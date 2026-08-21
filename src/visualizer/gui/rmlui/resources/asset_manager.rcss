@@ -259,13 +259,6 @@
     line-height: 16dp;
 }
 
-.asset-import-dropdown {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    z-index: 200;
-}
-
 .asset-import-button {
     background-color: #7fb9a5;
     border-width: 1dp;
@@ -279,57 +272,6 @@
 
 .asset-import-button:hover {
     background-color: #8fcab5;
-}
-
-.asset-import-menu {
-    position: absolute;
-    top: 100%;
-    right: 0;
-    margin-top: 4dp;
-    min-width: 160dp;
-    background-color: #2b2825;
-    border-width: 1dp;
-    border-color: #514a42;
-    border-radius: 4dp;
-    padding: 4dp 0;
-    z-index: 100;
-    display: none;
-}
-
-.asset-import-menu.is-visible {
-    display: flex;
-    flex-direction: column;
-}
-
-.asset-import-menu-item {
-    padding: 6dp 12dp;
-    font-size: 12dp;
-    color: #d8d0c3;
-    cursor: pointer;
-}
-
-.asset-import-menu-item:hover {
-    background-color: #38342f;
-}
-
-.asset-import-menu-separator {
-    height: 1dp;
-    background-color: rgba(128, 128, 128, 0.3);
-    margin: 4dp 0;  /* Reduced from 8dp */
-    width: 100%;
-}
-
-#asset-popup-summary {
-    display: flex;
-    flex-direction: row;
-    flex-shrink: 0;
-    gap: 16dp;
-    padding: 6dp 12dp;
-    background-color: #24221f;
-    border-bottom-width: 1dp;
-    border-bottom-color: #3c3630;
-    font-size: 12dp;
-    color: #a9a093;
 }
 
 #asset-main-row {
@@ -452,34 +394,6 @@
 }
 
 
-.asset-filter-checkbox-row {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    gap: 6dp;
-    padding: 4dp 6dp;
-    margin-bottom: 2dp;
-    cursor: pointer;
-    border-radius: 3dp;
-}
-
-.asset-filter-checkbox-row:hover {
-    background-color: #38342f;
-}
-
-.asset-filter-checkbox-row input[type="checkbox"] {
-    width: 14dp;
-    height: 14dp;
-    margin: 0;
-    padding: 0;
-}
-
-.asset-filter-checkbox-row .asset-row-label {
-    flex: 1;
-    font-size: 12dp;
-    color: #d8d0c3;
-}
-
 .asset-row-count {
     font-size: 12dp;
     color: #a9a093;
@@ -516,24 +430,6 @@
 
 .asset-folder-menu:hover img {
     image-color: rgba(255, 255, 255, 255);
-}
-
-.asset-folder-dropdown {
-    position: relative;
-    background-color: #302d29;
-    border-width: 1dp;
-    border-color: #514a42;
-    border-radius: 4dp;
-    margin-left: 6dp;
-    margin-right: 6dp;
-    margin-bottom: 4dp;
-    display: none;
-    z-index: 100;
-    box-shadow: 0 2dp 8dp rgba(0, 0, 0, 0.5);
-}
-
-.asset-folder-dropdown.is-visible {
-    display: block;
 }
 
 #asset-gallery {
@@ -638,13 +534,11 @@
     gap: 10dp;
     align-content: flex-start;
     min-width: 0;
-    overflow: visible;
 }
 
 .asset-card-slot {
     min-width: 0;
     display: flex;
-    overflow: visible;
 }
 
 .asset-card {
@@ -673,11 +567,6 @@
 .asset-card.is-missing,
 .asset-list-row.is-missing {
     border-color: #8b4a42;
-}
-
-.asset-card.menu-open,
-.asset-list-row.menu-open {
-    z-index: 1000;
 }
 
 .asset-card-thumb {
@@ -793,11 +682,6 @@
     padding: 3dp 6dp;
 }
 
-.asset-card-button.is-danger {
-    background-color: #6f3a33;
-    border-color: #8b4a42;
-}
-
 .asset-card-menu {
     position: absolute;
     top: 4dp;
@@ -828,111 +712,6 @@
 }
 
 
-.asset-load-menu {
-    position: absolute;
-    top: 28dp;
-    left: 12dp;
-    background-color: #302d29;
-    border-width: 1dp;
-    border-color: #514a42;
-    border-radius: 4dp;
-    min-width: 150dp;
-    display: none;
-    z-index: 1010;
-    box-shadow: 0 2dp 8dp rgba(0, 0, 0, 0.5);
-    pointer-events: auto;
-}
-
-.asset-load-menu.is-visible {
-    display: block;
-}
-
-.asset-load-menu.is-drop-up {
-    top: auto;
-    bottom: 100%;
-    margin-bottom: 4dp;
-}
-
-.asset-dropdown-item {
-    padding: 8dp 12dp;
-    font-size: 12dp;
-    color: #d8d0c3;
-    cursor: pointer;
-    border-bottom-width: 1dp;
-    border-bottom-color: #3c3630;
-    pointer-events: auto;
-}
-
-.asset-dropdown-item:last-child {
-    border-bottom-width: 0;
-}
-
-.asset-dropdown-item:hover {
-    background-color: #3c3630;
-    color: #f0ebe2;
-}
-
-.asset-dropdown-item.is-danger {
-    color: #e08e7f;
-}
-
-.asset-dropdown-item.is-danger:hover {
-    background-color: #4a2a25;
-    color: #ffb5a8;
-}
-
-.asset-dropdown-separator {
-    height: 1dp;
-    margin: 4dp 0;
-    background-color: #3c3630;
-}
-
-.asset-dropdown-item.folder-option {
-    cursor: pointer;
-    pointer-events: auto;
-}
-
-.asset-dropdown-item.has-submenu {
-    position: relative;
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-}
-
-.submenu-arrow {
-    font-size: 14dp;
-    color: #a9a093;
-    margin-left: 8dp;
-}
-
-.asset-dropdown-submenu {
-    position: absolute;
-    top: 0;
-    left: 100%;
-    margin-left: 0;
-    background-color: #302d29;
-    border-width: 1dp;
-    border-color: #514a42;
-    border-radius: 4dp;
-    min-width: 160dp;
-    display: none;
-    z-index: 1020;
-    box-shadow: 0 2dp 8dp rgba(0, 0, 0, 0.5);
-    pointer-events: auto;
-}
-
-.asset-dropdown-item.has-submenu:hover .asset-dropdown-submenu,
-.asset-dropdown-submenu:hover {
-    display: block;
-}
-
-.asset-submenu-divider {
-    height: 1dp;
-    background-color: #3c3630;
-    margin: 4dp 0;
-}
-
 .asset-list-view {
     display: flex;
     flex-direction: column;
@@ -949,7 +728,6 @@
     flex-direction: column;
     gap: 4dp;
     min-width: 0;
-    overflow: visible;
 }
 
 .asset-virtual-spacer {
@@ -1018,27 +796,9 @@
     position: relative;
 }
 
-.asset-list-row .asset-load-menu {
-    top: 28dp;
-    left: 10dp;
-}
-
-.asset-list-row .asset-load-menu.is-drop-up {
-    top: auto;
-    bottom: 100%;
-    left: 10dp;
-}
-
-.asset-card .asset-load-menu.is-drop-up {
-    top: auto;
-    bottom: 100%;
-    right: 4dp;
-    left: auto;
-}
-
 .asset-card {
     height: 220dp;
-    overflow: visible;
+    overflow: hidden;
 }
 
 .asset-card-body {
@@ -1253,18 +1013,4 @@
 .asset-info-empty-text {
     color: #a9a093;
     font-size: 12dp;
-}
-
-#asset-popup-footer {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12dp;
-    flex-shrink: 0;
-    padding: 10dp 12dp;
-    background-color: #2b2825;
-    border-top-width: 1dp;
-    border-top-color: #3c3630;
-    min-height: 40dp;
 }

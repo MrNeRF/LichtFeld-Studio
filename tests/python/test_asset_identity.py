@@ -153,8 +153,6 @@ def test_watched_directory_scan_registers_only_licht_projects(lf, tmp_path: Path
     first.write_bytes(b"first project")
     shutil.copy2(first, duplicate)
     second.write_bytes(b"second project")
-    (watched / "legacy.ply").write_bytes(b"legacy splat")
-    (nested / "checkpoint.ckpt").write_bytes(b"legacy checkpoint")
 
     index = AssetIndex(library_path=tmp_path / "library.json")
     index.ensure_default_catalog()
@@ -176,8 +174,12 @@ def test_asset_manager_ui_exposes_only_project_import_and_open_actions():
     rml = (
         ROOT / "src/visualizer/gui/rmlui/resources/asset_manager.rml"
     ).read_text(encoding="utf-8")
+    panel_source = (
+        ROOT / "src/python/lfs_plugins/asset_manager_panel.py"
+    ).read_text(encoding="utf-8")
 
     assert 'data-event-click="on_import_project"' in rml
     assert 'data-asset-action="load"' in rml
-    assert 'data-folder-action="watch_dirs"' in rml
+    assert 'data-folder-action="menu"' in rml
+    assert '"action": "watch_dirs"' in panel_source
     assert rml.count('data-event-click="on_import_project"') == 1

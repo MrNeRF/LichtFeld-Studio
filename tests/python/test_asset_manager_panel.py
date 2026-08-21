@@ -25,6 +25,17 @@ def _install_lf_stub(monkeypatch):
         def error(self, message):
             self.messages.append(("error", message))
 
+    context_menu_state = SimpleNamespace(calls=[])
+
+    def _show_context_menu(items, screen_x, screen_y, on_action=None):
+        context_menu_state.calls.append(
+            {
+                "items": items,
+                "position": (screen_x, screen_y),
+                "on_action": on_action,
+            }
+        )
+
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
         PanelSpace=SimpleNamespace(
@@ -38,6 +49,9 @@ def _install_lf_stub(monkeypatch):
             HIDE_HEADER="HIDE_HEADER",
         ),
         tr=lambda key: key,
+        get_mouse_screen_pos=lambda: (120.0, 220.0),
+        show_context_menu=_show_context_menu,
+        context_menu_state=context_menu_state,
     )
     lf_stub.log = _LogStub()
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
@@ -217,6 +231,17 @@ def test_asset_manager_remains_left_dock_panel(asset_manager_panel_module):
     assert asset_manager_panel_module.AssetManagerPanel.order == 20
 
 
+def test_asset_index_list_projects_executes_without_compiled_bindings(
+    asset_manager_panel_module,
+    tmp_path,
+):
+    index = asset_manager_panel_module.AssetIndex(
+        library_path=tmp_path / "library.json"
+    )
+
+    assert index.list_projects() == []
+
+
 def test_builtin_registration_keeps_asset_manager_closed_by_default():
     panels_source = (
         Path(__file__).resolve().parents[2] / "src" / "python" / "lfs_plugins" / "panels.py"
@@ -232,7 +257,6 @@ def test_edit_watch_directories_opens_for_clicked_folder(
     panel = asset_manager_panel_module.AssetManagerPanel()
     panel._handle = _HandleStub()
     panel._asset_index = object()
-    panel._open_menu_folder_id = "projects"
     calls = []
     monkeypatch.setattr(
         asset_manager_panel_module,
@@ -250,7 +274,6 @@ def test_edit_watch_directories_opens_for_clicked_folder(
     assert calls[0][0] is panel._asset_index
     assert calls[0][1] == "projects"
     assert calls[0][2].__self__ is panel
-    assert panel._open_menu_folder_id is None
     assert event.stopped is True
 
 
@@ -333,7 +356,7 @@ def test_asset_manager_card_thumbs_do_not_use_gradient_placeholders():
     assert "vertical-gradient" not in rcss
 
 
-def test_asset_menus_render_above_cards_and_rows():
+def test_asset_manager_has_no_panel_local_context_menu_markup_or_styles():
     folder_root = Path(__file__).parent.parent.parent
     resources_dir = (
         folder_root
@@ -346,12 +369,16 @@ def test_asset_menus_render_above_cards_and_rows():
     rml = (resources_dir / "asset_manager.rml").read_text(encoding="utf-8")
     rcss = (resources_dir / "asset_manager.rcss").read_text(encoding="utf-8")
 
-    assert rml.count('data-class-menu-open="asset.menu_open"') == 2
-    assert ".asset-card.menu-open," in rcss
-    assert ".asset-list-row.menu-open" in rcss
-    assert ".asset-card {\n    height: 220dp;\n    overflow: visible;\n}" in rcss
-    assert ".asset-card-slot" in rcss
-    assert ".asset-list-window" in rcss
+    assert "asset-context-menu" not in rml
+    assert "asset-load-menu" not in rml
+    assert "asset-folder-dropdown" not in rml
+    assert "move_menu_folders" not in rml
+    assert "asset-context-menu" not in rcss
+    assert "asset-load-menu" not in rcss
+    assert "asset-folder-dropdown" not in rcss
+    assert "asset-dropdown-submenu" not in rcss
+    assert 'data-event-click="show_new_folder_menu"' in rml
+    assert ".asset-card {\n    height: 220dp;\n    overflow: hidden;\n}" in rcss
 
 
 def test_asset_manager_has_visible_viewport_edge():
@@ -467,7 +494,10 @@ def test_dom_row_right_click_opens_menu_for_an_already_selected_asset(
     panel._handle = _HandleStub()
     panel._asset_index = SimpleNamespace(
         assets={"a1": _make_asset()},
-        folders={"p1": {"id": "p1", "name": "Projects", "scene_ids": ["s1"]}},
+        folders={
+            "p1": {"id": "p1", "name": "Projects", "scene_ids": ["s1"]},
+            "p2": {"id": "p2", "name": "Archive", "scene_ids": []},
+        },
         scenes={"s1": {"id": "s1", "name": "bicycle", "folder_id": "p1"}},
     )
     panel._selected_asset_ids = {"a1"}
@@ -490,7 +520,20 @@ def test_dom_row_right_click_opens_menu_for_an_already_selected_asset(
 
     panel._on_asset_manager_mousedown(event)
 
-    assert panel._open_menu_asset_id == "a1"
+    calls = asset_manager_panel_module.lf.ui.context_menu_state.calls
+    assert len(calls) == 1
+    assert calls[0]["position"] == (120.0, 220.0)
+    assert [item["action"] for item in calls[0]["items"]] == [
+        "load",
+        "rename",
+        "",
+        "create_folder",
+        "move_to_folder:p2",
+        "show_in_folder",
+        "remove",
+    ]
+    assert calls[0]["items"][2]["is_label"] is True
+    assert calls[0]["items"][4]["is_submenu_item"] is True
     assert event.stopped is True
 
 
@@ -517,8 +560,52 @@ def test_dom_row_primary_mousedown_does_not_open_context_menu(
 
     panel._on_asset_manager_mousedown(event)
 
-    assert panel._open_menu_asset_id is None
+    assert asset_manager_panel_module.lf.ui.context_menu_state.calls == []
     assert event.stopped is False
+
+
+def test_gallery_more_button_uses_shared_context_menu(asset_manager_panel_module):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    panel._handle = _HandleStub()
+    panel._asset_index = SimpleNamespace(
+        assets={"a1": _make_asset()},
+        folders={"p1": {"id": "p1", "name": "Projects", "scene_ids": []}},
+        scenes={},
+    )
+    container = _ElementStub({"id": "asset-shell"})
+    more_button = _ElementStub(
+        {"data-asset-id": "a1", "data-asset-action": "menu"},
+        parent=container,
+    )
+    event = _EventStub(current_target=container, target=more_button)
+
+    panel._on_asset_manager_click(event)
+
+    assert len(asset_manager_panel_module.lf.ui.context_menu_state.calls) == 1
+    assert event.stopped is True
+
+
+def test_asset_context_menu_callback_routes_the_bound_asset(
+    asset_manager_panel_module, monkeypatch
+):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    panel._asset_index = SimpleNamespace(
+        assets={"a1": _make_asset()},
+        folders={"p1": {"id": "p1", "name": "Projects", "scene_ids": []}},
+        scenes={},
+    )
+    calls = []
+    monkeypatch.setattr(
+        panel,
+        "on_rename_asset",
+        lambda _handle, _event, args: calls.append(tuple(args)),
+    )
+
+    assert panel._show_asset_context_menu("a1") is True
+    menu_call = asset_manager_panel_module.lf.ui.context_menu_state.calls[-1]
+    menu_call["on_action"]("rename")
+
+    assert calls == [("a1",)]
 
 
 def test_dom_card_click_updates_visible_row_class(asset_manager_panel_module):
@@ -755,11 +842,11 @@ def test_bind_dom_event_listeners_registers_gallery_wheel_handler(
     asset_manager_panel_module,
 ):
     panel = asset_manager_panel_module.AssetManagerPanel()
-    content = _ElementStub({"id": "asset-main-row"})
+    content = _ElementStub({"id": "asset-shell"})
     gallery_scroll = _ElementStub({"id": "asset-gallery-scroll"})
     doc = _DocumentStub(
         {
-            "asset-main-row": content,
+            "asset-shell": content,
             "asset-gallery-scroll": gallery_scroll,
         }
     )
@@ -769,6 +856,66 @@ def test_bind_dom_event_listeners_registers_gallery_wheel_handler(
     assert "mousescroll" in gallery_scroll.listeners
     assert "click" in content.listeners
     assert "mousemove" in doc.listeners
+
+
+def test_folder_more_button_uses_shared_context_menu(
+    asset_manager_panel_module, monkeypatch
+):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    panel._asset_index = SimpleNamespace(
+        assets={},
+        folders={"p1": {"id": "p1", "name": "Projects", "scene_ids": []}},
+        scenes={},
+    )
+    actions = []
+    monkeypatch.setattr(
+        panel,
+        "on_edit_watch_dirs",
+        lambda _handle, _event, args: actions.append(tuple(args)),
+    )
+    container = _ElementStub({"id": "asset-shell"})
+    more_button = _ElementStub(
+        {"data-folder-id": "p1", "data-folder-action": "menu"},
+        parent=container,
+    )
+    event = _EventStub(current_target=container, target=more_button)
+
+    panel._on_asset_manager_click(event)
+
+    menu_call = asset_manager_panel_module.lf.ui.context_menu_state.calls[-1]
+    assert [item["action"] for item in menu_call["items"]] == [
+        "watch_dirs",
+        "rename",
+        "delete",
+    ]
+    menu_call["on_action"]("watch_dirs")
+    assert actions == [("p1",)]
+    assert event.stopped is True
+
+
+def test_new_folder_button_uses_shared_context_menu(
+    asset_manager_panel_module, monkeypatch
+):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    actions = []
+    monkeypatch.setattr(
+        panel,
+        "on_create_folder_dialog",
+        lambda _handle, _event, args: actions.append(args),
+    )
+
+    panel.show_new_folder_menu(None, None, None)
+
+    menu_call = asset_manager_panel_module.lf.ui.context_menu_state.calls[-1]
+    assert menu_call["items"] == [
+        {
+            "label": "asset_manager.action.create_new_folder",
+            "action": "create_folder",
+        }
+    ]
+    menu_call["on_action"]("create_folder")
+
+    assert actions == [None]
 
 
 def test_gallery_precise_scroll_moves_scroll_container(asset_manager_panel_module):

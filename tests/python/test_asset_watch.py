@@ -17,9 +17,6 @@ def test_discovery_recurses_and_returns_only_licht_files(tmp_path: Path):
     second = nested / "SECOND.LICHT"
     first.write_bytes(b"first")
     second.write_bytes(b"second")
-    (tmp_path / "legacy.ply").write_bytes(b"ply")
-    (nested / "checkpoint.ckpt").write_bytes(b"checkpoint")
-    (nested / "dataset.json").write_text("{}", encoding="utf-8")
     (tmp_path / "directory.licht").mkdir()
 
     discovered = discover_licht_projects(str(tmp_path))

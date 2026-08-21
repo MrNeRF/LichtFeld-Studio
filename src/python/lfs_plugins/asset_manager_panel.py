@@ -137,12 +137,6 @@ class AssetManagerPanel(Panel):
         self._pending_selection_detail_asset_id = ""
         self._pending_selection_detail_requested_at = 0.0
 
-        # Track which asset has its dropdown menu open
-        self._open_menu_asset_id: Optional[str] = None
-
-        # Track which folder has its dropdown menu open
-        self._open_menu_folder_id: Optional[str] = None
-
         # Selection type for info panel display
         self._selection_type: str = "none"  # none, asset, scene, folder, multiple
 
@@ -155,9 +149,6 @@ class AssetManagerPanel(Panel):
         # Auto-save state
         self._auto_save_interval_sec: float = 30.0
         self._last_auto_save_time: float = 0.0
-
-        # New folder menu state
-        self._new_folder_menu_open: bool = False
 
         # Collapse state for sidebar sections
         self._folders_collapsed: bool = True
@@ -301,13 +292,6 @@ class AssetManagerPanel(Panel):
         model.bind_func("import_project_label", lambda: tr("menu.file.open_project"))
 
 
-        # New folder menu state
-        model.bind_func("new_folder_menu_open", self.get_new_folder_menu_open)
-        model.bind_func("create_new_folder_label", lambda: tr("asset_manager.action.create_new_folder"))
-
-        # Move menu folders list (for hover submenu)
-        model.bind_record_list("move_menu_folders")
-
         # Selected IDs for UI conditionals
         model.bind_func("selected_folder_id", self.get_selected_folder_id)
         model.bind_func("selected_scene_id", self.get_selected_scene_id)
@@ -366,21 +350,7 @@ class AssetManagerPanel(Panel):
             "asset_results_summary_visible",
             self.get_asset_results_summary_visible,
         )
-        model.bind_func(
-            "edit_watch_dirs_label",
-            lambda: tr("asset_manager.action.edit_watch_dirs"),
-        )
-        model.bind_func("rename_folder_label", lambda: tr("asset_manager.action.rename_folder"))
-        model.bind_func("delete_folder_label", lambda: tr("asset_manager.action.delete_folder"))
         model.bind_func("load_button_label", lambda: tr("menu.file.open_project"))
-        model.bind_func("rename_label", lambda: tr("asset_manager.action.rename"))
-        model.bind_func("move_to_folder_label", lambda: tr("asset_manager.action.move_to_folder"))
-        model.bind_func(
-            "new_folder_label",
-            lambda: f"{tr('asset_manager.action.new_folder')} and move here",
-        )
-        model.bind_func("show_in_folder_label", lambda: tr("asset_manager.action.show_in_folder"))
-        model.bind_func("remove_label", lambda: tr("asset_manager.action.remove"))
         model.bind_func("refresh_label", lambda: tr("asset_manager.action.refresh"))
         model.bind_func("clean_missing_label", lambda: tr("asset_manager.action.clean_missing"))
         model.bind_func("refresh_tooltip", lambda: tr("asset_manager.tooltip.refresh"))
@@ -443,8 +413,7 @@ class AssetManagerPanel(Panel):
         model.bind_event("on_bottom_panel_resize_start", self.on_bottom_panel_resize_start)
 
         # New folder event handlers
-        model.bind_event("toggle_new_folder_menu", self.toggle_new_folder_menu)
-        model.bind_event("on_create_folder_dialog", self.on_create_folder_dialog)
+        model.bind_event("show_new_folder_menu", self.show_new_folder_menu)
         model.bind_event("refresh_catalog", self.verify_catalog)
         model.bind_event("clean_missing", self.clean_missing)
 
@@ -477,9 +446,6 @@ class AssetManagerPanel(Panel):
     def get_selection_type(self) -> str:
         return self._selection_type
 
-    def get_new_folder_menu_open(self) -> bool:
-        return self._new_folder_menu_open
-
     def get_folders_collapsed(self) -> bool:
         return self._folders_collapsed
 
@@ -490,17 +456,6 @@ class AssetManagerPanel(Panel):
         self._folders_collapsed = not self._folders_collapsed
         self._dirty_model("folders_collapsed")
         self._dirty_model("folders_expanded")
-
-    def get_move_menu_folders(self) -> List[Dict[str, str]]:
-        """Get folders for the currently open move menu."""
-        if not self._open_menu_asset_id or not self._asset_index:
-            return []
-
-        asset = self._asset_index_assets().get(self._open_menu_asset_id)
-        if not asset:
-            return []
-
-        return self._get_available_folders_for_asset(asset)
 
     def get_selected_folder_id(self) -> Optional[str]:
         return self._selected_folder_id
@@ -1205,7 +1160,6 @@ class AssetManagerPanel(Panel):
             "scene_name": scene_name,
             "modified_at": str(asset.get("modified_at") or ""),
             "modified_label": self._format_timestamp(asset.get("modified_at", "")),
-            "menu_open": asset_id == self._open_menu_asset_id,
         }
 
     def get_folder_list(self) -> List[Dict[str, Any]]:
@@ -1230,7 +1184,6 @@ class AssetManagerPanel(Panel):
                     "description": folder.get("description", ""),
                     "scene_count": asset_count,
                     "is_selected": folder_id == self._selected_folder_id,
-                    "menu_open": folder_id == self._open_menu_folder_id,
                 }
             )
 
@@ -1920,17 +1873,27 @@ class AssetManagerPanel(Panel):
 
     # ── New Folder Handlers ──────────────────────────────────
 
-    def toggle_new_folder_menu(self, _handle, _ev, _args):
-        """Toggle the new folder dropdown menu visibility."""
-        self._new_folder_menu_open = not self._new_folder_menu_open
-        self._dirty_model("new_folder_menu_open")
+    def show_new_folder_menu(self, _handle, _ev, _args):
+        """Show folder creation through the shared full-window menu."""
+        if _ev:
+            self._stop_event(_ev)
+
+        def _on_action(action):
+            if action == "create_folder":
+                self.on_create_folder_dialog(None, None, None)
+
+        self._show_shared_context_menu(
+            [
+                {
+                    "label": tr("asset_manager.action.create_new_folder"),
+                    "action": "create_folder",
+                }
+            ],
+            _on_action,
+        )
 
     def on_create_folder_dialog(self, _handle, _ev, _args):
         """Open system dialog to create a new folder."""
-        # Close the dropdown menu
-        self._new_folder_menu_open = False
-        self._dirty_model("new_folder_menu_open")
-
         def _on_folder_name_entered(name):
             self._create_folder_from_name(name)
 
@@ -2290,38 +2253,109 @@ class AssetManagerPanel(Panel):
         # Sort by name
         return sorted(folders, key=lambda f: self._sort_text(f.get("name")))
 
-    def _open_asset_menu(self, asset_id: str) -> None:
-        if not asset_id:
-            return
-        self._open_menu_folder_id = None
-        self._open_menu_asset_id = asset_id
-        if self._handle:
-            folders = self.get_move_menu_folders()
-            self._log_info("Loading %d folders for move menu", len(folders))
-            self._handle.update_record_list("move_menu_folders", folders)
-        self._dirty_model("assets", "folders")
+    def _show_shared_context_menu(
+        self,
+        items: List[Dict[str, Any]],
+        on_action: Callable[[str], None],
+    ) -> bool:
+        """Show an app-level menu outside the docked panel's render tree."""
+        show_context_menu = getattr(lf.ui, "show_context_menu", None)
+        get_mouse_screen_pos = getattr(lf.ui, "get_mouse_screen_pos", None)
+        if not callable(show_context_menu) or not callable(get_mouse_screen_pos):
+            self._log_warn("Shared context menu API is unavailable")
+            return False
 
-    def on_toggle_asset_menu(self, _handle, _ev, args):
-        """Toggle dropdown menu for an asset."""
-        asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
-        if not asset_id:
-            return
+        try:
+            screen_x, screen_y = get_mouse_screen_pos()
+            show_context_menu(
+                items,
+                float(screen_x),
+                float(screen_y),
+                on_action,
+            )
+        except Exception as exc:
+            self._log_error("Failed to show shared context menu: %s", exc)
+            return False
+        return True
 
-        # Stop event propagation to prevent card selection
-        if _ev:
-            try:
-                _ev.stop_propagation()
-            except Exception:
-                pass
+    def _asset_context_menu_items(
+        self, asset: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        items: List[Dict[str, Any]] = []
+        if asset.get("exists", True):
+            items.append(
+                {
+                    "label": tr("menu.file.open_project"),
+                    "action": "load",
+                }
+            )
+        items.extend(
+            [
+                {
+                    "label": tr("asset_manager.action.rename"),
+                    "action": "rename",
+                },
+                {
+                    "label": tr("asset_manager.action.move_to_folder"),
+                    "action": "",
+                    "separator_before": True,
+                    "is_label": True,
+                },
+                {
+                    "label": tr("asset_manager.action.new_folder"),
+                    "action": "create_folder",
+                    "is_submenu_item": True,
+                },
+            ]
+        )
+        items.extend(
+            {
+                "label": str(folder["name"]),
+                "action": f"move_to_folder:{folder['id']}",
+                "is_submenu_item": True,
+            }
+            for folder in self._get_available_folders_for_asset(asset)
+        )
+        items.extend(
+            [
+                {
+                    "label": tr("asset_manager.action.show_in_folder"),
+                    "action": "show_in_folder",
+                    "separator_before": True,
+                },
+                {
+                    "label": tr("asset_manager.action.remove"),
+                    "action": "remove",
+                },
+            ]
+        )
+        return items
 
-        # Toggle: if already open for this asset, close it; otherwise open for this asset
-        if self._open_menu_asset_id == asset_id:
-            self._open_menu_asset_id = None
-            self._dirty_model("assets")
-            if self._handle:
-                self._handle.update_record_list("move_menu_folders", [])
-        else:
-            self._open_asset_menu(asset_id)
+    def _handle_asset_context_action(self, action: str, asset_id: str) -> None:
+        if action == "load":
+            self.on_load_asset(None, None, [asset_id])
+        elif action == "rename":
+            self.on_rename_asset(None, None, [asset_id])
+        elif action == "create_folder":
+            self.on_create_folder_and_move(None, None, [asset_id])
+        elif action.startswith("move_to_folder:"):
+            folder_id = action.removeprefix("move_to_folder:")
+            if folder_id:
+                self._move_asset_to_folder(asset_id, folder_id)
+        elif action == "show_in_folder":
+            self.on_show_in_folder(None, None, [asset_id])
+        elif action == "remove":
+            self.on_remove_asset(None, None, [asset_id])
+
+    def _show_asset_context_menu(self, asset_id: str) -> bool:
+        asset = self._asset_index_assets().get(asset_id)
+        if not asset:
+            return False
+
+        return self._show_shared_context_menu(
+            self._asset_context_menu_items(asset),
+            lambda action: self._handle_asset_context_action(action, asset_id),
+        )
 
     def on_rename_asset(self, _handle, _ev, args):
         """Open rename dialog for an asset."""
@@ -2342,10 +2376,6 @@ class AssetManagerPanel(Panel):
         asset = self._asset_index.assets.get(asset_id)
         if not asset:
             return
-
-        # Close the menu
-        self._open_menu_asset_id = None
-        self._dirty_model("assets")
 
         # Prompt for rename using input dialog
         current_name = str(asset.get("name") or tr("asset_manager.unnamed"))
@@ -2387,10 +2417,6 @@ class AssetManagerPanel(Panel):
         if not asset:
             return
 
-        # Close the menu
-        self._open_menu_asset_id = None
-        self._dirty_model("assets")
-
         file_path = asset.get("absolute_path") or asset.get("path")
         if not file_path:
             self._log_warn("Asset has no file path: %s", asset_id)
@@ -2411,100 +2437,6 @@ class AssetManagerPanel(Panel):
             self._log_info("Opened file location: %s", file_path)
         except Exception as e:
             self._log_error("Failed to open file location: %s", e)
-
-    def on_move_to_folder(self, _handle, _ev, args):
-        """Move asset to a different folder."""
-        asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
-        if not asset_id:
-            return
-
-        # Stop event propagation
-        if _ev:
-            try:
-                _ev.stop_propagation()
-            except Exception:
-                pass
-
-        if not self._asset_index or not hasattr(self._asset_index, "assets"):
-            return
-
-        asset = self._asset_index.assets.get(asset_id)
-        if not asset:
-            return
-
-        # Close the menu
-        self._open_menu_asset_id = None
-        self._dirty_model("assets")
-
-        # Get list of available folders
-        if not hasattr(self._asset_index, "folders"):
-            self._log_warn("No folders available")
-            return
-
-        folders = []
-        for fld_id, fld in self._asset_index.folders.items():
-            if fld_id != asset.get("folder_id"):  # Exclude current folder
-                folders.append((fld_id, fld.get("name", "Unnamed")))
-
-        if not folders:
-            self._log_info("No other folders available to move to")
-            return
-
-        # Build folder list string
-        folder_names = [f"{i+1}. {name}" for i, (_, name) in enumerate(folders)]
-        folder_list = "\n".join(folder_names)
-        current_folder = self._asset_index.folders.get(asset.get("folder_id", ""), {}).get("name", "Unknown")
-
-        def _on_folder_selected(result):
-            if not result or not result.strip():
-                return
-
-            try:
-                # Parse selection (number or name)
-                selection = result.strip()
-                selected_folder_id = None
-                selected_folder_name = None
-
-                # Try to parse as number first
-                try:
-                    idx = int(selection.split(".")[0]) - 1
-                    if 0 <= idx < len(folders):
-                        selected_folder_id, selected_folder_name = folders[idx]
-                except (ValueError, IndexError):
-                    # Try to match by name
-                    for fld_id, fld_name in folders:
-                        if selection.lower() in self._sort_text(fld_name):
-                            selected_folder_id = fld_id
-                            selected_folder_name = fld_name
-                            break
-
-                if not selected_folder_id:
-                    self._log_warn("Invalid folder selection: %s", selection)
-                    return
-
-                # Update asset's folder
-                self._asset_index.update_asset(
-                    asset_id,
-                    folder_id=selected_folder_id,
-                    scene_id=None  # Clear scene since scenes are folder-specific
-                )
-                self._asset_index.save()
-                self.refresh_catalog()
-                self._log_info("Moved asset to folder: %s", selected_folder_name)
-
-            except Exception as e:
-                self._log_error("Failed to move asset: %s", e)
-
-        prompt = tr("asset_manager.dialog.current_folder", name=current_folder) + "\n\n"
-        prompt += tr("asset_manager.dialog.available_folders") + "\n"
-        prompt += folder_list + "\n\n"
-        prompt += tr("asset_manager.dialog.enter_number_or_name")
-        lf.ui.input_dialog(
-            tr("asset_manager.dialog.move_to_folder"),
-            prompt,
-            "",
-            _on_folder_selected
-        )
 
     def _move_asset_to_folder(self, asset_id: str, folder_id: str) -> None:
         """Move asset to a specific folder."""
@@ -2556,12 +2488,6 @@ class AssetManagerPanel(Panel):
         if not asset:
             return
 
-        # Close menu
-        self._open_menu_asset_id = None
-        self._dirty_model("assets", "move_menu_folders")
-        if self._handle:
-            self._handle.update_record_list("move_menu_folders", [])
-
         def _on_folder_name_entered(name):
             if not name or not name.strip():
                 return
@@ -2595,26 +2521,39 @@ class AssetManagerPanel(Panel):
             _on_folder_name_entered
         )
 
-    def on_toggle_folder_menu(self, _handle, _ev, args):
-        """Toggle dropdown menu for a folder."""
-        folder_id = self._resolve_event_value(args, _ev, "data-folder-id")
-        if not folder_id:
-            return
+    @staticmethod
+    def _folder_context_menu_items() -> List[Dict[str, Any]]:
+        return [
+            {
+                "label": tr("asset_manager.action.edit_watch_dirs"),
+                "action": "watch_dirs",
+            },
+            {
+                "label": tr("asset_manager.action.rename_folder"),
+                "action": "rename",
+            },
+            {
+                "label": tr("asset_manager.action.delete_folder"),
+                "action": "delete",
+                "separator_before": True,
+            },
+        ]
 
-        # Stop event propagation to prevent row selection
-        if _ev:
-            try:
-                _ev.stop_propagation()
-            except Exception:
-                pass
+    def _handle_folder_context_action(self, action: str, folder_id: str) -> None:
+        if action == "watch_dirs":
+            self.on_edit_watch_dirs(None, None, [folder_id])
+        elif action == "rename":
+            self.on_rename_folder(None, None, [folder_id])
+        elif action == "delete":
+            self.on_delete_folder(None, None, [folder_id])
 
-        # Toggle: if already open for this folder, close it; otherwise open for this folder
-        if self._open_menu_folder_id == folder_id:
-            self._open_menu_folder_id = None
-        else:
-            self._open_menu_folder_id = folder_id
-
-        self._dirty_model("folders")
+    def _show_folder_context_menu(self, folder_id: str) -> bool:
+        if folder_id not in self._asset_index_folders():
+            return False
+        return self._show_shared_context_menu(
+            self._folder_context_menu_items(),
+            lambda action: self._handle_folder_context_action(action, folder_id),
+        )
 
     def on_edit_watch_dirs(self, _handle, _ev, args):
         """Open .licht-only watched-directory settings for a folder."""
@@ -2628,8 +2567,6 @@ class AssetManagerPanel(Panel):
             except Exception:
                 pass
 
-        self._open_menu_folder_id = None
-        self._dirty_model("folders")
         if not open_watch_dirs_dialog(
             self._asset_index,
             folder_id,
@@ -2658,10 +2595,6 @@ class AssetManagerPanel(Panel):
         folder = self._asset_index.folders.get(folder_id)
         if not folder:
             return
-
-        # Close the menu
-        self._open_menu_folder_id = None
-        self._dirty_model("folders")
 
         # Prompt for rename using input dialog
         current_name = folder.get("name", "Unnamed Folder")
@@ -2705,10 +2638,6 @@ class AssetManagerPanel(Panel):
         folder = folders.get(folder_id)
         if not folder:
             return
-
-        # Close the menu
-        self._open_menu_folder_id = None
-        self._dirty_model("folders")
 
         folder_name = folder.get("name", "Unnamed Folder")
 
@@ -2956,7 +2885,7 @@ class AssetManagerPanel(Panel):
         Binding once to a stable parent mirrors the working popup panels and
         avoids relying on per-row data-event callbacks for card selection.
         """
-        content = doc.get_element_by_id("asset-main-row")
+        content = doc.get_element_by_id("asset-shell")
         if content:
             content.add_event_listener("mousedown", self._on_asset_manager_mousedown)
             content.add_event_listener("click", self._on_asset_manager_click)
@@ -3040,56 +2969,8 @@ class AssetManagerPanel(Panel):
             elif action == "remove":
                 self.on_remove_asset(None, event, [asset_id])
             elif action == "menu":
-                self.on_toggle_asset_menu(None, event, [asset_id])
-                self._stop_event(event)
-                return
-            elif action == "rename":
-                self.on_rename_asset(None, event, [asset_id])
-                self._stop_event(event)
-                return
-            elif action == "show_in_folder":
-                self.on_show_in_folder(None, event, [asset_id])
-                self._stop_event(event)
-                return
-            elif action == "move_to_folder":
-                self.on_move_to_folder(None, event, [asset_id])
-                self._stop_event(event)
-                return
-            elif action == "remove_from_menu":
-                self._open_menu_asset_id = None
-                self.on_remove_asset(None, event, [asset_id])
-                self._stop_event(event)
-                return
-            elif action == "create_folder":
-                self.on_create_folder_and_move(None, event, [asset_id])
-                # Close menu after creating folder
-                self._open_menu_asset_id = None
-                self._dirty_model("assets", "move_menu_folders")
-                if self._handle:
-                    self._handle.update_record_list("move_menu_folders", [])
-                self._stop_event(event)
-                return
-            elif action == "move_to_existing_folder":
-                folder_id = action_el.get_attribute("data-folder-id", "")
-                self._log_info("Move to existing folder clicked: asset=%s, folder=%s", asset_id, folder_id)
-                if folder_id:
-                    self._move_asset_to_folder(asset_id, folder_id)
-                    # Close menu after move
-                    self._open_menu_asset_id = None
-                    self._dirty_model("assets", "move_menu_folders")
-                    if self._handle:
-                        self._handle.update_record_list("move_menu_folders", [])
-                else:
-                    self._log_warn("No folder_id found on action element")
-                self._stop_event(event)
-                return
+                self._show_asset_context_menu(asset_id)
             elif action in ("select", "scene_asset"):
-                # Close any open menu when selecting an asset
-                if self._open_menu_asset_id:
-                    self._open_menu_asset_id = None
-                    self._dirty_model("assets", "move_menu_folders")
-                    if self._handle:
-                        self._handle.update_record_list("move_menu_folders", [])
                 self._select_asset_id(
                     asset_id,
                     toggle=False,
@@ -3104,7 +2985,6 @@ class AssetManagerPanel(Panel):
             target, "data-folder-id", container
         )
         if folder_el is not None:
-            # Check if this is a folder action (menu, rename, delete)
             folder_action_el = rml_widgets.find_ancestor_with_attribute(
                 target, "data-folder-action", container
             )
@@ -3113,28 +2993,11 @@ class AssetManagerPanel(Panel):
                 folder_id = folder_action_el.get_attribute("data-folder-id", "")
 
                 if action == "menu":
-                    self.on_toggle_folder_menu(None, event, [folder_id])
-                    self._stop_event(event)
-                    return
-                elif action == "watch_dirs":
-                    self.on_edit_watch_dirs(None, event, [folder_id])
-                    self._stop_event(event)
-                    return
-                elif action == "rename":
-                    self.on_rename_folder(None, event, [folder_id])
-                    self._stop_event(event)
-                    return
-                elif action == "delete":
-                    self.on_delete_folder(None, event, [folder_id])
+                    self._show_folder_context_menu(folder_id)
                     self._stop_event(event)
                     return
 
-            # Regular folder selection (not an action button)
             folder_id = folder_el.get_attribute("data-folder-id", "")
-            # Close any open folder menu when selecting a folder
-            if self._open_menu_folder_id:
-                self._open_menu_folder_id = None
-                self._dirty_model("folders")
             if self._select_folder_id(folder_id):
                 self._stop_event(event)
             return
@@ -3147,18 +3010,6 @@ class AssetManagerPanel(Panel):
             if self._select_scene_id(scene_id):
                 self._stop_event(event)
             return
-
-        # Close open asset menu when clicking elsewhere
-        if self._open_menu_asset_id:
-            self._open_menu_asset_id = None
-            self._dirty_model("assets", "move_menu_folders")
-            if self._handle:
-                self._handle.update_record_list("move_menu_folders", [])
-
-        # Close open folder menu when clicking elsewhere
-        if self._open_menu_folder_id:
-            self._open_menu_folder_id = None
-            self._dirty_model("folders")
 
     def _on_asset_manager_mousedown(self, event) -> None:
         if self._input_capture_active():
@@ -3198,7 +3049,7 @@ class AssetManagerPanel(Panel):
             row_element=action_el,
             container=container,
         )
-        self._open_asset_menu(asset_id)
+        self._show_asset_context_menu(asset_id)
         self._stop_event(event)
 
     def _on_asset_manager_double_click(self, event) -> None:
