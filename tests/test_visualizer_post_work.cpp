@@ -36,6 +36,7 @@
 #include "visualizer/core/data_loading_service.hpp"
 #include "visualizer/include/visualizer/visualizer.hpp"
 #include "visualizer/post_work_utils.hpp"
+#include "visualizer/project/project_switch_error.hpp"
 #include "visualizer/visualizer_impl.hpp"
 
 #include <algorithm>
@@ -3691,6 +3692,41 @@ namespace lfs::vis {
                     1u);
             }
         }
+    }
+
+    TEST(ProjectSwitchErrorTest, PredicatesMatchFieldTagNotUserMessage) {
+        const auto make_tagged = [](const std::string_view field,
+                                    std::string message) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::FailedPrecondition,
+                .domain = lfs::ErrorDomain::App,
+                .user_message = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+                .fields = lfs::SmallFields{}.add("field", field),
+            });
+        };
+
+        const auto rewritten_training = make_tagged(
+            lfs::vis::project::kProjectSwitchTrainingActiveField,
+            "rewritten training switch copy");
+        EXPECT_TRUE(lfs::vis::project::isTrainingProjectSwitchError(
+            rewritten_training));
+        EXPECT_FALSE(lfs::vis::project::isDirtyProjectSwitchError(
+            rewritten_training));
+
+        const auto rewritten_dirty = make_tagged(
+            lfs::vis::project::kProjectSwitchDirtyField,
+            "rewritten dirty switch copy");
+        EXPECT_TRUE(lfs::vis::project::isDirtyProjectSwitchError(
+            rewritten_dirty));
+        EXPECT_FALSE(lfs::vis::project::isTrainingProjectSwitchError(
+            rewritten_dirty));
+
+        const auto message_only = make_tagged(
+            "project.training",
+            "Stop training before switching projects.");
+        EXPECT_FALSE(lfs::vis::project::isTrainingProjectSwitchError(
+            message_only));
     }
 
     TEST_F(VisualizerImplResetTest,

@@ -33,6 +33,7 @@
 #include "operator/ops/selection_ops.hpp"
 #include "operator/ops/transform_ops.hpp"
 #include "preferences.hpp"
+#include "project/project_switch_error.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
@@ -130,25 +131,8 @@ namespace lfs::vis {
             }
         }
 
-        [[nodiscard]] bool
-        isDirtyProjectSwitchError(
-            const lfs::Error& error) noexcept {
-            return error.code() ==
-                       lfs::ErrorCode::
-                           FailedPrecondition &&
-                   error.user_message() ==
-                       "The current project has unsaved changes.";
-        }
-
-        [[nodiscard]] bool
-        isTrainingProjectSwitchError(
-            const lfs::Error& error) noexcept {
-            return error.code() ==
-                       lfs::ErrorCode::
-                           FailedPrecondition &&
-                   error.user_message() ==
-                       "Stop training before switching projects.";
-        }
+        using project::isDirtyProjectSwitchError;
+        using project::isTrainingProjectSwitchError;
 
         void wakeEventLoopViaServices() {
             if (auto* const window_manager = services().windowOrNull()) {

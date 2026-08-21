@@ -32,6 +32,7 @@
 #include "io/selection_chapter.hpp"
 #include "ipc/view_context.hpp"
 #include "operation/undo_history.hpp"
+#include "project/project_switch_error.hpp"
 #include "project/session_state.hpp"
 #include "rendering/image_layout.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
@@ -1805,7 +1806,7 @@ namespace lfs::vis::project {
                     lfs::ErrorCode::FailedPrecondition,
                     "Stop training before switching projects.",
                     "Project switching is blocked while training is active",
-                    "project.training");
+                    kProjectSwitchTrainingActiveField);
             }
         }
         if (disposition ==
@@ -1815,7 +1816,7 @@ namespace lfs::vis::project {
                 lfs::ErrorCode::FailedPrecondition,
                 "The current project has unsaved changes.",
                 "Save the current project or retry with explicit discard authorization",
-                "project.dirty");
+                kProjectSwitchDirtyField);
         }
         return {};
     }
