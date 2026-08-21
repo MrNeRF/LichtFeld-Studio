@@ -80,6 +80,7 @@ namespace lfs::vis {
     class VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
     class VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
     class VisualizerImplResetTest_UntitledDirtySessionAutosavesToScratch_Test;
+    class VisualizerImplResetTest_AutosaveSkipsUnchangedSelectionCapture_Test;
     class VisualizerImplResetTest_BlankUntitledSessionUpdateMaintenanceWritesNoScratch_Test;
     class VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWritesScratch_Test;
     class VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWaitsForAutosaveQuietPeriod_Test;
@@ -291,6 +292,7 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
         friend class lfs::vis::VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
         friend class lfs::vis::VisualizerImplResetTest_UntitledDirtySessionAutosavesToScratch_Test;
+        friend class lfs::vis::VisualizerImplResetTest_AutosaveSkipsUnchangedSelectionCapture_Test;
         friend class lfs::vis::VisualizerImplResetTest_BlankUntitledSessionUpdateMaintenanceWritesNoScratch_Test;
         friend class lfs::vis::VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWritesScratch_Test;
         friend class lfs::vis::VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWaitsForAutosaveQuietPeriod_Test;
@@ -342,6 +344,7 @@ namespace lfs::vis::project {
 
         enum class DocumentSyncMode {
             Default,
+            Autosave,
             LightTrainingAutosave,
         };
 
@@ -505,6 +508,8 @@ namespace lfs::vis::project {
         std::uint64_t active_restore_ticket_ = 0;
         std::atomic<std::uint64_t>
             selection_mutation_serial_{0};
+        std::optional<std::uint64_t>
+            last_captured_selection_serial_;
         std::atomic<Hydration> hydration_{Hydration::Empty};
         std::atomic<bool> scene_dirty_{false};
         std::atomic<bool> payload_dirty_{false};

@@ -2430,6 +2430,244 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
+           AutosaveSkipsUnchangedSelectionCapture) {
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Untitled dirty"),
+                lfs::core::NULL_NODE);
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_TRUE(lifecycle->document_);
+            EXPECT_FALSE(
+                lifecycle
+                    ->last_captured_selection_serial_
+                    .has_value());
+
+            auto started = lifecycle->startAutosave();
+            ASSERT_TRUE(started)
+                << lfs::format_for_developer(
+                       started.error());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+
+            ASSERT_TRUE(
+                lifecycle
+                    ->last_captured_selection_serial_
+                    .has_value());
+            const auto captured_serial =
+                *lifecycle
+                     ->last_captured_selection_serial_;
+            EXPECT_EQ(
+                captured_serial,
+                lifecycle->selection_mutation_serial_
+                    .load(std::memory_order_acquire));
+
+            auto groups =
+                lifecycle->document_->selection()
+                    .groups();
+            ASSERT_FALSE(groups.empty());
+            groups.front().name = "Mutated group";
+            ASSERT_TRUE(
+                lifecycle->document_->edit_selection()
+                    .set_groups(
+                        groups,
+                        lifecycle->document_
+                            ->selection()
+                            .active_group_id(),
+                        lifecycle->document_
+                            ->selection()
+                            .next_group_id()));
+            const auto mutated_epoch =
+                lifecycle->document_->dirty_epoch();
+
+            auto skipped =
+                lifecycle
+                    ->synchronizeDocumentFromViewer(
+                        project::ProjectLifecycle::
+                            DocumentSyncMode::
+                                Autosave);
+            ASSERT_TRUE(skipped)
+                << lfs::format_for_developer(
+                       skipped.error());
+            EXPECT_EQ(
+                lifecycle
+                    ->last_captured_selection_serial_,
+                captured_serial);
+            EXPECT_EQ(
+                lifecycle->document_->dirty_epoch(),
+                mutated_epoch);
+            ASSERT_FALSE(
+                lifecycle->document_->selection()
+                    .groups()
+                    .empty());
+            EXPECT_EQ(
+                lifecycle->document_->selection()
+                    .groups()
+                    .front()
+                    .name,
+                "Mutated group");
+            EXPECT_TRUE(
+                lifecycle->document_->selection()
+                    .selected_node_uuids()
+                    .empty());
+
+            const auto* untitled =
+                viewer.getScene().getNode(
+                    "Untitled dirty");
+            ASSERT_NE(untitled, nullptr);
+            const auto untitled_uuid =
+                untitled->uuid;
+            viewer.getSceneManager()->selectNode(
+                "Untitled dirty");
+            EXPECT_EQ(
+                lifecycle->selection_mutation_serial_
+                    .load(std::memory_order_acquire),
+                captured_serial);
+
+            auto node_recaptured =
+                lifecycle
+                    ->synchronizeDocumentFromViewer(
+                        project::ProjectLifecycle::
+                            DocumentSyncMode::
+                                Autosave);
+            ASSERT_TRUE(node_recaptured)
+                << lfs::format_for_developer(
+                       node_recaptured.error());
+            EXPECT_EQ(
+                lifecycle
+                    ->last_captured_selection_serial_,
+                captured_serial);
+            EXPECT_GT(
+                lifecycle->document_->dirty_epoch(),
+                mutated_epoch);
+            ASSERT_FALSE(
+                lifecycle->document_->selection()
+                    .groups()
+                    .empty());
+            EXPECT_NE(
+                lifecycle->document_->selection()
+                    .groups()
+                    .front()
+                    .name,
+                "Mutated group");
+            ASSERT_EQ(
+                lifecycle->document_->selection()
+                    .selected_node_uuids()
+                    .size(),
+                1u);
+            EXPECT_EQ(
+                lifecycle->document_->selection()
+                    .selected_node_uuids()
+                    .front(),
+                untitled_uuid);
+
+            auto groups_after_node =
+                lifecycle->document_->selection()
+                    .groups();
+            ASSERT_FALSE(groups_after_node.empty());
+            groups_after_node.front().name =
+                "Mutated group";
+            ASSERT_TRUE(
+                lifecycle->document_->edit_selection()
+                    .set_groups(
+                        groups_after_node,
+                        lifecycle->document_
+                            ->selection()
+                            .active_group_id(),
+                        lifecycle->document_
+                            ->selection()
+                            .next_group_id()));
+            const auto remutated_epoch =
+                lifecycle->document_->dirty_epoch();
+
+            lifecycle->markSceneMutation(
+                static_cast<std::uint32_t>(
+                    lfs::core::Scene::MutationType::
+                        SELECTION_CHANGED));
+            const auto bumped_serial =
+                lifecycle->selection_mutation_serial_
+                    .load(std::memory_order_acquire);
+            ASSERT_NE(bumped_serial, captured_serial);
+
+            auto recaptured =
+                lifecycle
+                    ->synchronizeDocumentFromViewer(
+                        project::ProjectLifecycle::
+                            DocumentSyncMode::
+                                Autosave);
+            ASSERT_TRUE(recaptured)
+                << lfs::format_for_developer(
+                       recaptured.error());
+            EXPECT_EQ(
+                lifecycle
+                    ->last_captured_selection_serial_,
+                bumped_serial);
+            EXPECT_GT(
+                lifecycle->document_->dirty_epoch(),
+                remutated_epoch);
+            ASSERT_FALSE(
+                lifecycle->document_->selection()
+                    .groups()
+                    .empty());
+            EXPECT_NE(
+                lifecycle->document_->selection()
+                    .groups()
+                    .front()
+                    .name,
+                "Mutated group");
+
+            auto recaptured_groups =
+                lifecycle->document_->selection()
+                    .groups();
+            ASSERT_FALSE(recaptured_groups.empty());
+            recaptured_groups.front().name =
+                "Explicit save must recapture";
+            ASSERT_TRUE(
+                lifecycle->document_->edit_selection()
+                    .set_groups(
+                        recaptured_groups,
+                        lifecycle->document_
+                            ->selection()
+                            .active_group_id(),
+                        lifecycle->document_
+                            ->selection()
+                            .next_group_id()));
+            auto explicit_sync =
+                lifecycle
+                    ->synchronizeDocumentFromViewer();
+            ASSERT_TRUE(explicit_sync)
+                << lfs::format_for_developer(
+                       explicit_sync.error());
+            ASSERT_FALSE(
+                lifecycle->document_->selection()
+                    .groups()
+                    .empty());
+            EXPECT_NE(
+                lifecycle->document_->selection()
+                    .groups()
+                    .front()
+                    .name,
+                "Explicit save must recapture");
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
            BlankUntitledSessionUpdateMaintenanceWritesNoScratch) {
         auto options = projectOptions();
         {

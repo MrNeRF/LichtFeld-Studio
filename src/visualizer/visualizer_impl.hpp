@@ -336,6 +336,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
         friend class VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
         friend class VisualizerImplResetTest_UntitledDirtySessionAutosavesToScratch_Test;
+        friend class VisualizerImplResetTest_AutosaveSkipsUnchangedSelectionCapture_Test;
         friend class VisualizerImplResetTest_BlankUntitledSessionUpdateMaintenanceWritesNoScratch_Test;
         friend class VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWritesScratch_Test;
         friend class VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWaitsForAutosaveQuietPeriod_Test;
