@@ -398,6 +398,8 @@ set(TEST_FILES
     test_tensor_lazy_stateful_ops.cpp
     test_fastgs_kernels.cpp
     test_fastgs_fuzz.cpp
+    test_fastgs_tile_culling_boundary.cpp
+    fastgs_tile_culling_boundary_cuda.cu
     test_sh_swizzle_layout.cpp
     test_python_io.cpp
     test_extended_unary_ops_vs_torch.cpp
