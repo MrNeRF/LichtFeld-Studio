@@ -3188,26 +3188,17 @@ class AssetManagerPanel(Panel):
         if not asset_id:
             return
 
-        if button == 2:
-            self._select_asset_id(
-                asset_id,
-                toggle=False,
-                multi_select=False,
-                row_element=action_el,
-                container=container,
-            )
-            self._open_asset_menu(asset_id)
-            self._stop_event(event)
-            return
-
         if button != 1:
             return
 
-        if self._select_asset_id(asset_id):
-            self._open_menu_asset_id = None
-            self._open_menu_folder_id = None
-            self._open_asset_menu(asset_id)
-            self._dirty_model("assets", "folders")
+        self._select_asset_id(
+            asset_id,
+            toggle=False,
+            multi_select=False,
+            row_element=action_el,
+            container=container,
+        )
+        self._open_asset_menu(asset_id)
         self._stop_event(event)
 
     def _on_asset_manager_double_click(self, event) -> None:

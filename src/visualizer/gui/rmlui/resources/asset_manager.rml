@@ -110,7 +110,7 @@
                 <div class="asset-virtual-spacer asset-card-top-spacer" data-style-height="asset_gallery_top_spacer_height"></div>
                 <div class="asset-card-grid-window">
                   <div class="asset-card-slot" data-style-width="asset_card_slot_width" data-for="asset : assets">
-                    <div class="asset-card" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-attr-data-asset-id="asset.id" data-asset-action="select">
+                    <div class="asset-card" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-class-menu-open="asset.menu_open" data-attr-data-asset-id="asset.id" data-asset-action="select">
                       <div class="asset-card-thumb asset-thumb-project">
                         <div class="asset-card-overlay">
                           <span class="asset-pill asset-pill-licht">LICHT</span>
@@ -166,7 +166,7 @@
                 <div class="asset-virtual-spacer asset-list-top-spacer" data-style-height="asset_list_top_spacer_height"></div>
                 <div class="asset-list-window">
                   <div data-for="asset : assets">
-                    <div class="asset-list-row" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-attr-data-asset-id="asset.id" data-asset-action="select">
+                    <div class="asset-list-row" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-class-menu-open="asset.menu_open" data-attr-data-asset-id="asset.id" data-asset-action="select">
                       <span class="asset-col asset-col-name">
                         <span class="asset-list-primary">{{asset.display_name}}</span>
                         <span class="asset-list-secondary">{{asset.display_subtitle}}</span>

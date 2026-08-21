@@ -638,11 +638,13 @@
     gap: 10dp;
     align-content: flex-start;
     min-width: 0;
+    overflow: visible;
 }
 
 .asset-card-slot {
     min-width: 0;
     display: flex;
+    overflow: visible;
 }
 
 .asset-card {
@@ -671,6 +673,11 @@
 .asset-card.is-missing,
 .asset-list-row.is-missing {
     border-color: #8b4a42;
+}
+
+.asset-card.menu-open,
+.asset-list-row.menu-open {
+    z-index: 1000;
 }
 
 .asset-card-thumb {
@@ -831,8 +838,9 @@
     border-radius: 4dp;
     min-width: 150dp;
     display: none;
-    z-index: 1002;
+    z-index: 1010;
     box-shadow: 0 2dp 8dp rgba(0, 0, 0, 0.5);
+    pointer-events: auto;
 }
 
 .asset-load-menu.is-visible {
@@ -852,6 +860,7 @@
     cursor: pointer;
     border-bottom-width: 1dp;
     border-bottom-color: #3c3630;
+    pointer-events: auto;
 }
 
 .asset-dropdown-item:last-child {
@@ -901,14 +910,14 @@
     position: absolute;
     top: 0;
     left: 100%;
-    margin-left: 2dp;
+    margin-left: 0;
     background-color: #302d29;
     border-width: 1dp;
     border-color: #514a42;
     border-radius: 4dp;
     min-width: 160dp;
     display: none;
-    z-index: 1001;
+    z-index: 1020;
     box-shadow: 0 2dp 8dp rgba(0, 0, 0, 0.5);
     pointer-events: auto;
 }
@@ -940,6 +949,7 @@
     flex-direction: column;
     gap: 4dp;
     min-width: 0;
+    overflow: visible;
 }
 
 .asset-virtual-spacer {
@@ -1028,7 +1038,7 @@
 
 .asset-card {
     height: 220dp;
-    overflow: hidden;
+    overflow: visible;
 }
 
 .asset-card-body {

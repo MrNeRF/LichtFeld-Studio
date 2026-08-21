@@ -333,6 +333,27 @@ def test_asset_manager_card_thumbs_do_not_use_gradient_placeholders():
     assert "vertical-gradient" not in rcss
 
 
+def test_asset_menus_render_above_cards_and_rows():
+    folder_root = Path(__file__).parent.parent.parent
+    resources_dir = (
+        folder_root
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+    )
+    rml = (resources_dir / "asset_manager.rml").read_text(encoding="utf-8")
+    rcss = (resources_dir / "asset_manager.rcss").read_text(encoding="utf-8")
+
+    assert rml.count('data-class-menu-open="asset.menu_open"') == 2
+    assert ".asset-card.menu-open," in rcss
+    assert ".asset-list-row.menu-open" in rcss
+    assert ".asset-card {\n    height: 220dp;\n    overflow: visible;\n}" in rcss
+    assert ".asset-card-slot" in rcss
+    assert ".asset-list-window" in rcss
+
+
 def test_asset_manager_has_visible_viewport_edge():
     folder_root = Path(__file__).parent.parent.parent
     resources_dir = (
@@ -437,6 +458,67 @@ def test_dom_card_click_selects_asset_from_stable_parent(asset_manager_panel_mod
     assert panel.get_selected_asset_name() == "bicycle-project"
     assert panel.get_selected_count() == 1
     assert event.stopped is True
+
+
+def test_dom_row_right_click_opens_menu_for_an_already_selected_asset(
+    asset_manager_panel_module,
+):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    panel._handle = _HandleStub()
+    panel._asset_index = SimpleNamespace(
+        assets={"a1": _make_asset()},
+        folders={"p1": {"id": "p1", "name": "Projects", "scene_ids": ["s1"]}},
+        scenes={"s1": {"id": "s1", "name": "bicycle", "folder_id": "p1"}},
+    )
+    panel._selected_asset_ids = {"a1"}
+    panel._selection_type = "asset"
+
+    container = _ElementStub({"id": "asset-main-row"})
+    row = _ElementStub(
+        {
+            "class": "asset-list-row",
+            "data-asset-id": "a1",
+            "data-asset-action": "select",
+        },
+        parent=container,
+    )
+    event = _EventStub(
+        current_target=container,
+        target=row,
+        params={"button": "1"},
+    )
+
+    panel._on_asset_manager_mousedown(event)
+
+    assert panel._open_menu_asset_id == "a1"
+    assert event.stopped is True
+
+
+def test_dom_row_primary_mousedown_does_not_open_context_menu(
+    asset_manager_panel_module,
+):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    panel._handle = _HandleStub()
+    panel._asset_index = SimpleNamespace(
+        assets={"a1": _make_asset()},
+        folders={"p1": {"id": "p1", "name": "Projects", "scene_ids": ["s1"]}},
+        scenes={"s1": {"id": "s1", "name": "bicycle", "folder_id": "p1"}},
+    )
+    container = _ElementStub({"id": "asset-main-row"})
+    row = _ElementStub(
+        {"data-asset-id": "a1", "data-asset-action": "select"},
+        parent=container,
+    )
+    event = _EventStub(
+        current_target=container,
+        target=row,
+        params={"button": "0"},
+    )
+
+    panel._on_asset_manager_mousedown(event)
+
+    assert panel._open_menu_asset_id is None
+    assert event.stopped is False
 
 
 def test_dom_card_click_updates_visible_row_class(asset_manager_panel_module):
