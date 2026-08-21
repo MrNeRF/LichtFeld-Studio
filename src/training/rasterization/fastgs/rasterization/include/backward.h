@@ -34,7 +34,7 @@ namespace fast_lfs::rasterization {
         float* grad_opacity_helper,
         float3* grad_color_helper,
         float2* grad_mean2d_helper,
-        float* grad_conic_helper,
+        float3* grad_conic_helper,
         float* grad_depth_helper,
         float3* grad_normal_helper, // [N] or nullptr, required when grad_normal != nullptr
         float4* grad_w2c,

@@ -38,6 +38,24 @@ inline int checked_to_int(uint64_t value, const char* message) {
     return static_cast<int>(value);
 }
 
+// Host-side EWA clip box (same IEEE expression the kernels used to evaluate per thread).
+inline void ewa_clip_bounds(
+    const float w,
+    const float h,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
+    float& clip_left,
+    float& clip_right,
+    float& clip_top,
+    float& clip_bottom) {
+    clip_left = (-0.15f * w - cx) / fx;
+    clip_right = (1.15f * w - cx) / fx;
+    clip_top = (-0.15f * h - cy) / fy;
+    clip_bottom = (1.15f * h - cy) / fy;
+}
+
 inline int checked_fastgs_instance_count(uint64_t value, uint64_t n_primitives, uint64_t n_tiles) {
     if (value > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
         throw std::overflow_error(
