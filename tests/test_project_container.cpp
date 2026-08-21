@@ -39,9 +39,12 @@
 
 #ifndef _WIN32
 #include <csignal>
+#include <fcntl.h>
 #include <limits.h>
 #include <sched.h>
+#include <sys/file.h>
 #include <sys/mount.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -3244,6 +3247,89 @@ namespace {
         }
         EXPECT_FALSE(fs::exists(lock_path));
     }
+
+#ifndef _WIN32
+    TEST(ProjectContainerWriter, WriterLockFdMatchesCurrentLockPath) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "lock-identity.licht";
+        auto lock_path = path;
+        lock_path += ".lock";
+        const int fd =
+            ::open(lock_path.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+        ASSERT_GE(fd, 0);
+        ASSERT_EQ(::flock(fd, LOCK_EX | LOCK_NB), 0);
+        auto identity = detail::writer_lock_fd_matches_path(fd, lock_path);
+        ::flock(fd, LOCK_UN);
+        ::close(fd);
+        ASSERT_TRUE(identity) << lfs::format_for_developer(identity.error());
+        EXPECT_TRUE(*identity);
+    }
+
+    TEST(ProjectContainerWriter, WriterLockFdMismatchOnReplacedLockFile) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "lock-replaced.licht";
+        auto lock_path = path;
+        lock_path += ".lock";
+        const int stale =
+            ::open(lock_path.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+        ASSERT_GE(stale, 0);
+        ASSERT_EQ(::flock(stale, LOCK_EX | LOCK_NB), 0);
+        ASSERT_EQ(::unlink(lock_path.c_str()), 0);
+        const int current =
+            ::open(lock_path.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+        ASSERT_GE(current, 0);
+        auto stale_identity =
+            detail::writer_lock_fd_matches_path(stale, lock_path);
+        auto current_identity =
+            detail::writer_lock_fd_matches_path(current, lock_path);
+        auto missing_identity = detail::writer_lock_fd_matches_path(
+            stale, temporary.path / "missing.licht.lock");
+        ::flock(stale, LOCK_UN);
+        ::close(stale);
+        ::close(current);
+        ASSERT_TRUE(stale_identity)
+            << lfs::format_for_developer(stale_identity.error());
+        EXPECT_FALSE(*stale_identity);
+        ASSERT_TRUE(current_identity)
+            << lfs::format_for_developer(current_identity.error());
+        EXPECT_TRUE(*current_identity);
+        ASSERT_TRUE(missing_identity)
+            << lfs::format_for_developer(missing_identity.error());
+        EXPECT_FALSE(*missing_identity);
+    }
+
+    TEST(ProjectContainerWriter, WriterLockFdFstatFailureIsError) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "lock-fstat.licht";
+        auto lock_path = path;
+        lock_path += ".lock";
+        const int fd =
+            ::open(lock_path.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+        ASSERT_GE(fd, 0);
+        ASSERT_EQ(::close(fd), 0);
+        auto identity = detail::writer_lock_fd_matches_path(fd, lock_path);
+        ASSERT_FALSE(identity);
+        EXPECT_EQ(identity.error().code(), lfs::ErrorCode::Internal);
+        EXPECT_NE(std::string(identity.error().detail()).find("lockfile fstat failed"),
+                  std::string::npos);
+        ASSERT_TRUE(identity.error().native().has_value());
+        EXPECT_EQ(identity.error().native()->code, EBADF);
+    }
+
+    TEST(ProjectContainerWriter, WriterLockAcquireFailsWhenLockPathIsDirectory) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "dir-lock.licht";
+        auto lock_path = path;
+        lock_path += ".lock";
+        fs::create_directory(lock_path);
+        auto lock = detail::WriterLock::acquire(path);
+        ASSERT_FALSE(lock);
+        EXPECT_NE(lock.error().code(), lfs::ErrorCode::Unavailable);
+        EXPECT_NE(std::string(lock.error().detail()).find("lockfile open failed"),
+                  std::string::npos);
+        EXPECT_TRUE(fs::is_directory(lock_path));
+    }
+#endif
 
     TEST(ProjectContainerWriter,
          StartupSweepRemovesStaleMasterLockAndSaveasTemp) {

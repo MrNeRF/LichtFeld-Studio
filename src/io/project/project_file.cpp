@@ -414,7 +414,7 @@ namespace lfs::io::project::detail {
         }
         return static_cast<std::uint64_t>(size.QuadPart);
 #else
-        struct stat status {};
+        struct stat status{};
         if (::fstat(fd_, &status) != 0 || status.st_size < 0) {
             const int error = errno;
             return project_error(native_error_code(error, false),
@@ -687,6 +687,28 @@ namespace lfs::io::project::detail {
 #endif
     }
 
+#ifndef _WIN32
+    lfs::Result<bool> writer_lock_fd_matches_path(
+        const int fd, const std::filesystem::path& lock_path) {
+        struct stat fd_status{};
+        if (::fstat(fd, &fd_status) != 0) {
+            const int error = errno;
+            return project_error(
+                native_error_code(error, true),
+                "The project writer lock could not be opened.",
+                std::format("lockfile fstat failed: {}", std::strerror(error)), lock_path,
+                std::nullopt, "writer_lock", error, std::strerror(error));
+        }
+        struct stat path_status{};
+        if (::stat(lock_path.c_str(), &path_status) != 0 ||
+            fd_status.st_dev != path_status.st_dev ||
+            fd_status.st_ino != path_status.st_ino) {
+            return false;
+        }
+        return true;
+    }
+#endif
+
     lfs::Result<WriterLock> WriterLock::acquire(const std::filesystem::path& project_path) {
         auto lock_path = project_path;
         lock_path += ".lock";
@@ -769,20 +791,19 @@ namespace lfs::io::project::detail {
                     std::format("flock denied the held lock: {}", std::strerror(error)),
                     lock_path, std::nullopt, "writer_lock", error, std::strerror(error));
             }
-            struct stat fd_status {};
-            if (::fstat(fd, &fd_status) != 0) {
-                return WriterLock(lock_path, fd);
+            auto identity = writer_lock_fd_matches_path(fd, lock_path);
+            if (!identity) {
+                ::flock(fd, LOCK_UN);
+                ::close(fd);
+                return std::move(identity).error();
             }
-            struct stat path_status {};
-            if (::stat(lock_path.c_str(), &path_status) != 0 ||
-                fd_status.st_dev != path_status.st_dev ||
-                fd_status.st_ino != path_status.st_ino) {
-                if (attempt + 1 < kAcquireAttempts) {
-                    ::flock(fd, LOCK_UN);
-                    ::close(fd);
-                    continue;
-                }
-                return WriterLock(lock_path, fd);
+            if (!*identity) {
+                // Drop the stale fd and retry. The last attempt falls out of
+                // the loop so the exhaustion error below is returned instead
+                // of a compromised lock.
+                ::flock(fd, LOCK_UN);
+                ::close(fd);
+                continue;
             }
             return WriterLock(lock_path, fd);
         }

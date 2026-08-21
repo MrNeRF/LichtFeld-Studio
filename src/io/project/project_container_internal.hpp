@@ -136,6 +136,13 @@ namespace lfs::io::project::detail {
         std::filesystem::path path_;
     };
 
+#ifndef _WIN32
+    // True when `fd` still names `lock_path`. False if the path is missing or
+    // a different inode. fstat failure is an error, never a match.
+    [[nodiscard]] lfs::Result<bool>
+    writer_lock_fd_matches_path(int fd, const std::filesystem::path& lock_path);
+#endif
+
     struct AtomicReplaceState {
         std::optional<std::filesystem::path> backup_path;
     };
