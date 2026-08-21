@@ -1455,6 +1455,68 @@ namespace lfs::vis {
         }
     }
 
+    TEST_F(VisualizerImplResetTest, ModalOverlayCurrentSnapshotAndDismiss) {
+        VisualizerImpl viewer(projectOptions());
+        auto* const gui = viewer.getGuiManager();
+        ASSERT_NE(gui, nullptr);
+        auto* const overlay = gui->modalOverlay();
+        ASSERT_NE(overlay, nullptr);
+
+        EXPECT_FALSE(overlay->current().has_value());
+        EXPECT_EQ(overlay->pending_count(), 0u);
+        EXPECT_FALSE(overlay->dismiss("OK"));
+
+        bool fired = false;
+        std::string fired_label;
+        lfs::core::ModalRequest req;
+        req.title = "Exit Application?";
+        req.body_rml =
+            "<p>Are you sure you want to exit?</p><br/>Any unsaved changes will be lost.";
+        req.buttons = {
+            {"Save", "primary"},
+            {"Discard", "error"},
+            {"Cancel", "secondary"},
+            {"Hold", "secondary", true},
+        };
+        req.on_result = [&](const lfs::core::ModalResult& result) {
+            fired = true;
+            fired_label = result.button_label;
+        };
+        overlay->enqueue(std::move(req));
+
+        const auto snap = overlay->current();
+        ASSERT_TRUE(snap.has_value());
+        EXPECT_EQ(snap->title, "Exit Application?");
+        EXPECT_EQ(
+            snap->body_text,
+            "Are you sure you want to exit?\nAny unsaved changes will be lost.");
+        ASSERT_EQ(snap->button_labels.size(), 4u);
+        EXPECT_EQ(snap->button_labels[0], "Save");
+        EXPECT_EQ(snap->button_labels[1], "Discard");
+        EXPECT_EQ(snap->button_labels[2], "Cancel");
+        EXPECT_EQ(snap->button_labels[3], "Hold");
+        ASSERT_EQ(snap->button_enabled.size(), 4u);
+        EXPECT_TRUE(snap->button_enabled[0]);
+        EXPECT_TRUE(snap->button_enabled[1]);
+        EXPECT_TRUE(snap->button_enabled[2]);
+        EXPECT_FALSE(snap->button_enabled[3]);
+        EXPECT_FALSE(snap->has_input);
+        EXPECT_EQ(overlay->pending_count(), 0u);
+
+        EXPECT_FALSE(overlay->dismiss("Missing"));
+        EXPECT_FALSE(overlay->dismiss("Hold"));
+        EXPECT_FALSE(fired);
+        ASSERT_TRUE(overlay->current().has_value());
+        EXPECT_EQ(overlay->current()->title, "Exit Application?");
+
+        EXPECT_TRUE(overlay->dismiss("Cancel"));
+        EXPECT_TRUE(fired);
+        EXPECT_EQ(fired_label, "Cancel");
+        EXPECT_FALSE(overlay->current().has_value());
+        EXPECT_EQ(overlay->pending_count(), 0u);
+        EXPECT_FALSE(overlay->dismiss("Cancel"));
+    }
+
     TEST_F(VisualizerImplResetTest,
            RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt) {
         const auto& temporary = temporary_.path;

@@ -22,8 +22,100 @@
 #include <cassert>
 #include <cmath>
 #include <format>
+#include <string_view>
 
 namespace lfs::vis::gui {
+
+    namespace {
+        bool ieq_ascii(const char a, const char b) {
+            const auto lower = [](char c) {
+                return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+            };
+            return lower(a) == lower(b);
+        }
+
+        bool is_br_tag(const std::string_view tag) {
+            std::size_t i = 1;
+            while (i < tag.size() && (tag[i] == ' ' || tag[i] == '\t' || tag[i] == '\n'))
+                ++i;
+            if (i + 1 >= tag.size() || !ieq_ascii(tag[i], 'b') || !ieq_ascii(tag[i + 1], 'r'))
+                return false;
+            i += 2;
+            while (i < tag.size() && (tag[i] == ' ' || tag[i] == '\t' || tag[i] == '/' ||
+                                      tag[i] == '\n'))
+                ++i;
+            return i == tag.size();
+        }
+
+        std::string strip_rml_tags(const std::string_view rml) {
+            std::string text;
+            text.reserve(rml.size());
+            for (std::size_t i = 0; i < rml.size();) {
+                if (rml[i] == '<') {
+                    const auto close = rml.find('>', i + 1);
+                    if (close == std::string_view::npos)
+                        break;
+                    if (is_br_tag(rml.substr(i, close - i)))
+                        text.push_back('\n');
+                    i = close + 1;
+                    continue;
+                }
+                if (rml[i] == '&') {
+                    const auto rest = rml.substr(i);
+                    if (rest.starts_with("&lt;")) {
+                        text.push_back('<');
+                        i += 4;
+                        continue;
+                    }
+                    if (rest.starts_with("&gt;")) {
+                        text.push_back('>');
+                        i += 4;
+                        continue;
+                    }
+                    if (rest.starts_with("&amp;")) {
+                        text.push_back('&');
+                        i += 5;
+                        continue;
+                    }
+                    if (rest.starts_with("&quot;")) {
+                        text.push_back('"');
+                        i += 6;
+                        continue;
+                    }
+                    if (rest.starts_with("&nbsp;")) {
+                        text.push_back(' ');
+                        i += 6;
+                        continue;
+                    }
+                }
+                text.push_back(rml[i]);
+                ++i;
+            }
+            return text;
+        }
+
+        ModalSnapshot snapshot_from_request(const lfs::core::ModalRequest& req) {
+            ModalSnapshot snap;
+            snap.title = req.title;
+            snap.body_text = strip_rml_tags(req.body_rml);
+            snap.has_input = req.has_input;
+            snap.button_labels.reserve(req.buttons.size());
+            snap.button_enabled.reserve(req.buttons.size());
+            for (const auto& btn : req.buttons) {
+                snap.button_labels.push_back(btn.label);
+                snap.button_enabled.push_back(!btn.disabled);
+            }
+            return snap;
+        }
+
+        bool button_is_enabled(const lfs::core::ModalRequest& req, const std::string& label) {
+            for (const auto& btn : req.buttons) {
+                if (btn.label == label)
+                    return !btn.disabled;
+            }
+            return false;
+        }
+    } // namespace
 
     RmlModalOverlay::RmlModalOverlay(RmlUIManager* rml_manager)
         : rml_manager_(rml_manager) {
@@ -47,6 +139,23 @@ namespace lfs::vis::gui {
 
     bool RmlModalOverlay::isOpen() const {
         return active_.has_value();
+    }
+
+    std::optional<ModalSnapshot> RmlModalOverlay::current() const {
+        if (active_)
+            return snapshot_from_request(*active_);
+        std::lock_guard lock(queue_mutex_);
+        if (queue_.empty())
+            return std::nullopt;
+        return snapshot_from_request(queue_.front());
+    }
+
+    std::size_t RmlModalOverlay::pending_count() const {
+        std::lock_guard lock(queue_mutex_);
+        const auto queued = queue_.size();
+        if (!active_ && queued > 0)
+            return queued - 1;
+        return queued;
     }
 
     bool RmlModalOverlay::hasPendingRequest() const {
@@ -252,25 +361,47 @@ namespace lfs::vis::gui {
         return result;
     }
 
-    void RmlModalOverlay::dismiss(const std::string& button_label) {
-        if (!active_)
-            return;
+    bool RmlModalOverlay::dismiss(const std::string& button_label) {
+        if (active_) {
+            if (!button_is_enabled(*active_, button_label))
+                return false;
 
-        text_input_revert_.clear();
-        el_backdrop_->SetProperty("display", "none");
-        el_dialog_->SetProperty("display", "none");
+            text_input_revert_.clear();
+            if (el_backdrop_)
+                el_backdrop_->SetProperty("display", "none");
+            if (el_dialog_)
+                el_dialog_->SetProperty("display", "none");
 
-        auto result = collectFormValues();
+            auto result = collectFormValues();
+            result.button_label = button_label;
+
+            auto on_result = std::move(active_->on_result);
+            active_.reset();
+            render_needed_ = true;
+            dialog_position_valid_ = false;
+            last_mouse_valid_ = false;
+
+            if (on_result)
+                on_result(result);
+            return true;
+        }
+
+        lfs::core::ModalRequest req;
+        {
+            std::lock_guard lock(queue_mutex_);
+            if (queue_.empty() || !button_is_enabled(queue_.front(), button_label))
+                return false;
+            req = std::move(queue_.front());
+            queue_.pop_front();
+        }
+
+        lfs::core::ModalResult result;
         result.button_label = button_label;
-
-        auto on_result = std::move(active_->on_result);
-        active_.reset();
-        render_needed_ = true;
-        dialog_position_valid_ = false;
-        last_mouse_valid_ = false;
-
-        if (on_result)
-            on_result(result);
+        if (req.has_input)
+            result.input_value = req.input_default;
+        if (req.on_result)
+            req.on_result(result);
+        return true;
     }
 
     bool RmlModalOverlay::dismissFirstEnabledButton() {

@@ -8,8 +8,10 @@
 #include "core/events.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/core/editor_context.hpp"
+#include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/gui/rml_menu_bar.hpp"
+#include "visualizer/gui/rml_modal_overlay.hpp"
 #include "visualizer/operator/operator_properties.hpp"
 #include "visualizer/operator/operator_registry.hpp"
 #include "visualizer/tools/unified_tool_registry.hpp"
@@ -537,6 +539,60 @@ namespace lfs::app {
 
         vis::VisualizerImpl* as_visualizer_impl(vis::Visualizer* viewer) {
             return dynamic_cast<vis::VisualizerImpl*>(viewer);
+        }
+
+        vis::gui::RmlModalOverlay* modal_overlay_or_null(vis::Visualizer* viewer) {
+            auto* const impl = as_visualizer_impl(viewer);
+            if (!impl)
+                return nullptr;
+            auto* const gui = impl->getGuiManager();
+            return gui ? gui->modalOverlay() : nullptr;
+        }
+
+        json modal_state_json(vis::gui::RmlModalOverlay* overlay) {
+            json buttons = json::array();
+            if (!overlay) {
+                return json{
+                    {"open", false},
+                    {"title", ""},
+                    {"body", ""},
+                    {"buttons", std::move(buttons)},
+                    {"has_input", false},
+                    {"pending", 0},
+                };
+            }
+
+            const auto snap = overlay->current();
+            const auto pending = overlay->pending_count();
+            if (!snap) {
+                return json{
+                    {"open", false},
+                    {"title", ""},
+                    {"body", ""},
+                    {"buttons", std::move(buttons)},
+                    {"has_input", false},
+                    {"pending", pending},
+                };
+            }
+
+            const auto n = snap->button_labels.size() < snap->button_enabled.size()
+                               ? snap->button_labels.size()
+                               : snap->button_enabled.size();
+            buttons.get_ref<json::array_t&>().reserve(n);
+            for (std::size_t i = 0; i < n; ++i) {
+                buttons.push_back(json{
+                    {"label", snap->button_labels[i]},
+                    {"enabled", static_cast<bool>(snap->button_enabled[i])},
+                });
+            }
+            return json{
+                {"open", true},
+                {"title", snap->title},
+                {"body", snap->body_text},
+                {"buttons", std::move(buttons)},
+                {"has_input", snap->has_input},
+                {"pending", pending},
+            };
         }
 
         json current_ui_state_json(vis::Visualizer* viewer) {
@@ -1237,6 +1293,56 @@ namespace lfs::app {
                     auto payload = current_ui_state_json(viewer);
                     payload["success"] = true;
                     return payload;
+                });
+            });
+
+        registry.register_tool(
+            mcp::McpTool{
+                .name = "ui.modal.get",
+                .description = "Inspect the currently shown confirm/input modal overlay, including button labels and queued dialogs behind it",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = mcp::McpToolMetadata{
+                    .category = "ui",
+                    .kind = "query",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                }},
+            [viewer](const json&) -> json {
+                return post_and_wait(viewer, [viewer]() -> json {
+                    return modal_state_json(modal_overlay_or_null(viewer));
+                });
+            });
+
+        registry.register_tool(
+            mcp::McpTool{
+                .name = "ui.modal.press",
+                .description = "Press an enabled button on the currently shown modal overlay by label, running the same result path as a real click",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"label", json{{"type", "string"}, {"description", "Exact button label to press"}}}},
+                    .required = {"label"}},
+                .metadata = mcp::McpToolMetadata{
+                    .category = "ui",
+                    .kind = "command",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                }},
+            [viewer](const json& args) -> json {
+                const std::string label = args["label"].get<std::string>();
+                return post_and_wait(viewer, [viewer, label]() -> json {
+                    auto* const overlay = modal_overlay_or_null(viewer);
+                    if (!overlay) {
+                        return json{{"pressed", false}, {"error", "Modal overlay is unavailable"}};
+                    }
+                    if (!overlay->current()) {
+                        return json{{"pressed", false}, {"error", "No modal dialog is open"}};
+                    }
+                    if (!overlay->dismiss(label)) {
+                        return json{{"pressed", false},
+                                    {"error", "No matching enabled button: " + label}};
+                    }
+                    return json{{"pressed", true}};
                 });
             });
     }

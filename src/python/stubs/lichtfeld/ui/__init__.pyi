@@ -933,6 +933,16 @@ def input_dialog(title: str, message: str, default_value: str = '', callback: ob
 def message_dialog(title: str, message: str, style: str = 'info', callback: object | None = None) -> None:
     """Show a message dialog (style: 'info', 'warning', or 'error')"""
 
+def modal_get() -> dict | None:
+    """
+    Return the currently shown modal dialog as a dict, or None if none is open
+    """
+
+def modal_press(label: str) -> bool:
+    """
+    Press an enabled modal button by label. Returns False if no matching enabled button.
+    """
+
 def request_redraw(delay: float = 0.0) -> None:
     """
     Request a UI redraw; with delay > 0, schedule it no later than that many seconds from now.

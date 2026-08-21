@@ -110,6 +110,10 @@ namespace lfs::vis {
             [[nodiscard]] AsyncTaskManager& asyncTasks() { return async_tasks_; }
             [[nodiscard]] const AsyncTaskManager& asyncTasks() const { return async_tasks_; }
             void enqueueModal(lfs::core::ModalRequest request);
+            [[nodiscard]] RmlModalOverlay* modalOverlay() { return rml_modal_overlay_.get(); }
+            [[nodiscard]] const RmlModalOverlay* modalOverlay() const {
+                return rml_modal_overlay_.get();
+            }
             void enqueueToast(ToastRequest request);
             [[nodiscard]] GizmoManager& gizmo() { return gizmo_manager_; }
             [[nodiscard]] const GizmoManager& gizmo() const { return gizmo_manager_; }
