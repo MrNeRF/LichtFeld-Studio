@@ -746,9 +746,9 @@ namespace lfs::core {
         params.dst_cx = cx * static_cast<float>(params.dst_width) / static_cast<float>(width);
         params.dst_cy = cy * static_cast<float>(params.dst_height) / static_cast<float>(height);
 
-        LOG_INFO("Undistort: %dx%d -> %dx%d, fx=%.1f->%.1f, fy=%.1f->%.1f",
-                 width, height, params.dst_width, params.dst_height,
-                 fx, params.dst_fx, fy, params.dst_fy);
+        LOG_DEBUG("Undistort: %dx%d -> %dx%d, fx=%.1f->%.1f, fy=%.1f->%.1f",
+                  width, height, params.dst_width, params.dst_height,
+                  fx, params.dst_fx, fy, params.dst_fy);
 
         return params;
     }

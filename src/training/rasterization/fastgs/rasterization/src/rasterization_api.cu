@@ -226,7 +226,13 @@ namespace fast_lfs::rasterization {
         cudaStream_t stream,
         const float* sh_value_bounds_ptr,
         unsigned int sh_value_n_cells,
-        unsigned int sh_value_bits) {
+        unsigned int sh_value_bits,
+        FastGSCameraKind camera_kind,
+        float fisheye_k1,
+        float fisheye_k2,
+        float fisheye_k3,
+        float fisheye_k4,
+        float fisheye_theta_max) {
 
         if (stream == nullptr) {
             stream = lfs::core::getCurrentCUDAStream();
@@ -375,7 +381,13 @@ namespace fast_lfs::rasterization {
                                                    near_plane,
                                                    far_plane,
                                                    mip_filter,
-                                                   stream);
+                                                   stream,
+                                                   camera_kind,
+                                                   fisheye_k1,
+                                                   fisheye_k2,
+                                                   fisheye_k3,
+                                                   fisheye_k4,
+                                                   fisheye_theta_max);
 
             // Verify allocations happened
             if (forward_result.n_instances > 0 && !forward_result.sorted_primitive_indices) {
@@ -482,7 +494,13 @@ namespace fast_lfs::rasterization {
         const FusedAdamSettings* fused_adam,
         const float* shN_value_bounds_ptr,
         unsigned shN_value_n_cells,
-        unsigned shN_value_bits) {
+        unsigned shN_value_bits,
+        FastGSCameraKind camera_kind,
+        float fisheye_k1,
+        float fisheye_k2,
+        float fisheye_k3,
+        float fisheye_k4,
+        float fisheye_theta_max) {
 
         // The forward chose the stream and chained the arena frame on it; the
         // backward shares the same context/arena frame and must match.
@@ -662,7 +680,13 @@ namespace fast_lfs::rasterization {
                 reinterpret_cast<const float2*>(shN_value_bounds_ptr),
                 shN_value_n_cells,
                 shN_value_bits,
-                stream);
+                stream,
+                camera_kind,
+                fisheye_k1,
+                fisheye_k2,
+                fisheye_k3,
+                fisheye_k4,
+                fisheye_theta_max);
 
             // Mark frame as complete
             release_forward_context(forward_ctx);

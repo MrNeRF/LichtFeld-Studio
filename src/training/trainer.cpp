@@ -5623,8 +5623,11 @@ namespace lfs::training {
                         });
                     }
                 } else if (!params_.optimization.undistort || !cam->is_undistort_prepared()) {
-                    if (cam->radial_distortion().numel() != 0 ||
-                        cam->tangential_distortion().numel() != 0) {
+                    const bool fastgs_fisheye =
+                        cam->camera_model_type() == core::CameraModelType::FISHEYE;
+                    if (!fastgs_fisheye &&
+                        (cam->radial_distortion().numel() != 0 ||
+                         cam->tangential_distortion().numel() != 0)) {
                         return lfs::make_error(lfs::ErrorInit{
                             .code = lfs::ErrorCode::InvalidArgument,
                             .domain = lfs::ErrorDomain::Training,
@@ -5632,7 +5635,8 @@ namespace lfs::training {
                             .detection = LFS_SOURCE_SITE_CURRENT(),
                         });
                     }
-                    if (cam->camera_model_type() != core::CameraModelType::PINHOLE) {
+                    if (!fastgs_fisheye &&
+                        cam->camera_model_type() != core::CameraModelType::PINHOLE) {
                         return lfs::make_error(lfs::ErrorInit{
                             .code = lfs::ErrorCode::InvalidArgument,
                             .domain = lfs::ErrorDomain::Training,
@@ -6614,6 +6618,9 @@ namespace lfs::training {
                                         const float* const depth_pixel_weight =
                                             roi_weight_ptr_on_stream(depth_stream);
                                         lfs::core::pin_operands({&rendered_depth, &rendered_alpha, &target_depth});
+                                        // FastGS fisheye writes ray length D=|P| into the
+                                        // depth map (pinhole still writes camera-z). Depth-prior
+                                        // supervision compares against this same quantity.
                                         lfs::training::kernels::launch_depth_loss(
                                             rendered_depth.ptr<float>(),
                                             rendered_alpha.ptr<float>(),

@@ -57,6 +57,12 @@ namespace fast_lfs::rasterization {
         const float2* shN_value_bounds,
         const uint shN_value_n_cells,
         const uint shN_value_bits,
-        cudaStream_t stream);
+        cudaStream_t stream,
+        FastGSCameraKind camera_kind = FastGSCameraKind::PINHOLE,
+        float fisheye_k1 = 0.0f,
+        float fisheye_k2 = 0.0f,
+        float fisheye_k3 = 0.0f,
+        float fisheye_k4 = 0.0f,
+        float fisheye_theta_max = 0.0f);
 
 } // namespace fast_lfs::rasterization

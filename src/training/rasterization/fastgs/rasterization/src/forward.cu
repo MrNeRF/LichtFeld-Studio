@@ -6,6 +6,7 @@
 #include "core/crash_handler.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
+#include "fisheye_kb.cuh"
 #include "forward.h"
 #include "helper_math.h"
 #include "kernels_forward.cuh"
@@ -395,7 +396,13 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     const float near_, // near and far are macros in windows
     const float far_,
     bool mip_filter,
-    cudaStream_t stream) {
+    cudaStream_t stream,
+    FastGSCameraKind camera_kind,
+    float fisheye_k1,
+    float fisheye_k2,
+    float fisheye_k3,
+    float fisheye_k4,
+    float fisheye_theta_max) {
 
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
     const uint64_t n_tiles_u64 = static_cast<uint64_t>(grid.x) * static_cast<uint64_t>(grid.y);
@@ -429,46 +436,63 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     const float h_f = static_cast<float>(height);
     float clip_left, clip_right, clip_top, clip_bottom;
     ewa_clip_bounds(w_f, h_f, fx, fy, cx, cy, clip_left, clip_right, clip_top, clip_bottom);
-    kernels::forward::preprocess_cu<<<div_round_up(n_primitives, config::block_size_preprocess), config::block_size_preprocess, 0, stream>>>(
-        means,
-        scales_raw,
-        rotations_raw,
-        opacities_raw,
-        sh_coefficients_0,
-        sh_coefficients_rest,
-        sh_value_bounds,
-        sh_value_n_cells,
-        sh_value_bits,
-        w2c,
-        cam_position,
-        per_primitive_buffers.depth_keys,
-        per_primitive_buffers.depths,
-        per_primitive_buffers.n_touched_tiles,
-        per_primitive_buffers.screen_bounds,
-        per_primitive_buffers.mean2d,
-        per_primitive_buffers.conic_opacity,
-        per_primitive_buffers.color,
-        normal != nullptr ? primitive_normals : nullptr,
-        n_primitives,
-        grid.x,
-        grid.y,
-        active_sh_bases,
-        sh_layout_slots,
-        w_f,
-        h_f,
-        fx,
-        fy,
-        cx,
-        cy,
-        clip_left,
-        clip_right,
-        clip_top,
-        clip_bottom,
-        near_,
-        far_,
-        depth_bits,
-        mip_filter);
-    LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.preprocess");
+    const float4 fisheye_k = make_float4(fisheye_k1, fisheye_k2, fisheye_k3, fisheye_k4);
+    const float theta_max = camera_kind == FastGSCameraKind::FISHEYE
+                                ? (fisheye_theta_max > 0.0f
+                                       ? fisheye_theta_max
+                                       : fisheye_kb::kb_theta_max_from_intrinsics(
+                                             fisheye_k1, fisheye_k2, fisheye_k3, fisheye_k4,
+                                             width, height, fx, fy, cx, cy))
+                                : 0.0f;
+    auto launch_preprocess = [&]<FastGSCameraKind KIND>() {
+        kernels::forward::preprocess_cu<KIND><<<div_round_up(n_primitives, config::block_size_preprocess), config::block_size_preprocess, 0, stream>>>(
+            means,
+            scales_raw,
+            rotations_raw,
+            opacities_raw,
+            sh_coefficients_0,
+            sh_coefficients_rest,
+            sh_value_bounds,
+            sh_value_n_cells,
+            sh_value_bits,
+            w2c,
+            cam_position,
+            per_primitive_buffers.depth_keys,
+            per_primitive_buffers.depths,
+            per_primitive_buffers.n_touched_tiles,
+            per_primitive_buffers.screen_bounds,
+            per_primitive_buffers.mean2d,
+            per_primitive_buffers.conic_opacity,
+            per_primitive_buffers.color,
+            normal != nullptr ? primitive_normals : nullptr,
+            n_primitives,
+            grid.x,
+            grid.y,
+            active_sh_bases,
+            sh_layout_slots,
+            w_f,
+            h_f,
+            fx,
+            fy,
+            cx,
+            cy,
+            clip_left,
+            clip_right,
+            clip_top,
+            clip_bottom,
+            near_,
+            far_,
+            depth_bits,
+            mip_filter,
+            fisheye_k,
+            theta_max);
+        LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.preprocess");
+    };
+    if (camera_kind == FastGSCameraKind::FISHEYE) {
+        launch_preprocess.template operator()<FastGSCameraKind::FISHEYE>();
+    } else {
+        launch_preprocess.template operator()<FastGSCameraKind::PINHOLE>();
+    }
     check_cuda_with_fastgs_status(cudaGetLastError(), "preprocess", forward_status, "preprocess", static_cast<uint64_t>(n_primitives), n_tiles_u64);
     sync_fastgs_phase_if_requested("preprocess", forward_status, "preprocess", static_cast<uint64_t>(n_primitives), n_tiles_u64);
 

@@ -89,7 +89,13 @@ namespace fast_lfs::rasterization {
         cudaStream_t stream = nullptr,              // nullptr → getCurrentCUDAStream()
         const float* sh_value_bounds_ptr = nullptr, // float2 per 256; null = fp32/IEEE-f16 shN
         unsigned int sh_value_n_cells = 0,
-        unsigned int sh_value_bits = 0); // 0=fp32, 16=q16(+bounds) or IEEE f16
+        unsigned int sh_value_bits = 0, // 0=fp32, 16=q16(+bounds) or IEEE f16
+        FastGSCameraKind camera_kind = FastGSCameraKind::PINHOLE,
+        float fisheye_k1 = 0.0f,
+        float fisheye_k2 = 0.0f,
+        float fisheye_k3 = 0.0f,
+        float fisheye_k4 = 0.0f,
+        float fisheye_theta_max = 0.0f);
 
     void release_forward_context(const ForwardContext& forward_ctx);
 
@@ -135,7 +141,13 @@ namespace fast_lfs::rasterization {
         // codes; bits==16 without bounds → IEEE f16 swizzle; bits==0 → fp32.
         const float* shN_value_bounds_ptr = nullptr,
         unsigned shN_value_n_cells = 0u,
-        unsigned shN_value_bits = 0u);
+        unsigned shN_value_bits = 0u,
+        FastGSCameraKind camera_kind = FastGSCameraKind::PINHOLE,
+        float fisheye_k1 = 0.0f,
+        float fisheye_k2 = 0.0f,
+        float fisheye_k3 = 0.0f,
+        float fisheye_k4 = 0.0f,
+        float fisheye_theta_max = 0.0f);
 
     // Pre-compile all CUDA kernels to avoid JIT delays during rendering
     void warmup_kernels();

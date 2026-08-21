@@ -5,6 +5,7 @@
 #pragma once
 
 #include "helper_math.h"
+#include "rasterization_config.h"
 #include <cstddef>
 #include <cstdint>
 #include <cuda_runtime.h>
@@ -84,6 +85,12 @@ namespace fast_lfs::rasterization {
         const float near,
         const float far,
         bool mip_filter,
-        cudaStream_t stream);
+        cudaStream_t stream,
+        FastGSCameraKind camera_kind = FastGSCameraKind::PINHOLE,
+        float fisheye_k1 = 0.0f,
+        float fisheye_k2 = 0.0f,
+        float fisheye_k3 = 0.0f,
+        float fisheye_k4 = 0.0f,
+        float fisheye_theta_max = 0.0f);
 
 } // namespace fast_lfs::rasterization
