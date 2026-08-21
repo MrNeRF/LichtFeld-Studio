@@ -171,6 +171,7 @@ namespace lfs::core {
             stop_refine = apply(stop_refine);
             reset_every = apply(reset_every);
             refine_every = apply(refine_every);
+            morton_reorder_interval = apply(morton_reorder_interval);
             sh_degree_interval = apply(sh_degree_interval);
             grow_until_iter = apply(grow_until_iter);
 
@@ -250,6 +251,9 @@ namespace lfs::core {
                 return std::format("iterations must be within [1, {}] (got {})", MAX_ITERATION_VALUE, iterations);
             if (refine_every == 0 || refine_every > MAX_ITERATION_VALUE)
                 return std::format("refine_every must be within [1, {}] (got {})", MAX_ITERATION_VALUE, refine_every);
+            if (morton_reorder_interval > MAX_ITERATION_VALUE)
+                return std::format("morton_reorder_interval must be within [0, {}] (got {})",
+                                   MAX_ITERATION_VALUE, morton_reorder_interval);
             if (reset_every == 0 || reset_every > MAX_ITERATION_VALUE)
                 return std::format("reset_every must be within [1, {}] (got {})", MAX_ITERATION_VALUE, reset_every);
             if (sh_degree_interval == 0 || sh_degree_interval > MAX_ITERATION_VALUE)

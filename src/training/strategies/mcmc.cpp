@@ -7,6 +7,7 @@
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "kernels/mcmc_kernels.hpp"
+#include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
 #include <algorithm>
@@ -949,6 +950,10 @@ namespace lfs::training {
         _error_score_windows = 0;
 
         LOG_INFO("MCMC strategy initialized with {} Gaussians", _splat_data->size());
+    }
+
+    void MCMC::permute_gaussian_rows(const lfs::core::Tensor& perm) {
+        morton::permute_row_tensor(_error_score_max, perm);
     }
 
     bool MCMC::is_refining(int iter) const {

@@ -370,6 +370,39 @@ TEST(ArgumentParserTest, TrainingDefaultsApplyMaxWidthCap) {
     EXPECT_FLOAT_EQ((*parsed)->optimization.cropbox_lr_scale, 0.1f);
     EXPECT_FLOAT_EQ((*parsed)->optimization.cropbox_loss_weight, 0.1f);
     EXPECT_FLOAT_EQ((*parsed)->freeze_lr_scale, 0.0f);
+    EXPECT_EQ((*parsed)->optimization.morton_reorder_interval, 5000u);
+}
+
+TEST(ArgumentParserTest, MortonReorderIntervalFlag) {
+    const auto data_path = make_test_path("lfs_arg_parser_morton_data");
+    const auto output_path = make_test_path("lfs_arg_parser_morton_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--morton-reorder-interval",
+        "0"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_EQ((*parsed)->optimization.morton_reorder_interval, 0u);
+
+    const char* argv_1000[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--morton-reorder-interval=1000"};
+    auto parsed_1000 = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv_1000)), argv_1000);
+    ASSERT_TRUE(parsed_1000.has_value()) << parsed_1000.error();
+    EXPECT_EQ((*parsed_1000)->optimization.morton_reorder_interval, 1000u);
 }
 
 TEST(ArgumentParserTest, SafeModeIsProcessLocalAndNotATrainingConfigurationOption) {

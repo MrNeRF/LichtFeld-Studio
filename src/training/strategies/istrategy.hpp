@@ -38,6 +38,9 @@ namespace lfs::training {
 
         virtual void step(int iter) = 0;
 
+        /// Permute row-indexed strategy aux tensors (vis counts, error maxima, free masks).
+        virtual void permute_gaussian_rows(const lfs::core::Tensor&) {}
+
         virtual bool is_refining(int iter) const = 0;
 
         // Get the underlying Gaussian model (reference to Scene-owned data)

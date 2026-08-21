@@ -42,6 +42,7 @@
 #include "lfs/kernels/ssim.cuh"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
+#include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/perf_bench.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/vram_ledger.hpp"
@@ -1924,6 +1925,27 @@ namespace lfs::training {
 
         sparsity_optimizer_.reset();
         return {};
+    }
+
+    bool Trainer::morton_reorder_due(const int iter) const {
+        return morton::should_reorder(
+            iter,
+            params_.optimization.morton_reorder_interval,
+            params_.optimization.stop_refine);
+    }
+
+    void Trainer::maybe_morton_reorder(const int iter) {
+        if (!morton_reorder_due(iter) || !strategy_) {
+            return;
+        }
+        auto& model = strategy_->get_model();
+        const auto result = morton::apply_morton_reorder(model, &strategy_->get_optimizer());
+        if (!result.applied) {
+            return;
+        }
+        cropbox_damping_cache_valid_ = false;
+        strategy_->permute_gaussian_rows(result.permutation);
+        install_cropbox_step_damping(model, strategy_->get_optimizer());
     }
 
     void Trainer::install_cropbox_step_damping(
@@ -5761,6 +5783,7 @@ namespace lfs::training {
                 bool fastgs_strategy_hooks_at_start = false;
                 const bool refining_this_step =
                     strategy_ && strategy_->is_refining(iter);
+                const bool morton_due = morton_reorder_due(iter);
                 if (fastgs_path && !in_sparsification) {
                     current_phase = StepPhase::RefinementCommit;
                     LFS_VRAM_SCOPE("train.strategy.fastgs_pre_step");
@@ -5777,7 +5800,8 @@ namespace lfs::training {
                     // blocks. See trainer.cpp step() lock below; both must be gated.
                     std::unique_lock<std::shared_mutex> lock(render_mutex_, std::defer_lock);
                     const bool refining = refining_this_step;
-                    if (refining) {
+                    const bool need_exclusive = refining || morton_due;
+                    if (need_exclusive) {
                         lock.lock();
                     }
                     // One-lock complete: exclusive render_mutex_ already bars new
@@ -5785,7 +5809,7 @@ namespace lfs::training {
                     // any rebuild that started before exclusive cannot re-enter
                     // (or finish late) across float-workspace swap + trim.
                     std::unique_lock<std::mutex> combined_model_lock;
-                    if (refining && scene_) {
+                    if (need_exclusive && scene_) {
                         combined_model_lock = scene_->acquireCombinedModelExclusive();
                     }
                     // Drain in-flight reader events immediately before post_backward's
@@ -5816,7 +5840,7 @@ namespace lfs::training {
                         }
                         DensifyBarrierGuard(const DensifyBarrierGuard&) = delete;
                         DensifyBarrierGuard& operator=(const DensifyBarrierGuard&) = delete;
-                    } densify_barrier(this, refining);
+                    } densify_barrier(this, need_exclusive);
                     // Nested LiveModelMutationGuard inside ensure/commit must no-op.
                     struct RefiningMutationMark {
                         explicit RefiningMutationMark(bool on) {
@@ -5831,10 +5855,11 @@ namespace lfs::training {
                             }
                         }
                         bool on_ = false;
-                    } refining_mutation_mark(refining);
+                    } refining_mutation_mark(need_exclusive);
                     auto& model = strategy_->get_model();
                     const size_t model_size_before = static_cast<size_t>(model.size());
                     strategy_->post_backward(iter, r_output);
+                    maybe_morton_reorder(iter);
                     install_cropbox_step_damping(model, strategy_->get_optimizer());
                     fastgs_strategy_hooks_at_start = true;
 
@@ -7309,7 +7334,10 @@ namespace lfs::training {
                         std::unique_lock<std::shared_mutex> lock(render_mutex_, std::defer_lock);
                         std::unique_lock<std::shared_mutex> model_write_lock(model_access_mutex_, std::defer_lock);
                         const bool refining = strategy_->is_refining(iter);
-                        if (refining) {
+                        const bool morton_here =
+                            morton_due && !fastgs_strategy_hooks_at_start && !in_sparsification;
+                        const bool need_exclusive = refining || morton_here;
+                        if (need_exclusive) {
                             lock.lock();
                         } else {
                             // Non-refining in-place writes: hold the model-access lock
@@ -7320,7 +7348,7 @@ namespace lfs::training {
                         }
                         // One-lock complete: see fastgs post_backward block above.
                         std::unique_lock<std::mutex> combined_model_lock;
-                        if (refining && scene_) {
+                        if (need_exclusive && scene_) {
                             combined_model_lock = scene_->acquireCombinedModelExclusive();
                         }
                         // Drain in-flight reader events immediately before the optimizer
@@ -7352,7 +7380,8 @@ namespace lfs::training {
                             DensifyBarrierGuard& operator=(const DensifyBarrierGuard&) = delete;
                         } densify_barrier(
                             this,
-                            refining && !in_sparsification && !fastgs_strategy_hooks_at_start);
+                            (refining || morton_here) && !in_sparsification &&
+                                !fastgs_strategy_hooks_at_start);
                         LFS_VRAM_SCOPE("train.optimizer.strategy_step");
                         LOG_VRAM_DIFF("train.optimizer.strategy_step");
                         auto& model = strategy_->get_model();
@@ -7378,6 +7407,7 @@ namespace lfs::training {
                             ++mutation_epoch_;
                             persistent_commit = true;
                             strategy_->post_backward(iter, r_output);
+                            maybe_morton_reorder(iter);
                         }
                         if (!fastgs_path) {
                             install_cropbox_step_damping(model, strategy_->get_optimizer());

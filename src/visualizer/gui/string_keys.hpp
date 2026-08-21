@@ -102,6 +102,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* REFINE_EVERY = "training.refinement.refine_every";
             inline constexpr const char* START_REFINE = "training.refinement.start_refine";
             inline constexpr const char* STOP_REFINE = "training.refinement.stop_refine";
+            inline constexpr const char* MORTON_REORDER_INTERVAL = "training.refinement.morton_reorder_interval";
             inline constexpr const char* RESET_EVERY = "training.refinement.reset_every";
             inline constexpr const char* SH_UPGRADE_EVERY = "training.refinement.sh_upgrade_every";
         } // namespace Refinement
@@ -164,6 +165,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* REFINE_EVERY = "training.tooltip.refine_every";
             inline constexpr const char* START_REFINE = "training.tooltip.start_refine";
             inline constexpr const char* STOP_REFINE = "training.tooltip.stop_refine";
+            inline constexpr const char* MORTON_REORDER_INTERVAL = "training.tooltip.morton_reorder_interval";
             inline constexpr const char* RESET_EVERY = "training.tooltip.reset_every";
             inline constexpr const char* SH_UPGRADE_EVERY = "training.tooltip.sh_upgrade_every";
             inline constexpr const char* INIT_OPACITY = "training.tooltip.init_opacity";

@@ -34,6 +34,7 @@ namespace lfs::training {
         void post_backward(int iter, RenderOutput& render_output) override;
         bool is_refining(int iter) const override;
         void step(int iter) override;
+        void permute_gaussian_rows(const lfs::core::Tensor& perm) override;
 
         lfs::core::SplatData& get_model() override { return *_splat_data; }
         const lfs::core::SplatData& get_model() const override { return *_splat_data; }
