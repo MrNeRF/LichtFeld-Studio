@@ -547,7 +547,9 @@ private:
     void ProcessAsyncPreviewUploads();
     void DropAsyncPreviewTexture(texture_data_t* texture);
     void QueueTextureForDeferredDeletion(texture_data_t* texture);
-    static async_preview_result_t DecodePreviewTexture(std::filesystem::path path, int max_size);
+    static async_preview_result_t DecodePreviewTexture(std::filesystem::path path,
+                                                       int max_size,
+                                                       bool embedded_project_preview);
 
     void Initialize_Resources(const VkPhysicalDeviceProperties& physical_device_properties) noexcept;
     void Initialize_Allocator() noexcept;

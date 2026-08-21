@@ -1,76 +1,79 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Regression tests for Asset Manager panel record formatting and selection."""
+"""Regression tests for the `.licht`-only Asset Manager panel."""
 
 from importlib import import_module
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-import json
+from urllib.parse import quote
 import sys
 
 import pytest
 
 
 def _install_lf_stub(monkeypatch):
-    class _LogStub:
+    class _Panel:
         def __init__(self):
-            self.messages = []
+            pass
 
-        def info(self, message):
-            self.messages.append(("info", message))
+        def on_mount(self, _doc):
+            pass
 
-        def warn(self, message):
-            self.messages.append(("warn", message))
+    context_menus = []
+    state = SimpleNamespace(
+        context_menus=context_menus,
+        opened=[],
+        revealed=[],
+        enabled=[],
+        dialog_path="",
+    )
 
-        def error(self, message):
-            self.messages.append(("error", message))
-
-    context_menu_state = SimpleNamespace(calls=[])
-
-    def _show_context_menu(items, screen_x, screen_y, on_action=None):
-        context_menu_state.calls.append(
-            {
-                "items": items,
-                "position": (screen_x, screen_y),
-                "on_action": on_action,
-            }
+    def show_context_menu(items, x, y, on_action=None):
+        context_menus.append(
+            {"items": items, "position": (x, y), "on_action": on_action}
         )
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
+        Panel=_Panel,
         PanelSpace=SimpleNamespace(
             FLOATING="FLOATING",
-            BOTTOM_DOCK="BOTTOM_DOCK",
             LEFT_DOCK="LEFT_DOCK",
         ),
         PanelHeightMode=SimpleNamespace(FILL="FILL", CONTENT="CONTENT"),
-        PanelOption=SimpleNamespace(
-            DEFAULT_CLOSED="DEFAULT_CLOSED",
-            HIDE_HEADER="HIDE_HEADER",
-        ),
+        PanelOption=SimpleNamespace(DEFAULT_CLOSED="DEFAULT_CLOSED"),
         tr=lambda key: key,
+        get_current_language=lambda: "en",
         get_mouse_screen_pos=lambda: (120.0, 220.0),
-        show_context_menu=_show_context_menu,
-        context_menu_state=context_menu_state,
+        show_context_menu=show_context_menu,
+        reveal_in_file_manager=lambda path: state.revealed.append(path) or True,
+        open_project_file_dialog=lambda _start="": state.dialog_path,
+        input_dialog=lambda *_args: None,
+        set_panel_enabled=lambda panel_id, enabled: state.enabled.append(
+            (panel_id, enabled)
+        ),
+        schedule_on_ui_thread=lambda callback: callback(),
     )
-    lf_stub.log = _LogStub()
+    lf_stub.log = SimpleNamespace(info=lambda _msg: None, warn=lambda _msg: None, error=lambda _msg: None)
+    lf_stub.project_open = lambda path, discard_changes=False: state.opened.append(
+        (path, discard_changes)
+    )
+    lf_stub._test_state = state
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 
 
 @pytest.fixture
-def asset_manager_panel_module(monkeypatch):
-    folder_root = Path(__file__).parent.parent.parent
-    source_python = folder_root / "src" / "python"
+def panel_module(monkeypatch):
+    source_python = Path(__file__).resolve().parents[2] / "src" / "python"
     if str(source_python) not in sys.path:
         sys.path.insert(0, str(source_python))
-
-    sys.modules.pop("lfs_plugins.asset_manager_panel", None)
-    sys.modules.pop("lfs_plugins", None)
+    for name in ("lfs_plugins.asset_manager_panel", "lfs_plugins"):
+        sys.modules.pop(name, None)
     _install_lf_stub(monkeypatch)
     return import_module("lfs_plugins.asset_manager_panel")
 
 
-class _HandleStub:
+class _Handle:
     def __init__(self):
         self.records = {}
         self.dirty_fields = []
@@ -88,90 +91,64 @@ class _HandleStub:
         self.dirty_fields.append("__update__")
 
 
-class _SignalStub:
-    def __init__(self):
-        self._callbacks = []
-
-    def subscribe(self, callback):
-        self._callbacks.append(callback)
-
-        def unsubscribe():
-            if callback in self._callbacks:
-                self._callbacks.remove(callback)
-
-        return unsubscribe
-
-    def emit(self, value):
-        for callback in list(self._callbacks):
-            callback(value)
-
-
-class _ElementStub:
-    def __init__(self, attrs=None, parent=None, tag_name="div"):
-        self._attrs = attrs or {}
+class _Element:
+    def __init__(self, attrs=None, parent=None):
+        self.attrs = attrs or {}
         self._parent = parent
-        self.tag_name = tag_name
+        self.children = []
+        self.classes = set(str(self.attrs.get("class", "")).split())
         self.listeners = {}
-        self._classes = set(str(self._attrs.get("class", "")).split())
-        self._children = []
-        self.scroll_height = 0.0
-        self.client_height = 0.0
         self.scroll_top = 0.0
-        if parent is not None and hasattr(parent, "_children"):
-            parent._children.append(self)
+        self.scroll_height = 900.0
+        self.client_height = 300.0
+        self.client_width = 800.0
+        if parent is not None:
+            parent.children.append(self)
 
     def get_attribute(self, name, default=""):
-        return self._attrs.get(name, default)
+        return self.attrs.get(name, default)
 
     def has_attribute(self, name):
-        return name in self._attrs
+        return name in self.attrs
 
     def parent(self):
         return self._parent
 
-    def query_selector_all(self, selector):
-        result = []
-        selectors = [part.strip() for part in str(selector).split(",") if part.strip()]
-
-        def _matches(element, item):
-            if not item.startswith("."):
-                return False
-            return item[1:] in element._classes
-
-        def _visit(element):
-            for child in element._children:
-                if any(_matches(child, item) for item in selectors):
-                    result.append(child)
-                _visit(child)
-
-        _visit(self)
-        return result
-
-    def set_class(self, name, active):
-        if active:
-            self._classes.add(name)
-        else:
-            self._classes.discard(name)
-
-    def is_class_set(self, name):
-        return name in self._classes
-
     def add_event_listener(self, event, callback):
         self.listeners[event] = callback
 
+    def query_selector_all(self, selectors):
+        wanted = {
+            selector.strip().removeprefix(".")
+            for selector in selectors.split(",")
+        }
+        rows = []
 
-class _EventStub:
-    def __init__(
-        self,
-        current_target=None,
-        target=None,
-        bool_params=None,
-        params=None,
-    ):
+        def visit(node):
+            for child in node.children:
+                if child.classes.intersection(wanted):
+                    rows.append(child)
+                visit(child)
+
+        visit(self)
+        return rows
+
+    def set_class(self, name, enabled):
+        if enabled:
+            self.classes.add(name)
+        else:
+            self.classes.discard(name)
+
+    def is_class_set(self, name):
+        return name in self.classes
+
+
+class _Event:
+    def __init__(self, current_target=None, target=None, params=None, bool_params=None):
         self._current_target = current_target
         self._target = target or current_target
-        self._bool_params = bool_params or {}
-        self._params = params or {}
+        self.params = params or {}
+        self.bool_params = bool_params or {}
         self.stopped = False
 
     def current_target(self):
@@ -180,877 +157,302 @@ class _EventStub:
     def target(self):
         return self._target
 
-    def get_bool_parameter(self, key, default=False):
-        return self._bool_params.get(key, default)
+    def get_parameter(self, name, default=""):
+        return self.params.get(name, default)
 
-    def get_parameter(self, key, default=""):
-        return self._params.get(key, default)
+    def get_bool_parameter(self, name, default=False):
+        return self.bool_params.get(name, default)
 
     def stop_propagation(self):
         self.stopped = True
 
 
-class _DocumentStub:
+class _Document:
     def __init__(self, elements=None):
-        self._elements = elements or {}
+        self.elements = elements or {}
         self.listeners = {}
 
     def get_element_by_id(self, element_id):
-        return self._elements.get(element_id)
+        return self.elements.get(element_id)
 
     def add_event_listener(self, event, callback):
         self.listeners[event] = callback
 
 
-def _make_asset():
-    return {
-        "id": "a1",
-        "name": "bicycle-project",
-        "absolute_path": "/tmp/bicycle.licht",
-        "path": "/tmp/bicycle.licht",
-        "file_size_bytes": 4206437268,
+def _project(project_id="11111111-1111-4111-8111-111111111111", **overrides):
+    value = {
+        "id": project_id,
+        "project_uuid": project_id,
+        "name": "Bicycle",
+        "path": "/tmp/bicycle project.licht",
+        "folder_id": "default",
+        "file_uuid": "22222222-2222-4222-8222-222222222222",
+        "commit_uuid": "33333333-3333-4333-8333-333333333333",
+        "generation": 4,
+        "created_at_unix_ns": 1_700_000_000_000_000_000,
+        "saved_at_unix_ns": 1_710_000_000_000_000_000,
+        "file_size_bytes": 4_206_437_268,
+        "role": "MASTER",
+        "open_state": "OPEN",
+        "has_preview": True,
         "exists": True,
-        "verification_disposition": "MATCH_FAST_PATH",
-        "folder_id": "p1",
-        "scene_id": "s1",
-        "created_at": "2026-02-15T21:52:45.881056",
-        "modified_at": "2026-04-28T14:48:57.606369",
+        "available": True,
+        "status": "AVAILABLE",
+        "error": "",
     }
+    value.update(overrides)
+    return value
 
 
-def test_asset_manager_uses_dirty_update_policy(asset_manager_panel_module):
-    assert asset_manager_panel_module.AssetManagerPanel.update_policy == "dirty"
-    assert "update_interval_ms" not in asset_manager_panel_module.AssetManagerPanel.__dict__
-
-
-def test_asset_manager_remains_left_dock_panel(asset_manager_panel_module):
-    assert (
-        asset_manager_panel_module.AssetManagerPanel.space
-        == asset_manager_panel_module.lf.ui.PanelSpace.LEFT_DOCK
-    )
-    assert asset_manager_panel_module.AssetManagerPanel.order == 20
-
-
-def test_asset_index_list_projects_executes_without_compiled_bindings(
-    asset_manager_panel_module,
-    tmp_path,
-):
-    index = asset_manager_panel_module.AssetIndex(
-        library_path=tmp_path / "library.json"
+def _index(assets=None, folders=None, **methods):
+    return SimpleNamespace(
+        assets=assets or {},
+        folders=folders
+        or {"default": {"id": "default", "name": "Default", "watch_directories": []}},
+        **methods,
     )
 
-    assert index.list_projects() == []
+
+def test_panel_contract_remains_dirty_left_dock(panel_module):
+    panel_type = panel_module.AssetManagerPanel
+    assert panel_type.update_policy == "dirty"
+    assert panel_type.space == panel_module.lf.ui.PanelSpace.LEFT_DOCK
+    assert panel_type.order == 20
 
 
-def test_builtin_registration_keeps_asset_manager_closed_by_default():
-    panels_source = (
-        Path(__file__).resolve().parents[2] / "src" / "python" / "lfs_plugins" / "panels.py"
-    ).read_text(encoding="utf-8")
+def test_rml_and_panel_have_no_scene_or_disk_thumbnail_model():
+    root = Path(__file__).resolve().parents[2]
+    rml = (root / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
+    rcss = (root / "src/visualizer/gui/rmlui/resources/asset_manager.rcss").read_text()
+    source = (root / "src/python/lfs_plugins/asset_manager_panel.py").read_text()
 
-    assert 'set_panel_enabled("lfs.asset_manager", False)' in panels_source
-    assert 'set_panel_enabled("lfs.watch_dirs_dialog", False)' in panels_source
+    assert "scene" not in rml.casefold()
+    assert "scene" not in source.casefold()
+    assert "scene-asset" not in rcss
+    assert "absolute_path" not in source
+    assert "fingerprint" not in source
+    assert "thumbnails" not in source
+    assert 'data-style-decorator="asset.thumbnail_decorator"' in rml
 
 
-def test_edit_watch_directories_opens_for_clicked_folder(
-    asset_manager_panel_module, monkeypatch
-):
-    panel = asset_manager_panel_module.AssetManagerPanel()
-    panel._handle = _HandleStub()
-    panel._asset_index = object()
-    calls = []
-    monkeypatch.setattr(
-        asset_manager_panel_module,
-        "open_watch_dirs_dialog",
-        lambda index, folder_id, callback: calls.append(
-            (index, folder_id, callback)
-        )
-        or True,
+def test_embedded_preview_url_encodes_path_and_keys_cache_by_commit(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project(path="/tmp/a folder/project & one.licht")
+
+    decorator = panel._thumbnail_decorator(asset)
+
+    encoded = quote(asset["path"], safe="/:._-~")
+    assert decorator == (
+        "image(preview://kind=licht&thumb=256"
+        f"&rev={asset['commit_uuid']}&path={encoded})"
     )
-
-    event = _EventStub()
-    panel.on_edit_watch_dirs(None, event, ["projects"])
-
-    assert len(calls) == 1
-    assert calls[0][0] is panel._asset_index
-    assert calls[0][1] == "projects"
-    assert calls[0][2].__self__ is panel
-    assert event.stopped is True
+    assert asset["path"] not in decorator
+    assert panel._thumbnail_decorator({**asset, "has_preview": False}) == "none"
 
 
-def test_asset_manager_requests_update_from_reactive_store(asset_manager_panel_module, monkeypatch):
-    module = asset_manager_panel_module
-    signals = SimpleNamespace(
-        language_generation=_SignalStub(),
-    )
-    monkeypatch.setattr(module, "RuntimeState", signals)
+def test_asset_rows_use_custom_name_and_runtime_metadata(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={_project()["id"]: _project()})
+    panel._selected_folder_id = "default"
 
-    panel = module.AssetManagerPanel()
-    panel._handle = _HandleStub()
+    row = panel.get_filtered_assets()[0]
 
-    panel._subscribe_reactive_state()
-    signals.language_generation.emit(1)
-
-    assert panel._handle.dirty_fields == ["__update__"]
-
-    panel._unsubscribe_reactive_state()
-    signals.language_generation.emit(2)
-
-    assert panel._handle.dirty_fields == ["__update__"]
+    assert row["display_name"] == "Bicycle"
+    assert row["display_subtitle"] == "bicycle project.licht"
+    assert row["status_label"] == "asset_manager.status.available"
+    assert row["saved_label"]
+    assert row["thumbnail_decorator"].startswith("image(preview://kind=licht")
 
 
-def test_asset_card_title_uses_asset_path_leaf(asset_manager_panel_module):
-    panel = asset_manager_panel_module.AssetManagerPanel()
-    asset = _make_asset()
-    asset["name"] = ""
-    asset["absolute_path"] = "/data/tandt/truck/train"
-    fields = panel._get_asset_display_fields(
-        asset,
-        folder_name="tandt",
-        scene_name="truck",
-    )
+def test_selecting_project_updates_info_without_rebuilding_rows(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    asset = _project()
+    panel._asset_index = _index(assets={asset["id"]: asset})
 
-    assert fields["display_name"] == "train"
-    assert fields["display_subtitle"] == "truck"
+    panel.toggle_asset_selection(None, None, [asset["id"]])
 
-
-def test_asset_manager_rml_uses_text_interpolation_for_display_values():
-    folder_root = Path(__file__).parent.parent.parent
-    rml_path = (
-        folder_root
-        / "src"
-        / "visualizer"
-        / "gui"
-        / "rmlui"
-        / "resources"
-        / "asset_manager.rml"
-    )
-    rml = rml_path.read_text(encoding="utf-8")
-
-    display_data_value_lines = [
-        line.strip()
-        for line in rml.splitlines()
-        if ("<span" in line or "<div" in line) and "data-value=" in line
-    ]
-
-    assert display_data_value_lines == []
-    assert "{{asset.display_name}}" in rml
-    assert "{{selected_asset_name}}" in rml
-    assert 'data-event-click="on_import_project"' in rml
-    assert "asset-thumb-project" in rml
-    assert "LICHT" in rml
+    assert panel.get_selection_type() == "asset"
+    assert panel.get_selected_asset_name() == "Bicycle"
+    assert panel.get_selected_asset_path() == asset["path"]
+    assert "selected_asset_path" in panel._handle.dirty_fields
+    assert "assets" not in panel._handle.records
 
 
-def test_asset_manager_card_thumbs_do_not_use_gradient_placeholders():
-    folder_root = Path(__file__).parent.parent.parent
-    rcss_path = (
-        folder_root
-        / "src"
-        / "visualizer"
-        / "gui"
-        / "rmlui"
-        / "resources"
-        / "asset_manager.rcss"
-    )
-    rcss = rcss_path.read_text(encoding="utf-8")
-
-    assert "vertical-gradient" not in rcss
-
-
-def test_asset_manager_has_no_panel_local_context_menu_markup_or_styles():
-    folder_root = Path(__file__).parent.parent.parent
-    resources_dir = (
-        folder_root
-        / "src"
-        / "visualizer"
-        / "gui"
-        / "rmlui"
-        / "resources"
-    )
-    rml = (resources_dir / "asset_manager.rml").read_text(encoding="utf-8")
-    rcss = (resources_dir / "asset_manager.rcss").read_text(encoding="utf-8")
-
-    assert "asset-context-menu" not in rml
-    assert "asset-load-menu" not in rml
-    assert "asset-folder-dropdown" not in rml
-    assert "move_menu_folders" not in rml
-    assert "asset-context-menu" not in rcss
-    assert "asset-load-menu" not in rcss
-    assert "asset-folder-dropdown" not in rcss
-    assert "asset-dropdown-submenu" not in rcss
-    assert 'data-event-click="show_new_folder_menu"' in rml
-    assert ".asset-card {\n    height: 220dp;\n    overflow: hidden;\n}" in rcss
-
-
-def test_asset_manager_has_visible_viewport_edge():
-    folder_root = Path(__file__).parent.parent.parent
-    resources_dir = (
-        folder_root
-        / "src"
-        / "visualizer"
-        / "gui"
-        / "rmlui"
-        / "resources"
-    )
-    rcss = (resources_dir / "asset_manager.rcss").read_text(encoding="utf-8")
-    rml = (resources_dir / "asset_manager.rml").read_text(encoding="utf-8")
-    theme_rcss = (resources_dir / "asset_manager.theme.rcss").read_text(encoding="utf-8")
-
-    assert 'id="asset-viewport-edge"' in rml
-    assert "position: relative;" in rcss
-    assert "#asset-viewport-edge" in rcss
-    assert "position: absolute;" in rcss
-    assert "right: 0;" in rcss
-    assert "width: 1dp;" in rcss
-    assert "background-color: rgba(88, 91, 112, 153);" in rcss
-    assert "#asset-shell.is-floating #asset-viewport-edge" in rcss
-    assert "background-color: @{right_panel.border};" in theme_rcss
-
-
-def test_asset_manager_project_actions_are_localized():
-    folder_root = Path(__file__).parent.parent.parent
-    locale_dir = folder_root / "src" / "visualizer" / "gui" / "resources" / "locales"
-    required_keys = (
-        "action.refresh",
-        "action.clean_missing",
-        "tooltip.refresh",
-        "tooltip.clean_missing",
-        "panel_title",
-        "property.assets",
-        "status.content_changed",
-        "status.type_changed",
-        "status.unverified",
-    )
-
-    for locale_path in sorted(locale_dir.glob("*.json")):
-        data = json.loads(locale_path.read_text(encoding="utf-8"))
-        asset_manager = data["asset_manager"]
-        for key in required_keys:
-            assert asset_manager.get(key), f"{locale_path.name} missing asset_manager.{key}"
-
-
-def test_asset_selection_dirties_info_fields(asset_manager_panel_module):
-    panel = asset_manager_panel_module.AssetManagerPanel()
-    panel._handle = _HandleStub()
-    panel._asset_index = SimpleNamespace(
-        assets={"a1": _make_asset()},
-        folders={"p1": {"id": "p1", "name": "Projects", "scene_ids": ["s1"]}},
-        scenes={"s1": {"id": "s1", "name": "bicycle", "folder_id": "p1"}},
-    )
-
-    panel.toggle_asset_selection(None, None, ["a1"])
-
-    assert panel.get_selected_asset_name() == "bicycle-project"
-    assert panel.get_selected_asset_path() == "/tmp/bicycle.licht"
-    dirty = panel._handle.dirty_fields
-    assert "selected_asset_path" in dirty or "__all__" in dirty
-    assert "show_selection_asset" in dirty or "__all__" in dirty
-
-
-def test_asset_selection_resolves_asset_id_from_clicked_element(asset_manager_panel_module):
-    panel = asset_manager_panel_module.AssetManagerPanel()
-    panel._handle = _HandleStub()
-    panel._asset_index = SimpleNamespace(
-        assets={"a1": _make_asset()},
-        folders={"p1": {"id": "p1", "name": "Projects", "scene_ids": ["s1"]}},
-        scenes={"s1": {"id": "s1", "name": "bicycle", "folder_id": "p1"}},
-    )
-
-    event = _EventStub(current_target=_ElementStub({"data-asset-id": "a1"}))
-    panel.toggle_asset_selection(None, event, [])
-
-    assert panel.get_selected_asset_name() == "bicycle-project"
-    assert panel.get_selected_count() == 1
-
-
-
-def test_dom_card_click_selects_asset_from_stable_parent(asset_manager_panel_module):
-    panel = asset_manager_panel_module.AssetManagerPanel()
-    panel._handle = _HandleStub()
-    panel._asset_index = SimpleNamespace(
-        assets={"a1": _make_asset()},
-        folders={"p1": {"id": "p1", "name": "Projects", "scene_ids": ["s1"]}},
-        scenes={"s1": {"id": "s1", "name": "bicycle", "folder_id": "p1"}},
-    )
-
-    container = _ElementStub({"id": "asset-main-row"})
-    card = _ElementStub(
-        {"data-asset-id": "a1", "data-asset-action": "select"},
-        parent=container,
-    )
-    child = _ElementStub(parent=card)
-    event = _EventStub(current_target=container, target=child)
-
-    panel._on_asset_manager_click(event)
-
-    assert panel.get_selected_asset_name() == "bicycle-project"
-    assert panel.get_selected_count() == 1
-    assert event.stopped is True
-
-
-def test_dom_row_right_click_opens_menu_for_an_already_selected_asset(
-    asset_manager_panel_module,
-):
-    panel = asset_manager_panel_module.AssetManagerPanel()
-    panel._handle = _HandleStub()
-    panel._asset_index = SimpleNamespace(
-        assets={"a1": _make_asset()},
+def test_dom_right_click_uses_shared_app_context_menu(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    asset = _project()
+    panel._asset_index = _index(
+        assets={asset["id"]: asset},
         folders={
-            "p1": {"id": "p1", "name": "Projects", "scene_ids": ["s1"]},
-            "p2": {"id": "p2", "name": "Archive", "scene_ids": []},
+            "default": {"id": "default", "name": "Default", "watch_directories": []},
+            "archive": {"id": "archive", "name": "Archive", "watch_directories": []},
         },
-        scenes={"s1": {"id": "s1", "name": "bicycle", "folder_id": "p1"}},
     )
-    panel._selected_asset_ids = {"a1"}
-    panel._selection_type = "asset"
-
-    container = _ElementStub({"id": "asset-main-row"})
-    row = _ElementStub(
-        {
-            "class": "asset-list-row",
-            "data-asset-id": "a1",
-            "data-asset-action": "select",
-        },
-        parent=container,
+    shell = _Element()
+    row = _Element(
+        {"class": "asset-list-row", "data-asset-id": asset["id"], "data-asset-action": "select"},
+        shell,
     )
-    event = _EventStub(
-        current_target=container,
-        target=row,
-        params={"button": "1"},
-    )
+    event = _Event(shell, row, params={"button": "1"})
 
     panel._on_asset_manager_mousedown(event)
 
-    calls = asset_manager_panel_module.lf.ui.context_menu_state.calls
-    assert len(calls) == 1
-    assert calls[0]["position"] == (120.0, 220.0)
-    assert [item["action"] for item in calls[0]["items"]] == [
+    menu = panel_module.lf._test_state.context_menus[-1]
+    assert menu["position"] == (120.0, 220.0)
+    assert [item["action"] for item in menu["items"]] == [
         "load",
         "rename",
         "",
         "create_folder",
-        "move_to_folder:p2",
+        "move_to_folder:archive",
         "show_in_folder",
         "remove",
     ]
-    assert calls[0]["items"][2]["is_label"] is True
-    assert calls[0]["items"][4]["is_submenu_item"] is True
     assert event.stopped is True
 
 
-def test_dom_row_primary_mousedown_does_not_open_context_menu(
-    asset_manager_panel_module,
-):
-    panel = asset_manager_panel_module.AssetManagerPanel()
-    panel._handle = _HandleStub()
-    panel._asset_index = SimpleNamespace(
-        assets={"a1": _make_asset()},
-        folders={"p1": {"id": "p1", "name": "Projects", "scene_ids": ["s1"]}},
-        scenes={"s1": {"id": "s1", "name": "bicycle", "folder_id": "p1"}},
+def test_gallery_more_button_uses_same_shared_menu(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project()
+    panel._asset_index = _index(assets={asset["id"]: asset})
+    shell = _Element()
+    button = _Element(
+        {"data-asset-id": asset["id"], "data-asset-action": "menu"}, shell
     )
-    container = _ElementStub({"id": "asset-main-row"})
-    row = _ElementStub(
-        {"data-asset-id": "a1", "data-asset-action": "select"},
-        parent=container,
-    )
-    event = _EventStub(
-        current_target=container,
-        target=row,
-        params={"button": "0"},
-    )
-
-    panel._on_asset_manager_mousedown(event)
-
-    assert asset_manager_panel_module.lf.ui.context_menu_state.calls == []
-    assert event.stopped is False
-
-
-def test_gallery_more_button_uses_shared_context_menu(asset_manager_panel_module):
-    panel = asset_manager_panel_module.AssetManagerPanel()
-    panel._handle = _HandleStub()
-    panel._asset_index = SimpleNamespace(
-        assets={"a1": _make_asset()},
-        folders={"p1": {"id": "p1", "name": "Projects", "scene_ids": []}},
-        scenes={},
-    )
-    container = _ElementStub({"id": "asset-shell"})
-    more_button = _ElementStub(
-        {"data-asset-id": "a1", "data-asset-action": "menu"},
-        parent=container,
-    )
-    event = _EventStub(current_target=container, target=more_button)
+    event = _Event(shell, button)
 
     panel._on_asset_manager_click(event)
 
-    assert len(asset_manager_panel_module.lf.ui.context_menu_state.calls) == 1
+    assert len(panel_module.lf._test_state.context_menus) == 1
     assert event.stopped is True
 
 
-def test_asset_context_menu_callback_routes_the_bound_asset(
-    asset_manager_panel_module, monkeypatch
-):
-    panel = asset_manager_panel_module.AssetManagerPanel()
-    panel._asset_index = SimpleNamespace(
-        assets={"a1": _make_asset()},
-        folders={"p1": {"id": "p1", "name": "Projects", "scene_ids": []}},
-        scenes={},
+def test_folder_menu_keeps_watched_directory_action(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(
+        folders={"projects": {"id": "projects", "name": "Projects", "watch_directories": []}}
     )
     calls = []
-    monkeypatch.setattr(
-        panel,
-        "on_rename_asset",
-        lambda _handle, _event, args: calls.append(tuple(args)),
-    )
-
-    assert panel._show_asset_context_menu("a1") is True
-    menu_call = asset_manager_panel_module.lf.ui.context_menu_state.calls[-1]
-    menu_call["on_action"]("rename")
-
-    assert calls == [("a1",)]
-
-
-def test_dom_card_click_updates_visible_row_class(asset_manager_panel_module):
-    panel = asset_manager_panel_module.AssetManagerPanel()
-    panel._handle = _HandleStub()
-    first = _make_asset()
-    second = _make_asset()
-    second["id"] = "a2"
-    second["name"] = "garden"
-    panel._asset_index = SimpleNamespace(
-        assets={"a1": first, "a2": second},
-        folders={"p1": {"id": "p1", "name": "Projects", "scene_ids": ["s1"]}},
-        scenes={"s1": {"id": "s1", "name": "bicycle", "folder_id": "p1"}},
-    )
-
-    container = _ElementStub({"id": "asset-popup-content"})
-    card_a1 = _ElementStub(
-        {
-            "class": "asset-list-row",
-            "data-asset-id": "a1",
-            "data-asset-action": "select",
-        },
-        parent=container,
-    )
-    card_a2 = _ElementStub(
-        {
-            "class": "asset-list-row",
-            "data-asset-id": "a2",
-            "data-asset-action": "select",
-        },
-        parent=container,
-    )
-
-    panel._on_asset_manager_click(_EventStub(current_target=container, target=card_a1))
-    panel._on_asset_manager_click(_EventStub(current_target=container, target=card_a2))
-
-    assert card_a1.is_class_set("is-selected") is False
-    assert card_a2.is_class_set("is-selected") is True
-    assert "assets" not in panel._handle.records
-
-
-def test_dom_card_ctrl_click_adds_to_multi_selection(asset_manager_panel_module):
-    panel = asset_manager_panel_module.AssetManagerPanel()
-    panel._handle = _HandleStub()
-    first = _make_asset()
-    second = _make_asset()
-    second["id"] = "a2"
-    second["name"] = "garden"
-    second["absolute_path"] = "/tmp/garden.licht"
-    second["path"] = "/tmp/garden.licht"
-    panel._asset_index = SimpleNamespace(
-        assets={"a1": first, "a2": second},
-        folders={"p1": {"id": "p1", "name": "Projects", "scene_ids": ["s1"]}},
-        scenes={"s1": {"id": "s1", "name": "bicycle", "folder_id": "p1"}},
-    )
-
-    container = _ElementStub({"id": "asset-main-row"})
-    card_a1 = _ElementStub(
-        {"data-asset-id": "a1", "data-asset-action": "select"},
-        parent=container,
-    )
-    card_a2 = _ElementStub(
-        {"data-asset-id": "a2", "data-asset-action": "select"},
-        parent=container,
-    )
-
-    panel._on_asset_manager_click(_EventStub(current_target=container, target=card_a1))
-    panel._on_asset_manager_click(
-        _EventStub(
-            current_target=container,
-            target=card_a2,
-            bool_params={"ctrl_key": True},
-        )
-    )
-
-    assert panel.get_selected_count() == 2
-    assert panel.get_selection_type() == "multiple"
-
-
-def test_dom_card_double_click_opens_licht_project(
-    asset_manager_panel_module,
-    monkeypatch,
-):
-    panel = asset_manager_panel_module.AssetManagerPanel()
-    panel._handle = _HandleStub()
-    project = _make_asset()
-    panel._asset_index = SimpleNamespace(
-        assets={"a1": project},
-        verify_asset=lambda _asset_id: SimpleNamespace(to_dict=lambda: project),
-        folders={
-            "p1": {"id": "p1", "name": "Projects", "scene_ids": ["s1"]}
-        },
-        scenes={"s1": {"id": "s1", "name": "bicycle", "folder_id": "p1"}},
-    )
-    calls = []
-    monkeypatch.setattr(
-        asset_manager_panel_module.lf,
-        "project_open",
-        lambda path, discard_changes=False: calls.append((path, discard_changes)),
-        raising=False,
-    )
-
-    container = _ElementStub({"id": "asset-popup-content"})
-    card = _ElementStub(
-        {"data-asset-id": "a1", "data-asset-action": "select"},
-        parent=container,
-    )
-    child = _ElementStub(parent=card)
-    event = _EventStub(current_target=container, target=child)
-
-    panel._on_asset_manager_double_click(event)
-
-    assert calls == [("/tmp/bicycle.licht", False)]
-    assert panel.get_selected_asset_name() == "bicycle-project"
-    assert event.stopped is True
-
-
-def test_project_load_uses_lifecycle_without_discarding_changes(
-    asset_manager_panel_module,
-    monkeypatch,
-):
-    panel = asset_manager_panel_module.AssetManagerPanel()
-    panel._handle = _HandleStub()
-    project = _make_asset()
-    panel._asset_index = SimpleNamespace(
-        assets={"a1": project},
-        verify_asset=lambda _asset_id: SimpleNamespace(to_dict=lambda: project),
-        folders={
-            "p1": {"id": "p1", "name": "Projects", "scene_ids": ["s1"]}
-        },
-        scenes={"s1": {"id": "s1", "name": "bicycle", "folder_id": "p1"}},
-    )
-    calls = []
-
-    monkeypatch.setattr(
-        asset_manager_panel_module.lf,
-        "project_open",
-        lambda path, discard_changes=False: calls.append((path, discard_changes)),
-        raising=False,
-    )
-
-    panel._load_asset("a1")
-
-    assert calls == [("/tmp/bicycle.licht", False)]
-    assert panel.get_selected_asset_name() == "bicycle-project"
-
-
-def test_import_project_uses_licht_dialog_and_content_registration(
-    asset_manager_panel_module,
-    monkeypatch,
-):
-    panel = asset_manager_panel_module.AssetManagerPanel()
-    project = _make_asset()
-    project_record = SimpleNamespace(id="a1", name=project["name"])
-    calls = []
-    panel._asset_index = SimpleNamespace(
-        register_licht_asset=lambda path, folder_id=None: (
-            calls.append((path, folder_id)) or project_record,
-            True,
-        )
-    )
-    panel._with_import_folder = lambda continuation: continuation("default")
-    panel.refresh_catalog = lambda: None
-    monkeypatch.setattr(
-        asset_manager_panel_module.lf.ui,
-        "open_project_file_dialog",
-        lambda _start_dir="": "/tmp/bicycle.licht",
-        raising=False,
-    )
-
-    panel.on_import_project(None, None, [])
-
-    assert calls == [("/tmp/bicycle.licht", "default")]
-    assert panel._selected_asset_ids == {"a1"}
-    assert panel.get_selection_type() == "asset"
-
-
-def test_dom_card_double_click_ignored_during_input_capture(
-    asset_manager_panel_module,
-    monkeypatch,
-):
-    panel = asset_manager_panel_module.AssetManagerPanel()
-    panel._handle = _HandleStub()
-    panel._asset_index = SimpleNamespace(
-        assets={"a1": _make_asset()},
-        folders={
-            "p1": {"id": "p1", "name": "Projects", "scene_ids": ["s1"]}
-        },
-        scenes={"s1": {"id": "s1", "name": "bicycle", "folder_id": "p1"}},
-    )
-    asset_manager_panel_module.lf.keymap = SimpleNamespace(is_capturing=lambda: True)
-    calls = []
-    monkeypatch.setattr(
-        asset_manager_panel_module.lf,
-        "load_file",
-        lambda *args, **kwargs: calls.append((args, kwargs)),
-        raising=False,
-    )
-
-    container = _ElementStub({"id": "asset-popup-content"})
-    card = _ElementStub(
-        {"data-asset-id": "a1", "data-asset-action": "select"},
-        parent=container,
-    )
-    event = _EventStub(current_target=container, target=card)
-
-    panel._on_asset_manager_double_click(event)
-
-    assert calls == []
-    assert panel.get_selected_count() == 0
-    assert event.stopped is False
-
-
-def test_repair_selected_folder_prefers_default_name_when_selection_is_stale(
-    asset_manager_panel_module,
-):
-    panel = asset_manager_panel_module.AssetManagerPanel()
-    panel._asset_index = SimpleNamespace(
-        assets={},
-        folders={
-            "zeta": {"id": "zeta", "name": "Zeta", "scene_ids": []},
-            "default": {"id": "default", "name": "Default", "scene_ids": []},
-        },
-        scenes={},
-    )
-    panel._selected_folder_id = "missing"
-    panel._selection_type = "folder"
-
-    assert panel._repair_selected_folder() == "default"
-    assert panel._selected_folder_id == "default"
-
-
-def test_bind_dom_event_listeners_registers_gallery_wheel_handler(
-    asset_manager_panel_module,
-):
-    panel = asset_manager_panel_module.AssetManagerPanel()
-    content = _ElementStub({"id": "asset-shell"})
-    gallery_scroll = _ElementStub({"id": "asset-gallery-scroll"})
-    doc = _DocumentStub(
-        {
-            "asset-shell": content,
-            "asset-gallery-scroll": gallery_scroll,
-        }
-    )
-
-    panel._bind_dom_event_listeners(doc)
-
-    assert "mousescroll" in gallery_scroll.listeners
-    assert "click" in content.listeners
-    assert "mousemove" in doc.listeners
-
-
-def test_folder_more_button_uses_shared_context_menu(
-    asset_manager_panel_module, monkeypatch
-):
-    panel = asset_manager_panel_module.AssetManagerPanel()
-    panel._asset_index = SimpleNamespace(
-        assets={},
-        folders={"p1": {"id": "p1", "name": "Projects", "scene_ids": []}},
-        scenes={},
-    )
-    actions = []
     monkeypatch.setattr(
         panel,
         "on_edit_watch_dirs",
-        lambda _handle, _event, args: actions.append(tuple(args)),
+        lambda _handle, _event, args: calls.append(tuple(args)),
     )
-    container = _ElementStub({"id": "asset-shell"})
-    more_button = _ElementStub(
-        {"data-folder-id": "p1", "data-folder-action": "menu"},
-        parent=container,
-    )
-    event = _EventStub(current_target=container, target=more_button)
 
-    panel._on_asset_manager_click(event)
-
-    menu_call = asset_manager_panel_module.lf.ui.context_menu_state.calls[-1]
-    assert [item["action"] for item in menu_call["items"]] == [
+    assert panel._show_folder_context_menu("projects") is True
+    menu = panel_module.lf._test_state.context_menus[-1]
+    assert [item["action"] for item in menu["items"]] == [
         "watch_dirs",
         "rename",
         "delete",
     ]
-    menu_call["on_action"]("watch_dirs")
-    assert actions == [("p1",)]
+    menu["on_action"]("watch_dirs")
+    assert calls == [("projects",)]
+
+
+def test_open_project_verifies_then_uses_project_lifecycle(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project()
+    project = SimpleNamespace(to_dict=lambda: asset)
+    panel._handle = _Handle()
+    panel._asset_index = _index(
+        assets={asset["id"]: asset},
+        verify_asset=lambda project_id: project if project_id == asset["id"] else None,
+    )
+
+    panel._load_asset(asset["id"])
+
+    assert panel_module.lf._test_state.opened == [(asset["path"], False)]
+    assert panel.get_selected_asset_id() == asset["id"]
+
+
+def test_import_registers_only_selected_licht_project(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project()
+    calls = []
+    panel_module.lf._test_state.dialog_path = asset["path"]
+    panel._selected_folder_id = "default"
+    panel._asset_index = _index(
+        register_licht_asset=lambda path, folder_id=None: (
+            calls.append((path, folder_id)) or SimpleNamespace(id=asset["id"]),
+            True,
+        ),
+        verify_projects=lambda: (0, 1),
+    )
+    panel.refresh_catalog = lambda **_kwargs: None
+
+    panel.on_import_project()
+
+    assert calls == [(asset["path"], "default")]
+    assert panel.get_selected_asset_id() == asset["id"]
+
+
+def test_edit_watch_directories_targets_clicked_folder(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index()
+    calls = []
+    monkeypatch.setattr(
+        panel_module,
+        "open_watch_dirs_dialog",
+        lambda index, folder_id, callback: calls.append((index, folder_id, callback)) or True,
+    )
+    event = _Event()
+
+    panel.on_edit_watch_dirs(None, event, ["default"])
+
+    assert calls[0][0] is panel._asset_index
+    assert calls[0][1] == "default"
     assert event.stopped is True
 
 
-def test_new_folder_button_uses_shared_context_menu(
-    asset_manager_panel_module, monkeypatch
-):
-    panel = asset_manager_panel_module.AssetManagerPanel()
-    actions = []
-    monkeypatch.setattr(
-        panel,
-        "on_create_folder_dialog",
-        lambda _handle, _event, args: actions.append(args),
+def test_folder_counts_match_search_results(panel_module):
+    first = _project(name="Bicycle")
+    second = _project(
+        "44444444-4444-4444-8444-444444444444",
+        name="Garden",
+        path="/tmp/garden.licht",
     )
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={first["id"]: first, second["id"]: second})
+    panel._selected_folder_id = "default"
+    panel._search_query = "garden"
 
-    panel.show_new_folder_menu(None, None, None)
-
-    menu_call = asset_manager_panel_module.lf.ui.context_menu_state.calls[-1]
-    assert menu_call["items"] == [
-        {
-            "label": "asset_manager.action.create_new_folder",
-            "action": "create_folder",
-        }
-    ]
-    menu_call["on_action"]("create_folder")
-
-    assert actions == [None]
+    assert len(panel.get_filtered_assets()) == 1
+    assert panel.get_folder_list()[0]["project_count"] == 1
 
 
-def test_gallery_precise_scroll_moves_scroll_container(asset_manager_panel_module):
-    panel = asset_manager_panel_module.AssetManagerPanel()
-    gallery_scroll = _ElementStub({"id": "asset-gallery-scroll"})
-    gallery_scroll.scroll_height = 900.0
-    gallery_scroll.client_height = 300.0
-    gallery_scroll.scroll_top = 120.0
-    event = _EventStub(
-        current_target=gallery_scroll,
-        params={"wheel_delta_y": "1"},
-    )
+def test_precise_scroll_moves_gallery_container(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    scroll = _Element()
+    scroll.scroll_top = 120.0
+    event = _Event(scroll, params={"wheel_delta_y": "1"})
 
     panel._on_gallery_precise_scroll(event)
 
-    assert gallery_scroll.scroll_top == 152.0
+    assert scroll.scroll_top == 152.0
     assert event.stopped is True
 
 
-def test_asset_scroll_schedules_coalesced_window_refresh(asset_manager_panel_module):
-    panel = object.__new__(asset_manager_panel_module.AssetManagerPanel)
-    panel._asset_scroll_event_suppressed = False
-    panel._asset_scroll_suppressed_top = -1.0
-    panel._asset_window_refresh_pending = False
-    panel._asset_window_update_requested = False
-    scheduled = []
-    panel._request_model_update = lambda: scheduled.append("update")
-    scroll_el = _ElementStub({"id": "asset-gallery-scroll"})
-    event = _EventStub(current_target=scroll_el)
+def test_mount_binds_stable_delegated_handlers(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    shell = _Element()
+    scroll = _Element()
+    doc = _Document({"asset-shell": shell, "asset-gallery-scroll": scroll})
 
-    panel._on_asset_scroll(event)
-    panel._on_asset_scroll(event)
+    panel._bind_dom_event_listeners(doc)
 
-    assert panel._asset_window_refresh_pending is True
-    assert panel._asset_window_update_requested is True
-    assert scheduled == ["update"]
+    assert {"mousedown", "click", "dblclick"}.issubset(shell.listeners)
+    assert {"scroll", "mousescroll"}.issubset(scroll.listeners)
+    assert {"mousemove", "mouseup"}.issubset(doc.listeners)
 
 
-def test_on_update_applies_pending_window_refresh(asset_manager_panel_module):
-    panel = object.__new__(asset_manager_panel_module.AssetManagerPanel)
-    panel._handle = _HandleStub()
-    panel._asset_window_refresh_pending = True
-    panel._asset_window_update_requested = True
-    panel._view_mode = "list"
-    panel._sync_asset_window_viewport = lambda doc=None: False
-    panel._sync_gallery_card_width = lambda doc=None: False
-    panel._sync_panel_space_state = lambda: False
-    panel.get_filtered_assets = lambda: ["row-1", "row-2"]
-    panel._asset_window_dirty_fields = lambda: (
-        "assets",
-        "asset_list_top_spacer_height",
-        "asset_list_bottom_spacer_height",
-        "asset_gallery_top_spacer_height",
-        "asset_gallery_bottom_spacer_height",
-    )
-    runtime_state = SimpleNamespace(
-        scene_generation=SimpleNamespace(value=0),
-        language_generation=SimpleNamespace(value=0),
-    )
-    asset_manager_panel_module.RuntimeState = runtime_state
-    panel._last_language_generation = 0
-    panel._last_scene_generation = 0
-    panel._asset_index = None
-
-    changed = panel.on_update(None)
-
-    assert changed is True
-    assert panel._handle.records["assets"] == ["row-1", "row-2"]
-    assert "assets" in panel._handle.dirty_fields
-    assert panel._asset_window_refresh_pending is False
-    assert panel._asset_window_update_requested is False
-
-
-def test_dirty_model_assets_refresh_does_not_invalidate_catalog_cache(
-    asset_manager_panel_module,
-):
-    panel = object.__new__(asset_manager_panel_module.AssetManagerPanel)
-    panel._handle = _HandleStub()
-    invalidations = []
-    panel._invalidate_catalog_cache = lambda: invalidations.append("invalidate")
-    panel._selection_count_fields = lambda: ()
-    panel._selection_visibility_fields = lambda: ()
-    panel._selected_asset_detail_fields = lambda: ()
-    panel._selected_scene_detail_fields = lambda: ()
-    panel._selected_folder_detail_fields = lambda: ()
-    panel._update_selection_details = lambda update_scene_assets=True: {
-        "counts": {},
-        "timings_ms": {},
-    }
-    panel._updating_selection_details = False
-    panel.get_filtered_assets = lambda: []
-    panel.get_folder_list = lambda: []
-    panel.get_scene_list = lambda: []
-    panel._request_model_update = lambda: None
-    panel._elapsed_ms = lambda start: 0.0
-    panel._log_perf = lambda *args, **kwargs: None
-    panel._last_dirty_model_timing = {}
-    panel._last_asset_rows_update_count = 0
-    panel._last_asset_rows_update_ms = 0.0
-
-    panel._dirty_model("assets")
-
-    assert invalidations == []
-    assert panel._handle.records["assets"] == []
-
-
-def test_folder_count_matches_visible_list(asset_manager_panel_module, tmp_path):
-    present_file = tmp_path / "present.licht"
-    present_file.write_bytes(b"licht")
-
-    def _asset(asset_id, path, *, exists=True):
-        asset = dict(_make_asset())
-        asset["id"] = asset_id
-        asset["name"] = asset_id
-        asset["absolute_path"] = str(path)
-        asset["path"] = str(path)
-        asset["exists"] = exists
-        asset["folder_id"] = "p1"
-        asset["scene_id"] = "s1"
-        return asset
-
-    panel = asset_manager_panel_module.AssetManagerPanel()
-    panel._handle = _HandleStub()
-    panel._asset_index = SimpleNamespace(
-        assets={
-            "present": _asset("present", present_file),
-            "missing": _asset("missing", tmp_path / "deleted.licht", exists=False),
-        },
-        folders={"p1": {"id": "p1", "name": "Default", "scene_ids": ["s1"]}},
-        scenes={"s1": {"id": "s1", "name": "scene", "folder_id": "p1"}},
-    )
-
-    visible = panel.get_filtered_assets()
-
-    assert len(panel._asset_index.assets) == 2
-    assert [asset["id"] for asset in visible] == ["missing", "present"]
-    assert panel.get_folder_list()[0]["scene_count"] == len(visible)
-    assert panel.get_scene_list()[0]["asset_count"] == len(visible)
+def test_default_folder_cannot_be_renamed_or_deleted_from_menu(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    assert panel._folder_context_menu_items("default") == [
+        {
+            "label": "asset_manager.action.edit_watch_dirs",
+            "action": "watch_dirs",
+        }
+    ]

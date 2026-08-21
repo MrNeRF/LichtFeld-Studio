@@ -55,20 +55,10 @@
                 <div class="asset-filter-row" data-class-is-active="folder.id == selected_folder_id" data-attr-data-folder-id="folder.id">
                   <span class="asset-row-label">{{folder.name}}</span>
                   <div class="asset-folder-row-right">
-                    <span class="asset-row-count">{{folder.scene_count}}</span>
+                    <span class="asset-row-count">{{folder.project_count}}</span>
                     <button class="asset-folder-menu" data-attr-data-folder-id="folder.id" data-folder-action="menu"><img src="../icon/more-horizontal.png" /></button>
                   </div>
                 </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="asset-sidebar-section" data-if="selected_folder_id">
-            <div class="asset-sidebar-title">{{scenes_title}}</div>
-            <div data-for="scene : scenes">
-              <div class="asset-filter-row" data-class-is-active="scene.id == selected_scene_id" data-attr-data-scene-id="scene.id">
-                <span class="asset-row-label">{{scene.name}}</span>
-                <span class="asset-row-count">{{scene.asset_count}}</span>
               </div>
             </div>
           </div>
@@ -101,7 +91,7 @@
                 <div class="asset-card-grid-window">
                   <div class="asset-card-slot" data-style-width="asset_card_slot_width" data-for="asset : assets">
                     <div class="asset-card" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-attr-data-asset-id="asset.id" data-asset-action="select">
-                      <div class="asset-card-thumb asset-thumb-project">
+                      <div class="asset-card-thumb asset-thumb-project" data-style-decorator="asset.thumbnail_decorator">
                         <div class="asset-card-overlay">
                           <span class="asset-pill asset-pill-licht">LICHT</span>
                         </div>
@@ -147,7 +137,7 @@
                       <span class="asset-col asset-col-type">LICHT</span>
                       <span class="asset-col asset-col-folder">{{asset.folder_name}}</span>
                       <span class="asset-col asset-col-size">{{asset.size_label}}</span>
-                      <span class="asset-col asset-col-modified">{{asset.modified_label}}</span>
+                      <span class="asset-col asset-col-modified">{{asset.saved_label}}</span>
                     </div>
                   </div>
                 </div>
@@ -190,10 +180,6 @@
                   <span class="parameter-label">{{prop_folder_label}}</span>
                   <span class="parameter-value">{{selected_asset_folder_name}}</span>
                 </div>
-                <div class="parameter-row" data-if="selected_asset_scene_name">
-                  <span class="parameter-label">{{prop_scene_label}}</span>
-                  <span class="parameter-value">{{selected_asset_scene_name}}</span>
-                </div>
                 <div class="parameter-row">
                   <span class="parameter-label">{{prop_size_label}}</span>
                   <span class="parameter-value">{{selected_asset_size}}</span>
@@ -223,43 +209,6 @@
 
             </div>
 
-            <div data-if="show_selection_scene">
-              <div class="asset-info-header">
-                <span class="asset-info-name">{{selected_scene_name}}</span>
-                <span class="asset-pill asset-pill-scene">{{scene_pill_label}}</span>
-              </div>
-
-              <div class="asset-info-section">
-                <div class="asset-info-section-title">{{scene_details_title}}</div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_folder_label}}</span>
-                  <span class="parameter-value">{{selected_scene_folder_name}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_assets_label}}</span>
-                  <span class="parameter-value">{{selected_scene_asset_count}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_created_label}}</span>
-                  <span class="parameter-value">{{selected_scene_created}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_modified_label}}</span>
-                  <span class="parameter-value">{{selected_scene_modified}}</span>
-                </div>
-              </div>
-
-              <div class="asset-info-section">
-                <div class="asset-info-section-title">{{scene_assets_title}}</div>
-                <div data-for="scene_asset : selected_scene_assets">
-                  <div class="scene-asset-row" data-attr-data-asset-id="scene_asset.id" data-asset-action="scene_asset">
-                    <span class="scene-asset-name">{{scene_asset.name}}</span>
-                    <span class="asset-artifact-type">LICHT</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
             <div data-if="show_selection_folder">
               <div class="asset-info-header">
                 <span class="asset-info-name">{{selected_folder_name}}</span>
@@ -269,12 +218,8 @@
               <div class="asset-info-section">
                 <div class="asset-info-section-title">{{folder_details_title}}</div>
                 <div class="parameter-row">
-                  <span class="parameter-label">{{prop_created_label}}</span>
-                  <span class="parameter-value">{{selected_folder_created}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_modified_label}}</span>
-                  <span class="parameter-value">{{selected_folder_modified}}</span>
+                  <span class="parameter-label">{{prop_assets_label}}</span>
+                  <span class="parameter-value">{{selected_folder_asset_count}}</span>
                 </div>
               </div>
 

@@ -609,7 +609,6 @@
     color: #a8e4df;
 }
 
-.asset-pill-scene,
 .asset-pill-folder {
     background-color: #38342f;
     color: #d8d0c3;
@@ -979,25 +978,6 @@
     width: auto;
 }
 
-
-.scene-asset-row {
-    display: flex;
-    flex-direction: row;
-    justify-content: space-between;
-    gap: 8dp;
-    padding: 6dp 0;
-    border-bottom-width: 1dp;
-    border-bottom-color: #3c3630;
-    cursor: pointer;
-}
-
-.scene-asset-row:hover {
-    color: #9be0ca;
-}
-
-.scene-asset-name {
-    color: #f0ebe2;
-}
 
 .asset-artifact-type {
     color: #a9a093;
