@@ -4,6 +4,7 @@
 
 #include "buffer_utils.h"
 #include "core/crash_handler.hpp"
+#include "fisheye_kb.cuh"
 #include "forward.h"
 #include "helper_math.h"
 #include "kernels_forward.cuh"
@@ -201,7 +202,13 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     const float far_,
     bool mip_filter,
     cudaStream_t stream,
-    float* max_screen_share) {
+    float* max_screen_share,
+    FastGSCameraKind camera_kind,
+    float fisheye_k1,
+    float fisheye_k2,
+    float fisheye_k3,
+    float fisheye_k4,
+    float fisheye_theta_max) {
 
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
     const uint64_t n_tiles_u64 = static_cast<uint64_t>(grid.x) * static_cast<uint64_t>(grid.y);
@@ -229,13 +236,21 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     const float h_f = static_cast<float>(height);
     float clip_left, clip_right, clip_top, clip_bottom;
     ewa_clip_bounds(w_f, h_f, fx, fy, cx, cy, clip_left, clip_right, clip_top, clip_bottom);
+    const float4 fisheye_k = make_float4(fisheye_k1, fisheye_k2, fisheye_k3, fisheye_k4);
+    const float theta_max = camera_kind == FastGSCameraKind::FISHEYE
+                                ? (fisheye_theta_max > 0.0f
+                                       ? fisheye_theta_max
+                                       : fisheye_kb::kb_theta_max_from_intrinsics(
+                                             fisheye_k1, fisheye_k2, fisheye_k3, fisheye_k4,
+                                             width, height, fx, fy, cx, cy))
+                                : 0.0f;
 
     char* visibility_blob = per_primitive_buffers_func(required<VisibilityBuffers>(n_primitives));
     if (!visibility_blob)
         throw std::runtime_error("OUT_OF_MEMORY: Failed to allocate FastGS visibility buffers");
     VisibilityBuffers visibility_buffers = VisibilityBuffers::from_blob(visibility_blob, n_primitives);
 
-    auto launch_preprocess = [&](const uint* primitive_indices,
+    auto launch_preprocess = [&]<FastGSCameraKind KIND>(const uint* primitive_indices,
                                  uint* visibility_mask,
                                  uint* depth_keys,
                                  float* depths,
@@ -247,7 +262,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
                                  float3* normals,
                                  const uint n_work_items,
                                  float* screen_share) {
-        kernels::forward::preprocess_cu<<<div_round_up(n_work_items, static_cast<uint>(config::block_size_preprocess)), config::block_size_preprocess, 0, stream>>>(
+        kernels::forward::preprocess_cu<KIND><<<div_round_up(n_work_items, static_cast<uint>(config::block_size_preprocess)), config::block_size_preprocess, 0, stream>>>(
             means,
             scales_raw,
             rotations_raw,
@@ -289,7 +304,9 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             far_,
             depth_bits,
             mip_filter,
-            screen_share);
+            screen_share,
+            fisheye_k,
+            theta_max);
         LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.preprocess");
     };
 
@@ -299,10 +316,17 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
                                          visibility_mask_bytes, stream),
                          "cudaMemsetAsync(FastGS visibility mask)");
 
-    launch_preprocess(nullptr,
+    if (camera_kind == FastGSCameraKind::FISHEYE) {
+        launch_preprocess.template operator()<FastGSCameraKind::FISHEYE>(nullptr,
                       visibility_buffers.visibility_mask,
                       nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
                       static_cast<uint>(n_primitives), max_screen_share);
+    } else {
+        launch_preprocess.template operator()<FastGSCameraKind::PINHOLE>(nullptr,
+                      visibility_buffers.visibility_mask,
+                      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                      static_cast<uint>(n_primitives), max_screen_share);
+    }
     LFS_FASTGS_PHASE_CHECK("fastgs.forward.preprocess.visibility");
 
     const uint n_visibility_blocks = static_cast<uint>(
@@ -376,7 +400,8 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
                          "cudaMemsetAsync(FastGS forward status)");
 
     if (n_visible > 0) {
-        launch_preprocess(visibility_buffers.visible_indices,
+        if (camera_kind == FastGSCameraKind::FISHEYE) {
+            launch_preprocess.template operator()<FastGSCameraKind::FISHEYE>(visibility_buffers.visible_indices,
                           nullptr,
                           per_primitive_buffers.depth_keys,
                           per_primitive_buffers.depths,
@@ -387,6 +412,19 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
                           per_primitive_buffers.color,
                           primitive_normals,
                           static_cast<uint>(n_visible), nullptr);
+        } else {
+            launch_preprocess.template operator()<FastGSCameraKind::PINHOLE>(visibility_buffers.visible_indices,
+                          nullptr,
+                          per_primitive_buffers.depth_keys,
+                          per_primitive_buffers.depths,
+                          per_primitive_buffers.n_touched_tiles,
+                          per_primitive_buffers.screen_bounds,
+                          per_primitive_buffers.mean2d,
+                          per_primitive_buffers.conic_opacity,
+                          per_primitive_buffers.color,
+                          primitive_normals,
+                          static_cast<uint>(n_visible), nullptr);
+        }
         check_cuda_with_fastgs_status(cudaGetLastError(), "preprocess", forward_status, "preprocess", static_cast<uint64_t>(n_primitives), n_tiles_u64);
         sync_fastgs_phase_if_requested("preprocess", forward_status, "preprocess", static_cast<uint64_t>(n_primitives), n_tiles_u64);
     }
