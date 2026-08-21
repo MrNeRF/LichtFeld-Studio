@@ -617,18 +617,22 @@ namespace lfs::app {
             std::optional<float> fov_degrees;
         };
 
-        std::expected<ViewArguments, std::string> parse_view_arguments(const json& args) {
+        struct ViewArgumentsError {
+            std::string message;
+        };
+
+        std::expected<ViewArguments, ViewArgumentsError> parse_view_arguments(const json& args) {
             auto eye = optional_vec3_arg(args, "eye");
             if (!eye)
-                return std::unexpected(eye.error());
+                return std::unexpected(ViewArgumentsError{eye.error()});
             auto target = optional_vec3_arg(args, "target");
             if (!target)
-                return std::unexpected(target.error());
+                return std::unexpected(ViewArgumentsError{target.error()});
             auto up = optional_vec3_arg(args, "up");
             if (!up)
-                return std::unexpected(up.error());
+                return std::unexpected(ViewArgumentsError{up.error()});
             if (!eye->has_value() || !target->has_value())
-                return std::unexpected("Fields 'eye' and 'target' must be provided");
+                return std::unexpected(ViewArgumentsError{"Fields 'eye' and 'target' must be provided"});
 
             ViewArguments result{
                 .eye = **eye,
@@ -2631,7 +2635,7 @@ namespace lfs::app {
             [viewer_impl](const json& args) -> json {
                 auto view = parse_view_arguments(args);
                 if (!view)
-                    return json{{"error", view.error()}};
+                    return json{{"error", view.error().message}};
 
                 return post_and_wait(viewer_impl, [view = *view]() -> json {
                     apply_view_arguments(view);
@@ -2948,7 +2952,7 @@ namespace lfs::app {
             [viewer_impl](const json& args) -> json {
                 auto view = parse_view_arguments(args);
                 if (!view)
-                    return json{{"error", view.error()}};
+                    return json{{"error", view.error().message}};
 
                 const auto started_at = std::chrono::steady_clock::now();
                 auto applied = post_and_wait(viewer_impl, [view = *view]() -> json {
