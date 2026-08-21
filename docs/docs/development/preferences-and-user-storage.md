@@ -78,8 +78,9 @@ explicit override on every platform and in portable builds. The application
 imports legacy keymaps, theme/language choices, UI preferences, and
 `layout.json` once when the unified tree is first used. Existing destination
 files are never overwritten and legacy sources are never deleted. The Asset
-Manager similarly copies an existing legacy catalog into the resolved writable
-catalog directory without deleting the source.
+Manager is the exception: after its catalog is converted to the UUID-based
+`.licht` project index, the obsolete catalog directory and disk thumbnail cache
+are removed. Gallery previews are read directly from each `.licht` container.
 
 | Mode | Config | Durable data | Cache | Logs |
 | --- | --- | --- | --- | --- |
@@ -101,6 +102,8 @@ config/keymaps/
 data/backups/
 data/presets/
 data/asset_library/
+  library.json
+  library.json.bak
 cache/
 logs/
 logs/mcp/
