@@ -1140,12 +1140,9 @@ namespace lfs::core::tensor_ops {
                 LFS_ASSERT_MSG(output_dtype == DataType::Int64,
                                "Int32 product requires Int64 output");
                 auto in_ptr = thrust::device_pointer_cast(d_in);
-                int64_t result = 1;
-                run_with_thrust_policy(stream, [&](auto policy) {
-                    result = thrust::transform_reduce(
-                        policy, in_ptr, in_ptr + n, Int32ToInt64Op{}, int64_t{1},
-                        thrust::multiplies<int64_t>{});
-                });
+                int64_t result = thrust::transform_reduce(
+                    thrust::cuda::par.on(stream), in_ptr, in_ptr + n,
+                    Int32ToInt64Op{}, int64_t{1}, thrust::multiplies<int64_t>{});
                 init_scalar_gpu(static_cast<int64_t*>(output), result, stream);
             } break;
             default:

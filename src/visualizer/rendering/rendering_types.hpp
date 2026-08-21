@@ -78,6 +78,19 @@ namespace lfs::vis {
         return mode == SplitViewMode::IndependentDual;
     }
 
+    [[nodiscard]] inline float effectiveSceneRenderScale(
+        const float base_scale,
+        const float upscaler_scale,
+        const bool reconstruction_enabled) {
+        const float base = std::isfinite(base_scale) ? std::clamp(base_scale, 0.25f, 1.0f) : 1.0f;
+        if (!reconstruction_enabled)
+            return base;
+        const float reconstruction = std::isfinite(upscaler_scale)
+                                         ? std::clamp(upscaler_scale, 0.25f, 1.0f)
+                                         : 1.0f;
+        return std::clamp(base * reconstruction, 0.25f, 1.0f);
+    }
+
     struct SplitViewPanelLayout {
         SplitViewPanelId panel = SplitViewPanelId::Left;
         int x = 0;
@@ -181,6 +194,9 @@ namespace lfs::vis {
         bool mip_filter = false;
         int sh_degree = 3;
         float render_scale = 1.0f; // Viewer resolution scale (0.25-1.0), does not affect training
+        std::string scene_upscaler = "native";
+        std::string scene_upscaler_preset = "native";
+        float scene_upscaler_scale = 1.0f;
         CameraMetricsMode camera_metrics_mode = CameraMetricsMode::Off;
 
         // Crop box (data stored in scene graph CropBoxData, these are UI toggles only)

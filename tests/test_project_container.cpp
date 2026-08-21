@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/uuid.hpp"
 #include "io/project/crc32c.hpp"
 #include "io/project/project_container_internal.hpp"
 #include "io/project_container.hpp"
@@ -38,9 +39,12 @@
 
 #ifndef _WIN32
 #include <csignal>
+#include <fcntl.h>
 #include <limits.h>
 #include <sched.h>
+#include <sys/file.h>
 #include <sys/mount.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -169,6 +173,19 @@ namespace {
         require_status(writer.write_chunk(key, payload));
         require_status(writer.commit());
         return read_file_bytes(path);
+    }
+
+    std::string recoverable_scene_graph_payload() {
+        SceneGraphChapter graph;
+        SceneNodeRecord node;
+        node.uuid = lfs::core::generate_uuid_v4();
+        node.type = "group";
+        node.name = "Recoverable";
+        require_status(graph.upsert_node(node));
+        const auto bytes = graph.to_bytes();
+        return std::string(
+            reinterpret_cast<const char*>(bytes.data()),
+            bytes.size());
     }
 
     void publish_complete_sidecar(
@@ -816,6 +833,35 @@ namespace {
               Compression::ByteShuffleZstdFramed);
         check("zstd-fallback-non-multiple-of-4", patterned_payload(4097),
               Compression::ByteShuffleZstdFramed);
+    }
+
+    // 7-byte chunked drain of a framed payload. Get-area windows default to
+    // INT_MAX, so this exercises underflow / leftover-get-area drain rather than
+    // an INT_MAX split. Multi-record coverage is BoundedStreamMatchesReadChunkForFramedPayloads.
+    TEST(ProjectContainerReader, BoundedStreamChunkedReadsOnFramedPayload) {
+        const auto payload = patterned_payload(4096);
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "framed-chunked.licht";
+        write_framed_fixture(path, FOURCC_SPLT, 851, payload, Compression::ZstdFramed,
+                             true, false, 851);
+        ProjectReader reader = require_result(ProjectReader::open(path));
+        const ChunkInfo& chunk = reader.chunks().front();
+        auto bounded = reader.open_bounded_stream(chunk);
+        ASSERT_TRUE(bounded) << lfs::format_for_developer(bounded.error());
+        auto& stream = bounded->stream();
+        std::vector<std::byte> got;
+        got.reserve(payload.size());
+        while (stream) {
+            std::array<char, 7> buf{};
+            stream.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+            const auto n = stream.gcount();
+            if (n <= 0) {
+                break;
+            }
+            const auto* begin = reinterpret_cast<const std::byte*>(buf.data());
+            got.insert(got.end(), begin, begin + static_cast<std::size_t>(n));
+        }
+        EXPECT_EQ(got, payload);
     }
 
     TEST(ProjectContainerReader, BoundedStreamReadsPayloadClassBeyondMaterializeCap) {
@@ -2081,7 +2127,9 @@ namespace {
             ASSERT_FALSE(second);
             EXPECT_EQ(second.error().code(), lfs::ErrorCode::Unavailable);
         }
-        EXPECT_TRUE(fs::exists(fs::path(path.string() + ".lock")));
+        const auto lock_path = fs::path(path.string() + ".lock");
+        EXPECT_FALSE(fs::exists(lock_path));
+        write_file_bytes(lock_path, byte_vector("stale lock is not authority"));
 
         ProjectWriter writer = require_result(ProjectWriter::create(
             path, fixture_create_options(403)));
@@ -3144,7 +3192,8 @@ namespace {
     }
 
     TEST(ProjectContainerWriter, InspectLeavesMasterLockFile) {
-        // Would fail if sweep started unlinking .lock siblings (O7).
+        // Would fail if inspect left a permanent {master}.lock after
+        // releasing the writer lock (O7: sweep still skips a held lock).
         TemporaryDirectory temporary;
         const fs::path master = temporary.path / "keep-lock.licht";
         create_single_chunk_fixture(
@@ -3155,7 +3204,211 @@ namespace {
             << lfs::format_for_developer(inspection.error());
         auto lock_path = master;
         lock_path += ".lock";
+        EXPECT_FALSE(fs::exists(lock_path));
+    }
+
+    TEST(ProjectContainerWriter, WriterLockReleaseDeletesLockFile) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "lock-hygiene.licht";
+        auto lock_path = path;
+        lock_path += ".lock";
+        {
+            auto lock = detail::WriterLock::acquire(path);
+            ASSERT_TRUE(lock)
+                << lfs::format_for_developer(lock.error());
+            EXPECT_TRUE(fs::exists(lock_path));
+        }
+        EXPECT_FALSE(fs::exists(lock_path));
+    }
+
+    TEST(ProjectContainerWriter,
+         WriterLockContentionLoserErrorsWinnerReleaseDeletes) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "lock-contend.licht";
+        auto lock_path = path;
+        lock_path += ".lock";
+        std::optional<detail::WriterLock> winner;
+        {
+            auto acquired = detail::WriterLock::acquire(path);
+            ASSERT_TRUE(acquired)
+                << lfs::format_for_developer(acquired.error());
+            winner.emplace(std::move(*acquired));
+        }
+        auto loser = detail::WriterLock::acquire(path);
+        ASSERT_FALSE(loser);
+        EXPECT_EQ(loser.error().code(), lfs::ErrorCode::Unavailable);
         EXPECT_TRUE(fs::exists(lock_path));
+        winner.reset();
+        EXPECT_FALSE(fs::exists(lock_path));
+        {
+            auto reacquired = detail::WriterLock::acquire(path);
+            ASSERT_TRUE(reacquired)
+                << lfs::format_for_developer(reacquired.error());
+        }
+        EXPECT_FALSE(fs::exists(lock_path));
+    }
+
+#ifndef _WIN32
+    TEST(ProjectContainerWriter, WriterLockFdMatchesCurrentLockPath) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "lock-identity.licht";
+        auto lock_path = path;
+        lock_path += ".lock";
+        const int fd =
+            ::open(lock_path.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+        ASSERT_GE(fd, 0);
+        ASSERT_EQ(::flock(fd, LOCK_EX | LOCK_NB), 0);
+        auto identity = detail::writer_lock_fd_matches_path(fd, lock_path);
+        ::flock(fd, LOCK_UN);
+        ::close(fd);
+        ASSERT_TRUE(identity) << lfs::format_for_developer(identity.error());
+        EXPECT_TRUE(*identity);
+    }
+
+    TEST(ProjectContainerWriter, WriterLockFdMismatchOnReplacedLockFile) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "lock-replaced.licht";
+        auto lock_path = path;
+        lock_path += ".lock";
+        const int stale =
+            ::open(lock_path.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+        ASSERT_GE(stale, 0);
+        ASSERT_EQ(::flock(stale, LOCK_EX | LOCK_NB), 0);
+        ASSERT_EQ(::unlink(lock_path.c_str()), 0);
+        const int current =
+            ::open(lock_path.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+        ASSERT_GE(current, 0);
+        auto stale_identity =
+            detail::writer_lock_fd_matches_path(stale, lock_path);
+        auto current_identity =
+            detail::writer_lock_fd_matches_path(current, lock_path);
+        auto missing_identity = detail::writer_lock_fd_matches_path(
+            stale, temporary.path / "missing.licht.lock");
+        ::flock(stale, LOCK_UN);
+        ::close(stale);
+        ::close(current);
+        ASSERT_TRUE(stale_identity)
+            << lfs::format_for_developer(stale_identity.error());
+        EXPECT_FALSE(*stale_identity);
+        ASSERT_TRUE(current_identity)
+            << lfs::format_for_developer(current_identity.error());
+        EXPECT_TRUE(*current_identity);
+        ASSERT_TRUE(missing_identity)
+            << lfs::format_for_developer(missing_identity.error());
+        EXPECT_FALSE(*missing_identity);
+    }
+
+    TEST(ProjectContainerWriter, WriterLockFdFstatFailureIsError) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "lock-fstat.licht";
+        auto lock_path = path;
+        lock_path += ".lock";
+        const int fd =
+            ::open(lock_path.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+        ASSERT_GE(fd, 0);
+        ASSERT_EQ(::close(fd), 0);
+        auto identity = detail::writer_lock_fd_matches_path(fd, lock_path);
+        ASSERT_FALSE(identity);
+        EXPECT_EQ(identity.error().code(), lfs::ErrorCode::Internal);
+        EXPECT_NE(std::string(identity.error().detail()).find("lockfile fstat failed"),
+                  std::string::npos);
+        ASSERT_TRUE(identity.error().native().has_value());
+        EXPECT_EQ(identity.error().native()->code, EBADF);
+    }
+
+    TEST(ProjectContainerWriter, WriterLockAcquireFailsWhenLockPathIsDirectory) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "dir-lock.licht";
+        auto lock_path = path;
+        lock_path += ".lock";
+        fs::create_directory(lock_path);
+        auto lock = detail::WriterLock::acquire(path);
+        ASSERT_FALSE(lock);
+        EXPECT_NE(lock.error().code(), lfs::ErrorCode::Unavailable);
+        EXPECT_NE(std::string(lock.error().detail()).find("lockfile open failed"),
+                  std::string::npos);
+        EXPECT_TRUE(fs::is_directory(lock_path));
+    }
+#endif
+
+    TEST(ProjectContainerWriter,
+         StartupSweepRemovesStaleMasterLockAndSaveasTemp) {
+        TemporaryDirectory temporary;
+        const fs::path master =
+            temporary.path / "startup-hygiene.licht";
+        create_single_chunk_fixture(
+            master, 1101, 1102, 1103, fixed_key("PROJ", 1104),
+            R"({"master":"startup-hygiene"})");
+        auto master_lock = master;
+        master_lock += ".lock";
+        write_file_bytes(master_lock, byte_vector("stale master lock"));
+        const fs::path saveas =
+            temporary.path /
+            ".startup-hygiene.licht.saveas-deadbeef.tmp";
+        auto saveas_lock = saveas;
+        saveas_lock += ".lock";
+        write_file_bytes(saveas, byte_vector("stale saveas staging"));
+        write_file_bytes(saveas_lock, byte_vector("stale saveas lock"));
+
+        const fs::path other_master =
+            temporary.path / "other.licht";
+        write_file_bytes(other_master, byte_vector("foreign master"));
+        const fs::path foreign =
+            temporary.path / ".other.licht.saveas-bbbb.tmp";
+        write_file_bytes(foreign, byte_vector("foreign saveas staging"));
+        const fs::path foreign_compact =
+            temporary.path / "other.compact.1.2.3.tmp.licht";
+        write_file_bytes(foreign_compact, byte_vector("foreign compact"));
+
+        const fs::path ghost =
+            temporary.path / ".ghost.licht.saveas-xxxx.tmp";
+        auto ghost_lock = ghost;
+        ghost_lock += ".lock";
+        write_file_bytes(ghost, byte_vector("unreferenced saveas staging"));
+        write_file_bytes(ghost_lock, byte_vector("unreferenced saveas lock"));
+        const fs::path ghost_compact =
+            temporary.path / "ghost.compact.1.2.3.tmp.licht";
+        write_file_bytes(ghost_compact, byte_vector("unreferenced compact"));
+
+        const fs::path held_ghost =
+            temporary.path / ".ghost.licht.saveas-held.tmp";
+        auto held_ghost_lock = held_ghost;
+        held_ghost_lock += ".lock";
+        write_file_bytes(held_ghost, byte_vector("held ghost staging"));
+        write_file_bytes(held_ghost_lock, byte_vector("held ghost lock"));
+        auto held_ghost_lease = WriterLockLease::acquire(held_ghost);
+        ASSERT_TRUE(held_ghost_lease)
+            << lfs::format_for_developer(held_ghost_lease.error());
+
+        const fs::path held_master =
+            temporary.path / "startup-held.licht";
+        create_single_chunk_fixture(
+            held_master, 1105, 1106, 1107, fixed_key("PROJ", 1108),
+            R"({"master":"startup-held"})");
+        auto held = WriterLockLease::acquire(held_master);
+        ASSERT_TRUE(held)
+            << lfs::format_for_developer(held.error());
+        auto held_lock = held_master;
+        held_lock += ".lock";
+        EXPECT_TRUE(fs::exists(held_lock));
+
+        const fs::path missing = temporary.path / "missing.licht";
+        sweep_stale_licht_artifacts_for_known_masters(
+            {master, held_master, missing});
+
+        EXPECT_FALSE(fs::exists(master_lock));
+        EXPECT_FALSE(fs::exists(saveas));
+        EXPECT_FALSE(fs::exists(saveas_lock));
+        EXPECT_FALSE(fs::exists(ghost));
+        EXPECT_FALSE(fs::exists(ghost_lock));
+        EXPECT_FALSE(fs::exists(ghost_compact));
+        EXPECT_TRUE(fs::exists(other_master));
+        EXPECT_TRUE(fs::exists(foreign));
+        EXPECT_TRUE(fs::exists(foreign_compact));
+        EXPECT_TRUE(fs::exists(held_ghost));
+        EXPECT_TRUE(fs::exists(held_ghost_lock));
+        EXPECT_TRUE(fs::exists(held_lock));
+        EXPECT_FALSE(fs::exists(missing));
     }
 
     TEST(ProjectContainerWriter,
@@ -3175,6 +3428,97 @@ namespace {
         ASSERT_TRUE(removed)
             << lfs::format_for_developer(removed.error());
         EXPECT_FALSE(fs::exists(free_temp));
+    }
+
+    TEST(ProjectRecoveryScratch, PathResolutionUsesSessionUuid) {
+        TemporaryDirectory temporary;
+        const auto uuid = lfs::core::generate_uuid_v4();
+        const auto dir = temporary.path / "recovery";
+        const auto path = scratch_autosave_path(dir, uuid);
+        EXPECT_EQ(path.parent_path(), dir);
+        EXPECT_EQ(
+            path.filename().string(),
+            uuid.to_string() + ".licht");
+        EXPECT_TRUE(is_scratch_autosave_path(path, dir));
+        EXPECT_FALSE(is_scratch_autosave_path(
+            dir / "not-a-uuid.licht", dir));
+        EXPECT_FALSE(is_scratch_autosave_path(
+            path, temporary.path));
+    }
+
+    TEST(ProjectRecoveryScratch, ScanFindsScratchCandidate) {
+        TemporaryDirectory temporary;
+        const auto dir = temporary.path / "recovery";
+        fs::create_directories(dir);
+        const auto uuid = lfs::core::generate_uuid_v4();
+        const auto path = scratch_autosave_path(dir, uuid);
+        create_single_chunk_fixture(
+            path, 2001, 2002, 2003,
+            fixed_key("SCNG", 2004),
+            recoverable_scene_graph_payload());
+        auto found = scan_scratch_autosaves(dir);
+        ASSERT_EQ(found.size(), 1u);
+        EXPECT_EQ(
+            found[0].disposition,
+            RecoveryDisposition::Offer);
+        EXPECT_TRUE(found[0].untitled_scratch);
+        ASSERT_TRUE(found[0].selected_path);
+        EXPECT_EQ(
+            found[0].selected_path->lexically_normal(),
+            path.lexically_normal());
+        EXPECT_FALSE(found[0].commit_uuid.is_nil());
+    }
+
+    TEST(ProjectRecoveryScratch, RemoveDeletesUnlockedScratch) {
+        TemporaryDirectory temporary;
+        const auto dir = temporary.path / "recovery";
+        fs::create_directories(dir);
+        const auto uuid = lfs::core::generate_uuid_v4();
+        const auto path = scratch_autosave_path(dir, uuid);
+        create_single_chunk_fixture(
+            path, 2011, 2012, 2013,
+            fixed_key("SCNG", 2014),
+            recoverable_scene_graph_payload());
+        auto removed = remove_scratch_autosave(path);
+        ASSERT_TRUE(removed)
+            << lfs::format_for_developer(removed.error());
+        EXPECT_FALSE(fs::exists(path));
+    }
+
+    TEST(ProjectRecoveryScratch, SweepSkipsLiveLockedScratch) {
+        TemporaryDirectory temporary;
+        const auto dir = temporary.path / "recovery";
+        fs::create_directories(dir);
+        const auto uuid = lfs::core::generate_uuid_v4();
+        const auto path = scratch_autosave_path(dir, uuid);
+        create_single_chunk_fixture(
+            path, 2021, 2022, 2023,
+            fixed_key("SCNG", 2024),
+            recoverable_scene_graph_payload());
+        auto lease = WriterLockLease::acquire(path);
+        ASSERT_TRUE(lease)
+            << lfs::format_for_developer(lease.error());
+        sweep_stale_scratch_autosaves(dir);
+        EXPECT_TRUE(fs::is_regular_file(path));
+        auto found = scan_scratch_autosaves(dir);
+        EXPECT_TRUE(found.empty());
+    }
+
+    TEST(ProjectRecoveryScratch, SweepRemovesEmptyUnlockedScratch) {
+        TemporaryDirectory temporary;
+        const auto dir = temporary.path / "recovery";
+        fs::create_directories(dir);
+        const auto uuid = lfs::core::generate_uuid_v4();
+        const auto path = scratch_autosave_path(dir, uuid);
+        create_single_chunk_fixture(
+            path, 2031, 2032, 2033,
+            fixed_key("PROJ", 2034),
+            R"({"scratch":"empty"})");
+        ASSERT_TRUE(fs::is_regular_file(path));
+        sweep_stale_scratch_autosaves(dir);
+        EXPECT_FALSE(fs::exists(path));
+        auto found = scan_scratch_autosaves(dir);
+        EXPECT_TRUE(found.empty());
     }
 
     TEST(ProjectPathTest, IsPublishedLichtPathTable) {

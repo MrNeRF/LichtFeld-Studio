@@ -33,6 +33,7 @@ namespace lfs::vis {
     // Forward declarations
     class VisualizerImpl;
     class VisualizerImplResetTest_ForceExitWhileStoppingArmsWatcher_Test;
+    class VisualizerImplResetTest_NewProjectWhileCompletionPendingStillErrors_Test;
     class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
     class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
     class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
@@ -72,7 +73,7 @@ namespace lfs::vis {
         void pauseTraining();
         void resumeTraining();
         void stopTraining();
-        void requestSaveProject();
+        bool requestSaveProject();
         // Suppress the completion notification modal for the next TrainingCompleted
         // dispatch (stop initiated by New Project / app close / reset, issue #1604).
         void suppressCompletionNotification() { suppress_completion_notification_.store(true, std::memory_order_relaxed); }
@@ -108,6 +109,11 @@ namespace lfs::vis {
         [[nodiscard]] bool isCompletionPending() const {
             return completion_pending_.load(std::memory_order_acquire);
         }
+        // True while a training completion is pending (running or paused
+        // mid-run). The reaper steals training_thread_ immediately, so
+        // joinable() is not the live-worker signal. Checkpoint-installed
+        // paused trainers have no worker and report false.
+        [[nodiscard]] bool hasLiveTrainingThread() const;
         [[nodiscard]] bool isPublishingFinalSnapshot() const {
             return isCompletionPending() && !isTrainingActive();
         }
@@ -123,8 +129,7 @@ namespace lfs::vis {
         int getNumSplats() const;
         int getMaxGaussians() const;
         std::vector<size_t> getSaveSteps() const;
-        bool setSaveSteps(std::vector<size_t> save_steps);
-        bool canEditSaveSteps() const;
+        void setSaveSteps(std::vector<size_t> save_steps);
         const char* getStrategyType() const;
         bool isGutEnabled() const;
 
@@ -208,6 +213,7 @@ namespace lfs::vis {
         };
 
         friend class VisualizerImplResetTest_ForceExitWhileStoppingArmsWatcher_Test;
+        friend class VisualizerImplResetTest_NewProjectWhileCompletionPendingStillErrors_Test;
         friend class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
         friend class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;

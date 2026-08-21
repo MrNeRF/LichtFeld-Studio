@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "rendering/scene_upscaler_registry.hpp"
 #include "vulkan_depth_blit_pass.hpp"
 #include "vulkan_environment_pass.hpp"
 #include "vulkan_mesh_pass.hpp"
@@ -117,6 +118,7 @@ namespace lfs::vis {
         // until the render extent settles. Do not replace that binding with an
         // incompletely prepared image during the deferral window.
         bool preserve_scene_image_binding = false;
+        SceneUpscalerBackend scene_upscaler = SceneUpscalerBackend::Native;
 
         bool grid_enabled = false;
         glm::mat4 grid_view{1.0f};
@@ -179,6 +181,7 @@ namespace lfs::vis {
         void record(VkCommandBuffer command_buffer,
                     VkExtent2D framebuffer_extent,
                     const VulkanViewportPassParams& params);
+        [[nodiscard]] SceneUpscalerSelection sceneUpscalerSelection() const;
         void shutdown();
 
     private:

@@ -4,6 +4,7 @@
 
 #include "gui/rml_right_panel.hpp"
 #include "core/logger.hpp"
+#include "gui/gui_focus_state.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
@@ -432,6 +433,8 @@ namespace lfs::vis::gui {
             wants_input_ = wants_keyboard_ || last_over_interactive_ ||
                            previous_cursor_request != CursorRequest::None;
             cursor_request_ = previous_cursor_request;
+            if (rml_input::wantsTextInput(focused_before))
+                guiFocusState().want_text_input = true;
             return;
         }
 
@@ -583,6 +586,8 @@ namespace lfs::vis::gui {
         auto* focused = rml_context_->GetFocusElement();
         wants_keyboard_ = rml_input::hasFocusedKeyboardTarget(focused);
         wants_input_ = wants_input_ || wants_keyboard_;
+        if (rml_input::wantsTextInput(focused))
+            guiFocusState().want_text_input = true;
     }
 
     void RmlRightPanel::render(const RightPanelLayout& layout,

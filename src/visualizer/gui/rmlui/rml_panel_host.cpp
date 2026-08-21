@@ -780,6 +780,12 @@ namespace lfs::vis::gui {
 
         trackFrame(x, y);
 
+        if (input_ &&
+            rml_input::hasFocusedKeyboardTarget(rml_context_->GetFocusElement()) &&
+            (input_->mouse_clicked[0] || input_->viewport_keyboard_focus)) {
+            return false;
+        }
+
         if (input_ && manager_ &&
             manager_->activeOverlayOccludesContext(rml_context_, input_->mouse_x, input_->mouse_y)) {
             compositeDirectToScreen(x, y, w, display_h);

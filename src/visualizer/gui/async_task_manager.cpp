@@ -902,6 +902,8 @@ namespace lfs::vis::gui {
         cmd::LoadFile::when([this](const auto& cmd) {
             if (!cmd.is_dataset)
                 return;
+            if (viewer_->deferDatasetLoadForTraining(cmd))
+                return;
             const auto* const data_loader = viewer_->getDataLoader();
             if (!data_loader) {
                 LOG_ERROR("LoadFile: no data loader");

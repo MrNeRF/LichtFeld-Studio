@@ -872,7 +872,7 @@ namespace lfs::vis::gui {
 
     void RmlStatusBar::commitSaveStepEdit() {
         auto* tm = lfs::vis::services().trainerOrNull();
-        if (!tm || !tm->canEditSaveSteps() || save_step_interaction_.preview_step == 0)
+        if (!tm || save_step_interaction_.preview_step == 0)
             return;
 
         auto steps = tm->getSaveSteps();
@@ -888,7 +888,7 @@ namespace lfs::vis::gui {
 
     void RmlStatusBar::removeSaveStep(const size_t step) {
         auto* tm = lfs::vis::services().trainerOrNull();
-        if (!tm || !tm->canEditSaveSteps() || step == 0)
+        if (!tm || step == 0)
             return;
 
         auto steps = tm->getSaveSteps();
@@ -913,7 +913,7 @@ namespace lfs::vis::gui {
                                                  const float local_x,
                                                  const float local_y) {
         auto* tm = lfs::vis::services().trainerOrNull();
-        if (!tm || !tm->canEditSaveSteps() || tm->getTotalIterations() <= 0) {
+        if (!tm || tm->getTotalIterations() <= 0) {
             resetSaveStepInteraction();
             return;
         }

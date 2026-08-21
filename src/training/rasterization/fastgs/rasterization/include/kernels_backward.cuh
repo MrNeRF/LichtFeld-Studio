@@ -35,16 +35,17 @@ namespace fast_lfs::rasterization::kernels::backward {
     // the geometry backward (sweep 2..4; 3 is the measured default).
     template <bool MIP_FILTER, int ACTIVE_SH_BASES>
     __global__ void __launch_bounds__(config::block_size_preprocess_backward, 3) preprocess_backward_cu(
-        const float3* __restrict__ means,
-        const float3* __restrict__ raw_scales,
-        const float4* __restrict__ raw_rotations,
+        // These four alias fused_adam.{means,scaling,rotation,opacity}.param (Adam writes).
+        const float3* means,
+        const float3* raw_scales,
+        const float4* raw_rotations,
         const float4* __restrict__ sh_coefficients_rest, // compact float4-packed swizzled layout
         const float4* __restrict__ w2c,
         const float3* __restrict__ cam_position,
-        const float* __restrict__ raw_opacities,
+        const float* raw_opacities,
         const std::uint64_t* __restrict__ primitive_n_touched_tiles,
         const float2* __restrict__ grad_mean2d,
-        const float* __restrict__ grad_conic,
+        const float3* __restrict__ grad_conic,
         const float* __restrict__ grad_depth,
         const float3* __restrict__ grad_normal,
         float* __restrict__ grad_opacity_helper,
@@ -58,6 +59,10 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float fy,
         const float cx,
         const float cy,
+        const float clip_left,
+        const float clip_right,
+        const float clip_top,
+        const float clip_bottom,
         const uint sh_layout_slots,
         FusedAdamSettings fused_adam,
         // model-truth shN-rest decode binds. fused_adam.shN.sh_value_*
@@ -66,6 +71,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float2* __restrict__ shN_value_bounds,
         const uint shN_value_n_cells,
         const uint shN_value_bits) {
+        (void)cx;
+        (void)cy;
         auto primitive_idx = cg::this_grid().thread_rank();
         const bool in_range = primitive_idx < n_primitives;
 
@@ -112,17 +119,13 @@ namespace fast_lfs::rasterization::kernels::backward {
 
         // Grad buffers. Joint block-bounds needs all threads to hit the same
         // adam_step_row sequence — no early returns before Adam sections.
-        // sh0/shN Adam runs immediately after SH-grad fill so
-        // shN_grads[15]×3 + joint us_u/us_s do not live across covariance/EWA.
+        // sh0/shN Adam runs immediately after SH-dir backward so the SH
+        // streaming temporaries do not live across covariance/EWA.
         float mean_grads[3] = {0.0f, 0.0f, 0.0f};
         float rotation_grads[4] = {0.0f, 0.0f, 0.0f, 0.0f};
         float sh0_grads[3] = {0.0f, 0.0f, 0.0f};
         float scale_grads[3] = {0.0f, 0.0f, 0.0f};
         float opacity_grads[1] = {0.0f};
-        float3 shN_grads[15];
-#pragma unroll
-        for (int i = 0; i < 15; ++i)
-            shN_grads[i] = make_float3(0.0f, 0.0f, 0.0f);
         float3 dL_dmean3d_from_color = make_float3(0.0f, 0.0f, 0.0f);
 
         const bool invisible = in_range && primitive_n_touched_tiles[primitive_idx] == 0;
@@ -145,7 +148,6 @@ namespace fast_lfs::rasterization::kernels::backward {
                 primitive_idx,
                 sh_layout_slots,
                 sh0_grads,
-                shN_grads,
                 // q16: bits==16 + bounds. IEEE f16: bits==16 + null bounds.
                 // decode from the model bind, NOT fused_adam.shN
                 // the optimizer copy is null during SH warmup while the buffer
@@ -159,11 +161,14 @@ namespace fast_lfs::rasterization::kernels::backward {
         // Also the single re-encode site for SH value quant.
         adam_step_row(sh0_grads, fused_adam.sh0, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         if constexpr (ACTIVE_SH_BASES > 1) {
-            constexpr uint N_SLOTS = (ACTIVE_SH_BASES > 9) ? 12u : (ACTIVE_SH_BASES > 4) ? 6u
-                                                                                         : 3u;
-            apply_shN_grads_packed(fused_adam, primitive_idx, shN_grads, N_SLOTS, sh_layout_slots);
+            const float3 sh_mean = visible ? means[primitive_idx] : make_float3(0.0f, 0.0f, 0.0f);
+            const float3 sh_cam = visible ? cam_position[0] : make_float3(0.0f, 0.0f, 0.0f);
+            const float3 sh_gc = visible ? grad_color_helper[primitive_idx] : make_float3(0.0f, 0.0f, 0.0f);
+            apply_shN_grads_packed<ACTIVE_SH_BASES>(
+                fused_adam, primitive_idx, sh_layout_slots,
+                sh_mean, sh_cam, sh_gc, visible);
         }
-        // sh0_grads / shN_grads are dead from here on (compiler can free them).
+        // sh0 / streamed shN Adam state is dead from here on (compiler can free it).
 
         // Re-enter the visible-only path for covariance, EWA, and geometry gradients.
         if (visible) {
@@ -172,10 +177,11 @@ namespace fast_lfs::rasterization::kernels::backward {
             const float4 w2c_r3 = w2c[2];
             const float depth = w2c_r3.x * mean3d.x + w2c_r3.y * mean3d.y + w2c_r3.z * mean3d.z + w2c_r3.w;
             const float depth_safe = fmaxf(depth, 1e-4f);
+            const float inv_depth = 1.0f / depth_safe;
             const float4 w2c_r1 = w2c[0];
-            const float x = (w2c_r1.x * mean3d.x + w2c_r1.y * mean3d.y + w2c_r1.z * mean3d.z + w2c_r1.w) / depth_safe;
+            const float x = (w2c_r1.x * mean3d.x + w2c_r1.y * mean3d.y + w2c_r1.z * mean3d.z + w2c_r1.w) * inv_depth;
             const float4 w2c_r2 = w2c[1];
-            const float y = (w2c_r2.x * mean3d.x + w2c_r2.y * mean3d.y + w2c_r2.z * mean3d.z + w2c_r2.w) / depth_safe;
+            const float y = (w2c_r2.x * mean3d.x + w2c_r2.y * mean3d.y + w2c_r2.z * mean3d.z + w2c_r2.w) * inv_depth;
 
             // compute 3d covariance from raw scale and rotation
             const float3 raw_scale = raw_scales[primitive_idx];
@@ -191,10 +197,11 @@ namespace fast_lfs::rasterization::kernels::backward {
             const float qz = raw_rotation.w;
             const float qrr_raw = qr * qr, qxx_raw = qx * qx, qyy_raw = qy * qy, qzz_raw = qz * qz;
             const float q_norm_sq = qrr_raw + qxx_raw + qyy_raw + qzz_raw;
-            const float q_norm_sq_safe = fmaxf(q_norm_sq, 1e-7f);
-            const float qxx = 2.0f * qxx_raw / q_norm_sq_safe, qyy = 2.0f * qyy_raw / q_norm_sq_safe, qzz = 2.0f * qzz_raw / q_norm_sq_safe;
-            const float qxy = 2.0f * qx * qy / q_norm_sq_safe, qxz = 2.0f * qx * qz / q_norm_sq_safe, qyz = 2.0f * qy * qz / q_norm_sq_safe;
-            const float qrx = 2.0f * qr * qx / q_norm_sq_safe, qry = 2.0f * qr * qy / q_norm_sq_safe, qrz = 2.0f * qr * qz / q_norm_sq_safe;
+            const float q_norm_sq_safe = fmaxf(q_norm_sq, 1e-8f);
+            const float inv_q_norm_sq = 2.0f / q_norm_sq_safe;
+            const float qxx = qxx_raw * inv_q_norm_sq, qyy = qyy_raw * inv_q_norm_sq, qzz = qzz_raw * inv_q_norm_sq;
+            const float qxy = qx * qy * inv_q_norm_sq, qxz = qx * qz * inv_q_norm_sq, qyz = qy * qz * inv_q_norm_sq;
+            const float qrx = qr * qx * inv_q_norm_sq, qry = qr * qy * inv_q_norm_sq, qrz = qr * qz * inv_q_norm_sq;
             const mat3x3 rotation = {
                 1.0f - (qyy + qzz), qxy - qrz, qry + qxz,
                 qrz + qxy, 1.0f - (qxx + qzz), qyz - qrx,
@@ -212,16 +219,12 @@ namespace fast_lfs::rasterization::kernels::backward {
                 rotation_scaled.m31 * rotation.m31 + rotation_scaled.m32 * rotation.m32 + rotation_scaled.m33 * rotation.m33,
             };
 
-            // ewa splatting gradient helpers
-            const float clip_left = (-0.15f * w - cx) / fx;
-            const float clip_right = (1.15f * w - cx) / fx;
-            const float clip_top = (-0.15f * h - cy) / fy;
-            const float clip_bottom = (1.15f * h - cy) / fy;
+            // ewa splatting gradient helpers (clip box is grid-uniform; computed once on the host)
             const float tx = clamp(x, clip_left, clip_right);
             const float ty = clamp(y, clip_top, clip_bottom);
-            const float j11 = fx / depth_safe;
+            const float j11 = fx * inv_depth;
             const float j13 = -j11 * tx;
-            const float j22 = fy / depth_safe;
+            const float j22 = fy * inv_depth;
             const float j23 = -j22 * ty;
             const float3 jw_r1 = make_float3(
                 j11 * w2c_r1.x + j13 * w2c_r3.x,
@@ -252,16 +255,13 @@ namespace fast_lfs::rasterization::kernels::backward {
             const float determinant_safe = fmaxf(determinant, config::min_cov2d_determinant);
             const float determinant_rcp = 1.0f / determinant_safe;
             const float determinant_rcp_sq = determinant_rcp * determinant_rcp;
-            const float3 dL_dconic = make_float3(
-                grad_conic[primitive_idx],
-                grad_conic[n_primitives + primitive_idx],
-                grad_conic[2 * n_primitives + primitive_idx]);
+            const float3 dL_dconic = grad_conic[primitive_idx];
             float3 dL_dcov2d = determinant_rcp_sq * make_float3(
                                                         2.0f * bc * dL_dconic.y - cc * dL_dconic.x - bb * dL_dconic.z,
                                                         bc * dL_dconic.x - (ac + bb) * dL_dconic.y + ab * dL_dconic.z,
                                                         2.0f * ab * dL_dconic.y - bb * dL_dconic.x - aa * dL_dconic.z);
 
-            const float original_opacity = __frcp_rn(1.0f + __expf(-raw_opacities[primitive_idx]));
+            const float original_opacity = 1.0f / (1.0f + expf(-raw_opacities[primitive_idx]));
             const float grad_compensated_opacity = grad_opacity_helper[primitive_idx];
             float opacity_compensation = 1.0f;
             if constexpr (MIP_FILTER) {
@@ -313,12 +313,12 @@ namespace fast_lfs::rasterization::kernels::backward {
             const bool valid_x = x >= clip_left && x <= clip_right;
             const bool valid_y = y >= clip_top && y <= clip_bottom;
             if (valid_x)
-                dL_dmean3d_cam.x -= j11 * dL_dj13 / depth_safe;
+                dL_dmean3d_cam.x -= j11 * dL_dj13 * inv_depth;
             if (valid_y)
-                dL_dmean3d_cam.y -= j22 * dL_dj23 / depth_safe;
+                dL_dmean3d_cam.y -= j22 * dL_dj23 * inv_depth;
             const float factor_x = 1.0f + static_cast<float>(valid_x);
             const float factor_y = 1.0f + static_cast<float>(valid_y);
-            dL_dmean3d_cam.z += (j11 * (factor_x * tx * dL_dj13 - dL_dj11) + j22 * (factor_y * ty * dL_dj23 - dL_dj22)) / depth_safe;
+            dL_dmean3d_cam.z += (j11 * (factor_x * tx * dL_dj13 - dL_dj11) + j22 * (factor_y * ty * dL_dj23 - dL_dj22)) * inv_depth;
 
             if (grad_w2c != nullptr) {
                 atomicAdd(&grad_w2c[0].w, dL_dmean3d_cam.x);
@@ -415,7 +415,7 @@ namespace fast_lfs::rasterization::kernels::backward {
             const float dL_dqry = dL_drotation.m13 - dL_drotation.m31;
             const float dL_dqrz = dL_drotation.m21 - dL_drotation.m12;
             const float dL_dq_norm_helper = qxx * dL_dqxx + qyy * dL_dqyy + qzz * dL_dqzz + qxy * dL_dqxy + qxz * dL_dqxz + qyz * dL_dqyz + qrx * dL_dqrx + qry * dL_dqry + qrz * dL_dqrz;
-            const float4 dL_draw_rotation = 2.0f * make_float4(qx * dL_dqrx + qy * dL_dqry + qz * dL_dqrz - qr * dL_dq_norm_helper, 2.0f * qx * dL_dqxx + qy * dL_dqxy + qz * dL_dqxz + qr * dL_dqrx - qx * dL_dq_norm_helper, 2.0f * qy * dL_dqyy + qx * dL_dqxy + qz * dL_dqyz + qr * dL_dqry - qy * dL_dq_norm_helper, 2.0f * qz * dL_dqzz + qx * dL_dqxz + qy * dL_dqyz + qr * dL_dqrz - qz * dL_dq_norm_helper) / q_norm_sq_safe;
+            const float4 dL_draw_rotation = make_float4(qx * dL_dqrx + qy * dL_dqry + qz * dL_dqrz - qr * dL_dq_norm_helper, 2.0f * qx * dL_dqxx + qy * dL_dqxy + qz * dL_dqxz + qr * dL_dqrx - qx * dL_dq_norm_helper, 2.0f * qy * dL_dqyy + qx * dL_dqxy + qz * dL_dqyz + qr * dL_dqry - qy * dL_dq_norm_helper, 2.0f * qz * dL_dqzz + qx * dL_dqxz + qy * dL_dqyz + qr * dL_dqrz - qz * dL_dq_norm_helper) * inv_q_norm_sq;
             const float4 clamped_rotation = clamp_grad4(dL_draw_rotation);
             rotation_grads[0] = clamped_rotation.x;
             rotation_grads[1] = clamped_rotation.y;
@@ -475,11 +475,11 @@ namespace fast_lfs::rasterization::kernels::backward {
     //   • warp-reduce per-splat grads → one atomic per splat per warp
     //
     // Numerical policy: FP reduction order may change → grads within 1e-6 of the
-    // uncull reference (NOT bit-exact). warp_cull_mode: 0=on, 1=off (ref), 2=wrong empty.
+    // uncull reference (NOT bit-exact). WARP_CULL_MODE: 0=on, 1=off (ref), 2=wrong empty.
     // WARP_BWD_WALK_BEGIN / WARP_BWD_WALK_END mark the reverse-walk body: zero
     // The sync-count assertion depends on the block.sync and __syncthreads calls below.
     // ---------------------------------------------------------------------------
-    template <DensificationType DENSIFICATION_TYPE, bool NORMAL_CHANNEL>
+    template <DensificationType DENSIFICATION_TYPE, bool NORMAL_CHANNEL, int WARP_CULL_MODE = 0>
     __global__ void __launch_bounds__(config::block_size_blend_backward, 8) blend_backward_cu(
         const uint2* __restrict__ tile_instance_ranges,
         const uint* __restrict__ instance_primitive_indices,
@@ -497,7 +497,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const uint* __restrict__ tile_n_contributions,
         const float* __restrict__ tile_final_transmittance,
         float2* __restrict__ grad_mean2d,
-        float* __restrict__ grad_conic,
+        float3* __restrict__ grad_conic,
         float* __restrict__ grad_depth,
         float3* __restrict__ grad_normal,
         float* __restrict__ grad_compensated_opacity,
@@ -510,7 +510,6 @@ namespace fast_lfs::rasterization::kernels::backward {
         const uint width,
         const uint height,
         const uint grid_width,
-        const int warp_cull_mode,
         const int blend_batch_size_runtime) {
         (void)image;
         (void)alpha_map;
@@ -657,6 +656,18 @@ namespace fast_lfs::rasterization::kernels::backward {
             return;
         }
 
+        float pixel_error0 = 1.0f;
+        float pixel_error1 = 1.0f;
+        if constexpr (DENSIFICATION_TYPE != DensificationType::None) {
+            if constexpr (DENSIFICATION_TYPE == DensificationType::MCMC) {
+                pixel_error0 = densification_error_map[pixel_idx0];
+                pixel_error1 = densification_error_map[pixel_idx1];
+            } else if (densification_error_map != nullptr) {
+                pixel_error0 = densification_error_map[pixel_idx0];
+                pixel_error1 = densification_error_map[pixel_idx1];
+            }
+        }
+
         // Fetch batch size: runtime override or config default; shrink for tiny T_eff.
         // Cap at block size so one thread can load one splat (collaborative fetch).
         int batch_size = blend_batch_size_runtime > 0
@@ -679,9 +690,9 @@ namespace fast_lfs::rasterization::kernels::backward {
         __shared__ float4 s_color[config::block_size_blend_backward];
         __shared__ float s_depth[config::block_size_blend_backward];
         __shared__ float3 s_normal[NORMAL_CHANNEL ? config::block_size_blend_backward : 1];
-        __shared__ int s_tile_prim_idx[config::block_size_blend_backward];
         __shared__ unsigned char s_valid_splat[config::block_size_blend_backward];
         __shared__ ushort4 s_pixel_bbox[config::block_size_blend_backward];
+        const bool stage_depth = grad_depth_map != nullptr;
 
         // Reverse walk: batch_base is reverse-order index into [0, T_eff).
         // tile_primitive_idx = T_eff - reverse_i - 1  (high index first).
@@ -692,7 +703,6 @@ namespace fast_lfs::rasterization::kernels::backward {
             if (static_cast<int>(thread_rank) < n_batch) {
                 const int reverse_i = batch_base + static_cast<int>(thread_rank);
                 const int tile_primitive_idx = T_eff - reverse_i - 1;
-                s_tile_prim_idx[thread_rank] = tile_primitive_idx;
                 const uint instance_idx =
                     tile_instance_range.x + static_cast<uint>(tile_primitive_idx);
                 uint primitive_idx = instance_primitive_indices[instance_idx];
@@ -722,8 +732,16 @@ namespace fast_lfs::rasterization::kernels::backward {
                     s_pixel_bbox[thread_rank] = geom.pixel_bbox;
                     s_conic_opacity[thread_rank] = primitive_conic_opacity[primitive_idx];
                     const float3 color_unclamped = make_float3(primitive_color[primitive_idx]);
-                    s_color[thread_rank] = make_float4(color_unclamped, 0.0f);
-                    s_depth[thread_rank] = primitive_depths[primitive_idx];
+                    const float3 color_clamped =
+                        fminf(fmaxf(color_unclamped, 0.0f), config::max_blend_color);
+                    const unsigned factor_bits =
+                        (color_unclamped.x <= config::max_blend_color ? 1u : 0u) |
+                        (color_unclamped.y <= config::max_blend_color ? 2u : 0u) |
+                        (color_unclamped.z <= config::max_blend_color ? 4u : 0u);
+                    s_color[thread_rank] = make_float4(
+                        color_clamped.x, color_clamped.y, color_clamped.z, __uint_as_float(factor_bits));
+                    if (stage_depth)
+                        s_depth[thread_rank] = primitive_depths[primitive_idx];
                     if constexpr (NORMAL_CHANNEL) {
                         s_normal[thread_rank] = primitive_normals[primitive_idx];
                     }
@@ -732,7 +750,8 @@ namespace fast_lfs::rasterization::kernels::backward {
                     s_pixel_bbox[thread_rank] = make_ushort4(0, 0, 0, 0);
                     s_conic_opacity[thread_rank] = make_float4(0.0f);
                     s_color[thread_rank] = make_float4(0.0f);
-                    s_depth[thread_rank] = 0.0f;
+                    if (stage_depth)
+                        s_depth[thread_rank] = 0.0f;
                     if constexpr (NORMAL_CHANNEL) {
                         s_normal[thread_rank] = make_float3(0.0f);
                     }
@@ -767,36 +786,40 @@ namespace fast_lfs::rasterization::kernels::backward {
                 }
                 unsigned mask0 = __ballot_sync(0xffffffffu, hit0);
                 unsigned mask1 = __ballot_sync(0xffffffffu, hit1);
-                if (warp_cull_mode == 1) {
+                if constexpr (WARP_CULL_MODE == 1) {
                     mask0 = mask1 = 0xffffffffu;
-                } else if (warp_cull_mode == 2) {
+                } else if constexpr (WARP_CULL_MODE == 2) {
                     mask0 = mask1 = 0u;
                 }
 
-                for (int k = 0; k < 32; ++k) {
+                unsigned live = mask0 | mask1;
+                while (live != 0u) {
+                    const int k = __ffs(live) - 1;
+                    live &= live - 1u;
                     const int j = j_base + k;
                     if (j >= n_batch)
                         break;
                     const bool use0 = ((mask0 >> k) & 1u) != 0u;
                     const bool use1 = ((mask1 >> k) & 1u) != 0u;
-                    if (!use0 && !use1)
-                        continue;
-                    if (!s_valid_splat[j])
-                        continue;
+                    if constexpr (WARP_CULL_MODE != 0) {
+                        if (!s_valid_splat[j])
+                            continue;
+                    }
 
-                    const int tile_primitive_idx = s_tile_prim_idx[j];
+                    const int tile_primitive_idx = T_eff - batch_base - j - 1;
                     const uint primitive_idx = s_prim_idx[j];
                     const float2 mean2d = s_mean2d[j];
                     const float4 conic_opacity = s_conic_opacity[j];
                     const float3 conic = make_float3(conic_opacity);
                     const float compensated_opacity = conic_opacity.w;
-                    const float3 color_unclamped = make_float3(s_color[j]);
-                    const float3 color = fminf(fmaxf(color_unclamped, 0.0f), config::max_blend_color);
+                    const float4 color_staged = s_color[j];
+                    const float3 color = make_float3(color_staged);
+                    const unsigned factor_bits = __float_as_uint(color_staged.w);
                     const float3 color_grad_factor = make_float3(
-                        color_unclamped.x <= config::max_blend_color ? 1.0f : 0.0f,
-                        color_unclamped.y <= config::max_blend_color ? 1.0f : 0.0f,
-                        color_unclamped.z <= config::max_blend_color ? 1.0f : 0.0f);
-                    const float depth = s_depth[j];
+                        (factor_bits & 1u) ? 1.0f : 0.0f,
+                        (factor_bits & 2u) ? 1.0f : 0.0f,
+                        (factor_bits & 4u) ? 1.0f : 0.0f);
+                    const float depth = stage_depth ? s_depth[j] : 0.0f;
                     float3 normal = make_float3(0.0f);
                     if constexpr (NORMAL_CHANNEL) {
                         normal = s_normal[j];
@@ -807,7 +830,7 @@ namespace fast_lfs::rasterization::kernels::backward {
 
                     // Lambda-like: process one pixel's contribution into accum.
                     auto accumulate_pixel = [&](const bool use, const bool inside, const uint last,
-                                                const float2 pixel, const uint pidx,
+                                                const float2 pixel, const float pixel_error,
                                                 float& T, float3& grad_c, float& grad_T,
                                                 const float grad_d, const float3& grad_n) {
                         if (!use || !inside || static_cast<uint>(tile_primitive_idx) >= last)
@@ -818,7 +841,7 @@ namespace fast_lfs::rasterization::kernels::backward {
                             conic.y * delta.x * delta.y;
                         if (!(sigma_over_2 >= 0.0f))
                             return;
-                        const float gaussian = expf(-sigma_over_2);
+                        const float gaussian = __expf(-sigma_over_2);
                         const float unclamped_alpha = compensated_opacity * gaussian;
                         const float alpha = fminf(unclamped_alpha, config::max_fragment_alpha);
                         if (!(alpha >= config::min_alpha_threshold))
@@ -837,7 +860,6 @@ namespace fast_lfs::rasterization::kernels::backward {
                         const float grad_transmittance_after = grad_T;
 
                         if constexpr (DENSIFICATION_TYPE == DensificationType::MCMC) {
-                            const float pixel_error = densification_error_map[pidx];
                             accum.densification_weight += blending_weight;
                             accum.densification_error_weighted += blending_weight * pixel_error;
                         }
@@ -871,9 +893,6 @@ namespace fast_lfs::rasterization::kernels::backward {
                         accum.mean_y += dL_dmean2d.y;
 
                         if constexpr (DENSIFICATION_TYPE == DensificationType::MRNF) {
-                            const float pixel_error = (densification_error_map != nullptr)
-                                                          ? densification_error_map[pidx]
-                                                          : 1.0f;
                             accum.densification_weight += blending_weight;
                             accum.densification_error_weighted += blending_weight * pixel_error;
                         }
@@ -885,40 +904,47 @@ namespace fast_lfs::rasterization::kernels::backward {
                                  grad_transmittance_after * one_minus_alpha;
                     };
 
-                    accumulate_pixel(use0, inside0, last0, pixel0, pixel_idx0, T0, grad_c0, grad_T0, grad_d0, grad_n0);
-                    accumulate_pixel(use1, inside1, last1, pixel1, pixel_idx1, T1, grad_c1, grad_T1, grad_d1, grad_n1);
+                    accumulate_pixel(use0, inside0, last0, pixel0, pixel_error0, T0, grad_c0, grad_T0, grad_d0, grad_n0);
+                    accumulate_pixel(use1, inside1, last1, pixel1, pixel_error1, T1, grad_c1, grad_T1, grad_d1, grad_n1);
 
                     // Warp-reduce → one global atomic per splat per warp.
                     const unsigned contrib_mask = __ballot_sync(0xffffffffu, has_contribution);
                     if (contrib_mask != 0u && primitive_idx < n_primitives) {
                         using lfs::core::warp_ops::warp_reduce_sum;
-                        const float mean_x = warp_reduce_sum(has_contribution ? accum.mean_x : 0.0f);
-                        const float mean_y = warp_reduce_sum(has_contribution ? accum.mean_y : 0.0f);
-                        const float conic_x = warp_reduce_sum(has_contribution ? accum.conic_x : 0.0f);
-                        const float conic_y = warp_reduce_sum(has_contribution ? accum.conic_y : 0.0f);
-                        const float conic_z = warp_reduce_sum(has_contribution ? accum.conic_z : 0.0f);
-                        const float depth_g = warp_reduce_sum(has_contribution ? accum.depth : 0.0f);
-                        const float opac_g = warp_reduce_sum(has_contribution ? accum.compensated_opacity : 0.0f);
-                        const float color_x = warp_reduce_sum(has_contribution ? accum.color_x : 0.0f);
-                        const float color_y = warp_reduce_sum(has_contribution ? accum.color_y : 0.0f);
-                        const float color_z = warp_reduce_sum(has_contribution ? accum.color_z : 0.0f);
+                        const unsigned n_contrib = __popc(contrib_mask);
+                        const int src_lane = __ffs(contrib_mask) - 1;
+                        auto reduce_field = [&](float v) -> float {
+                            if (n_contrib == 1u)
+                                return __shfl_sync(0xffffffffu, v, src_lane);
+                            return warp_reduce_sum(v);
+                        };
+                        const float mean_x = reduce_field(accum.mean_x);
+                        const float mean_y = reduce_field(accum.mean_y);
+                        const float conic_x = reduce_field(accum.conic_x);
+                        const float conic_y = reduce_field(accum.conic_y);
+                        const float conic_z = reduce_field(accum.conic_z);
+                        const float depth_g = reduce_field(accum.depth);
+                        const float opac_g = reduce_field(accum.compensated_opacity);
+                        const float color_x = reduce_field(accum.color_x);
+                        const float color_y = reduce_field(accum.color_y);
+                        const float color_z = reduce_field(accum.color_z);
                         float normal_x = 0.0f, normal_y = 0.0f, normal_z = 0.0f;
                         if constexpr (NORMAL_CHANNEL) {
-                            normal_x = warp_reduce_sum(has_contribution ? accum.normal_x : 0.0f);
-                            normal_y = warp_reduce_sum(has_contribution ? accum.normal_y : 0.0f);
-                            normal_z = warp_reduce_sum(has_contribution ? accum.normal_z : 0.0f);
+                            normal_x = reduce_field(accum.normal_x);
+                            normal_y = reduce_field(accum.normal_y);
+                            normal_z = reduce_field(accum.normal_z);
                         }
                         float dens_w = 0.0f, dens_e = 0.0f;
                         if constexpr (DENSIFICATION_TYPE != DensificationType::None) {
-                            dens_w = warp_reduce_sum(has_contribution ? accum.densification_weight : 0.0f);
-                            dens_e = warp_reduce_sum(has_contribution ? accum.densification_error_weighted : 0.0f);
+                            dens_w = reduce_field(accum.densification_weight);
+                            dens_e = reduce_field(accum.densification_error_weighted);
                         }
                         if (lane_id == 0u) {
                             atomicAdd(&grad_mean2d[primitive_idx].x, clamp_grad(mean_x));
                             atomicAdd(&grad_mean2d[primitive_idx].y, clamp_grad(mean_y));
-                            atomicAdd(&grad_conic[primitive_idx], clamp_grad(conic_x));
-                            atomicAdd(&grad_conic[n_primitives + primitive_idx], clamp_grad(conic_y));
-                            atomicAdd(&grad_conic[2 * n_primitives + primitive_idx], clamp_grad(conic_z));
+                            atomicAdd(&grad_conic[primitive_idx].x, clamp_grad(conic_x));
+                            atomicAdd(&grad_conic[primitive_idx].y, clamp_grad(conic_y));
+                            atomicAdd(&grad_conic[primitive_idx].z, clamp_grad(conic_z));
                             atomicAdd(&grad_depth[primitive_idx], clamp_grad(depth_g));
                             if constexpr (NORMAL_CHANNEL) {
                                 atomicAdd(&grad_normal[primitive_idx].x, clamp_grad(normal_x));

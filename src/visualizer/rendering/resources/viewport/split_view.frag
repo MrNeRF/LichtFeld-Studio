@@ -13,7 +13,7 @@ layout(push_constant) uniform Push {
     // x = split_position (0..1 in viewport space)
     // y = left_flip_y (0/1)
     // z = right_flip_y (0/1)
-    // w = unused padding (divider color is hardcoded in the shader)
+    // w = padding
     vec4 split;
 
     // Viewport pixel rect (x, y, width, height) — letterboxed content extent.
@@ -22,7 +22,7 @@ layout(push_constant) uniform Push {
     // Panel x-range in viewport-uv space: (left_start, left_end, right_start, right_end).
     // When normalize_x_to_panel is true on either side, sampling uses (u - start) / (end - start).
     vec4 panel_norm;
-    // Per-panel "normalize_x_to_panel" flags packed as (left, right, _, _).
+    // Per-panel flags packed as (left normalize, right normalize, left filter, right filter).
     vec4 panel_flags;
 
     // Background color for letterboxed regions.
@@ -40,7 +40,7 @@ layout(push_constant) uniform Push {
 } pc;
 
 vec3 sample_panel(sampler2D tex, vec2 uv, float start, float end, float normalize, float flip_y,
-                  vec2 uv_scale, vec2 uv_clamp_max) {
+                  float spatial_filter, vec2 uv_scale, vec2 uv_clamp_max) {
     float u = uv.x;
     if (normalize > 0.5) {
         float span = max(end - start, 1e-6);
@@ -48,7 +48,22 @@ vec3 sample_panel(sampler2D tex, vec2 uv, float start, float end, float normaliz
     }
     float v = flip_y > 0.5 ? 1.0 - uv.y : uv.y;
     vec2 st = min(vec2(u, v) * uv_scale, uv_clamp_max);
-    return texture(tex, st).rgb;
+    vec3 center = texture(tex, st).rgb;
+    if (spatial_filter < 0.5) {
+        return center;
+    }
+
+    const float strength = 0.18;
+    vec2 texel = 1.0 / vec2(textureSize(tex, 0));
+    vec3 left = texture(tex, clamp(st - vec2(texel.x, 0.0), vec2(0.0), uv_clamp_max)).rgb;
+    vec3 right = texture(tex, clamp(st + vec2(texel.x, 0.0), vec2(0.0), uv_clamp_max)).rgb;
+    vec3 up = texture(tex, clamp(st - vec2(0.0, texel.y), vec2(0.0), uv_clamp_max)).rgb;
+    vec3 down = texture(tex, clamp(st + vec2(0.0, texel.y), vec2(0.0), uv_clamp_max)).rgb;
+    vec3 sharpened = center * (1.0 + 4.0 * strength) -
+                     (left + right + up + down) * strength;
+    vec3 neighborhood_min = min(center, min(min(left, right), min(up, down)));
+    vec3 neighborhood_max = max(center, max(max(left, right), max(up, down)));
+    return clamp(sharpened, neighborhood_min, neighborhood_max);
 }
 
 void main() {
@@ -73,10 +88,10 @@ void main() {
 
     vec3 color = use_left
         ? sample_panel(u_left, content_uv, pc.panel_norm.x, pc.panel_norm.y,
-                       pc.panel_flags.x, pc.split.y,
+                       pc.panel_flags.x, pc.split.y, pc.panel_flags.z,
                        pc.left_uv_scale_clamp.xy, pc.left_uv_scale_clamp.zw)
         : sample_panel(u_right, content_uv, pc.panel_norm.z, pc.panel_norm.w,
-                       pc.panel_flags.y, pc.split.z,
+                       pc.panel_flags.y, pc.split.z, pc.panel_flags.w,
                        pc.right_uv_scale_clamp.xy, pc.right_uv_scale_clamp.zw);
 
     // Divider/handle/grip overlay. Mirrors compositeSplitImages CPU geometry

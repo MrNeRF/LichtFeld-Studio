@@ -5,7 +5,6 @@
 #include "core/user_paths.hpp"
 
 #include "core/environment.hpp"
-#include "core/executable_path.hpp"
 #include "path_utils.hpp"
 
 #include <nlohmann/json.hpp>
@@ -325,20 +324,6 @@ namespace lfs::core {
         if (const auto root = environmentPath("LFS_HOME"))
             return fromUnifiedRoot(*root);
 
-#ifdef LFS_BUILD_PORTABLE
-        if (!options.portable) {
-            try {
-                return fromUnifiedRoot(getExecutableDir() / ".lichtfeld");
-            } catch (const std::exception& error) {
-                // LFS-CENSUS-OK(empty-catch): convert executable path failures into a typed result.
-                return userPathError(
-                    lfs::ErrorCode::Unavailable,
-                    "Portable user storage could not be resolved.",
-                    std::format("Unable to resolve portable executable directory: {}", error.what()));
-            }
-        }
-#endif
-
         if (options.portable) {
             if (!options.executable_dir || options.executable_dir->empty())
                 return userPathError(
@@ -361,7 +346,8 @@ namespace lfs::core {
     lfs::Status UserPaths::ensureDirectories() const {
         const std::filesystem::path directories[] = {
             config_dir_, data_dir_, cache_dir_, log_dir_, plugin_dir_, venv_dir_,
-            keymapDir(), presetDir(), assetLibraryDir(), backupDir()};
+            keymapDir(), presetDir(), assetLibraryDir(), backupDir(),
+            recoveryDir()};
         for (const auto& directory : directories) {
             std::error_code error;
             std::filesystem::create_directories(directory, error);
@@ -428,6 +414,9 @@ namespace lfs::core {
     std::filesystem::path UserPaths::presetDir() const { return data_dir_ / "presets"; }
     std::filesystem::path UserPaths::assetLibraryDir() const { return data_dir_ / "asset_library"; }
     std::filesystem::path UserPaths::backupDir() const { return data_dir_ / "backups"; }
+    std::filesystem::path UserPaths::recoveryDir() const {
+        return config_dir_.parent_path() / "recovery";
+    }
     std::filesystem::path UserPaths::mcpLogDir() const { return log_dir_ / "mcp"; }
     lfs::Status UserPaths::appendMcpLogLine(
         const std::filesystem::path& filename, const std::string& line) const {

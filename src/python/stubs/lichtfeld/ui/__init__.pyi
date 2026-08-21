@@ -2067,6 +2067,9 @@ def on_request_exit(callback: object) -> None:
 def on_project_switch_confirmation(callback: object) -> None:
     """Register callback for a dirty project-switch decision"""
 
+def on_stop_training_confirmation(callback: object) -> None:
+    """Register callback for a stop-training project-switch decision"""
+
 def on_open_camera_preview(callback: object) -> None:
     """Register callback for OpenCameraPreview event"""
 
@@ -2442,7 +2445,7 @@ def is_windows_platform() -> bool:
 
 def register_file_associations() -> bool:
     """
-    Register LichtFeld Studio as a supported handler for .ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz files (Windows only)
+    Register LichtFeld Studio as a supported handler for .ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht files (Windows only)
     """
 
 def open_file_association_settings() -> bool:
@@ -2452,12 +2455,12 @@ def open_file_association_settings() -> bool:
 
 def unregister_file_associations() -> bool:
     """
-    Remove LichtFeld Studio file associations for .ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz (Windows only)
+    Remove LichtFeld Studio file associations for .ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht (Windows only)
     """
 
 def are_file_associations_registered() -> bool:
     """
-    Check if LichtFeld Studio is the default handler for .ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz (Windows only)
+    Check if LichtFeld Studio is the default handler for .ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht (Windows only)
     """
 
 def get_pivot_mode() -> int:
@@ -2557,6 +2560,18 @@ def get_ui_scale() -> float:
 def get_ui_scale_preference() -> float:
     """Get saved UI scale preference (0.0 = auto)"""
 
+def get_scene_reconstruction_options() -> list:
+    """Get registered scene reconstruction backends and their presets"""
+
+def get_scene_reconstruction_preset_preference(backend_id: str) -> str:
+    """Get the saved preset for a scene reconstruction backend"""
+
+def set_scene_reconstruction(backend_id: str, preset_id: str) -> bool:
+    """Atomically select a scene reconstruction backend and preset"""
+
+def reset_scene_reconstruction_preferences() -> None:
+    """Clear all saved scene reconstruction backend and preset preferences"""
+
 def get_mcp_preferences() -> dict:
     """Get effective MCP HTTP server preferences"""
 
@@ -2597,9 +2612,6 @@ def get_current_language() -> str:
 
 def get_languages() -> list[tuple[str, str]]:
     """Get available languages as list of (code, name) tuples"""
-
-def show_input_settings() -> None:
-    """No-op stub; open input settings via lfs.input_settings panel"""
 
 def show_python_console() -> None:
     """Show Python console"""

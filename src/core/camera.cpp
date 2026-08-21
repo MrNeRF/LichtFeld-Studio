@@ -15,6 +15,8 @@
 #include <array>
 #include <cassert>
 #include <cuda_runtime.h>
+#include <format>
+#include <stdexcept>
 
 namespace lfs::core {
     static Tensor world_to_view(const Tensor& R, const Tensor& t) {
@@ -185,6 +187,7 @@ namespace lfs::core {
           _mask_path(std::move(other._mask_path)),
           _depth_path(std::move(other._depth_path)),
           _normal_path(std::move(other._normal_path)),
+          _has_image(other._has_image),
           _split(other._split),
           _camera_width(other._camera_width),
           _camera_height(other._camera_height),
@@ -240,6 +243,7 @@ namespace lfs::core {
             _mask_path = std::move(other._mask_path);
             _depth_path = std::move(other._depth_path);
             _normal_path = std::move(other._normal_path);
+            _has_image = other._has_image;
             _split = other._split;
             _camera_width = other._camera_width;
             _camera_height = other._camera_height;
@@ -289,6 +293,7 @@ namespace lfs::core {
           _mask_path(other._mask_path),
           _depth_path(other._depth_path),
           _normal_path(other._normal_path),
+          _has_image(other._has_image),
           _split(other._split),
           _camera_width(other._camera_width),
           _camera_height(other._camera_height),
@@ -348,6 +353,13 @@ namespace lfs::core {
 
     Tensor Camera::load_and_get_image(int resize_factor, int max_width, const bool output_uint8,
                                       const bool update_dimensions) {
+        if (!_has_image) {
+            throw std::runtime_error(std::format(
+                "Dataset image '{}' is missing: {}",
+                _image_name,
+                lfs::core::path_to_utf8(_image_path)));
+        }
+
         const ImageLoadParams params{
             .path = _image_path,
             .resize_factor = resize_factor,
@@ -376,7 +388,7 @@ namespace lfs::core {
 
     void Camera::load_image_size(int resize_factor, int max_width) {
         int w, h;
-        if (_undistort_prepared) {
+        if (_undistort_prepared || !_has_image) {
             w = _camera_width;
             h = _camera_height;
         } else {
@@ -423,6 +435,9 @@ namespace lfs::core {
     }
 
     size_t Camera::get_num_bytes_from_file(int resize_factor, int max_width) const {
+        if (!_has_image) {
+            return 0;
+        }
         auto result = get_image_info(_image_path);
 
         int w = std::get<0>(result);
@@ -449,6 +464,9 @@ namespace lfs::core {
     }
 
     size_t Camera::get_num_bytes_from_file() const {
+        if (!_has_image) {
+            return 0;
+        }
         auto [w, h, c] = get_image_info(_image_path);
         size_t num_bytes = w * h * c * sizeof(uint8_t);
         return num_bytes;

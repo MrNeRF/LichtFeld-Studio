@@ -24,7 +24,6 @@ namespace lichtfeld::Strings {
 
         namespace Edit {
             inline constexpr const char* MENU = "menu.edit";
-            inline constexpr const char* INPUT_SETTINGS = "menu.edit.input_settings";
         } // namespace Edit
 
         namespace Tools {
@@ -45,7 +44,6 @@ namespace lichtfeld::Strings {
     } // namespace Menu
 
     namespace Window {
-        inline constexpr const char* INPUT_SETTINGS = "window.input_settings";
         inline constexpr const char* EXPORT = "window.export";
         inline constexpr const char* SCENE = "window.scene";
         inline constexpr const char* RENDERING = "window.rendering";
@@ -288,6 +286,8 @@ namespace lichtfeld::Strings {
 
     namespace Common {
         inline constexpr const char* OK = "common.ok";
+        inline constexpr const char* YES = "common.yes";
+        inline constexpr const char* NO = "common.no";
         inline constexpr const char* CANCEL = "common.cancel";
         inline constexpr const char* CLOSE = "common.close";
         inline constexpr const char* SAVE = "common.save";
@@ -555,14 +555,12 @@ namespace lichtfeld::Strings {
         inline constexpr const char* RESET_TO_DEFAULT = "input_settings.reset_to_default";
         inline constexpr const char* EXPORT = "input_settings.export";
         inline constexpr const char* IMPORT = "input_settings.import";
-        inline constexpr const char* ACTION = "input_settings.action";
         inline constexpr const char* REBIND = "input_settings.rebind";
         inline constexpr const char* CANCEL = "input_settings.cancel";
         inline constexpr const char* PRESS_KEY_OR_CLICK = "input_settings.press_key_or_click";
         inline constexpr const char* CLICK_AGAIN_DOUBLE = "input_settings.click_again_double";
         inline constexpr const char* TOOL_MODE = "input_settings.tool_mode";
         inline constexpr const char* SELECT_TOOL_MODE = "input_settings.select_tool_mode";
-        inline constexpr const char* CURRENT_BINDINGS = "input_settings.current_bindings";
         inline constexpr const char* GLOBAL_BINDINGS_HINT = "input_settings.global_bindings_hint";
         inline constexpr const char* TOOL_BINDINGS_HINT = "input_settings.tool_bindings_hint";
         inline constexpr const char* SECTION_NAVIGATION = "input_settings.section.navigation";
@@ -784,6 +782,15 @@ namespace lichtfeld::Strings {
         inline constexpr const char* KEYFRAME_PREVIEW = "sequencer.keyframe_preview";
         inline constexpr const char* EDIT_DELTA = "sequencer.edit_delta";
     } // namespace Sequencer
+
+    namespace Recovery {
+        inline constexpr const char* CRASH_TITLE = "recovery.crash_title";
+        inline constexpr const char* BODY = "recovery.body";
+        inline constexpr const char* UNSAVED_SESSION = "recovery.unsaved_session";
+        inline constexpr const char* RECOVER = "recovery.recover";
+        inline constexpr const char* OPEN_SAVED = "recovery.open_saved";
+        inline constexpr const char* SKIP = "recovery.skip";
+    } // namespace Recovery
 
     namespace DatasetRelocate {
         inline constexpr const char* TITLE = "dataset_relocate.title";

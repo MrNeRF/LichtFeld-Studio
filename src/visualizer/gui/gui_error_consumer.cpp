@@ -92,6 +92,9 @@ namespace lfs::vis::gui {
                 }
                 return Keys::FILE_OPEN_FAILED;
             case lfs::ErrorDomain::IO:
+                if (error.severity() == lfs::Severity::Warning) {
+                    return Keys::GENERIC;
+                }
                 if (op == error_op::kLoadDataset) {
                     return Keys::DATASET_LOAD_FAILED;
                 }

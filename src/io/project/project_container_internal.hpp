@@ -113,7 +113,7 @@ namespace lfs::io::project::detail {
         WriterLock& operator=(const WriterLock&) = delete;
         WriterLock(WriterLock&& other) noexcept;
         WriterLock& operator=(WriterLock&& other) noexcept;
-        ~WriterLock();
+        ~WriterLock() noexcept;
 
         [[nodiscard]] static lfs::Result<WriterLock>
         acquire(const std::filesystem::path& project_path);
@@ -135,6 +135,13 @@ namespace lfs::io::project::detail {
 #endif
         std::filesystem::path path_;
     };
+
+#ifndef _WIN32
+    // True when `fd` still names `lock_path`. False if the path is missing or
+    // a different inode. fstat failure is an error, never a match.
+    [[nodiscard]] lfs::Result<bool>
+    writer_lock_fd_matches_path(int fd, const std::filesystem::path& lock_path);
+#endif
 
     struct AtomicReplaceState {
         std::optional<std::filesystem::path> backup_path;

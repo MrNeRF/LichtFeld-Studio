@@ -248,6 +248,9 @@ def prepare_training_from_scene() -> None:
 def start_training() -> None:
     """Start training with current parameters"""
 
+def training_start_overwrite_conflict() -> int | None:
+    """Return the blocking training-start overwrite conflict, if any"""
+
 def pause_training() -> None:
     """Pause the current training run"""
 
@@ -260,16 +263,19 @@ def stop_training() -> None:
 def reset_training() -> None:
     """Reset training state to initial"""
 
-def new_project(discard_changes: bool = False) -> None:
+def is_training_active() -> bool:
+    """Whether training is running or paused"""
+
+def new_project(discard_changes: bool = False, stop_training: bool = False) -> None:
     """Clear all project state and start a new project"""
 
-def project_save() -> None:
+def project_save(wait: bool = False, regenerate_preview: bool = True) -> bool:
     """Save the active .licht project, prompting for a path when needed"""
 
-def project_save_as(path: str = '') -> None:
+def project_save_as(path: str = '', wait: bool = False) -> bool:
     """Save the active project to a new .licht path"""
 
-def project_open(path: str = '', discard_changes: bool = False) -> ProjectOpenOutcome:
+def project_open(path: str = '', discard_changes: bool = False, stop_training: bool = False) -> ProjectOpenOutcome:
     """Open a .licht project"""
 
 def project_compact() -> None:
@@ -286,6 +292,9 @@ def project_recent_files() -> list[str]:
 
 def project_clear_recent_files() -> None:
     """Clear the most-recently-used .licht project list"""
+
+def project_remove_recent_file(path: str) -> None:
+    """Remove one path from the most-recently-used .licht project list"""
 
 def project_autosave_recovery_disposition(path: str) -> str:
     """
@@ -318,7 +327,7 @@ def clear_scene() -> None:
 def switch_to_edit_mode() -> None:
     """Switch from training to edit mode"""
 
-def load_file(path: str, is_dataset: bool = False, output_path: str = '', init_path: str = '', centralize_dataset: str = 'off', max_width: int | None = None, apply_auto_crop: bool = False, min_track_length: int | None = None) -> None:
+def load_file(path: str, is_dataset: bool = False, output_path: str = '', init_path: str = '', centralize_dataset: str = 'off', max_width: int | None = None, apply_auto_crop: bool = False, min_track_length: int | None = None, stop_training: bool = False) -> None:
     """Load a file (PLY, checkpoint) or dataset into the scene."""
 
 def load_config_file(path: str) -> None:
@@ -533,6 +542,16 @@ def get_camera_view_snap_enabled() -> bool:
 
 def set_camera_view_snap_enabled(enabled: bool) -> None:
     """Enable or disable camera axis-view snapping"""
+
+def file_associations_status() -> list:
+    """
+    Return whether LichtFeld Studio is registered as a handler for each known file extension (Windows only)
+    """
+
+def file_association_set(extension: str, enabled: bool) -> bool:
+    """
+    Register or unregister LichtFeld Studio as a handler for one file extension (Windows only)
+    """
 
 def toggle_fullscreen() -> None:
     """Toggle fullscreen mode"""

@@ -78,13 +78,6 @@ namespace lfs::training {
         mutable_fields_.push_back({"shN", CommandTarget::Model, "[N,?]", "Higher-order SH coefficients", true});
     }
 
-    void CommandCenter::apply_training_paused(int iteration) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        snapshot_.iteration = iteration;
-        snapshot_.is_paused = true;
-        snapshot_.is_running = false;
-    }
-
     void CommandCenter::bind_state_events() {
         using lfs::core::events::state::TrainingPaused;
         auto& bridge = lfs::event::EventBridge::instance();
@@ -94,7 +87,10 @@ namespace lfs::training {
         }
         training_paused_handler_id_ = TrainingPaused::when(
             [this](const TrainingPaused& event) {
-                apply_training_paused(event.iteration);
+                std::lock_guard<std::mutex> lock(mutex_);
+                snapshot_.iteration = event.iteration;
+                snapshot_.is_paused = true;
+                snapshot_.is_running = false;
             });
     }
 

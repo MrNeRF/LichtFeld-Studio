@@ -490,6 +490,10 @@ namespace lfs::app {
                                 installed.error());
                             return 1;
                         }
+                        training::grant_headless_project_saves(
+                            *installed->trainer,
+                            effective_params,
+                            *params->resume_project);
                         manager->setTrainer(
                             std::move(installed->trainer));
                     } else {
@@ -504,6 +508,8 @@ namespace lfs::app {
                                     .python_scripts);
                         }
                         trainer->setParams(effective_params);
+                        training::grant_headless_project_saves(
+                            *trainer, effective_params);
                         manager->setTrainer(std::move(trainer));
                     }
                 }
@@ -701,6 +707,9 @@ namespace lfs::app {
                     }
                     auto trainer =
                         std::move(installed->trainer);
+                    training::grant_headless_project_saves(
+                        *trainer, project->params,
+                        *params->resume_project);
                     LOG_INFO(
                         "Project display hydration complete; full "
                         "trainer state restored at iteration {}",
@@ -754,6 +763,8 @@ namespace lfs::app {
                         LOG_ERROR("Failed to initialize trainer: {}", result.error());
                         return 1;
                     }
+                    training::grant_headless_project_saves(
+                        *trainer, *ckpt_params_result);
 
                     const auto ckpt_result = trainer->load_checkpoint(*params->resume_checkpoint);
                     if (!ckpt_result) {
@@ -804,6 +815,8 @@ namespace lfs::app {
                         LOG_ERROR("Failed to initialize trainer: {}", result.error());
                         return 1;
                     }
+                    training::grant_headless_project_saves(
+                        *trainer, *params);
 
                     core::Tensor::trim_memory_pool();
 
@@ -1297,9 +1310,12 @@ namespace lfs::app {
             mcp::setActiveMcpHttpServer(nullptr);
             mcp_http.stop();
 
-            python::finalize();
-
+            // GuiManager drains scheduled Python UI work while tearing down the
+            // viewer. Keep the runtime/GIL available until that work and the
+            // Python-backed UI resources have been released.
             viewer.reset();
+
+            python::finalize();
 
             core::teardown_gpu_before_exit();
 

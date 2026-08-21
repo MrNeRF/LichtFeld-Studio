@@ -181,15 +181,24 @@ namespace lfs::io {
             }
 
             Json* destination = &root;
-            for (std::size_t i = 0; i + 1 < split->values.size(); ++i) {
+            std::size_t i = 0;
+            for (; i + 1 < split->values.size(); ++i) {
                 auto found = destination->find(std::string(split->values[i]));
                 if (found == destination->end()) {
-                    (*destination)[std::string(split->values[i])] = Json::object();
-                    found = destination->find(std::string(split->values[i]));
+                    break;
                 }
                 destination = &*found;
             }
-            (*destination)[std::string(split->values.back())] = std::move(value);
+            if (i + 1 >= split->values.size()) {
+                (*destination)[std::string(split->values.back())] = std::move(value);
+                return {};
+            }
+
+            Json chain = std::move(value);
+            for (std::size_t j = split->values.size(); j-- > i + 1;) {
+                chain = Json{{std::string(split->values[j]), std::move(chain)}};
+            }
+            (*destination)[std::string(split->values[i])] = std::move(chain);
             return {};
         }
 
@@ -422,31 +431,25 @@ namespace lfs::io {
 
     lfs::Result<void> JsonChapterDom::set_value(const std::string_view path, Json value) {
         return guarded_dom_operation<void>(path, [&]() -> lfs::Result<void> {
-            Json candidate = root_;
-            auto result = set_value_at(candidate, path, std::move(value));
-            if (!result) {
-                return result;
-            }
-            root_ = std::move(candidate);
-            return {};
+            return set_value_at(root_, path, std::move(value));
         });
     }
 
     lfs::Result<bool> JsonChapterDom::remove(const std::string_view path) {
         return guarded_dom_operation<bool>(path, [&]() -> lfs::Result<bool> {
-            Json candidate = root_;
-            auto removed = remove_value_at(candidate, path);
-            if (!removed || !*removed) {
-                return removed;
-            }
-            root_ = std::move(candidate);
-            return true;
+            return remove_value_at(root_, path);
         });
     }
 
     std::optional<JsonChapterDom::Json> JsonChapterDom::get_json(
         const std::string_view path) const {
         const Json* value = find_node_from(root_, path);
+        return value == nullptr ? std::nullopt : std::optional<Json>(*value);
+    }
+
+    std::optional<JsonChapterDom::Json> JsonChapterDom::read_json(
+        const Json& node, const std::string_view path) {
+        const Json* value = find_node_from(node, path);
         return value == nullptr ? std::nullopt : std::optional<Json>(*value);
     }
 
@@ -497,25 +500,16 @@ namespace lfs::io {
                 if (find_array_element_node(root_, path, uuid) != nullptr) {
                     return Element(*this, std::string(path), std::string(uuid));
                 }
+                (*existing_array)->push_back(Json{{"uuid", std::string(uuid)}});
+                return Element(*this, std::string(path), std::string(uuid));
             }
 
-            Json candidate = root_;
-            auto candidate_array = resolve_node(candidate, path, "upsert into");
-            if (!candidate_array) {
-                return std::move(candidate_array).error();
+            Json created_array = Json::array();
+            created_array.push_back(Json{{"uuid", std::string(uuid)}});
+            auto created = set_value_at(root_, path, std::move(created_array));
+            if (!created) {
+                return std::move(created).error();
             }
-            if (*candidate_array == nullptr) {
-                auto created = set_value_at(candidate, path, Json::array());
-                if (!created) {
-                    return std::move(created).error();
-                }
-                candidate_array = resolve_node(candidate, path, "upsert into");
-                if (!candidate_array) {
-                    return std::move(candidate_array).error();
-                }
-            }
-            (*candidate_array)->push_back(Json{{"uuid", std::string(uuid)}});
-            root_ = std::move(candidate);
             return Element(*this, std::string(path), std::string(uuid));
         });
     }
@@ -546,26 +540,19 @@ namespace lfs::io {
                                 path, (*current_array)->type_name()),
                     path, uuid);
             }
-            if (find_array_element_node(root_, path, uuid) == nullptr) {
+            auto& array = **current_array;
+            const auto found = std::find_if(array.begin(), array.end(), [uuid](const Json& element) {
+                if (!element.is_object()) {
+                    return false;
+                }
+                const auto member = element.find("uuid");
+                return member != element.end() && member->is_string() &&
+                       member->get_ref<const std::string&>() == uuid;
+            });
+            if (found == array.end()) {
                 return false;
             }
-
-            Json candidate = root_;
-            auto candidate_array = resolve_node(candidate, path, "remove from");
-            if (!candidate_array) {
-                return std::move(candidate_array).error();
-            }
-            const auto found = std::find_if((*candidate_array)->begin(), (*candidate_array)->end(),
-                                            [uuid](const Json& element) {
-                                                if (!element.is_object()) {
-                                                    return false;
-                                                }
-                                                const auto member = element.find("uuid");
-                                                return member != element.end() && member->is_string() &&
-                                                       member->get_ref<const std::string&>() == uuid;
-                                            });
-            (*candidate_array)->erase(found);
-            root_ = std::move(candidate);
+            array.erase(found);
             return true;
         });
     }
@@ -592,6 +579,8 @@ namespace lfs::io {
 
                 std::vector<std::string> uuids;
                 uuids.reserve((*resolved)->size());
+                std::unordered_set<std::string_view> seen;
+                seen.reserve((*resolved)->size());
                 for (std::size_t i = 0; i < (*resolved)->size(); ++i) {
                     const Json& element = (**resolved)[i];
                     if (!element.is_object()) {
@@ -612,7 +601,7 @@ namespace lfs::io {
                             path);
                     }
                     const std::string& uuid = member->get_ref<const std::string&>();
-                    if (std::ranges::find(uuids, uuid) != uuids.end()) {
+                    if (!seen.insert(uuid).second) {
                         return make_dom_error(
                             lfs::ErrorCode::DataLoss,
                             "The JSON chapter contains a duplicate UUID.",
@@ -625,23 +614,144 @@ namespace lfs::io {
             });
     }
 
+    lfs::Result<std::vector<std::pair<std::string, JsonChapterDom::Json>>>
+    JsonChapterDom::array_items(const std::string_view path) const {
+        return guarded_dom_operation<std::vector<std::pair<std::string, Json>>>(
+            path, [&]() -> lfs::Result<std::vector<std::pair<std::string, Json>>> {
+                auto resolved = resolve_node(root_, path, "enumerate");
+                if (!resolved) {
+                    return std::move(resolved).error();
+                }
+                if (*resolved == nullptr) {
+                    return std::vector<std::pair<std::string, Json>>{};
+                }
+                if (!(*resolved)->is_array()) {
+                    return make_dom_error(
+                        lfs::ErrorCode::FailedPrecondition,
+                        "The JSON chapter has an incompatible structure.",
+                        std::format("Cannot enumerate '{}': value is {}, expected an array",
+                                    path, (*resolved)->type_name()),
+                        path);
+                }
+
+                std::vector<std::pair<std::string, Json>> items;
+                items.reserve((*resolved)->size());
+                std::unordered_set<std::string_view> seen;
+                seen.reserve((*resolved)->size());
+                for (std::size_t i = 0; i < (*resolved)->size(); ++i) {
+                    const Json& element = (**resolved)[i];
+                    if (!element.is_object()) {
+                        return make_dom_error(
+                            lfs::ErrorCode::DataLoss,
+                            "The JSON chapter contains an invalid UUID array.",
+                            std::format("Element {} of '{}' is {}, expected an object",
+                                        i, path, element.type_name()),
+                            path);
+                    }
+                    const auto member = element.find("uuid");
+                    if (member == element.end() || !member->is_string() ||
+                        !is_canonical_uuid(member->get_ref<const std::string&>())) {
+                        return make_dom_error(
+                            lfs::ErrorCode::DataLoss,
+                            "The JSON chapter contains an invalid UUID array.",
+                            std::format("Element {} of '{}' has no canonical UUID", i, path),
+                            path);
+                    }
+                    const std::string& uuid = member->get_ref<const std::string&>();
+                    if (!seen.insert(uuid).second) {
+                        return make_dom_error(
+                            lfs::ErrorCode::DataLoss,
+                            "The JSON chapter contains a duplicate UUID.",
+                            std::format("UUID '{}' occurs more than once in '{}'", uuid, path),
+                            path, uuid);
+                    }
+                    items.emplace_back(uuid, element);
+                }
+                return items;
+            });
+    }
+
+    std::optional<JsonChapterDom::Json> JsonChapterDom::array_get(
+        const std::string_view path, const std::string_view uuid) const {
+        if (!is_canonical_uuid(uuid)) {
+            return std::nullopt;
+        }
+        const Json* element = find_array_element_node(root_, path, uuid);
+        return element == nullptr ? std::nullopt : std::optional<Json>(*element);
+    }
+
+    lfs::Result<void> JsonChapterDom::array_put(const std::string_view path,
+                                                const std::string_view uuid, Json value) {
+        if (!is_canonical_uuid(uuid)) {
+            return lfs::Result<void>::failure(make_dom_error(
+                lfs::ErrorCode::InvalidArgument, "The JSON chapter UUID is invalid.",
+                std::format("UUID '{}' is not canonical lowercase xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+                            uuid),
+                path, uuid));
+        }
+        if (!value.is_object()) {
+            return lfs::Result<void>::failure(make_dom_error(
+                lfs::ErrorCode::InvalidArgument, "The JSON chapter array element is invalid.",
+                std::format("Cannot put UUID '{}' at '{}': value is {}, expected an object", uuid,
+                            path, value.type_name()),
+                path, uuid));
+        }
+        const auto member = value.find("uuid");
+        if (member == value.end() || !member->is_string() ||
+            member->get_ref<const std::string&>() != uuid) {
+            return lfs::Result<void>::failure(make_dom_error(
+                lfs::ErrorCode::InvalidArgument, "The JSON chapter array element is invalid.",
+                std::format("Cannot put UUID '{}' at '{}': element \"uuid\" must equal the canonical uuid argument",
+                            uuid, path),
+                path, uuid));
+        }
+
+        return guarded_dom_operation<void>(path, [&]() -> lfs::Result<void> {
+            auto existing_array = resolve_node(root_, path, "put into");
+            if (!existing_array) {
+                return lfs::Result<void>::failure(std::move(existing_array).error());
+            }
+            if (*existing_array != nullptr) {
+                if (!(*existing_array)->is_array()) {
+                    return lfs::Result<void>::failure(make_dom_error(
+                        lfs::ErrorCode::FailedPrecondition,
+                        "The JSON chapter has an incompatible structure.",
+                        std::format("Cannot put UUID '{}' at '{}': value is {}, expected an array",
+                                    uuid, path, (*existing_array)->type_name()),
+                        path, uuid));
+                }
+                Json* element = find_array_element_node(root_, path, uuid);
+                if (element != nullptr) {
+                    *element = std::move(value);
+                    return {};
+                }
+                (*existing_array)->push_back(std::move(value));
+                return {};
+            }
+
+            Json created_array = Json::array();
+            created_array.push_back(std::move(value));
+            return set_value_at(root_, path, std::move(created_array));
+        });
+    }
+
     lfs::Result<void> JsonChapterDom::set_element_value(
         const std::string_view array_path, const std::string_view uuid, const std::string_view path,
         Json value) {
         return guarded_dom_operation<void>(path, [&]() -> lfs::Result<void> {
-            Json candidate = root_;
-            Json* element = find_array_element_node(candidate, array_path, uuid);
+            Json* element = find_array_element_node(root_, array_path, uuid);
             if (element == nullptr) {
                 return lfs::Result<void>::failure(make_dom_error(
                     lfs::ErrorCode::NotFound, "The JSON chapter element no longer exists.",
                     std::format("UUID '{}' was not found in JSON array '{}'", uuid, array_path),
                     array_path, uuid));
             }
-            auto result = set_value_at(*element, path, std::move(value));
+            Json candidate = *element;
+            auto result = set_value_at(candidate, path, std::move(value));
             if (!result) {
                 return result;
             }
-            root_ = std::move(candidate);
+            *element = std::move(candidate);
             return {};
         });
     }
@@ -649,19 +759,19 @@ namespace lfs::io {
     lfs::Result<bool> JsonChapterDom::remove_element_value(
         const std::string_view array_path, const std::string_view uuid, const std::string_view path) {
         return guarded_dom_operation<bool>(path, [&]() -> lfs::Result<bool> {
-            Json candidate = root_;
-            Json* element = find_array_element_node(candidate, array_path, uuid);
+            Json* element = find_array_element_node(root_, array_path, uuid);
             if (element == nullptr) {
                 return make_dom_error(
                     lfs::ErrorCode::NotFound, "The JSON chapter element no longer exists.",
                     std::format("UUID '{}' was not found in JSON array '{}'", uuid, array_path),
                     array_path, uuid);
             }
-            auto removed = remove_value_at(*element, path);
+            Json candidate = *element;
+            auto removed = remove_value_at(candidate, path);
             if (!removed || !*removed) {
                 return removed;
             }
-            root_ = std::move(candidate);
+            *element = std::move(candidate);
             return true;
         });
     }

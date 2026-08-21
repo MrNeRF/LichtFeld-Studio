@@ -7,6 +7,7 @@
 #include "core/error.hpp"
 #include "core/logger.hpp"
 #include "core/user_paths.hpp"
+#include "rendering/scene_upscaler_registry.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -269,6 +270,57 @@ namespace lfs::vis {
         return result;
     }
 
+    void UserPreferences::setSceneUpscaler(const std::string& backend_id,
+                                           const std::string& preset_id) {
+        const auto backend = sceneUpscalerBackendFromId(backend_id)
+                                 .value_or(SceneUpscalerBackend::Native);
+        const auto preset = lfs::vis::sceneUpscalerPreset(backend, preset_id)
+                                .value_or(defaultSceneUpscalerPreset(backend));
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["scene_upscaler"] = std::string(sceneUpscalerBackendId(backend));
+        auto& presets = impl_->values["scene_upscaler_presets"];
+        if (!presets.is_object())
+            presets = json::object();
+        presets[std::string(sceneUpscalerBackendId(backend))] = std::string(preset.id);
+        impl_->saveLocked();
+    }
+
+    void UserPreferences::clearSceneUpscaler() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values.erase("scene_upscaler");
+        impl_->values.erase("scene_upscaler_presets");
+        impl_->saveLocked();
+    }
+
+    std::string UserPreferences::sceneUpscaler() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("scene_upscaler");
+        if (it == impl_->values.end() || !it->is_string())
+            return "native";
+        const std::string id = it->get<std::string>();
+        return sceneUpscalerBackendFromId(id).has_value() ? id : "native";
+    }
+
+    std::string UserPreferences::sceneUpscalerPreset(const std::string& backend_id) {
+        const auto backend = sceneUpscalerBackendFromId(backend_id)
+                                 .value_or(SceneUpscalerBackend::Native);
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto presets = impl_->values.find("scene_upscaler_presets");
+        if (presets != impl_->values.end() && presets->is_object()) {
+            const auto preset = presets->find(std::string(sceneUpscalerBackendId(backend)));
+            if (preset != presets->end() && preset->is_string()) {
+                const std::string id = preset->get<std::string>();
+                if (lfs::vis::sceneUpscalerPreset(backend, id).has_value())
+                    return id;
+            }
+        }
+        return std::string(defaultSceneUpscalerPreset(backend).id);
+    }
+
     void saveLanguagePreference(const std::string& value) { UserPreferences::instance().setLanguage(value); }
     std::string loadLanguagePreference() { return UserPreferences::instance().language(); }
     void clearLanguagePreference() { UserPreferences::instance().clearLanguage(); }
@@ -282,5 +334,16 @@ namespace lfs::vis {
     bool rememberCameraViewSnapPreference() { return UserPreferences::instance().rememberCameraViewSnap(); }
     void saveMcpPreferences(const McpPreferenceState& state) { UserPreferences::instance().setMcp(state); }
     McpPreferenceState loadMcpPreferences() { return UserPreferences::instance().mcp(); }
+    void saveSceneUpscalerPreference(const std::string& backend_id,
+                                     const std::string& preset_id) {
+        UserPreferences::instance().setSceneUpscaler(backend_id, preset_id);
+    }
+    void clearSceneUpscalerPreference() { UserPreferences::instance().clearSceneUpscaler(); }
+    std::string loadSceneUpscalerPreference() {
+        return UserPreferences::instance().sceneUpscaler();
+    }
+    std::string loadSceneUpscalerPresetPreference(const std::string& backend_id) {
+        return UserPreferences::instance().sceneUpscalerPreset(backend_id);
+    }
 
 } // namespace lfs::vis

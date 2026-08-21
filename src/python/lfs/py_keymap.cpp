@@ -181,7 +181,8 @@ namespace lfs::python {
             .value("TOGGLE_CAMERA_FRUSTUMS", Action::TOGGLE_CAMERA_FRUSTUMS)
             .value("OPEN_PREFERENCES", Action::OPEN_PREFERENCES)
             .value("TOGGLE_MCP_SERVER", Action::TOGGLE_MCP_SERVER)
-            .value("TOGGLE_MCP_BINDING", Action::TOGGLE_MCP_BINDING);
+            .value("TOGGLE_MCP_BINDING", Action::TOGGLE_MCP_BINDING)
+            .value("TOGGLE_GRID", Action::TOGGLE_GRID);
 
         // Expose ToolMode enum
         nb::enum_<ToolMode>(keymap, "ToolMode")

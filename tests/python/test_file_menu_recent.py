@@ -28,12 +28,20 @@ def _load_file_menu(monkeypatch, recent_paths=()):
         return f"tr:{key}"
 
     opened = []
+    opened_stop_training = []
+    new_projects = []
     removed = []
     confirm_dialogs = []
     message_dialogs = []
+    warnings = []
+    training_active = False
 
-    def project_open(path, discard=False):
+    def project_open(path, discard=False, stop_training=False):
         opened.append((path, discard))
+        opened_stop_training.append(stop_training)
+
+    def new_project(discard=False, stop_training=False):
+        new_projects.append((discard, stop_training))
 
     def project_remove_recent_file(path):
         removed.append(path)
@@ -49,17 +57,34 @@ def _load_file_menu(monkeypatch, recent_paths=()):
         tr=tr,
         confirm_dialog=confirm_dialog,
         message_dialog=message_dialog,
+        open_dataset_folder_dialog=lambda: "",
+        open_ply_file_dialog=lambda _path: "",
+        open_mesh_file_dialog=lambda _path: "",
+        open_checkpoint_file_dialog=lambda: "",
+        open_json_file_dialog=lambda: "",
     )
+    lf_stub.log = SimpleNamespace(warn=warnings.append)
     lf_stub.project_recent_files = lambda: list(recent_paths)
     lf_stub.project_clear_recent_files = lambda: None
     lf_stub.project_auto_save_on_close_enabled = lambda: False
     lf_stub.project_is_dirty = lambda: False
+    lf_stub.project_has_path = lambda: False
     lf_stub.project_open = project_open
+    lf_stub.new_project = new_project
+    lf_stub.is_training_active = lambda: training_active
     lf_stub.project_remove_recent_file = project_remove_recent_file
     lf_stub.project_open_calls = opened
+    lf_stub.project_open_stop_training = opened_stop_training
+    lf_stub.new_project_calls = new_projects
     lf_stub.project_remove_recent_file_calls = removed
     lf_stub.confirm_dialogs = confirm_dialogs
     lf_stub.message_dialogs = message_dialogs
+    lf_stub.warning_messages = warnings
+    lf_stub.load_file = lambda *_args, **_kwargs: None
+    lf_stub.load_config_file = lambda *_args, **_kwargs: None
+    lf_stub.is_dataset_path = lambda _path: True
+    lf_stub.read_checkpoint_header = lambda _path: object()
+    lf_stub.read_checkpoint_params = lambda _path: object()
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 
     class Operator:
@@ -72,8 +97,8 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     monkeypatch.setitem(sys.modules, "lfs_plugins.types", types_stub)
 
     imports_stub = ModuleType("lfs_plugins.import_panels")
-    imports_stub.open_dataset_import_panel = lambda _path: None
-    imports_stub.open_resume_checkpoint_panel = lambda _path: None
+    imports_stub.open_dataset_import_panel = lambda _path: True
+    imports_stub.open_resume_checkpoint_panel = lambda _path: True
     monkeypatch.setitem(sys.modules, "lfs_plugins.import_panels", imports_stub)
 
     return import_module("lfs_plugins.file_menu")
@@ -211,3 +236,208 @@ def test_open_recent_existing_other_error_shows_message(monkeypatch, tmp_path):
     _title, message, style = file_menu.lf.message_dialogs[0]
     assert style == "error"
     assert "boom" in message
+def _compact_project_item(file_menu):
+    for item in file_menu.FileMenu().menu_items():
+        if str(item.get("operator_id", "")).endswith("CompactProjectOperator"):
+            return item
+    raise AssertionError("CompactProjectOperator menu entry missing")
+
+
+def test_compact_project_enabled_only_with_durable_path(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+
+    file_menu.lf.project_has_path = lambda: False
+    disabled = _compact_project_item(file_menu)
+    assert disabled["enabled"] is False
+
+    file_menu.lf.project_has_path = lambda: True
+    enabled = _compact_project_item(file_menu)
+    assert "enabled" not in enabled or enabled["enabled"] is True
+
+    def raise_missing():
+        raise RuntimeError("project_has_path unavailable")
+
+    file_menu.lf.project_has_path = raise_missing
+    guarded = _compact_project_item(file_menu)
+    assert guarded["enabled"] is False
+
+
+def test_imports_are_grouped_before_exports(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    items = file_menu.FileMenu().menu_items()
+
+    import_index = next(
+        index
+        for index, item in enumerate(items)
+        if item.get("type") == "submenu"
+        and item.get("label") == "tr:menu.file.import"
+    )
+    import_items = items[import_index]["items"]
+    operator_names = [
+        item["operator_id"].rsplit(".", 1)[-1]
+        for item in import_items
+        if item.get("type") == "operator"
+    ]
+
+    assert operator_names == [
+        "ImportDatasetOperator",
+        "ImportPlyOperator",
+        "ImportMeshOperator",
+        "ImportCheckpointOperator",
+        "ImportConfigOperator",
+    ]
+    assert import_items[-2]["type"] == "separator"
+    assert items[import_index + 1]["operator_id"].endswith("ExportOperator")
+    assert items[import_index + 2]["operator_id"].endswith(
+        "ExportConfigOperator"
+    )
+
+
+def test_unrecognized_dataset_reports_modal_and_warning(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    selected = "/tmp/not-a-dataset"
+    file_menu.lf.ui.open_dataset_folder_dialog = lambda: selected
+    file_menu.lf.is_dataset_path = lambda _path: False
+
+    result = file_menu.ImportDatasetOperator().execute(None)
+
+    assert result == {"CANCELLED"}
+    assert len(file_menu.lf.message_dialogs) == 1
+    title, message, style = file_menu.lf.message_dialogs[0]
+    assert title == "tr:menu.file.import_failed"
+    assert message == "tr:menu.file.dataset_not_recognized"
+    assert style == "error"
+    assert file_menu.lf.warning_messages == [
+        "Import rejected: path='/tmp/not-a-dataset', "
+        "reason='dataset format was not recognized'"
+    ]
+
+
+def test_unrecognized_checkpoint_reports_modal_and_warning(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    selected = "/tmp/not-a-checkpoint.ckpt"
+    file_menu.lf.ui.open_checkpoint_file_dialog = lambda: selected
+    file_menu.lf.read_checkpoint_header = lambda _path: None
+
+    result = file_menu.ImportCheckpointOperator().execute(None)
+
+    assert result == {"CANCELLED"}
+    assert len(file_menu.lf.message_dialogs) == 1
+    title, message, style = file_menu.lf.message_dialogs[0]
+    assert title == "tr:menu.file.import_failed"
+    assert message == "tr:menu.file.checkpoint_not_recognized"
+    assert style == "error"
+    assert "checkpoint format was not recognized" in (
+        file_menu.lf.warning_messages[0]
+    )
+
+
+def test_checkpoint_preflight_reads_only_the_header(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    selected = "/tmp/large.resume"
+    header_reads = []
+    file_menu.lf.ui.open_checkpoint_file_dialog = lambda: selected
+    file_menu.lf.read_checkpoint_header = lambda path: header_reads.append(path) or object()
+
+    def unexpected_parameter_read(_path):
+        raise AssertionError("checkpoint parameters belong to the retained import panel")
+
+    file_menu.lf.read_checkpoint_params = unexpected_parameter_read
+
+    result = file_menu.ImportCheckpointOperator().execute(None)
+
+    assert result == {"FINISHED"}
+    assert header_reads == [selected]
+    assert file_menu.lf.message_dialogs == []
+    assert file_menu.lf.warning_messages == []
+
+
+def test_immediate_import_error_reports_reason(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    selected = "/tmp/broken.ply"
+    file_menu.lf.ui.open_ply_file_dialog = lambda _path: selected
+
+    def fail_load(*_args, **_kwargs):
+        raise RuntimeError("load failed")
+
+    file_menu.lf.load_file = fail_load
+
+    result = file_menu.ImportPlyOperator().execute(None)
+
+    assert result == {"CANCELLED"}
+    assert len(file_menu.lf.message_dialogs) == 1
+    title, message, style = file_menu.lf.message_dialogs[0]
+    assert title == "tr:menu.file.import_failed"
+    assert message == "tr:menu.file.import_failed_message"
+    assert style == "error"
+    assert "load failed" in file_menu.lf.warning_messages[0]
+
+
+def test_new_project_while_training_prompts_instead_of_switching(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    file_menu.lf.is_training_active = lambda: True
+
+    file_menu.NewProjectOperator().execute(None)
+
+    assert file_menu.lf.new_project_calls == []
+    assert len(file_menu.lf.confirm_dialogs) == 1
+    title, message, buttons, callback = file_menu.lf.confirm_dialogs[0]
+    assert title == "tr:project_switch.stop_training_title"
+    assert message == "tr:project_switch.stop_training_message"
+    assert buttons == ["tr:common.yes", "tr:common.no"]
+
+    callback("tr:common.no")
+    assert file_menu.lf.new_project_calls == []
+
+    callback("tr:common.yes")
+    assert file_menu.lf.new_project_calls == [(True, True)]
+
+
+def test_open_recent_while_training_prompts_instead_of_opening(
+    monkeypatch, tmp_path
+):
+    project = tmp_path / "training.licht"
+    project.write_bytes(b"")
+    path = str(project)
+    file_menu = _load_file_menu(monkeypatch, [path])
+    file_menu.lf.is_training_active = lambda: True
+
+    _recent_item_callback(file_menu)()
+
+    assert file_menu.lf.project_open_calls == []
+    assert file_menu.lf.message_dialogs == []
+    assert len(file_menu.lf.confirm_dialogs) == 1
+    title, _message, buttons, callback = file_menu.lf.confirm_dialogs[0]
+    assert title == "tr:project_switch.stop_training_title"
+    assert buttons == ["tr:common.yes", "tr:common.no"]
+
+    callback("tr:common.no")
+    assert file_menu.lf.project_open_calls == []
+    assert file_menu.lf.project_open_stop_training == []
+
+    callback("tr:common.yes")
+    assert file_menu.lf.project_open_calls == [(path, True)]
+    assert file_menu.lf.project_open_stop_training == [True]
+
+
+def test_stop_training_confirmation_yes_retries_with_stop_flag(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+
+    file_menu._show_stop_training_confirmation(True, "", True)
+    assert len(file_menu.lf.confirm_dialogs) == 1
+    _title, _message, buttons, callback = file_menu.lf.confirm_dialogs[0]
+    assert buttons == ["tr:common.yes", "tr:common.no"]
+
+    callback("tr:common.no")
+    assert file_menu.lf.new_project_calls == []
+
+    callback("tr:common.yes")
+    assert file_menu.lf.new_project_calls == [(True, True)]
+
+    file_menu._show_stop_training_confirmation(
+        False, "/tmp/other.licht", False
+    )
+    _title, _message, _buttons, open_callback = file_menu.lf.confirm_dialogs[1]
+    open_callback("tr:common.yes")
+    assert file_menu.lf.project_open_calls == [("/tmp/other.licht", False)]
+    assert file_menu.lf.project_open_stop_training == [True]

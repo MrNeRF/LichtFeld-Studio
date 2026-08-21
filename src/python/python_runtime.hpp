@@ -488,11 +488,8 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void set_playback_speed(float speed);
 
     // Menu bar UI callbacks (for Python-driven menus)
-    using ShowInputSettingsCallback = void (*)();
     using ShowPythonConsoleCallback = void (*)();
-    LFS_PYTHON_RUNTIME_API void set_show_input_settings_callback(ShowInputSettingsCallback cb);
     LFS_PYTHON_RUNTIME_API void set_show_python_console_callback(ShowPythonConsoleCallback cb);
-    LFS_PYTHON_RUNTIME_API void show_input_settings();
     LFS_PYTHON_RUNTIME_API void show_python_console();
 
     // Section drawing callbacks (for Python-first UI)

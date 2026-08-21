@@ -18,6 +18,7 @@
 #include "passes/vulkan_split_view_pass.hpp"
 #include "render_animation_state.hpp"
 #include "rendering/rendering.hpp"
+#include "rendering/scene_upscaler_registry.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
 #include "rendering_types.hpp"
 #include "spark_lod_controller.hpp"
@@ -102,6 +103,10 @@ namespace lfs::vis {
             glm::ivec2 size{0, 0};       // valid/logical viewport extent
             glm::ivec2 alloc_size{0, 0}; // bucketed image extent (0 = treat as size)
             bool flip_y = false;
+            // True only when this output was rendered for the logical viewport
+            // extent in the current request. Internal reconstruction resolution
+            // may differ from that extent.
+            bool matches_viewport_extent = false;
 
             // Split-view right panel. The left panel reuses the `image` slot above
             // (rideshares the existing scene-image interop). When this is set, the
@@ -251,6 +256,11 @@ namespace lfs::vis {
         void updateSettings(const RenderSettings& settings);
         void updateSettings(const RenderSettings& settings, DirtyMask dirty_flags);
         RenderSettings getSettings() const;
+        // The presentation pass reports its actual runtime choice after pipeline
+        // preparation. Rendering uses this feedback on the next frame so a failed
+        // reconstruction pipeline never receives a reduced-resolution image.
+        void reportSceneUpscalerRuntimeSelection(SceneUpscalerSelection selection);
+        [[nodiscard]] SceneUpscalerSelection sceneUpscalerRuntimeSelection() const;
 
         // Toggle orthographic mode, calculating ortho_scale to preserve size at pivot
         void setOrthographic(bool enabled, float viewport_height, float distance_to_pivot);
@@ -561,7 +571,9 @@ namespace lfs::vis {
         void setEllipsoidGizmoActive(bool active) { viewport_overlay_service_.setEllipsoidActive(active); }
         [[nodiscard]] GizmoState getGizmoState() const { return viewport_overlay_service_.makeFrameGizmoState(); }
 
-        void setViewportResizeActive(bool active);
+        void setViewportResizeActive(
+            bool active,
+            ViewportResizeRenderPolicy render_policy = ViewportResizeRenderPolicy::InteractivePreview);
         [[nodiscard]] bool isViewportResizeDeferring() const {
             return frame_lifecycle_service_.isResizeDeferring();
         }
@@ -801,6 +813,7 @@ namespace lfs::vis {
         std::function<void()> wake_callback_;
         glm::ivec2 vulkan_viewport_image_size_{0, 0};
         glm::ivec2 vulkan_viewport_image_alloc_size_{0, 0};
+        glm::ivec2 vulkan_viewport_coordinate_size_{0, 0};
         bool vulkan_viewport_image_flip_y_ = false;
         glm::ivec2 vulkan_gt_comparison_content_size_{0, 0};
         struct GTComparisonImageCacheEntry {
@@ -858,6 +871,7 @@ namespace lfs::vis {
 
         // Settings
         RenderSettings settings_;
+        SceneUpscalerSelection scene_upscaler_runtime_selection_{};
         std::array<int, 2> panel_grid_planes_{{1, 1}};
         mutable std::mutex settings_mutex_;
         mutable std::mutex camera_metrics_mutex_;

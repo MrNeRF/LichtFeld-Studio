@@ -509,6 +509,10 @@ namespace lfs::core {
         // touched.
         size_t rebaseCameraAssetPaths(const std::filesystem::path& old_root,
                                       const std::filesystem::path& new_root);
+        // Aligns each camera's has_image with whether its image_path is a regular
+        // file. Empty image_path is left unchanged (dummy/test cameras). Returns
+        // the image names of cameras whose files are currently missing.
+        std::vector<std::string> revalidateCameraImagePresence();
         [[nodiscard]] size_t getActiveCameraCount() const;
         [[nodiscard]] CameraTrainingCounts getCameraTrainingCounts(NodeId camera_group_id) const;
         void setCameraTrainingEnabled(const std::string& name, bool enabled);

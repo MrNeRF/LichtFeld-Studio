@@ -15,6 +15,11 @@
     "file.recent_missing_message": "Die Projektdatei konnte nicht gefunden werden:\n{path}",
     "file.remove_from_recent": "Aus zuletzt geöffneten entfernen",
     "file.recent_entry": "{name} — {parent}",
+    "file.import": "Importieren",
+    "file.import_failed": "Import fehlgeschlagen",
+    "file.import_failed_message": "Import nicht möglich:\n{path}\n\n{reason}",
+    "file.dataset_not_recognized": "Der ausgewählte Ordner wurde nicht als unterstützter Datensatz erkannt:\n{path}",
+    "file.checkpoint_not_recognized": "Die ausgewählte Datei wurde nicht als gültiger Checkpoint erkannt:\n{path}",
     "file.import_dataset": "Datensatz importieren",
     "file.import_ply": "PLY, SOG, SPZ, RAD, USD importieren",
     "file.import_mesh": "Mesh importieren",
@@ -26,7 +31,6 @@
     "file.mesh_to_splat": "Mesh zu Splat...",
     "file.exit": "Beenden",
     "edit": "Bearbeiten",
-    "edit.input_settings": "Eingabeeinstellungen...",
     "select": "Auswahl",
     "select.copy_selection": "Auswahl kopieren",
     "select.cut_selection": "Auswahl ausschneiden",
@@ -56,7 +60,6 @@
     "view.debug_info": "Debug-Info..."
   },
   "window": {
-    "input_settings": "Eingabeeinstellungen",
     "export": "Exportieren",
     "scene": "Szene",
     "rendering": "Rendering",
@@ -406,6 +409,12 @@
     "save_pc.message": "Die Punktwolke wurde geändert. Für zukünftige Sitzungen im Datensatz-Ordner speichern?",
     "save_pc.btn_save_start": "Speichern & Starten",
     "save_pc.btn_start_without": "Ohne Speichern starten",
+    "overwrite.title": "Vorheriges Training überschreiben?",
+    "overwrite.message": "Das Projekt enthält einen Checkpoint bei Iteration {iteration}. Ein neues Training überschreibt ihn.",
+    "overwrite.existing_title": "Vorhandenes Projekt überschreiben?",
+    "overwrite.existing_message": "Am Trainings-Ausgabeort existiert bereits eine Projektdatei. Das Starten des Trainings überschreibt sie.",
+    "overwrite.btn_overwrite_start": "Überschreiben und starten",
+    "overwrite.btn_save_as_start": "Speichern unter…",
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.opacity_reg": "Opazitätsreg.:",
     "losses.scale_reg": "Skalierungsreg.:",
@@ -651,7 +660,9 @@
     "undo": "Rückgängig",
     "redo": "Wiederholen",
     "edit": "Bearbeiten",
-    "double_click_reset": "Doppelklick zum Zurücksetzen"
+    "double_click_reset": "Doppelklick zum Zurücksetzen",
+    "yes": "Ja",
+    "no": "Nein"
   },
   "status": {
     "ready": "Bereit",
@@ -696,9 +707,21 @@
     "language": "Sprache:",
     "select_language": "Sprache auswählen",
     "interface": "Oberfläche",
+    "file_associations": "Dateizuordnungen",
+    "file_associations_description": "LichtFeld Studio als Handler für jeden Dateityp registrieren oder entfernen.",
     "general": "Allgemein",
     "appearance": "Erscheinungsbild",
+    "scene_rendering": "Szenen-Rendering",
+    "scene_reconstruction": "Szenenrekonstruktion",
+    "scene_reconstruction_off": "Aus",
+    "scene_reconstruction_spatial": "Räumlich",
+    "scene_reconstruction_preset": "Räumliche Voreinstellung",
+    "scene_reconstruction_quality": "Qualität",
+    "scene_reconstruction_balanced": "Ausgewogen",
+    "scene_reconstruction_performance": "Leistung",
+    "scene_reconstruction_description": "Die räumliche Rekonstruktion rendert die Szene mit reduzierter interner Auflösung und rekonstruiert sie in der Viewport-Auflösung. Training und gespeicherte Splat-Daten bleiben unverändert.",
     "input": "Eingabe",
+    "key_bindings": "Tastenbelegung",
     "camera_navigation": "Kameranavigation",
     "navigation_mode": "Navigationsmodus",
     "camera_view_snap": "Ansichten an Achsen ausrichten",
@@ -736,7 +759,7 @@
     "reset_section_failed": "Einstellungen konnten nicht zurückgesetzt werden.",
     "ui_preferences_save_failed": "Die Einstellungen der Benutzeroberfläche konnten nicht gespeichert werden.",
     "reset_all_settings": "Alle Einstellungen zurücksetzen",
-    "reset_all_settings_confirmation": "Sprache, Theme, UI-Skalierung, Eingabeeinstellungen, MCP-Server, Layout und Fensterstatus auf die Standardwerte zurücksetzen? Dies wird sofort angewendet. Ist ein .licht-Projekt geöffnet, wird dessen gespeichertes Layout beim nächsten Speichern ersetzt; Projektinhalte, Datensätze, Exporte, Plugins und Cache bleiben unverändert.",
+    "reset_all_settings_confirmation": "Sprache, Theme, UI-Skalierung, Szenenrekonstruktion, Eingabeeinstellungen, MCP-Server, Layout und Fensterstatus auf die Standardwerte zurücksetzen? Dies wird sofort angewendet. Ist ein .licht-Projekt geöffnet, wird dessen gespeichertes Layout beim nächsten Speichern ersetzt; Projektinhalte, Datensätze, Exporte, Plugins und Cache bleiben unverändert.",
     "reset_all_settings_success": "Alle Einstellungen, das Layout und der Fensterstatus wurden sofort zurückgesetzt.",
     "window_manager_unavailable": "Die Fensterverwaltung ist nicht verfügbar.",
     "window_state_reset_failed": "Die Standardgeometrie des Fensters konnte nicht wiederhergestellt werden."
@@ -1145,6 +1168,10 @@
     "discard_and_exit": "Verwerfen & Beenden",
     "exit": "Beenden"
   },
+  "project_switch": {
+    "stop_training_title": "Training beenden?",
+    "stop_training_message": "Das Training muss beendet werden, bevor das Projekt gewechselt werden kann. Aktuelle Sitzung beenden?"
+  },
   "load_dataset_popup": {
     "title": "Datensatz laden",
     "configure_paths": "Datensatz-Pfade konfigurieren",
@@ -1165,7 +1192,11 @@
     "min_track_length": "Minimale Spurlänge",
     "min_track_length_hint": "Behält Sparse-Punkte, die in mindestens so vielen Bildern beobachtet wurden. 0 deaktiviert die Filterung.",
     "min_track_length_init_warning": "Wird ignoriert, solange Init PLY gesetzt ist.",
-    "apply_auto_crop": "Auto-Zuschnitt anwenden"
+    "apply_auto_crop": "Auto-Zuschnitt anwenden",
+    "save_title": "Projekt speichern?",
+    "save_message": "Aktuelles Projekt speichern, bevor der neue Datensatz geladen wird?",
+    "save_and_load": "Speichern und laden",
+    "load_without_saving": "Laden ohne Speichern"
   },
   "notification": {
     "dropped_not_recognized": "Das abgelegte",
@@ -1218,13 +1249,11 @@
     "status_label": "Status: %s"
   },
   "input_settings": {
-    "title": "EINGABEEINSTELLUNGEN",
     "active_profile": "Aktives Profil:",
     "save_current_profile": "Aktuelles Profil speichern",
     "reset_to_default": "Auf Standard zurücksetzen",
     "export": "Exportieren...",
     "import": "Importieren...",
-    "action": "Aktion",
     "rebind": "Neu belegen",
     "cancel": "Abbrechen",
     "replace": "Ersetzen",
@@ -1245,7 +1274,6 @@
     "click_again_double": "Nochmal klicken für Doppelklick...",
     "tool_mode": "WERKZEUGMODUS",
     "select_tool_mode": "Werkzeugmodus auswählen um Belegungen anzuzeigen/bearbeiten",
-    "current_bindings": "AKTUELLE BELEGUNGEN",
     "global_bindings_hint": "Globale Belegungen gelten überall, sofern nicht überschrieben",
     "tool_bindings_hint": "Werkzeugspezifische Belegungen überschreiben globale Belegungen",
     "section.navigation": "NAVIGATION",
@@ -1291,6 +1319,7 @@
     "action.toggle_independent_split_view": "Unabhängige geteilte Ansicht umschalten",
     "action.toggle_gt_comparison": "GT-Vergleich umschalten",
     "action.toggle_camera_frustums": "Kamera-Frustums umschalten",
+    "action.toggle_grid": "Gitter umschalten",
     "action.toggle_depth_mode": "Tiefenbox umschalten",
     "action.cycle_ply": "PLY durchschalten",
     "action.delete_selected": "Ausgewählte Gaussians löschen",
@@ -1349,8 +1378,7 @@
     "trigger.drag": " Ziehen",
     "trigger.scroll": "Scrollen",
     "trigger.unknown": "Unbekannt",
-    "action.toggle_performance_hud": "Toggle Performance HUD",
-    "binding": "Belegung"
+    "action.toggle_performance_hud": "Toggle Performance HUD"
   },
   "debug_info": {
     "clear_history": "Verlauf löschen",
@@ -1868,7 +1896,7 @@
   },
   "file_association": {
     "title": "Als Standardanwendung festlegen",
-    "message": "Möchten Sie LichtFeld Studio als Standardanwendung für Splat-Dateien (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz) festlegen?",
+    "message": "Möchten Sie LichtFeld Studio als Standardanwendung für Splat- und Projektdateien (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht) festlegen?",
     "yes": "Ja",
     "not_now": "Nicht jetzt",
     "dont_ask": "Nicht mehr fragen",
@@ -2263,6 +2291,14 @@
       "title": "Trainer nicht wiederhergestellt",
       "message": "Das Projektmodell ist zum Anzeigen verfügbar, aber das Training konnte nicht fortgesetzt werden. Prüfen Sie den Dataset-Pfad und die Protokolle."
     }
+  },
+  "recovery": {
+    "crash_title": "LichtFeld Studio wurde unerwartet beendet",
+    "body": "Es wurde eine Wiederherstellungsdatei für {} gefunden. (gespeichert {})",
+    "unsaved_session": "eine ungespeicherte Sitzung",
+    "recover": "Wiederherstellen",
+    "open_saved": "Gespeicherte Datei öffnen",
+    "skip": "Überspringen und neu erstellen"
   },
   "startup_recent": {
     "title": "Zuletzt verwendete Projekte",

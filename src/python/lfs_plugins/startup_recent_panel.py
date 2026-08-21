@@ -11,6 +11,7 @@ from pathlib import Path
 import lichtfeld as lf
 
 from .rml_keys import KI_ESCAPE
+from .training_confirm import _project_has_path
 from .types import Panel
 
 __lfs_panel_classes__ = ["StartupRecentPanel"]
@@ -71,13 +72,8 @@ def should_show_startup_recent() -> bool:
         return False
     if not recent:
         return False
-    has_path = getattr(lf, "project_has_path", None)
-    if callable(has_path):
-        try:
-            if has_path():
-                return False
-        except Exception:
-            pass
+    if _project_has_path():
+        return False
     is_empty = getattr(lf.ui, "is_scene_empty", None)
     if callable(is_empty):
         try:
@@ -263,8 +259,6 @@ class StartupRecentPanel(Panel):
 
         try:
             outcome = lf.project_open(path_text, True)
-            if outcome == lf.ProjectOpenOutcome.RECOVERY_PROMPT_PENDING:
-                return
         except Exception as exc:
             # NotFoundError subclasses FileNotFoundError; other open failures
             # surface their error text on the same user-visible path.
@@ -273,6 +267,15 @@ class StartupRecentPanel(Panel):
             else:
                 message = str(exc).strip() or missing_message
             self._report_open_error(message)
+            return
+
+        # Keep the chooser open while a crash-recovery prompt is pending.
+        recovery_pending = getattr(
+            getattr(lf, "ProjectOpenOutcome", None),
+            "RECOVERY_PROMPT_PENDING",
+            None,
+        )
+        if recovery_pending is not None and outcome == recovery_pending:
             return
 
         self._dismiss()

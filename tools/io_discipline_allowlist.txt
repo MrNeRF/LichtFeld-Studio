@@ -1,0 +1,34 @@
+# Reviewed exceptions for tools/check_io_discipline.py.
+# Entries are <repo-relative-path>:<exact stripped source line>.
+# A finding is allowed only when the file's repo-relative path equals the
+# entry path exactly and the flagged line, stripped, equals the entry's line
+# text exactly. Suffix path matching and substring token matching are not used.
+# Blank lines and # comments are ignored.
+#
+# Regenerated with: python3 tools/check_io_discipline.py --write-allowlist
+
+# --- setg: windowed or bounded get areas (MSVC stores get-area length as int)
+src/io/project/project_container.cpp:setg(buffer_.data(), buffer_.data(), buffer_.data());
+src/io/project/project_container.cpp:setg(
+src/io/project/project_container.cpp:setg(nullptr, nullptr, nullptr);
+src/io/project/project_container.cpp:setg(first, first, first + static_cast<std::ptrdiff_t>(count));
+src/io/project/project_container.cpp:setg(window_.data(), window_.data(), window_.data() + count);
+src/io/project/span_streambuf.hpp:setg(eback(),
+src/io/project/span_streambuf.hpp:setg(first, first, first);
+src/io/project/span_streambuf.hpp:setg(first, first,
+
+# --- text-mode: deliberate line-oriented or /proc reads (not structured binary)
+src/io/cache_image_loader.cpp:std::ifstream meminfo("/proc/meminfo");
+src/io/formats/colmap.cpp:if (!lfs::core::open_file_for_read(file_path, file)) {
+src/io/formats/colmap.cpp:std::ifstream points_stream(points_path);
+src/io/formats/colmap.cpp:std::ofstream stream(path, std::ios::trunc);
+src/io/formats/ply.cpp:std::ifstream stream(path);
+src/io/formats/rad.cpp:std::ifstream meminfo("/proc/meminfo");
+src/io/formats/transforms.cpp:if (!lfs::core::open_file_for_read(dir_path / "train.txt", train_file)) {
+src/io/formats/transforms.cpp:if (!lfs::core::open_file_for_read(dir_path / "test.txt", val_file)) {
+src/io/ply_to_rad_lod.cpp:std::ifstream meminfo("/proc/meminfo");
+src/training/metrics/metrics.cpp:if (lfs::core::open_file_for_write(csv_path_, csv_file)) {
+src/training/metrics/metrics.cpp:if (lfs::core::open_file_for_write(csv_path_, std::ios::app, csv_file)) {
+src/training/metrics/metrics.cpp:if (!lfs::core::open_file_for_write(txt_path_, report_file)) {
+src/training/training_snapshot_service.cpp:std::ifstream input("/proc/self/status");
+src/training/training_snapshot_service.cpp:std::ifstream input("/proc/meminfo");

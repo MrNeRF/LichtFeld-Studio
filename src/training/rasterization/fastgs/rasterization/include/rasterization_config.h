@@ -36,10 +36,12 @@ namespace fast_lfs::rasterization::config {
     // Four warps with two pixels per thread cover all 8×4 sub-tiles without a
     // 256-thread block.
     DEF int block_size_blend_backward = 128;
-    // Forward blend fetch batch size (multiple of warp size 32, <= block_size_blend).
-    // RTX 4080: synthetic microbench argmin 128; late-window bonsai kern_sum argmin 192
-    // among {128,192,256}. Keep 192, matching the high-end paper result.
-    DEF int blend_batch_size = 192;
+    // Forward blend matches the backward shape: 128 threads, 4 warps x 2 pixels
+    // cover the 16x16 tile, halving shared-memory traffic per pixel.
+    DEF int block_size_blend_forward = 128;
+    // Forward blend fetch batch (multiple of 32, <= block_size_blend_forward).
+    // Capped by the 128-thread dual-pixel block: one thread loads one splat.
+    DEF int blend_batch_size = 128;
     // Backward blend fetch batch (warp-cull reverse walk). Cap at block_size (128).
     DEF int blend_backward_batch_size = 128;
     // Warp sub-tile geometry for forward/backward blend culling (32 threads = 1 warp).

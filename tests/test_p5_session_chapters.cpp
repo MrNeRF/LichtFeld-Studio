@@ -441,6 +441,81 @@ namespace {
     }
 
     TEST(P5SessionChapterTest,
+         MissingPlySequenceOwnerIsDocumentedDegradedState) {
+        const auto missing = lfs::core::generate_uuid_v4();
+
+        auto document = ProjectDocument::create(
+            lfs::core::generate_uuid_v4(), 100);
+        ASSERT_TRUE(document);
+        require_status(document->edit_sequencer().dom().set_json(
+            "ply_sequences",
+            Json::array({Json{
+                {"node_name", "legacy clip"},
+                {"node_uuid", missing.to_string()},
+                {"fps", 24.0},
+            }})));
+        lfs::core::Scene scene;
+        auto plan = document->stage_hydration(scene);
+        ASSERT_TRUE(plan)
+            << lfs::format_for_developer(plan.error());
+        EXPECT_NE(
+            std::ranges::find(
+                document->degraded_states(),
+                ProjectDocumentDegradedState::MissingPlySequenceNode),
+            document->degraded_states().end());
+
+        TemporaryDirectory temporary;
+        const auto path =
+            temporary.path / "dangling-seqr.licht";
+        auto saved = document->save(
+            path,
+            ProjectDocumentSaveOptions{
+                .disk_reserve_bytes = 0,
+            });
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(saved.error());
+        auto reopened = ProjectDocument::open(path);
+        ASSERT_TRUE(reopened)
+            << lfs::format_for_developer(reopened.error());
+        EXPECT_NE(
+            std::ranges::find(
+                reopened->degraded_states(),
+                ProjectDocumentDegradedState::MissingPlySequenceNode),
+            reopened->degraded_states().end());
+    }
+
+    TEST(P5SessionChapterTest,
+         SequencerClipOwnerPresentInSceneGraphIsNotDegraded) {
+        const auto owner = lfs::core::generate_uuid_v4();
+        auto document = ProjectDocument::create(
+            lfs::core::generate_uuid_v4(), 100);
+        ASSERT_TRUE(document);
+        require_status(document->edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = owner,
+                .type = "group",
+                .name = "clip owner",
+                .child_order = 0,
+            }));
+        require_status(document->edit_sequencer().dom().set_json(
+            "ply_sequences",
+            Json::array({Json{
+                {"node_name", "owned clip"},
+                {"node_uuid", owner.to_string()},
+                {"fps", 24.0},
+            }})));
+        lfs::core::Scene scene;
+        auto plan = document->stage_hydration(scene);
+        ASSERT_TRUE(plan)
+            << lfs::format_for_developer(plan.error());
+        EXPECT_EQ(
+            std::ranges::find(
+                document->degraded_states(),
+                ProjectDocumentDegradedState::MissingPlySequenceNode),
+            document->degraded_states().end());
+    }
+
+    TEST(P5SessionChapterTest,
          EditorWorkspaceCaptureUsesEveryRealOpenBuffer) {
         using namespace lfs::vis::editor;
 
@@ -1755,7 +1830,7 @@ namespace {
     }
 
     TEST_F(P5MetricsRestoreTest,
-           ProjectCheckpointLocksSaveSteps) {
+           ProjectCheckpointAcceptsSaveStepEdits) {
         lfs::core::Scene scene;
         const auto cameras = scene.addGroup("Cameras");
         const auto training_cameras =
@@ -1774,7 +1849,8 @@ namespace {
         lfs::vis::TrainerManager manager;
         manager.setTrainerFromCheckpoint(
             std::move(trainer), 3);
-        EXPECT_FALSE(manager.canEditSaveSteps());
+        manager.setSaveSteps({5});
+        EXPECT_EQ(manager.getSaveSteps(), (std::vector<size_t>{5}));
     }
 
     TEST_F(P5MetricsRestoreTest,

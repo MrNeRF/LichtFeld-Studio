@@ -34,6 +34,7 @@
 #include "io/cache_image_loader.hpp"
 #include "io/cuda/image_format_kernels.cuh"
 #include "io/filesystem_utils.hpp"
+#include "io/project_container.hpp"
 #include "io/project_document.hpp"
 #include "io/project_recovery.hpp"
 #include "io/scene_chapter_adapter.hpp"
@@ -2029,6 +2030,7 @@ namespace lfs::training {
             nvtxNameCudaStreamA(callback_stream_, "lfs.train.callback");
             nvtxNameCudaStreamA(metrics_stream_, "lfs.metrics");
             createSyncPrimitives();
+            PerfBenchCollector::instance().set_timing_stream(training_stream_);
         } catch (...) {
             // A C++ destructor is not invoked when its constructor throws.
             // Roll back every member handle published by this transaction.
@@ -2757,6 +2759,13 @@ namespace lfs::training {
                 if (source_cameras.empty()) {
                     return std::unexpected("Scene has no active cameras enabled for training");
                 }
+                std::erase_if(source_cameras, [](const auto& camera) {
+                    return !camera || !camera->has_image();
+                });
+                if (source_cameras.empty()) {
+                    return std::unexpected(
+                        "Scene has no cameras with image files available for training");
+                }
 
                 if (params.optimization.enable_eval) {
                     for (const auto& camera : source_cameras) {
@@ -2776,6 +2785,13 @@ namespace lfs::training {
                 }
             } else if (base_dataset_) {
                 source_cameras = base_dataset_->get_cameras();
+                std::erase_if(source_cameras, [](const auto& camera) {
+                    return !camera || !camera->has_image();
+                });
+                if (source_cameras.empty()) {
+                    return std::unexpected(
+                        "Dataset has no cameras with image files available for training");
+                }
             } else {
                 return std::unexpected("No camera source available");
             }
@@ -3548,7 +3564,24 @@ namespace lfs::training {
         std::optional<ProjectSnapshotDocumentContext>
             document_context) {
         if (path.empty()) {
-            path = live_or_default_project_path();
+            if (auto bound = bound_project_path()) {
+                path = std::move(*bound);
+            }
+        }
+        if (path.empty()) {
+            std::lock_guard lock(project_snapshot_mutex_);
+            const auto request_id =
+                next_project_snapshot_request_id_++;
+            last_project_writer_error_ =
+                "No project destination is bound for this trainer";
+            LOG_ERROR(
+                "Cannot save project snapshot: {}",
+                last_project_writer_error_);
+            last_failed_project_request_id_ =
+                std::max(
+                    last_failed_project_request_id_,
+                    request_id);
+            return request_id;
         }
         attach_live_document_context(document_context);
         auto chapters =
@@ -3971,7 +4004,13 @@ namespace lfs::training {
 
         auto path = requested_path;
         if (path.empty()) {
-            path = default_project_path();
+            LOG_ERROR(
+                "No project destination is bound for this trainer");
+            std::lock_guard lock(project_snapshot_mutex_);
+            fail_project_request_locked(
+                request_id,
+                "No project destination is bound for this trainer");
+            return;
         }
         if (path.extension() != ".licht") {
             LOG_ERROR(
@@ -4420,26 +4459,30 @@ namespace lfs::training {
 
         photometric_loss_.arena().shrink_to_required();
 
+        bool first_publish_to_destination =
+            false;
         {
             std::lock_guard lock(
                 project_snapshot_mutex_);
             project_step_regression_
                 .arm_after_snapshot(iteration);
+            first_publish_to_destination =
+                last_project_snapshot_path_
+                    .lexically_normal() !=
+                path.lexically_normal();
         }
         project_writer_done_.store(
             false, std::memory_order_release);
         project_writer_in_flight_.store(
             true, std::memory_order_release);
 
-        const auto default_destination =
-            default_project_path();
         try {
             project_writer_thread_ = std::jthread(
                 [this, path, chapters, cpu_state,
                  request_id, write_kind,
                  base_explicit_commit_uuid,
                  autosave_sequence,
-                 default_destination,
+                 first_publish_to_destination,
                  recovery_session =
                      recovery_session_,
                  preview_png =
@@ -4458,10 +4501,18 @@ namespace lfs::training {
                             background_priority));
                     }
 #endif
+                    bool compact_after_publish = false;
                     auto writer_result =
                         [&]()
                         -> lfs::Result<
                             TrainingSnapshotPauseMetrics> {
+                        if (path.empty()) {
+                            return project_snapshot_error(
+                                lfs::ErrorCode::
+                                    FailedPrecondition,
+                                "No project destination is bound for this trainer",
+                                LFS_SOURCE_SITE_CURRENT());
+                        }
                         if (auto materialized =
                                 materialize_project_snapshot_cpu_chapters(
                                     std::move(*cpu_state),
@@ -4542,20 +4593,8 @@ namespace lfs::training {
                             std::filesystem::exists(
                                 path)) {
                             source_path = path;
-                        } else if (
-                            document_context &&
-                            !document_context
-                                 ->source_path &&
-                            !document_context
-                                 ->allow_existing_destination_replacement &&
-                            path.lexically_normal() ==
-                                default_destination
-                                    .lexically_normal() &&
-                            std::filesystem::exists(
-                                path)) {
-                            source_path = path;
-                            adopt_container_identity =
-                                true;
+                            compact_after_publish =
+                                first_publish_to_destination;
                         }
                         bool save_as =
                             !source_path &&
@@ -5064,6 +5103,69 @@ namespace lfs::training {
                         return captured->metrics;
                     }();
 
+                    if (writer_result &&
+                        compact_after_publish &&
+                        write_kind !=
+                            ProjectSnapshotWriteKind::
+                                Autosave) {
+                        const auto compact_creation_ns =
+                            static_cast<std::uint64_t>(
+                                std::chrono::
+                                    duration_cast<
+                                        std::chrono::
+                                            nanoseconds>(
+                                        std::chrono::
+                                            system_clock::
+                                                now()
+                                                    .time_since_epoch())
+                                        .count());
+                        const auto compact_wallclock_ns =
+                            static_cast<std::uint64_t>(
+                                std::chrono::
+                                    duration_cast<
+                                        std::chrono::
+                                            nanoseconds>(
+                                        std::chrono::
+                                            system_clock::
+                                                now()
+                                                    .time_since_epoch())
+                                        .count());
+                        auto compacted =
+                            lfs::io::project::
+                                ProjectWriter::compact(
+                                    path,
+                                    lfs::io::project::
+                                        CompactionOptions{
+                                            .compatibility =
+                                                {},
+                                            .new_file_uuid =
+                                                lfs::core::
+                                                    generate_uuid_v4(),
+                                            .commit_uuid =
+                                                lfs::core::
+                                                    generate_uuid_v4(),
+                                            .snapshot_uuid =
+                                                {},
+                                            .creation_time_unix_ns =
+                                                compact_creation_ns,
+                                            .wallclock_unix_ns =
+                                                compact_wallclock_ns,
+                                        });
+                        if (compacted) {
+                            LOG_INFO(
+                                "Compacted trainer project {} after first publish of this run",
+                                lfs::core::path_to_utf8(
+                                    path));
+                        } else {
+                            LOG_WARN(
+                                "Failed to compact trainer project {} after first publish of this run: {}",
+                                lfs::core::path_to_utf8(
+                                    path),
+                                lfs::format_for_developer(
+                                    compacted.error()));
+                        }
+                    }
+
                     {
                         std::lock_guard lock(
                             project_snapshot_mutex_);
@@ -5482,6 +5584,7 @@ namespace lfs::training {
                 if (PerfBenchCollector::enabled()) {
                     PerfBenchCollector::instance().on_step_begin(iter);
                 }
+                PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::StepBegin, iter);
                 if (live_vram_profiler_enabled()) {
                     auto& profiler = lfs::diagnostics::VramProfiler::instance();
                     profiler.beginIteration(iter);
@@ -5902,6 +6005,7 @@ namespace lfs::training {
 
                     // Render the tile
                     nvtxRangePush("rasterize_forward");
+                    PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::FwdBegin, iter);
 
                     // Storage for render output (used by both paths)
                     RenderOutput output;
@@ -6117,6 +6221,7 @@ namespace lfs::training {
 
                         // Photometric loss
                         nvtxRangePush("compute_photometric_loss");
+                        PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::LossBegin, iter);
                         lfs::core::Tensor tile_loss;
                         lfs::core::Tensor tile_grad;
 
@@ -6253,6 +6358,7 @@ namespace lfs::training {
                         }
 
                         nvtxRangePush("compute_photometric_loss");
+                        PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::LossBegin, iter);
                         lfs::core::Tensor tile_loss;
                         lfs::core::Tensor tile_grad;
                         lfs::core::Tensor tile_grad_raw;
@@ -6956,6 +7062,7 @@ namespace lfs::training {
 
                         current_phase = StepPhase::Backward;
                         nvtxRangePush("rasterize_backward");
+                        PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::BwdBegin, iter);
                         {
                             LFS_VRAM_SCOPE("train.rasterize_backward");
                             LOG_VRAM_DIFF("train.rasterize_backward");
@@ -7013,6 +7120,7 @@ namespace lfs::training {
                     current_phase = StepPhase::OptimizerCommit;
                     // Controller phase: only update controller weights
                     nvtxRangePush("controller_optimizer_step");
+                    PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::OptBegin, iter);
                     LFS_VRAM_SCOPE("train.optimizer.ppisp_controller_step");
                     LOG_VRAM_DIFF("train.optimizer.ppisp_controller_step");
                     ppisp_controller_pool_->optimizer_step(ppisp_cam_idx);
@@ -7022,6 +7130,9 @@ namespace lfs::training {
                     persistent_commit = true;
                     nvtxRangePop();
                 } else {
+                    // Default path has no controller_optimizer_step NVTX; mark the
+                    // same OptBegin boundary at the start of the optimizer region.
+                    PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::OptBegin, iter);
                     // Normal phase: regularization losses + optimizer steps for all components
 
                     if (params_.optimization.scale_reg > 0.0f) {
@@ -7357,13 +7468,32 @@ namespace lfs::training {
                     const bool save_regular_phase_output = get_active_sparsify_steps() > 0 &&
                                                            iter == get_sparsity_boundary_iteration();
                     current_phase = StepPhase::TerminalCleanup;
+                    TrainerProjectSavePolicy project_save_policy;
+                    std::optional<std::filesystem::path> step_project_path;
+                    {
+                        std::lock_guard lock(project_snapshot_mutex_);
+                        project_save_policy = trainer_project_save_policy_;
+                        if (live_project_path_ &&
+                            !live_project_path_->empty()) {
+                            step_project_path = *live_project_path_;
+                        }
+                    }
+                    const bool may_save_at_step_boundary =
+                        project_save_policy.at_step_boundaries &&
+                        step_project_path.has_value();
                     if (save_regular_phase_output) {
-                        LOG_INFO(
-                            "Queuing regular-phase .licht generation at iteration {} before sparsification",
-                            iter);
-                        static_cast<void>(
-                            request_project_save(
-                                live_or_default_project_path()));
+                        if (may_save_at_step_boundary) {
+                            LOG_INFO(
+                                "Queuing regular-phase .licht generation at iteration {} before sparsification",
+                                iter);
+                            static_cast<void>(
+                                request_project_save(
+                                    *step_project_path));
+                        } else {
+                            LOG_DEBUG(
+                                "Skipping regular-phase project save at iteration {}: trainer-initiated saves are not authorized",
+                                iter);
+                        }
                     }
 
                     // Publish a project generation at specified steps unless
@@ -7372,9 +7502,15 @@ namespace lfs::training {
                         if (iter == static_cast<int>(save_step) &&
                             iter != get_total_iterations() &&
                             !save_regular_phase_output) {
-                            static_cast<void>(
-                                request_project_save(
-                                    live_or_default_project_path()));
+                            if (may_save_at_step_boundary) {
+                                static_cast<void>(
+                                    request_project_save(
+                                        *step_project_path));
+                            } else {
+                                LOG_DEBUG(
+                                    "Skipping step-boundary project save at iteration {}: trainer-initiated saves are not authorized",
+                                    iter);
+                            }
                         }
                     }
 
@@ -7451,25 +7587,55 @@ namespace lfs::training {
                         static_cast<std::size_t>(
                             std::numeric_limits<int>::
                                 max())) {
+                    TrainerProjectSavePolicy policy;
+                    std::optional<std::filesystem::path> bound;
+                    {
+                        std::lock_guard lock(project_snapshot_mutex_);
+                        policy = trainer_project_save_policy_;
+                        if (live_project_path_ && !live_project_path_->empty())
+                            bound = *live_project_path_;
+                    }
                     const int target =
                         static_cast<int>(
                             *project_hook);
-                    if (iter + 1 == target &&
-                        !prepared_project_snapshot_) {
-                        prepare_project_snapshot_at_safe_point(
-                            target,
+                    std::filesystem::path
+                        project_hook_destination =
                             getParams()
-                                .save_project_path);
+                                .save_project_path;
+                    if (project_hook_destination
+                            .empty() &&
+                        bound) {
+                        project_hook_destination =
+                            *bound;
                     }
-                    if (iter == target) {
-                        if (!prepared_project_snapshot_) {
-                            prepare_project_snapshot_at_safe_point(
-                                iter,
-                                getParams()
-                                    .save_project_path);
+                    const bool may_save_at_project_hook =
+                        policy
+                            .at_step_boundaries &&
+                        !project_hook_destination
+                             .empty();
+                    if (!may_save_at_project_hook) {
+                        if (iter + 1 == target ||
+                            iter == target) {
+                            LOG_DEBUG(
+                                "Skipping save-project-at-iter project save at iteration {}: trainer-initiated saves are not authorized",
+                                iter);
                         }
-                        capture_project_snapshot_at_safe_point(
-                            iter);
+                    } else {
+                        if (iter + 1 == target &&
+                            !prepared_project_snapshot_) {
+                            prepare_project_snapshot_at_safe_point(
+                                target,
+                                project_hook_destination);
+                        }
+                        if (iter == target) {
+                            if (!prepared_project_snapshot_) {
+                                prepare_project_snapshot_at_safe_point(
+                                    iter,
+                                    project_hook_destination);
+                            }
+                            capture_project_snapshot_at_safe_point(
+                                iter);
+                        }
                     }
                 }
 
@@ -7480,6 +7646,7 @@ namespace lfs::training {
                                                   &strategy_->get_optimizer());
                     lfs::diagnostics::VramProfiler::instance().sampleCudaMemory();
                 }
+                PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::StepEnd, iter);
                 if (PerfBenchCollector::enabled() && strategy_) {
                     auto& bench = PerfBenchCollector::instance();
                     const auto ledger = compute_training_state_ledger(
@@ -7575,6 +7742,8 @@ namespace lfs::training {
         }
 
         training_complete_ = false;
+        pending_snapshot_finish_reason_ =
+            lfs::io::project::TrainingFinishReason::None;
         ready_to_start_ = false; // Reset the flag
         lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
 
@@ -8040,51 +8209,81 @@ namespace lfs::training {
         const int terminal_iteration = current_iteration_.load();
         const bool user_stopped = stop_requested_.load() || stop_token.stop_requested();
         apply_pending_params_at_safe_point();
-        const auto terminal_save_started = std::chrono::steady_clock::now();
-        saving_model_.store(true, std::memory_order_release);
         pending_snapshot_finish_reason_ =
             terminal_error
                 ? lfs::io::project::TrainingFinishReason::Error
             : user_stopped
                 ? lfs::io::project::TrainingFinishReason::UserStopped
                 : lfs::io::project::TrainingFinishReason::Completed;
-        try {
-            LOG_INFO("Saving {} project at iteration {}...",
-                     terminal_error ? "recovery" : (user_stopped ? "stopped" : "final"),
-                     terminal_iteration);
-            if (auto save_result = save_project_to(
-                    live_or_default_project_path(),
-                    terminal_iteration);
-                !save_result) {
+        TrainerProjectSavePolicy terminal_save_policy;
+        std::optional<std::filesystem::path> terminal_project_path;
+        {
+            std::lock_guard lock(project_snapshot_mutex_);
+            terminal_save_policy = trainer_project_save_policy_;
+            if (live_project_path_ &&
+                !live_project_path_->empty()) {
+                terminal_project_path = *live_project_path_;
+            }
+        }
+        const bool authorize_terminal_save =
+            (user_stopped || terminal_error)
+                ? terminal_save_policy.on_stop_or_error
+                : terminal_save_policy.on_completion;
+        if (authorize_terminal_save &&
+            terminal_project_path) {
+            const auto terminal_save_started = std::chrono::steady_clock::now();
+            saving_model_.store(true, std::memory_order_release);
+            try {
+                LOG_INFO("Saving {} project at iteration {}...",
+                         terminal_error ? "recovery" : (user_stopped ? "stopped" : "final"),
+                         terminal_iteration);
+                if (auto save_result = save_project_to(
+                        *terminal_project_path,
+                        terminal_iteration);
+                    !save_result) {
+                    append_terminal_error(lfs::make_error(lfs::ErrorInit{
+                        .code = lfs::ErrorCode::Internal,
+                        .domain = lfs::ErrorDomain::Training,
+                        .user_message = "Terminal training save failed.",
+                        .detail = std::format("Terminal save failed at iteration {}: {}",
+                                              terminal_iteration, save_result.error()),
+                        .detection = LFS_SOURCE_SITE_CURRENT(),
+                    }));
+                }
+            } catch (const std::exception& e) {
                 append_terminal_error(lfs::make_error(lfs::ErrorInit{
                     .code = lfs::ErrorCode::Internal,
                     .domain = lfs::ErrorDomain::Training,
                     .user_message = "Terminal training save failed.",
-                    .detail = std::format("Terminal save failed at iteration {}: {}",
-                                          terminal_iteration, save_result.error()),
+                    .detail = std::format("Terminal save threw at iteration {}: {}",
+                                          terminal_iteration, e.what()),
                     .detection = LFS_SOURCE_SITE_CURRENT(),
                 }));
             }
-        } catch (const std::exception& e) {
-            append_terminal_error(lfs::make_error(lfs::ErrorInit{
-                .code = lfs::ErrorCode::Internal,
-                .domain = lfs::ErrorDomain::Training,
-                .user_message = "Terminal training save failed.",
-                .detail = std::format("Terminal save threw at iteration {}: {}",
-                                      terminal_iteration, e.what()),
-                .detection = LFS_SOURCE_SITE_CURRENT(),
-            }));
+            LOG_INFO("Terminal {} save phase took {:.3f}s",
+                     user_stopped ? "stop" : "completion",
+                     std::chrono::duration<double>(std::chrono::steady_clock::now() - terminal_save_started).count());
+            pending_snapshot_finish_reason_ =
+                lfs::io::project::TrainingFinishReason::None;
+            saving_model_.store(false, std::memory_order_release);
+        } else {
+            const char* skip_reason =
+                authorize_terminal_save
+                    ? "no project path is bound"
+                : user_stopped
+                    ? "saves on user stop are not authorized"
+                : terminal_error
+                    ? "saves on training error are not authorized"
+                    : "not authorized";
+            LOG_INFO(
+                "Training ended at iteration {} without a project save: {}",
+                terminal_iteration,
+                skip_reason);
         }
-        LOG_INFO("Terminal {} save phase took {:.3f}s",
-                 user_stopped ? "stop" : "completion",
-                 std::chrono::duration<double>(std::chrono::steady_clock::now() - terminal_save_started).count());
-        pending_snapshot_finish_reason_ =
-            lfs::io::project::TrainingFinishReason::None;
-        saving_model_.store(false, std::memory_order_release);
 
         // A dead train loop must not report an active pause: stale is_paused_
-        // keeps has_active_train_loop() true, so finished-trainer saves skip
-        // the synchronous flush and wait forever on a safe point.
+        // makes finished-trainer saves skip the synchronous flush and wait
+        // forever on a safe point.
         pause_requested_ = false;
         is_paused_ = false;
         {
@@ -8162,21 +8361,26 @@ namespace lfs::training {
         return {};
     }
 
-    std::filesystem::path
-    Trainer::default_project_path() const {
-        return getParams().dataset.output_path /
-               "project.licht";
+    void Trainer::set_trainer_project_save_policy(
+        TrainerProjectSavePolicy policy) {
+        std::lock_guard lock(project_snapshot_mutex_);
+        trainer_project_save_policy_ = policy;
     }
 
-    std::filesystem::path
-    Trainer::live_or_default_project_path() const {
+    Trainer::TrainerProjectSavePolicy
+    Trainer::trainer_project_save_policy() const {
+        std::lock_guard lock(project_snapshot_mutex_);
+        return trainer_project_save_policy_;
+    }
+
+    std::optional<std::filesystem::path>
+    Trainer::bound_project_path() const {
         std::lock_guard lock(project_snapshot_mutex_);
         if (live_project_path_ &&
             !live_project_path_->empty()) {
             return *live_project_path_;
         }
-        return getParams().dataset.output_path /
-               "project.licht";
+        return std::nullopt;
     }
 
     void Trainer::set_live_project_snapshot(
@@ -8234,10 +8438,15 @@ namespace lfs::training {
         }
 
         attach_live_document_context(document_context);
-        const auto path =
-            requested_path.empty()
-                ? live_or_default_project_path()
-                : requested_path;
+        std::filesystem::path path = requested_path;
+        if (path.empty()) {
+            auto bound = bound_project_path();
+            if (!bound) {
+                return std::unexpected(
+                    "No project destination is bound for this trainer");
+            }
+            path = std::move(*bound);
+        }
         if (path.extension() != ".licht") {
             return std::unexpected(
                 "Project destination must end in .licht");

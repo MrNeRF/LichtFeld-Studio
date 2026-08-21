@@ -15,6 +15,7 @@ The Preferences panel currently exposes:
 
 - language;
 - application theme and UI scale;
+- viewport scene reconstruction backend and backend-specific preset;
 - camera navigation mode and axis/view snap;
 - per-setting remember options;
 - MCP server enablement, bind scope, port, and opt-in request logging;
@@ -62,6 +63,11 @@ UI details that are not project layout, such as HUD state, are written to
 settings, keymaps, and the Asset Manager catalog are published with
 same-directory atomic replacement so an interrupted write cannot expose a
 partially written destination.
+
+Scene reconstruction preferences are user-global rather than `.licht` project
+state. They affect viewport presentation only and do not alter training or
+stored splat data. See [Scene reconstruction](scene-reconstruction) for the
+backend, preset, lazy-loading, and fallback contracts.
 
 ## User storage roots
 

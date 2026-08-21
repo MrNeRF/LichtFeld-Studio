@@ -4,6 +4,7 @@
 
 import lichtfeld as lf
 
+from .keymap_bindings import KeymapBindingsSection
 from .types import Panel
 
 __lfs_panel_classes__ = ["PreferencesPanel"]
@@ -43,14 +44,20 @@ class PreferencesPanel(Panel):
     EXPANDABLE_SECTIONS = (
         "language",
         "appearance",
+        "scene_rendering",
         "navigation",
         "view_snap",
+        "key_bindings",
         "interface",
+        "file_associations",
         "mcp",
     )
 
     def __init__(self):
         self._handle = None
+        self._scene_upscaler_catalog = []
+        self._scene_upscaler_presets = {}
+        self._keymap = KeymapBindingsSection()
         self._theme_catalog = []
         self._language_catalog = []
         self._last_state = None
@@ -64,6 +71,7 @@ class PreferencesPanel(Panel):
         self._mcp_safe_mode = False
         self._last_mcp_runtime_config = None
         self._document = None
+        self._file_associations = []
 
     def on_bind_model(self, ctx):
         self._read_mcp_preferences()
@@ -76,6 +84,8 @@ class PreferencesPanel(Panel):
         model.bind_func("show_appearance", lambda: self._section == "appearance")
         model.bind_func("show_input", lambda: self._section == "input")
         model.bind_func("show_interface", lambda: self._section == "interface")
+        model.bind_func("show_file_associations", self._show_file_associations)
+        model.bind_func("has_file_associations", self._has_file_associations)
         model.bind_func("show_mcp", lambda: self._section == "mcp")
         model.bind_func("show_section_reset", lambda: True)
         model.bind_func("reset_section_label", self._reset_section_label)
@@ -86,6 +96,20 @@ class PreferencesPanel(Panel):
             )
         model.bind("theme_idx", self._theme_index, self._set_theme_index)
         model.bind("scale_idx", self._scale_index, self._set_scale_index)
+        model.bind(
+            "scene_upscaler_idx",
+            self._scene_upscaler_index,
+            self._set_scene_upscaler_index,
+        )
+        model.bind(
+            "scene_upscaler_preset_idx",
+            self._scene_upscaler_preset_index,
+            self._set_scene_upscaler_preset_index,
+        )
+        model.bind_func(
+            "scene_upscaler_has_preset",
+            lambda: len(self._scene_upscaler_presets.get(self._scene_upscaler(), ())) > 1,
+        )
         model.bind("language_idx", self._language_index, self._set_language_index)
         model.bind("navigation_idx", self._navigation_index, self._set_navigation_index)
         model.bind("view_snap", lf.get_camera_view_snap_enabled, self._set_view_snap)
@@ -109,7 +133,9 @@ class PreferencesPanel(Panel):
         model.bind_event("show_appearance", lambda *_: self._set_section("appearance"))
         model.bind_event("show_input", lambda *_: self._set_section("input"))
         model.bind_event("show_interface", lambda *_: self._set_section("interface"))
+        model.bind_event("show_file_associations", lambda *_: self._set_section("file_associations"))
         model.bind_event("show_mcp", lambda *_: self._set_section("mcp"))
+        model.bind_event("set_file_association", self._on_set_file_association)
         model.bind_event("toggle_mcp_enabled", self._on_toggle_mcp_enabled)
         model.bind_event("mcp_port_change", self._on_mcp_port_change)
         model.bind_event("confirm_mcp_port", self._on_confirm_mcp_port)
@@ -117,9 +143,14 @@ class PreferencesPanel(Panel):
         model.bind_event("toggle_section", self._on_toggle_section)
         model.bind_record_list("themes")
         model.bind_record_list("scales")
+        model.bind_record_list("scene_upscalers")
+        model.bind_record_list("scene_upscaler_presets")
         model.bind_record_list("languages")
         model.bind_record_list("navigation_modes")
+        model.bind_record_list("file_associations")
         self._handle = model.get_handle()
+        self._keymap.bind(model)
+        self._reload_file_associations()
 
     def on_mount(self, doc):
         # The title bar is a cancellation boundary for the drafted MCP port,
@@ -138,8 +169,10 @@ class PreferencesPanel(Panel):
         self._consume_section_request()
         self._last_state = self._state()
         self._refresh_selection()
+        self._keymap.on_mount(doc)
 
     def on_unmount(self, doc):
+        self._keymap.on_unmount()
         self._document = None
         self._handle = None
         doc.remove_data_model("preferences")
@@ -148,16 +181,19 @@ class PreferencesPanel(Panel):
         self._consume_section_request()
         self._sync_mcp_runtime()
         state = self._state()
-        if state == self._last_state:
-            return
-        self._last_state = state
-        self._dirty_selection()
-        self._dirty_mcp()
+        if state != self._last_state:
+            self._last_state = state
+            self._sync_scene_upscaler_preset_records()
+            self._dirty_selection()
+            self._dirty_mcp()
+        self._keymap.on_update(doc)
 
     def _state(self):
         return (
             lf.ui.get_theme(),
             float(lf.ui.get_ui_scale_preference()),
+            self._scene_upscaler(),
+            self._scene_upscaler_preset(),
             lf.ui.get_current_language(),
             lf.get_camera_navigation_mode(),
             lf.get_camera_view_snap_enabled(),
@@ -167,6 +203,7 @@ class PreferencesPanel(Panel):
         )
 
     def _rebuild_records(self):
+        self._sync_scene_reconstruction_catalog()
         self._theme_catalog = sorted(
             lf.ui.themes(),
             key=lambda theme: (theme.get("order", 0), theme.get("name", theme.get("id", ""))),
@@ -195,6 +232,14 @@ class PreferencesPanel(Panel):
             ],
         )
         self._handle.update_record_list(
+            "scene_upscalers",
+            [
+                {"index": str(index), "label": lf.ui.tr(label_key)}
+                for index, (_backend, label_key) in enumerate(self._scene_upscaler_catalog)
+            ],
+        )
+        self._sync_scene_upscaler_preset_records()
+        self._handle.update_record_list(
             "languages",
             [
                 {"index": str(index), "label": name}
@@ -208,6 +253,7 @@ class PreferencesPanel(Panel):
                 for index, (_mode, label) in enumerate(self.NAVIGATION_OPTIONS)
             ],
         )
+        self._reload_file_associations()
 
     def _theme_index(self):
         current = lf.ui.get_theme()
@@ -240,6 +286,127 @@ class PreferencesPanel(Panel):
         if 0 <= index < len(self.SCALE_OPTIONS):
             lf.ui.set_ui_scale(self.SCALE_OPTIONS[index][0])
             self._refresh_selection()
+
+    def _scene_upscaler(self):
+        settings = lf.get_render_settings()
+        backend = "native" if settings is None else str(settings.scene_upscaler)
+        return (
+            backend
+            if any(item[0] == backend for item in self._scene_upscaler_catalog)
+            else "native"
+        )
+
+    def _sync_scene_reconstruction_catalog(self):
+        records = lf.ui.get_scene_reconstruction_options()
+        backends = []
+        presets = {}
+        for record in records:
+            backend_id = str(record["id"])
+            label_key = str(record["label_key"])
+            backend_presets = tuple(
+                (str(preset["id"]), str(preset["label_key"]))
+                for preset in record.get("presets", ())
+            )
+            if backend_id and label_key and backend_presets:
+                backends.append((backend_id, label_key))
+                presets[backend_id] = backend_presets
+        self._scene_upscaler_catalog = backends
+        self._scene_upscaler_presets = presets
+
+    def _sync_scene_upscaler_preset_records(self):
+        if not self._handle:
+            return
+        presets = self._scene_upscaler_presets.get(self._scene_upscaler(), ())
+        selected_preset = self._scene_upscaler_preset()
+        self._handle.update_record_list(
+            "scene_upscaler_presets",
+            [
+                {
+                    "index": str(index),
+                    "label": lf.ui.tr(label_key),
+                    "selected": preset == selected_preset,
+                }
+                for index, (preset, label_key) in enumerate(presets)
+            ],
+        )
+
+    def _scene_upscaler_index(self):
+        current = self._scene_upscaler()
+        return next(
+            (str(index) for index, (backend, _label) in enumerate(self._scene_upscaler_catalog)
+             if backend == current),
+            "0",
+        )
+
+    def _set_scene_upscaler_index(self, value):
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            return
+        if not 0 <= index < len(self._scene_upscaler_catalog):
+            return
+        settings = lf.get_render_settings()
+        if settings is None:
+            return
+        backend = self._scene_upscaler_catalog[index][0]
+        presets = self._scene_upscaler_presets.get(backend, ())
+        default_preset = presets[0][0] if presets else "native"
+        try:
+            remembered_preset = str(lf.ui.get_scene_reconstruction_preset_preference(backend))
+        except AttributeError:
+            remembered_preset = default_preset
+        preset = (
+            remembered_preset
+            if any(item[0] == remembered_preset for item in presets)
+            else default_preset
+        )
+        self._apply_scene_reconstruction(backend, preset)
+        self._sync_scene_upscaler_preset_records()
+        self._refresh_selection()
+
+    @staticmethod
+    def _apply_scene_reconstruction(backend, preset):
+        setter = getattr(lf.ui, "set_scene_reconstruction", None)
+        if setter is not None:
+            return setter(backend, preset)
+        settings = lf.get_render_settings()
+        if settings is None:
+            return False
+        settings.scene_upscaler = backend
+        settings.scene_upscaler_preset = preset
+        return True
+
+    def _scene_upscaler_preset(self):
+        backend = self._scene_upscaler()
+        settings = lf.get_render_settings()
+        presets = self._scene_upscaler_presets.get(backend, ())
+        if not presets:
+            return "native"
+        preset = presets[0][0] if settings is None else str(settings.scene_upscaler_preset)
+        return preset if any(item[0] == preset for item in presets) else presets[0][0]
+
+    def _scene_upscaler_preset_index(self):
+        current = self._scene_upscaler_preset()
+        presets = self._scene_upscaler_presets.get(self._scene_upscaler(), ())
+        return next(
+            (str(index) for index, (preset, _label) in enumerate(presets)
+             if preset == current),
+            "0",
+        )
+
+    def _set_scene_upscaler_preset_index(self, value):
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            return
+        backend = self._scene_upscaler()
+        presets = self._scene_upscaler_presets.get(backend, ())
+        if not 0 <= index < len(presets):
+            return
+        if len(presets) <= 1:
+            return
+        self._apply_scene_reconstruction(backend, presets[index][0])
+        self._refresh_selection()
 
     def _language_index(self):
         current = lf.ui.get_current_language()
@@ -477,9 +644,76 @@ class PreferencesPanel(Panel):
     def _on_open_mcp_log_folder(self, _handle, _event, _args):
         lf.ui.open_url(lf.ui.get_mcp_log_directory())
 
+    @staticmethod
+    def _coerce_bool(value):
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    def _file_association_status_rows(self):
+        getter = getattr(lf, "file_associations_status", None)
+        if not callable(getter):
+            return []
+        rows = getter()
+        if not rows:
+            return []
+        result = []
+        for row in rows:
+            extension = str(row.get("extension", "")).strip()
+            if not extension:
+                continue
+            result.append(
+                {
+                    "extension": extension,
+                    "registered": bool(row.get("registered", False)),
+                    "label": extension,
+                }
+            )
+        return result
+
+    def _reload_file_associations(self):
+        self._file_associations = self._file_association_status_rows()
+        if self._handle:
+            self._handle.update_record_list(
+                "file_associations",
+                [
+                    {
+                        "extension": row["extension"],
+                        "registered": row["registered"],
+                        "label": row["label"],
+                    }
+                    for row in self._file_associations
+                ],
+            )
+            dirty = getattr(self._handle, "dirty", None)
+            if callable(dirty):
+                dirty("has_file_associations")
+                dirty("show_file_associations")
+
+    def _has_file_associations(self):
+        return bool(self._file_associations)
+
+    def _show_file_associations(self):
+        return self._section == "file_associations" and self._has_file_associations()
+
+    def _on_set_file_association(self, _handle, _event, args):
+        if not args or len(args) < 2:
+            return
+        self._set_file_association(args[0], args[1])
+
+    def _set_file_association(self, extension, enabled):
+        setter = getattr(lf, "file_association_set", None)
+        if not callable(setter):
+            return False
+        ok = bool(setter(str(extension), self._coerce_bool(enabled)))
+        self._reload_file_associations()
+        return ok
+
     def _consume_section_request(self):
         section = lf.ui.take_preferences_section_request()
-        if section in ("general", "appearance", "input", "interface", "mcp"):
+        if section in ("general", "appearance", "input", "interface", "file_associations", "mcp"):
+            if section == "file_associations" and not self._has_file_associations():
+                return
             self._set_section(section)
 
     def _dirty_mcp(self):
@@ -521,8 +755,17 @@ class PreferencesPanel(Panel):
             return
         self._section = section
         if self._handle:
-            for name in ("show_general", "show_appearance", "show_input", "show_interface", "show_mcp",
-                          "show_section_reset", "reset_section_label"):
+            for name in (
+                "show_general",
+                "show_appearance",
+                "show_input",
+                "show_interface",
+                "show_file_associations",
+                "has_file_associations",
+                "show_mcp",
+                "show_section_reset",
+                "reset_section_label",
+            ):
                 self._handle.dirty(name)
 
     def _on_toggle_section(self, _handle, _event, args):
@@ -610,6 +853,9 @@ class PreferencesPanel(Panel):
         elif section == "appearance":
             lf.ui.set_theme("dark")
             lf.ui.set_ui_scale(0.0)
+            lf.ui.set_scene_reconstruction("native", "native")
+            lf.ui.reset_scene_reconstruction_preferences()
+            self._sync_scene_upscaler_preset_records()
         elif section == "input":
             lf.ui.set_remember_camera_navigation(False)
             lf.ui.set_remember_camera_view_snap(False)
@@ -632,6 +878,9 @@ class PreferencesPanel(Panel):
         if self._handle:
             self._handle.dirty("theme_idx")
             self._handle.dirty("scale_idx")
+            self._handle.dirty("scene_upscaler_idx")
+            self._handle.dirty("scene_upscaler_preset_idx")
+            self._handle.dirty("scene_upscaler_has_preset")
             self._handle.dirty("language_idx")
             self._handle.dirty("navigation_idx")
             self._handle.dirty("view_snap")

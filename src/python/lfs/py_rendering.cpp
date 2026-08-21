@@ -789,6 +789,16 @@ namespace lfs::python {
                      2);
         add_bool(&Proxy::mip_filter, "mip_filter", "Mip Filter", "Enable mip-map filtering", false);
         add_float(&Proxy::render_scale, "render_scale", "Render Scale", "Render resolution scale", 1.0, 0.25, 1.0);
+        add_string(&Proxy::scene_upscaler,
+                   "scene_upscaler",
+                   "Scene Reconstruction",
+                   "Stable scene reconstruction backend identifier",
+                   "native");
+        add_string(&Proxy::scene_upscaler_preset,
+                   "scene_upscaler_preset",
+                   "Scene Reconstruction Preset",
+                   "Backend-specific scene reconstruction quality preset",
+                   "native");
         add_float(&Proxy::depth_view_min, "depth_view_min", "Depth Near", "Depth-map visualization near range",
                   lfs::rendering::DEFAULT_DEPTH_VIEW_MIN, 0.0, lfs::rendering::MAX_DEPTH_VIEW_DISTANCE);
         add_float(&Proxy::depth_view_max, "depth_view_max", "Depth Far", "Depth-map visualization far range",
@@ -926,6 +936,14 @@ namespace lfs::python {
                 static_cast<rendering::GaussianRasterBackend>(settings_.raster_backend));
         }
         vis::update_render_settings(settings_);
+        // update_render_settings may normalize dependent properties (for
+        // example the preset when switching scene reconstruction backends).
+        // Keep this Python proxy in lockstep with that applied state so the
+        // next property assignment cannot restore a stale, cross-backend
+        // preset.
+        if (const auto applied = vis::get_render_settings()) {
+            settings_ = *applied;
+        }
         request_redraw();
     }
 

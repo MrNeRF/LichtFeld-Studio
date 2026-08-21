@@ -15,6 +15,11 @@
     "file.recent_missing_message": "The project file could not be found:\n{path}",
     "file.remove_from_recent": "Remove from Recent",
     "file.recent_entry": "{name} — {parent}",
+    "file.import": "Import",
+    "file.import_failed": "Import Failed",
+    "file.import_failed_message": "Could not import:\n{path}\n\n{reason}",
+    "file.dataset_not_recognized": "The selected folder is not recognized as a supported dataset:\n{path}",
+    "file.checkpoint_not_recognized": "The selected file is not recognized as a valid checkpoint:\n{path}",
     "file.import_dataset": "Import Dataset",
     "file.import_ply": "Import PLY, SOG, SPZ, RAD, USD",
     "file.import_mesh": "Import Mesh",
@@ -26,7 +31,6 @@
     "file.mesh_to_splat": "Mesh to Splat...",
     "file.exit": "Exit",
     "edit": "Edit",
-    "edit.input_settings": "Input Settings...",
     "select": "Select",
     "select.copy_selection": "Copy Selection",
     "select.cut_selection": "Cut Selection",
@@ -56,7 +60,6 @@
     "view.debug_info": "Debug Info..."
   },
   "window": {
-    "input_settings": "Input Settings",
     "export": "Export",
     "scene": "Scene",
     "rendering": "Rendering",
@@ -406,6 +409,12 @@
     "save_pc.message": "The point cloud has been modified. Save to the dataset folder for future sessions?",
     "save_pc.btn_save_start": "Save & Start",
     "save_pc.btn_start_without": "Start Without Saving",
+    "overwrite.title": "Overwrite previous training?",
+    "overwrite.message": "The project contains a checkpoint at iteration {iteration}. Starting a new training will overwrite it.",
+    "overwrite.existing_title": "Overwrite existing project?",
+    "overwrite.existing_message": "A project file already exists at the training output location. Starting training will overwrite it.",
+    "overwrite.btn_overwrite_start": "Overwrite and Start",
+    "overwrite.btn_save_as_start": "Save As…",
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.opacity_reg": "Opacity Reg:",
     "losses.scale_reg": "Scale Reg:",
@@ -651,7 +660,9 @@
     "undo": "Undo",
     "redo": "Redo",
     "edit": "Edit",
-    "double_click_reset": "dbl-click reset"
+    "double_click_reset": "dbl-click reset",
+    "yes": "Yes",
+    "no": "No"
   },
   "status": {
     "ready": "Ready",
@@ -696,9 +707,21 @@
     "language": "Language:",
     "select_language": "Select Language",
     "interface": "Interface",
+    "file_associations": "File Associations",
+    "file_associations_description": "Register or remove LichtFeld Studio as a handler for each file type.",
     "general": "General",
     "appearance": "Appearance",
+    "scene_rendering": "Scene Rendering",
+    "scene_reconstruction": "Scene Reconstruction",
+    "scene_reconstruction_off": "Off",
+    "scene_reconstruction_spatial": "Spatial",
+    "scene_reconstruction_preset": "Spatial Preset",
+    "scene_reconstruction_quality": "Quality",
+    "scene_reconstruction_balanced": "Balanced",
+    "scene_reconstruction_performance": "Performance",
+    "scene_reconstruction_description": "Spatial reconstruction renders the scene at a reduced internal resolution and reconstructs it at viewport resolution. It affects viewing only, never training or stored splat data.",
     "input": "Input",
+    "key_bindings": "Key Bindings",
     "camera_navigation": "Camera Navigation",
     "navigation_mode": "Navigation Mode",
     "camera_view_snap": "Snap Axis Views",
@@ -736,7 +759,7 @@
     "reset_section_failed": "Unable to reset settings.",
     "ui_preferences_save_failed": "Unable to save interface preferences.",
     "reset_all_settings": "Reset all settings",
-    "reset_all_settings_confirmation": "Restore language, theme, UI scale, input preferences, MCP server, layout, and window state to their defaults? This applies immediately. If a .licht project is open, its stored layout will be replaced when next saved; project content, datasets, exports, plugins, and cache are not affected.",
+    "reset_all_settings_confirmation": "Restore language, theme, UI scale, scene reconstruction, input preferences, MCP server, layout, and window state to their defaults? This applies immediately. If a .licht project is open, its stored layout will be replaced when next saved; project content, datasets, exports, plugins, and cache are not affected.",
     "reset_all_settings_success": "All preferences, layout, and window state reset immediately.",
     "window_manager_unavailable": "Window manager is unavailable.",
     "window_state_reset_failed": "The window could not be restored to its default geometry."
@@ -1145,6 +1168,10 @@
     "discard_and_exit": "Discard & Exit",
     "exit": "Exit"
   },
+  "project_switch": {
+    "stop_training_title": "Stop Training?",
+    "stop_training_message": "Training must be stopped before switching projects. Stop the current session?"
+  },
   "load_dataset_popup": {
     "title": "Load Dataset",
     "configure_paths": "Configure dataset paths",
@@ -1165,7 +1192,11 @@
     "min_track_length": "Minimum Track Length",
     "min_track_length_hint": "Keeps sparse points observed in at least this many images. 0 disables filtering.",
     "min_track_length_init_warning": "Ignored while Init PLY is set.",
-    "apply_auto_crop": "Apply Auto Crop"
+    "apply_auto_crop": "Apply Auto Crop",
+    "save_title": "Save Project?",
+    "save_message": "Save the current project before loading the new dataset?",
+    "save_and_load": "Save and Load",
+    "load_without_saving": "Load without saving"
   },
   "notification": {
     "dropped_not_recognized": "The dropped",
@@ -1218,13 +1249,11 @@
     "status_label": "Status: %s"
   },
   "input_settings": {
-    "title": "INPUT SETTINGS",
     "active_profile": "Active Profile:",
     "save_current_profile": "Save Current Profile",
     "reset_to_default": "Reset to Default",
     "export": "Export...",
     "import": "Import...",
-    "action": "Action",
     "rebind": "Rebind",
     "cancel": "Cancel",
     "replace": "Replace",
@@ -1245,7 +1274,6 @@
     "click_again_double": "Click again for double-click...",
     "tool_mode": "TOOL MODE",
     "select_tool_mode": "Select tool mode to view/edit bindings",
-    "current_bindings": "CURRENT BINDINGS",
     "global_bindings_hint": "Global bindings apply everywhere unless overridden",
     "tool_bindings_hint": "Tool-specific bindings override global bindings",
     "section.navigation": "NAVIGATION",
@@ -1291,6 +1319,7 @@
     "action.toggle_independent_split_view": "Toggle Independent Split View",
     "action.toggle_gt_comparison": "Toggle GT Comparison",
     "action.toggle_camera_frustums": "Toggle Camera Frustums",
+    "action.toggle_grid": "Toggle Grid",
     "action.toggle_depth_mode": "Toggle Depth Box",
     "action.cycle_ply": "Cycle PLY",
     "action.delete_selected": "Delete Selected Gaussians",
@@ -1349,8 +1378,7 @@
     "trigger.drag": " Drag",
     "trigger.scroll": "Scroll",
     "trigger.unknown": "Unknown",
-    "action.toggle_performance_hud": "Toggle Performance HUD",
-    "binding": "Binding"
+    "action.toggle_performance_hud": "Toggle Performance HUD"
   },
   "debug_info": {
     "clear_history": "Clear History",
@@ -1868,7 +1896,7 @@
   },
   "file_association": {
     "title": "Set as Default Application",
-    "message": "Would you like to set LichtFeld Studio as the default application for splat files (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz)?",
+    "message": "Would you like to set LichtFeld Studio as the default application for splat and project files (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht)?",
     "yes": "Yes",
     "not_now": "Not Now",
     "dont_ask": "Don't Ask Again",
@@ -2263,6 +2291,14 @@
       "title": "Trainer not restored",
       "message": "The project model is available for viewing, but training could not be resumed. Check the dataset path and logs."
     }
+  },
+  "recovery": {
+    "crash_title": "LichtFeld Studio closed unexpectedly",
+    "body": "A recovery file was found for {}. (saved {})",
+    "unsaved_session": "an unsaved session",
+    "recover": "Recover",
+    "open_saved": "Open saved",
+    "skip": "Skip and create new"
   },
   "startup_recent": {
     "title": "Recent Projects",

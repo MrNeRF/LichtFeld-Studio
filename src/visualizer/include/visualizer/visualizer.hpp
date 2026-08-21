@@ -190,6 +190,10 @@ namespace lfs::vis {
         [[nodiscard]] virtual bool acceptsPostedWork() const { return true; }
         virtual void setShutdownRequestedCallback(std::function<void()> callback) = 0;
         virtual std::expected<void, std::string> startTraining() = 0;
+        [[nodiscard]] virtual std::optional<int>
+        trainingStartOverwriteConflict() {
+            return std::nullopt;
+        }
         virtual lfs::Result<void>
         projectSave(bool regenerate_preview = true) = 0;
         virtual lfs::Result<void>
@@ -212,6 +216,12 @@ namespace lfs::vis {
         projectPollWrite() {
             return ProjectWritePoll{};
         }
+        // True when the last ProjectSave or ProjectSaveAs command
+        // started a write. A cancelled save dialog returns false.
+        [[nodiscard]] virtual bool consumeProjectSaveStarted() {
+            return false;
+        }
+        virtual void projectWaitWrite() {}
         virtual lfs::Result<ProjectMenuInfo>
         projectGetMenuInfo() {
             auto info = projectGetInfo();

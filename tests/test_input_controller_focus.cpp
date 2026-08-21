@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/editor_context.hpp"
+#include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/services.hpp"
@@ -14,6 +15,8 @@
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "scene/scene_manager.hpp"
+#include "tools/tool_base.hpp"
 #include "visualizer/visualizer.hpp"
 
 #include <cstdint>
@@ -27,6 +30,7 @@
 #include <optional>
 #include <string>
 #include <variant>
+#include <vector>
 
 namespace lfs::vis {
 
@@ -64,6 +68,7 @@ namespace lfs::vis {
             void SetUp() override {
                 isolateInputProfileHome();
                 input::InputBindings::setPersistenceEnabled(false);
+                lfs::event::EventBridge::instance().clear_all();
                 services().clear();
                 gui::guiFocusState().reset();
             }
@@ -72,6 +77,7 @@ namespace lfs::vis {
                 setRuntimeServiceControls({});
                 gui::guiFocusState().reset();
                 services().clear();
+                lfs::event::EventBridge::instance().clear_all();
                 input::InputBindings::setPersistenceEnabled(true);
                 restoreHome();
             }
@@ -250,6 +256,95 @@ namespace lfs::vis {
 
         EXPECT_EQ(toggle_gt_count, 0);
         EXPECT_EQ(toggle_split_count, 0);
+    }
+
+    TEST_F(InputControllerFocusTest, DeleteNodeShortcutDoesNotFireDuringTextEntry) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        SceneManager scene_manager;
+        scene_manager.getScene().addGroup("delete_me");
+        scene_manager.selectNode("delete_me");
+        ASSERT_EQ(scene_manager.getSelectedNodeNames(), std::vector<std::string>{"delete_me"});
+
+        ToolContext tool_context(nullptr, &scene_manager, &viewport, nullptr);
+        controller.setToolContext(&tool_context);
+
+        lfs::event::ScopedHandler handlers;
+        int remove_ply_count = 0;
+        handlers.subscribe<core::events::cmd::RemovePLY>(
+            [&](const auto&) { ++remove_ply_count; });
+
+        auto& focus = gui::guiFocusState();
+        focus.want_capture_keyboard = true;
+        focus.want_text_input = true;
+        focus.any_item_active = true;
+
+        router.focusViewportKeyboard();
+        controller.handleKey(input::KEY_DELETE, input::ACTION_PRESS, input::KEYMOD_NONE);
+
+        EXPECT_EQ(remove_ply_count, 0);
+        EXPECT_EQ(input::shortcutScopeForAction(input::Action::DELETE_NODE),
+                  input::ShortcutScope::GlobalWhenNotTextEditing);
+    }
+
+    TEST_F(InputControllerFocusTest, DeleteNodeShortcutFiresWhenViewportFocused) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        SceneManager scene_manager;
+        scene_manager.getScene().addGroup("delete_me");
+        scene_manager.selectNode("delete_me");
+        ASSERT_EQ(scene_manager.getSelectedNodeNames(), std::vector<std::string>{"delete_me"});
+
+        ToolContext tool_context(nullptr, &scene_manager, &viewport, nullptr);
+        controller.setToolContext(&tool_context);
+
+        lfs::event::ScopedHandler handlers;
+        int remove_ply_count = 0;
+        handlers.subscribe<core::events::cmd::RemovePLY>(
+            [&](const auto& cmd) {
+                ++remove_ply_count;
+                EXPECT_EQ(cmd.name, "delete_me");
+            });
+
+        router.focusViewportKeyboard();
+        controller.handleKey(input::KEY_DELETE, input::ACTION_PRESS, input::KEYMOD_NONE);
+
+        EXPECT_EQ(remove_ply_count, 1);
+    }
+
+    TEST_F(InputControllerFocusTest, TransformToolShortcutDoesNotFireDuringTextEntry) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        lfs::event::ScopedHandler handlers;
+        int toolbar_tool_count = 0;
+        handlers.subscribe<core::events::tools::SetToolbarTool>(
+            [&](const auto&) { ++toolbar_tool_count; });
+
+        auto& focus = gui::guiFocusState();
+        focus.want_capture_keyboard = true;
+        focus.want_text_input = true;
+        focus.any_item_active = true;
+
+        router.focusViewportKeyboard();
+        controller.handleKey(input::KEY_2, input::ACTION_PRESS, input::KEYMOD_NONE);
+
+        EXPECT_EQ(toolbar_tool_count, 0);
+        EXPECT_EQ(input::shortcutScopeForAction(input::Action::TOOL_TRANSLATE),
+                  input::ShortcutScope::GlobalWhenNotTextEditing);
+        EXPECT_EQ(input::shortcutScopeForAction(input::Action::CYCLE_PLY),
+                  input::ShortcutScope::GlobalWhenNotTextEditing);
     }
 
     TEST_F(InputControllerFocusTest, ProjectSaveShortcutRemainsGlobalDuringTextEntry) {
@@ -1148,6 +1243,7 @@ namespace lfs::vis {
 
         EXPECT_EQ(static_cast<int>(input::Action::TOGGLE_MCP_SERVER), 79);
         EXPECT_EQ(static_cast<int>(input::Action::TOGGLE_MCP_BINDING), 80);
+        EXPECT_EQ(static_cast<int>(input::Action::TOGGLE_GRID), 81);
         EXPECT_EQ(bindings.getActionForKey(input::ToolMode::GLOBAL,
                                            input::KEY_M,
                                            input::MODIFIER_CTRL | input::MODIFIER_SHIFT),
@@ -1220,7 +1316,7 @@ namespace lfs::vis {
         std::ifstream persisted(profile_path);
         ASSERT_TRUE(persisted.is_open());
         const std::string contents((std::istreambuf_iterator<char>(persisted)), {});
-        EXPECT_NE(contents.find("\"version\": 22"), std::string::npos);
+        EXPECT_NE(contents.find("\"version\": 23"), std::string::npos); // PROFILE_VERSION
         EXPECT_NE(contents.find("Toggle MCP Server"), std::string::npos);
         EXPECT_NE(contents.find("Toggle MCP Local/Network Binding"), std::string::npos);
 
@@ -1279,6 +1375,31 @@ namespace lfs::vis {
         EXPECT_FALSE(rendering_manager.getSettings().show_camera_frustums);
     }
 
+    TEST_F(InputControllerFocusTest, GridDefaultToAltGAndToggleRenderSetting) {
+        RenderingManager rendering_manager;
+        services().set(&rendering_manager);
+
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+        router.focusViewportKeyboard();
+
+        EXPECT_EQ(controller.getBindings().getActionForKey(input::ToolMode::GLOBAL,
+                                                           input::KEY_G,
+                                                           input::MODIFIER_ALT),
+                  input::Action::TOGGLE_GRID);
+        EXPECT_EQ(input::shortcutScopeForAction(input::Action::TOGGLE_GRID),
+                  input::ShortcutScope::GlobalWhenNotTextEditing);
+
+        EXPECT_TRUE(rendering_manager.getSettings().show_grid);
+        controller.handleKey(input::KEY_G, input::ACTION_PRESS, input::KEYMOD_ALT);
+        EXPECT_FALSE(rendering_manager.getSettings().show_grid);
+        controller.handleKey(input::KEY_G, input::ACTION_PRESS, input::KEYMOD_ALT);
+        EXPECT_TRUE(rendering_manager.getSettings().show_grid);
+    }
+
     TEST_F(InputControllerFocusTest, VersionFifteenProfileMigratesCameraFrustumShortcutWhenFree) {
         const auto profile_path = std::filesystem::temp_directory_path() / "lfs_input_bindings_legacy_v15.json";
         std::filesystem::remove(profile_path);
@@ -1331,6 +1452,64 @@ namespace lfs::vis {
                                          input::MODIFIER_ALT),
                   input::Action::CYCLE_PLY);
         EXPECT_FALSE(loaded.getTriggerForAction(input::Action::TOGGLE_CAMERA_FRUSTUMS,
+                                                input::ToolMode::GLOBAL)
+                         .has_value());
+
+        std::filesystem::remove(profile_path);
+    }
+
+    TEST_F(InputControllerFocusTest, VersionTwentyTwoProfileMigratesGridShortcutWhenFree) {
+        const auto profile_path = std::filesystem::temp_directory_path() / "lfs_input_bindings_legacy_v22.json";
+        std::filesystem::remove(profile_path);
+        {
+            std::ofstream file(profile_path);
+            ASSERT_TRUE(file.is_open());
+            file << R"({
+  "name": "LegacyV22",
+  "version": 22,
+  "bindings": []
+})";
+        }
+
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_G,
+                                         input::MODIFIER_ALT),
+                  input::Action::TOGGLE_GRID);
+
+        std::filesystem::remove(profile_path);
+    }
+
+    TEST_F(InputControllerFocusTest, VersionTwentyTwoProfilePreservesOccupiedAltG) {
+        const auto profile_path = std::filesystem::temp_directory_path() / "lfs_input_bindings_legacy_v22_alt_g.json";
+        std::filesystem::remove(profile_path);
+        {
+            std::ofstream file(profile_path);
+            ASSERT_TRUE(file.is_open());
+            file << R"({
+  "name": "LegacyV22AltG",
+  "version": 22,
+  "bindings": [
+    {
+      "mode": 0,
+      "action": 25,
+      "description": "Cycle PLY",
+      "trigger_type": "key",
+      "key": 71,
+      "modifiers": 4
+    }
+  ]
+})";
+        }
+
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_G,
+                                         input::MODIFIER_ALT),
+                  input::Action::CYCLE_PLY);
+        EXPECT_FALSE(loaded.getTriggerForAction(input::Action::TOGGLE_GRID,
                                                 input::ToolMode::GLOBAL)
                          .has_value());
 

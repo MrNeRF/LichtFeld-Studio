@@ -12,6 +12,7 @@
 #include "io/error.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/loaders/loader_utils.hpp"
+#include "io/loaders/missing_dataset_images.hpp"
 #include <chrono>
 #include <filesystem>
 #include <format>
@@ -21,6 +22,7 @@
 #include <ranges>
 #include <span>
 #include <tuple>
+#include <vector>
 
 namespace lfs::io {
 
@@ -81,7 +83,7 @@ namespace lfs::io {
             LOG_DEBUG("Validation only mode for Blender/NeRF: {}", lfs::core::path_to_utf8(transforms_file));
             // Check if the transforms file is valid JSON
             std::ifstream file;
-            if (!lfs::core::open_file_for_read(transforms_file, file)) {
+            if (!lfs::core::open_file_for_read(transforms_file, std::ios::in | std::ios::binary, file)) {
                 return make_error(ErrorCode::PERMISSION_DENIED,
                                   "Cannot open transforms file for reading", transforms_file);
             }
@@ -94,6 +96,29 @@ namespace lfs::io {
                 if (!j.contains("frames") || !j["frames"].is_array()) {
                     return make_error(ErrorCode::INVALID_DATASET,
                                       "Invalid transforms file: missing 'frames' array", transforms_file);
+                }
+
+                const auto base_path = transforms_file.parent_path();
+                std::vector<std::string> missing_images;
+                size_t referenced_images = 0;
+                for (const auto& frame : j["frames"]) {
+                    if (!frame.is_object() || !frame.contains("file_path") ||
+                        !frame["file_path"].is_string()) {
+                        continue;
+                    }
+                    ++referenced_images;
+                    const std::string file_path = frame["file_path"].get<std::string>();
+                    if (!safe_is_regular_file(GetTransformImagePath(base_path, file_path))) {
+                        missing_images.push_back(file_path);
+                    }
+                }
+                if (referenced_images > 0 && missing_images.size() == referenced_images) {
+                    return make_error(
+                        ErrorCode::EMPTY_DATASET,
+                        format_all_dataset_images_missing_message(
+                            missing_images,
+                            lfs::core::path_to_utf8(base_path)),
+                        base_path);
                 }
             } catch (const std::exception& e) {
                 return make_error(ErrorCode::MALFORMED_JSON,
@@ -129,6 +154,23 @@ namespace lfs::io {
             // Read transforms and create cameras
             auto [camera_infos, scene_center, train_val_split] =
                 read_transforms_cameras_and_images(transforms_file, options);
+
+            std::vector<std::string> missing_images;
+            for (const auto& info : camera_infos) {
+                if (!info._has_image) {
+                    missing_images.push_back(info._image_name.empty()
+                                                 ? lfs::core::path_to_utf8(info._image_path.filename())
+                                                 : info._image_name);
+                }
+            }
+            if (!camera_infos.empty() && missing_images.size() == camera_infos.size()) {
+                return make_error(
+                    ErrorCode::EMPTY_DATASET,
+                    format_all_dataset_images_missing_message(
+                        missing_images,
+                        lfs::core::path_to_utf8(transforms_file.parent_path())),
+                    transforms_file.parent_path());
+            }
 
             if (options.progress) {
                 options.progress(40.0f, std::format("Creating {} cameras...", camera_infos.size()));
@@ -226,7 +268,7 @@ namespace lfs::io {
                         }
                         return *image_info;
                     };
-                    if (options.load_masks && !mask_path.empty()) {
+                    if (info._has_image && options.load_masks && !mask_path.empty()) {
                         auto [img_w, img_h, img_c] = get_image_info_cached();
                         auto [mask_w, mask_h, mask_c] = lfs::core::get_image_info(mask_path);
                         if (img_w != mask_w || img_h != mask_h) {
@@ -237,7 +279,7 @@ namespace lfs::io {
                                               mask_path);
                         }
                     }
-                    if (options.load_depths && !depth_path.empty()) {
+                    if (info._has_image && options.load_depths && !depth_path.empty()) {
                         auto [img_w, img_h, img_c] = get_image_info_cached();
                         auto [depth_w, depth_h, depth_c] = lfs::core::get_image_info(depth_path);
                         if (img_w != depth_w || img_h != depth_h) {
@@ -248,7 +290,7 @@ namespace lfs::io {
                                               depth_path);
                         }
                     }
-                    if (options.load_normals && !normal_path.empty()) {
+                    if (info._has_image && options.load_normals && !normal_path.empty()) {
                         auto [img_w, img_h, img_c] = get_image_info_cached();
                         auto [normal_w, normal_h, normal_c] = lfs::core::get_image_info(normal_path);
                         if (img_w != normal_w || img_h != normal_h) {
@@ -280,11 +322,16 @@ namespace lfs::io {
                         depth_path,
                         normal_path);
 
+                    cam->set_has_image(info._has_image);
                     cameras.push_back(cam);
                 } catch (const std::exception& e) {
                     LOG_ERROR("Failed to create camera {}: {}", i, e.what());
                     throw;
                 }
+            }
+
+            if (!missing_images.empty()) {
+                notify_missing_dataset_images(missing_images);
             }
 
             const bool images_have_alpha = detect_camera_alpha(cameras, options.cancel_requested);
@@ -297,7 +344,7 @@ namespace lfs::io {
 
             // Check ply_file_path in transforms.json (nerfstudio format), fallback to pointcloud.ply
             std::filesystem::path pointcloud_path;
-            if (std::ifstream file; lfs::core::open_file_for_read(transforms_file, file)) {
+            if (std::ifstream file; lfs::core::open_file_for_read(transforms_file, std::ios::in | std::ios::binary, file)) {
                 try {
                     if (const auto json = nlohmann::json::parse(file, nullptr, true, true);
                         json.contains("ply_file_path")) {
@@ -313,6 +360,9 @@ namespace lfs::io {
 
             std::shared_ptr<PointCloud> point_cloud;
             std::vector<std::string> warnings;
+            if (!missing_images.empty()) {
+                warnings.push_back(format_missing_dataset_images_warning(missing_images));
+            }
             if (std::filesystem::exists(pointcloud_path)) {
                 auto loaded_point_cloud = load_simple_ply_point_cloud(pointcloud_path, options);
                 point_cloud = std::make_shared<PointCloud>(

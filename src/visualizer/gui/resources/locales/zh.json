@@ -15,6 +15,11 @@
     "file.recent_missing_message": "找不到项目文件：\n{path}",
     "file.remove_from_recent": "从最近打开中移除",
     "file.recent_entry": "{name} — {parent}",
+    "file.import": "导入",
+    "file.import_failed": "导入失败",
+    "file.import_failed_message": "无法导入：\n{path}\n\n{reason}",
+    "file.dataset_not_recognized": "所选文件夹未被识别为受支持的数据集：\n{path}",
+    "file.checkpoint_not_recognized": "所选文件未被识别为有效检查点：\n{path}",
     "file.import_dataset": "导入数据集",
     "file.import_ply": "导入PLY, SOG, SPZ, RAD, USD",
     "file.import_mesh": "导入网格",
@@ -26,7 +31,6 @@
     "file.mesh_to_splat": "网格转Splat...",
     "file.exit": "退出",
     "edit": "编辑",
-    "edit.input_settings": "输入设置...",
     "select": "选择",
     "select.copy_selection": "复制选择",
     "select.cut_selection": "剪切选择",
@@ -56,7 +60,6 @@
     "view.debug_info": "调试信息..."
   },
   "window": {
-    "input_settings": "输入设置",
     "export": "导出",
     "scene": "场景",
     "rendering": "渲染",
@@ -406,6 +409,12 @@
     "save_pc.message": "点云已被修改。是否保存到数据集文件夹以供未来使用？",
     "save_pc.btn_save_start": "保存并开始",
     "save_pc.btn_start_without": "不保存直接开始",
+    "overwrite.title": "覆盖之前的训练？",
+    "overwrite.message": "项目在第 {iteration} 次迭代处包含检查点。开始新的训练将覆盖它。",
+    "overwrite.existing_title": "覆盖现有项目？",
+    "overwrite.existing_message": "训练输出位置已存在项目文件。开始训练将覆盖它。",
+    "overwrite.btn_overwrite_start": "覆盖并开始",
+    "overwrite.btn_save_as_start": "另存为…",
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.opacity_reg": "不透明度正则化:",
     "losses.scale_reg": "缩放正则化:",
@@ -651,7 +660,9 @@
     "undo": "撤销",
     "redo": "重做",
     "edit": "编辑",
-    "double_click_reset": "双击重置"
+    "double_click_reset": "双击重置",
+    "yes": "是",
+    "no": "否"
   },
   "status": {
     "ready": "就绪",
@@ -696,9 +707,21 @@
     "language": "语言：",
     "select_language": "选择语言",
     "interface": "界面",
+    "file_associations": "文件关联",
+    "file_associations_description": "为每种文件类型注册或取消 LichtFeld Studio 作为打开程序。",
     "general": "常规",
     "appearance": "外观",
+    "scene_rendering": "场景渲染",
+    "scene_reconstruction": "场景重建",
+    "scene_reconstruction_off": "关闭",
+    "scene_reconstruction_spatial": "空间",
+    "scene_reconstruction_preset": "空间预设",
+    "scene_reconstruction_quality": "质量",
+    "scene_reconstruction_balanced": "均衡",
+    "scene_reconstruction_performance": "性能",
+    "scene_reconstruction_description": "空间重建以较低的内部分辨率渲染场景，再重建到视口分辨率。它不会影响训练或已保存的高斯点数据。",
     "input": "输入",
+    "key_bindings": "按键绑定",
     "camera_navigation": "相机导航",
     "navigation_mode": "导航模式",
     "camera_view_snap": "对齐轴视图",
@@ -736,7 +759,7 @@
     "reset_section_failed": "无法重置设置。",
     "ui_preferences_save_failed": "无法保存界面偏好设置。",
     "reset_all_settings": "重置所有设置",
-    "reset_all_settings_confirmation": "将语言、主题、界面缩放、输入偏好、MCP 服务器、布局和窗口状态恢复为默认值？将立即应用。如果当前打开了 .licht 项目，下次保存时将替换其已存储的布局；项目内容、数据集、导出、插件和缓存不会受到影响。",
+    "reset_all_settings_confirmation": "将语言、主题、界面缩放、场景重建、输入偏好、MCP 服务器、布局和窗口状态恢复为默认值？将立即应用。如果当前打开了 .licht 项目，下次保存时将替换其已存储的布局；项目内容、数据集、导出、插件和缓存不会受到影响。",
     "reset_all_settings_success": "所有偏好、布局和窗口状态已立即重置。",
     "window_manager_unavailable": "窗口管理器不可用。",
     "window_state_reset_failed": "无法将窗口恢复为默认位置和大小。"
@@ -1145,6 +1168,10 @@
     "discard_and_exit": "丢弃并退出",
     "exit": "退出"
   },
+  "project_switch": {
+    "stop_training_title": "停止训练？",
+    "stop_training_message": "切换项目前必须停止训练。是否停止当前会话？"
+  },
   "load_dataset_popup": {
     "title": "加载数据集",
     "configure_paths": "配置数据集路径",
@@ -1165,7 +1192,11 @@
     "min_track_length": "最小轨迹长度",
     "min_track_length_hint": "保留至少在这么多图像中观测到的 Sparse 点。0 可禁用筛选。",
     "min_track_length_init_warning": "设置初始 PLY 时将被忽略。",
-    "apply_auto_crop": "应用自动裁剪"
+    "apply_auto_crop": "应用自动裁剪",
+    "save_title": "保存项目？",
+    "save_message": "加载新数据集前要保存当前项目吗？",
+    "save_and_load": "保存并加载",
+    "load_without_saving": "不保存并加载"
   },
   "notification": {
     "dropped_not_recognized": "拖放的",
@@ -1218,13 +1249,11 @@
     "status_label": "状态：%s"
   },
   "input_settings": {
-    "title": "输入设置",
     "active_profile": "活动配置文件：",
     "save_current_profile": "保存当前配置文件",
     "reset_to_default": "重置为默认",
     "export": "导出...",
     "import": "导入...",
-    "action": "操作",
     "rebind": "重新绑定",
     "cancel": "取消",
     "replace": "替换",
@@ -1245,7 +1274,6 @@
     "click_again_double": "再次点击以双击...",
     "tool_mode": "工具模式",
     "select_tool_mode": "选择工具模式以查看/编辑绑定",
-    "current_bindings": "当前绑定",
     "global_bindings_hint": "全局绑定在所有地方都适用，除非被覆盖",
     "tool_bindings_hint": "工具特定的绑定会覆盖全局绑定",
     "section.navigation": "导航",
@@ -1291,6 +1319,7 @@
     "action.toggle_independent_split_view": "切换独立分屏视图",
     "action.toggle_gt_comparison": "切换 GT 对比",
     "action.toggle_camera_frustums": "切换相机视锥体",
+    "action.toggle_grid": "切换网格",
     "action.toggle_depth_mode": "切换深度框",
     "action.cycle_ply": "循环 PLY",
     "action.delete_selected": "删除选中的高斯",
@@ -1349,8 +1378,7 @@
     "trigger.drag": " 拖动",
     "trigger.scroll": "滚动",
     "trigger.unknown": "未知",
-    "action.toggle_performance_hud": "Toggle Performance HUD",
-    "binding": "绑定"
+    "action.toggle_performance_hud": "Toggle Performance HUD"
   },
   "debug_info": {
     "clear_history": "清除历史",
@@ -1868,7 +1896,7 @@
   },
   "file_association": {
     "title": "设为默认应用程序",
-    "message": "是否要将 LichtFeld Studio 设为 splat 文件（.ply、.sog、.spz、.rad、.usd、.usda、.usdc、.usdz）的默认应用程序？",
+    "message": "是否要将 LichtFeld Studio 设为 splat 和项目文件（.ply、.sog、.spz、.rad、.usd、.usda、.usdc、.usdz、.licht）的默认应用程序？",
     "yes": "是",
     "not_now": "暂不",
     "dont_ask": "不再询问",
@@ -2263,6 +2291,14 @@
       "title": "未能恢复训练器",
       "message": "项目模型可供查看，但无法恢复训练。请检查数据集路径和日志。"
     }
+  },
+  "recovery": {
+    "crash_title": "LichtFeld Studio 意外关闭",
+    "body": "找到了 {} 的恢复文件。（保存于 {}）",
+    "unsaved_session": "未保存的会话",
+    "recover": "恢复",
+    "open_saved": "打开已保存",
+    "skip": "跳过并新建"
   },
   "startup_recent": {
     "title": "最近的项目",

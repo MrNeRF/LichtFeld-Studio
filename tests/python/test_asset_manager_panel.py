@@ -33,7 +33,10 @@ def _install_lf_stub(monkeypatch):
             LEFT_DOCK="LEFT_DOCK",
         ),
         PanelHeightMode=SimpleNamespace(FILL="FILL", CONTENT="CONTENT"),
-        PanelOption=SimpleNamespace(DEFAULT_CLOSED="DEFAULT_CLOSED"),
+        PanelOption=SimpleNamespace(
+            DEFAULT_CLOSED="DEFAULT_CLOSED",
+            HIDE_HEADER="HIDE_HEADER",
+        ),
         tr=lambda key: key,
     )
     lf_stub.log = _LogStub()

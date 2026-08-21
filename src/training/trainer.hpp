@@ -52,13 +52,16 @@ namespace lfs::vis {
     class VisualizerImplResetTest_TrainingSnapshotSupersedeTerminalizesOldAndCompletesNew_Test;
     class VisualizerImplResetTest_CloseSaveRoutesTrainingSnapshotToLiveDocument_Test;
     class VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
+    class VisualizerImplResetTest_StartConflictSeesDiskCheckpointAfterTrainerReplacement_Test;
     class VisualizerImplResetTest_SaveAsRoutesThroughFinishedTrainer_Test;
     class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
+    class VisualizerImplResetTest_SaveWhilePausedNoWorkerTrainerCompletes_Test;
     class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
     class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
     class VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
     class VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
     class VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
+    class VisualizerImplResetTest_AdoptedStepBoundaryPublishRebasesAutosaveBase_Test;
     class VisualizerImplResetTest_EditModeSaveDropsFormerTrainingCheckpoint_Test;
 } // namespace lfs::vis
 
@@ -346,17 +349,25 @@ namespace lfs::training {
 
         // Project persistence. Standalone LFKP files are import-only; saves
         // always publish a .licht generation.
-        [[nodiscard]] std::filesystem::path default_project_path() const;
-        [[nodiscard]] std::filesystem::path
-        live_or_default_project_path() const;
+        // Trainer-initiated project writes are off by default; the owner that
+        // manages project persistence opts in per trigger. Explicit save requests
+        // (request_project_save / save_project_to with a destination) are not
+        // affected by this policy.
+        struct TrainerProjectSavePolicy {
+            bool on_completion = false;      // terminal save when training reaches its target
+            bool on_stop_or_error = false;   // terminal save on user stop or training error
+            bool at_step_boundaries = false; // save_steps + sparsity phase boundary
+        };
+        void set_trainer_project_save_policy(TrainerProjectSavePolicy policy);
+        [[nodiscard]] TrainerProjectSavePolicy
+        trainer_project_save_policy() const;
+        [[nodiscard]] std::optional<std::filesystem::path>
+        bound_project_path() const;
         void set_live_project_snapshot(
             std::optional<std::filesystem::path> path,
             std::function<std::optional<
                 ProjectSnapshotDocumentContext>()>
                 context_provider = {});
-        [[nodiscard]] bool has_active_train_loop() const {
-            return is_running_.load() || is_paused_.load();
-        }
         [[nodiscard]] bool can_flush_project_snapshot() const {
             return project_snapshot_service_ && strategy_ &&
                    scene_;
@@ -391,13 +402,16 @@ namespace lfs::training {
         friend class lfs::vis::VisualizerImplResetTest_TrainingSnapshotSupersedeTerminalizesOldAndCompletesNew_Test;
         friend class lfs::vis::VisualizerImplResetTest_CloseSaveRoutesTrainingSnapshotToLiveDocument_Test;
         friend class lfs::vis::VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
+        friend class lfs::vis::VisualizerImplResetTest_StartConflictSeesDiskCheckpointAfterTrainerReplacement_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsRoutesThroughFinishedTrainer_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SaveWhilePausedNoWorkerTrainerCompletes_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
         friend class lfs::vis::VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
         friend class lfs::vis::VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
+        friend class lfs::vis::VisualizerImplResetTest_AdoptedStepBoundaryPublishRebasesAutosaveBase_Test;
         friend class lfs::vis::VisualizerImplResetTest_EditModeSaveDropsFormerTrainingCheckpoint_Test;
         friend class lfs::vis::project::ProjectLifecycle;
         friend struct TrainerRetryTestAccess;
@@ -749,6 +763,7 @@ namespace lfs::training {
         std::string last_project_writer_error_;
         std::optional<std::filesystem::path>
             live_project_path_;
+        TrainerProjectSavePolicy trainer_project_save_policy_{};
         std::function<std::optional<
             ProjectSnapshotDocumentContext>()>
             live_document_context_provider_;

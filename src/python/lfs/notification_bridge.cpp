@@ -70,13 +70,13 @@ namespace lfs::python {
             if (!e.success)
                 return; // failures surface via the native ErrorBus bridge
             if (e.suppress_notification)
-                return; // stop was part of New Project / app close / reset — no modal (issue #1604)
+                return; // stop was part of New Project / app close / reset / trainer teardown on scene/dataset replacement — no modal (issue #1604, #1645)
 
             namespace Str = lichtfeld::Strings::Training::Button;
 
             auto message = e.user_stopped
                                ? std::format("Training stopped by user at iteration {}.\n\n"
-                                             "Checkpoint saved; resume is available from the training panel.",
+                                             "Resume is available from the training panel. Save the project to keep this state.",
                                              e.iteration)
                                : std::format("Training completed successfully.\n\n"
                                              "{} iterations | loss {:.6f} | {}",

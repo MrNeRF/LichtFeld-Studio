@@ -21,6 +21,7 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
+#include "core/events.hpp"
 #include "core/parameters.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/point_cloud.hpp"
@@ -32,6 +33,7 @@
 #include "training/components/bilateral_grid.hpp"
 #include "training/components/ppisp.hpp"
 #include "training/components/ppisp_file.hpp"
+#include "training/control/command_api.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
@@ -75,6 +77,9 @@ namespace lfs::python {
         private:
             std::filesystem::path path_;
         };
+
+        bool transition_trainer_manager_for_test(lfs::vis::TrainerManager& trainer_manager,
+                                                 lfs::vis::TrainingState state);
     } // namespace
 
     TEST(TrainingStateMachineTest, PublishesFinishReasonBeforeFinishedCallback) {
@@ -349,6 +354,73 @@ namespace lfs::python {
         EXPECT_EQ(manager.splatExportableStorage(), nullptr);
         EXPECT_EQ(after.allocated_bytes, before.allocated_bytes);
         EXPECT_EQ(after.cached_bytes, 0u);
+    }
+
+    TEST(TrainerConstructionTest, ClearTrainerSuppressesStoppedNotificationForPausedTrainer) {
+        core::Scene scene;
+        const core::NodeId cameras = scene.addGroup("Cameras");
+        scene.addCamera("camera.png", cameras, make_test_camera());
+        lfs::vis::TrainerManager manager;
+        manager.setScene(&scene);
+        manager.setTrainer(std::make_unique<training::Trainer>(scene));
+
+        ASSERT_TRUE(transition_trainer_manager_for_test(manager, lfs::vis::TrainingState::Running));
+        ASSERT_TRUE(transition_trainer_manager_for_test(manager, lfs::vis::TrainingState::Paused));
+
+        int completions = 0;
+        bool user_stopped = false;
+        bool suppress_notification = false;
+        const auto id = lfs::core::events::state::TrainingCompleted::when([&](const auto& e) {
+            ++completions;
+            user_stopped = e.user_stopped;
+            suppress_notification = e.suppress_notification;
+        });
+
+        ASSERT_TRUE(manager.clearTrainer());
+        EXPECT_EQ(completions, 1);
+        EXPECT_TRUE(user_stopped);
+        EXPECT_TRUE(suppress_notification);
+        EXPECT_EQ(manager.getState(), lfs::vis::TrainingState::Idle);
+
+        lfs::event::EventBridge::instance().unsubscribe(
+            typeid(lfs::core::events::state::TrainingCompleted), id);
+    }
+
+    TEST(TrainerConstructionTest, ClearTrainerResetsPausedCommandCenterSnapshot) {
+        core::Scene scene;
+        const core::NodeId cameras = scene.addGroup("Cameras");
+        scene.addCamera("camera.png", cameras, make_test_camera());
+        lfs::vis::TrainerManager manager;
+        manager.setScene(&scene);
+        manager.setTrainer(std::make_unique<training::Trainer>(scene));
+
+        ASSERT_TRUE(transition_trainer_manager_for_test(manager, lfs::vis::TrainingState::Running));
+        ASSERT_TRUE(transition_trainer_manager_for_test(manager, lfs::vis::TrainingState::Paused));
+
+        auto& command_center = lfs::training::CommandCenter::instance();
+        command_center.reset_snapshot();
+        const lfs::training::HookContext context{.iteration = 8200};
+        command_center.update_snapshot(
+            context, 0, true, false, false, lfs::training::TrainingPhase::Idle);
+        {
+            const auto paused = command_center.snapshot();
+            ASSERT_TRUE(paused.is_paused);
+            EXPECT_FALSE(paused.is_running);
+            EXPECT_EQ(paused.iteration, 8200);
+            EXPECT_EQ(paused.trainer, nullptr);
+        }
+
+        ASSERT_TRUE(manager.clearTrainer());
+
+        const auto snapshot = command_center.snapshot();
+        EXPECT_FALSE(snapshot.is_paused);
+        EXPECT_FALSE(snapshot.is_running);
+        EXPECT_FALSE(snapshot.stop_requested);
+        EXPECT_EQ(snapshot.iteration, 0);
+        EXPECT_EQ(snapshot.max_iterations, 0);
+        EXPECT_EQ(snapshot.trainer, nullptr);
+        EXPECT_EQ(snapshot.phase, lfs::training::TrainingPhase::Idle);
+        EXPECT_EQ(manager.getState(), lfs::vis::TrainingState::Idle);
     }
 
     namespace {
@@ -791,6 +863,51 @@ namespace lfs::python {
         EXPECT_EQ(consume_scene_mutation_flags(), combined);
         EXPECT_EQ(get_scene_mutation_flags(), 0u);
         EXPECT_EQ(consume_scene_mutation_flags(), 0u);
+    }
+
+    TEST_F(SceneValidityTest, TransactionBatchesSetNodeTransformIntoSingleSceneChanged) {
+        ASSERT_NE(dummy_scene_.addGroup("Left"), core::NULL_NODE);
+        ASSERT_NE(dummy_scene_.addGroup("Right"), core::NULL_NODE);
+        ASSERT_NE(dummy_scene_.addGroup("Front"), core::NULL_NODE);
+
+        int changed = 0;
+        std::uint32_t flags = 0;
+        auto handler = core::events::state::SceneChanged::when(
+            [&](const auto& event) {
+                ++changed;
+                flags = event.mutation_flags;
+            });
+
+        {
+            core::Scene::Transaction txn(dummy_scene_);
+            dummy_scene_.setNodeTransform(
+                "Left",
+                glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 0.0f, 0.0f)));
+            dummy_scene_.setNodeTransform(
+                "Right",
+                glm::translate(glm::mat4(1.0f), glm::vec3(-1.0f, 0.0f, 0.0f)));
+            dummy_scene_.setNodeTransform(
+                "Front",
+                glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 1.0f)));
+            EXPECT_EQ(changed, 0);
+        }
+
+        EXPECT_EQ(changed, 1);
+        EXPECT_EQ(
+            flags,
+            static_cast<std::uint32_t>(
+                core::Scene::MutationType::TRANSFORM_CHANGED));
+
+        changed = 0;
+        dummy_scene_.setNodeTransform(
+            "Left",
+            glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f)));
+        dummy_scene_.setNodeTransform(
+            "Right",
+            glm::translate(glm::mat4(1.0f), glm::vec3(-2.0f, 0.0f, 0.0f)));
+        EXPECT_EQ(changed, 2);
+
+        (void)handler;
     }
 
     TEST_F(SceneValidityTest, SelectionGenerationPublishesToAppStore) {

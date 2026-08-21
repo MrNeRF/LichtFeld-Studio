@@ -306,8 +306,8 @@ namespace fast_lfs::rasterization {
             }
 
             // Allocate helper buffers for backward pass upfront to avoid allocation failures later
-            const size_t grad_mean2d_size = static_cast<size_t>(n_primitives) * 2 * sizeof(float);
-            const size_t grad_conic_size = static_cast<size_t>(n_primitives) * 3 * sizeof(float);
+            const size_t grad_mean2d_size = static_cast<size_t>(n_primitives) * sizeof(float2);
+            const size_t grad_conic_size = static_cast<size_t>(n_primitives) * sizeof(float3);
             const size_t grad_depth_size = static_cast<size_t>(n_primitives) * sizeof(float);
             char* grad_mean2d_helper = arena_allocator(grad_mean2d_size);
             char* grad_conic_helper = arena_allocator(grad_conic_size);
@@ -562,7 +562,7 @@ namespace fast_lfs::rasterization {
             return outputs;
         }
         float* grad_mean2d_helper = static_cast<float*>(forward_ctx.grad_mean2d_helper);
-        float* grad_conic_helper = static_cast<float*>(forward_ctx.grad_conic_helper);
+        float3* grad_conic_helper = static_cast<float3*>(forward_ctx.grad_conic_helper);
         float* grad_depth_helper = static_cast<float*>(forward_ctx.grad_depth_helper);
         float* grad_opacity_helper = nullptr;
         float* grad_color_helper = nullptr;
@@ -599,8 +599,8 @@ namespace fast_lfs::rasterization {
             }
 
             // Zero out helper buffers
-            const size_t grad_mean2d_size = static_cast<size_t>(n_primitives) * 2 * sizeof(float);
-            const size_t grad_conic_size = static_cast<size_t>(n_primitives) * 3 * sizeof(float);
+            const size_t grad_mean2d_size = static_cast<size_t>(n_primitives) * sizeof(float2);
+            const size_t grad_conic_size = static_cast<size_t>(n_primitives) * sizeof(float3);
             const size_t grad_depth_size = static_cast<size_t>(n_primitives) * sizeof(float);
             LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(grad_mean2d_helper, 0, grad_mean2d_size, stream),
                                  "cudaMemsetAsync(grad_mean2d_helper)");

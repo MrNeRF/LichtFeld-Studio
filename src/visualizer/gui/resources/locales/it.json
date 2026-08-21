@@ -15,6 +15,11 @@
     "file.recent_missing_message": "Impossibile trovare il file di progetto:\n{path}",
     "file.remove_from_recent": "Rimuovi dai recenti",
     "file.recent_entry": "{name} — {parent}",
+    "file.import": "Importa",
+    "file.import_failed": "Importazione non riuscita",
+    "file.import_failed_message": "Impossibile importare:\n{path}\n\n{reason}",
+    "file.dataset_not_recognized": "La cartella selezionata non è riconosciuta come dataset supportato:\n{path}",
+    "file.checkpoint_not_recognized": "Il file selezionato non è riconosciuto come checkpoint valido:\n{path}",
     "file.import_dataset": "Importa Dataset",
     "file.import_ply": "Importa PLY, SOG, SPZ, RAD, USD",
     "file.import_mesh": "Importa Mesh",
@@ -26,7 +31,6 @@
     "file.mesh_to_splat": "Mesh a Splat...",
     "file.exit": "Esci",
     "edit": "Modifica",
-    "edit.input_settings": "Impostazioni di Input...",
     "select": "Selezione",
     "select.copy_selection": "Copia selezione",
     "select.cut_selection": "Taglia selezione",
@@ -56,7 +60,6 @@
     "view.debug_info": "Info di Debug..."
   },
   "window": {
-    "input_settings": "Impostazioni di Input",
     "export": "Esporta",
     "scene": "Scena",
     "rendering": "Rendering",
@@ -406,6 +409,12 @@
     "save_pc.message": "La nuvola di punti è stata modificata. Salvare nella cartella del dataset per le sessioni future?",
     "save_pc.btn_save_start": "Salva e avvia",
     "save_pc.btn_start_without": "Avvia senza salvare",
+    "overwrite.title": "Sovrascrivere l'addestramento precedente?",
+    "overwrite.message": "Il progetto contiene un checkpoint all'iterazione {iteration}. Avviare un nuovo addestramento lo sovrascriverà.",
+    "overwrite.existing_title": "Sovrascrivere il progetto esistente?",
+    "overwrite.existing_message": "Un file di progetto esiste già nella destinazione di output dell'addestramento. Avviare l'addestramento lo sovrascriverà.",
+    "overwrite.btn_overwrite_start": "Sovrascrivi e avvia",
+    "overwrite.btn_save_as_start": "Salva con nome…",
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.opacity_reg": "Regolarizzazione opacità:",
     "losses.scale_reg": "Regolarizzazione scala:",
@@ -651,7 +660,9 @@
     "undo": "Annulla",
     "redo": "Ripeti",
     "edit": "Modifica",
-    "double_click_reset": "doppio clic per resettare"
+    "double_click_reset": "doppio clic per resettare",
+    "yes": "Sì",
+    "no": "No"
   },
   "status": {
     "ready": "Pronto",
@@ -696,9 +707,21 @@
     "language": "Lingua:",
     "select_language": "Seleziona Lingua",
     "interface": "Interfaccia",
+    "file_associations": "Associazioni file",
+    "file_associations_description": "Registra o rimuovi LichtFeld Studio come gestore per ogni tipo di file.",
     "general": "Generale",
     "appearance": "Aspetto",
+    "scene_rendering": "Rendering della scena",
+    "scene_reconstruction": "Ricostruzione della scena",
+    "scene_reconstruction_off": "Disattivata",
+    "scene_reconstruction_spatial": "Spaziale",
+    "scene_reconstruction_preset": "Preset spaziale",
+    "scene_reconstruction_quality": "Qualità",
+    "scene_reconstruction_balanced": "Bilanciato",
+    "scene_reconstruction_performance": "Prestazioni",
+    "scene_reconstruction_description": "La ricostruzione spaziale renderizza la scena a una risoluzione interna ridotta e la ricostruisce alla risoluzione del viewport. Influisce solo sulla visualizzazione, mai sul training o sui dati splat salvati.",
     "input": "Input",
+    "key_bindings": "Associazioni tasti",
     "camera_navigation": "Navigazione della camera",
     "navigation_mode": "Modalità di navigazione",
     "camera_view_snap": "Aggancia alle viste assiali",
@@ -736,7 +759,7 @@
     "reset_section_failed": "Impossibile reimpostare le impostazioni.",
     "ui_preferences_save_failed": "Impossibile salvare le preferenze dell'interfaccia.",
     "reset_all_settings": "Reimposta tutte le impostazioni",
-    "reset_all_settings_confirmation": "Ripristinare lingua, tema, scala dell'interfaccia, preferenze di input, server MCP, layout e stato della finestra ai valori predefiniti? L'azione viene applicata subito. Se è aperto un progetto .licht, il layout salvato verrà sostituito al prossimo salvataggio; contenuti del progetto, dataset, esportazioni, plugin e cache non vengono modificati.",
+    "reset_all_settings_confirmation": "Ripristinare lingua, tema, scala dell'interfaccia, ricostruzione della scena, preferenze di input, server MCP, layout e stato della finestra ai valori predefiniti? L'azione viene applicata subito. Se è aperto un progetto .licht, il layout salvato verrà sostituito al prossimo salvataggio; contenuti del progetto, dataset, esportazioni, plugin e cache non vengono modificati.",
     "reset_all_settings_success": "Tutte le preferenze, il layout e lo stato della finestra sono stati reimpostati immediatamente.",
     "window_manager_unavailable": "Il gestore della finestra non è disponibile.",
     "window_state_reset_failed": "Non è stato possibile ripristinare la geometria predefinita della finestra."
@@ -1145,6 +1168,10 @@
     "discard_and_exit": "Scarta ed esci",
     "exit": "Esci"
   },
+  "project_switch": {
+    "stop_training_title": "Interrompere l'addestramento?",
+    "stop_training_message": "L'addestramento deve essere interrotto prima di cambiare progetto. Interrompere la sessione corrente?"
+  },
   "load_dataset_popup": {
     "title": "Carica Dataset",
     "configure_paths": "Configura percorsi dataset",
@@ -1165,7 +1192,11 @@
     "min_track_length": "Lunghezza minima traccia",
     "min_track_length_hint": "Mantiene i punti sparsi osservati in almeno questo numero di immagini. 0 disattiva il filtro.",
     "min_track_length_init_warning": "Ignorato quando è impostato Init PLY.",
-    "apply_auto_crop": "Applica ritaglio automatico"
+    "apply_auto_crop": "Applica ritaglio automatico",
+    "save_title": "Salvare il progetto?",
+    "save_message": "Salvare il progetto corrente prima di caricare il nuovo dataset?",
+    "save_and_load": "Salva e carica",
+    "load_without_saving": "Carica senza salvare"
   },
   "notification": {
     "dropped_not_recognized": "L'elemento trascinato",
@@ -1218,13 +1249,11 @@
     "status_label": "Stato: %s"
   },
   "input_settings": {
-    "title": "IMPOSTAZIONI INPUT",
     "active_profile": "Profilo Attivo:",
     "save_current_profile": "Salva Profilo Corrente",
     "reset_to_default": "Ripristina Predefinito",
     "export": "Esporta...",
     "import": "Importa...",
-    "action": "Azione",
     "rebind": "Riassocia",
     "cancel": "Annulla",
     "replace": "Sostituisci",
@@ -1245,7 +1274,6 @@
     "click_again_double": "Clicca di nuovo per doppio clic...",
     "tool_mode": "MODALITÀ STRUMENTO",
     "select_tool_mode": "Seleziona modalità strumento per visualizzare/modificare le associazioni",
-    "current_bindings": "ASSOCIAZIONI CORRENTI",
     "global_bindings_hint": "Le associazioni globali si applicano ovunque a meno che non vengano sovrascritte",
     "tool_bindings_hint": "Le associazioni specifiche degli strumenti sovrascrivono le associazioni globali",
     "section.navigation": "NAVIGAZIONE",
@@ -1291,6 +1319,7 @@
     "action.toggle_independent_split_view": "Attiva vista divisa indipendente",
     "action.toggle_gt_comparison": "Attiva confronto GT",
     "action.toggle_camera_frustums": "Attiva/disattiva frustum fotocamera",
+    "action.toggle_grid": "Attiva/disattiva griglia",
     "action.toggle_depth_mode": "Attiva box di profondità",
     "action.cycle_ply": "Scorri PLY",
     "action.delete_selected": "Elimina gaussiane selezionate",
@@ -1349,8 +1378,7 @@
     "trigger.drag": " Trascina",
     "trigger.scroll": "Scorri",
     "trigger.unknown": "Sconosciuto",
-    "action.toggle_performance_hud": "Toggle Performance HUD",
-    "binding": "Associazione"
+    "action.toggle_performance_hud": "Toggle Performance HUD"
   },
   "debug_info": {
     "clear_history": "Cancella Cronologia",
@@ -1868,7 +1896,7 @@
   },
   "file_association": {
     "title": "Imposta come applicazione predefinita",
-    "message": "Vuoi impostare LichtFeld Studio come applicazione predefinita per i file splat (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz)?",
+    "message": "Vuoi impostare LichtFeld Studio come applicazione predefinita per i file splat e di progetto (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht)?",
     "yes": "Sì",
     "not_now": "Non ora",
     "dont_ask": "Non chiedere più",
@@ -2263,6 +2291,14 @@
       "title": "Trainer non ripristinato",
       "message": "Il modello del progetto è disponibile per la visualizzazione, ma non è stato possibile riprendere l'addestramento. Controlla il percorso del dataset e i log."
     }
+  },
+  "recovery": {
+    "crash_title": "LichtFeld Studio si è chiuso inaspettatamente",
+    "body": "È stato trovato un file di ripristino per {}. (salvato {})",
+    "unsaved_session": "una sessione non salvata",
+    "recover": "Ripristina",
+    "open_saved": "Apri salvato",
+    "skip": "Salta e crea nuovo"
   },
   "startup_recent": {
     "title": "Progetti recenti",

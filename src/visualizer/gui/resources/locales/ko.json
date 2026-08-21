@@ -15,6 +15,11 @@
     "file.recent_missing_message": "프로젝트 파일을 찾을 수 없습니다:\n{path}",
     "file.remove_from_recent": "최근 프로젝트에서 제거",
     "file.recent_entry": "{name} — {parent}",
+    "file.import": "가져오기",
+    "file.import_failed": "가져오기 실패",
+    "file.import_failed_message": "가져올 수 없습니다:\n{path}\n\n{reason}",
+    "file.dataset_not_recognized": "선택한 폴더가 지원되는 데이터셋으로 인식되지 않습니다:\n{path}",
+    "file.checkpoint_not_recognized": "선택한 파일이 유효한 체크포인트로 인식되지 않습니다:\n{path}",
     "file.import_dataset": "데이터셋 가져오기",
     "file.import_ply": "PLY, SOG, SPZ, RAD, USD 가져오기",
     "file.import_mesh": "메시 가져오기",
@@ -26,7 +31,6 @@
     "file.mesh_to_splat": "메시를 스플랫으로 변환...",
     "file.exit": "종료",
     "edit": "편집",
-    "edit.input_settings": "입력 설정...",
     "select": "선택",
     "select.copy_selection": "선택 복사",
     "select.cut_selection": "선택 잘라내기",
@@ -56,7 +60,6 @@
     "view.debug_info": "디버그 정보..."
   },
   "window": {
-    "input_settings": "입력 설정",
     "export": "내보내기",
     "scene": "씬",
     "rendering": "렌더링",
@@ -406,6 +409,12 @@
     "save_pc.message": "포인트 클라우드가 수정되었습니다. 향후 세션을 위해 데이터셋 폴더에 저장하시겠습니까?",
     "save_pc.btn_save_start": "저장 후 시작",
     "save_pc.btn_start_without": "저장 없이 시작",
+    "overwrite.title": "이전 학습을 덮어쓸까요?",
+    "overwrite.message": "프로젝트에 반복 {iteration}의 체크포인트가 있습니다. 새 학습을 시작하면 덮어씁니다.",
+    "overwrite.existing_title": "기존 프로젝트를 덮어쓸까요?",
+    "overwrite.existing_message": "학습 출력 위치에 프로젝트 파일이 이미 있습니다. 학습을 시작하면 덮어씁니다.",
+    "overwrite.btn_overwrite_start": "덮어쓰고 시작",
+    "overwrite.btn_save_as_start": "다른 이름으로 저장…",
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.opacity_reg": "불투명도 정규화:",
     "losses.scale_reg": "스케일 정규화:",
@@ -651,7 +660,9 @@
     "undo": "실행 취소",
     "redo": "다시 실행",
     "edit": "편집",
-    "double_click_reset": "더블클릭하여 재설정"
+    "double_click_reset": "더블클릭하여 재설정",
+    "yes": "예",
+    "no": "아니요"
   },
   "status": {
     "ready": "준비됨",
@@ -696,9 +707,21 @@
     "language": "언어:",
     "select_language": "언어 선택",
     "interface": "인터페이스",
+    "file_associations": "파일 연결",
+    "file_associations_description": "각 파일 형식별 LichtFeld Studio 연결을 등록하거나 해제합니다.",
     "general": "일반",
     "appearance": "모양",
+    "scene_rendering": "장면 렌더링",
+    "scene_reconstruction": "장면 재구성",
+    "scene_reconstruction_off": "끄기",
+    "scene_reconstruction_spatial": "공간",
+    "scene_reconstruction_preset": "공간 프리셋",
+    "scene_reconstruction_quality": "품질",
+    "scene_reconstruction_balanced": "균형",
+    "scene_reconstruction_performance": "성능",
+    "scene_reconstruction_description": "공간 재구성은 낮은 내부 해상도로 장면을 렌더링한 뒤 뷰포트 해상도로 재구성합니다. 학습이나 저장된 스플랫 데이터에는 영향을 주지 않습니다.",
     "input": "입력",
+    "key_bindings": "키 바인딩",
     "camera_navigation": "카메라 탐색",
     "navigation_mode": "탐색 모드",
     "camera_view_snap": "축 보기 스냅",
@@ -736,7 +759,7 @@
     "reset_section_failed": "설정을 재설정할 수 없습니다.",
     "ui_preferences_save_failed": "인터페이스 환경설정을 저장할 수 없습니다.",
     "reset_all_settings": "모든 설정 재설정",
-    "reset_all_settings_confirmation": "언어, 테마, UI 배율, 입력 기본 설정, MCP 서버, 레이아웃 및 창 상태를 기본값으로 복원할까요? 즉시 적용됩니다. .licht 프로젝트가 열려 있으면 다음 저장 시 저장된 레이아웃이 교체됩니다. 프로젝트 내용, 데이터 세트, 내보내기, 플러그인 및 캐시는 영향을 받지 않습니다.",
+    "reset_all_settings_confirmation": "언어, 테마, UI 배율, 장면 재구성, 입력 기본 설정, MCP 서버, 레이아웃 및 창 상태를 기본값으로 복원할까요? 즉시 적용됩니다. .licht 프로젝트가 열려 있으면 다음 저장 시 저장된 레이아웃이 교체됩니다. 프로젝트 내용, 데이터 세트, 내보내기, 플러그인 및 캐시는 영향을 받지 않습니다.",
     "reset_all_settings_success": "모든 기본 설정, 레이아웃 및 창 상태를 즉시 재설정했습니다.",
     "window_manager_unavailable": "창 관리자를 사용할 수 없습니다.",
     "window_state_reset_failed": "창을 기본 위치와 크기로 복원할 수 없습니다."
@@ -1145,6 +1168,10 @@
     "discard_and_exit": "폐기 후 종료",
     "exit": "종료"
   },
+  "project_switch": {
+    "stop_training_title": "훈련을 중단할까요?",
+    "stop_training_message": "프로젝트를 전환하려면 훈련을 먼저 중단해야 합니다. 현재 세션을 중단할까요?"
+  },
   "load_dataset_popup": {
     "title": "데이터셋 불러오기",
     "configure_paths": "데이터셋 경로 구성",
@@ -1165,7 +1192,11 @@
     "min_track_length": "최소 트랙 길이",
     "min_track_length_hint": "최소 이 수의 이미지에서 관측된 Sparse 점을 유지합니다. 0이면 필터링을 비활성화합니다.",
     "min_track_length_init_warning": "초기화 PLY가 설정된 동안에는 무시됩니다.",
-    "apply_auto_crop": "자동 자르기 적용"
+    "apply_auto_crop": "자동 자르기 적용",
+    "save_title": "프로젝트를 저장할까요?",
+    "save_message": "새 데이터셋을 불러오기 전에 현재 프로젝트를 저장할까요?",
+    "save_and_load": "저장하고 불러오기",
+    "load_without_saving": "저장하지 않고 불러오기"
   },
   "notification": {
     "dropped_not_recognized": "드롭된",
@@ -1218,13 +1249,11 @@
     "status_label": "상태: %s"
   },
   "input_settings": {
-    "title": "입력 설정",
     "active_profile": "활성 프로필:",
     "save_current_profile": "현재 프로필 저장",
     "reset_to_default": "기본값으로 재설정",
     "export": "내보내기...",
     "import": "가져오기...",
-    "action": "동작",
     "rebind": "다시 바인딩",
     "cancel": "취소",
     "replace": "교체",
@@ -1245,7 +1274,6 @@
     "click_again_double": "더블 클릭하려면 다시 클릭...",
     "tool_mode": "도구 모드",
     "select_tool_mode": "바인딩을 보거나 편집하려면 도구 모드 선택",
-    "current_bindings": "현재 바인딩",
     "global_bindings_hint": "전역 바인딩은 재정의되지 않는 한 모든 곳에 적용됩니다",
     "tool_bindings_hint": "도구별 바인딩은 전역 바인딩을 재정의합니다",
     "section.navigation": "내비게이션",
@@ -1291,6 +1319,7 @@
     "action.toggle_independent_split_view": "독립 분할 보기 전환",
     "action.toggle_gt_comparison": "GT 비교 전환",
     "action.toggle_camera_frustums": "카메라 절두체 전환",
+    "action.toggle_grid": "그리드 전환",
     "action.toggle_depth_mode": "깊이 상자 전환",
     "action.cycle_ply": "PLY 순환",
     "action.delete_selected": "선택한 가우시안 삭제",
@@ -1349,8 +1378,7 @@
     "trigger.drag": " 드래그",
     "trigger.scroll": "스크롤",
     "trigger.unknown": "알 수 없음",
-    "action.toggle_performance_hud": "Toggle Performance HUD",
-    "binding": "바인딩"
+    "action.toggle_performance_hud": "Toggle Performance HUD"
   },
   "debug_info": {
     "clear_history": "기록 지우기",
@@ -1868,7 +1896,7 @@
   },
   "file_association": {
     "title": "기본 응용 프로그램으로 설정",
-    "message": "LichtFeld Studio를 스플랫 파일(.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz)의 기본 응용 프로그램으로 설정하시겠습니까?",
+    "message": "LichtFeld Studio를 스플랫 및 프로젝트 파일(.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht)의 기본 응용 프로그램으로 설정하시겠습니까?",
     "yes": "예",
     "not_now": "나중에",
     "dont_ask": "다시 묻지 않기",
@@ -2263,6 +2291,14 @@
       "title": "트레이너를 복원하지 못함",
       "message": "프로젝트 모델은 볼 수 있지만 학습을 재개할 수 없습니다. 데이터세트 경로와 로그를 확인하세요."
     }
+  },
+  "recovery": {
+    "crash_title": "LichtFeld Studio가 예기치 않게 종료되었습니다",
+    "body": "{}의 복구 파일이 있습니다. (저장 시각 {})",
+    "unsaved_session": "저장되지 않은 세션",
+    "recover": "복구",
+    "open_saved": "저장된 파일 열기",
+    "skip": "건너뛰고 새로 만들기"
   },
   "startup_recent": {
     "title": "최근 프로젝트",

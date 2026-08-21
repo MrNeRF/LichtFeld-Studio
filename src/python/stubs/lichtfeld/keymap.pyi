@@ -163,6 +163,8 @@ class Action(enum.Enum):
 
     TOGGLE_MCP_BINDING = 80
 
+    TOGGLE_GRID = 81
+
 class ToolMode(enum.Enum):
     GLOBAL = 0
 

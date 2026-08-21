@@ -418,8 +418,10 @@ namespace lfs::training {
                         }
                     } else {
                         // Try float topology install. Real SplatExportableStorage
-                        // forces Float16 and clamps capacity to q16 cells — detect
-                        // that and re-encode instead of bitcasting float into half.
+                        // forces Float16 and clamps capacity to q16 cells — and rejects
+                        // the swizzled float shape outright when live-N cells exceed the
+                        // pad-dropped region — detect that and re-encode instead of
+                        // bitcasting float into half.
                         lfs::core::Tensor src_float = model.shN_raw();
                         if (src_float.device() != lfs::core::Device::CUDA) {
                             src_float = src_float.cuda();
@@ -427,15 +429,30 @@ namespace lfs::training {
                         if (!src_float.is_contiguous()) {
                             src_float = src_float.contiguous();
                         }
-                        lfs::core::Tensor installed = copy_param(
-                            src_float, src_float.shape(), float_cap, "SplatData.shN");
+                        lfs::core::Tensor installed;
+                        try {
+                            installed = tensor_allocator(src_float.shape(),
+                                                         float_cap,
+                                                         lfs::core::DataType::Float32,
+                                                         "SplatData.shN");
+                        } catch (const std::exception& error) {
+                            // Exportable q16 region rejects the swizzled float shape when
+                            // live-N cells exceed the pad-dropped capacity; same fallback
+                            // as the Float16/clamp detection below.
+                            LOG_DEBUG("Float shN install rejected by allocator ({}); "
+                                      "re-encoding to q16 instead",
+                                      error.what());
+                        }
                         const bool landed_in_q16_exportable =
+                            !installed.is_valid() ||
                             installed.dtype() == lfs::core::DataType::Float16 ||
                             installed.capacity() < float_cap;
                         if (landed_in_q16_exportable) {
                             shN = std::move(src_float);
                             need_q16_encode = true;
                         } else {
+                            installed.set_name("SplatData.shN");
+                            installed.copy_from(src_float);
                             shN = std::move(installed);
                         }
                     }
@@ -450,11 +467,7 @@ namespace lfs::training {
                                               std::move(opacity),
                                               scene_scale,
                                               lfs::core::SplatData::ShNLayout::Swizzled);
-                if (shN_bounds.is_valid()) {
-                    // Codes and bounds are one declared representation; install before degree validation.
-                    migrated.shN_value_bounds() = std::move(shN_bounds);
-                }
-                migrated.set_active_sh_degree(active_sh);
+                migrated.set_active_sh_degree(active_sh, std::move(shN_bounds));
                 if (deleted.is_valid()) {
                     migrated.deleted() = std::move(deleted);
                 }
@@ -1154,6 +1167,27 @@ namespace lfs::training {
             .trainer = std::move(trainer),
             .iteration = restored_iteration,
         };
+    }
+
+    void grant_headless_project_saves(
+        Trainer& trainer,
+        const lfs::core::param::TrainingParameters& params,
+        const std::filesystem::path& destination) {
+        if (destination.empty() &&
+            params.dataset.output_path.empty()) {
+            LOG_WARN(
+                "Headless project saves not granted: no output path is set");
+            return;
+        }
+        trainer.set_live_project_snapshot(
+            destination.empty()
+                ? params.dataset.output_path / "project.licht"
+                : destination);
+        trainer.set_trainer_project_save_policy({
+            .on_completion = true,
+            .on_stop_or_error = true,
+            .at_step_boundaries = true,
+        });
     }
 
 } // namespace lfs::training

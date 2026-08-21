@@ -4,6 +4,7 @@
  */
 
 #include "io/splat_chapter.hpp"
+#include "span_streambuf.hpp"
 
 #include "core/cuda/sh_layout.cuh"
 #include "core/cuda_error_typed.hpp"
@@ -24,7 +25,6 @@
 #include <limits>
 #include <optional>
 #include <ranges>
-#include <streambuf>
 #include <string_view>
 #include <utility>
 
@@ -278,47 +278,6 @@ namespace lfs::io::project {
             }
             return {};
         }
-
-        class SpanStreambuf final : public std::streambuf {
-        public:
-            explicit SpanStreambuf(const std::span<const char> bytes) {
-                auto* begin = const_cast<char*>(bytes.data());
-                setg(begin, begin, begin + bytes.size());
-            }
-
-        protected:
-            pos_type seekoff(const off_type offset, const std::ios_base::seekdir direction,
-                             const std::ios_base::openmode which = std::ios_base::in) override {
-                if ((which & std::ios_base::in) == 0)
-                    return pos_type(off_type(-1));
-                const auto current = static_cast<off_type>(gptr() - eback());
-                const auto end = static_cast<off_type>(egptr() - eback());
-                off_type target = 0;
-                if (direction == std::ios_base::beg) {
-                    if (offset < 0 || offset > end)
-                        return pos_type(off_type(-1));
-                    target = offset;
-                } else if (direction == std::ios_base::cur) {
-                    if ((offset > 0 && offset > end - current) ||
-                        (offset < 0 && offset < -current))
-                        return pos_type(off_type(-1));
-                    target = current + offset;
-                } else if (direction == std::ios_base::end) {
-                    if ((offset > 0 && offset > end) ||
-                        (offset < 0 && offset < -end))
-                        return pos_type(off_type(-1));
-                    target = end + offset;
-                } else
-                    return pos_type(off_type(-1));
-                setg(eback(), eback() + target, egptr());
-                return pos_type(target);
-            }
-
-            pos_type seekpos(const pos_type position,
-                             const std::ios_base::openmode which = std::ios_base::in) override {
-                return seekoff(off_type(position), std::ios_base::beg, which);
-            }
-        };
 
         lfs::Error splat_error(const lfs::ErrorCode code, std::string message,
                                std::string detail) {
@@ -687,9 +646,8 @@ namespace lfs::io::project {
         }
         try {
             auto result = std::make_unique<lfs::core::SplatData>();
-            const auto chars = std::span<const char>(
-                reinterpret_cast<const char*>(bytes_.data()), bytes_.size());
-            SpanStreambuf buffer(chars);
+            SpanStreambuf buffer(std::span<const std::byte>(
+                bytes_.data(), bytes_.size()));
             std::istream stream(&buffer);
             result->deserialize(stream, std::move(tensor_allocator));
             if (!stream || stream.peek() != std::char_traits<char>::eof()) {

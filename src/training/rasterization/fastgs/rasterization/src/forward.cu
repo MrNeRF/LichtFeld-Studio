@@ -398,7 +398,6 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     cudaStream_t stream) {
 
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
-    const dim3 block(config::tile_width, config::tile_height, 1);
     const uint64_t n_tiles_u64 = static_cast<uint64_t>(grid.x) * static_cast<uint64_t>(grid.y);
     const int n_tiles = checked_to_int(n_tiles_u64, "n_tiles exceeds int range");
     const uint n_tiles_u32 = static_cast<uint>(n_tiles);
@@ -426,6 +425,10 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
                          "cudaMemsetAsync(FastGS forward status)");
 
     // Preprocess primitives
+    const float w_f = static_cast<float>(width);
+    const float h_f = static_cast<float>(height);
+    float clip_left, clip_right, clip_top, clip_bottom;
+    ewa_clip_bounds(w_f, h_f, fx, fy, cx, cy, clip_left, clip_right, clip_top, clip_bottom);
     kernels::forward::preprocess_cu<<<div_round_up(n_primitives, config::block_size_preprocess), config::block_size_preprocess, 0, stream>>>(
         means,
         scales_raw,
@@ -451,12 +454,16 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         grid.y,
         active_sh_bases,
         sh_layout_slots,
-        static_cast<float>(width),
-        static_cast<float>(height),
+        w_f,
+        h_f,
         fx,
         fy,
         cx,
         cy,
+        clip_left,
+        clip_right,
+        clip_top,
+        clip_bottom,
         near_,
         far_,
         depth_bits,
@@ -787,7 +794,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     const int warp_cull_mode = g_warp_cull_mode.load(std::memory_order_relaxed);
     const int blend_batch_override = g_blend_batch_size_override.load(std::memory_order_relaxed);
     auto launch_blend = [&]<bool RENDER_NORMAL>() {
-        kernels::forward::blend_cu<RENDER_NORMAL><<<grid, block, 0, stream>>>(
+        kernels::forward::blend_cu<RENDER_NORMAL><<<grid, dim3(config::block_size_blend_forward), 0, stream>>>(
             per_tile_buffers.instance_ranges,
             sorted_primitive_indices,
             per_primitive_buffers.mean2d,

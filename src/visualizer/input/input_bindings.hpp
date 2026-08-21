@@ -135,6 +135,7 @@ namespace lfs::vis::input {
         OPEN_PREFERENCES,
         TOGGLE_MCP_SERVER,
         TOGGLE_MCP_BINDING,
+        TOGGLE_GRID,
 
     };
 

@@ -6,6 +6,7 @@
 #include "app/headless_recovery_document.hpp"
 #include "io/loaders/loader_utils.hpp"
 #include "io/project/project_container_internal.hpp"
+#include "io/project/span_streambuf.hpp"
 #include "io/project_document.hpp"
 #include "io/project_recovery.hpp"
 #include "licht_test_support.hpp"
@@ -31,6 +32,7 @@
 #include <fstream>
 #include <glm/gtc/type_ptr.hpp>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <ranges>
@@ -40,7 +42,10 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <unordered_set>
 #include <vector>
+
+#include <cuda_runtime.h>
 
 #if defined(__linux__)
 #include <csignal>
@@ -70,6 +75,7 @@ namespace {
     using lfs::test::licht::require_result_ptr;
     using lfs::test::licht::require_status;
     using lfs::test::licht::TemporaryDirectory;
+    using lfs::test::licht::write_file_bytes;
 
     Uuid fixed_uuid(const std::uint64_t tag) {
         return lfs::test::licht::fixed_uuid_in_namespace(0x70000000, tag);
@@ -581,6 +587,224 @@ namespace {
                   lfs::ErrorCode::FailedPrecondition);
     }
 
+    TEST(SpanStreambufTest, WindowedReadsAndSeeks) {
+        constexpr std::size_t n = 1000;
+        std::vector<std::byte> pattern(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            pattern[i] = static_cast<std::byte>((i * 131u) & 0xffu);
+        }
+        SpanStreambuf buffer(
+            std::span<const std::byte>(pattern.data(),
+                                       pattern.size()),
+            7);
+        std::istream stream(&buffer);
+
+        for (std::size_t i = 0; i < n; ++i) {
+            const int ch = stream.get();
+            ASSERT_NE(ch, std::char_traits<char>::eof()) << i;
+            EXPECT_EQ(static_cast<unsigned char>(ch),
+                      static_cast<unsigned char>(pattern[i]))
+                << i;
+        }
+        EXPECT_EQ(stream.get(), std::char_traits<char>::eof());
+
+        stream.clear();
+        stream.seekg(0);
+        ASSERT_TRUE(stream);
+        std::array<char, 64> chunk{};
+        stream.read(chunk.data(), 64);
+        ASSERT_EQ(stream.gcount(), 64);
+        ASSERT_TRUE(stream);
+        for (std::size_t i = 0; i < chunk.size(); ++i) {
+            EXPECT_EQ(static_cast<unsigned char>(chunk[i]),
+                      static_cast<unsigned char>(pattern[i]))
+                << i;
+        }
+
+        stream.clear();
+        stream.seekg(333, std::ios::beg);
+        EXPECT_EQ(stream.tellg(), std::streampos(333));
+        ASSERT_TRUE(stream);
+        {
+            const int ch = stream.get();
+            ASSERT_NE(ch, std::char_traits<char>::eof());
+            EXPECT_EQ(static_cast<unsigned char>(ch),
+                      static_cast<unsigned char>(pattern[333]));
+        }
+
+        stream.seekg(17, std::ios::cur);
+        EXPECT_EQ(stream.tellg(), std::streampos(351));
+        ASSERT_TRUE(stream);
+        {
+            const int ch = stream.get();
+            ASSERT_NE(ch, std::char_traits<char>::eof());
+            EXPECT_EQ(static_cast<unsigned char>(ch),
+                      static_cast<unsigned char>(pattern[351]));
+        }
+
+        stream.seekg(-12, std::ios::cur);
+        EXPECT_EQ(stream.tellg(), std::streampos(340));
+        ASSERT_TRUE(stream);
+        {
+            const int ch = stream.get();
+            ASSERT_NE(ch, std::char_traits<char>::eof());
+            EXPECT_EQ(static_cast<unsigned char>(ch),
+                      static_cast<unsigned char>(pattern[340]));
+        }
+
+        stream.seekg(-80, std::ios::end);
+        EXPECT_EQ(stream.tellg(), std::streampos(920));
+        ASSERT_TRUE(stream);
+        {
+            const int ch = stream.get();
+            ASSERT_NE(ch, std::char_traits<char>::eof());
+            EXPECT_EQ(static_cast<unsigned char>(ch),
+                      static_cast<unsigned char>(pattern[920]));
+        }
+
+        stream.clear();
+        stream.seekg(static_cast<std::streamoff>(n),
+                     std::ios::beg);
+        ASSERT_TRUE(stream);
+        EXPECT_EQ(stream.tellg(), std::streampos(n));
+        EXPECT_EQ(stream.get(), std::char_traits<char>::eof());
+        EXPECT_TRUE(stream.eof());
+
+        stream.clear();
+        stream.seekg(static_cast<std::streamoff>(n + 1),
+                     std::ios::beg);
+        EXPECT_TRUE(stream.fail());
+
+        stream.clear();
+        stream.seekg(0);
+        ASSERT_TRUE(stream);
+        stream.seekg(-1, std::ios::beg);
+        EXPECT_TRUE(stream.fail());
+
+        stream.clear();
+        stream.seekg(static_cast<std::streamoff>(n - 10));
+        ASSERT_TRUE(stream);
+        std::array<char, 32> tail{};
+        stream.read(tail.data(), 32);
+        EXPECT_EQ(stream.gcount(), 10);
+        EXPECT_TRUE(stream.eof());
+        for (std::size_t i = 0; i < 10; ++i) {
+            EXPECT_EQ(static_cast<unsigned char>(tail[i]),
+                      static_cast<unsigned char>(
+                          pattern[n - 10 + i]))
+                << i;
+        }
+    }
+
+    TEST(ProjectDocumentTest, VisitStreamOwnedSeekableRoundTrip) {
+        constexpr std::size_t n = 512;
+        std::vector<std::byte> pattern(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            pattern[i] = static_cast<std::byte>((i * 131u) & 0xffu);
+        }
+        const auto expected = pattern;
+        auto chunk = require_result(LazyChunkValue::from_owned(
+            std::move(pattern), fixed_uuid(1679)));
+        auto visited = chunk.visit_stream(
+            [&](std::istream& stream,
+                const std::uint64_t bytes) -> lfs::Result<void> {
+                EXPECT_EQ(bytes, n);
+                std::array<char, 32> head{};
+                stream.read(
+                    head.data(),
+                    static_cast<std::streamsize>(head.size()));
+                EXPECT_TRUE(stream.good());
+                EXPECT_EQ(stream.gcount(), 32);
+                for (std::size_t i = 0; i < head.size(); ++i) {
+                    EXPECT_EQ(
+                        static_cast<unsigned char>(head[i]),
+                        static_cast<unsigned char>(expected[i]))
+                        << i;
+                }
+                const auto tail_offset =
+                    static_cast<std::streamoff>(bytes - 16);
+                stream.seekg(tail_offset);
+                EXPECT_TRUE(stream.good());
+                EXPECT_EQ(stream.tellg(),
+                          std::streampos(tail_offset));
+                std::array<char, 16> tail{};
+                stream.read(
+                    tail.data(),
+                    static_cast<std::streamsize>(tail.size()));
+                EXPECT_TRUE(stream.good());
+                EXPECT_EQ(stream.gcount(), 16);
+                for (std::size_t i = 0; i < tail.size(); ++i) {
+                    EXPECT_EQ(
+                        static_cast<unsigned char>(tail[i]),
+                        static_cast<unsigned char>(
+                            expected[expected.size() - 16 + i]))
+                        << i;
+                }
+                return {};
+            });
+        ASSERT_TRUE(visited)
+            << lfs::format_for_developer(visited.error());
+    }
+
+    TEST(SpanStreambufTest, SpanStreambufServesBuffersOver2GiB) {
+        const auto int_max = static_cast<std::size_t>(
+            std::numeric_limits<int>::max());
+        const std::size_t size = int_max + 4096;
+        std::vector<std::byte> bytes(size, std::byte{0});
+        for (std::size_t i = 0; i < 40; ++i) {
+            bytes[i] = static_cast<std::byte>(0xA0 + i);
+        }
+        for (std::size_t i = 0; i < 16; ++i) {
+            bytes[int_max - 8 + i] =
+                static_cast<std::byte>(0xB0 + i);
+        }
+        for (std::size_t i = 0; i < 16; ++i) {
+            bytes[size - 16 + i] =
+                static_cast<std::byte>(0xC0 + i);
+        }
+
+        SpanStreambuf buffer(
+            std::span<const std::byte>(bytes.data(),
+                                       bytes.size()));
+        std::istream stream(&buffer);
+
+        std::array<char, 40> head{};
+        stream.read(head.data(), 40);
+        ASSERT_TRUE(stream.good());
+        ASSERT_EQ(stream.gcount(), 40);
+        for (std::size_t i = 0; i < head.size(); ++i) {
+            EXPECT_EQ(static_cast<unsigned char>(head[i]),
+                      static_cast<unsigned char>(bytes[i]))
+                << i;
+        }
+
+        stream.seekg(static_cast<std::streamoff>(int_max - 8));
+        ASSERT_TRUE(stream.good());
+        std::array<char, 16> mid{};
+        stream.read(mid.data(), 16);
+        ASSERT_TRUE(stream.good());
+        ASSERT_EQ(stream.gcount(), 16);
+        for (std::size_t i = 0; i < mid.size(); ++i) {
+            EXPECT_EQ(
+                static_cast<unsigned char>(mid[i]),
+                static_cast<unsigned char>(bytes[int_max - 8 + i]))
+                << i;
+        }
+
+        stream.seekg(-16, std::ios::end);
+        ASSERT_TRUE(stream.good());
+        std::array<char, 16> tail{};
+        stream.read(tail.data(), 16);
+        ASSERT_TRUE(stream.good());
+        ASSERT_EQ(stream.gcount(), 16);
+        for (std::size_t i = 0; i < tail.size(); ++i) {
+            EXPECT_EQ(
+                static_cast<unsigned char>(tail[i]),
+                static_cast<unsigned char>(bytes[size - 16 + i]))
+                << i;
+        }
+    }
+
     TEST(LoaderGeoreferenceTest,
          CentralizedOriginNeverRoundTripsThroughFloat) {
         const float lower = 1.0f;
@@ -732,6 +956,128 @@ namespace {
         EXPECT_EQ(live.getNodeUuid(root_node->children[0]), first);
         EXPECT_EQ(live.getNodeUuid(root_node->children[1]), second);
         EXPECT_EQ(live.getNodeUuid(root_node->children[2]), third);
+    }
+
+    bool cuda_device_available() {
+        int count = 0;
+        return cudaGetDeviceCount(&count) == cudaSuccess && count > 0;
+    }
+
+    std::shared_ptr<lfs::core::Camera> make_adapter_test_camera(
+        const std::string& image_name, const int uid) {
+        const auto empty_distortion = Tensor::zeros(
+            {0}, Device::CPU, DataType::Float32);
+        return std::make_shared<lfs::core::Camera>(
+            Tensor::eye(3, Device::CPU),
+            Tensor::zeros({3}, Device::CPU),
+            100.0f, 100.0f, 32.0f, 32.0f,
+            empty_distortion, empty_distortion,
+            lfs::core::CameraModelType::PINHOLE,
+            image_name, std::filesystem::path{},
+            std::filesystem::path{}, 64, 64, uid);
+    }
+
+    TEST(SceneChapterAdapterTest,
+         CameraVisibleTrainingEnabledAndHasImageRoundTripIndependently) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+
+        Scene source;
+        const auto dataset = source.addDataset("Dataset");
+        const auto group =
+            source.addCameraGroup("Training", dataset, 3);
+        ASSERT_NE(dataset, lfs::core::NULL_NODE);
+        ASSERT_NE(group, lfs::core::NULL_NODE);
+
+        auto disabled = make_adapter_test_camera("frame_0001.png", 1);
+        auto missing = make_adapter_test_camera("frame_0002.png", 2);
+        missing->set_has_image(false);
+        auto hidden = make_adapter_test_camera("frame_0003.png", 3);
+
+        const auto disabled_id =
+            source.addCamera("frame_0001.png", group, disabled);
+        const auto missing_id =
+            source.addCamera("frame_0002.png", group, missing);
+        const auto hidden_id =
+            source.addCamera("frame_0003.png", group, hidden);
+        ASSERT_NE(disabled_id, lfs::core::NULL_NODE);
+        ASSERT_NE(missing_id, lfs::core::NULL_NODE);
+        ASSERT_NE(hidden_id, lfs::core::NULL_NODE);
+
+        source.setCameraTrainingEnabled(disabled_id, false);
+        source.setNodeVisibility(hidden_id, false);
+
+        auto chapter = capture_scene_graph(source, ScenePayloadBindings{});
+        ASSERT_TRUE(chapter)
+            << lfs::format_for_developer(chapter.error());
+        auto captured_nodes = chapter->nodes();
+        ASSERT_TRUE(captured_nodes)
+            << lfs::format_for_developer(captured_nodes.error());
+        const auto captured_disabled = std::ranges::find_if(
+            *captured_nodes, [](const auto& node) {
+                return node.name == "frame_0001.png";
+            });
+        const auto captured_missing = std::ranges::find_if(
+            *captured_nodes, [](const auto& node) {
+                return node.name == "frame_0002.png";
+            });
+        const auto captured_hidden = std::ranges::find_if(
+            *captured_nodes, [](const auto& node) {
+                return node.name == "frame_0003.png";
+            });
+        ASSERT_NE(captured_disabled, captured_nodes->end());
+        ASSERT_NE(captured_missing, captured_nodes->end());
+        ASSERT_NE(captured_hidden, captured_nodes->end());
+        EXPECT_TRUE(captured_disabled->visible);
+        EXPECT_FALSE(captured_disabled->training_enabled);
+        ASSERT_TRUE(captured_disabled->camera);
+        EXPECT_TRUE(captured_disabled->camera->has_image);
+        EXPECT_TRUE(captured_missing->visible);
+        EXPECT_TRUE(captured_missing->training_enabled);
+        ASSERT_TRUE(captured_missing->camera);
+        EXPECT_FALSE(captured_missing->camera->has_image);
+        EXPECT_FALSE(captured_hidden->visible);
+        EXPECT_TRUE(captured_hidden->training_enabled);
+        ASSERT_TRUE(captured_hidden->camera);
+        EXPECT_TRUE(captured_hidden->camera->has_image);
+
+        Scene live;
+        auto restored =
+            hydrate_scene_graph(*chapter, live, ScenePayloadResolver{});
+        ASSERT_TRUE(restored)
+            << lfs::format_for_developer(restored.error());
+
+        const auto* live_disabled = live.getNode("frame_0001.png");
+        const auto* live_missing = live.getNode("frame_0002.png");
+        const auto* live_hidden = live.getNode("frame_0003.png");
+        ASSERT_NE(live_disabled, nullptr);
+        ASSERT_NE(live_missing, nullptr);
+        ASSERT_NE(live_hidden, nullptr);
+        EXPECT_TRUE(live_disabled->visible.get());
+        EXPECT_FALSE(live_disabled->training_enabled);
+        ASSERT_NE(live_disabled->camera, nullptr);
+        EXPECT_TRUE(live_disabled->camera->has_image());
+        EXPECT_TRUE(live_missing->visible.get());
+        EXPECT_TRUE(live_missing->training_enabled);
+        ASSERT_NE(live_missing->camera, nullptr);
+        EXPECT_FALSE(live_missing->camera->has_image());
+        EXPECT_FALSE(live_hidden->visible.get());
+        EXPECT_TRUE(live_hidden->training_enabled);
+        ASSERT_NE(live_hidden->camera, nullptr);
+        EXPECT_TRUE(live_hidden->camera->has_image());
+
+        const auto active = live.getActiveCameras();
+        ASSERT_EQ(active.size(), 2u);
+        EXPECT_TRUE(std::ranges::none_of(active, [](const auto& camera) {
+            return camera && camera->uid() == 1;
+        }));
+        EXPECT_TRUE(std::ranges::any_of(active, [](const auto& camera) {
+            return camera && camera->uid() == 2;
+        }));
+        EXPECT_TRUE(std::ranges::any_of(active, [](const auto& camera) {
+            return camera && camera->uid() == 3;
+        }));
     }
 
     TEST(ProjectDocumentTest,
@@ -1405,6 +1751,82 @@ namespace {
             invalid.error().code(),
             lfs::ErrorCode::
                 FailedPrecondition);
+
+        invalid_options.commit.kind =
+            CommitKind::Compaction;
+        auto compaction =
+            reopened->save(
+                path, invalid_options);
+        ASSERT_FALSE(compaction);
+        EXPECT_EQ(
+            compaction.error().code(),
+            lfs::ErrorCode::
+                FailedPrecondition);
+    }
+
+    TEST(ProjectDocumentTest,
+         RecoveredSaveAsRegeneratesPreviewOnDifferentDestination) {
+        TemporaryDirectory temporary;
+        const auto source =
+            temporary.path / "recovered-preview-source.licht";
+        const auto destination =
+            temporary.path / "recovered-preview-dest.licht";
+        auto document = make_empty_document(fixed_uuid(1990), 100);
+        auto first =
+            document->save(source, save_options(1991, 200));
+        ASSERT_TRUE(first)
+            << lfs::format_for_developer(
+                   first.error());
+
+        const auto preview = one_pixel_png();
+        auto recovered_options =
+            save_options(1994, 300);
+        recovered_options.commit.kind =
+            CommitKind::Recovered;
+        recovered_options.preview_png =
+            std::span<const std::byte>(preview);
+        auto saved = document->save_as(
+            destination, recovered_options);
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(
+                   saved.error());
+
+        auto reader = ProjectReader::open(destination);
+        ASSERT_TRUE(reader);
+        EXPECT_EQ(
+            reader->commit().kind,
+            CommitKind::Recovered);
+        ASSERT_TRUE(reader->preview());
+        auto bytes = reader->read_preview();
+        ASSERT_TRUE(bytes);
+        EXPECT_EQ(*bytes, preview);
+    }
+
+    TEST(ProjectDocumentTest,
+         RecoveredSaveRegeneratesPreviewOnSamePath) {
+        TemporaryDirectory temporary;
+        const auto path =
+            temporary.path / "recovered-preview-same.licht";
+        auto document = make_empty_document(fixed_uuid(2000), 100);
+        const auto preview = one_pixel_png();
+        auto options = save_options(2001, 200);
+        options.commit.kind = CommitKind::Recovered;
+        options.preview_png =
+            std::span<const std::byte>(preview);
+        auto saved = document->save(path, options);
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(
+                   saved.error());
+
+        auto reader = ProjectReader::open(path);
+        ASSERT_TRUE(reader);
+        EXPECT_EQ(
+            reader->commit().kind,
+            CommitKind::Recovered);
+        ASSERT_TRUE(reader->preview());
+        auto bytes = reader->read_preview();
+        ASSERT_TRUE(bytes);
+        EXPECT_EQ(*bytes, preview);
     }
 
     TEST(ProjectDocumentTest,
@@ -2774,6 +3196,105 @@ namespace {
         EXPECT_FALSE(fs::exists(sidecar));
     }
 
+    TEST(ProjectDocumentTest,
+         AutosaveSidecarCreateRejectsStaleBaseAndAcceptsRefreshedBase) {
+        TemporaryDirectory temporary;
+        const fs::path master =
+            temporary.path / "stale-base.licht";
+        const fs::path sidecar =
+            autosave_sidecar_path(master);
+        write_phase_a_fixture(master);
+
+        auto held = require_result_ptr(
+            ProjectDocument::open(master));
+        ASSERT_TRUE(held->source_commit_uuid());
+        const auto stale_base =
+            *held->source_commit_uuid();
+        require_status(
+            held->edit_view().dom().set(
+                "stale_base_marker",
+                std::string{"held"}));
+
+        {
+            auto advanced = require_result_ptr(
+                ProjectDocument::open(master));
+            require_status(
+                advanced->edit_view().dom().set(
+                    "trainer_append_marker",
+                    std::string{"generation-2"}));
+            auto advanced_save = advanced->save(
+                master, save_options(9970, 1600));
+            ASSERT_TRUE(advanced_save)
+                << lfs::format_for_developer(
+                       advanced_save.error());
+        }
+        ProjectReader disk =
+            require_result(ProjectReader::open(master));
+        EXPECT_NE(
+            disk.commit().commit_uuid, stale_base);
+        EXPECT_EQ(
+            *held->source_commit_uuid(), stale_base);
+
+        auto stale = held->save_autosave(
+            sidecar,
+            ProjectDocumentAutosaveOptions{
+                .file_uuid = fixed_uuid(9971),
+                .base_explicit_commit_uuid =
+                    stale_base,
+                .autosave_sequence = 1,
+                .snapshot_uuid = fixed_uuid(9972),
+                .index_compression =
+                    IndexCompression::
+                        StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+            });
+        ASSERT_FALSE(stale);
+        EXPECT_EQ(
+            stale.error().code(),
+            lfs::ErrorCode::FailedPrecondition);
+        const auto stale_formatted =
+            lfs::format_for_developer(stale.error());
+        EXPECT_NE(
+            stale_formatted.find(
+                "The autosave base changed before publication."),
+            std::string::npos)
+            << stale_formatted;
+
+        auto refreshed = require_result_ptr(
+            ProjectDocument::open(master));
+        ASSERT_TRUE(refreshed->source_commit_uuid());
+        EXPECT_EQ(
+            *refreshed->source_commit_uuid(),
+            disk.commit().commit_uuid);
+        require_status(
+            refreshed->edit_view().dom().set(
+                "refreshed_base_marker",
+                std::string{"ok"}));
+        auto published = refreshed->save_autosave(
+            sidecar,
+            ProjectDocumentAutosaveOptions{
+                .file_uuid = fixed_uuid(9973),
+                .base_explicit_commit_uuid =
+                    *refreshed->source_commit_uuid(),
+                .autosave_sequence = 1,
+                .snapshot_uuid = fixed_uuid(9974),
+                .index_compression =
+                    IndexCompression::
+                        StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+            });
+        ASSERT_TRUE(published)
+            << lfs::format_for_developer(
+                   published.error());
+        EXPECT_TRUE(fs::is_regular_file(sidecar));
+        ProjectReader overlay =
+            require_result(ProjectReader::open(sidecar));
+        EXPECT_EQ(
+            overlay.superblock()
+                .base_explicit_commit_uuid,
+            disk.commit().commit_uuid);
+    }
+
     LazyChunkValue make_autosave_checkpoint_payload(
         const Uuid& checkpoint_uuid) {
         auto model = make_splat(2);
@@ -2964,6 +3485,110 @@ namespace {
     }
 
     TEST(ProjectDocumentTest,
+         UnboundCheckpointIsRemovedWhenCapturedSceneHasNoBinding) {
+        const auto training_uuid = fixed_uuid(9970);
+        const auto checkpoint_uuid = fixed_uuid(9971);
+        auto document = make_empty_document(fixed_uuid(9972), 100);
+        require_status(document->edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = training_uuid,
+                .type = "splat",
+                .name = "Training",
+                .child_order = 0,
+                .payload = PayloadBinding{
+                    .fourcc = "CKPT",
+                    .instance_uuid = checkpoint_uuid,
+                    .source_kind = "training",
+                },
+            }));
+        require_status(
+            document->edit_scene_graph().set_training_model_uuid(
+                training_uuid));
+        require_status(document->set_checkpoint(
+            checkpoint_uuid,
+            make_autosave_checkpoint_payload(checkpoint_uuid)));
+        ASSERT_EQ(document->checkpoint_uuids().size(), 1u);
+
+        document->edit_scene_graph() = SceneGraphChapter{};
+        Scene live;
+        auto before_prune = document->stage_hydration(live);
+        ASSERT_FALSE(before_prune);
+        EXPECT_EQ(
+            before_prune.error().code(), lfs::ErrorCode::DataLoss);
+
+        std::unordered_set<Uuid> bound;
+        if (const auto nodes = document->scene_graph().nodes();
+            nodes) {
+            for (const auto& node : *nodes) {
+                if (node.payload && node.payload->fourcc == "CKPT") {
+                    bound.insert(node.payload->instance_uuid);
+                }
+            }
+        }
+        for (const auto& uuid : document->checkpoint_uuids()) {
+            if (!bound.contains(uuid)) {
+                EXPECT_TRUE(document->remove_checkpoint(uuid));
+            }
+        }
+        EXPECT_TRUE(document->checkpoint_uuids().empty());
+
+        Scene after_scene;
+        auto after_prune = document->stage_hydration(after_scene);
+        ASSERT_TRUE(after_prune)
+            << lfs::format_for_developer(after_prune.error());
+
+        TemporaryDirectory temporary;
+        const auto path =
+            temporary.path / "ckpt-omit-prune.licht";
+        (void)require_result(
+            document->save(path, save_options(9973, 200)));
+        auto reopened = require_result_ptr(ProjectDocument::open(path));
+        EXPECT_TRUE(reopened->checkpoint_uuids().empty());
+    }
+
+    TEST(ProjectDocumentTest,
+         BoundCheckpointSurvivesWhenCapturedSceneStillBindsIt) {
+        const auto training_uuid = fixed_uuid(9974);
+        const auto checkpoint_uuid = fixed_uuid(9975);
+        auto document = make_empty_document(fixed_uuid(9976), 100);
+        require_status(document->edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = training_uuid,
+                .type = "splat",
+                .name = "Training",
+                .child_order = 0,
+                .payload = PayloadBinding{
+                    .fourcc = "CKPT",
+                    .instance_uuid = checkpoint_uuid,
+                    .source_kind = "training",
+                },
+            }));
+        require_status(
+            document->edit_scene_graph().set_training_model_uuid(
+                training_uuid));
+        require_status(document->set_checkpoint(
+            checkpoint_uuid,
+            make_autosave_checkpoint_payload(checkpoint_uuid)));
+
+        std::unordered_set<Uuid> bound;
+        if (const auto nodes = document->scene_graph().nodes();
+            nodes) {
+            for (const auto& node : *nodes) {
+                if (node.payload && node.payload->fourcc == "CKPT") {
+                    bound.insert(node.payload->instance_uuid);
+                }
+            }
+        }
+        for (const auto& uuid : document->checkpoint_uuids()) {
+            if (!bound.contains(uuid)) {
+                static_cast<void>(document->remove_checkpoint(uuid));
+            }
+        }
+        ASSERT_EQ(document->checkpoint_uuids().size(), 1u);
+        EXPECT_EQ(document->checkpoint_uuids().front(), checkpoint_uuid);
+    }
+
+    TEST(ProjectDocumentTest,
          SaveAsDropsCheckpointRemovedBeforeRebind) {
         TemporaryDirectory temporary;
         const fs::path master =
@@ -3022,6 +3647,290 @@ namespace {
 
         static_cast<void>(require_result_ptr(
             ProjectDocument::open(destination)));
+    }
+
+    TEST(ProjectDocumentTest,
+         SaveAsToExistingForeignProjectSucceedsWithLazyCheckpoint) {
+        TemporaryDirectory temporary;
+        const fs::path source =
+            temporary.path / "saveas-handles-source.licht";
+        const fs::path destination =
+            temporary.path / "saveas-handles-dest.licht";
+        const Uuid checkpoint_uuid = fixed_uuid(9961);
+        write_phase_a_fixture(source);
+        {
+            auto seeded =
+                require_result_ptr(ProjectDocument::open(source));
+            install_bound_autosave_checkpoint(
+                *seeded, fixed_uuid(9960), checkpoint_uuid);
+            auto options = save_options(9962, 300);
+            options.commit.snapshot_uuid = checkpoint_uuid;
+            auto published = seeded->save(source, options);
+            ASSERT_TRUE(published)
+                << lfs::format_for_developer(
+                       published.error());
+        }
+
+        auto foreign = make_empty_document(fixed_uuid(9963), 100);
+        ASSERT_TRUE(foreign->save(
+            destination, save_options(9964, 400)));
+
+        auto document =
+            require_result_ptr(ProjectDocument::open(source));
+        const auto* checkpoint =
+            document->find_checkpoint(checkpoint_uuid);
+        ASSERT_NE(checkpoint, nullptr);
+        EXPECT_TRUE(checkpoint->is_clean_reference());
+        std::vector<std::byte> expected(
+            static_cast<std::size_t>(checkpoint->size()));
+        require_status(checkpoint->read_at(0, expected));
+        require_status(
+            document->edit_view().dom().set(
+                "save_as_handle_marker",
+                std::string{"dirty"}));
+        EXPECT_TRUE(document->dirty());
+
+        auto options = save_options(9965, 500);
+        options.commit.snapshot_uuid = checkpoint_uuid;
+        auto saved = document->save_as(destination, options);
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(saved.error());
+        EXPECT_FALSE(document->dirty());
+        ASSERT_TRUE(document->source_path());
+        EXPECT_EQ(
+            *document->source_path(),
+            std::filesystem::absolute(destination)
+                .lexically_normal());
+
+        auto published =
+            require_result(ProjectReader::open(destination));
+        require_status(published.verify_all());
+        EXPECT_EQ(
+            published.superblock().project_uuid,
+            fixed_uuid(950));
+
+        const auto* rebound =
+            document->find_checkpoint(checkpoint_uuid);
+        ASSERT_NE(rebound, nullptr);
+        std::vector<std::byte> actual(
+            static_cast<std::size_t>(rebound->size()));
+        require_status(rebound->read_at(0, actual));
+        EXPECT_EQ(actual, expected);
+
+        auto append_options = save_options(9966, 600);
+        append_options.commit.snapshot_uuid = checkpoint_uuid;
+        auto appended =
+            document->save(destination, append_options);
+        ASSERT_TRUE(appended)
+            << lfs::format_for_developer(appended.error());
+    }
+
+    TEST(ProjectDocumentTest,
+         SaveAsToExistingForeignProjectSucceedsWithDirtyCheckpoint) {
+        TemporaryDirectory temporary;
+        const fs::path source =
+            temporary.path / "saveas-dirty-ckpt-source.licht";
+        const fs::path destination =
+            temporary.path / "saveas-dirty-ckpt-dest.licht";
+        const Uuid checkpoint_uuid = fixed_uuid(9981);
+        write_phase_a_fixture(source);
+
+        auto foreign = make_empty_document(fixed_uuid(9982), 100);
+        ASSERT_TRUE(foreign->save(
+            destination, save_options(9983, 400)));
+
+        auto document =
+            require_result_ptr(ProjectDocument::open(source));
+        for (const auto& uuid : document->checkpoint_uuids()) {
+            EXPECT_TRUE(document->remove_checkpoint(uuid));
+        }
+        install_bound_autosave_checkpoint(
+            *document, fixed_uuid(9980), checkpoint_uuid);
+        const auto* checkpoint =
+            document->find_checkpoint(checkpoint_uuid);
+        ASSERT_NE(checkpoint, nullptr);
+        EXPECT_FALSE(checkpoint->is_clean_reference());
+        std::vector<std::byte> expected(
+            static_cast<std::size_t>(checkpoint->size()));
+        require_status(checkpoint->read_at(0, expected));
+        EXPECT_TRUE(document->dirty());
+
+        auto options = save_options(9984, 500);
+        options.commit.snapshot_uuid = checkpoint_uuid;
+        auto saved = document->save_as(destination, options);
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(saved.error());
+        EXPECT_FALSE(document->dirty());
+        ASSERT_TRUE(document->source_path());
+        EXPECT_EQ(
+            *document->source_path(),
+            std::filesystem::absolute(destination)
+                .lexically_normal());
+
+        for (const auto& entry :
+             fs::directory_iterator(temporary.path)) {
+            const auto name =
+                entry.path().filename().string();
+            EXPECT_EQ(name.find(".saveas-"), std::string::npos)
+                << name;
+        }
+
+        auto published =
+            require_result(ProjectReader::open(destination));
+        require_status(published.verify_all());
+        EXPECT_EQ(
+            published.superblock().project_uuid,
+            fixed_uuid(950));
+        EXPECT_NE(
+            published.find(FOURCC_CKPT, checkpoint_uuid),
+            nullptr);
+
+        const auto* rebound =
+            document->find_checkpoint(checkpoint_uuid);
+        ASSERT_NE(rebound, nullptr);
+        EXPECT_TRUE(rebound->is_clean_reference());
+        std::vector<std::byte> actual(
+            static_cast<std::size_t>(rebound->size()));
+        require_status(rebound->read_at(0, actual));
+        EXPECT_EQ(actual, expected);
+
+        auto append_options = save_options(9985, 600);
+        append_options.commit.snapshot_uuid = checkpoint_uuid;
+        auto appended =
+            document->save(destination, append_options);
+        ASSERT_TRUE(appended)
+            << lfs::format_for_developer(appended.error());
+    }
+
+    TEST(ProjectDocumentTest,
+         SaveAsFailureRemovesStagingTempAndLock) {
+        TemporaryDirectory temporary;
+        const fs::path source =
+            temporary.path / "saveas-fail-source.licht";
+        const fs::path destination =
+            temporary.path / "saveas-fail-dest.licht";
+        write_phase_a_fixture(source);
+        auto document =
+            require_result_ptr(ProjectDocument::open(source));
+        auto options = save_options(9970, 500);
+        options.disk_reserve_bytes =
+            std::numeric_limits<std::uint64_t>::max() / 2;
+        auto saved = document->save_as(destination, options);
+        ASSERT_FALSE(saved);
+        EXPECT_FALSE(fs::exists(destination));
+        auto destination_lock = destination;
+        destination_lock += ".lock";
+        EXPECT_FALSE(fs::exists(destination_lock));
+        for (const auto& entry :
+             fs::directory_iterator(temporary.path)) {
+            const auto name =
+                entry.path().filename().string();
+            EXPECT_EQ(name.find(".saveas-"), std::string::npos)
+                << name;
+            EXPECT_FALSE(name.ends_with(".lock")) << name;
+        }
+        EXPECT_TRUE(fs::is_regular_file(source));
+    }
+
+    TEST(ProjectDocumentTest,
+         OpenSweepsOwnedSaveasTempsAndSkipsForeignAndHeld) {
+        TemporaryDirectory temporary;
+        const fs::path master =
+            temporary.path / "open-sweep.licht";
+        write_phase_a_fixture(master);
+
+        const fs::path owned =
+            temporary.path /
+            ".open-sweep.licht.saveas-aaaa.tmp";
+        auto owned_lock = owned;
+        owned_lock += ".lock";
+        const std::array<std::byte, 1> owned_bytes{std::byte{'o'}};
+        const std::array<std::byte, 1> owned_lock_bytes{std::byte{'l'}};
+        write_file_bytes(owned, owned_bytes);
+        write_file_bytes(owned_lock, owned_lock_bytes);
+
+        const fs::path compact =
+            temporary.path /
+            "open-sweep.compact.1.2.3.tmp.licht";
+        const std::array<std::byte, 1> compact_bytes{std::byte{'c'}};
+        write_file_bytes(compact, compact_bytes);
+
+        const fs::path other_master =
+            temporary.path / "other.licht";
+        const std::array<std::byte, 1> other_master_bytes{std::byte{'m'}};
+        write_file_bytes(other_master, other_master_bytes);
+        const fs::path foreign =
+            temporary.path /
+            ".other.licht.saveas-bbbb.tmp";
+        const std::array<std::byte, 1> foreign_bytes{std::byte{'f'}};
+        write_file_bytes(foreign, foreign_bytes);
+        const fs::path foreign_compact =
+            temporary.path /
+            "other.compact.1.2.3.tmp.licht";
+        const std::array<std::byte, 1> foreign_compact_bytes{std::byte{'n'}};
+        write_file_bytes(foreign_compact, foreign_compact_bytes);
+
+        const fs::path ghost =
+            temporary.path /
+            ".ghost.licht.saveas-xxxx.tmp";
+        auto ghost_lock = ghost;
+        ghost_lock += ".lock";
+        const std::array<std::byte, 1> ghost_bytes{std::byte{'g'}};
+        const std::array<std::byte, 1> ghost_lock_bytes{std::byte{'q'}};
+        write_file_bytes(ghost, ghost_bytes);
+        write_file_bytes(ghost_lock, ghost_lock_bytes);
+        const fs::path ghost_compact =
+            temporary.path /
+            "ghost.compact.1.2.3.tmp.licht";
+        const std::array<std::byte, 1> ghost_compact_bytes{std::byte{'w'}};
+        write_file_bytes(ghost_compact, ghost_compact_bytes);
+
+        const fs::path held =
+            temporary.path /
+            ".open-sweep.licht.saveas-held.tmp";
+        auto held_lock = held;
+        held_lock += ".lock";
+        const std::array<std::byte, 1> held_bytes{std::byte{'h'}};
+        const std::array<std::byte, 1> held_lock_bytes{std::byte{'k'}};
+        write_file_bytes(held, held_bytes);
+        write_file_bytes(held_lock, held_lock_bytes);
+        auto held_lease = WriterLockLease::acquire(held);
+        ASSERT_TRUE(held_lease)
+            << lfs::format_for_developer(held_lease.error());
+
+        const fs::path held_ghost =
+            temporary.path /
+            ".ghost.licht.saveas-held.tmp";
+        auto held_ghost_lock = held_ghost;
+        held_ghost_lock += ".lock";
+        const std::array<std::byte, 1> held_ghost_bytes{std::byte{'j'}};
+        const std::array<std::byte, 1> held_ghost_lock_bytes{std::byte{'p'}};
+        write_file_bytes(held_ghost, held_ghost_bytes);
+        write_file_bytes(held_ghost_lock, held_ghost_lock_bytes);
+        auto held_ghost_lease = WriterLockLease::acquire(held_ghost);
+        ASSERT_TRUE(held_ghost_lease)
+            << lfs::format_for_developer(held_ghost_lease.error());
+
+        auto opened =
+            require_result_ptr(ProjectDocument::open(master));
+        ASSERT_TRUE(opened->source_path());
+
+        EXPECT_FALSE(fs::exists(owned));
+        EXPECT_FALSE(fs::exists(owned_lock));
+        EXPECT_FALSE(fs::exists(compact));
+        EXPECT_FALSE(fs::exists(ghost));
+        EXPECT_FALSE(fs::exists(ghost_lock));
+        EXPECT_FALSE(fs::exists(ghost_compact));
+        EXPECT_TRUE(fs::exists(other_master));
+        EXPECT_TRUE(fs::exists(foreign));
+        EXPECT_TRUE(fs::exists(foreign_compact));
+        EXPECT_TRUE(fs::exists(held));
+        EXPECT_TRUE(fs::exists(held_lock));
+        EXPECT_TRUE(fs::exists(held_ghost));
+        EXPECT_TRUE(fs::exists(held_ghost_lock));
+        auto master_lock = master;
+        master_lock += ".lock";
+        EXPECT_FALSE(fs::exists(master_lock));
     }
 
     TEST(ProjectDocumentTest,

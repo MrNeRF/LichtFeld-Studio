@@ -44,6 +44,7 @@
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/operator/operator_properties.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
+#include "visualizer/rendering/scene_upscaler_registry.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/visualizer.hpp"
@@ -819,6 +820,8 @@ namespace lfs::app {
                                  {"mip_filter", settings.mip_filter},
                                  {"sh_degree", settings.sh_degree},
                                  {"render_scale", settings.render_scale},
+                                 {"scene_upscaler", settings.scene_upscaler},
+                                 {"scene_upscaler_preset", settings.scene_upscaler_preset},
                                  {"show_crop_box", settings.show_crop_box},
                                  {"use_crop_box", settings.use_crop_box},
                                  {"show_ellipsoid", settings.show_ellipsoid},
@@ -948,6 +951,28 @@ namespace lfs::app {
                 touched = true;
                 return {};
             };
+            const auto set_scene_reconstruction = [&args, &touched](vis::RenderSettingsProxy& settings)
+                -> std::expected<void, std::string> {
+                const std::string backend_id = args.value("scene_upscaler", settings.scene_upscaler);
+                const auto backend = vis::sceneUpscalerBackendFromId(backend_id);
+                if (!backend) {
+                    return std::unexpected("Field 'scene_upscaler' must name a registered scene reconstruction backend");
+                }
+                std::string preset_id = args.value("scene_upscaler_preset", settings.scene_upscaler_preset);
+                if (!args.contains("scene_upscaler_preset") &&
+                    !vis::sceneUpscalerPreset(*backend, preset_id)) {
+                    preset_id = std::string(vis::defaultSceneUpscalerPreset(*backend).id);
+                }
+                if (!vis::sceneUpscalerPreset(*backend, preset_id)) {
+                    return std::unexpected("Field 'scene_upscaler_preset' is not valid for the selected scene reconstruction backend");
+                }
+                if (args.contains("scene_upscaler"))
+                    settings.scene_upscaler = backend_id;
+                if (args.contains("scene_upscaler_preset"))
+                    settings.scene_upscaler_preset = preset_id;
+                touched = touched || args.contains("scene_upscaler") || args.contains("scene_upscaler_preset");
+                return {};
+            };
 
             const auto set_vec3 = [&args, &touched](const char* key,
                                                     std::array<float, 3>& field) -> std::expected<void, std::string> {
@@ -981,6 +1006,8 @@ namespace lfs::app {
             set_bool("mip_filter", settings.mip_filter);
             set_int("sh_degree", settings.sh_degree);
             set_float("render_scale", settings.render_scale);
+            if (auto result = set_scene_reconstruction(settings); !result)
+                return result;
             set_bool("show_crop_box", settings.show_crop_box);
             set_bool("use_crop_box", settings.use_crop_box);
             set_bool("show_ellipsoid", settings.show_ellipsoid);
@@ -2401,10 +2428,12 @@ namespace lfs::app {
                 return trainer_manager ? trainer_manager->lastTrainingError() : std::nullopt;
             }});
 
-        // CommandCenter's generated session.resume only sets the trainer flag. A
-        // checkpoint-installed trainer has no worker yet, so route GUI MCP session
-        // controls through TrainerManager to keep the state machine and worker
-        // flags in sync.
+        // CommandCenter's generated session.pause/stop only set trainer flags. A
+        // checkpoint-installed trainer has no worker yet, so route GUI MCP pause
+        // and stop through TrainerManager. session.resume keeps the canResume()
+        // guard (resume-only; training.start starts a fresh run) then goes through
+        // VisualizerImpl::startTraining so a paused ungranted trainer shares the
+        // training.start save-grant gate.
         registry.register_tool(
             McpTool{
                 .name = "session.pause",
@@ -2451,8 +2480,7 @@ namespace lfs::app {
                     if (!trainer_manager->canResume())
                         return std::unexpected(std::string(trainer_manager->getActionBlockedReason(
                             vis::TrainingAction::Resume)));
-                    trainer_manager->resumeTraining();
-                    return {};
+                    return viewer_impl->startTraining();
                 });
                 if (!result)
                     return json{{"error", result.error()}};
@@ -2839,6 +2867,20 @@ namespace lfs::app {
                 });
             });
 
+        json scene_upscaler_backend_enum = json::array();
+        json scene_upscaler_preset_enum = json::array();
+        for (const auto& descriptor : vis::sceneUpscalerDescriptors()) {
+            scene_upscaler_backend_enum.push_back(std::string(descriptor.id));
+            for (const auto& preset : descriptor.presets) {
+                const std::string preset_id(preset.id);
+                if (std::find(scene_upscaler_preset_enum.begin(),
+                              scene_upscaler_preset_enum.end(),
+                              preset_id) == scene_upscaler_preset_enum.end()) {
+                    scene_upscaler_preset_enum.push_back(preset_id);
+                }
+            }
+        }
+
         registry.register_tool(
             McpTool{
                 .name = "render.settings.set",
@@ -2848,6 +2890,8 @@ namespace lfs::app {
                     .properties = json{
                         {"focal_length_mm", json{{"type", "number"}}},
                         {"render_scale", json{{"type", "number"}}},
+                        {"scene_upscaler", json{{"type", "string"}, {"enum", scene_upscaler_backend_enum}}},
+                        {"scene_upscaler_preset", json{{"type", "string"}, {"enum", scene_upscaler_preset_enum}}},
                         {"background_color", json{{"type", "array"}, {"items", json{{"type", "number"}}}}},
                         {"environment_mode", json{{"type", "integer"}}},
                         {"environment_map_path", json{{"type", "string"}}},

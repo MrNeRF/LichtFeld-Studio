@@ -15,6 +15,11 @@
     "file.recent_missing_message": "プロジェクトファイルが見つかりません:\n{path}",
     "file.remove_from_recent": "最近使ったプロジェクトから削除",
     "file.recent_entry": "{name} — {parent}",
+    "file.import": "インポート",
+    "file.import_failed": "インポートに失敗しました",
+    "file.import_failed_message": "インポートできませんでした:\n{path}\n\n{reason}",
+    "file.dataset_not_recognized": "選択したフォルダーは対応データセットとして認識されませんでした:\n{path}",
+    "file.checkpoint_not_recognized": "選択したファイルは有効なチェックポイントとして認識されませんでした:\n{path}",
     "file.import_dataset": "データセットをインポート",
     "file.import_ply": "PLY, SOG, SPZ, RAD, USDをインポート",
     "file.import_mesh": "メッシュをインポート",
@@ -26,7 +31,6 @@
     "file.mesh_to_splat": "メッシュをスプラットに変換...",
     "file.exit": "終了",
     "edit": "編集",
-    "edit.input_settings": "入力設定...",
     "select": "選択",
     "select.copy_selection": "選択をコピー",
     "select.cut_selection": "選択を切り取り",
@@ -56,7 +60,6 @@
     "view.debug_info": "デバッグ情報..."
   },
   "window": {
-    "input_settings": "入力設定",
     "export": "エクスポート",
     "scene": "シーン",
     "rendering": "レンダリング",
@@ -406,6 +409,12 @@
     "save_pc.message": "ポイントクラウドが変更されています。今後のセッションのためにデータセットフォルダに保存しますか？",
     "save_pc.btn_save_start": "保存して開始",
     "save_pc.btn_start_without": "保存せずに開始",
+    "overwrite.title": "以前のトレーニングを上書きしますか？",
+    "overwrite.message": "プロジェクトにはイテレーション {iteration} のチェックポイントがあります。新しいトレーニングを開始すると上書きされます。",
+    "overwrite.existing_title": "既存のプロジェクトを上書きしますか？",
+    "overwrite.existing_message": "トレーニング出力先にプロジェクトファイルが既に存在します。トレーニングを開始すると上書きされます。",
+    "overwrite.btn_overwrite_start": "上書きして開始",
+    "overwrite.btn_save_as_start": "名前を付けて保存…",
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.opacity_reg": "不透明度の正則化:",
     "losses.scale_reg": "スケールの正則化:",
@@ -651,7 +660,9 @@
     "undo": "元に戻す",
     "redo": "やり直す",
     "edit": "編集",
-    "double_click_reset": "ダブルクリックでリセット"
+    "double_click_reset": "ダブルクリックでリセット",
+    "yes": "はい",
+    "no": "いいえ"
   },
   "status": {
     "ready": "準備完了",
@@ -696,9 +707,21 @@
     "language": "言語:",
     "select_language": "言語を選択",
     "interface": "インターフェース",
+    "file_associations": "ファイルの関連付け",
+    "file_associations_description": "ファイルの種類ごとに LichtFeld Studio を関連付けるか解除します。",
     "general": "一般",
     "appearance": "外観",
+    "scene_rendering": "シーンレンダリング",
+    "scene_reconstruction": "シーン再構成",
+    "scene_reconstruction_off": "オフ",
+    "scene_reconstruction_spatial": "空間",
+    "scene_reconstruction_preset": "空間プリセット",
+    "scene_reconstruction_quality": "品質",
+    "scene_reconstruction_balanced": "バランス",
+    "scene_reconstruction_performance": "パフォーマンス",
+    "scene_reconstruction_description": "空間再構成は、低い内部解像度でシーンを描画し、ビューポート解像度へ再構成します。トレーニングや保存済みのスプラットデータには影響しません。",
     "input": "入力",
+    "key_bindings": "キー割り当て",
     "camera_navigation": "カメラ操作",
     "navigation_mode": "ナビゲーションモード",
     "camera_view_snap": "軸ビューにスナップ",
@@ -736,7 +759,7 @@
     "reset_section_failed": "設定をリセットできませんでした。",
     "ui_preferences_save_failed": "インターフェース設定を保存できませんでした。",
     "reset_all_settings": "すべての設定をリセット",
-    "reset_all_settings_confirmation": "言語、テーマ、UI スケール、入力設定、MCP サーバー、レイアウト、ウィンドウ状態を既定値に戻しますか？直ちに適用されます。.licht プロジェクトが開いている場合、次回保存時に保存済みレイアウトが置き換えられます。プロジェクト内容、データセット、エクスポート、プラグイン、キャッシュは影響を受けません。",
+    "reset_all_settings_confirmation": "言語、テーマ、UI スケール、シーン再構成、入力設定、MCP サーバー、レイアウト、ウィンドウ状態を既定値に戻しますか？直ちに適用されます。.licht プロジェクトが開いている場合、次回保存時に保存済みレイアウトが置き換えられます。プロジェクト内容、データセット、エクスポート、プラグイン、キャッシュは影響を受けません。",
     "reset_all_settings_success": "すべての設定、レイアウト、ウィンドウ状態を直ちにリセットしました。",
     "window_manager_unavailable": "ウィンドウマネージャーを利用できません。",
     "window_state_reset_failed": "ウィンドウを既定の配置に戻せませんでした。"
@@ -1145,6 +1168,10 @@
     "discard_and_exit": "破棄して終了",
     "exit": "終了"
   },
+  "project_switch": {
+    "stop_training_title": "トレーニングを停止しますか？",
+    "stop_training_message": "プロジェクトを切り替える前にトレーニングを停止する必要があります。現在のセッションを停止しますか？"
+  },
   "load_dataset_popup": {
     "title": "データセットを読み込む",
     "configure_paths": "データセットのパスを設定",
@@ -1165,7 +1192,11 @@
     "min_track_length": "最小トラック長",
     "min_track_length_hint": "少なくともこの枚数の画像で観測された Sparse 点を保持します。0 でフィルタリングを無効にします。",
     "min_track_length_init_warning": "初期化 PLY が設定されている間は無視されます。",
-    "apply_auto_crop": "自動クロップを適用"
+    "apply_auto_crop": "自動クロップを適用",
+    "save_title": "プロジェクトを保存しますか？",
+    "save_message": "新しいデータセットを読み込む前に、現在のプロジェクトを保存しますか？",
+    "save_and_load": "保存して読み込む",
+    "load_without_saving": "保存せずに読み込む"
   },
   "notification": {
     "dropped_not_recognized": "ドロップされた",
@@ -1218,13 +1249,11 @@
     "status_label": "ステータス: %s"
   },
   "input_settings": {
-    "title": "入力設定",
     "active_profile": "アクティブプロファイル:",
     "save_current_profile": "現在のプロファイルを保存",
     "reset_to_default": "デフォルトにリセット",
     "export": "エクスポート...",
     "import": "インポート...",
-    "action": "アクション",
     "rebind": "再割り当て",
     "cancel": "キャンセル",
     "replace": "置き換え",
@@ -1245,7 +1274,6 @@
     "click_again_double": "ダブルクリックにするにはもう一度クリック...",
     "tool_mode": "ツールモード",
     "select_tool_mode": "ツールモードを選択して割り当てを表示/編集",
-    "current_bindings": "現在の割り当て",
     "global_bindings_hint": "グローバル割り当ては上書きされない限りどこでも適用されます",
     "tool_bindings_hint": "ツール固有の割り当てはグローバル割り当てを上書きします",
     "section.navigation": "ナビゲーション",
@@ -1291,6 +1319,7 @@
     "action.toggle_independent_split_view": "独立分割ビュー切替",
     "action.toggle_gt_comparison": "GT比較切替",
     "action.toggle_camera_frustums": "カメラ視錐台を切り替え",
+    "action.toggle_grid": "グリッドを切り替え",
     "action.toggle_depth_mode": "深度ボックス切替",
     "action.cycle_ply": "PLY切替",
     "action.delete_selected": "選択したガウシアンを削除",
@@ -1349,8 +1378,7 @@
     "trigger.drag": " ドラッグ",
     "trigger.scroll": "スクロール",
     "trigger.unknown": "不明",
-    "action.toggle_performance_hud": "Toggle Performance HUD",
-    "binding": "割り当て"
+    "action.toggle_performance_hud": "Toggle Performance HUD"
   },
   "debug_info": {
     "clear_history": "履歴をクリア",
@@ -1868,7 +1896,7 @@
   },
   "file_association": {
     "title": "既定のアプリケーションに設定",
-    "message": "LichtFeld Studioをスプラットファイル（.ply、.sog、.spz、.rad、.usd、.usda、.usdc、.usdz）の既定のアプリケーションに設定しますか？",
+    "message": "LichtFeld Studioをスプラットおよびプロジェクトファイル（.ply、.sog、.spz、.rad、.usd、.usda、.usdc、.usdz、.licht）の既定のアプリケーションに設定しますか？",
     "yes": "はい",
     "not_now": "後で",
     "dont_ask": "今後表示しない",
@@ -2263,6 +2291,14 @@
       "title": "トレーナーを復元できませんでした",
       "message": "プロジェクトモデルは表示できますが、学習を再開できませんでした。データセットのパスとログを確認してください。"
     }
+  },
+  "recovery": {
+    "crash_title": "LichtFeld Studio が予期せず終了しました",
+    "body": "{} の復旧ファイルが見つかりました。（保存日時 {}）",
+    "unsaved_session": "未保存のセッション",
+    "recover": "復旧",
+    "open_saved": "保存済みを開く",
+    "skip": "スキップして新規作成"
   },
   "startup_recent": {
     "title": "最近のプロジェクト",

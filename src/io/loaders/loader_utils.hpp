@@ -31,6 +31,8 @@ namespace lfs::io {
             }
 
             const auto& cam = cameras[i];
+            if (!cam->has_image())
+                continue;
             auto ext = cam->image_path().extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
             if (ext == ".jpg" || ext == ".jpeg")

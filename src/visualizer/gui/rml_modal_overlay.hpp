@@ -31,6 +31,12 @@ namespace lfs::vis {
     class VisualizerImplResetTest_RecoveredCloseDeletesTempAfterDocumentTeardown_Test;
     class VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
     class VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
+    class VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
+    class VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
+    class VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
+    class VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
+    class VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
+    class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
 } // namespace lfs::vis
 namespace lfs::vis::gui {
 
@@ -68,6 +74,12 @@ namespace lfs::vis::gui {
         friend class lfs::vis::VisualizerImplResetTest_RecoveredCloseDeletesTempAfterDocumentTeardown_Test;
         friend class lfs::vis::VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
         friend class lfs::vis::VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
+        friend class lfs::vis::VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
+        friend class lfs::vis::VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
         void initContext();
         bool syncTheme();
         void cacheElements();

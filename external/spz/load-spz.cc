@@ -224,13 +224,9 @@ namespace spz {
             return decompressGzippedImpl(compressed, size, 16 | MAX_WBITS, out);
         }
 
-        // A read-only streambuf over a contiguous byte range, avoiding any copy.
-        struct membuf : std::streambuf {
-            membuf(const uint8_t* data, size_t size) {
-                auto* p = reinterpret_cast<char*>(const_cast<uint8_t*>(data));
-                setg(p, p, p + size);
-            }
-        };
+        // LichtFeld: unbounded membuf (setg(p, p, p + size)) was replaced by
+        // the windowed spz::membuf in load-spz.h. Do not restore a whole-span
+        // setg here — MSVC stores the get-area length as int (LichtFeld #1697).
 
     } // namespace
 

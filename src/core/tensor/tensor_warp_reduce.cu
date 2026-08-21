@@ -1491,7 +1491,7 @@ namespace lfs::core::tensor_ops {
             break;
         case ReduceOp::Max:
             if (grid_y > 1) {
-                thrust::fill(thrust::cuda::par.on(stream),
+                thrust::fill(thrust::cuda::par_nosync.on(stream),
                              thrust::device_ptr<float>(output), thrust::device_ptr<float>(output + N), -FLT_MAX);
             }
             column_reduce_max_kernel<<<grid, BLOCK, 0, stream>>>(input, output, M, N);
@@ -1499,7 +1499,7 @@ namespace lfs::core::tensor_ops {
             break;
         case ReduceOp::Min:
             if (grid_y > 1) {
-                thrust::fill(thrust::cuda::par.on(stream),
+                thrust::fill(thrust::cuda::par_nosync.on(stream),
                              thrust::device_ptr<float>(output), thrust::device_ptr<float>(output + N), FLT_MAX);
             }
             column_reduce_min_kernel<<<grid, BLOCK, 0, stream>>>(input, output, M, N);
@@ -1791,7 +1791,7 @@ namespace lfs::core::tensor_ops {
             if (grid_y > 1) {
                 const float inv = 1.0f / static_cast<float>(reduce_size);
                 thrust::transform(
-                    thrust::cuda::par.on(stream),
+                    thrust::cuda::par_nosync.on(stream),
                     thrust::device_ptr<float>(output),
                     thrust::device_ptr<float>(output + output_elems),
                     thrust::device_ptr<float>(output),
@@ -1800,7 +1800,7 @@ namespace lfs::core::tensor_ops {
             break;
         case ReduceOp::Max:
             if (grid_y > 1) {
-                thrust::fill(thrust::cuda::par.on(stream),
+                thrust::fill(thrust::cuda::par_nosync.on(stream),
                              thrust::device_ptr<float>(output),
                              thrust::device_ptr<float>(output + output_elems),
                              -FLT_MAX);
@@ -1811,7 +1811,7 @@ namespace lfs::core::tensor_ops {
             break;
         case ReduceOp::Min:
             if (grid_y > 1) {
-                thrust::fill(thrust::cuda::par.on(stream),
+                thrust::fill(thrust::cuda::par_nosync.on(stream),
                              thrust::device_ptr<float>(output),
                              thrust::device_ptr<float>(output + output_elems),
                              FLT_MAX);

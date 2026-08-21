@@ -1727,6 +1727,14 @@ namespace lfs::vis {
                 }
                 return;
 
+            case input::Action::TOGGLE_GRID:
+                if (auto* rendering_manager = services().renderingOrNull()) {
+                    auto settings = rendering_manager->getSettings();
+                    settings.show_grid = !settings.show_grid;
+                    rendering_manager->updateSettings(settings);
+                }
+                return;
+
             case input::Action::CAMERA_NEXT_VIEW:
             case input::Action::CAMERA_PREV_VIEW: {
                 const auto* trainer = services().trainerOrNull();

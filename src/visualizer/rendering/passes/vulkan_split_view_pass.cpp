@@ -55,7 +55,7 @@ namespace lfs::vis {
             float split[4];               // x = position, y = left_flip_y, z = right_flip_y, w = pad
             float rect[4];                // x, y, w, h
             float panel_norm[4];          // left_start, left_end, right_start, right_end
-            float panel_flags[4];         // left_normalize, right_normalize, pad, pad
+            float panel_flags[4];         // left_normalize, right_normalize, left_filter, right_filter
             float background[4];          // rgb + pad
             float divider[4];             // bar_half_w, handle_half_w, handle_half_h, corner_radius
             float grip[4];                // spacing, half_w, half_l, line_count
@@ -1166,7 +1166,6 @@ namespace lfs::vis {
             push.split[0] = std::clamp(params.split_position, 0.0f, 1.0f);
             push.split[1] = params.left.flip_y ? 1.0f : 0.0f;
             push.split[2] = params.right.flip_y ? 1.0f : 0.0f;
-            push.split[3] = 0.0f;
 
             const float rect_x = static_cast<float>(params.content_rect.x);
             const float rect_y = static_cast<float>(params.content_rect.y);
@@ -1184,6 +1183,8 @@ namespace lfs::vis {
 
             push.panel_flags[0] = params.left.normalize_x_to_panel ? 1.0f : 0.0f;
             push.panel_flags[1] = params.right.normalize_x_to_panel ? 1.0f : 0.0f;
+            push.panel_flags[2] = params.left.spatial_filter ? 1.0f : 0.0f;
+            push.panel_flags[3] = params.right.spatial_filter ? 1.0f : 0.0f;
 
             push.background[0] = params.background.r;
             push.background[1] = params.background.g;
@@ -1221,6 +1222,8 @@ namespace lfs::vis {
                    descriptor.left_view != VK_NULL_HANDLE &&
                    descriptor.right_view != VK_NULL_HANDLE;
         }
+
+        [[nodiscard]] bool available() const { return pipeline != VK_NULL_HANDLE; }
     };
 
     VulkanSplitViewPass::VulkanSplitViewPass() = default;
@@ -1257,6 +1260,10 @@ namespace lfs::vis {
 
     bool VulkanSplitViewPass::ready(const std::size_t frame_slot) const {
         return impl_ && impl_->ready(frame_slot);
+    }
+
+    bool VulkanSplitViewPass::available() const {
+        return impl_ && impl_->available();
     }
 
 } // namespace lfs::vis

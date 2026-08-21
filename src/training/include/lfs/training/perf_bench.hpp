@@ -11,13 +11,21 @@
  * Collects per-iteration wall time, real device allocs (alloc_counter), peak
  * CUDA VRAM, last loss, and the training-state ledger. Writes a JSON report
  * at finalize().
+ *
+ * When enabled, also samples paired host-clock + cudaEvent stamps at the
+ * train-step phase boundaries (every 25th steady-state iteration, plus the
+ * following iteration so inter_step can be measured). Events are recorded
+ * without synchronizing; elapsed times are read only at finalize().
  */
 
 #include "diagnostics/vram_profiler.hpp"
 
+#include <cuda_runtime_api.h>
+
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace lfs::training {
 
@@ -39,6 +47,16 @@ namespace lfs::training {
 
     class PerfBenchCollector {
     public:
+        enum class PhaseBoundary : int {
+            StepBegin = 0,
+            FwdBegin,
+            LossBegin,
+            BwdBegin,
+            OptBegin,
+            StepEnd,
+            Count
+        };
+
         static PerfBenchCollector& instance();
 
         /// Configure from CLI (`--perf-bench` / `--perf-bench-warmup=N`). Call before training.
@@ -48,6 +66,17 @@ namespace lfs::training {
 
         /// Warmup length for steady-state metrics (default 200).
         [[nodiscard]] static int warmup_iters();
+
+        /// Training stream used for phase cudaEventRecord (lfs.train).
+        void set_timing_stream(cudaStream_t stream);
+
+        /// One integer compare when disabled or this iter is not sampled.
+        static void phase_mark(PhaseBoundary b, int iter) {
+            if (iter != phase_active_iter_) {
+                return;
+            }
+            instance().record_phase_mark(b);
+        }
 
         void on_training_start(int total_iters);
         void on_step_begin(int iter);
@@ -87,9 +116,38 @@ namespace lfs::training {
         [[nodiscard]] diagnostics::PeakExCacheLedger peak_ex_cache_ledger() const;
 
     private:
+        static constexpr int kPhaseSampleStride = 25;
+        static constexpr int kPhaseSampleCap = 400;
+        static constexpr int kPhaseBoundaryCount = static_cast<int>(PhaseBoundary::Count);
+
+        struct PhaseSample {
+            int iter = 0;
+            std::uint32_t seen_mask = 0;
+            std::int64_t host_ns[kPhaseBoundaryCount]{};
+        };
+
         PerfBenchCollector() = default;
+        ~PerfBenchCollector();
+        PerfBenchCollector(const PerfBenchCollector&) = delete;
+        PerfBenchCollector& operator=(const PerfBenchCollector&) = delete;
+        PerfBenchCollector(PerfBenchCollector&&) = delete;
+        PerfBenchCollector& operator=(PerfBenchCollector&&) = delete;
 
         void capture_peak_snapshot(int iter, std::size_t used, std::size_t total);
+        void record_phase_mark(PhaseBoundary b);
+        [[nodiscard]] bool ensure_phase_event_pool();
+        void destroy_phase_event_pool();
+        void reset_phase_session();
+
+        static inline int phase_active_iter_ = 0;
+
+        cudaStream_t timing_stream_ = nullptr;
+        bool phase_pool_ready_ = false;
+        int phase_sample_count_ = 0;
+        int phase_current_index_ = -1;
+        int phase_last_primary_iter_ = 0;
+        std::vector<PhaseSample> phase_samples_;
+        std::vector<cudaEvent_t> phase_events_;
 
         bool started_ = false;
         int total_iters_ = 0;

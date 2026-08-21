@@ -15,6 +15,11 @@
     "file.recent_missing_message": "Nie można znaleźć pliku projektu:\n{path}",
     "file.remove_from_recent": "Usuń z ostatnich projektów",
     "file.recent_entry": "{name} — {parent}",
+    "file.import": "Importuj",
+    "file.import_failed": "Import nie powiódł się",
+    "file.import_failed_message": "Nie można zaimportować:\n{path}\n\n{reason}",
+    "file.dataset_not_recognized": "Wybrany folder nie został rozpoznany jako obsługiwany zbiór danych:\n{path}",
+    "file.checkpoint_not_recognized": "Wybrany plik nie został rozpoznany jako prawidłowy checkpoint:\n{path}",
     "file.import_dataset": "Importuj Zbiór Danych",
     "file.import_ply": "Importuj PLY, SOG, SPZ, RAD, USD",
     "file.import_mesh": "Importuj Mesh",
@@ -26,7 +31,6 @@
     "file.mesh_to_splat": "Mesh na Splat...",
     "file.exit": "Zakończ",
     "edit": "Edycja",
-    "edit.input_settings": "Ustawienia Wejścia...",
     "select": "Zaznaczenie",
     "select.copy_selection": "Kopiuj zaznaczenie",
     "select.cut_selection": "Wytnij zaznaczenie",
@@ -56,7 +60,6 @@
     "view.debug_info": "Informacje Debugowania..."
   },
   "window": {
-    "input_settings": "Ustawienia Wejścia",
     "export": "Eksportuj",
     "scene": "Scena",
     "rendering": "Renderowanie",
@@ -406,6 +409,12 @@
     "save_pc.message": "Chmura punktów została zmodyfikowana. Zapisać w folderze datasetu dla przyszłych sesji?",
     "save_pc.btn_save_start": "Zapisz i rozpocznij",
     "save_pc.btn_start_without": "Rozpocznij bez zapisywania",
+    "overwrite.title": "Nadpisać poprzedni trening?",
+    "overwrite.message": "Projekt zawiera punkt kontrolny w iteracji {iteration}. Rozpoczęcie nowego treningu go nadpisze.",
+    "overwrite.existing_title": "Nadpisać istniejący projekt?",
+    "overwrite.existing_message": "W lokalizacji wyjściowej treningu istnieje już plik projektu. Rozpoczęcie treningu go nadpisze.",
+    "overwrite.btn_overwrite_start": "Nadpisz i rozpocznij",
+    "overwrite.btn_save_as_start": "Zapisz jako…",
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.opacity_reg": "Reg. nieprzezroczystości:",
     "losses.scale_reg": "Reg. skali:",
@@ -651,7 +660,9 @@
     "undo": "Cofnij",
     "redo": "Ponów",
     "edit": "Edytuj",
-    "double_click_reset": "podwójne kliknięcie resetuje"
+    "double_click_reset": "podwójne kliknięcie resetuje",
+    "yes": "Tak",
+    "no": "Nie"
   },
   "status": {
     "ready": "Gotowy",
@@ -696,9 +707,21 @@
     "language": "Język:",
     "select_language": "Wybierz Język",
     "interface": "Interfejs",
+    "file_associations": "Skojarzenia plików",
+    "file_associations_description": "Zarejestruj lub usuń LichtFeld Studio jako program obsługujący każdy typ pliku.",
     "general": "Ogólne",
     "appearance": "Wygląd",
+    "scene_rendering": "Renderowanie sceny",
+    "scene_reconstruction": "Rekonstrukcja sceny",
+    "scene_reconstruction_off": "Wyłączona",
+    "scene_reconstruction_spatial": "Przestrzenna",
+    "scene_reconstruction_preset": "Ustawienie przestrzenne",
+    "scene_reconstruction_quality": "Jakość",
+    "scene_reconstruction_balanced": "Zrównoważone",
+    "scene_reconstruction_performance": "Wydajność",
+    "scene_reconstruction_description": "Rekonstrukcja przestrzenna renderuje scenę w niższej rozdzielczości wewnętrznej i odtwarza ją w rozdzielczości widoku. Nie wpływa na trening ani zapisane dane splatów.",
     "input": "Sterowanie",
+    "key_bindings": "Przypisania klawiszy",
     "camera_navigation": "Nawigacja kamery",
     "navigation_mode": "Tryb nawigacji",
     "camera_view_snap": "Przyciągaj widoki osi",
@@ -736,7 +759,7 @@
     "reset_section_failed": "Nie można zresetować ustawień.",
     "ui_preferences_save_failed": "Nie udało się zapisać preferencji interfejsu.",
     "reset_all_settings": "Resetuj wszystkie ustawienia",
-    "reset_all_settings_confirmation": "Przywrócić język, motyw, skalę interfejsu, preferencje wejścia, serwer MCP, układ i stan okna do wartości domyślnych? Zostanie to zastosowane natychmiast. Jeśli projekt .licht jest otwarty, jego zapisany układ zostanie zastąpiony przy następnym zapisie; zawartość projektu, zestawy danych, eksporty, wtyczki i pamięć podręczna nie zostaną zmienione.",
+    "reset_all_settings_confirmation": "Przywrócić język, motyw, skalę interfejsu, rekonstrukcję sceny, preferencje wejścia, serwer MCP, układ i stan okna do wartości domyślnych? Zostanie to zastosowane natychmiast. Jeśli projekt .licht jest otwarty, jego zapisany układ zostanie zastąpiony przy następnym zapisie; zawartość projektu, zestawy danych, eksporty, wtyczki i pamięć podręczna nie zostaną zmienione.",
     "reset_all_settings_success": "Wszystkie preferencje, układ i stan okna zostały natychmiast zresetowane.",
     "window_manager_unavailable": "Menedżer okien jest niedostępny.",
     "window_state_reset_failed": "Nie udało się przywrócić domyślnej geometrii okna."
@@ -1145,6 +1168,10 @@
     "discard_and_exit": "Odrzuć i wyjdź",
     "exit": "Zakończ"
   },
+  "project_switch": {
+    "stop_training_title": "Zatrzymać trening?",
+    "stop_training_message": "Trening trzeba zatrzymać przed zmianą projektu. Zatrzymać bieżącą sesję?"
+  },
   "load_dataset_popup": {
     "title": "Wczytaj Zbiór Danych",
     "configure_paths": "Skonfiguruj ścieżki zbioru danych",
@@ -1165,7 +1192,11 @@
     "min_track_length": "Minimalna długość ścieżki",
     "min_track_length_hint": "Zachowuje punkty Sparse obserwowane w co najmniej tylu obrazach. 0 wyłącza filtrowanie.",
     "min_track_length_init_warning": "Ignorowane, gdy ustawiono Init PLY.",
-    "apply_auto_crop": "Zastosuj automatyczne kadrowanie"
+    "apply_auto_crop": "Zastosuj automatyczne kadrowanie",
+    "save_title": "Zapisać projekt?",
+    "save_message": "Zapisać bieżący projekt przed wczytaniem nowego zbioru danych?",
+    "save_and_load": "Zapisz i wczytaj",
+    "load_without_saving": "Wczytaj bez zapisywania"
   },
   "notification": {
     "dropped_not_recognized": "Upuszczony",
@@ -1218,13 +1249,11 @@
     "status_label": "Stan: %s"
   },
   "input_settings": {
-    "title": "USTAWIENIA WEJŚCIA",
     "active_profile": "Aktywny Profil:",
     "save_current_profile": "Zapisz Bieżący Profil",
     "reset_to_default": "Resetuj do Domyślnych",
     "export": "Eksportuj...",
     "import": "Importuj...",
-    "action": "Akcja",
     "rebind": "Przypisz Ponownie",
     "cancel": "Anuluj",
     "replace": "Zastąp",
@@ -1245,7 +1274,6 @@
     "click_again_double": "Kliknij ponownie dla podwójnego kliknięcia...",
     "tool_mode": "TRYB NARZĘDZIA",
     "select_tool_mode": "Wybierz tryb narzędzia, aby wyświetlić/edytować przypisania",
-    "current_bindings": "BIEŻĄCE PRZYPISANIA",
     "global_bindings_hint": "Przypisania globalne obowiązują wszędzie, chyba że zostaną nadpisane",
     "tool_bindings_hint": "Przypisania specyficzne dla narzędzi nadpisują przypisania globalne",
     "section.navigation": "NAWIGACJA",
@@ -1291,6 +1319,7 @@
     "action.toggle_independent_split_view": "Przełącz niezależny widok podzielony",
     "action.toggle_gt_comparison": "Przełącz porównanie GT",
     "action.toggle_camera_frustums": "Przełącz ostrosłupy kamery",
+    "action.toggle_grid": "Przełącz siatkę",
     "action.toggle_depth_mode": "Przełącz pudełko głębi",
     "action.cycle_ply": "Przełączaj PLY",
     "action.delete_selected": "Usuń wybrane gaussiany",
@@ -1349,8 +1378,7 @@
     "trigger.drag": " Przeciągnięcie",
     "trigger.scroll": "Przewijanie",
     "trigger.unknown": "Nieznane",
-    "action.toggle_performance_hud": "Toggle Performance HUD",
-    "binding": "Przypisanie"
+    "action.toggle_performance_hud": "Toggle Performance HUD"
   },
   "debug_info": {
     "clear_history": "Wyczyść Historię",
@@ -1868,7 +1896,7 @@
   },
   "file_association": {
     "title": "Ustaw jako domyślną aplikację",
-    "message": "Czy chcesz ustawić LichtFeld Studio jako domyślną aplikację dla plików splat (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz)?",
+    "message": "Czy chcesz ustawić LichtFeld Studio jako domyślną aplikację dla plików splat i projektów (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht)?",
     "yes": "Tak",
     "not_now": "Nie teraz",
     "dont_ask": "Nie pytaj ponownie",
@@ -2263,6 +2291,14 @@
       "title": "Nie przywrócono trenera",
       "message": "Model projektu jest dostępny do podglądu, ale nie udało się wznowić treningu. Sprawdź ścieżkę zestawu danych i logi."
     }
+  },
+  "recovery": {
+    "crash_title": "LichtFeld Studio zostało nieoczekiwanie zamknięte",
+    "body": "Znaleziono plik odzyskiwania dla {}. (zapisano {})",
+    "unsaved_session": "niezapisana sesja",
+    "recover": "Odzyskaj",
+    "open_saved": "Otwórz zapisany",
+    "skip": "Pomiń i utwórz nowy"
   },
   "startup_recent": {
     "title": "Ostatnie projekty",

@@ -569,7 +569,7 @@
         <span class="text-accent">{{pv_header_save_steps}}</span>
       </div>
       <div class="section-content collapsed" id="sec-save-steps">
-        <div data-if="save_edit_mode" data-class-disabled-overlay="step_scaling_params_locked">
+        <div data-if="save_edit_mode">
           <div class="setting-row" data-tooltip="training.tooltip.save_step_input">
             <input type="text" id="num-new_step" class="number-input" data-value="new_step_str" />
             <button class="num-step-btn" data-event-mousedown="num_step('new_step', -1)">-</button>

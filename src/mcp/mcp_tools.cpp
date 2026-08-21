@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "mcp_tools.hpp"
-#include "mcp_training_context.hpp"
 
 #include "core/error.hpp"
 #include "core/error_envelope.hpp"

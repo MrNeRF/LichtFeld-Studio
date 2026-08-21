@@ -25,6 +25,7 @@
 #include "viewport/pivot.frag.spv.h"
 #include "viewport/pivot.vert.spv.h"
 #include "viewport/scene.frag.spv.h"
+#include "viewport/scene_spatial.frag.spv.h"
 #include "viewport/screen_quad.vert.spv.h"
 #include "viewport/shape_overlay.frag.spv.h"
 #include "viewport/shape_overlay.vert.spv.h"
@@ -251,6 +252,11 @@ namespace lfs::vis {
 
         VkPipelineLayout scene_pipeline_layout = VK_NULL_HANDLE;
         VkPipeline scene_pipeline = VK_NULL_HANDLE;
+        VkPipelineLayout scene_spatial_pipeline_layout = VK_NULL_HANDLE;
+        VkPipeline scene_spatial_pipeline = VK_NULL_HANDLE;
+        bool scene_spatial_pipeline_failed = false;
+        SceneUpscalerSelection scene_upscaler_selection{};
+        std::optional<SceneUpscalerSelection> logged_scene_upscaler_selection;
         VkPipelineLayout vignette_pipeline_layout = VK_NULL_HANDLE;
         VkPipeline vignette_pipeline = VK_NULL_HANDLE;
         VkPipelineLayout grid_pipeline_layout = VK_NULL_HANDLE;
@@ -1604,6 +1610,39 @@ namespace lfs::vis {
                                   frustum_descriptor_layout);
         }
 
+        [[nodiscard]] bool ensureSpatialScenePipeline() {
+            if (scene_spatial_pipeline != VK_NULL_HANDLE)
+                return true;
+            if (scene_spatial_pipeline_failed)
+                return false;
+            VkPushConstantRange scene_push{};
+            scene_push.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+            scene_push.offset = 0;
+            scene_push.size = sizeof(ScenePush);
+            using namespace viewport_shaders;
+            if (createPipeline(kScreenQuadVertSpv,
+                               kSceneSpatialFragSpv,
+                               "scene_spatial",
+                               scene_descriptor_layout,
+                               &scene_push,
+                               true,
+                               PipelineVertexLayout::ScreenQuad,
+                               scene_spatial_pipeline_layout,
+                               scene_spatial_pipeline)) {
+                return true;
+            }
+            if (scene_spatial_pipeline != VK_NULL_HANDLE) {
+                vkDestroyPipeline(device, scene_spatial_pipeline, nullptr);
+                scene_spatial_pipeline = VK_NULL_HANDLE;
+            }
+            if (scene_spatial_pipeline_layout != VK_NULL_HANDLE) {
+                vkDestroyPipelineLayout(device, scene_spatial_pipeline_layout, nullptr);
+                scene_spatial_pipeline_layout = VK_NULL_HANDLE;
+            }
+            scene_spatial_pipeline_failed = true;
+            return false;
+        }
+
         void updateQuadBuffer(const bool flip_y) {
             if (quad_initialized && quad_flip_y == flip_y) {
                 return;
@@ -1973,6 +2012,11 @@ namespace lfs::vis {
         }
 
         void prepare(const VulkanViewportPassParams& params) {
+            if (params.scene_upscaler == SceneUpscalerBackend::Native) {
+                scene_spatial_pipeline_failed = false;
+            } else {
+                static_cast<void>(ensureSpatialScenePipeline());
+            }
             auto& frame = resourcesForFrame(params.frame_slot);
             updateQuadBuffer(params.scene_image_flip_y);
             updateGridUniforms(params);
@@ -2007,6 +2051,30 @@ namespace lfs::vis {
             environment_pass.prepare(params.environment, params.frame_slot);
             depth_blit_pass.prepare(params.depth_blit, params.frame_slot);
             split_view_pass.prepare(params.split_view, params.frame_slot);
+            const bool runtime_available = params.split_view.enabled
+                                               ? split_view_pass.available()
+                                               : scene_spatial_pipeline != VK_NULL_HANDLE;
+            scene_upscaler_selection = resolveSceneUpscalerSelection(
+                params.scene_upscaler, runtime_available);
+            auto& profiler = lfs::diagnostics::VramProfiler::instance();
+            profiler.setGauge("viewer.upscaler.requested",
+                              static_cast<double>(scene_upscaler_selection.requested));
+            profiler.setGauge("viewer.upscaler.effective",
+                              static_cast<double>(scene_upscaler_selection.effective));
+            profiler.setGauge("viewer.upscaler.fallback",
+                              scene_upscaler_selection.fellBack() ? 1.0 : 0.0);
+            profiler.setGauge("viewer.upscaler.runtime_ready", runtime_available ? 1.0 : 0.0);
+            if (!logged_scene_upscaler_selection ||
+                *logged_scene_upscaler_selection != scene_upscaler_selection) {
+                if (scene_upscaler_selection.fellBack()) {
+                    LOG_WARN("Scene reconstruction '{}' unavailable; using native presentation",
+                             sceneUpscalerBackendId(scene_upscaler_selection.requested));
+                } else {
+                    LOG_INFO("Scene reconstruction active: {}",
+                             sceneUpscalerBackendId(scene_upscaler_selection.effective));
+                }
+                logged_scene_upscaler_selection = scene_upscaler_selection;
+            }
         }
 
         void bindViewport(VkCommandBuffer command_buffer, const FramebufferRect& rect) const {
@@ -2184,6 +2252,19 @@ namespace lfs::vis {
                 // content_rect arrives panel-local; lift it into framebuffer
                 // coords so the shader's letterbox check matches gl_FragCoord.
                 VulkanSplitViewParams adjusted = params.split_view;
+                if (adjusted.coordinate_extent.x > 0 && adjusted.coordinate_extent.y > 0) {
+                    const float scale_x = static_cast<float>(rect.width) /
+                                          static_cast<float>(adjusted.coordinate_extent.x);
+                    const float scale_y = static_cast<float>(rect.height) /
+                                          static_cast<float>(adjusted.coordinate_extent.y);
+                    const int left = static_cast<int>(std::lround(adjusted.content_rect.x * scale_x));
+                    const int top = static_cast<int>(std::lround(adjusted.content_rect.y * scale_y));
+                    const int right = static_cast<int>(std::lround(
+                        (adjusted.content_rect.x + adjusted.content_rect.z) * scale_x));
+                    const int bottom = static_cast<int>(std::lround(
+                        (adjusted.content_rect.y + adjusted.content_rect.w) * scale_y));
+                    adjusted.content_rect = {left, top, std::max(right - left, 1), std::max(bottom - top, 1)};
+                }
                 adjusted.content_rect.x += rect.x;
                 adjusted.content_rect.y += rect.y;
                 const VkRect2D panel_rect{
@@ -2193,10 +2274,16 @@ namespace lfs::vis {
                 };
                 split_view_pass.record(command_buffer, panel_rect, adjusted, params.frame_slot);
             } else if (has_scene) {
-                vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, scene_pipeline);
+                const bool use_spatial =
+                    scene_upscaler_selection.effective == SceneUpscalerBackend::Spatial &&
+                    scene_spatial_pipeline != VK_NULL_HANDLE;
+                const VkPipeline selected_pipeline = use_spatial ? scene_spatial_pipeline : scene_pipeline;
+                const VkPipelineLayout selected_layout =
+                    use_spatial ? scene_spatial_pipeline_layout : scene_pipeline_layout;
+                vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, selected_pipeline);
                 vkCmdBindDescriptorSets(command_buffer,
                                         VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                        scene_pipeline_layout,
+                                        selected_layout,
                                         0,
                                         1,
                                         &frame.scene_descriptor_set,
@@ -2212,7 +2299,7 @@ namespace lfs::vis {
                     .uv_clamp_max = outputUvClampMax(valid, alloc),
                 };
                 vkCmdPushConstants(command_buffer,
-                                   scene_pipeline_layout,
+                                   selected_layout,
                                    VK_SHADER_STAGE_FRAGMENT_BIT,
                                    0,
                                    sizeof(scene_push),
@@ -2597,6 +2684,8 @@ namespace lfs::vis {
                 split_view_pass.shutdown();
                 if (scene_pipeline != VK_NULL_HANDLE)
                     vkDestroyPipeline(device, scene_pipeline, nullptr);
+                if (scene_spatial_pipeline != VK_NULL_HANDLE)
+                    vkDestroyPipeline(device, scene_spatial_pipeline, nullptr);
                 if (vignette_pipeline != VK_NULL_HANDLE)
                     vkDestroyPipeline(device, vignette_pipeline, nullptr);
                 if (grid_pipeline != VK_NULL_HANDLE)
@@ -2613,6 +2702,8 @@ namespace lfs::vis {
                     vkDestroyPipeline(device, frustum_pipeline, nullptr);
                 if (scene_pipeline_layout != VK_NULL_HANDLE)
                     vkDestroyPipelineLayout(device, scene_pipeline_layout, nullptr);
+                if (scene_spatial_pipeline_layout != VK_NULL_HANDLE)
+                    vkDestroyPipelineLayout(device, scene_spatial_pipeline_layout, nullptr);
                 if (vignette_pipeline_layout != VK_NULL_HANDLE)
                     vkDestroyPipelineLayout(device, vignette_pipeline_layout, nullptr);
                 if (grid_pipeline_layout != VK_NULL_HANDLE)
@@ -2700,6 +2791,10 @@ namespace lfs::vis {
         if (impl_) {
             impl_->record(command_buffer, framebuffer_extent, params);
         }
+    }
+
+    SceneUpscalerSelection VulkanViewportPass::sceneUpscalerSelection() const {
+        return impl_ ? impl_->scene_upscaler_selection : SceneUpscalerSelection{};
     }
 
     void VulkanViewportPass::shutdown() {

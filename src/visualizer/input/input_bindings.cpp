@@ -23,8 +23,8 @@ namespace lfs::vis::input {
 
         std::atomic<bool> g_persistence_enabled{true};
 
-        constexpr int PROFILE_VERSION = 22; // Version 22 adds MCP runtime shortcuts.
-        constexpr Action LAST_ACTION = Action::TOGGLE_MCP_BINDING;
+        constexpr int PROFILE_VERSION = 23; // Version 23 adds the grid visibility shortcut.
+        constexpr Action LAST_ACTION = Action::TOGGLE_GRID;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -516,7 +516,8 @@ namespace lfs::vis::input {
                 (version < 20 && def.action == Action::TOGGLE_PERFORMANCE_HUD) ||
                 (version < 21 && def.action == Action::OPEN_PREFERENCES) ||
                 (version < 22 && def.action == Action::TOGGLE_MCP_SERVER) ||
-                (version < 22 && def.action == Action::TOGGLE_MCP_BINDING);
+                (version < 22 && def.action == Action::TOGGLE_MCP_BINDING) ||
+                (version < 23 && def.action == Action::TOGGLE_GRID);
             if (!should_add) {
                 continue;
             }
@@ -998,6 +999,7 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_V, MODIFIER_SHIFT}, Action::TOGGLE_INDEPENDENT_SPLIT_VIEW, "Independent split"},
             {KeyTrigger{KEY_G, MODIFIER_NONE}, Action::TOGGLE_GT_COMPARISON, "GT comparison"},
             {KeyTrigger{KEY_C, MODIFIER_ALT}, Action::TOGGLE_CAMERA_FRUSTUMS, "Camera frustums"},
+            {KeyTrigger{KEY_G, MODIFIER_ALT}, Action::TOGGLE_GRID, "Grid"},
             {KeyTrigger{KEY_T, MODIFIER_NONE}, Action::CYCLE_PLY, "Cycle PLY"},
             // Editing (Delete is mode-specific, added below)
             {KeyTrigger{KEY_Z, MODIFIER_CTRL}, Action::UNDO, "Undo"},
@@ -1192,6 +1194,7 @@ namespace lfs::vis::input {
         case Action::OPEN_PREFERENCES: return "Open Preferences";
         case Action::TOGGLE_MCP_SERVER: return "Toggle MCP Server";
         case Action::TOGGLE_MCP_BINDING: return "Toggle MCP Local/Network Binding";
+        case Action::TOGGLE_GRID: return "Toggle Grid";
         default: return "Unknown";
         }
     }
@@ -1277,6 +1280,7 @@ namespace lfs::vis::input {
         case Action::OPEN_PREFERENCES: return "open_preferences";
         case Action::TOGGLE_MCP_SERVER: return "toggle_mcp_server";
         case Action::TOGGLE_MCP_BINDING: return "toggle_mcp_binding";
+        case Action::TOGGLE_GRID: return "toggle_grid";
         default: return {};
         }
     }
@@ -1895,6 +1899,7 @@ namespace lfs::vis::input {
         case Action::TOGGLE_INDEPENDENT_SPLIT_VIEW:
         case Action::TOGGLE_GT_COMPARISON:
         case Action::TOGGLE_CAMERA_FRUSTUMS:
+        case Action::TOGGLE_GRID:
         case Action::CYCLE_PLY:
         case Action::CYCLE_SELECTION_VIS:
             return d_view_global_key;
@@ -1985,47 +1990,6 @@ namespace lfs::vis::input {
 
     ShortcutScope shortcutScopeForAction(const Action action) {
         switch (action) {
-        case Action::TOOL_SELECT:
-        case Action::TOOL_TRANSLATE:
-        case Action::TOOL_ROTATE:
-        case Action::TOOL_SCALE:
-        case Action::TOOL_MIRROR:
-        case Action::TOOL_ALIGN:
-        case Action::TOGGLE_UI:
-        case Action::TOGGLE_FULLSCREEN:
-        case Action::TOGGLE_PERFORMANCE_HUD:
-        case Action::OPEN_PREFERENCES:
-        case Action::SELECT_MODE_CENTERS:
-        case Action::SELECT_MODE_RECTANGLE:
-        case Action::SELECT_MODE_POLYGON:
-        case Action::SELECT_MODE_LASSO:
-        case Action::SELECT_MODE_RINGS:
-        case Action::SELECT_MODE_COLOR:
-        case Action::SELECT_MODE_BOX:
-        case Action::SELECT_MODE_SPHERE:
-        case Action::UNDO:
-        case Action::REDO:
-        case Action::DELETE_SELECTED:
-        case Action::DELETE_NODE:
-        case Action::INVERT_SELECTION:
-        case Action::DESELECT_ALL:
-        case Action::SELECT_ALL:
-        case Action::COPY_SELECTION:
-        case Action::CUT_SELECTION:
-        case Action::PASTE_SELECTION:
-        case Action::TOGGLE_DEPTH_MODE:
-        case Action::TOGGLE_SELECTION_DEPTH_FILTER:
-        case Action::TOGGLE_SELECTION_CROP_FILTER:
-        case Action::SEQUENCER_ADD_KEYFRAME:
-        case Action::SEQUENCER_UPDATE_KEYFRAME:
-        case Action::SEQUENCER_PLAY_PAUSE:
-        case Action::TOGGLE_SPLIT_VIEW:
-        case Action::TOGGLE_INDEPENDENT_SPLIT_VIEW:
-        case Action::TOGGLE_GT_COMPARISON:
-        case Action::TOGGLE_CAMERA_FRUSTUMS:
-        case Action::CYCLE_SELECTION_VIS:
-            return ShortcutScope::GlobalWhenNotTextEditing;
-
         case Action::TOGGLE_MCP_SERVER:
         case Action::TOGGLE_MCP_BINDING:
             return ShortcutScope::Global;
@@ -2050,7 +2014,8 @@ namespace lfs::vis::input {
             return ShortcutScope::Viewport;
 
         default:
-            return ShortcutScope::Global;
+            // Scene, tool, and edit key shortcuts yield to a focused text widget.
+            return ShortcutScope::GlobalWhenNotTextEditing;
         }
     }
 

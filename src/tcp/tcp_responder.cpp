@@ -165,8 +165,7 @@ namespace lfs::tcp {
             trainer_manager_->stopTraining();
             response["success"] = true;
         } else if (command == "save_project") {
-            trainer_manager_->requestSaveProject();
-            response["success"] = true;
+            response["success"] = trainer_manager_->requestSaveProject();
         } else {
             lfs::Error error = lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::NotFound,

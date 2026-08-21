@@ -15,8 +15,65 @@ from .layouts.menus import (
     register_menu,
 )
 from .import_panels import open_dataset_import_panel, open_resume_checkpoint_panel
+from .training_confirm import _confirm_stop_training_then, _project_has_path
 
 __lfs_menu_classes__ = ["FileMenu"]
+
+class _ImportRejected(RuntimeError):
+    def __init__(self, reason: str, message_key: str):
+        super().__init__(reason)
+        self.message_key = message_key
+
+
+def _warn_import_failure(path: str, reason: str) -> None:
+    message = f"Import rejected: path='{path}', reason='{reason}'"
+    lf.log.warn(message)
+
+
+def _show_import_failure(path: str, reason: str, message_key: str) -> None:
+    _warn_import_failure(path, reason)
+    message = lf.ui.tr(message_key).format(path=path, reason=reason)
+    lf.ui.message_dialog(
+        lf.ui.tr("menu.file.import_failed"), message, "error"
+    )
+
+
+def _run_import(path: str, callback) -> bool:
+    try:
+        callback()
+        return True
+    except Exception as exc:
+        reason = str(exc).strip() or exc.__class__.__name__
+        _show_import_failure(
+            path,
+            reason,
+            getattr(
+                exc,
+                "message_key",
+                "menu.file.import_failed_message",
+            ),
+        )
+        return False
+
+
+def _open_dataset_import_checked(path: str) -> None:
+    if not lf.is_dataset_path(path):
+        raise _ImportRejected(
+            "dataset format was not recognized",
+            "menu.file.dataset_not_recognized",
+        )
+    if not open_dataset_import_panel(path):
+        raise RuntimeError("dataset import dialog is unavailable")
+
+
+def _open_checkpoint_import_checked(path: str) -> None:
+    if not lf.read_checkpoint_header(path):
+        raise _ImportRejected(
+            "checkpoint format was not recognized",
+            "menu.file.checkpoint_not_recognized",
+        )
+    if not open_resume_checkpoint_panel(path):
+        raise RuntimeError("checkpoint import dialog is unavailable")
 
 
 def _confirm_discard_then(title: str, callback) -> None:
@@ -39,6 +96,13 @@ def _confirm_discard_then(title: str, callback) -> None:
     )
 
 
+def _confirm_switch_then(title: str, callback) -> None:
+    _confirm_discard_then(
+        title,
+        lambda: _confirm_stop_training_then(callback),
+    )
+
+
 def _offer_remove_missing_recent(path: str) -> None:
     tr = lf.ui.tr
     remove_label = tr("menu.file.remove_from_recent")
@@ -55,9 +119,21 @@ def _offer_remove_missing_recent(path: str) -> None:
     )
 
 
-def _open_recent_checked(path: str) -> None:
+def _open_project(path: str, discard_changes: bool, stop_training: bool = False):
+    if stop_training:
+        return lf.project_open(path, discard_changes, True)
+    return lf.project_open(path, discard_changes)
+
+
+def _new_project(discard_changes: bool, stop_training: bool = False):
+    if stop_training:
+        return lf.new_project(discard_changes, True)
+    return lf.new_project(discard_changes)
+
+
+def _open_recent_checked(path: str, stop_training: bool = False) -> None:
     try:
-        lf.project_open(path, True)
+        _open_project(path, True, stop_training)
     except FileNotFoundError:
         # NotFoundError subclasses FileNotFoundError (see startup_recent_panel).
         _offer_remove_missing_recent(path)
@@ -74,9 +150,9 @@ def _open_recent_project(path: str) -> None:
     if not Path(path).is_file():
         _offer_remove_missing_recent(path)
         return
-    _confirm_discard_then(
+    _confirm_switch_then(
         lf.ui.tr("menu.file.open_project"),
-        lambda: _open_recent_checked(path),
+        lambda stop_training: _open_recent_checked(path, stop_training),
     )
 
 
@@ -102,9 +178,9 @@ class NewProjectOperator(Operator):
     description = "Clear the scene to start a new project"
 
     def execute(self, context) -> set:
-        _confirm_discard_then(
+        _confirm_switch_then(
             lf.ui.tr("menu.file.new_project"),
-            lambda: lf.new_project(True),
+            lambda stop_training: _new_project(True, stop_training),
         )
         return {"FINISHED"}
 
@@ -114,9 +190,9 @@ class OpenProjectOperator(Operator):
     description = "Open a LichtFeld project"
 
     def execute(self, context) -> set:
-        _confirm_discard_then(
+        _confirm_switch_then(
             lf.ui.tr("menu.file.open_project"),
-            lambda: lf.project_open("", True),
+            lambda stop_training: _open_project("", True, stop_training),
         )
         return {"FINISHED"}
 
@@ -154,8 +230,10 @@ class ImportDatasetOperator(Operator):
 
     def execute(self, context) -> set:
         path = lf.ui.open_dataset_folder_dialog()
-        if path:
-            open_dataset_import_panel(path)
+        if path and not _run_import(
+            path, lambda: _open_dataset_import_checked(path)
+        ):
+            return {"CANCELLED"}
         return {"FINISHED"}
 
 
@@ -166,7 +244,11 @@ class ImportPlyOperator(Operator):
     def execute(self, context) -> set:
         path = lf.ui.open_ply_file_dialog("")
         if path:
-            lf.load_file(path, is_dataset=False)
+            def _load() -> None:
+                lf.load_file(path, is_dataset=False)
+
+            if not _run_import(path, _load):
+                return {"CANCELLED"}
         return {"FINISHED"}
 
 
@@ -177,7 +259,11 @@ class ImportMeshOperator(Operator):
     def execute(self, context) -> set:
         path = lf.ui.open_mesh_file_dialog("")
         if path:
-            lf.load_file(path, is_dataset=False)
+            def _load() -> None:
+                lf.load_file(path, is_dataset=False)
+
+            if not _run_import(path, _load):
+                return {"CANCELLED"}
         return {"FINISHED"}
 
 
@@ -187,8 +273,10 @@ class ImportCheckpointOperator(Operator):
 
     def execute(self, context) -> set:
         path = lf.ui.open_checkpoint_file_dialog()
-        if path:
-            open_resume_checkpoint_panel(path)
+        if path and not _run_import(
+            path, lambda: _open_checkpoint_import_checked(path)
+        ):
+            return {"CANCELLED"}
         return {"FINISHED"}
 
 
@@ -198,8 +286,8 @@ class ImportConfigOperator(Operator):
 
     def execute(self, context) -> set:
         path = lf.ui.open_json_file_dialog()
-        if path:
-            lf.load_config_file(path)
+        if path and not _run_import(path, lambda: lf.load_config_file(path)):
+            return {"CANCELLED"}
         return {"FINISHED"}
 
 
@@ -276,7 +364,7 @@ def _show_exit_confirmation(training_in_progress: bool = False) -> None:
         )
         return
 
-    has_path = lf.project_has_path()
+    has_path = _project_has_path()
     save_label = (
         tr("common.save")
         if has_path
@@ -309,11 +397,36 @@ def _show_project_switch_confirmation(
 ) -> None:
     if new_project:
         title = lf.ui.tr("menu.file.new_project")
-        callback = lambda: lf.new_project(True)
+        callback = lambda stop_training: _new_project(True, stop_training)
     else:
         title = lf.ui.tr("menu.file.open_project")
-        callback = lambda: lf.project_open(path, True)
-    _confirm_discard_then(title, callback)
+        callback = lambda stop_training: _open_project(
+            path, True, stop_training
+        )
+    _confirm_switch_then(title, callback)
+
+
+def _show_stop_training_confirmation(
+    new_project: bool, path: str, discard_changes: bool = False
+) -> None:
+    tr = lf.ui.tr
+    yes_label = tr("common.yes")
+    no_label = tr("common.no")
+
+    def _on_result(button):
+        if button != yes_label:
+            return
+        if new_project:
+            _new_project(discard_changes, True)
+        else:
+            _open_project(path, discard_changes, True)
+
+    lf.ui.confirm_dialog(
+        tr("project_switch.stop_training_title"),
+        tr("project_switch.stop_training_message"),
+        [yes_label, no_label],
+        _on_result,
+    )
 
 
 def _on_show_dataset_load_popup(path: str):
@@ -322,6 +435,10 @@ def _on_show_dataset_load_popup(path: str):
 
 def _on_show_resume_checkpoint_popup(path: str):
     open_resume_checkpoint_panel(path)
+
+
+def _can_compact_project() -> bool:
+    return _project_has_path()
 
 
 @register_menu
@@ -374,7 +491,10 @@ class FileMenu:
                 shortcut="Ctrl+S",
             ),
             menu_operator(SaveProjectAsOperator),
-            menu_operator(CompactProjectOperator),
+            menu_operator(
+                CompactProjectOperator,
+                enabled=_can_compact_project(),
+            ),
             menu_toggle(
                 lf.ui.tr("menu.file.auto_save_on_close"),
                 lambda: lf.project_set_auto_save_on_close(
@@ -383,12 +503,17 @@ class FileMenu:
                 lf.project_auto_save_on_close_enabled(),
             ),
             menu_separator(),
-            menu_operator(ImportDatasetOperator),
-            menu_operator(ImportPlyOperator),
-            menu_operator(ImportMeshOperator),
-            menu_operator(ImportCheckpointOperator),
-            menu_operator(ImportConfigOperator),
-            menu_separator(),
+            menu_submenu(
+                lf.ui.tr("menu.file.import"),
+                [
+                    menu_operator(ImportDatasetOperator),
+                    menu_operator(ImportPlyOperator),
+                    menu_operator(ImportMeshOperator),
+                    menu_operator(ImportCheckpointOperator),
+                    menu_separator(),
+                    menu_operator(ImportConfigOperator),
+                ],
+            ),
             menu_operator(ExportOperator),
             menu_operator(ExportConfigOperator),
             menu_separator(),
@@ -427,6 +552,9 @@ def register():
     lf.ui.on_request_exit(_show_exit_confirmation)
     lf.ui.on_project_switch_confirmation(
         _show_project_switch_confirmation
+    )
+    lf.ui.on_stop_training_confirmation(
+        _show_stop_training_confirmation
     )
 
 

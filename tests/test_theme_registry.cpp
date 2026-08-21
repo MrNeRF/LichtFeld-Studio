@@ -229,6 +229,35 @@ TEST(ThemePreferencesContract, MalformedJsonFallsBackToBuiltInDefaults) {
     std::filesystem::remove_all(root, error);
 }
 
+TEST(ThemePreferencesContract, SceneReconstructionRoundTripsAndValidatesPerBackendPreset) {
+    const auto root = std::filesystem::temp_directory_path() / "lfs_scene_reconstruction_preferences";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << lfs::format_for_developer(paths.error());
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "native");
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerPresetPreference("native"), "native");
+
+    lfs::vis::saveSceneUpscalerPreference("spatial", "performance");
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "spatial");
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerPresetPreference("spatial"), "performance");
+
+    lfs::vis::saveSceneUpscalerPreference("unknown", "unknown");
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "native");
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerPresetPreference("native"), "native");
+
+    lfs::vis::saveSceneUpscalerPreference("spatial", "performance");
+    lfs::vis::clearSceneUpscalerPreference();
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "native");
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerPresetPreference("native"), "native");
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerPresetPreference("spatial"), "quality");
+
+    std::filesystem::remove_all(root, error);
+}
+
 TEST(ThemePreferencesContract, McpPreferencesRoundTripAndValidateInput) {
     const auto root = std::filesystem::temp_directory_path() / "lfs_mcp_preferences";
     std::error_code error;
@@ -293,6 +322,8 @@ TEST(ThemePreferencesContract, SafeModeNeitherReadsNorWritesPreferences) {
         const ScopedSafeMode safe_mode;
         EXPECT_EQ(lfs::vis::loadThemePreferenceName(), "dark");
         EXPECT_FLOAT_EQ(lfs::vis::loadUiScalePreference(), 0.0f);
+        EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "native");
+        EXPECT_EQ(lfs::vis::loadSceneUpscalerPresetPreference("native"), "native");
         EXPECT_TRUE(lfs::vis::loadLanguagePreference().empty());
         const auto mcp = lfs::vis::loadMcpPreferences();
         EXPECT_TRUE(mcp.enabled);
@@ -301,6 +332,7 @@ TEST(ThemePreferencesContract, SafeModeNeitherReadsNorWritesPreferences) {
         EXPECT_FALSE(mcp.request_logging);
         lfs::vis::saveThemePreferenceName("gruvbox");
         lfs::vis::saveUiScalePreference(2.0f);
+        lfs::vis::saveSceneUpscalerPreference("spatial", "performance");
         lfs::vis::saveLanguagePreference("fr");
         lfs::vis::saveMcpPreferences({
             .enabled = true,
