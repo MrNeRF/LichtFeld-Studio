@@ -761,7 +761,9 @@ class AssetManagerPanel(Panel):
         self._selected_asset_ids = {asset_id}
         self._update_selection_type()
         self._dirty_selection()
-        lf.project_open(str(asset.get("path") or ""), False)
+        from .file_menu import open_project_with_confirmation
+
+        open_project_with_confirmation(str(asset.get("path") or ""))
 
     def on_remove_asset(self, _handle, _ev, args):
         asset_id = self._resolve_event_value(args, _ev, "data-asset-id")

@@ -125,6 +125,20 @@ def _open_project(path: str, discard_changes: bool, stop_training: bool = False)
     return lf.project_open(path, discard_changes)
 
 
+def open_project_with_confirmation(path: str) -> None:
+    """Open a known project path through the standard project-switch flow."""
+    title = lf.ui.tr("menu.file.open_project")
+
+    def _open_checked(stop_training: bool) -> None:
+        try:
+            _open_project(path, True, stop_training)
+        except Exception as exc:
+            message = str(exc).strip() or title
+            lf.ui.message_dialog(title, message, "error")
+
+    _confirm_switch_then(title, _open_checked)
+
+
 def _new_project(discard_changes: bool, stop_training: bool = False):
     if stop_training:
         return lf.new_project(discard_changes, True)

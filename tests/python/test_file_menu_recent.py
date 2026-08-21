@@ -236,6 +236,43 @@ def test_open_recent_existing_other_error_shows_message(monkeypatch, tmp_path):
     _title, message, style = file_menu.lf.message_dialogs[0]
     assert style == "error"
     assert "boom" in message
+
+
+def test_open_project_with_confirmation_handles_dirty_project(monkeypatch):
+    path = "/tmp/catalog-project.licht"
+    file_menu = _load_file_menu(monkeypatch)
+    file_menu.lf.project_is_dirty = lambda: True
+
+    file_menu.open_project_with_confirmation(path)
+
+    assert file_menu.lf.project_open_calls == []
+    assert len(file_menu.lf.confirm_dialogs) == 1
+    title, _message, buttons, callback = file_menu.lf.confirm_dialogs[0]
+    assert title == "tr:menu.file.open_project"
+    assert buttons == ["tr:menu.file.open_project", "tr:common.cancel"]
+
+    callback("tr:common.cancel")
+    assert file_menu.lf.project_open_calls == []
+
+    callback("tr:menu.file.open_project")
+    assert file_menu.lf.project_open_calls == [(path, True)]
+
+
+def test_open_project_with_confirmation_reports_open_error(monkeypatch):
+    path = "/tmp/broken-catalog-project.licht"
+    file_menu = _load_file_menu(monkeypatch)
+
+    def raise_boom(_path, _discard=False, _stop_training=False):
+        raise RuntimeError("open failed")
+
+    file_menu.lf.project_open = raise_boom
+    file_menu.open_project_with_confirmation(path)
+
+    assert file_menu.lf.message_dialogs == [
+        ("tr:menu.file.open_project", "open failed", "error")
+    ]
+
+
 def _compact_project_item(file_menu):
     for item in file_menu.FileMenu().menu_items():
         if str(item.get("operator_id", "")).endswith("CompactProjectOperator"):

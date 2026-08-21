@@ -22,10 +22,13 @@ def _install_lf_stub(monkeypatch):
     context_menus = []
     state = SimpleNamespace(
         context_menus=context_menus,
+        confirm_dialogs=[],
+        message_dialogs=[],
         opened=[],
         revealed=[],
         enabled=[],
         dialog_path="",
+        project_dirty=False,
     )
 
     def show_context_menu(items, x, y, on_action=None):
@@ -46,6 +49,12 @@ def _install_lf_stub(monkeypatch):
         get_current_language=lambda: "en",
         get_mouse_screen_pos=lambda: (120.0, 220.0),
         show_context_menu=show_context_menu,
+        confirm_dialog=lambda title, message, buttons, callback=None: state.confirm_dialogs.append(
+            (title, message, buttons, callback)
+        ),
+        message_dialog=lambda title, message, style=None: state.message_dialogs.append(
+            (title, message, style)
+        ),
         reveal_in_file_manager=lambda path: state.revealed.append(path) or True,
         open_project_file_dialog=lambda _start="": state.dialog_path,
         input_dialog=lambda *_args: None,
@@ -55,9 +64,19 @@ def _install_lf_stub(monkeypatch):
         schedule_on_ui_thread=lambda callback: callback(),
     )
     lf_stub.log = SimpleNamespace(info=lambda _msg: None, warn=lambda _msg: None, error=lambda _msg: None)
-    lf_stub.project_open = lambda path, discard_changes=False: state.opened.append(
-        (path, discard_changes)
+    lf_stub.project_is_dirty = lambda: state.project_dirty
+    lf_stub.project_has_path = lambda: False
+    lf_stub.is_training_active = lambda: False
+    lf_stub.project_open = (
+        lambda path, discard_changes=False, stop_training=False: state.opened.append(
+            (path, discard_changes, stop_training)
+        )
     )
+    lf_stub.is_dataset_path = lambda _path: True
+    lf_stub.read_checkpoint_header = lambda _path: object()
+    lf_stub.read_checkpoint_params = lambda _path: object()
+    lf_stub.load_file = lambda *_args, **_kwargs: None
+    lf_stub.load_config_file = lambda *_args, **_kwargs: None
     lf_stub._test_state = state
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 
@@ -67,8 +86,9 @@ def panel_module(monkeypatch):
     source_python = Path(__file__).resolve().parents[2] / "src" / "python"
     if str(source_python) not in sys.path:
         sys.path.insert(0, str(source_python))
-    for name in ("lfs_plugins.asset_manager_panel", "lfs_plugins"):
-        sys.modules.pop(name, None)
+    for name in list(sys.modules):
+        if name == "lfs_plugins" or name.startswith("lfs_plugins."):
+            sys.modules.pop(name, None)
     _install_lf_stub(monkeypatch)
     return import_module("lfs_plugins.asset_manager_panel")
 
@@ -369,8 +389,38 @@ def test_open_project_verifies_then_uses_project_lifecycle(panel_module):
 
     panel._load_asset(asset["id"])
 
-    assert panel_module.lf._test_state.opened == [(asset["path"], False)]
+    assert panel_module.lf._test_state.opened == [
+        (asset["path"], True, False)
+    ]
     assert panel.get_selected_asset_id() == asset["id"]
+
+
+def test_open_project_confirms_before_discarding_unsaved_changes(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project()
+    panel._handle = _Handle()
+    panel._asset_index = _index(
+        assets={asset["id"]: asset},
+        verify_asset=lambda _project_id: SimpleNamespace(
+            to_dict=lambda: asset
+        ),
+    )
+    state = panel_module.lf._test_state
+    state.project_dirty = True
+
+    panel._load_asset(asset["id"])
+
+    assert state.opened == []
+    assert len(state.confirm_dialogs) == 1
+    title, _message, buttons, callback = state.confirm_dialogs[0]
+    assert title == "menu.file.open_project"
+    assert buttons == ["menu.file.open_project", "common.cancel"]
+
+    callback("common.cancel")
+    assert state.opened == []
+
+    callback("menu.file.open_project")
+    assert state.opened == [(asset["path"], True, False)]
 
 
 def test_import_registers_only_selected_licht_project(panel_module):
