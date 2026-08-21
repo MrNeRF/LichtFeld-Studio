@@ -58,6 +58,8 @@ namespace lfs::vis {
         EXPECT_EQ(fallback.effective, SceneUpscalerBackend::Native);
         EXPECT_EQ(fallback.fallback, SceneUpscalerFallback::RuntimeUnavailable);
         EXPECT_TRUE(fallback.fellBack());
+        EXPECT_EQ(sceneUpscalerFallbackId(fallback.fallback), "runtime_unavailable");
+        EXPECT_EQ(sceneUpscalerFallbackId(SceneUpscalerFallback::None), "none");
 
         const auto temporal = resolveSceneUpscalerSelection(SceneUpscalerBackend::Temporal, true);
         EXPECT_EQ(temporal.requested, SceneUpscalerBackend::Temporal);

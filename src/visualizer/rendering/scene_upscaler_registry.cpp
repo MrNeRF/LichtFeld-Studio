@@ -129,4 +129,14 @@ namespace lfs::vis {
         };
     }
 
+    std::string_view sceneUpscalerFallbackId(const SceneUpscalerFallback fallback) noexcept {
+        switch (fallback) {
+        case SceneUpscalerFallback::None:
+            return "none";
+        case SceneUpscalerFallback::RuntimeUnavailable:
+            return "runtime_unavailable";
+        }
+        return "unknown";
+    }
+
 } // namespace lfs::vis

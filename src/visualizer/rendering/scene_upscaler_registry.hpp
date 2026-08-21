@@ -61,5 +61,7 @@ namespace lfs::vis {
         SceneUpscalerBackend backend);
     [[nodiscard]] LFS_VIS_API SceneUpscalerSelection resolveSceneUpscalerSelection(
         SceneUpscalerBackend requested, bool runtime_available);
+    [[nodiscard]] LFS_VIS_API std::string_view sceneUpscalerFallbackId(
+        SceneUpscalerFallback fallback) noexcept;
 
 } // namespace lfs::vis

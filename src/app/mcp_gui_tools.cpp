@@ -610,6 +610,46 @@ namespace lfs::app {
             return glm::vec3(value[0].get<float>(), value[1].get<float>(), value[2].get<float>());
         }
 
+        struct ViewArguments {
+            glm::vec3 eye{};
+            glm::vec3 target{};
+            glm::vec3 up{0.0f, 1.0f, 0.0f};
+            std::optional<float> fov_degrees;
+        };
+
+        std::expected<ViewArguments, std::string> parse_view_arguments(const json& args) {
+            auto eye = optional_vec3_arg(args, "eye");
+            if (!eye)
+                return std::unexpected(eye.error());
+            auto target = optional_vec3_arg(args, "target");
+            if (!target)
+                return std::unexpected(target.error());
+            auto up = optional_vec3_arg(args, "up");
+            if (!up)
+                return std::unexpected(up.error());
+            if (!eye->has_value() || !target->has_value())
+                return std::unexpected("Fields 'eye' and 'target' must be provided");
+
+            ViewArguments result{
+                .eye = **eye,
+                .target = **target,
+                .up = up->value_or(glm::vec3(0.0f, 1.0f, 0.0f)),
+            };
+            if (args.contains("fov_degrees"))
+                result.fov_degrees = args["fov_degrees"].get<float>();
+            return result;
+        }
+
+        void apply_view_arguments(const ViewArguments& view) {
+            vis::apply_set_view(vis::SetViewParams{
+                .eye = {view.eye.x, view.eye.y, view.eye.z},
+                .target = {view.target.x, view.target.y, view.target.z},
+                .up = {view.up.x, view.up.y, view.up.z},
+            });
+            if (view.fov_degrees)
+                vis::apply_set_fov(*view.fov_degrees);
+        }
+
         void show_python_console() {
             core::events::cmd::ShowWindow{.window_name = "python_console", .show = true}.emit();
         }
@@ -901,6 +941,21 @@ namespace lfs::app {
                                  {"depth_filter_min", json::array({settings.depth_filter_min[0], settings.depth_filter_min[1], settings.depth_filter_min[2]})},
                                  {"depth_filter_max", json::array({settings.depth_filter_max[0], settings.depth_filter_max[1], settings.depth_filter_max[2]})},
                              }},
+            };
+        }
+
+        json scene_reconstruction_status_json(vis::RenderingManager& rendering_manager) {
+            const auto selection = rendering_manager.sceneUpscalerRuntimeSelection();
+            const auto settings = vis::get_render_settings();
+            return json{
+                {"success", true},
+                {"requested", std::string(vis::sceneUpscalerBackendId(selection.requested))},
+                {"effective", std::string(vis::sceneUpscalerBackendId(selection.effective))},
+                {"fallback", std::string(vis::sceneUpscalerFallbackId(selection.fallback))},
+                {"fell_back", selection.fellBack()},
+                {"preset", settings ? settings->scene_upscaler_preset : std::string{}},
+                {"scene_fps", rendering_manager.getAverageFPS()},
+                {"presented_fps", rendering_manager.getPresentedAverageFPS()},
             };
         }
 
@@ -2574,31 +2629,12 @@ namespace lfs::app {
                         {"fov_degrees", json{{"type", "number"}, {"description", "Optional vertical field of view in degrees"}}}},
                     .required = {"eye", "target"}}},
             [viewer_impl](const json& args) -> json {
-                auto eye = optional_vec3_arg(args, "eye");
-                if (!eye)
-                    return json{{"error", eye.error()}};
-                auto target = optional_vec3_arg(args, "target");
-                if (!target)
-                    return json{{"error", target.error()}};
-                auto up = optional_vec3_arg(args, "up");
-                if (!up)
-                    return json{{"error", up.error()}};
-                if (!eye->has_value() || !target->has_value())
-                    return json{{"error", "Fields 'eye' and 'target' must be provided"}};
+                auto view = parse_view_arguments(args);
+                if (!view)
+                    return json{{"error", view.error()}};
 
-                const glm::vec3 up_value = up->value_or(glm::vec3(0.0f, 1.0f, 0.0f));
-                const std::optional<float> fov = args.contains("fov_degrees")
-                                                     ? std::optional<float>(args["fov_degrees"].get<float>())
-                                                     : std::nullopt;
-
-                return post_and_wait(viewer_impl, [eye = **eye, target = **target, up_value, fov]() -> json {
-                    vis::apply_set_view(vis::SetViewParams{
-                        .eye = {eye.x, eye.y, eye.z},
-                        .target = {target.x, target.y, target.z},
-                        .up = {up_value.x, up_value.y, up_value.z},
-                    });
-                    if (fov)
-                        vis::apply_set_fov(*fov);
+                return post_and_wait(viewer_impl, [view = *view]() -> json {
+                    apply_view_arguments(view);
 
                     const auto info = vis::get_current_view_info();
                     if (!info)
@@ -2850,6 +2886,89 @@ namespace lfs::app {
                     payload["performed"] = "shrink";
                     payload["target_gpu_bytes"] = static_cast<int64_t>(target_gpu_bytes);
                     return payload;
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "render.reconstruction.catalog",
+                .description = "List registered viewport scene-reconstruction backends and their backend-specific presets",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [](const json&) -> json {
+                json backends = json::array();
+                for (const auto& descriptor : vis::sceneUpscalerDescriptors()) {
+                    json presets = json::array();
+                    for (const auto& preset : descriptor.presets) {
+                        presets.push_back(json{
+                            {"id", std::string(preset.id)},
+                            {"input_scale", preset.input_scale},
+                        });
+                    }
+                    backends.push_back(json{
+                        {"id", std::string(descriptor.id)},
+                        {"presets", std::move(presets)},
+                    });
+                }
+                return json{{"success", true}, {"backends", std::move(backends)}};
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "render.reconstruction.status",
+                .description = "Read requested and effective viewport scene reconstruction state plus live frame-rate observations",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
+                    auto* const rendering_manager = viewer_impl->getRenderingManager();
+                    if (!rendering_manager)
+                        return json{{"error", "Rendering manager is not available"}};
+                    return scene_reconstruction_status_json(*rendering_manager);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "render.reconstruction.sample_frame",
+                .description = "Set the interactive camera and wait for the ensuing production viewport frame without capture or readback",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"eye", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Camera eye position [x,y,z]"}}},
+                        {"target", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Camera target/pivot position [x,y,z]"}}},
+                        {"up", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional up vector [x,y,z], defaults to [0,1,0]"}}},
+                        {"fov_degrees", json{{"type", "number"}, {"description", "Optional vertical field of view in degrees"}}}},
+                    .required = {"eye", "target"}},
+                .metadata = mcp::McpToolMetadata{
+                    .category = "render",
+                    .kind = "mutation",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                    .user_visible = false,
+                }},
+            [viewer_impl](const json& args) -> json {
+                auto view = parse_view_arguments(args);
+                if (!view)
+                    return json{{"error", view.error()}};
+
+                const auto started_at = std::chrono::steady_clock::now();
+                auto applied = post_and_wait(viewer_impl, [view = *view]() -> json {
+                    apply_view_arguments(view);
+                    return json{{"success", true}};
+                });
+                if (applied.contains("error"))
+                    return applied;
+
+                return post_render_and_wait(viewer_impl, [viewer_impl, started_at]() -> json {
+                    auto* const rendering_manager = viewer_impl->getRenderingManager();
+                    if (!rendering_manager)
+                        return json{{"error", "Rendering manager is not available"}};
+
+                    auto result = scene_reconstruction_status_json(*rendering_manager);
+                    result["frame_latency_ms"] = std::chrono::duration<double, std::milli>(
+                                                     std::chrono::steady_clock::now() - started_at)
+                                                     .count();
+                    result["timing_scope"] = "camera_mutation_to_post_render_without_readback";
+                    return result;
                 });
             });
 
