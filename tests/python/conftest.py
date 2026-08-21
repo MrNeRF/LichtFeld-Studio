@@ -85,27 +85,12 @@ def guard_production_asset_catalog():
 def isolate_asset_manager_catalog(tmp_path, monkeypatch):
     """Redirect the Asset Manager catalog to a per-test temp directory.
 
-    Code paths that resolve the catalog implicitly (e.g.
-    register_catalog_asset_path -> load_asset_index) otherwise write into the
-    user's real ~/.lichtfeld/asset_manager/library.json, leaving dead entries
-    that point at deleted pytest tmp dirs. resolve_asset_manager_storage_path()
-    reads this env var first on every call, so the redirect is binding-proof;
-    pinning the legacy path to the temp dir suppresses the real-catalog copy.
+    Code paths that resolve the catalog implicitly otherwise write into the
+    user's real Asset Manager library. resolve_asset_manager_storage_path()
+    reads this env var first on every call, so the redirect is binding-proof.
     """
     catalog_dir = tmp_path / "asset_manager"
     monkeypatch.setenv("LFS_ASSET_MANAGER_DIR", str(catalog_dir))
-    try:
-        from lfs_plugins import asset_index
-
-        monkeypatch.setattr(asset_index, "LEGACY_STORAGE_PATH", catalog_dir, raising=False)
-        monkeypatch.setattr(
-            asset_index, "LEGACY_LIBRARY_PATH", catalog_dir / "library.json", raising=False
-        )
-        monkeypatch.setattr(
-            asset_index, "DEFAULT_LIBRARY_PATH", catalog_dir / "library.json", raising=False
-        )
-    except Exception:
-        pass
     return catalog_dir
 
 

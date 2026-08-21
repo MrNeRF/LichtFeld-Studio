@@ -684,20 +684,8 @@
     overflow: hidden;
 }
 
-.asset-thumb-splat {
-    background-color: #30443b;
-}
-
-.asset-thumb-checkpoint {
-    background-color: #3d4430;
-}
-
-.asset-thumb-dataset {
-    background-color: #4c3f2d;
-}
-
-.asset-thumb-default {
-    background-color: #3b3936;
+.asset-thumb-project {
+    background-color: #2f4545;
 }
 
 
@@ -720,35 +708,11 @@
     border-radius: 3dp;
 }
 
-.asset-pill-ply,
-.asset-pill-ply-3dgs,
-.asset-pill-ply-pcl,
-.asset-pill-rad,
-.asset-pill-sog,
-.asset-pill-spz,
-.asset-pill-mesh {
-    background-color: #36564b;
-    color: #9be0ca;
+.asset-pill-licht {
+    background-color: #315a58;
+    color: #a8e4df;
 }
 
-.asset-pill-mp4,
-.asset-pill-mov,
-.asset-pill-video {
-    background-color: #584531;
-    color: #e9b56e;
-}
-
-.asset-pill-checkpoint {
-    background-color: #46583a;
-    color: #b4d98c;
-}
-
-.asset-pill-dataset {
-    background-color: #6b512c;
-    color: #f1c687;
-}
-
-.asset-pill-run,
 .asset-pill-scene,
 .asset-pill-folder {
     background-color: #38342f;

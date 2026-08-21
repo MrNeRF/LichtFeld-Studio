@@ -21,17 +21,7 @@
             <input type="text" placeholder="{{search_placeholder}}" data-value="search_query" />
           </div>
 
-          <div class="asset-import-dropdown">
-            <button class="asset-import-button" data-event-click="toggle_import_menu">{{import_label}} ▼</button>
-            <div class="asset-import-menu" data-class-is-visible="import_menu_open">
-              <div class="asset-import-menu-item" data-event-click="on_import_dataset">{{import_dataset_label}}</div>
-              <div class="asset-import-menu-item" data-event-click="on_import_splat">{{import_splat_label}}</div>
-              <div class="asset-import-menu-item" data-event-click="on_import_mesh">{{import_mesh_label}}</div>
-              <div class="asset-import-menu-item" data-event-click="on_import_checkpoint">{{import_checkpoint_label}}</div>
-              <div class="asset-import-menu-separator"></div>
-              <div class="asset-import-menu-item" data-event-click="on_import_from_url">{{import_from_url_label}}</div>
-            </div>
-          </div>
+          <button class="asset-import-button" data-event-click="on_import_project">{{import_project_label}}</button>
           <button class="asset-panel-close" type="button" data-event-click="close_panel" data-tooltip="common.close">&#215;</button>
         </div>
 
@@ -75,7 +65,6 @@
                   </div>
                 </div>
                 <div class="asset-folder-dropdown" data-class-is-visible="folder.menu_open">
-                  <div class="asset-dropdown-item" data-attr-data-folder-id="folder.id" data-folder-action="watch_dirs">{{edit_watch_dirs_label}}</div>
                   <div class="asset-dropdown-item" data-attr-data-folder-id="folder.id" data-folder-action="rename">{{rename_folder_label}}</div>
                   <div class="asset-dropdown-item is-danger" data-attr-data-folder-id="folder.id" data-folder-action="delete">{{delete_folder_label}}</div>
                 </div>
@@ -89,21 +78,6 @@
               <div class="asset-filter-row" data-class-is-active="scene.id == selected_scene_id" data-attr-data-scene-id="scene.id">
                 <span class="asset-row-label">{{scene.name}}</span>
                 <span class="asset-row-count">{{scene.asset_count}}</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="asset-sidebar-section">
-            <div class="asset-sidebar-title" style="display: flex; align-items: center; gap: 4dp; cursor: pointer;" data-event-click="toggle_filters_collapsed" data-tooltip="asset_manager.sidebar.filter_hint">
-              <span class="section-arrow" data-class-is-expanded="!filters_collapsed">&#x25B6;</span>
-              <span>{{filters_title}}</span>
-            </div>
-            <div class="section-content collapsed" data-class-collapsed="!filters_expanded">
-              <div data-for="filter : filters">
-                <div class="asset-filter-checkbox-row" data-event-click="toggle_filter(filter.id)">
-                  <input type="checkbox" data-checked="filter.is_selected" />
-                  <span class="asset-row-label">{{filter.label}}</span>
-                </div>
               </div>
             </div>
           </div>
@@ -136,9 +110,9 @@
                 <div class="asset-card-grid-window">
                   <div class="asset-card-slot" data-style-width="asset_card_slot_width" data-for="asset : assets">
                     <div class="asset-card" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-attr-data-asset-id="asset.id" data-asset-action="select">
-                      <div data-attr-class="'asset-card-thumb ' + asset.thumb_class" data-style-decorator="asset.thumbnail_decorator">
+                      <div class="asset-card-thumb asset-thumb-project">
                         <div class="asset-card-overlay">
-                          <span data-attr-class="'asset-pill ' + asset.pill_class">{{asset.type_label}}</span>
+                          <span class="asset-pill asset-pill-licht">LICHT</span>
                         </div>
                       </div>
                       <div class="asset-card-body">
@@ -147,22 +121,16 @@
                         </div>
                         <div class="asset-card-subtitle">{{asset.display_subtitle}}</div>
                         <div class="asset-card-meta">
-                          <span>{{asset.role_label}}</span>
-                          <span data-if="asset.points_label">{{asset.points_label}}</span>
+                          <span>{{asset.status_label}}</span>
                           <span>{{asset.size_label}}</span>
                         </div>
                         <div class="asset-card-actions">
-                          <button class="asset-card-button" data-attr-data-asset-id="asset.id" data-asset-action="load">{{load_button_label}}</button>
+                          <button class="asset-card-button" data-if="asset.can_load" data-attr-data-asset-id="asset.id" data-asset-action="load">{{load_button_label}}</button>
                         </div>
                       </div>
                       <button class="asset-card-menu" data-attr-data-asset-id="asset.id" data-asset-action="menu"><img src="../icon/more-vertical.png" /></button>
                       <div class="asset-load-menu" data-class-is-visible="asset.menu_open">
-                        <div class="asset-dropdown-item" data-if="asset.can_load" data-attr-data-asset-id="asset.id" data-asset-action="load_new">{{load_new_label}}</div>
-                        <div class="asset-dropdown-item" data-if="asset.can_load" data-attr-data-asset-id="asset.id" data-asset-action="add_to_scene">{{add_to_scene_label}}</div>
-                        <div class="asset-dropdown-separator"></div>
-                        <div data-if="asset.type != 'dataset'">
-                          <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="update_thumbnail">{{update_thumbnail_label}}</div>
-                        </div>
+                        <div class="asset-dropdown-item" data-if="asset.can_load" data-attr-data-asset-id="asset.id" data-asset-action="load">{{load_button_label}}</div>
                         <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="rename">{{rename_label}}</div>
                         <div class="asset-dropdown-item has-submenu" data-attr-data-asset-id="asset.id">
                           <span>{{move_to_folder_label}}</span>
@@ -202,17 +170,12 @@
                         <span class="asset-list-primary">{{asset.display_name}}</span>
                         <span class="asset-list-secondary">{{asset.display_subtitle}}</span>
                       </span>
-                      <span class="asset-col asset-col-type">{{asset.type_label}}</span>
+                      <span class="asset-col asset-col-type">LICHT</span>
                       <span class="asset-col asset-col-folder">{{asset.folder_name}}</span>
                       <span class="asset-col asset-col-size">{{asset.size_label}}</span>
                       <span class="asset-col asset-col-modified">{{asset.modified_label}}</span>
                       <div class="asset-load-menu" data-class-is-visible="asset.menu_open">
-                        <div class="asset-dropdown-item" data-if="asset.can_load" data-attr-data-asset-id="asset.id" data-asset-action="load_new">{{load_new_label}}</div>
-                        <div class="asset-dropdown-item" data-if="asset.can_load" data-attr-data-asset-id="asset.id" data-asset-action="add_to_scene">{{add_to_scene_label}}</div>
-                        <div class="asset-dropdown-separator"></div>
-                        <div data-if="asset.type != 'dataset'">
-                          <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="update_thumbnail">{{update_thumbnail_label}}</div>
-                        </div>
+                        <div class="asset-dropdown-item" data-if="asset.can_load" data-attr-data-asset-id="asset.id" data-asset-action="load">{{load_button_label}}</div>
                         <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="rename">{{rename_label}}</div>
                         <div class="asset-dropdown-item has-submenu" data-attr-data-asset-id="asset.id">
                           <span>{{move_to_folder_label}}</span>
@@ -261,7 +224,7 @@
             <div data-if="show_selection_asset">
               <div class="asset-info-header">
                 <span class="asset-info-name">{{selected_asset_name}}</span>
-                <span data-attr-class="'asset-pill ' + selected_asset_pill_class">{{selected_asset_type_label}}</span>
+                <span class="asset-pill asset-pill-licht">LICHT</span>
               </div>
 
               <div class="asset-info-section">
@@ -273,18 +236,6 @@
                 <div class="parameter-row" data-if="selected_asset_scene_name">
                   <span class="parameter-label">{{prop_scene_label}}</span>
                   <span class="parameter-value">{{selected_asset_scene_name}}</span>
-                </div>
-                <div class="parameter-row" data-if="selected_asset_role">
-                  <span class="parameter-label">{{prop_role_label}}</span>
-                  <span class="parameter-value">{{selected_asset_role}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_points_label}}</span>
-                  <span class="parameter-value">{{selected_asset_points}}</span>
-                </div>
-                <div class="parameter-row" data-if="selected_asset_has_sh_degree">
-                  <span class="parameter-label">{{prop_sh_degree_label}}</span>
-                  <span class="parameter-value">{{selected_asset_sh_degree}}</span>
                 </div>
                 <div class="parameter-row">
                   <span class="parameter-label">{{prop_size_label}}</span>
@@ -301,54 +252,6 @@
                 <div class="parameter-row">
                   <span class="parameter-label">{{prop_modified_label}}</span>
                   <span class="parameter-value">{{selected_asset_modified}}</span>
-                </div>
-                <div class="parameter-row" data-if="selected_asset_resolution">
-                  <span class="parameter-label">{{prop_resolution_label}}</span>
-                  <span class="parameter-value">{{selected_asset_resolution}}</span>
-                </div>
-                <div class="parameter-row" data-if="selected_asset_duration">
-                  <span class="parameter-label">{{prop_duration_label}}</span>
-                  <span class="parameter-value">{{selected_asset_duration}}</span>
-                </div>
-              </div>
-
-              <div class="asset-info-section" data-if="selected_asset_has_dataset_metadata">
-                <div class="asset-info-section-title">{{dataset_details_title}}</div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_images_label}}</span>
-                  <span class="parameter-value">{{selected_asset_dataset_image_count}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_image_root_label}}</span>
-                  <span class="parameter-value">{{selected_asset_dataset_image_root}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_masks_label}}</span>
-                  <span class="parameter-value">{{selected_asset_dataset_masks}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_cameras_label}}</span>
-                  <span class="parameter-value">{{selected_asset_dataset_camera_count}}</span>
-                </div>
-                <div class="parameter-row" data-if="selected_asset_dataset_initial_points">
-                  <span class="parameter-label">{{prop_initial_points_label}}</span>
-                  <span class="parameter-value">{{selected_asset_dataset_initial_points}}</span>
-                </div>
-              </div>
-
-              <div class="asset-info-section" data-if="selected_asset_has_transform_metadata">
-                <div class="asset-info-section-title">{{transform_info_title}}</div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_translation_label}}</span>
-                  <span class="parameter-value">{{selected_asset_transform_translation}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_rotation_label}}</span>
-                  <span class="parameter-value">{{selected_asset_transform_rotation}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_scaling_label}}</span>
-                  <span class="parameter-value">{{selected_asset_transform_scaling}}</span>
                 </div>
               </div>
 
@@ -394,7 +297,7 @@
                 <div data-for="scene_asset : selected_scene_assets">
                   <div class="scene-asset-row" data-attr-data-asset-id="scene_asset.id" data-asset-action="scene_asset">
                     <span class="scene-asset-name">{{scene_asset.name}}</span>
-                    <span class="asset-artifact-type">{{scene_asset.type}}</span>
+                    <span class="asset-artifact-type">LICHT</span>
                   </div>
                 </div>
               </div>
