@@ -196,11 +196,15 @@ button {
 #controlsWrap > #buttonsContainer .controlButton.toggle.right:not(.active) {
   background-position: 200% 0%;
 }
-#controlsWrap > #buttonsContainer .controlButton.active {
+#controlsWrap > #buttonsContainer #measure.active {
   color: #F60;
 }
 
 /* Measurement tool overlay */
+#measureToolSvg,
+#measureToolSvg * {
+  pointer-events: none;
+}
 #measureToolSvg {
   display: inline;
   position: absolute;
@@ -208,7 +212,6 @@ button {
   left: 0;
   width: 100%;
   height: 100%;
-  pointer-events: none;
 }
 #measureToolSvg.hidden {
   display: none;
@@ -255,6 +258,9 @@ button {
   color: #fff;
   background-color: #222;
   font-size: 13px;
+}
+#measurePanel > #measureLengthUnit {
+  color: #AAA;
 }
 #measurePanel > #measureClear {
   width: 24px;

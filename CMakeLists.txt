@@ -1146,6 +1146,17 @@ add_custom_target(copy_locale_files
 )
 add_dependencies(${PROJECT_NAME} copy_locale_files)
 
+# Copy HTML viewer export resources (read at export time by html.cpp, not
+# compiled in; named target so editing them doesn't require a full rebuild)
+add_custom_target(copy_viewer_resource_files
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCE_DIR}/viewer"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+        "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/viewer"
+        "${RESOURCE_DIR}/viewer"
+    COMMENT "Syncing HTML viewer export resources"
+)
+add_dependencies(${PROJECT_NAME} copy_viewer_resource_files)
+
 # OpenUSD runtime resources (schema/file-format plugin metadata).
 # On Windows: copy to <exe>/usd/ so that relative LibraryPaths resolve to the
 # DLL copies already loaded from the exe directory.
@@ -1437,6 +1448,7 @@ install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/volinga-logo.png" D
 install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/volinga-logo-dark.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/rmlui/resources/" DESTINATION "${INSTALL_RESOURCE_DIR}/assets/rmlui")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locales" DESTINATION "${INSTALL_RESOURCE_DIR}")
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/viewer" DESTINATION "${INSTALL_RESOURCE_DIR}")
 
 # OpenUSD plugin resources (schema definitions + plugInfo.json files)
 # On Windows configure_usd_plugins() looks for <exe_dir>/usd → install next to the exe (bin/usd).

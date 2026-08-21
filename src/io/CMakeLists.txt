@@ -209,7 +209,6 @@ add_library(lfs_io STATIC
         formats/sogs.cpp
         formats/html.hpp
         formats/html.cpp
-        formats/html_viewer_resources.hpp
         formats/rad.hpp
         formats/rad.cpp
         ply_to_rad_lod.cpp

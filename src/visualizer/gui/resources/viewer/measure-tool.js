@@ -9,48 +9,23 @@
  * splat's own transform.
  *
  * IMPORTANT: like gizmo.js, this file is NOT self-contained at runtime. It
- * is spliced (via tools/generate_html_viewer_resources.py) into the same
- * script scope as gizmo.js and the bundled PlayCanvas engine classes already
- * present in index.js (Vec3, Entity, EventHandler, Picker, etc). Do not add
- * real `import`/`export` statements here.
+ * is concatenated (see src/io/formats/html.cpp) after index.js and gizmo.js
+ * and wrapped in an IIFE at HTML export time, so it shares index.js's
+ * bundled PlayCanvas engine classes and gizmo.js's `Gizmo`/`TranslateGizmo`
+ * by closure rather than a real ES import. Do not add real `import`
+ * statements here; the trailing `export` below is stripped at export time.
  */
 
 const SCREEN_PICK_TOLERANCE = 8;
-
-// Prevent the viewer's own orbit/fly camera controller from consuming mouse
-// deltas while the measurement gizmo is being dragged. `InputController` only
-// accumulates raw input into `this.frame.deltas` each frame (some other part
-// of the viewer reads and applies those deltas to the camera); starving it of
-// deltas for a frame is enough to keep the camera perfectly still, without
-// having to fight DOM event propagation order against the gizmo's own
-// pointer handlers (both are plain listeners on the same canvas element, so
-// stopPropagation()/preventDefault() alone can't select one over the other).
-let _lfsCameraFrozen = false;
-const _lfsPatchCameraFreeze = () => {
-    if (typeof InputController === 'undefined' || !InputController.prototype) return;
-    const proto = InputController.prototype;
-    if (proto.update.__lfsFreezePatched) return;
-    const originalUpdate = proto.update;
-    const patched = function (...args) {
-        if (_lfsCameraFrozen) {
-            // drain accumulated input so movement doesn't jump once unfrozen
-            this._desktopInput?.read();
-            this._orbitInput?.read();
-            this._flyInput?.read();
-            this._gamepadInput?.read();
-            return;
-        }
-        return originalUpdate.apply(this, args);
-    };
-    patched.__lfsFreezePatched = true;
-    proto.update = patched;
-};
+// Pointer must move less than this (px) between down and up for a click to
+// register as a point pick; matches the viewer's own double-tap tolerance.
+// Without a deadzone, ordinary mouse/trackpad jitter between press and
+// release cancels almost every pick attempt.
+const CLICK_DEADZONE = 8;
 
 function initMeasureTool(global) {
     const { app, camera, events } = global;
     const canvas = app.graphicsDevice.canvas;
-
-    _lfsPatchCameraFreeze();
 
     // ---- state -------------------------------------------------------
     const points = [];
@@ -112,6 +87,10 @@ function initMeasureTool(global) {
     lengthInput.step = '0.01';
     lengthInput.min = '0.0001';
 
+    const lengthUnit = document.createElement('span');
+    lengthUnit.id = 'measureLengthUnit';
+    lengthUnit.textContent = 'm';
+
     const clearButton = document.createElement('button');
     clearButton.id = 'measureClear';
     clearButton.type = 'button';
@@ -120,6 +99,7 @@ function initMeasureTool(global) {
 
     panel.appendChild(lengthLabel);
     panel.appendChild(lengthInput);
+    panel.appendChild(lengthUnit);
     panel.appendChild(clearButton);
     panel.addEventListener('pointerdown', (e) => e.stopPropagation());
     document.getElementById('ui').appendChild(panel);
@@ -130,22 +110,21 @@ function initMeasureTool(global) {
         gizmoLayer = Gizmo.createLayer(app, 'LfsMeasureGizmo');
         gizmo = new TranslateGizmo(camera.camera, gizmoLayer);
         gizmo.size = 0.8;
+        // Left button only: the viewer binds right-drag to pan and
+        // middle/right drags are otherwise meaningful camera gestures, so
+        // only the left button should be able to grab a handle.
+        gizmo.mouseButtons[1] = false;
+        gizmo.mouseButtons[2] = false;
         pivot = new Entity('measurePivot');
         app.root.addChild(pivot);
         gizmo.on('render:update', () => {
             app.renderNextFrame = true;
-        });
-        gizmo.on('transform:start', () => {
-            _lfsCameraFrozen = true;
         });
         gizmo.on('transform:move', () => {
             if (selection >= 0 && selection < points.length) {
                 points[selection].copy(pivot.getPosition());
                 refreshVisuals();
             }
-        });
-        gizmo.on('transform:end', () => {
-            _lfsCameraFrozen = false;
         });
     };
 
@@ -215,7 +194,13 @@ function initMeasureTool(global) {
     });
     lengthInput.addEventListener('change', () => {
         if (points.length !== 2 || _dragStartLength <= 1e-6) return;
-        const newLength = Math.max(0.0001, parseFloat(lengthInput.value) || _dragStartLength);
+        const newLength = parseFloat(lengthInput.value);
+        if (!Number.isFinite(newLength) || newLength <= 0) {
+            // Reject 0/empty/negative input instead of silently keeping the
+            // old length or snapping the points together.
+            lengthInput.value = _dragStartLength.toFixed(3);
+            return;
+        }
         points[1].copy(_dragDir).mulScalar(newLength).add(points[0]);
         if (selection === 1 && pivot) {
             pivot.setPosition(points[1]);
@@ -233,14 +218,21 @@ function initMeasureTool(global) {
     // ---- point picking on click (drag = camera navigation, not a pick) --
     const isPrimary = (e) => (e.pointerType === 'mouse' ? e.button === 0 : e.isPrimary);
     let clicked = false;
+    let downX = 0;
+    let downY = 0;
 
     const onPointerDown = (e) => {
         if (active && !clicked && isPrimary(e)) {
             clicked = true;
+            downX = e.clientX;
+            downY = e.clientY;
         }
     };
-    const onPointerMove = () => {
-        clicked = false;
+    const onPointerMove = (e) => {
+        if (!clicked) return;
+        if (Math.abs(e.clientX - downX) > CLICK_DEADZONE || Math.abs(e.clientY - downY) > CLICK_DEADZONE) {
+            clicked = false;
+        }
     };
     const onPointerUp = async (e) => {
         if (!active || !clicked || !isPrimary(e)) return;
@@ -262,6 +254,8 @@ function initMeasureTool(global) {
         }
 
         if (points.length < 2) {
+            e.preventDefault();
+            e.stopPropagation();
             if (!picker) {
                 picker = new Picker(app, camera);
             }
@@ -271,8 +265,6 @@ function initMeasureTool(global) {
                 selection = points.length - 1;
                 syncGizmo();
             }
-            e.preventDefault();
-            e.stopPropagation();
         }
     };
 
@@ -287,9 +279,6 @@ function initMeasureTool(global) {
     const setActive = (state) => {
         active = state;
         button?.classList.toggle('active', active);
-        // defensive: don't leave the camera frozen if the tool is toggled
-        // off mid-drag
-        _lfsCameraFrozen = false;
         if (!active && gizmo) {
             gizmo.detach();
         } else if (active && selection >= 0) {
@@ -306,3 +295,5 @@ function initMeasureTool(global) {
         }
     });
 }
+
+export { initMeasureTool };

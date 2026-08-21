@@ -356,6 +356,10 @@
                 ]);
 
                 const viewer = await main(appElement.app, cameraElement.entity, settingsJson, config);
+                // Vendored gizmo/measurement-tool code (see gizmo.js, measure-tool.js)
+                // is appended after this bundle at export time and exposes itself
+                // via this hook so it can share the viewer's app/camera/events.
+                window.__lfsInitMeasureTool?.(viewer.global);
             });
         </script>
     </body>

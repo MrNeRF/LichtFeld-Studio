@@ -2,7 +2,7 @@
  * Trimmed/adapted translate-gizmo module from the PlayCanvas Engine
  * (https://github.com/playcanvas/engine), MIT licensed:
  *
- *   Copyright (c) 2011-2026 PlayCanvas Ltd.
+ *   Copyright (c) 2011-2024 PlayCanvas Ltd.
  *   Permission is hereby granted, free of charge, to any person obtaining a copy
  *   of this software and associated documentation files (the "Software"), to deal
  *   in the Software without restriction, including without limitation the rights
@@ -26,17 +26,23 @@
  * UI, and deprecated legacy aliases were removed since they are unused here.
  *
  * IMPORTANT: this file is NOT a self-contained module at runtime. It is
- * spliced (via tools/generate_html_viewer_resources.py) into the same script
- * scope as the bundled PlayCanvas engine classes already present in
- * index.js (Vec3, Quat, Mat4, Ray, Plane, Color, Layer, Entity, MeshInstance,
- * Mesh, ShaderMaterial, EventHandler, math, and the various geometry/blend/
- * cull-mode constants). Do not add real `import` statements here.
+ * concatenated (see src/io/formats/html.cpp) after index.js and wrapped in
+ * an IIFE together with measure-tool.js when the HTML viewer is exported, so
+ * it shares index.js's bundled PlayCanvas engine classes (Vec3, Quat, Mat4,
+ * Ray, Plane, Color, Layer, Entity, MeshInstance, Mesh, ShaderMaterial,
+ * EventHandler, math, and the various geometry/blend/cull-mode constants) by
+ * closure rather than a real ES import. Do not add real `import` statements
+ * here; the trailing `export` below is stripped at export time.
  *
- * One deliberate behavioral trim: `TransformGizmo._drawSpanLine` (the
- * full-length axis "guide line" drawn while dragging) is a no-op because the
- * viewer's engine build does not include `app.drawLine` (immediate-mode
- * debug line drawing was stripped from the production bundle). This only
- * affects a cosmetic guide line, not dragging itself.
+ * Input handling note: `Gizmo` registers its pointer listeners on the canvas
+ * with `{ capture: true }` and calls `stopImmediatePropagation()` on a
+ * handle hit (and for the remainder of an active drag), so the viewer's own
+ * orbit/fly camera controller - whose listeners are bubble-phase listeners
+ * on the same canvas - never observes drag input. Per the DOM spec, capturing
+ * listeners registered on the event target itself run before bubbling ones
+ * registered on that same target, regardless of add order (see
+ * https://dom.spec.whatwg.org/#dispatching-events); this is honored by
+ * current Chromium and Firefox releases.
  */
 
 // ---------------------------------------------------------------------------
@@ -147,8 +153,6 @@ const COLOR_RED = Object.freeze(new Color(1, 0.3, 0.3));
 const COLOR_GREEN = Object.freeze(new Color(0.3, 1, 0.3));
 const COLOR_BLUE = Object.freeze(new Color(0.3, 0.3, 1));
 const COLOR_GRAY = Object.freeze(new Color(0.5, 0.5, 0.5, 0.5));
-
-const color4from3 = (color, a) => new Color(color.r, color.g, color.b, a);
 
 const unlitShader = {
     uniqueName: 'lfs-gizmo-unlit',
@@ -327,6 +331,11 @@ class Gizmo extends EventHandler {
         this.nodes = [];
         this.intersectShapes = [];
         this.preventDefault = true;
+        // True from a handle hit (pointerdown) through the matching pointerup,
+        // even if the pointer strays off every shape's hit area mid-drag. Used
+        // to keep swallowing input for the whole drag, not just while directly
+        // over a shape.
+        this._activeDrag = false;
 
         this._layer = layer;
         this._camera = camera;
@@ -341,9 +350,12 @@ class Gizmo extends EventHandler {
         this._onPointerDown = this._onPointerDown.bind(this);
         this._onPointerMove = this._onPointerMove.bind(this);
         this._onPointerUp = this._onPointerUp.bind(this);
-        this._device.canvas.addEventListener('pointerdown', this._onPointerDown);
-        this._device.canvas.addEventListener('pointermove', this._onPointerMove);
-        this._device.canvas.addEventListener('pointerup', this._onPointerUp);
+        // Capture phase: on the event target itself, capturing listeners run
+        // before bubbling ones (see the file header note), so this reliably
+        // runs before the viewer's own bubble-phase camera-control listeners.
+        this._device.canvas.addEventListener('pointerdown', this._onPointerDown, true);
+        this._device.canvas.addEventListener('pointermove', this._onPointerMove, true);
+        this._device.canvas.addEventListener('pointerup', this._onPointerUp, true);
         this._handles.push(this._app.on('prerender', () => this.prerender()));
         this._handles.push(this._app.on('update', () => this.update()));
         this._handles.push(this._app.on('destroy', () => this.destroy()));
@@ -428,8 +440,9 @@ class Gizmo extends EventHandler {
         if (!this.mouseButtons[e.button]) return;
         const selection = this._getSelection(e.offsetX, e.offsetY);
         if (selection[0]) {
+            this._activeDrag = true;
             if (this.preventDefault) e.preventDefault();
-            e.stopPropagation();
+            e.stopImmediatePropagation();
         }
         const { canvas } = this._device;
         canvas.setPointerCapture(e.pointerId);
@@ -439,9 +452,9 @@ class Gizmo extends EventHandler {
     _onPointerMove(e) {
         if (!this.enabled || document.pointerLockElement) return;
         const selection = this._getSelection(e.offsetX, e.offsetY);
-        if (selection[0]) {
+        if (selection[0] || this._activeDrag) {
             if (this.preventDefault) e.preventDefault();
-            e.stopPropagation();
+            e.stopImmediatePropagation();
         }
         this.fire(Gizmo.EVENT_POINTERMOVE, e.offsetX, e.offsetY, selection[0]);
     }
@@ -450,10 +463,11 @@ class Gizmo extends EventHandler {
         if (!this.enabled || document.pointerLockElement) return;
         if (!this.mouseButtons[e.button]) return;
         const selection = this._getSelection(e.offsetX, e.offsetY);
-        if (selection[0]) {
+        if (selection[0] || this._activeDrag) {
             if (this.preventDefault) e.preventDefault();
-            e.stopPropagation();
+            e.stopImmediatePropagation();
         }
+        this._activeDrag = false;
         const { canvas } = this._device;
         canvas.releasePointerCapture(e.pointerId);
         this.fire(Gizmo.EVENT_POINTERUP, e.offsetX, e.offsetY, selection[0]);
@@ -574,9 +588,9 @@ class Gizmo extends EventHandler {
 
     destroy() {
         this.detach();
-        this._device.canvas.removeEventListener('pointerdown', this._onPointerDown);
-        this._device.canvas.removeEventListener('pointermove', this._onPointerMove);
-        this._device.canvas.removeEventListener('pointerup', this._onPointerUp);
+        this._device.canvas.removeEventListener('pointerdown', this._onPointerDown, true);
+        this._device.canvas.removeEventListener('pointermove', this._onPointerMove, true);
+        this._device.canvas.removeEventListener('pointerup', this._onPointerUp, true);
         this._handles.forEach((handle) => handle.off());
         this.root.destroy();
     }
@@ -600,6 +614,7 @@ const _tgV2 = new Vec3();
 const _tgPoint = new Vec3();
 const _tgRay = new Ray();
 const _tgPlane = new Plane();
+const _tgColor = new Color();
 const AXES_XYZ = ['x', 'y', 'z'];
 
 class TransformGizmo extends Gizmo {
@@ -794,12 +809,40 @@ class TransformGizmo extends Gizmo {
         return _tgPoint;
     }
 
-    // Full-length axis guide-lines are intentionally not rendered: the
-    // viewer's engine build has no immediate-mode `app.drawLine` API. This
-    // only affects a cosmetic aid shown while dragging.
-    _drawGuideLines() {}
+    _drawGuideLines(pos, rot, activeAxis, activeIsPlane) {
+        for (const axis of AXES_XYZ) {
+            if (activeAxis === 'xyz') {
+                this._drawSpanLine(pos, rot, axis);
+                continue;
+            }
+            if (activeIsPlane) {
+                if (axis !== activeAxis) {
+                    this._drawSpanLine(pos, rot, axis);
+                }
+            } else {
+                if (axis === activeAxis) {
+                    this._drawSpanLine(pos, rot, axis);
+                }
+            }
+        }
+    }
 
-    _drawSpanLine() {}
+    _drawSpanLine(pos, rot, axis) {
+        const dir = this._dirFromAxis(axis, _tgV1);
+        const base = this._theme.guideBase[axis];
+        const from = _tgV1.copy(dir).mulScalar(this._camera.farClip - this._camera.nearClip);
+        const to = _tgV2.copy(from).mulScalar(-1);
+        rot.transformVector(from, from).add(pos);
+        rot.transformVector(to, to).add(pos);
+        if (this._theme.guideOcclusion < 1) {
+            const occluded = _tgColor.copy(base);
+            occluded.a *= 1 - this._theme.guideOcclusion;
+            this._app.drawLine(from, to, occluded, false, this._layer);
+        }
+        if (base.a !== 0) {
+            this._app.drawLine(from, to, base, true);
+        }
+    }
 
     _createTransform() {
         for (const key in this._shapes) {
@@ -851,7 +894,11 @@ class TransformGizmo extends Gizmo {
     prerender() {
         super.prerender();
         if (!this.enabled) return;
-        this._drawGuideLines();
+        const gizmoPos = this.root.getLocalPosition();
+        const gizmoRot = this.root.getRotation();
+        const activeAxis = this._hoverAxis || this._selectedAxis;
+        const activeIsPlane = this._hoverIsPlane || this._selectedIsPlane;
+        this._drawGuideLines(gizmoPos, gizmoRot, activeAxis, activeIsPlane);
     }
 
     destroy() {
@@ -1228,6 +1275,26 @@ class TranslateGizmo extends TransformGizmo {
             this._projectToAxis(_tlPoint, axis);
         }
         return _tlPoint;
+    }
+
+    // While actively dragging any axis, show guide lines for all three axes
+    // (not just the one being dragged) so the full 3D reference is visible.
+    _drawGuideLines(pos, rot, activeAxis, activeIsPlane) {
+        for (const axis of AXES_XYZ) {
+            if (this._dragging || activeAxis === 'xyz') {
+                this._drawSpanLine(pos, rot, axis);
+                continue;
+            }
+            if (activeIsPlane) {
+                if (axis !== activeAxis) {
+                    this._drawSpanLine(pos, rot, axis);
+                }
+            } else {
+                if (axis === activeAxis) {
+                    this._drawSpanLine(pos, rot, axis);
+                }
+            }
+        }
     }
 
     prerender() {

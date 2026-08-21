@@ -102465,8 +102465,6 @@ const main = (app, camera, settingsJson, config) => {
     initXr(global);
     // Initialize user interface
     initUI(global);
-    // Initialize the measurement tool (translate gizmo + distance readout)
-    __lfsInitMeasureTool(global);
     // Load model
     const gsplatLoad = loadGsplat(app, config, (progress) => {
         state.progress = progress;
