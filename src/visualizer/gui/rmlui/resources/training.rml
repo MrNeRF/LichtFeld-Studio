@@ -52,11 +52,13 @@
   </div>
 
   <!-- ── Training Parameters ── -->
-  <div class="training-search-row">
-    <img class="training-search-icon" src="../icon/scene/search.png" />
-    <input type="text" class="number-input training-search-input" data-value="pv_search_query" />
-    <button type="button" class="btn btn--secondary training-search-clear"
-            data-if="pv_search_active" data-event-click="pv_search_clear">{{label_clear}}</button>
+  <div id="training-search-container">
+    <img id="training-search-icon" src="../icon/scene/search.png" />
+    <input id="training-search-input" type="text" data-value="pv_search_query" />
+    <button id="training-search-clear" type="button"
+            data-if="pv_search_active" data-event-click="pv_search_clear">
+      <img src="../icon/scene/x.png" />
+    </button>
   </div>
 
   <!-- Training telemetry remains visible while parameter rows scroll independently. -->

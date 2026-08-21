@@ -20,6 +20,7 @@
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
+#include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 #include <SDL3/SDL_clipboard.h>
 
@@ -985,6 +986,7 @@ namespace lfs::vis::gui {
             return false;
 
         const Rml::String id = target->GetId();
+        const Rml::String current_id = current ? current->GetId() : "";
         if (id == "scene-tab") {
             setTab(Tab::Scene);
             event.StopPropagation();
@@ -1007,9 +1009,9 @@ namespace lfs::vis::gui {
             event.StopPropagation();
             return true;
         }
-        if (id == "filter-clear") {
-            if (filter_input_el_)
-                filter_input_el_->SetAttribute("value", "");
+        if (id == "filter-clear" || current_id == "filter-clear") {
+            if (auto* input = dynamic_cast<Rml::ElementFormControlInput*>(filter_input_el_))
+                input->SetValue("");
             applyFilterInputValue();
             event.StopPropagation();
             return true;
@@ -1063,8 +1065,9 @@ namespace lfs::vis::gui {
     }
 
     void NativeScenePanel::applyFilterInputValue() {
+        const auto* input = dynamic_cast<const Rml::ElementFormControlInput*>(filter_input_el_);
         if (tree_el_)
-            tree_el_->setFilterText(filter_input_el_ ? filter_input_el_->GetAttribute<Rml::String>("value", "") : "");
+            tree_el_->setFilterText(input ? input->GetValue() : "");
         syncSummaryChips();
         syncSceneVisibility();
         host_.markContentDirty();
@@ -1199,8 +1202,8 @@ namespace lfs::vis::gui {
             tree_el_->setModelsCollapsed(false);
             tree_el_->setFilterText({});
         }
-        if (filter_input_el_)
-            filter_input_el_->SetAttribute("value", "");
+        if (auto* input = dynamic_cast<Rml::ElementFormControlInput*>(filter_input_el_))
+            input->SetValue("");
         host_.markContentDirty();
     }
 
@@ -1213,8 +1216,8 @@ namespace lfs::vis::gui {
             tree_el_->setModelsCollapsed(chrome.models_collapsed);
             tree_el_->setFilterText(chrome.filter_text);
         }
-        if (filter_input_el_)
-            filter_input_el_->SetAttribute("value", chrome.filter_text);
+        if (auto* input = dynamic_cast<Rml::ElementFormControlInput*>(filter_input_el_))
+            input->SetValue(chrome.filter_text);
         host_.markContentDirty();
     }
 

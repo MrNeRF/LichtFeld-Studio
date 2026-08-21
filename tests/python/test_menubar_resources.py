@@ -247,3 +247,14 @@ def test_scene_header_hosts_asset_manager_launcher():
     assert 'resolveRmlImageSource("icon/archive.png")' in scene_cpp
     assert 'panel_registry.is_panel_enabled("lfs.asset_manager")' in scene_cpp
     assert 'panel_registry.set_panel_enabled("lfs.asset_manager", !currently_open);' in scene_cpp
+
+
+def test_scene_filter_clear_resets_the_live_input_control():
+    scene_cpp = (
+        PROJECT_ROOT / "src" / "visualizer" / "gui" / "scene_panel_native.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert 'id == "filter-clear" || current_id == "filter-clear"' in scene_cpp
+    assert 'input->SetValue("")' in scene_cpp
+    assert "input ? input->GetValue()" in scene_cpp
+    assert 'filter_input_el_->SetAttribute("value", "")' not in scene_cpp

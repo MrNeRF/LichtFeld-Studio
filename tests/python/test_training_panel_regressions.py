@@ -897,9 +897,10 @@ def test_training_panel_keeps_controls_and_search_outside_scroll_region():
     resources = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources"
     rml = (resources / "training.rml").read_text()
     rcss = (resources / "training.rcss").read_text()
+    panel_source = (project_root / "src" / "python" / "lfs_plugins" / "training_panel.py").read_text()
 
     controls = rml.index('id="controls"')
-    search = rml.index('class="training-search-row"')
+    search = rml.index('id="training-search-container"')
     telemetry = rml.index('class="section-gap training-telemetry"')
     scroll_start = rml.index('class="training-scroll-region"')
     parameters = rml.index('class="training-panel-title"')
@@ -908,14 +909,20 @@ def test_training_panel_keeps_controls_and_search_outside_scroll_region():
 
     assert controls < search < telemetry < scroll_start < parameters < scroll_end < color_picker
     assert 'class="section-gap training-telemetry" data-if="show_training_telemetry"' in rml
-    assert 'class="training-search-icon" src="../icon/scene/search.png"' in rml
+    assert 'id="training-search-icon" src="../icon/scene/search.png"' in rml
+    assert 'id="training-search-input" type="text"' in rml
+    assert '<img src="../icon/scene/x.png" />' in rml
     assert ".training-panel-layout" in rcss
     assert ".training-scroll-region" in rcss
     assert ".training-telemetry" in rcss
+    assert "#training-search-input" in rcss
+    assert "background-color: transparent" in rcss
+    assert "border-width: 0" in rcss
     assert "overflow-y: auto" in rcss
     assert ".training-scroll-region scrollbarvertical" in rcss
     assert "padding-bottom: 6dp" in rcss
     assert "width: 4dp" in rcss
+    assert "height_mode = lf.ui.PanelHeightMode.FILL" in panel_source
 
 
 def test_set_bool_prop_hasattr_guard(training_panel_module, monkeypatch):

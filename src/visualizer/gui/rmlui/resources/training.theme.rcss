@@ -9,8 +9,26 @@
     image-color: @{primary};
 }
 
-.training-search-icon {
+#training-search-container {
+    background-color: @{surface};
+    border-color: @{border};
+}
+
+#training-search-input {
+    color: @{text};
+}
+
+#training-search-icon {
     image-color: @{text_dim};
+}
+
+#training-search-clear img {
+    image-color: @{text_dim};
+}
+
+#training-search-clear:hover img,
+#training-search-clear:focus-visible img {
+    image-color: @{text};
 }
 
 .training-subsection-title {
