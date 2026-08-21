@@ -84,6 +84,9 @@ namespace lfs::vis {
     class VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWritesScratch_Test;
     class VisualizerImplResetTest_SaveAsMigratesScratchAutosaveToSidecar_Test;
     class VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
+    class VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
+    class VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
+    class VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
     class VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
     class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
 } // namespace lfs::vis
@@ -290,6 +293,9 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWritesScratch_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsMigratesScratchAutosaveToSidecar_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
         friend class lfs::vis::VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
         friend class lfs::vis::VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
         enum class Hydration {

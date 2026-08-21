@@ -5503,6 +5503,9 @@ namespace lfs::vis::project {
             temporary;
         recovery_session_ =
             std::move(*session);
+        // Recovered content is not the durable master yet.
+        scene_dirty_.store(
+            true, std::memory_order_release);
         {
             const std::lock_guard lock(
                 settings_mutex_);

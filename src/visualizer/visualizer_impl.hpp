@@ -337,6 +337,9 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWritesScratch_Test;
         friend class VisualizerImplResetTest_SaveAsMigratesScratchAutosaveToSidecar_Test;
         friend class VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
+        friend class VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
+        friend class VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
+        friend class VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
         friend class VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
         friend class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
         friend class VisualizerImplResetTest_LoadFileStopTrainingDefersDatasetLoad_Test;

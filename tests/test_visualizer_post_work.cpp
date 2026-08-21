@@ -2640,6 +2640,250 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
+           RecoverThenCleanQuitDoesNotReoffer) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "recover-quit.licht";
+        const auto sidecar =
+            lfs::io::project::
+                autosave_sidecar_path(project_path);
+        write_recoverable_project(project_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
+            installModalOverlay(
+                gui->rml_modal_overlay_,
+                gui->rmlui_manager_);
+            auto pending = viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges);
+            ASSERT_TRUE(pending);
+            EXPECT_EQ(
+                *pending,
+                ProjectOpenOutcome::
+                    RecoveryPromptPending);
+            auto request = takeModalRequest(
+                gui->rml_modal_overlay_->queue_mutex_,
+                gui->rml_modal_overlay_->queue_);
+            ASSERT_TRUE(request.on_result);
+            request.on_result({.button_label = LOC(
+                                   lichtfeld::Strings::Recovery::
+                                       RECOVER)});
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->recovery_session_);
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            EXPECT_EQ(
+                lifecycle->beginOrPollCloseSave(),
+                project::ProjectLifecycle::
+                    CloseSaveStatus::NeedsPrompt);
+            EXPECT_TRUE(
+                std::filesystem::is_regular_file(
+                    sidecar));
+            lifecycle->resetCloseSaveAttempt();
+            ASSERT_TRUE(
+                lifecycle->setAutoSaveOnClose(true));
+            EXPECT_EQ(
+                lifecycle->beginOrPollCloseSave(),
+                project::ProjectLifecycle::
+                    CloseSaveStatus::Saving);
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            EXPECT_EQ(
+                lifecycle->beginOrPollCloseSave(),
+                project::ProjectLifecycle::
+                    CloseSaveStatus::Succeeded);
+            EXPECT_FALSE(
+                std::filesystem::exists(sidecar));
+        }
+        EXPECT_FALSE(std::filesystem::exists(sidecar));
+
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
+            installModalOverlay(
+                gui->rml_modal_overlay_,
+                gui->rmlui_manager_);
+            viewer.project_lifecycle_
+                ->openStartupProject(std::nullopt);
+            EXPECT_FALSE(viewer.project_lifecycle_
+                             ->recovery_prompt_pending_);
+            {
+                auto& overlay =
+                    *gui->rml_modal_overlay_;
+                std::lock_guard lock(
+                    overlay.queue_mutex_);
+                EXPECT_TRUE(overlay.queue_.empty());
+            }
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           RecoverThenDiscardExitRemovesMasterSidecar) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "recover-discard.licht";
+        const auto sidecar =
+            lfs::io::project::
+                autosave_sidecar_path(project_path);
+        write_recoverable_project(project_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
+            installModalOverlay(
+                gui->rml_modal_overlay_,
+                gui->rmlui_manager_);
+            auto pending = viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges);
+            ASSERT_TRUE(pending);
+            EXPECT_EQ(
+                *pending,
+                ProjectOpenOutcome::
+                    RecoveryPromptPending);
+            auto request = takeModalRequest(
+                gui->rml_modal_overlay_->queue_mutex_,
+                gui->rml_modal_overlay_->queue_);
+            ASSERT_TRUE(request.on_result);
+            request.on_result({.button_label = LOC(
+                                   lichtfeld::Strings::Recovery::
+                                       RECOVER)});
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->recovery_session_);
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->recovered_master_path_);
+            ASSERT_TRUE(
+                std::filesystem::is_regular_file(
+                    sidecar));
+            lfs::core::events::cmd::ForceExit{
+                .discard_autosave = true}
+                .emit();
+        }
+        EXPECT_FALSE(std::filesystem::exists(sidecar));
+        EXPECT_TRUE(
+            std::filesystem::is_regular_file(
+                project_path));
+
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
+            installModalOverlay(
+                gui->rml_modal_overlay_,
+                gui->rmlui_manager_);
+            viewer.project_lifecycle_
+                ->openStartupProject(std::nullopt);
+            EXPECT_FALSE(viewer.project_lifecycle_
+                             ->recovery_prompt_pending_);
+            {
+                auto& overlay =
+                    *gui->rml_modal_overlay_;
+                std::lock_guard lock(
+                    overlay.queue_mutex_);
+                EXPECT_TRUE(overlay.queue_.empty());
+            }
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           RecoverThenCrashStillOffersRecovery) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "recover-crash.licht";
+        const auto sidecar =
+            lfs::io::project::
+                autosave_sidecar_path(project_path);
+        write_recoverable_project(project_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
+            installModalOverlay(
+                gui->rml_modal_overlay_,
+                gui->rmlui_manager_);
+            auto pending = viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges);
+            ASSERT_TRUE(pending);
+            EXPECT_EQ(
+                *pending,
+                ProjectOpenOutcome::
+                    RecoveryPromptPending);
+            auto request = takeModalRequest(
+                gui->rml_modal_overlay_->queue_mutex_,
+                gui->rml_modal_overlay_->queue_);
+            ASSERT_TRUE(request.on_result);
+            request.on_result({.button_label = LOC(
+                                   lichtfeld::Strings::Recovery::
+                                       RECOVER)});
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->recovery_session_);
+            ASSERT_TRUE(
+                std::filesystem::is_regular_file(
+                    sidecar));
+        }
+        ASSERT_TRUE(
+            std::filesystem::is_regular_file(
+                sidecar));
+
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
+            installModalOverlay(
+                gui->rml_modal_overlay_,
+                gui->rmlui_manager_);
+            viewer.project_lifecycle_
+                ->openStartupProject(std::nullopt);
+            EXPECT_TRUE(viewer.project_lifecycle_
+                            ->recovery_prompt_pending_);
+            auto request = takeModalRequest(
+                gui->rml_modal_overlay_->queue_mutex_,
+                gui->rml_modal_overlay_->queue_);
+            EXPECT_EQ(
+                request.title,
+                LOC(lichtfeld::Strings::Recovery::
+                        CRASH_TITLE));
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
            StartupOffersScratchRecoveryAsUntitled) {
         auto options = projectOptions();
         std::filesystem::path scratch;
