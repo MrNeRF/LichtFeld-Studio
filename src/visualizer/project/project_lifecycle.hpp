@@ -82,6 +82,7 @@ namespace lfs::vis {
     class VisualizerImplResetTest_UntitledDirtySessionAutosavesToScratch_Test;
     class VisualizerImplResetTest_BlankUntitledSessionUpdateMaintenanceWritesNoScratch_Test;
     class VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWritesScratch_Test;
+    class VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWaitsForAutosaveQuietPeriod_Test;
     class VisualizerImplResetTest_SaveAsMigratesScratchAutosaveToSidecar_Test;
     class VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
     class VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
@@ -115,6 +116,7 @@ namespace lfs::vis::project {
         bool auto_save_on_close = false;
         std::uint64_t autosave_interval_seconds = 5 * 60;
         std::uint64_t autosave_dirty_epoch_threshold = 20;
+        std::uint64_t autosave_quiet_seconds = 2;
         std::uint64_t compaction_idle_seconds = 30;
         std::vector<ProjectMruEntry> mru;
         std::vector<DismissedRecoveryEntry> dismissed_recovery;
@@ -291,6 +293,7 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_UntitledDirtySessionAutosavesToScratch_Test;
         friend class lfs::vis::VisualizerImplResetTest_BlankUntitledSessionUpdateMaintenanceWritesNoScratch_Test;
         friend class lfs::vis::VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWritesScratch_Test;
+        friend class lfs::vis::VisualizerImplResetTest_DirtyUntitledSessionUpdateMaintenanceWaitsForAutosaveQuietPeriod_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsMigratesScratchAutosaveToSidecar_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;

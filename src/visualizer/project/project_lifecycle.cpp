@@ -1357,6 +1357,10 @@ namespace lfs::vis::project {
                     json.value(
                         "autosave_dirty_epoch_threshold",
                         std::uint64_t{20}));
+            settings.autosave_quiet_seconds =
+                json.value(
+                    "autosave_quiet_seconds",
+                    std::uint64_t{2});
             settings.compaction_idle_seconds =
                 json.value(
                     "compaction_idle_seconds",
@@ -1486,6 +1490,9 @@ namespace lfs::vis::project {
                 {"autosave_dirty_epoch_threshold",
                  settings
                      .autosave_dirty_epoch_threshold},
+                {"autosave_quiet_seconds",
+                 settings
+                     .autosave_quiet_seconds},
                 {"compaction_idle_seconds",
                  settings
                      .compaction_idle_seconds},
@@ -3950,6 +3957,14 @@ namespace lfs::vis::project {
         if (autosave_failure_backoff_seconds_ !=
                 0 &&
             now < autosave_retry_not_before_) {
+            return;
+        }
+        if (settings_.autosave_quiet_seconds !=
+                0 &&
+            now - last_mutation_at_ <
+                std::chrono::seconds(
+                    settings_
+                        .autosave_quiet_seconds)) {
             return;
         }
         if (auto started = startAutosave();

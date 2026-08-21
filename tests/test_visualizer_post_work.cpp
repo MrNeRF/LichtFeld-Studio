@@ -2431,6 +2431,9 @@ namespace lfs::vis {
             lifecycle->last_autosave_at_ =
                 std::chrono::steady_clock::now() -
                 std::chrono::hours(1);
+            lifecycle->last_mutation_at_ =
+                std::chrono::steady_clock::now() -
+                std::chrono::hours(1);
             lifecycle->updateMaintenance();
             ASSERT_TRUE(pumpUntil(
                 viewer.work_queue_mutex_,
@@ -2443,6 +2446,70 @@ namespace lfs::vis {
                 lfs::io::project::scratch_autosave_path(
                     lifecycle->recovery_directory_,
                     lifecycle->document_->project_uuid());
+            EXPECT_TRUE(
+                std::filesystem::is_regular_file(
+                    scratch));
+            EXPECT_FALSE(
+                lifecycle->document_->source_path());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           DirtyUntitledSessionUpdateMaintenanceWaitsForAutosaveQuietPeriod) {
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Untitled quiet maintenance"),
+                lfs::core::NULL_NODE);
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            EXPECT_FALSE(
+                lifecycle->isBlankUntitledSession());
+            lifecycle->settings_
+                .autosave_dirty_epoch_threshold = 1;
+            lifecycle->last_autosaved_dirty_epoch_ =
+                0;
+            lifecycle->last_autosaved_scene_serial_ =
+                0;
+            lifecycle->last_autosave_at_ =
+                std::chrono::steady_clock::now() -
+                std::chrono::hours(1);
+            lifecycle->last_mutation_at_ =
+                std::chrono::steady_clock::now();
+            lifecycle->updateMaintenance();
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_FALSE(
+                lifecycle->project_write_job_
+                    .has_value());
+            const auto scratch =
+                lfs::io::project::scratch_autosave_path(
+                    lifecycle->recovery_directory_,
+                    lifecycle->document_->project_uuid());
+            EXPECT_FALSE(
+                std::filesystem::exists(scratch));
+
+            lifecycle->last_mutation_at_ =
+                std::chrono::steady_clock::now() -
+                std::chrono::hours(1);
+            lifecycle->updateMaintenance();
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
             EXPECT_TRUE(
                 std::filesystem::is_regular_file(
                     scratch));
@@ -4216,6 +4283,9 @@ namespace lfs::vis {
             lifecycle->last_autosave_at_ =
                 std::chrono::steady_clock::now() -
                 std::chrono::hours(1);
+            lifecycle->last_mutation_at_ =
+                std::chrono::steady_clock::now() -
+                std::chrono::hours(1);
 
             std::filesystem::rename(
                 project_path, backup_path);
@@ -4299,6 +4369,9 @@ namespace lfs::vis {
             lifecycle->last_autosaved_scene_serial_ =
                 0;
             lifecycle->last_autosave_at_ =
+                std::chrono::steady_clock::now() -
+                std::chrono::hours(1);
+            lifecycle->last_mutation_at_ =
                 std::chrono::steady_clock::now() -
                 std::chrono::hours(1);
 
@@ -5463,6 +5536,9 @@ namespace lfs::vis {
             lifecycle
                 ->last_autosaved_scene_serial_ = 0;
             lifecycle->last_autosave_at_ =
+                std::chrono::steady_clock::now() -
+                std::chrono::hours(1);
+            lifecycle->last_mutation_at_ =
                 std::chrono::steady_clock::now() -
                 std::chrono::hours(1);
             lifecycle->updateMaintenance();
