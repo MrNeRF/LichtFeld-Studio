@@ -58,8 +58,7 @@ namespace gsplat_lfs {
         const scalar_t* __restrict__ render_alphas, // [C, image_height, image_width, 1]
         const int32_t* __restrict__ last_ids,       // [C, image_height, image_width]
         // grad outputs
-        const scalar_t* __restrict__ v_render_colors, // [C, image_height,
-                                                      // image_width, CDIM]
+        const scalar_t* __restrict__ v_render_colors, // [C, CDIM, image_height, image_width]
         const scalar_t* __restrict__ v_render_alphas, // [C, image_height, image_width, 1]
         // grad inputs
         vec3* __restrict__ v_means,                          // [N, 3]
@@ -233,7 +232,7 @@ namespace gsplat_lfs {
         float v_render_c[CDIM];
 #pragma unroll
         for (uint32_t k = 0; k < CDIM; ++k) {
-            v_render_c[k] = v_render_colors[pix_id * CDIM + k];
+            v_render_c[k] = v_render_colors[chw_pix(k, pix_id, image_height, image_width)];
         }
         const float v_render_a = v_render_alphas[pix_id];
 
@@ -260,9 +259,9 @@ namespace gsplat_lfs {
                 int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
                 id_batch[tr] = g;
                 const vec3 xyz = means[g];
-                const float opac = opacities[g];
+                const float opac = activated_opacity(opacities[g]);
                 xyz_opacity_batch[tr] = {xyz.x, xyz.y, xyz.z, opac};
-                scale_batch[tr] = scales[g];
+                scale_batch[tr] = activated_scale(scales[g]);
                 quat_batch[tr] = quats[g];
 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
@@ -421,9 +420,10 @@ namespace gsplat_lfs {
                     gpuAtomicAdd(v_mean_ptr + 2, v_mean_local.z);
 
                     float* v_scale_ptr = (float*)(v_scales) + 3 * g;
-                    gpuAtomicAdd(v_scale_ptr, v_scale_local.x);
-                    gpuAtomicAdd(v_scale_ptr + 1, v_scale_local.y);
-                    gpuAtomicAdd(v_scale_ptr + 2, v_scale_local.z);
+                    const vec3 scale_act = scale_batch[t];
+                    gpuAtomicAdd(v_scale_ptr, v_scale_local.x * scale_act.x);
+                    gpuAtomicAdd(v_scale_ptr + 1, v_scale_local.y * scale_act.y);
+                    gpuAtomicAdd(v_scale_ptr + 2, v_scale_local.z * scale_act.z);
 
                     float* v_quat_ptr = (float*)(v_quats) + 4 * g;
                     gpuAtomicAdd(v_quat_ptr, v_quat_local.x);
@@ -431,7 +431,8 @@ namespace gsplat_lfs {
                     gpuAtomicAdd(v_quat_ptr + 2, v_quat_local.z);
                     gpuAtomicAdd(v_quat_ptr + 3, v_quat_local.w);
 
-                    gpuAtomicAdd(v_opacities + g, v_opacity_local);
+                    const float opac_act = xyz_opacity_batch[t][3];
+                    gpuAtomicAdd(v_opacities + g, v_opacity_local * opac_act * (1.0f - opac_act));
                     if (densification_info != nullptr && densification_error_map != nullptr) {
                         gpuAtomicAdd(densification_info + g, densification_weight_local);
                         gpuAtomicAdd(densification_info + N + g, densification_error_weighted_local);

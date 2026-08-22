@@ -289,10 +289,11 @@ namespace gsplat_lfs {
 
         // Step 3: Compute viewing directions and evaluate SH
         if (render_mode == 0 || render_mode == 3 || render_mode == 4) {
-            compute_view_dirs(means, viewmats0, C, N, result.dirs, stream);
-
+            if (sh_degree > 0) {
+                compute_view_dirs(means, viewmats0, C, N, result.dirs, stream);
+            }
             spherical_harmonics_swizzled_fwd(
-                sh_degree, result.dirs, sh0, shN, nullptr,
+                sh_degree, sh_degree > 0 ? result.dirs : nullptr, sh0, shN, nullptr,
                 static_cast<int64_t>(C) * N,
                 result.colors, stream);
         }

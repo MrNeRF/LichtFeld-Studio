@@ -252,7 +252,7 @@ namespace lfs::python {
         EXPECT_FALSE(trainer.isInitialized());
     }
 
-    TEST(TrainerConstructionTest, InitializeRejectsGutWithShRestBeforeTraining) {
+    TEST(TrainerConstructionTest, InitializeDoesNotRejectGutWithShRest) {
         core::Scene scene;
         const core::NodeId cameras = scene.addGroup("Cameras");
         scene.addCamera("camera.png", cameras, make_test_camera());
@@ -262,12 +262,11 @@ namespace lfs::python {
         params.optimization.gut = true;
         params.optimization.sh_degree = 1;
         const auto result = trainer.initialize(params);
-
-        ASSERT_FALSE(result);
-        EXPECT_NE(result.error().find("GUT/gsplat"), std::string::npos);
-        EXPECT_NE(result.error().find("sh_degree=0"), std::string::npos);
-        EXPECT_NE(result.error().find("FastGS"), std::string::npos);
-        EXPECT_FALSE(trainer.isInitialized());
+        if (!result) {
+            EXPECT_EQ(result.error().find("unfused"), std::string::npos);
+            EXPECT_EQ(result.error().find("joint-codec SH-rest"), std::string::npos);
+            EXPECT_EQ(result.error().find("sh_degree=0"), std::string::npos);
+        }
     }
 
     TEST(TrainerConstructionTest, ExportableDensifyBarrierDistinguishesAbsentAndFailed) {

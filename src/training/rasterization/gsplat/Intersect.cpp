@@ -29,6 +29,28 @@ namespace gsplat_lfs {
             size_t sort_capacity = 0;
             cudaEvent_t sort_reuse_event = nullptr;
             bool sort_reuse_event_recorded = false;
+            int64_t* h_n_isects_pinned = nullptr;
+            bool h_n_isects_is_pinned = false;
+            cudaEvent_t n_isects_ready_event = nullptr;
+
+            IntersectBufferCache() {
+#if CUDART_VERSION >= 11020
+                void* ptr = nullptr;
+                if (cudaMallocHost(&ptr, sizeof(int64_t)) == cudaSuccess) {
+                    h_n_isects_pinned = static_cast<int64_t*>(ptr);
+                    h_n_isects_is_pinned = true;
+                    *h_n_isects_pinned = 0;
+                }
+#endif
+                if (!h_n_isects_pinned) {
+                    h_n_isects_pinned = new int64_t(0);
+                    h_n_isects_is_pinned = false;
+                }
+                if (cudaEventCreateWithFlags(&n_isects_ready_event, cudaEventDisableTiming) !=
+                    cudaSuccess) {
+                    n_isects_ready_event = nullptr;
+                }
+            }
 
             static size_t pair_bytes(const size_t count) {
                 return checked_bytes(
@@ -151,7 +173,8 @@ namespace gsplat_lfs {
                             lfs::core::CudaFailureDisposition::LogOnlyNoLatch);
                     }
                 }
-                // Drop pooled gsplat temporaries so thread exit returns VRAM.
+                // Pinned n_isects slot + event stay for the TLS lifetime so a
+                // mid-process release does not break a later forward on this thread.
                 const bool cub_released = release_gsplat_cub_workspace();
                 const bool color_grad_released = release_gsplat_color_grad_workspace();
                 return !cum_tiles && !isect_pair && !sort_pair &&
@@ -161,6 +184,18 @@ namespace gsplat_lfs {
 
             ~IntersectBufferCache() {
                 release();
+                cudaEvent_t count_event = std::exchange(n_isects_ready_event, nullptr);
+                if (count_event) {
+                    (void)cudaEventDestroy(count_event);
+                }
+                if (h_n_isects_pinned) {
+                    if (h_n_isects_is_pinned) {
+                        (void)cudaFreeHost(h_n_isects_pinned);
+                    } else {
+                        delete h_n_isects_pinned;
+                    }
+                    h_n_isects_pinned = nullptr;
+                }
             }
         };
 
@@ -233,13 +268,62 @@ namespace gsplat_lfs {
         // Compute cumulative sum on GPU with int32→int64 promotion
         compute_cumsum_gpu(tiles_per_gauss_out, d_cum_tiles, n_elements, stream);
 
-        // Get total intersection count (single 8-byte copy instead of full array)
-        int64_t n_isects;
+        LFS_ASSERT_MSG(cache.h_n_isects_pinned != nullptr,
+                       "gsplat intersection cache missing pinned n_isects slot");
         LFS_CUDA_CHECK_MSG(
-            cudaMemcpyAsync(&n_isects, d_cum_tiles + n_elements - 1, sizeof(int64_t),
-                            cudaMemcpyDeviceToHost, stream),
+            cudaMemcpyAsync(cache.h_n_isects_pinned, d_cum_tiles + n_elements - 1,
+                            sizeof(int64_t), cudaMemcpyDeviceToHost, stream),
             "gsplat intersection-count readback");
-        LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "gsplat intersection-count stream sync");
+        if (cache.n_isects_ready_event) {
+            LFS_CUDA_CHECK_MSG(
+                cudaEventRecord(cache.n_isects_ready_event, stream),
+                "gsplat n_isects event record");
+        }
+
+        auto finish_second_pass = [&](const int64_t n_isects, const int64_t max_write) {
+            cache.ensure_isect_buffers(static_cast<size_t>(n_isects), stream);
+            int64_t* const isect_ids_ptr = cache.isect_ids();
+            int32_t* const flatten_ids_ptr = cache.flatten_ids();
+            launch_intersect_tile_kernel(
+                means2d, radii, depths,
+                nullptr, nullptr,
+                C, N, nnz, packed,
+                tile_size, tile_width, tile_height,
+                d_cum_tiles,
+                nullptr,
+                isect_ids_ptr, flatten_ids_ptr,
+                stream, max_write);
+            return std::pair<int64_t*, int32_t*>{isect_ids_ptr, flatten_ids_ptr};
+        };
+
+        int64_t* isect_ids_ptr = nullptr;
+        int32_t* flatten_ids_ptr = nullptr;
+        const bool have_capacity = cache.isect_capacity > 0;
+        if (have_capacity) {
+            // Optimistic fill into the grow-only high-water buffers while the
+            // count D2H completes. Overflow is detected after the event wait.
+            launch_intersect_tile_kernel(
+                means2d, radii, depths,
+                nullptr, nullptr,
+                C, N, nnz, packed,
+                tile_size, tile_width, tile_height,
+                d_cum_tiles,
+                nullptr,
+                cache.isect_ids(), cache.flatten_ids(),
+                stream, static_cast<int64_t>(cache.isect_capacity));
+            isect_ids_ptr = cache.isect_ids();
+            flatten_ids_ptr = cache.flatten_ids();
+        }
+
+        if (cache.n_isects_ready_event) {
+            LFS_CUDA_CHECK_MSG(
+                cudaEventSynchronize(cache.n_isects_ready_event),
+                "gsplat n_isects event wait");
+        } else {
+            LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream),
+                               "gsplat intersection-count stream sync");
+        }
+        const int64_t n_isects = *cache.h_n_isects_pinned;
         LFS_ASSERT_MSG(
             n_isects >= 0 && n_isects <= std::numeric_limits<int32_t>::max(),
             std::format("gsplat intersection count {} exceeds int32 range", n_isects));
@@ -249,22 +333,15 @@ namespace gsplat_lfs {
             return result;
         }
 
-        // Grow-only high-water buffers: ownership stays in the TLS cache.
-        // Callers must NOT cudaFree the returned pointers (release is a no-op).
-        cache.ensure_isect_buffers(static_cast<size_t>(n_isects), stream);
-        int64_t* const isect_ids_ptr = cache.isect_ids();
-        int32_t* const flatten_ids_ptr = cache.flatten_ids();
-
-        // Second pass: compute isect_ids and flatten_ids
-        launch_intersect_tile_kernel(
-            means2d, radii, depths,
-            nullptr, nullptr, // camera_ids, gaussian_ids (dense)
-            C, N, nnz, packed,
-            tile_size, tile_width, tile_height,
-            d_cum_tiles,
-            nullptr, // tiles_per_gauss (not needed in second pass)
-            isect_ids_ptr, flatten_ids_ptr,
-            stream);
+        if (!have_capacity || n_isects > static_cast<int64_t>(cache.isect_capacity)) {
+            if (have_capacity) {
+                LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream),
+                                   "gsplat intersection overflow drain");
+            }
+            auto ptrs = finish_second_pass(n_isects, /*max_write=*/-1);
+            isect_ids_ptr = ptrs.first;
+            flatten_ids_ptr = ptrs.second;
+        }
 
         // Sort by isect_ids if requested
         if (sort && n_isects > 0) {

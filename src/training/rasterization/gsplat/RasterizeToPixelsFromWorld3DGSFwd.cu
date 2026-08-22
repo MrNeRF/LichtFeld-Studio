@@ -52,7 +52,7 @@ namespace gsplat_lfs {
         // intersections
         const int32_t* __restrict__ tile_offsets, // [C, tile_height, tile_width]
         const int32_t* __restrict__ flatten_ids,  // [n_isects]
-        scalar_t* __restrict__ render_colors,     // [C, image_height, image_width, CDIM]
+        scalar_t* __restrict__ render_colors,     // [C, CDIM, image_height, image_width]
         scalar_t* __restrict__ render_alphas,     // [C, image_height, image_width, 1]
         int32_t* __restrict__ last_ids            // [C, image_height, image_width]
     ) {
@@ -192,7 +192,7 @@ namespace gsplat_lfs {
                 } else if (backgrounds != nullptr) {
                     bg_val = backgrounds[k];
                 }
-                render_colors[pix_id * CDIM + k] = bg_val;
+                render_colors[chw_pix(k, pix_id, image_height, image_width)] = bg_val;
             }
             return;
         }
@@ -246,11 +246,11 @@ namespace gsplat_lfs {
                 int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
                 id_batch[tr] = g;
                 const vec3 xyz = means[g];
-                const float opac = opacities[g];
+                const float opac = activated_opacity(opacities[g]);
                 xyz_opacity_batch[tr] = {xyz.x, xyz.y, xyz.z, opac};
 
                 const vec4 quat = quats[g];
-                vec3 scale = scales[g];
+                vec3 scale = activated_scale(scales[g]);
 
                 mat3 R = quat_to_rotmat(quat);
                 mat3 S = mat3(
@@ -324,7 +324,7 @@ namespace gsplat_lfs {
                 } else if (backgrounds != nullptr) {
                     bg_val = backgrounds[k];
                 }
-                render_colors[pix_id * CDIM + k] = pix_out[k] + T * bg_val;
+                render_colors[chw_pix(k, pix_id, image_height, image_width)] = pix_out[k] + T * bg_val;
             }
             // index in bin of last gaussian in this pixel
             last_ids[pix_id] = static_cast<int32_t>(cur_idx);

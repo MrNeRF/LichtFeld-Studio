@@ -16,6 +16,8 @@
 #include "training/rasterization/gsplat/Ops.h"
 #include "training/rasterization/gsplat_rasterizer.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <iostream>
@@ -381,5 +383,76 @@ TEST(GsplatRasterizerQuantTest, RejectsFloat16ShRestWithoutQ16Bounds) {
     } catch (const std::runtime_error& error) {
         EXPECT_NE(std::string_view(error.what()).find("unsupported SH-rest storage"),
                   std::string_view::npos);
+    }
+}
+
+TEST_F(GsplatRasterizerTest, ForwardWritesChwAndBackwardIsStable) {
+    auto camera = make_camera(32, 32);
+    auto splat = make_visible_splat(16);
+    auto bg = Tensor::zeros({3}, Device::CUDA);
+
+    AdamConfig cfg;
+    cfg.lr = 1e-3f;
+    cfg.initial_capacity = 32;
+    AdamOptimizer opt(*splat, cfg);
+    opt.allocate_gradients(32);
+
+    auto run_once = [&]() {
+        auto r = gsplat_rasterize_forward(
+            camera, *splat, bg, 0, 0, 0, 0, 1.0f, false, GsplatRenderMode::RGB,
+            /*use_gut=*/true);
+        EXPECT_TRUE(r.has_value()) << r.error();
+        auto output = std::move(r->first);
+        auto ctx = std::move(r->second);
+        EXPECT_TRUE(output.image.is_valid());
+        EXPECT_EQ(output.image.ndim(), 3);
+        EXPECT_EQ(output.image.shape()[0], 3u);
+        auto grad_image = Tensor::ones_like(output.image);
+        auto grad_alpha = Tensor::zeros_like(output.alpha);
+        gsplat_rasterize_backward(ctx, grad_image, grad_alpha, *splat, opt, Tensor{});
+        return output.image.clone();
+    };
+
+    auto image0 = run_once();
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    auto means_g = opt.get_grad(ParamType::Means).clone().cpu();
+    auto scale_g = opt.get_grad(ParamType::Scaling).clone().cpu();
+    auto quat_g = opt.get_grad(ParamType::Rotation).clone().cpu();
+    auto opa_g = opt.get_grad(ParamType::Opacity).clone().cpu();
+    float max_abs = 0.0f;
+    auto bump = [&](const Tensor& t) {
+        const auto* p = t.ptr<float>();
+        for (size_t i = 0; i < static_cast<size_t>(t.numel()); ++i) {
+            max_abs = std::max(max_abs, std::abs(p[i]));
+            EXPECT_TRUE(std::isfinite(p[i]));
+        }
+    };
+    bump(means_g);
+    bump(scale_g);
+    bump(quat_g);
+    bump(opa_g);
+    EXPECT_GT(max_abs, 0.0f);
+
+    opt.zero_grad(1);
+    auto image1 = run_once();
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    auto means_g2 = opt.get_grad(ParamType::Means).cpu();
+    const auto* a = means_g.ptr<float>();
+    const auto* b = means_g2.ptr<float>();
+    float max_rel = 0.0f;
+    for (size_t i = 0; i < static_cast<size_t>(means_g.numel()); ++i) {
+        const float denom = std::max(max_abs, 1e-8f);
+        max_rel = std::max(max_rel, std::abs(a[i] - b[i]) / denom);
+    }
+    EXPECT_LT(max_rel, 1e-5f);
+
+    auto img0 = image0.cpu();
+    auto img1 = image1.cpu();
+    ASSERT_EQ(img0.numel(), img1.numel());
+    const auto* p0 = img0.ptr<float>();
+    const auto* p1 = img1.ptr<float>();
+    for (size_t i = 0; i < static_cast<size_t>(img0.numel()); ++i) {
+        EXPECT_EQ(p0[i], p1[i]);
+        EXPECT_TRUE(std::isfinite(p0[i]));
     }
 }

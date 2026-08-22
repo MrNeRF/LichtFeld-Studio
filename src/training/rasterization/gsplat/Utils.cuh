@@ -73,6 +73,21 @@ namespace gsplat_lfs {
         val = cg::reduce(warp, val, cg::greater<float>());
     }
 
+    inline __device__ float activated_opacity(const float raw) {
+        return 1.0f / (1.0f + expf(-raw));
+    }
+
+    inline __device__ vec3 activated_scale(const vec3 raw) {
+        return vec3(expf(raw.x), expf(raw.y), expf(raw.z));
+    }
+
+    inline __device__ int32_t chw_pix(const uint32_t channel,
+                                      const int32_t pix_id,
+                                      const uint32_t image_height,
+                                      const uint32_t image_width) {
+        return static_cast<int32_t>(channel * image_height * image_width) + pix_id;
+    }
+
     ///////////////////////////////
     // Quaternion
     ///////////////////////////////

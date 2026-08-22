@@ -35,7 +35,8 @@ namespace gsplat_lfs {
         const uint32_t tile_n_bits,
         int32_t* __restrict__ tiles_per_gauss,
         int64_t* __restrict__ isect_ids,
-        int32_t* __restrict__ flatten_ids) {
+        int32_t* __restrict__ flatten_ids,
+        const int64_t max_isects) {
         uint32_t idx = cg::this_grid().thread_rank();
         bool first_pass = cum_tiles_per_gauss == nullptr;
         if (idx >= (packed ? nnz : C * N)) {
@@ -84,6 +85,9 @@ namespace gsplat_lfs {
         int64_t cur_idx = (idx == 0) ? 0 : cum_tiles_per_gauss[idx - 1];
         for (int32_t i = tile_min.y; i < tile_max.y; ++i) {
             for (int32_t j = tile_min.x; j < tile_max.x; ++j) {
+                if (max_isects >= 0 && cur_idx >= max_isects) {
+                    return;
+                }
                 int64_t tile_id = i * tile_width + j;
                 isect_ids[cur_idx] = cid_enc | (tile_id << 32) | depth_id_enc;
                 flatten_ids[cur_idx] = static_cast<int32_t>(idx);
@@ -109,7 +113,8 @@ namespace gsplat_lfs {
         int32_t* tiles_per_gauss,
         int64_t* isect_ids,
         int32_t* flatten_ids,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        int64_t max_isects) {
         int64_t n_elements = packed ? nnz : C * N;
 
         uint32_t n_tiles = tile_width * tile_height;
@@ -129,7 +134,7 @@ namespace gsplat_lfs {
             means2d, radii, depths,
             cum_tiles_per_gauss,
             tile_size, tile_width, tile_height, tile_n_bits,
-            tiles_per_gauss, isect_ids, flatten_ids);
+            tiles_per_gauss, isect_ids, flatten_ids, max_isects);
         LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.intersect_tile");
     }
 

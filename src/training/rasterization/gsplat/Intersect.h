@@ -28,7 +28,8 @@ namespace gsplat_lfs {
         int32_t* tiles_per_gauss, // [C, N] or [nnz] optional (for first pass)
         int64_t* isect_ids,       // [n_isects] optional (for second pass)
         int32_t* flatten_ids,     // [n_isects] optional (for second pass)
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        int64_t max_isects = -1);
 
     void launch_intersect_offset_kernel(
         // inputs

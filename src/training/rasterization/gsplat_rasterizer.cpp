@@ -87,16 +87,16 @@ namespace lfs::training {
 
             core::Tensor K_tensor;
 
-            // Get Gaussian parameters (activated), preserving existing contiguous storage where possible.
+            // Raw parameters: kernels apply sigmoid/exp/normalize internally.
             auto ensure_contiguous = [](core::Tensor t) -> core::Tensor {
                 return t.is_contiguous() ? t : t.contiguous();
             };
             auto means = ensure_contiguous(gaussian_model.get_means());
-            auto opacities = ensure_contiguous(gaussian_model.get_opacity()); // [N] sigmoid applied
-            auto scales = ensure_contiguous(gaussian_model.get_scaling());    // [N, 3] exp applied
-            auto quats = ensure_contiguous(gaussian_model.get_rotation());    // [N, 4] normalized
-            auto sh0 = ensure_contiguous(gaussian_model.sh0());               // [N, 1, 3]
-            auto shN = ensure_contiguous(gaussian_model.shN());               // swizzled 1D SH-rest (float or q16)
+            auto opacities = ensure_contiguous(gaussian_model.opacity_raw());
+            auto scales = ensure_contiguous(gaussian_model.scaling_raw());
+            auto quats = ensure_contiguous(gaussian_model.rotation_raw());
+            auto sh0 = ensure_contiguous(gaussian_model.sh0());
+            auto shN = ensure_contiguous(gaussian_model.shN());
             const uint32_t sh_degree = static_cast<uint32_t>(gaussian_model.get_active_sh_degree());
 
             // Squeeze opacities if needed
@@ -277,20 +277,17 @@ namespace lfs::training {
             const size_t radii_size = align(C * N * 2 * sizeof(int32_t));
             const size_t means2d_size = align(C * N * 2 * sizeof(float));
             const size_t depths_size = align(C * N * sizeof(float));
-            const size_t dirs_size = align(C * N * 3 * sizeof(float));
+            const size_t dirs_size = (sh_degree > 0) ? align(C * N * 3 * sizeof(float)) : 0;
             const size_t conics_size = align(C * N * 3 * sizeof(float));
             const size_t compensations_size = calc_compensations ? align(C * N * sizeof(float)) : 0;
             const size_t tiles_per_gauss_size = align(C * N * sizeof(int32_t));
             const size_t tile_offsets_size = align(C * num_tiles_y * num_tiles_x * sizeof(int32_t));
             const size_t colors_size = align(C * N * channels * sizeof(float));
-            const size_t render_colors_size = align(C * H * W * channels * sizeof(float));
-            const size_t render_alphas_size = align(C * H * W * sizeof(float));
             const size_t last_ids_size = align(C * H * W * sizeof(int32_t));
 
             const size_t total_size = radii_size + means2d_size + depths_size + dirs_size +
                                       conics_size + compensations_size + tiles_per_gauss_size +
-                                      tile_offsets_size + colors_size + render_colors_size +
-                                      render_alphas_size + last_ids_size;
+                                      tile_offsets_size + colors_size + last_ids_size;
 
             // Allocate from arena
             char* blob = arena_allocator(total_size);
@@ -327,11 +324,28 @@ namespace lfs::training {
             ptr += tile_offsets_size;
             auto* colors_ptr_out = reinterpret_cast<float*>(ptr);
             ptr += colors_size;
-            auto* render_colors_ptr_out = reinterpret_cast<float*>(ptr);
-            ptr += render_colors_size;
-            auto* render_alphas_ptr_out = reinterpret_cast<float*>(ptr);
-            ptr += render_alphas_size;
             auto* last_ids_ptr_out = reinterpret_cast<int32_t*>(ptr);
+
+            auto& cached_image_chw = gsplat_thread_caches.image_chw;
+            auto& cached_alpha_chw = gsplat_thread_caches.alpha_chw;
+            auto& cached_depth_chw = gsplat_thread_caches.depth_chw;
+            const core::TensorShape image_shape = {
+                static_cast<size_t>(channels), static_cast<size_t>(H), static_cast<size_t>(W)};
+            if (!cached_image_chw.is_valid() || cached_image_chw.shape() != image_shape ||
+                cached_image_chw.stream() != fwd_stream) {
+                cached_image_chw = core::Tensor::empty(image_shape, core::Device::CUDA, core::DataType::Float32);
+                if (cached_image_chw.stream() != fwd_stream)
+                    cached_image_chw.set_stream(fwd_stream);
+            }
+            const core::TensorShape alpha_shape = {1UL, static_cast<size_t>(H), static_cast<size_t>(W)};
+            if (!cached_alpha_chw.is_valid() || cached_alpha_chw.shape() != alpha_shape ||
+                cached_alpha_chw.stream() != fwd_stream) {
+                cached_alpha_chw = core::Tensor::empty(alpha_shape, core::Device::CUDA, core::DataType::Float32);
+                if (cached_alpha_chw.stream() != fwd_stream)
+                    cached_alpha_chw.set_stream(fwd_stream);
+            }
+            float* const render_colors_ptr_out = cached_image_chw.ptr<float>();
+            float* const render_alphas_ptr_out = cached_alpha_chw.ptr<float>();
 
             // Setup result struct
             gsplat_lfs::RasterizeWithSHResult result{
@@ -341,7 +355,7 @@ namespace lfs::training {
                 .means2d = means2d_ptr_out,
                 .depths = depths_ptr_out,
                 .colors = colors_ptr_out,
-                .dirs = dirs_ptr_out,
+                .dirs = (sh_degree > 0) ? dirs_ptr_out : nullptr,
                 .conics = conics_ptr_out,
                 .tiles_per_gauss = tiles_per_gauss_ptr,
                 .tile_offsets = tile_offsets_ptr_out,
@@ -390,97 +404,17 @@ namespace lfs::training {
             // isect_ids / flatten_ids are borrowed from TLS high-water cache —
             // never transfer ownership or free on error paths.
 
-            // Build RenderOutput - wrap raw pointers in tensor views
             RenderOutput render_output;
-
-            // Create tensor views over arena memory for output
-            auto render_colors_tensor = core::Tensor::from_blob(
-                render_colors_ptr_out, {static_cast<size_t>(C), static_cast<size_t>(H), static_cast<size_t>(W), static_cast<size_t>(channels)},
-                core::Device::CUDA, core::DataType::Float32, fwd_stream);
-            auto render_alphas_tensor = core::Tensor::from_blob(
-                render_alphas_ptr_out, {static_cast<size_t>(C), static_cast<size_t>(H), static_cast<size_t>(W), 1UL},
-                core::Device::CUDA, core::DataType::Float32, fwd_stream);
-
-            // Process based on render mode
-            core::Tensor final_image, final_depth;
+            render_output.alpha = cached_alpha_chw;
 
             switch (render_mode) {
             case GsplatRenderMode::RGB:
-                final_image = render_colors_tensor;
-                break;
-
-            case GsplatRenderMode::D:
-                final_depth = render_colors_tensor;
-                break;
-
-            case GsplatRenderMode::ED:
-                final_depth = render_colors_tensor.div(render_alphas_tensor.clamp_min(1e-10f));
-                break;
-
-            case GsplatRenderMode::RGB_D:
-                final_image = render_colors_tensor.slice(-1, 0, 3);
-                final_depth = render_colors_tensor.slice(-1, 3, 4);
-                break;
-
-            case GsplatRenderMode::RGB_ED:
-                final_image = render_colors_tensor.slice(-1, 0, 3);
-                auto accum_depth = render_colors_tensor.slice(-1, 3, 4);
-                final_depth = accum_depth.div(render_alphas_tensor.clamp_min(1e-10f));
-                break;
-            }
-
-            // Convert from [1, H, W, C] arena views to reusable CHW buffers.
-            auto& cached_image_chw = gsplat_thread_caches.image_chw;
-            auto& cached_alpha_chw = gsplat_thread_caches.alpha_chw;
-            auto& cached_depth_chw = gsplat_thread_caches.depth_chw;
-
-            if (final_image.is_valid() && final_image.numel() > 0) {
-                auto image_hwc = final_image.squeeze(0); // [H, W, C]
-                if (!image_hwc.is_contiguous()) {
-                    image_hwc = image_hwc.contiguous();
-                }
-
-                const size_t image_channels = image_hwc.shape()[2];
-                const core::TensorShape image_shape = {image_channels, static_cast<size_t>(H), static_cast<size_t>(W)};
-                if (!cached_image_chw.is_valid() || cached_image_chw.shape() != image_shape ||
-                    cached_image_chw.stream() != fwd_stream) {
-                    cached_image_chw = core::Tensor::empty(image_shape, core::Device::CUDA, core::DataType::Float32);
-                    if (cached_image_chw.stream() != fwd_stream)
-                        cached_image_chw.set_stream(fwd_stream);
-                }
-
-                kernels::launch_permute_hwc_to_chw(
-                    image_hwc.ptr<float>(),
-                    cached_image_chw.ptr<float>(),
-                    static_cast<int>(image_channels),
-                    static_cast<int>(H),
-                    static_cast<int>(W),
-                    fwd_stream);
-
                 render_output.image = cached_image_chw;
-            }
-
-            const core::TensorShape alpha_shape = {1UL, static_cast<size_t>(H), static_cast<size_t>(W)};
-            if (!cached_alpha_chw.is_valid() || cached_alpha_chw.shape() != alpha_shape ||
-                cached_alpha_chw.stream() != fwd_stream) {
-                cached_alpha_chw = core::Tensor::empty(alpha_shape, core::Device::CUDA, core::DataType::Float32);
-                if (cached_alpha_chw.stream() != fwd_stream)
-                    cached_alpha_chw.set_stream(fwd_stream);
-            }
-            cudaMemcpyAsync(
-                cached_alpha_chw.ptr<float>(),
-                render_alphas_ptr_out,
-                static_cast<size_t>(H) * static_cast<size_t>(W) * sizeof(float),
-                cudaMemcpyDeviceToDevice,
-                fwd_stream);
-            render_output.alpha = cached_alpha_chw;
-
-            if (final_depth.is_valid() && final_depth.numel() > 0) {
-                auto depth_hwc = final_depth.squeeze(0); // [H, W, 1]
-                if (!depth_hwc.is_contiguous()) {
-                    depth_hwc = depth_hwc.contiguous();
-                }
-
+                break;
+            case GsplatRenderMode::D:
+                render_output.depth = cached_image_chw;
+                break;
+            case GsplatRenderMode::ED: {
                 const core::TensorShape depth_shape = {1UL, static_cast<size_t>(H), static_cast<size_t>(W)};
                 if (!cached_depth_chw.is_valid() || cached_depth_chw.shape() != depth_shape ||
                     cached_depth_chw.stream() != fwd_stream) {
@@ -488,14 +422,19 @@ namespace lfs::training {
                     if (cached_depth_chw.stream() != fwd_stream)
                         cached_depth_chw.set_stream(fwd_stream);
                 }
-                cudaMemcpyAsync(
-                    cached_depth_chw.ptr<float>(),
-                    depth_hwc.ptr<float>(),
-                    static_cast<size_t>(H) * static_cast<size_t>(W) * sizeof(float),
-                    cudaMemcpyDeviceToDevice,
-                    fwd_stream);
-
-                render_output.depth = cached_depth_chw;
+                render_output.depth = cached_image_chw.div(cached_alpha_chw.clamp_min(1e-10f));
+                break;
+            }
+            case GsplatRenderMode::RGB_D:
+                render_output.image = cached_image_chw.slice(0, 0, 3);
+                render_output.depth = cached_image_chw.slice(0, 3, 4);
+                break;
+            case GsplatRenderMode::RGB_ED: {
+                render_output.image = cached_image_chw.slice(0, 0, 3);
+                auto accum_depth = cached_image_chw.slice(0, 3, 4);
+                render_output.depth = accum_depth.div(cached_alpha_chw.clamp_min(1e-10f));
+                break;
+            }
             }
 
             // NOTE: Background image blending is now handled inside gsplat kernel directly
@@ -514,7 +453,7 @@ namespace lfs::training {
             ctx.means2d_ptr = means2d_ptr_out;
             ctx.depths_ptr = depths_ptr_out;
             ctx.colors_ptr = colors_ptr_out;
-            ctx.dirs_ptr = dirs_ptr_out;
+            ctx.dirs_ptr = (sh_degree > 0) ? dirs_ptr_out : nullptr;
             ctx.tile_offsets_ptr = tile_offsets_ptr_out;
             ctx.last_ids_ptr = last_ids_ptr_out;
             ctx.compensations_ptr = compensations_ptr_out;
@@ -619,8 +558,10 @@ namespace lfs::training {
                 return (size + alignment - 1) & ~(alignment - 1);
             };
 
-            size_t v_render_colors_size = align(H * W * channels * sizeof(float));
-            size_t v_render_alphas_size = align(H * W * sizeof(float));
+            const bool have_color_grad = grad_image.is_valid() && grad_image.numel() > 0;
+            const bool have_alpha_grad = grad_alpha.is_valid() && grad_alpha.numel() > 0;
+            size_t v_render_colors_size = have_color_grad ? 0 : align(H * W * channels * sizeof(float));
+            size_t v_render_alphas_size = have_alpha_grad ? 0 : align(H * W * sizeof(float));
             size_t v_means_size = align(N * 3 * sizeof(float));
             size_t v_quats_size = align(N * 4 * sizeof(float));
             size_t v_scales_size = align(N * 3 * sizeof(float));
@@ -644,10 +585,22 @@ namespace lfs::training {
 
             // Carve out backward buffers
             char* bwd_ptr = bwd_blob;
-            auto* v_render_colors_ptr = reinterpret_cast<float*>(bwd_ptr);
-            bwd_ptr += v_render_colors_size;
-            auto* v_render_alphas_ptr = reinterpret_cast<float*>(bwd_ptr);
-            bwd_ptr += v_render_alphas_size;
+            float* v_render_colors_ptr = nullptr;
+            float* v_render_alphas_ptr = nullptr;
+            if (!have_color_grad) {
+                v_render_colors_ptr = reinterpret_cast<float*>(bwd_ptr);
+                bwd_ptr += v_render_colors_size;
+                cudaMemsetAsync(v_render_colors_ptr, 0, H * W * channels * sizeof(float), stream);
+            } else {
+                v_render_colors_ptr = const_cast<float*>(grad_image.ptr<float>());
+            }
+            if (!have_alpha_grad) {
+                v_render_alphas_ptr = reinterpret_cast<float*>(bwd_ptr);
+                bwd_ptr += v_render_alphas_size;
+                cudaMemsetAsync(v_render_alphas_ptr, 0, H * W * sizeof(float), stream);
+            } else {
+                v_render_alphas_ptr = const_cast<float*>(grad_alpha.ptr<float>());
+            }
             auto* v_means_ptr = reinterpret_cast<float*>(bwd_ptr);
             bwd_ptr += v_means_size;
             auto* v_quats_ptr = reinterpret_cast<float*>(bwd_ptr);
@@ -658,38 +611,11 @@ namespace lfs::training {
             bwd_ptr += v_opacities_size;
             auto* v_sh_coeffs_ptr = reinterpret_cast<float*>(bwd_ptr);
 
-            // Zero the gradient buffers
             cudaMemsetAsync(v_means_ptr, 0, N * 3 * sizeof(float), stream);
             cudaMemsetAsync(v_quats_ptr, 0, N * 4 * sizeof(float), stream);
             cudaMemsetAsync(v_scales_ptr, 0, N * 3 * sizeof(float), stream);
             cudaMemsetAsync(v_opacities_ptr, 0, N * sizeof(float), stream);
             cudaMemsetAsync(v_sh_coeffs_ptr, 0, N * K * 3 * sizeof(float), stream);
-
-            // Prepare grad_render_colors [1, H, W, channels] - permute from CHW to HWC using custom kernel
-            // This avoids memory pool allocation from tensor permute().contiguous()
-            if (grad_image.is_valid() && grad_image.numel() > 0) {
-                // grad_image is [C, H, W], need [H, W, C]
-                kernels::launch_permute_chw_to_hwc(
-                    grad_image.ptr<float>(),
-                    v_render_colors_ptr,
-                    static_cast<int>(channels), static_cast<int>(H), static_cast<int>(W),
-                    stream);
-            } else {
-                cudaMemsetAsync(v_render_colors_ptr, 0, H * W * channels * sizeof(float), stream);
-            }
-
-            // Prepare grad_render_alphas [H, W] - squeeze from [1, H, W] using custom kernel
-            // This avoids memory pool allocation from tensor permute().contiguous()
-            if (grad_alpha.is_valid() && grad_alpha.numel() > 0) {
-                // grad_alpha is [1, H, W], need [H, W] - same memory layout
-                kernels::launch_squeeze_1hw_to_hw(
-                    grad_alpha.ptr<float>(),
-                    v_render_alphas_ptr,
-                    static_cast<int>(H), static_cast<int>(W),
-                    stream);
-            } else {
-                cudaMemsetAsync(v_render_alphas_ptr, 0, H * W * sizeof(float), stream);
-            }
 
             UnscentedTransformParameters ut_params;
 
@@ -787,30 +713,6 @@ namespace lfs::training {
                 v_sh_coeffs_ptr,
                 densification_info_ptr,
                 pixel_error_map_ptr,
-                stream);
-
-            // ============ Chain rule for activation functions ============
-            // gsplat backward returns gradients w.r.t. activated parameters
-            // We need to chain rule back to raw parameters
-            // Use custom CUDA kernels to avoid tensor allocations
-
-            // Scales: exp(raw) -> v_scales_raw = v_scales * exp(raw_scales) = v_scales * scales
-            // In-place: v_scales_ptr *= scales
-            kernels::launch_exp_backward(v_scales_ptr, ctx.scales.ptr<float>(), N, stream);
-
-            // Opacities: sigmoid(raw) -> v_opacities_raw = v_opacities * sigmoid * (1 - sigmoid)
-            // In-place: v_opacities_ptr *= sigmoid * (1 - sigmoid)
-            kernels::launch_sigmoid_backward(v_opacities_ptr, ctx.opacities.ptr<float>(), N, stream);
-
-            // Quaternions: normalize(raw) -> need Jacobian of normalization
-            // v_raw = (v_activated - q_norm * dot(q_norm, v_activated)) / ||q_raw||
-            // In-place modification of v_quats_ptr
-            auto raw_quats = gaussian_model.rotation_raw();
-            kernels::launch_quat_normalize_backward(
-                v_quats_ptr,
-                ctx.quats.ptr<float>(),
-                raw_quats.ptr<float>(),
-                N,
                 stream);
 
             // ============ Accumulate gradients into optimizer using CUDA kernels ============
