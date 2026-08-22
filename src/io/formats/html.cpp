@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
+#include "core/splat_data_transform.hpp"
 #include "io/atomic_output.hpp"
 #include "io/error.hpp"
 #include "sogs.hpp"
@@ -15,6 +16,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -158,6 +160,8 @@ namespace lfs::io {
         }
 
         Result<std::string> generate_html(const std::string& base64_sog,
+                                          const glm::vec3& camera_position,
+                                          const glm::vec3& camera_target,
                                           const std::optional<core::ProvenanceStamp>& provenance) {
             auto resource_dir_result = resolve_viewer_resources_dir();
             if (!resource_dir_result)
@@ -200,8 +204,10 @@ namespace lfs::io {
             html = replace_placeholder(html, js_import, js);
 
             const std::string settings_fetch = "settings: fetch(settingsUrl).then(response => response.json())";
-            const std::string inline_settings = R"(settings: {"camera":{"fov":50,"position":[2,2,-2],"target":[0,0,0],"startAnim":"none"},"background":{"color":[0,0,0]},"animTracks":[]})";
-            html = replace_placeholder(html, settings_fetch, inline_settings);
+            std::ostringstream settings_stream;
+            settings_stream << std::fixed << std::setprecision(6);
+            settings_stream << "settings:{\"camera\":{\"fov\":50,\"position\":[" << camera_position.x << "," << camera_position.y << "," << camera_position.z << "],\"target\":[" << camera_target.x << "," << camera_target.y << "," << camera_target.z << "],\"startAnim\":\"none\"},\"background\":{\"color\":[0,0,0]},\"animTracks\":[]}";
+            html = replace_placeholder(html, settings_fetch, settings_stream.str());
 
             const std::string content_fetch = "fetch(contentUrl)";
             const std::string base64_fetch = "fetch(\"data:application/octet-stream;base64," + base64_sog + "\")";
@@ -294,7 +300,40 @@ namespace lfs::io {
             return make_error(ErrorCode::CANCELLED, "HTML export cancelled", options.output_path);
         }
 
-        auto html_result = generate_html(base64_data, options.provenance);
+        // Compute bounding box and derive camera position for a 30° elevation view
+        glm::vec3 min_bounds{0.f, 0.f, 0.f};
+        glm::vec3 max_bounds{0.f, 0.f, 0.f};
+        if (!compute_bounds(splat_data, min_bounds, max_bounds, 0.0f, false)) {
+            return make_error(ErrorCode::CORRUPTED_DATA,
+                              "Failed to compute model bounds for camera setup", options.output_path);
+        }
+
+        const glm::vec3 extent = max_bounds - min_bounds;
+        const float max_extent = std::max({extent.x, extent.y, extent.z});
+        const glm::vec3 center = (min_bounds + max_bounds) * 0.5f;
+
+        // The web viewer's SOG loader (index.js `loadGsplat`) always attaches the
+        // gsplat entity with a fixed 180° rotation about Z, while the camera entity
+        // itself is left unrotated. That negates X and Y for the model as actually
+        // rendered, so the camera's look-at target/position must be computed in that
+        // same rotated space (otherwise the orbit pivots around a point away from the
+        // model whenever its center isn't near X=0, Y=0).
+        const glm::vec3 render_center{-center.x, -center.y, center.z};
+
+        // Distance to fit model in 50° FOV with 1.5× margin
+        const float fov_rad = glm::radians(50.0f);
+        const float distance = max_extent / std::tan(fov_rad * 0.5f) * 1.5f;
+
+        // 30° elevation angle from horizontal, looking from +X,+Z diagonal
+        const float elev_rad = glm::radians(30.0f);
+        const float horiz_dist = distance * std::cos(elev_rad);
+        const float vert_dist = distance * std::sin(elev_rad);
+        const float diag = horiz_dist * 0.70710678118f;
+
+        const glm::vec3 camera_position{render_center.x + diag, render_center.y + vert_dist, render_center.z - diag};
+        const glm::vec3 camera_target{render_center.x, render_center.y, render_center.z};
+
+        auto html_result = generate_html(base64_data, camera_position, camera_target, options.provenance);
         if (!html_result) {
             return std::unexpected(html_result.error());
         }
