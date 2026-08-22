@@ -21,6 +21,417 @@ namespace gsplat_lfs {
 
     namespace cg = cooperative_groups;
 
+    // 16x16 tile, 128 threads, two horizontally adjacent pixels per thread.
+    constexpr uint32_t kBwdDualThreads = 128;
+    constexpr uint32_t kBwdDualBatch = 256;
+
+    struct PixelBwd {
+        bool active;
+        int32_t pix_id;
+        int32_t bin_final;
+        vec3 ray_o;
+        vec3 ray_d;
+        float T;
+        float T_final;
+        float buffer[3];
+        float v_render_c[3];
+        float v_render_a;
+        float bg_accum;
+        float pixel_error;
+    };
+
+    template <bool kPinholeGlobal>
+    __device__ __forceinline__ void init_pixel_bwd(
+        PixelBwd& pix,
+        const uint32_t i,
+        const uint32_t j,
+        const uint32_t image_width,
+        const uint32_t image_height,
+        const CameraModelType camera_model_type,
+        const ShutterType rs_type,
+        const float* viewmats0,
+        const float* viewmats1,
+        const float* Ks,
+        const uint32_t cid,
+        const float* radial_coeffs,
+        const float* tangential_coeffs,
+        const float* thin_prism_coeffs,
+        const float* render_alphas,
+        const int32_t* last_ids,
+        const float* v_render_colors,
+        const float* v_render_alphas,
+        const float* backgrounds,
+        const float* bg_images,
+        const bool have_bg,
+        const bool do_dens,
+        const float* densification_error_map) {
+        const float px = (float)j + 0.5f;
+        const float py = (float)i + 0.5f;
+        pix.pix_id = min(i * image_width + j, image_width * image_height - 1);
+        const WorldRay ray = from_world_pixel_ray<kPinholeGlobal>(
+            camera_model_type, rs_type, image_width, image_height, px, py,
+            viewmats0, viewmats1, Ks, cid,
+            radial_coeffs, tangential_coeffs, thin_prism_coeffs);
+        pix.ray_d = ray.ray_dir;
+        pix.ray_o = ray.ray_org;
+        pix.active = (i < image_height && j < image_width) && ray.valid_flag;
+        pix.T_final = 1.0f - render_alphas[pix.pix_id];
+        pix.T = pix.T_final;
+#pragma unroll
+        for (uint32_t k = 0; k < 3; ++k) {
+            pix.buffer[k] = 0.f;
+            pix.v_render_c[k] = v_render_colors[chw_pix(k, pix.pix_id, image_height, image_width)];
+        }
+        pix.bin_final = pix.active ? last_ids[pix.pix_id] : 0;
+        pix.v_render_a = v_render_alphas[pix.pix_id];
+        pix.bg_accum = 0.f;
+        if (have_bg) {
+#pragma unroll
+            for (uint32_t k = 0; k < 3; ++k) {
+                float bg_val;
+                if (bg_images != nullptr) {
+                    bg_val = bg_images[k * image_height * image_width + pix.pix_id];
+                } else {
+                    bg_val = backgrounds[k];
+                }
+                pix.bg_accum += bg_val * pix.v_render_c[k];
+            }
+        }
+        pix.pixel_error = do_dens ? densification_error_map[pix.pix_id] : 0.f;
+    }
+
+    __device__ __forceinline__ bool contribute_pixel(
+        PixelBwd& pix,
+        const int32_t isect_idx,
+        const vec4 xyz_opac,
+        const mat3 Mt,
+        const vec3 scale_act,
+        const vec4 quat,
+        const float rgb0,
+        const float rgb1,
+        const float rgb2,
+        const bool have_bg,
+        const bool do_dens,
+        float v_rgb[3],
+        vec3& v_mean,
+        vec3& v_scale,
+        vec4& v_quat,
+        float& v_opacity,
+        float& dens_w,
+        float& dens_e) {
+        bool valid = pix.active;
+        if (isect_idx > pix.bin_final) {
+            valid = false;
+        }
+        if (!valid) {
+            return false;
+        }
+        const float opac = xyz_opac[3];
+        const vec3 xyz = {xyz_opac[0], xyz_opac[1], xyz_opac[2]};
+        const vec3 o_minus_mu = pix.ray_o - xyz;
+        const vec3 gro = Mt * o_minus_mu;
+        const vec3 grd = Mt * pix.ray_d;
+        const vec3 grd_n = safe_normalize(grd);
+        const vec3 gcrod = glm::cross(grd_n, gro);
+        const float grayDist = glm::dot(gcrod, gcrod);
+        const float power = -0.5f * grayDist;
+        const float vis = __expf(power);
+        const float alpha = min(0.999f, opac * vis);
+        if (power > 0.f || alpha < 1.f / 255.f) {
+            return false;
+        }
+
+        const float ra = 1.0f / (1.0f - alpha);
+        pix.T *= ra;
+        const float fac = alpha * pix.T;
+        v_rgb[0] += fac * pix.v_render_c[0];
+        v_rgb[1] += fac * pix.v_render_c[1];
+        v_rgb[2] += fac * pix.v_render_c[2];
+        if (do_dens) {
+            dens_w += fac;
+            dens_e += fac * pix.pixel_error;
+        }
+        float v_alpha = (rgb0 * pix.T - pix.buffer[0] * ra) * pix.v_render_c[0] +
+                        (rgb1 * pix.T - pix.buffer[1] * ra) * pix.v_render_c[1] +
+                        (rgb2 * pix.T - pix.buffer[2] * ra) * pix.v_render_c[2];
+        v_alpha += pix.T_final * ra * pix.v_render_a;
+        if (have_bg) {
+            v_alpha += -pix.T_final * ra * pix.bg_accum;
+        }
+
+        if (opac * vis <= 0.999f) {
+            const float v_vis = opac * v_alpha;
+            const float v_gradDist = -0.5f * vis * v_vis;
+            const vec3 v_gcrod = 2.0f * v_gradDist * gcrod;
+            const vec3 v_grd_n = -glm::cross(v_gcrod, gro);
+            const vec3 v_gro = glm::cross(v_gcrod, grd_n);
+            const vec3 v_grd = safe_normalize_bw(grd, v_grd_n);
+            const mat3 v_Mt = glm::outerProduct(v_grd, pix.ray_d) +
+                              glm::outerProduct(v_gro, o_minus_mu);
+            const vec3 v_o_minus_mu = glm::transpose(Mt) * v_gro;
+            v_mean += -v_o_minus_mu;
+            const mat3 R = quat_to_rotmat(quat);
+            quat_scale_to_preci_half_vjp(
+                quat, scale_act, R, glm::transpose(v_Mt), v_quat, v_scale);
+            v_opacity += vis * v_alpha;
+        }
+
+        pix.buffer[0] += rgb0 * fac;
+        pix.buffer[1] += rgb1 * fac;
+        pix.buffer[2] += rgb2 * fac;
+        return true;
+    }
+
+    __device__ __forceinline__ float reduce_field(float v, const unsigned n_contrib, const int src_lane) {
+        if (n_contrib == 1u) {
+            return __shfl_sync(0xffffffffu, v, src_lane);
+        }
+#pragma unroll
+        for (int offset = 16; offset > 0; offset /= 2) {
+            v += __shfl_xor_sync(0xffffffffu, v, offset);
+        }
+        return v;
+    }
+
+    __device__ __forceinline__ void flush_splat_grads(
+        const int32_t g,
+        const uint32_t N,
+        const bool do_dens,
+        const float v_rgb[3],
+        const vec3 v_mean,
+        const vec3 v_scale,
+        const vec4 v_quat,
+        const float v_opacity,
+        const float dens_w,
+        const float dens_e,
+        const vec3 scale_act,
+        const float opac_act,
+        vec3* v_means,
+        vec4* v_quats,
+        vec3* v_scales,
+        float* v_colors,
+        float* v_opacities,
+        float* densification_info) {
+        float* v_rgb_ptr = v_colors + 3 * g;
+        gpuAtomicAdd(v_rgb_ptr, v_rgb[0]);
+        gpuAtomicAdd(v_rgb_ptr + 1, v_rgb[1]);
+        gpuAtomicAdd(v_rgb_ptr + 2, v_rgb[2]);
+        float* v_mean_ptr = (float*)(v_means) + 3 * g;
+        gpuAtomicAdd(v_mean_ptr, v_mean.x);
+        gpuAtomicAdd(v_mean_ptr + 1, v_mean.y);
+        gpuAtomicAdd(v_mean_ptr + 2, v_mean.z);
+        float* v_scale_ptr = (float*)(v_scales) + 3 * g;
+        gpuAtomicAdd(v_scale_ptr, v_scale.x * scale_act.x);
+        gpuAtomicAdd(v_scale_ptr + 1, v_scale.y * scale_act.y);
+        gpuAtomicAdd(v_scale_ptr + 2, v_scale.z * scale_act.z);
+        float* v_quat_ptr = (float*)(v_quats) + 4 * g;
+        gpuAtomicAdd(v_quat_ptr, v_quat.x);
+        gpuAtomicAdd(v_quat_ptr + 1, v_quat.y);
+        gpuAtomicAdd(v_quat_ptr + 2, v_quat.z);
+        gpuAtomicAdd(v_quat_ptr + 3, v_quat.w);
+        gpuAtomicAdd(v_opacities + g, v_opacity * opac_act * (1.0f - opac_act));
+        if (do_dens) {
+            gpuAtomicAdd(densification_info + g, dens_w);
+            gpuAtomicAdd(densification_info + N + g, dens_e);
+        }
+    }
+
+    template <typename scalar_t, bool kPinholeGlobal>
+    __global__ void rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel(
+        const uint32_t C,
+        const uint32_t N,
+        const uint32_t n_isects,
+        const bool packed,
+        const vec3* __restrict__ means,
+        const vec4* __restrict__ quats,
+        const vec3* __restrict__ scales,
+        const scalar_t* __restrict__ colors,
+        const scalar_t* __restrict__ opacities,
+        const scalar_t* __restrict__ backgrounds,
+        const scalar_t* __restrict__ bg_images,
+        const bool* __restrict__ masks,
+        const uint32_t image_width,
+        const uint32_t image_height,
+        const uint32_t tile_size,
+        const uint32_t tile_width,
+        const uint32_t tile_height,
+        const scalar_t* __restrict__ viewmats0,
+        const scalar_t* __restrict__ viewmats1,
+        const scalar_t* __restrict__ Ks,
+        const CameraModelType camera_model_type,
+        const UnscentedTransformParameters ut_params,
+        const ShutterType rs_type,
+        const scalar_t* __restrict__ radial_coeffs,
+        const scalar_t* __restrict__ tangential_coeffs,
+        const scalar_t* __restrict__ thin_prism_coeffs,
+        const int32_t* __restrict__ tile_offsets,
+        const int32_t* __restrict__ flatten_ids,
+        const scalar_t* __restrict__ render_alphas,
+        const int32_t* __restrict__ last_ids,
+        const scalar_t* __restrict__ v_render_colors,
+        const scalar_t* __restrict__ v_render_alphas,
+        vec3* __restrict__ v_means,
+        vec4* __restrict__ v_quats,
+        vec3* __restrict__ v_scales,
+        scalar_t* __restrict__ v_colors,
+        scalar_t* __restrict__ v_opacities,
+        float* __restrict__ densification_info,
+        const scalar_t* __restrict__ densification_error_map) {
+        auto block = cg::this_thread_block();
+        const uint32_t cid = block.group_index().x;
+        const uint32_t tile_id =
+            block.group_index().y * tile_width + block.group_index().z;
+        const uint32_t tx = block.thread_index().x;
+        const uint32_t ty = block.thread_index().y;
+        const uint32_t i = block.group_index().y * tile_size + ty;
+        const uint32_t j0 = block.group_index().z * tile_size + tx * 2u;
+        const uint32_t j1 = j0 + 1u;
+
+        tile_offsets += cid * tile_height * tile_width;
+        render_alphas += cid * image_height * image_width;
+        last_ids += cid * image_height * image_width;
+        v_render_colors += cid * image_height * image_width * 3u;
+        v_render_alphas += cid * image_height * image_width;
+        if (backgrounds != nullptr) {
+            backgrounds += cid * 3u;
+        }
+        if (bg_images != nullptr) {
+            bg_images += cid * 3u * image_height * image_width;
+        }
+        if (masks != nullptr) {
+            masks += cid * tile_height * tile_width;
+        }
+        if (masks != nullptr && !masks[tile_id]) {
+            return;
+        }
+
+        const bool have_bg = bg_images != nullptr || backgrounds != nullptr;
+        const bool do_dens = densification_info != nullptr && densification_error_map != nullptr;
+
+        PixelBwd pix0, pix1;
+        init_pixel_bwd<kPinholeGlobal>(
+            pix0, i, j0, image_width, image_height,
+            camera_model_type, rs_type, viewmats0, viewmats1, Ks, cid,
+            radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+            render_alphas, last_ids, v_render_colors, v_render_alphas,
+            backgrounds, bg_images, have_bg, do_dens, densification_error_map);
+        init_pixel_bwd<kPinholeGlobal>(
+            pix1, i, j1, image_width, image_height,
+            camera_model_type, rs_type, viewmats0, viewmats1, Ks, cid,
+            radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+            render_alphas, last_ids, v_render_colors, v_render_alphas,
+            backgrounds, bg_images, have_bg, do_dens, densification_error_map);
+
+        const int32_t range_start = tile_offsets[tile_id];
+        const int32_t range_end = tile_offsets[tile_id + 1];
+        const uint32_t num_batches =
+            (range_end - range_start + kBwdDualBatch - 1) / kBwdDualBatch;
+
+        extern __shared__ int s[];
+        int32_t* id_batch = (int32_t*)s;
+        vec4* xyz_opacity_batch = reinterpret_cast<vec4*>(&id_batch[kBwdDualBatch]);
+        vec3* scale_batch = reinterpret_cast<vec3*>(&xyz_opacity_batch[kBwdDualBatch]);
+        vec4* quat_batch = reinterpret_cast<vec4*>(&scale_batch[kBwdDualBatch]);
+        mat3* mt_batch = reinterpret_cast<mat3*>(&quat_batch[kBwdDualBatch]);
+        float* rgbs_batch = reinterpret_cast<float*>(&mt_batch[kBwdDualBatch]);
+
+        const uint32_t tr = block.thread_rank();
+        cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
+        const int32_t warp_bin_final =
+            cg::reduce(warp, max(pix0.bin_final, pix1.bin_final), cg::greater<int>());
+
+        auto stage_splat = [&](const int32_t idx, const uint32_t slot) {
+            if (idx >= range_start) {
+                const int32_t g = flatten_ids[idx];
+                id_batch[slot] = g;
+                const vec3 xyz = means[g];
+                const float opac = activated_opacity(opacities[g]);
+                xyz_opacity_batch[slot] = {xyz.x, xyz.y, xyz.z, opac};
+                const vec3 scale_act = activated_scale(scales[g]);
+                const vec4 quat = quats[g];
+                scale_batch[slot] = scale_act;
+                quat_batch[slot] = quat;
+                const mat3 R = quat_to_rotmat(quat);
+                const mat3 S = mat3(
+                    1.0f / scale_act[0], 0.f, 0.f,
+                    0.f, 1.0f / scale_act[1], 0.f,
+                    0.f, 0.f, 1.0f / scale_act[2]);
+                mt_batch[slot] = glm::transpose(R * S);
+                rgbs_batch[slot * 3u + 0] = colors[g * 3u + 0];
+                rgbs_batch[slot * 3u + 1] = colors[g * 3u + 1];
+                rgbs_batch[slot * 3u + 2] = colors[g * 3u + 2];
+            }
+        };
+
+        for (uint32_t b = 0; b < num_batches; ++b) {
+            block.sync();
+            const int32_t batch_end = range_end - 1 - static_cast<int32_t>(kBwdDualBatch * b);
+            const int32_t batch_size = min(static_cast<int32_t>(kBwdDualBatch), batch_end + 1 - range_start);
+            stage_splat(batch_end - static_cast<int32_t>(tr), tr);
+            stage_splat(batch_end - static_cast<int32_t>(tr + kBwdDualThreads), tr + kBwdDualThreads);
+            block.sync();
+
+            for (uint32_t t = max(0, batch_end - warp_bin_final); t < static_cast<uint32_t>(batch_size); ++t) {
+                const int32_t isect_idx = batch_end - static_cast<int32_t>(t);
+                const vec4 xyz_opac = xyz_opacity_batch[t];
+                const mat3 Mt = mt_batch[t];
+                const vec3 scale_act = scale_batch[t];
+                const vec4 quat = quat_batch[t];
+                const float rgb0 = rgbs_batch[t * 3u + 0];
+                const float rgb1 = rgbs_batch[t * 3u + 1];
+                const float rgb2 = rgbs_batch[t * 3u + 2];
+
+                float v_rgb_local[3] = {0.f, 0.f, 0.f};
+                vec3 v_mean_local = {0.f, 0.f, 0.f};
+                vec3 v_scale_local = {0.f, 0.f, 0.f};
+                vec4 v_quat_local = {0.f, 0.f, 0.f, 0.f};
+                float v_opacity_local = 0.f;
+                float densification_weight_local = 0.f;
+                float densification_error_weighted_local = 0.f;
+
+                const bool hit0 = contribute_pixel(
+                    pix0, isect_idx, xyz_opac, Mt, scale_act, quat, rgb0, rgb1, rgb2,
+                    have_bg, do_dens, v_rgb_local, v_mean_local, v_scale_local, v_quat_local,
+                    v_opacity_local, densification_weight_local, densification_error_weighted_local);
+                const bool hit1 = contribute_pixel(
+                    pix1, isect_idx, xyz_opac, Mt, scale_act, quat, rgb0, rgb1, rgb2,
+                    have_bg, do_dens, v_rgb_local, v_mean_local, v_scale_local, v_quat_local,
+                    v_opacity_local, densification_weight_local, densification_error_weighted_local);
+
+                const unsigned valid_mask = __ballot_sync(0xffffffffu, hit0 || hit1);
+                if (valid_mask == 0u) {
+                    continue;
+                }
+                const unsigned n_contrib = __popc(valid_mask);
+                const int src_lane = __ffs(valid_mask) - 1;
+                v_rgb_local[0] = reduce_field(v_rgb_local[0], n_contrib, src_lane);
+                v_rgb_local[1] = reduce_field(v_rgb_local[1], n_contrib, src_lane);
+                v_rgb_local[2] = reduce_field(v_rgb_local[2], n_contrib, src_lane);
+                v_mean_local.x = reduce_field(v_mean_local.x, n_contrib, src_lane);
+                v_mean_local.y = reduce_field(v_mean_local.y, n_contrib, src_lane);
+                v_mean_local.z = reduce_field(v_mean_local.z, n_contrib, src_lane);
+                v_scale_local.x = reduce_field(v_scale_local.x, n_contrib, src_lane);
+                v_scale_local.y = reduce_field(v_scale_local.y, n_contrib, src_lane);
+                v_scale_local.z = reduce_field(v_scale_local.z, n_contrib, src_lane);
+                v_quat_local.x = reduce_field(v_quat_local.x, n_contrib, src_lane);
+                v_quat_local.y = reduce_field(v_quat_local.y, n_contrib, src_lane);
+                v_quat_local.z = reduce_field(v_quat_local.z, n_contrib, src_lane);
+                v_quat_local.w = reduce_field(v_quat_local.w, n_contrib, src_lane);
+                v_opacity_local = reduce_field(v_opacity_local, n_contrib, src_lane);
+                densification_weight_local = reduce_field(densification_weight_local, n_contrib, src_lane);
+                densification_error_weighted_local =
+                    reduce_field(densification_error_weighted_local, n_contrib, src_lane);
+                if (warp.thread_rank() == 0) {
+                    flush_splat_grads(
+                        id_batch[t], N, do_dens, v_rgb_local, v_mean_local, v_scale_local,
+                        v_quat_local, v_opacity_local, densification_weight_local,
+                        densification_error_weighted_local, scale_act, xyz_opac[3],
+                        v_means, v_quats, v_scales, v_colors, v_opacities, densification_info);
+                }
+            }
+        }
+    }
+
     template <uint32_t CDIM, typename scalar_t, bool kPinholeGlobal>
     __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         const uint32_t C,
@@ -390,22 +801,6 @@ namespace gsplat_lfs {
         const uint32_t tile_width = (image_width + tile_size - 1) / tile_size;
         const uint32_t tile_height = (image_height + tile_size - 1) / tile_size;
 
-        // Each block covers a tile on the image
-        dim3 threads = {tile_size, tile_size, 1};
-        dim3 grid = {C, tile_height, tile_width};
-
-        int64_t shmem_size =
-            tile_size * tile_size *
-            (sizeof(int32_t) + sizeof(vec4) + sizeof(vec3) + sizeof(vec4) +
-             sizeof(mat3) + sizeof(float) * CDIM);
-        // Atomics contend past 2 blocks/SM; pad so occupancy stays at 2.
-        if constexpr (CDIM == 3) {
-            constexpr int64_t kOccCapBytes = 49152;
-            if (shmem_size < kOccCapBytes) {
-                shmem_size = kOccCapBytes;
-            }
-        }
-
         if (n_isects == 0) {
             // Skip kernel launch if no intersections
             return;
@@ -415,7 +810,7 @@ namespace gsplat_lfs {
             camera_model, rs_type, viewmats1,
             radial_coeffs, tangential_coeffs, thin_prism_coeffs);
 
-        auto launch = [&](auto kernel) {
+        auto launch_args = [&](auto kernel, dim3 grid, dim3 threads, int64_t shmem_size) {
             auto err = cudaFuncSetAttribute(
                 kernel,
                 cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -473,12 +868,49 @@ namespace gsplat_lfs {
         };
 
         if constexpr (CDIM == 3) {
-            if (pinhole_global) {
-                launch(rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float, true>);
+            if (tile_size == 16) {
+                dim3 threads = {8, 16, 1};
+                dim3 grid = {C, tile_height, tile_width};
+                int64_t shmem_size =
+                    int64_t(kBwdDualBatch) *
+                    (sizeof(int32_t) + sizeof(vec4) + sizeof(vec3) + sizeof(vec4) +
+                     sizeof(mat3) + sizeof(float) * CDIM);
+                if (pinhole_global) {
+                    launch_args(
+                        rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, true>,
+                        grid, threads, shmem_size);
+                    return;
+                }
+                launch_args(
+                    rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, false>,
+                    grid, threads, shmem_size);
                 return;
             }
         }
-        launch(rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float, false>);
+
+        dim3 threads = {tile_size, tile_size, 1};
+        dim3 grid = {C, tile_height, tile_width};
+        int64_t shmem_size =
+            tile_size * tile_size *
+            (sizeof(int32_t) + sizeof(vec4) + sizeof(vec3) + sizeof(vec4) +
+             sizeof(mat3) + sizeof(float) * CDIM);
+        if constexpr (CDIM == 3) {
+            constexpr int64_t kOccCapBytes = 49152;
+            if (shmem_size < kOccCapBytes) {
+                shmem_size = kOccCapBytes;
+            }
+        }
+        if constexpr (CDIM == 3) {
+            if (pinhole_global) {
+                launch_args(
+                    rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float, true>,
+                    grid, threads, shmem_size);
+                return;
+            }
+        }
+        launch_args(
+            rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float, false>,
+            grid, threads, shmem_size);
     }
 
     ////////////////////////////////////////////////////////////////
