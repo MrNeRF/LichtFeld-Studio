@@ -10,7 +10,6 @@
 #include "FromWorldRay.cuh"
 #include "Rasterization.h"
 #include "Utils.cuh"
-#include "core/cuda_safe_format.hpp"
 
 // Use standard CUDA atomic add
 #ifndef gpuAtomicAdd
@@ -103,8 +102,10 @@ namespace gsplat_lfs {
     __device__ __forceinline__ bool contribute_pixel(
         PixelBwd& pix,
         const int32_t isect_idx,
-        const vec4 xyz_opac,
+        const float opac,
         const mat3 Mt,
+        const vec3 gro,
+        const vec3 o_minus_mu,
         const vec3 scale_act,
         const vec4 quat,
         const float rgb0,
@@ -118,7 +119,9 @@ namespace gsplat_lfs {
         vec4& v_quat,
         float& v_opacity,
         float& dens_w,
-        float& dens_e) {
+        float& dens_e,
+        mat3& R,
+        bool& have_R) {
         bool valid = pix.active;
         if (isect_idx > pix.bin_final) {
             valid = false;
@@ -126,10 +129,6 @@ namespace gsplat_lfs {
         if (!valid) {
             return false;
         }
-        const float opac = xyz_opac[3];
-        const vec3 xyz = {xyz_opac[0], xyz_opac[1], xyz_opac[2]};
-        const vec3 o_minus_mu = pix.ray_o - xyz;
-        const vec3 gro = Mt * o_minus_mu;
         const vec3 grd = Mt * pix.ray_d;
         const vec3 grd_n = safe_normalize(grd);
         const vec3 gcrod = glm::cross(grd_n, gro);
@@ -170,7 +169,10 @@ namespace gsplat_lfs {
                               glm::outerProduct(v_gro, o_minus_mu);
             const vec3 v_o_minus_mu = glm::transpose(Mt) * v_gro;
             v_mean += -v_o_minus_mu;
-            const mat3 R = quat_to_rotmat(quat);
+            if (!have_R) {
+                R = quat_to_rotmat(quat);
+                have_R = true;
+            }
             quat_scale_to_preci_half_vjp(
                 quat, scale_act, R, glm::transpose(v_Mt), v_quat, v_scale);
             v_opacity += vis * v_alpha;
@@ -180,6 +182,56 @@ namespace gsplat_lfs {
         pix.buffer[1] += rgb1 * fac;
         pix.buffer[2] += rgb2 * fac;
         return true;
+    }
+
+    template <bool kSharedOrigin>
+    __device__ __forceinline__ void contribute_pixel_pair(
+        PixelBwd& pix0,
+        PixelBwd& pix1,
+        const int32_t isect_idx,
+        const vec4 xyz_opac,
+        const mat3 Mt,
+        const vec3 scale_act,
+        const vec4 quat,
+        const float rgb0,
+        const float rgb1,
+        const float rgb2,
+        const bool have_bg,
+        const bool do_dens,
+        float v_rgb[3],
+        vec3& v_mean,
+        vec3& v_scale,
+        vec4& v_quat,
+        float& v_opacity,
+        float& dens_w,
+        float& dens_e,
+        bool& hit0,
+        bool& hit1) {
+        const float opac = xyz_opac[3];
+        const vec3 xyz = {xyz_opac[0], xyz_opac[1], xyz_opac[2]};
+        vec3 o_minus_mu0, o_minus_mu1, gro0, gro1;
+        if constexpr (kSharedOrigin) {
+            const vec3 ray_o = pix0.active ? pix0.ray_o : pix1.ray_o;
+            o_minus_mu0 = ray_o - xyz;
+            gro0 = Mt * o_minus_mu0;
+            o_minus_mu1 = o_minus_mu0;
+            gro1 = gro0;
+        } else {
+            o_minus_mu0 = pix0.ray_o - xyz;
+            gro0 = Mt * o_minus_mu0;
+            o_minus_mu1 = pix1.ray_o - xyz;
+            gro1 = Mt * o_minus_mu1;
+        }
+        mat3 R;
+        bool have_R = false;
+        hit0 = contribute_pixel(
+            pix0, isect_idx, opac, Mt, gro0, o_minus_mu0, scale_act, quat,
+            rgb0, rgb1, rgb2, have_bg, do_dens, v_rgb, v_mean, v_scale, v_quat,
+            v_opacity, dens_w, dens_e, R, have_R);
+        hit1 = contribute_pixel(
+            pix1, isect_idx, opac, Mt, gro1, o_minus_mu1, scale_act, quat,
+            rgb0, rgb1, rgb2, have_bg, do_dens, v_rgb, v_mean, v_scale, v_quat,
+            v_opacity, dens_w, dens_e, R, have_R);
     }
 
     __device__ __forceinline__ float reduce_field(float v, const unsigned n_contrib, const int src_lane) {
@@ -389,14 +441,13 @@ namespace gsplat_lfs {
                 float densification_weight_local = 0.f;
                 float densification_error_weighted_local = 0.f;
 
-                const bool hit0 = contribute_pixel(
-                    pix0, isect_idx, xyz_opac, Mt, scale_act, quat, rgb0, rgb1, rgb2,
+                bool hit0 = false;
+                bool hit1 = false;
+                contribute_pixel_pair<kPinholeGlobal>(
+                    pix0, pix1, isect_idx, xyz_opac, Mt, scale_act, quat, rgb0, rgb1, rgb2,
                     have_bg, do_dens, v_rgb_local, v_mean_local, v_scale_local, v_quat_local,
-                    v_opacity_local, densification_weight_local, densification_error_weighted_local);
-                const bool hit1 = contribute_pixel(
-                    pix1, isect_idx, xyz_opac, Mt, scale_act, quat, rgb0, rgb1, rgb2,
-                    have_bg, do_dens, v_rgb_local, v_mean_local, v_scale_local, v_quat_local,
-                    v_opacity_local, densification_weight_local, densification_error_weighted_local);
+                    v_opacity_local, densification_weight_local, densification_error_weighted_local,
+                    hit0, hit1);
 
                 const unsigned valid_mask = __ballot_sync(0xffffffffu, hit0 || hit1);
                 if (valid_mask == 0u) {
@@ -811,19 +862,8 @@ namespace gsplat_lfs {
             radial_coeffs, tangential_coeffs, thin_prism_coeffs);
 
         auto launch_args = [&](auto kernel, dim3 grid, dim3 threads, int64_t shmem_size) {
-            auto err = cudaFuncSetAttribute(
-                kernel,
-                cudaFuncAttributeMaxDynamicSharedMemorySize,
-                shmem_size);
-            if (err != cudaSuccess) {
-                lfs::core::ensure_cuda_success(
-                    err, "cudaFuncSetAttribute(gsplat backward shared memory)",
-                    lfs::core::detail::format_cuda_safe(
-                        "requested_bytes={}, try lowering tile_size", shmem_size),
-                    LFS_SOURCE_SITE_CURRENT(),
-                    lfs::core::CudaFailureDisposition::LogOnly);
-                return;
-            }
+            set_kernel_max_dynamic_smem(
+                kernel, static_cast<int>(shmem_size), "gsplat backward");
             kernel<<<grid, threads, shmem_size, stream>>>(
                 C,
                 N,

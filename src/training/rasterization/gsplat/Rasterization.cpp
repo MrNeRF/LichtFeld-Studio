@@ -391,7 +391,6 @@ namespace gsplat_lfs {
             cudaMemsetAsync(v_colors, 0, color_bytes, stream),
             "gsplat backward color-gradient initialization");
 
-        // Backward through rasterization
         rasterize_to_pixels_from_world_3dgs_bwd(
             means, quats, scales, colors, opacities,
             backgrounds, bg_images, masks,

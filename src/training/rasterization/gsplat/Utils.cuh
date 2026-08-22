@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Common.h"
+#include "core/cuda_safe_format.hpp"
 
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
@@ -206,6 +207,33 @@ namespace gsplat_lfs {
             return il * d_out - il3 * glm::dot(d_out, v) * v;
         }
         return d_out;
+    }
+
+    inline __device__ float3 load_float3(const float* p) {
+        return *reinterpret_cast<const float3*>(p);
+    }
+
+    inline __device__ float4 load_float4(const float* p) {
+        return *reinterpret_cast<const float4*>(p);
+    }
+
+    // MaxDynamicSharedMemorySize is a ceiling: set it once per kernel
+    // instantiation when a launch needs more than the last recorded size.
+    // Failure throws so the caller cannot silently skip rendering.
+    template <typename Kernel>
+    inline void set_kernel_max_dynamic_smem(Kernel kernel, const int smem, const char* what) {
+        static int max_set = 0;
+        if (smem <= max_set) {
+            return;
+        }
+        const auto err = cudaFuncSetAttribute(
+            kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem);
+        lfs::core::ensure_cuda_success(
+            err,
+            "cudaFuncSetAttribute(dynamic shared memory)",
+            lfs::core::detail::format_cuda_safe("{} requested_bytes={}", what, smem),
+            LFS_SOURCE_SITE_CURRENT());
+        max_set = smem;
     }
 
 } // namespace gsplat_lfs

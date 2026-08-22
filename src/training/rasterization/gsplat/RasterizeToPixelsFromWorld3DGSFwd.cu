@@ -10,7 +10,6 @@
 #include "FromWorldRay.cuh"
 #include "Rasterization.h"
 #include "Utils.cuh"
-#include "core/cuda_safe_format.hpp"
 
 namespace gsplat_lfs {
 
@@ -124,11 +123,11 @@ namespace gsplat_lfs {
             (range_end - range_start + block_size - 1) / block_size;
 
         extern __shared__ int s[];
-        int32_t* id_batch = (int32_t*)s; // [block_size]
-        vec4* xyz_opacity_batch =
-            reinterpret_cast<vec4*>(&id_batch[block_size]); // [block_size]
+        vec4* xyz_opacity_batch = reinterpret_cast<vec4*>(s); // [block_size]
         mat3* iscl_rot_batch =
             reinterpret_cast<mat3*>(&xyz_opacity_batch[block_size]); // [block_size]
+        float* rgbs_batch =
+            reinterpret_cast<float*>(&iscl_rot_batch[block_size]); // [block_size * CDIM]
 
         // current visibility left to render
         // transmittance is gonna be used in the backward pass which requires a high
@@ -156,16 +155,13 @@ namespace gsplat_lfs {
             uint32_t batch_start = range_start + block_size * b;
             uint32_t idx = batch_start + tr;
             if (idx < range_end) {
-                // TODO: only support 1 camera for now so it is ok to abuse the index.
                 int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
-                id_batch[tr] = g;
-                const vec3 xyz = means[g];
+                const float3 xyz_f = load_float3(reinterpret_cast<const float*>(&means[g]));
                 const float opac = activated_opacity(opacities[g]);
-                xyz_opacity_batch[tr] = {xyz.x, xyz.y, xyz.z, opac};
+                xyz_opacity_batch[tr] = {xyz_f.x, xyz_f.y, xyz_f.z, opac};
 
                 const vec4 quat = quats[g];
                 vec3 scale = activated_scale(scales[g]);
-
                 mat3 R = quat_to_rotmat(quat);
                 mat3 S = mat3(
                     1.0f / scale[0],
@@ -177,8 +173,24 @@ namespace gsplat_lfs {
                     0.f,
                     0.f,
                     1.0f / scale[2]);
-                mat3 iscl_rot = S * glm::transpose(R);
-                iscl_rot_batch[tr] = iscl_rot;
+                iscl_rot_batch[tr] = S * glm::transpose(R);
+                if constexpr (CDIM == 3) {
+                    const float3 c = load_float3(colors + g * 3);
+                    rgbs_batch[tr * 3u + 0] = c.x;
+                    rgbs_batch[tr * 3u + 1] = c.y;
+                    rgbs_batch[tr * 3u + 2] = c.z;
+                } else if constexpr (CDIM == 4) {
+                    const float4 c = load_float4(colors + g * 4);
+                    rgbs_batch[tr * 4u + 0] = c.x;
+                    rgbs_batch[tr * 4u + 1] = c.y;
+                    rgbs_batch[tr * 4u + 2] = c.z;
+                    rgbs_batch[tr * 4u + 3] = c.w;
+                } else {
+#pragma unroll
+                    for (uint32_t k = 0; k < CDIM; ++k) {
+                        rgbs_batch[tr * CDIM + k] = colors[g * CDIM + k];
+                    }
+                }
             }
 
             // wait for other threads to collect the gaussians in batch
@@ -187,9 +199,9 @@ namespace gsplat_lfs {
             // process gaussians in the current batch for this pixel
             uint32_t batch_size = min(block_size, range_end - batch_start);
             for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
-                const vec4 xyz_opac = xyz_opacity_batch[t];
-                const float opac = xyz_opac[3];
-                const vec3 xyz = {xyz_opac[0], xyz_opac[1], xyz_opac[2]};
+                const float4 xyz_opac = load_float4(reinterpret_cast<const float*>(&xyz_opacity_batch[t]));
+                const float opac = xyz_opac.w;
+                const vec3 xyz = {xyz_opac.x, xyz_opac.y, xyz_opac.z};
                 const mat3 iscl_rot = iscl_rot_batch[t];
 
                 const vec3 gro = iscl_rot * (ray_o - xyz);
@@ -209,12 +221,23 @@ namespace gsplat_lfs {
                     break;
                 }
 
-                int32_t g = id_batch[t];
                 const float vis = alpha * T;
-                const float* c_ptr = colors + g * CDIM;
+                if constexpr (CDIM == 3) {
+                    const float3 c = load_float3(&rgbs_batch[t * 3u]);
+                    pix_out[0] += c.x * vis;
+                    pix_out[1] += c.y * vis;
+                    pix_out[2] += c.z * vis;
+                } else if constexpr (CDIM == 4) {
+                    const float4 c = load_float4(&rgbs_batch[t * 4u]);
+                    pix_out[0] += c.x * vis;
+                    pix_out[1] += c.y * vis;
+                    pix_out[2] += c.z * vis;
+                    pix_out[3] += c.w * vis;
+                } else {
 #pragma unroll
-                for (uint32_t k = 0; k < CDIM; ++k) {
-                    pix_out[k] += c_ptr[k] * vis;
+                    for (uint32_t k = 0; k < CDIM; ++k) {
+                        pix_out[k] += rgbs_batch[t * CDIM + k] * vis;
+                    }
                 }
                 cur_idx = batch_start + t;
 
@@ -289,9 +312,13 @@ namespace gsplat_lfs {
         dim3 threads = {tile_size, tile_size, 1};
         dim3 grid = {C, tile_height, tile_width};
 
+        const bool pinhole_global = is_pinhole_global_launch(
+            camera_model, rs_type, viewmats1,
+            radial_coeffs, tangential_coeffs, thin_prism_coeffs);
+
         int64_t shmem_size =
             tile_size * tile_size *
-            (sizeof(int32_t) + sizeof(vec4) + sizeof(mat3));
+            (sizeof(vec4) + sizeof(mat3) + sizeof(float) * CDIM);
 
         if (n_isects == 0) {
             // Skip kernel launch if no intersections
@@ -311,24 +338,9 @@ namespace gsplat_lfs {
             return;
         }
 
-        const bool pinhole_global = is_pinhole_global_launch(
-            camera_model, rs_type, viewmats1,
-            radial_coeffs, tangential_coeffs, thin_prism_coeffs);
-
         auto launch = [&](auto kernel) {
-            auto err = cudaFuncSetAttribute(
-                kernel,
-                cudaFuncAttributeMaxDynamicSharedMemorySize,
-                shmem_size);
-            if (err != cudaSuccess) {
-                lfs::core::ensure_cuda_success(
-                    err, "cudaFuncSetAttribute(gsplat forward shared memory)",
-                    lfs::core::detail::format_cuda_safe(
-                        "requested_bytes={}, try lowering tile_size", shmem_size),
-                    LFS_SOURCE_SITE_CURRENT(),
-                    lfs::core::CudaFailureDisposition::LogOnly);
-                return;
-            }
+            set_kernel_max_dynamic_smem(
+                kernel, static_cast<int>(shmem_size), "gsplat forward");
             kernel<<<grid, threads, shmem_size, stream>>>(
                 C,
                 N,
