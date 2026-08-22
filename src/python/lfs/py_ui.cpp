@@ -2712,6 +2712,42 @@ namespace lfs::python {
         register_ui_modals(m);
         register_rml_bindings(m);
 
+        m.def(
+            "begin_drag_payload",
+            [](std::string type, std::string data, std::string label) {
+                auto* const manager = static_cast<lfs::vis::gui::RmlUIManager*>(
+                    lfs::python::get_rml_manager());
+                if (!manager)
+                    throw std::runtime_error("RmlUI drag payloads require an initialized UI");
+                const auto token = manager->beginDragPayload(
+                    std::move(type), std::move(data), std::move(label));
+                if (token == 0)
+                    throw nb::value_error("drag payload type and data must not be empty");
+                lfs::python::request_redraw();
+                return token;
+            },
+            nb::arg("type"), nb::arg("data"), nb::arg("label") = "",
+            "Begin one typed cross-context RmlUI drag payload and return its source token");
+        m.def(
+            "end_drag_payload",
+            [](const std::uint64_t token) {
+                auto* const manager = static_cast<lfs::vis::gui::RmlUIManager*>(
+                    lfs::python::get_rml_manager());
+                if (manager && manager->endDragPayload(token))
+                    lfs::python::request_redraw();
+            },
+            nb::arg("token"),
+            "Mark a cross-context RmlUI drag payload released for target resolution");
+        m.def(
+            "cancel_drag_payload",
+            [](const std::uint64_t token) {
+                auto* const manager = static_cast<lfs::vis::gui::RmlUIManager*>(
+                    lfs::python::get_rml_manager());
+                if (manager && manager->cancelDragPayload(token))
+                    lfs::python::request_redraw();
+            },
+            nb::arg("token"), "Cancel a cross-context RmlUI drag payload");
+
         // Hot-reload redraw request functions
         m.def(
             "request_redraw",
@@ -3694,7 +3730,8 @@ namespace lfs::python {
                                         event.new_project,
                                         lfs::core::
                                             path_to_utf8(
-                                                event.path));
+                                                event.path),
+                                        event.keep_asset_manager_open);
                                 } catch (
                                     const std::
                                         exception& error) {
@@ -3727,7 +3764,8 @@ namespace lfs::python {
                                         lfs::core::
                                             path_to_utf8(
                                                 event.path),
-                                        event.discard_changes);
+                                        event.discard_changes,
+                                        event.keep_asset_manager_open);
                                 } catch (
                                     const std::
                                         exception& error) {

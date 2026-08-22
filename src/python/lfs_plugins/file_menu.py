@@ -119,7 +119,16 @@ def _offer_remove_missing_recent(path: str) -> None:
     )
 
 
-def _open_project(path: str, discard_changes: bool, stop_training: bool = False):
+def _open_project(
+    path: str,
+    discard_changes: bool,
+    stop_training: bool = False,
+    keep_asset_manager_open: bool = False,
+):
+    if keep_asset_manager_open:
+        return lf.project_open(
+            path, discard_changes, stop_training, True
+        )
     if stop_training:
         return lf.project_open(path, discard_changes, True)
     return lf.project_open(path, discard_changes)
@@ -407,7 +416,9 @@ def _show_exit_confirmation(training_in_progress: bool = False) -> None:
 
 
 def _show_project_switch_confirmation(
-    new_project: bool, path: str
+    new_project: bool,
+    path: str,
+    keep_asset_manager_open: bool = False,
 ) -> None:
     if new_project:
         title = lf.ui.tr("menu.file.new_project")
@@ -415,13 +426,16 @@ def _show_project_switch_confirmation(
     else:
         title = lf.ui.tr("menu.file.open_project")
         callback = lambda stop_training: _open_project(
-            path, True, stop_training
+            path, True, stop_training, keep_asset_manager_open
         )
     _confirm_switch_then(title, callback)
 
 
 def _show_stop_training_confirmation(
-    new_project: bool, path: str, discard_changes: bool = False
+    new_project: bool,
+    path: str,
+    discard_changes: bool = False,
+    keep_asset_manager_open: bool = False,
 ) -> None:
     tr = lf.ui.tr
     yes_label = tr("common.yes")
@@ -433,7 +447,12 @@ def _show_stop_training_confirmation(
         if new_project:
             _new_project(discard_changes, True)
         else:
-            _open_project(path, discard_changes, True)
+            _open_project(
+                path,
+                discard_changes,
+                True,
+                keep_asset_manager_open,
+            )
 
     lf.ui.confirm_dialog(
         tr("project_switch.stop_training_title"),

@@ -275,7 +275,7 @@ def project_save(wait: bool = False, regenerate_preview: bool = True) -> bool:
 def project_save_as(path: str = '', wait: bool = False) -> bool:
     """Save the active project to a new .licht path"""
 
-def project_open(path: str = '', discard_changes: bool = False, stop_training: bool = False) -> ProjectOpenOutcome:
+def project_open(path: str = '', discard_changes: bool = False, stop_training: bool = False, keep_asset_manager_open: bool = False) -> ProjectOpenOutcome:
     """Open a .licht project"""
 
 def project_compact() -> None:

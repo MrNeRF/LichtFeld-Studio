@@ -1431,7 +1431,8 @@ namespace lfs::vis {
                               DiscardChanges
                         : ProjectSwitchDisposition::
                               RequireClean,
-                    command.stop_training);
+                    command.stop_training,
+                    command.keep_asset_manager_open);
             });
 
         cmd::ProjectCompact::when(
@@ -2869,6 +2870,7 @@ namespace lfs::vis {
 
     void VisualizerImpl::performNewProject(
         const ProjectSwitchDisposition disposition) {
+        keep_asset_manager_open_after_restore_ = false;
         if (!project_lifecycle_) {
             return;
         }
@@ -2893,7 +2895,8 @@ namespace lfs::vis {
     void VisualizerImpl::handleOpenProject(
         const std::filesystem::path& path,
         const ProjectSwitchDisposition disposition,
-        const bool stop_training) {
+        const bool stop_training,
+        const bool keep_asset_manager_open) {
         if (pending_training_action_ ==
                 PendingTrainingAction::CloseSave ||
             pending_training_action_ ==
@@ -2913,7 +2916,9 @@ namespace lfs::vis {
                 lfs::core::events::cmd::
                     ShowProjectSwitchConfirmation{
                         .new_project = false,
-                        .path = path}
+                        .path = path,
+                        .keep_asset_manager_open =
+                            keep_asset_manager_open}
                         .emit();
                 return;
             }
@@ -2929,7 +2934,9 @@ namespace lfs::vis {
                         .discard_changes =
                             disposition ==
                             ProjectSwitchDisposition::
-                                DiscardChanges}
+                                DiscardChanges,
+                        .keep_asset_manager_open =
+                            keep_asset_manager_open}
                         .emit();
                 return;
             }
@@ -2955,25 +2962,35 @@ namespace lfs::vis {
                 PendingTrainingAction::OpenProject;
             pending_open_path_ = path;
             pending_open_disposition_ = disposition;
+            pending_open_keep_asset_manager_open_ =
+                keep_asset_manager_open;
             requestStopThenPendingAction();
             return;
         }
 
         pending_training_action_ = PendingTrainingAction::None;
-        performOpenProject(path, disposition);
+        performOpenProject(
+            path, disposition,
+            keep_asset_manager_open);
     }
 
     void VisualizerImpl::performOpenProject(
         const std::filesystem::path& path,
-        const ProjectSwitchDisposition disposition) {
+        const ProjectSwitchDisposition disposition,
+        const bool keep_asset_manager_open) {
+        keep_asset_manager_open_after_restore_ =
+            keep_asset_manager_open;
         if (auto opened = projectOpen(path, disposition);
             !opened) {
+            keep_asset_manager_open_after_restore_ = false;
             if (isDirtyProjectSwitchError(
                     opened.error())) {
                 lfs::core::events::cmd::
                     ShowProjectSwitchConfirmation{
                         .new_project = false,
-                        .path = path}
+                        .path = path,
+                        .keep_asset_manager_open =
+                            keep_asset_manager_open}
                         .emit();
                 return;
             }
@@ -3013,6 +3030,7 @@ namespace lfs::vis {
         pending_open_path_.clear();
         pending_open_disposition_ =
             ProjectSwitchDisposition::RequireClean;
+        pending_open_keep_asset_manager_open_ = false;
         pending_load_file_.reset();
         gui_session_restore_.clear();
         pending_project_tools_restore_.reset();
@@ -3058,6 +3076,16 @@ namespace lfs::vis {
         const auto ticket = prepared->ticket;
         project::applyGuiSession(
             *this, *prepared, camera_bookmarks_);
+        if (std::exchange(
+                keep_asset_manager_open_after_restore_,
+                false)) {
+            auto& panels =
+                gui::PanelRegistry::instance();
+            panels.set_panel_enabled(
+                "lfs.asset_manager", true);
+            panels.bring_panel_to_front(
+                "lfs.asset_manager");
+        }
         pending_project_tools_restore_ =
             std::move(*prepared);
         retained_project_session_ =
@@ -3633,9 +3661,14 @@ namespace lfs::vis {
                     pending_open_disposition_,
                     ProjectSwitchDisposition::
                         RequireClean);
+            const bool keep_asset_manager_open =
+                std::exchange(
+                    pending_open_keep_asset_manager_open_,
+                    false);
             if (!path.empty()) {
                 performOpenProject(
-                    path, disposition);
+                    path, disposition,
+                    keep_asset_manager_open);
             }
             break;
         }

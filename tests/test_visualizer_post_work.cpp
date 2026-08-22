@@ -3990,6 +3990,7 @@ namespace lfs::vis {
                 lfs::core::NULL_NODE);
 
             bool drag_drop_prompted = false;
+            bool keep_asset_manager_open = false;
             std::filesystem::path prompted_path;
             lfs::core::events::cmd::
                 ShowProjectSwitchConfirmation::
@@ -3997,12 +3998,16 @@ namespace lfs::vis {
                         drag_drop_prompted = true;
                         prompted_path =
                             event.path;
+                        keep_asset_manager_open =
+                            event.keep_asset_manager_open;
                     });
             lfs::core::events::cmd::
                 ProjectOpen{
-                    .path = project_path}
+                    .path = project_path,
+                    .keep_asset_manager_open = true}
                     .emit();
             EXPECT_TRUE(drag_drop_prompted);
+            EXPECT_TRUE(keep_asset_manager_open);
             EXPECT_EQ(
                 prompted_path, project_path);
             EXPECT_NE(

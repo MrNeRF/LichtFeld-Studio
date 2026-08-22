@@ -933,6 +933,17 @@ def input_dialog(title: str, message: str, default_value: str = '', callback: ob
 def message_dialog(title: str, message: str, style: str = 'info', callback: object | None = None) -> None:
     """Show a message dialog (style: 'info', 'warning', or 'error')"""
 
+def begin_drag_payload(type: str, data: str, label: str = '') -> int:
+    """
+    Begin one typed cross-context RmlUI drag payload and return its source token
+    """
+
+def end_drag_payload(token: int) -> None:
+    """Mark a cross-context RmlUI drag payload released for target resolution"""
+
+def cancel_drag_payload(token: int) -> None:
+    """Cancel a cross-context RmlUI drag payload"""
+
 def request_redraw(delay: float = 0.0) -> None:
     """
     Request a UI redraw; with delay > 0, schedule it no later than that many seconds from now.

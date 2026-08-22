@@ -6,6 +6,12 @@
     <div id="left-frame-border" class="viewport-frame-border"></div>
     <div id="left-dock-resize-indicator" class="left-dock-resize-indicator hidden"></div>
     <div id="split-divider-overlay" class="viewport-split-divider hidden"></div>
+    <div id="project-drop-overlay" class="project-drop-overlay hidden">
+        <div class="project-drop-card">
+            <div class="project-drop-title">@tr:asset_manager.drag.open_project</div>
+            <div id="project-drop-label" class="project-drop-label"></div>
+        </div>
+    </div>
 
     <div id="primary-toolbar-root" class="panel-toolbar-root">
         <div id="primary-utility-toolbar" class="toolbar-container toolbar-vertical">

@@ -39,6 +39,45 @@ body {
     z-index: 12;
 }
 
+.project-drop-overlay {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    border-width: 2dp;
+    border-radius: 8dp;
+    pointer-events: none;
+    z-index: 30;
+}
+
+.project-drop-overlay.hidden {
+    display: none;
+}
+
+.project-drop-card {
+    max-width: 420dp;
+    padding: 14dp 20dp;
+    border-width: 1dp;
+    border-radius: 8dp;
+    text-align: center;
+}
+
+.project-drop-title {
+    font-size: 17dp;
+    font-weight: 600;
+}
+
+.project-drop-label {
+    margin-top: 5dp;
+    font-size: 13dp;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .panel-toolbar-root {
     position: absolute;
     top: 0;

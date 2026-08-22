@@ -29,6 +29,7 @@ def _load_file_menu(monkeypatch, recent_paths=()):
 
     opened = []
     opened_stop_training = []
+    opened_keep_asset_manager = []
     new_projects = []
     removed = []
     confirm_dialogs = []
@@ -36,9 +37,15 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     warnings = []
     training_active = False
 
-    def project_open(path, discard=False, stop_training=False):
+    def project_open(
+        path,
+        discard=False,
+        stop_training=False,
+        keep_asset_manager_open=False,
+    ):
         opened.append((path, discard))
         opened_stop_training.append(stop_training)
+        opened_keep_asset_manager.append(keep_asset_manager_open)
 
     def new_project(discard=False, stop_training=False):
         new_projects.append((discard, stop_training))
@@ -75,6 +82,7 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     lf_stub.project_remove_recent_file = project_remove_recent_file
     lf_stub.project_open_calls = opened
     lf_stub.project_open_stop_training = opened_stop_training
+    lf_stub.project_open_keep_asset_manager = opened_keep_asset_manager
     lf_stub.new_project_calls = new_projects
     lf_stub.project_remove_recent_file_calls = removed
     lf_stub.confirm_dialogs = confirm_dialogs
@@ -478,3 +486,16 @@ def test_stop_training_confirmation_yes_retries_with_stop_flag(monkeypatch):
     open_callback("tr:common.yes")
     assert file_menu.lf.project_open_calls == [("/tmp/other.licht", False)]
     assert file_menu.lf.project_open_stop_training == [True]
+
+
+def test_drag_open_confirmation_preserves_asset_manager(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+
+    file_menu._show_project_switch_confirmation(
+        False, "/tmp/dragged.licht", True
+    )
+
+    assert file_menu.lf.project_open_calls == [
+        ("/tmp/dragged.licht", True)
+    ]
+    assert file_menu.lf.project_open_keep_asset_manager == [True]

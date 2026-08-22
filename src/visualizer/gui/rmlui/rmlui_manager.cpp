@@ -75,6 +75,59 @@ namespace lfs::vis::gui {
             shutdown();
     }
 
+    std::uint64_t RmlUIManager::beginDragPayload(std::string type,
+                                                 std::string data,
+                                                 std::string label) {
+        if (type.empty() || data.empty())
+            return 0;
+        std::scoped_lock lock(drag_payload_mutex_);
+        const std::uint64_t token = next_drag_payload_token_++;
+        if (next_drag_payload_token_ == 0)
+            next_drag_payload_token_ = 1;
+        drag_payload_ = RmlDragPayload{
+            .token = token,
+            .type = std::move(type),
+            .data = std::move(data),
+            .label = std::move(label),
+        };
+        return token;
+    }
+
+    bool RmlUIManager::endDragPayload(const std::uint64_t token) {
+        std::scoped_lock lock(drag_payload_mutex_);
+        if (!drag_payload_ || drag_payload_->token != token)
+            return false;
+        drag_payload_->released = true;
+        return true;
+    }
+
+    bool RmlUIManager::cancelDragPayload(const std::uint64_t token) {
+        std::scoped_lock lock(drag_payload_mutex_);
+        if (!drag_payload_ || drag_payload_->token != token)
+            return false;
+        drag_payload_.reset();
+        return true;
+    }
+
+    void RmlUIManager::cancelDragPayload() {
+        std::scoped_lock lock(drag_payload_mutex_);
+        drag_payload_.reset();
+    }
+
+    std::optional<RmlDragPayload> RmlUIManager::dragPayload() const {
+        std::scoped_lock lock(drag_payload_mutex_);
+        return drag_payload_;
+    }
+
+    std::optional<RmlDragPayload> RmlUIManager::takeReleasedDragPayload() {
+        std::scoped_lock lock(drag_payload_mutex_);
+        if (!drag_payload_ || !drag_payload_->released)
+            return std::nullopt;
+        auto result = std::move(drag_payload_);
+        drag_payload_.reset();
+        return result;
+    }
+
     bool RmlUIManager::initVulkan(SDL_Window* window, lfs::vis::VulkanContext& vulkan_context, float dp_ratio) {
         auto render_interface = std::make_unique<RenderInterface_VK>();
         RenderInterface_VK::ExternalContext context{};
@@ -277,6 +330,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlUIManager::shutdown() {
+        cancelDragPayload();
         if (!initialized_)
             return;
 

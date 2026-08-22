@@ -407,10 +407,12 @@ namespace lfs::vis {
         void handleOpenProject(
             const std::filesystem::path& path,
             ProjectSwitchDisposition disposition,
-            bool stop_training = false);
+            bool stop_training = false,
+            bool keep_asset_manager_open = false);
         void performOpenProject(
             const std::filesystem::path& path,
-            ProjectSwitchDisposition disposition);
+            ProjectSwitchDisposition disposition,
+            bool keep_asset_manager_open = false);
         [[nodiscard]] bool
         shouldDeferProjectSwitchForTraining() const;
         void requestStopThenPendingAction();
@@ -557,6 +559,8 @@ namespace lfs::vis {
         ProjectSwitchDisposition
             pending_open_disposition_ =
                 ProjectSwitchDisposition::RequireClean;
+        bool pending_open_keep_asset_manager_open_ = false;
+        bool keep_asset_manager_open_after_restore_ = false;
         std::optional<lfs::core::events::cmd::LoadFile>
             pending_load_file_;
         int pending_training_completion_refresh_frames_ = 0;
