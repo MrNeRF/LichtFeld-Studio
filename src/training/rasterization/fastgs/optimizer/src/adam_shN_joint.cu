@@ -98,14 +98,16 @@ namespace fast_lfs::optimizer {
         if (active_sh_bases == 16) {
             adam_step_shN_joint_from_grad_cu<16><<<n_blocks, kBS, 0, stream>>>(
                 fused, shN_grad, slots);
+            LFS_CUDA_LAUNCH_CHECK(stream, "adam_step_shN_joint_from_grad<16>");
         } else if (active_sh_bases == 9) {
             adam_step_shN_joint_from_grad_cu<9><<<n_blocks, kBS, 0, stream>>>(
                 fused, shN_grad, slots);
+            LFS_CUDA_LAUNCH_CHECK(stream, "adam_step_shN_joint_from_grad<9>");
         } else {
             adam_step_shN_joint_from_grad_cu<4><<<n_blocks, kBS, 0, stream>>>(
                 fused, shN_grad, slots);
+            LFS_CUDA_LAUNCH_CHECK(stream, "adam_step_shN_joint_from_grad<4>");
         }
-        LFS_CUDA_LAUNCH_CHECK(stream, "adam_step_shN_joint_from_grad");
     }
 
 } // namespace fast_lfs::optimizer
