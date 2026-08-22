@@ -670,7 +670,13 @@ scene-graph,
 
 .selection-action-count {
     font-size: 11dp;
+    height: 22dp;
+    line-height: 22dp;
     white-space: nowrap;
+}
+
+#selection-clear {
+    margin-left: 3dp;
 }
 
 .selection-action-spacer {
@@ -679,9 +685,13 @@ scene-graph,
 }
 
 .selection-action-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
     width: 22dp;
     height: 22dp;
-    padding: 4dp;
+    padding: 0;
     margin-left: 1dp;
     border-width: 0;
     background-color: transparent;
@@ -689,6 +699,7 @@ scene-graph,
 }
 
 .selection-action-button img {
+    display: block;
     width: 14dp;
     height: 14dp;
 }

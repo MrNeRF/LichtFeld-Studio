@@ -379,9 +379,23 @@ def test_scene_tree_multi_selection_actions_are_fixed_below_the_scroll_view():
     assert scene_rml.count('id="selection-visibility"') == 1
     assert scene_rml.count('id="selection-training"') == 1
     assert "selection-action-separator" not in scene_rml
+    count_pos = scene_rml.index('id="selection-action-count"')
+    clear_pos = scene_rml.index('id="selection-clear"')
+    spacer_pos = scene_rml.index('class="selection-action-spacer"')
+    visibility_pos = scene_rml.index('id="selection-visibility"')
+    assert count_pos < clear_pos < spacer_pos < visibility_pos
     action_rule = _rule_body(scene_rcss, ".selection-action-bar")
     assert "flex-shrink: 0;" in action_rule
     assert "height: 27dp;" in action_rule
+    count_rule = _rule_body(scene_rcss, ".selection-action-count")
+    assert "height: 22dp;" in count_rule
+    assert "line-height: 22dp;" in count_rule
+    button_rule = _rule_body(scene_rcss, ".selection-action-button")
+    assert "display: flex;" in button_rule
+    assert "align-items: center;" in button_rule
+    assert "justify-content: center;" in button_rule
+    assert "box-sizing: border-box;" in button_rule
+    assert "padding: 0;" in button_rule
     assert "state.count > 0" in scene_panel
     assert "!state.all_training_compatible" in scene_panel
     assert "!state.all_delete_enabled" in scene_panel
