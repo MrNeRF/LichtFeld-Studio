@@ -260,7 +260,7 @@ def test_scene_filter_clear_resets_the_live_input_control():
     assert 'filter_input_el_->SetAttribute("value", "")' not in scene_cpp
 
 
-def test_scene_tree_aligns_hierarchy_and_keeps_delete_action_trailing():
+def test_scene_tree_aligns_hierarchy_and_keeps_row_actions_trailing():
     scene_rcss = (
         PROJECT_ROOT
         / "src"
@@ -285,14 +285,115 @@ def test_scene_tree_aligns_hierarchy_and_keeps_delete_action_trailing():
     assert "margin-right: 6dp;" in scene_view_rule
 
     node_name_rule = _rule_body(scene_rcss, ".node-name")
-    assert "flex-grow: 0;" in node_name_rule
+    assert "flex-grow: 1;" in node_name_rule
     assert "flex-shrink: 1;" in node_name_rule
     trash_rule = _rule_body(scene_rcss, ".row-icon.trash-icon")
-    assert "margin-left: 6dp;" in trash_rule
+    assert "margin-left: 2dp;" in trash_rule
     assert "flex-shrink: 0;" in trash_rule
+    training_toggle_rule = _rule_body(scene_rcss, ".row-icon.training-toggle-icon")
+    assert "flex-shrink: 0;" in training_toggle_rule
 
+    checkbox = scene_graph_cpp.index('selection_checkbox->SetClass("tree-checkbox", true)')
     expand = scene_graph_cpp.index('expand->SetClass("expand-toggle", true)')
     visibility = scene_graph_cpp.index('vis_icon->SetAttribute("data-action", "toggle-vis")')
     name = scene_graph_cpp.index('node_name->SetClass("node-name", true)')
+    training_toggle = scene_graph_cpp.index(
+        'training_toggle_icon->SetAttribute("data-action", "toggle-training")'
+    )
     delete = scene_graph_cpp.index('trash_icon->SetAttribute("data-action", "delete")')
-    assert expand < visibility < name < delete
+    assert checkbox < expand < name < visibility < training_toggle < delete
+    assert 'actions->SetClass("row-actions", true)' in scene_graph_cpp
+    assert scene_graph_cpp.count('SetClass("row-action-slot", true)') == 3
+
+
+def test_scene_tree_removes_models_header_space_and_confirms_all_node_deletes():
+    scene_graph_hpp = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "elements"
+        / "scene_graph_element.hpp"
+    ).read_text(encoding="utf-8")
+    scene_graph_cpp = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "elements"
+        / "scene_graph_element.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert "kHeaderHeightDpInt = 0" in scene_graph_hpp
+    assert "kHeaderHeightDp = 0.0f" in scene_graph_hpp
+    assert 'header_el_->SetProperty("display", "none")' in scene_graph_cpp
+    assert "void SceneGraphElement::requestDeleteNodes" in scene_graph_cpp
+    assert "gui->enqueueModal(std::move(request))" in scene_graph_cpp
+    assert "getNodeIdByUuid(uuid)" in scene_graph_cpp
+    assert scene_graph_cpp.count("requestDeleteNodes({node_id})") == 2
+    assert "requestDeleteNodes(ids);" in scene_graph_cpp
+    assert 'data-action", "toggle-training"' in scene_graph_cpp
+
+
+def test_scene_tree_multi_selection_actions_are_fixed_below_the_scroll_view():
+    scene_rml = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+        / "scene_tree.rml"
+    ).read_text(encoding="utf-8")
+    scene_rcss = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+        / "scene_tree.rcss"
+    ).read_text(encoding="utf-8")
+    scene_panel = (
+        PROJECT_ROOT / "src" / "visualizer" / "gui" / "scene_panel_native.cpp"
+    ).read_text(encoding="utf-8")
+    scene_graph = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "elements"
+        / "scene_graph_element.cpp"
+    ).read_text(encoding="utf-8")
+
+    tree_pos = scene_rml.index('<scene-graph id="tree-container"')
+    actions_pos = scene_rml.index('<div id="selection-action-bar"')
+    assert tree_pos < actions_pos
+    assert '<div id="scene-chip-row" class="scene-chip-row">' in scene_rml
+    assert 'id="summary-model-chip"' in scene_rml
+    assert 'id="summary-node-chip"' in scene_rml
+    assert 'id="summary-selection-chip"' not in scene_rml
+    assert scene_rml.count('id="selection-visibility"') == 1
+    assert scene_rml.count('id="selection-training"') == 1
+    assert "selection-action-separator" not in scene_rml
+    action_rule = _rule_body(scene_rcss, ".selection-action-bar")
+    assert "flex-shrink: 0;" in action_rule
+    assert "height: 27dp;" in action_rule
+    assert "state.count > 0" in scene_panel
+    assert "!state.all_training_compatible" in scene_panel
+    assert "!state.all_delete_enabled" in scene_panel
+    assert "requestDeleteSelection()" in scene_panel
+    assert "training_mixed" in scene_graph
+    assert 'std::format("{} / {}"' in scene_graph
+    assert 'SetAttribute("data-action", "toggle-select")' in scene_graph
+    assert "collectCheckboxSelectionIds(child_id, ids)" in scene_graph
+    assert "checkboxState(child_id)" in scene_graph
+    checkbox_rule = _rule_body(scene_rcss, ".tree-checkbox")
+    assert "position: absolute;" in checkbox_rule
+    assert "left: 4dp;" in checkbox_rule
+    assert "opacity:" not in checkbox_rule
+    assert ".tree-row:hover .tree-checkbox" not in scene_rcss
+    assert ".padding_left_dp = formatDp(21 + depth * 16)" in scene_graph

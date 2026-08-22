@@ -27,6 +27,16 @@ namespace lfs::vis::gui {
 
     class SceneGraphElement : public Rml::Element {
     public:
+        struct SelectionActionState {
+            size_t count = 0;
+            bool all_visible = false;
+            bool any_visible = false;
+            bool all_training_compatible = false;
+            bool all_training_enabled = false;
+            bool any_training_enabled = false;
+            bool all_delete_enabled = false;
+        };
+
         explicit SceneGraphElement(const Rml::String& tag);
 
         void setPanelScreenOffset(float x, float y);
@@ -37,9 +47,14 @@ namespace lfs::vis::gui {
         [[nodiscard]] size_t rootCount() const { return root_count_; }
         [[nodiscard]] size_t nodeCount() const { return node_snapshots_.size(); }
         [[nodiscard]] size_t selectedCount() const { return selected_ids_.size(); }
+        [[nodiscard]] SelectionActionState selectionActionState() const;
+        void setSelectedVisibility(bool visible);
+        void setSelectedTrainingEnabled(bool enabled);
+        void requestDeleteSelection();
+        void clearSelectedNodes();
         [[nodiscard]] const std::string& filterText() const { return filter_text_; }
         [[nodiscard]] bool hasNodes() const { return scene_has_nodes_; }
-        [[nodiscard]] bool modelsCollapsed() const { return models_collapsed_; }
+        [[nodiscard]] bool modelsCollapsed() const { return false; }
         void setModelsCollapsed(bool collapsed);
         [[nodiscard]] const std::unordered_set<core::NodeId>& collapsedIds() const {
             return collapsed_ids_;
@@ -81,6 +96,10 @@ namespace lfs::vis::gui {
             bool camera_frustum_container = false;
             bool has_children = false;
             bool training_enabled = true;
+            bool training_mixed = false;
+            size_t training_enabled_count = 0;
+            size_t training_total_count = 0;
+            bool can_toggle_training = false;
             std::string label;
             bool draggable = false;
             bool has_mask = false;
@@ -100,6 +119,10 @@ namespace lfs::vis::gui {
             bool collapsed = false;
             bool draggable = false;
             bool training_enabled = true;
+            bool training_mixed = false;
+            size_t training_enabled_count = 0;
+            size_t training_total_count = 0;
+            bool can_toggle_training = false;
             std::string name;
             std::string label;
             std::string node_id_text;
@@ -116,8 +139,11 @@ namespace lfs::vis::gui {
         struct RowSlot {
             Rml::Element* root = nullptr;
             Rml::Element* content = nullptr;
+            Rml::Element* selection_checkbox = nullptr;
             Rml::Element* vis_icon = nullptr;
             Rml::Element* delete_icon = nullptr;
+            Rml::Element* training_toggle_icon = nullptr;
+            Rml::Element* training_mixed_mark = nullptr;
             Rml::Element* type_icon = nullptr;
             Rml::Element* unicode_icon = nullptr;
             Rml::Element* mask_icon = nullptr;
@@ -158,6 +184,10 @@ namespace lfs::vis::gui {
         void confirmRename();
         void cancelRename();
         void handleInlineAction(const std::string& action, core::NodeId node_id);
+        [[nodiscard]] std::pair<bool, bool> checkboxState(core::NodeId node_id) const;
+        void collectCheckboxSelectionIds(core::NodeId node_id,
+                                         std::vector<core::NodeId>& ids) const;
+        void toggleCheckboxSelection(core::NodeId node_id);
         void handlePrimaryClick(core::NodeId node_id);
         void handleSecondaryClick(core::NodeId node_id, float mouse_x, float mouse_y);
         bool activateNode(core::NodeId node_id);
@@ -183,6 +213,7 @@ namespace lfs::vis::gui {
         void showModelsHeaderContextMenu(float mouse_x, float mouse_y);
         bool isModelsHeaderTarget(Rml::Element* target) const;
         std::vector<core::NodeId> deleteEnabledSelectedNodeIds() const;
+        void requestDeleteNodes(const std::vector<core::NodeId>& node_ids);
         void deleteSelectedNodes();
         void toggleChildrenTraining(core::NodeId group_id, bool enabled);
         void toggleSelectedTraining(bool enabled);
@@ -237,17 +268,14 @@ namespace lfs::vis::gui {
         float last_bound_dp_ratio_ = -1.0f;
         float last_client_height_ = -1.0f;
         float last_content_height_ = -1.0f;
-        std::string last_header_text_;
         std::vector<std::string> row_top_dp_cache_;
-        bool last_header_visible_ = false;
-        bool last_header_expanded_ = true;
         float panel_screen_x_ = 0.0f;
         float panel_screen_y_ = 0.0f;
 
         static constexpr int kRowHeightDpInt = 20;
-        static constexpr int kHeaderHeightDpInt = 24;
+        static constexpr int kHeaderHeightDpInt = 0;
         static constexpr float kRowHeightDp = 20.0f;
-        static constexpr float kHeaderHeightDp = 24.0f;
+        static constexpr float kHeaderHeightDp = 0.0f;
         static constexpr int kOverscanRows = 12;
         static constexpr int kAutoCollapseCameraGroupThreshold = 25;
     };

@@ -610,10 +610,111 @@ scene-graph,
 .row-icon.trash-icon {
     width: 14dp;
     height: 14dp;
-    margin-left: 6dp;
+    margin-left: 2dp;
     margin-right: 0;
     flex-shrink: 0;
     image-color: rgba(230, 90, 90, 210);
+}
+
+.tree-checkbox {
+    display: inline-block;
+    position: absolute;
+    left: 4dp;
+    top: 3dp;
+    width: 13dp;
+    height: 13dp;
+    box-sizing: border-box;
+    border-width: 1dp;
+    border-radius: 2dp;
+    font-size: 10dp;
+    line-height: 11dp;
+    text-align: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    z-index: 2;
+}
+
+.selection-action-bar {
+    display: none;
+    align-items: center;
+    box-sizing: border-box;
+    flex-shrink: 0;
+    height: 27dp;
+    margin-top: 2dp;
+    padding: 2dp 3dp 2dp 6dp;
+    border-top-width: 1dp;
+}
+
+.selection-action-count {
+    font-size: 11dp;
+    white-space: nowrap;
+}
+
+.selection-action-spacer {
+    flex: 1;
+    min-width: 3dp;
+}
+
+.selection-action-button {
+    width: 22dp;
+    height: 22dp;
+    padding: 4dp;
+    margin-left: 1dp;
+    border-width: 0;
+    background-color: transparent;
+    cursor: pointer;
+}
+
+.selection-action-button img {
+    width: 14dp;
+    height: 14dp;
+}
+
+.selection-action-button.disabled {
+    opacity: 0.28;
+    cursor: default;
+}
+
+
+.row-actions {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    margin-left: auto;
+    padding-left: 4dp;
+}
+
+.row-action-slot {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    width: 17dp;
+    height: 20dp;
+    flex-shrink: 0;
+}
+
+.row-action-slot .row-icon {
+    margin-left: 0;
+    margin-right: 0;
+}
+
+.row-icon.training-toggle-icon {
+    width: 14dp;
+    height: 14dp;
+    margin-left: 0;
+    margin-right: 0;
+    flex-shrink: 0;
+}
+
+.training-mixed-mark {
+    position: absolute;
+    right: 1dp;
+    bottom: 3dp;
+    width: 6dp;
+    height: 2dp;
+    border-radius: 1dp;
+    pointer-events: none;
 }
 
 .row-icon.trash-icon:hover {
@@ -627,7 +728,7 @@ scene-graph,
 .node-name {
     display: block;
     min-width: 0;
-    flex-grow: 0;
+    flex-grow: 1;
     flex-shrink: 1;
     color: #cdd6f4;
     overflow: hidden;
@@ -645,7 +746,7 @@ scene-graph,
     display: inline;
     min-width: 0;
     width: auto;
-    flex-grow: 0;
+    flex-grow: 1;
     flex-shrink: 1;
     padding: 2dp 4dp;
     font-size: 12dp;
