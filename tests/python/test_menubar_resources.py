@@ -396,6 +396,10 @@ def test_scene_tree_multi_selection_actions_are_fixed_below_the_scroll_view():
     assert "justify-content: center;" in button_rule
     assert "box-sizing: border-box;" in button_rule
     assert "padding: 0;" in button_rule
+    tree_scrollbar_rule = _rule_body(scene_rcss, "scene-graph scrollbarvertical")
+    assert "width: 4dp;" in tree_scrollbar_rule
+    tree_slider_rule = _rule_body(scene_rcss, "scene-graph scrollbarvertical sliderbar")
+    assert "min-height: 12dp;" in tree_slider_rule
     assert "state.count > 0" in scene_panel
     assert "!state.all_training_compatible" in scene_panel
     assert "!state.all_delete_enabled" in scene_panel

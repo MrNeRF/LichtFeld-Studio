@@ -201,6 +201,15 @@ scene-graph,
     tab-index: auto;
 }
 
+/* Match the compact Training parameter scrollbar without hiding scroll state. */
+scene-graph scrollbarvertical {
+    width: 4dp;
+}
+
+scene-graph scrollbarvertical sliderbar {
+    min-height: 12dp;
+}
+
 .scene-graph-content {
     position: relative;
     width: 100%;
