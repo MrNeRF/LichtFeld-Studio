@@ -17,6 +17,7 @@ import lichtfeld as lf
 from . import rml_widgets
 from .asset_watch import scan_all_watch_directories
 from .localization import localized_count
+from .rml_keys import KI_DELETE, KI_DOWN, KI_LEFT, KI_RETURN, KI_RIGHT, KI_UP
 from .types import Panel
 from .ui import RuntimeState
 from .watch_dirs_panel import open_watch_dirs_dialog
@@ -32,6 +33,8 @@ ASSET_WINDOW_OVERSCAN_ROWS = 2
 ASSET_LIST_FALLBACK_ROWS = 24
 ASSET_GALLERY_FALLBACK_ROWS = 8
 _RML_PATH_SAFE_CHARS = "/:._-~"
+SCOPE_ALL = "__all__"
+PROJECT_DRAG_PAYLOAD_TYPE = "application/x-lichtfeld-project"
 
 try:
     from .asset_index import (
@@ -87,13 +90,14 @@ class AssetManagerPanel(Panel):
         self._asset_index: Optional[Any] = None
 
         self._selected_asset_ids: Set[str] = set()
-        self._selected_folder_id: Optional[str] = None
+        self._selection_cursor_id: Optional[str] = None
+        self._selected_folder_id: Optional[str] = SCOPE_ALL
         self._selection_type = "none"
         self._view_mode = "list"
         self._sort_mode = "name"
         self._search_query = ""
 
-        self._folders_collapsed = True
+        self._folders_collapsed = False
         self._sidebar_height = 176.0
         self._bottom_panel_height = 220.0
         self._sidebar_dragging = False
@@ -123,6 +127,7 @@ class AssetManagerPanel(Panel):
         self._watch_scan_lock = threading.Lock()
         self._watch_scan_active = False
         self._watch_scan_refresh_pending = False
+        self._drag_payload_token: Optional[int] = None
 
     def capture_chrome(self) -> Dict[str, Any]:
         return {
@@ -172,6 +177,8 @@ class AssetManagerPanel(Panel):
         model.bind_func("folders_collapsed", lambda: self._folders_collapsed)
         model.bind_func("folders_expanded", lambda: not self._folders_collapsed)
         model.bind_func("selected_folder_id", lambda: self._selected_folder_id)
+        model.bind_func("all_assets_selected", lambda: self._selected_folder_id == SCOPE_ALL)
+        model.bind_func("all_assets_count", self.get_all_assets_count)
         model.bind_func("selected_asset_id", self.get_selected_asset_id)
         model.bind_func("selected_count", self.get_selected_count)
         model.bind_func("selected_count_text", self.get_selected_count_text)
@@ -233,13 +240,8 @@ class AssetManagerPanel(Panel):
             "import_project_label": "menu.file.open_project",
             "search_placeholder": "asset_manager.toolbar.search_placeholder",
             "search_icon_label": "asset_manager.toolbar.search_icon",
-            "gallery_label": "asset_manager.toolbar.view_gallery",
-            "list_label": "asset_manager.toolbar.view_list",
+            "all_assets_label": "asset_manager.sidebar.all_assets",
             "folders_title": "asset_manager.sidebar.folders",
-            "gallery_title": "asset_manager.toolbar.view_gallery",
-            "list_title": "asset_manager.toolbar.view_list",
-            "refresh_label": "asset_manager.action.refresh",
-            "clean_missing_label": "asset_manager.action.clean_missing",
             "col_name_label": "asset_manager.property.name",
             "col_folder_label": "asset_manager.property.folder",
             "col_size_label": "asset_manager.property.size",
@@ -271,8 +273,7 @@ class AssetManagerPanel(Panel):
             ("on_import_project", self.on_import_project),
             ("set_view_mode", self.set_view_mode),
             ("cycle_sort_mode", self.cycle_sort_mode),
-            ("refresh_catalog", self.refresh_catalog),
-            ("clean_missing", self.clean_missing),
+            ("refresh_and_clean", self.refresh_and_clean),
             ("on_locate_file", self.on_locate_file),
             ("on_sidebar_resize_start", self.on_sidebar_resize_start),
             ("on_bottom_panel_resize_start", self.on_bottom_panel_resize_start),
@@ -345,14 +346,6 @@ class AssetManagerPanel(Panel):
         except (OSError, OverflowError, TypeError, ValueError):
             return ""
 
-    @staticmethod
-    def _ellipsize_path(value: Any, max_chars: int = 56) -> str:
-        text = str(value or "")
-        if len(text) <= max_chars:
-            return text
-        keep = max_chars - 3
-        return f"{text[: keep // 2]}...{text[-(keep - keep // 2):]}"
-
     def _asset_index_assets(self) -> Dict[str, Dict[str, Any]]:
         assets = getattr(self._asset_index, "assets", {}) if self._asset_index else {}
         return assets if isinstance(assets, dict) else {}
@@ -367,12 +360,30 @@ class AssetManagerPanel(Panel):
             return "default"
         return min(folders, key=lambda folder_id: self._sort_text(folders[folder_id].get("name"))) if folders else None
 
+    def _asset_matches_query(self, asset: Dict[str, Any], query: str) -> bool:
+        if not query:
+            return True
+        haystack = " ".join(
+            str(value)
+            for value in (
+                asset.get("name"),
+                asset.get("path"),
+                asset.get("type"),
+                asset.get("project_uuid"),
+                self._folder_name(asset.get("folder_id")),
+                "licht project",
+            )
+        ).casefold()
+        return query in haystack
+
     def _repair_selection(self) -> None:
         assets = self._asset_index_assets()
         folders = self._asset_index_folders()
         self._selected_asset_ids.intersection_update(assets)
-        if self._selected_folder_id not in folders:
-            self._selected_folder_id = self._default_folder_id()
+        if self._selection_cursor_id not in assets:
+            self._selection_cursor_id = next(iter(self._selected_asset_ids), None)
+        if self._selected_folder_id not in {*folders, SCOPE_ALL}:
+            self._selected_folder_id = SCOPE_ALL
         self._update_selection_type()
 
     def _repair_selected_folder(self) -> Optional[str]:
@@ -384,7 +395,7 @@ class AssetManagerPanel(Panel):
             self._selection_type = "multiple"
         elif len(self._selected_asset_ids) == 1:
             self._selection_type = "asset"
-        elif self._selected_folder_id:
+        elif self._selected_folder_id in self._asset_index_folders():
             self._selection_type = "folder"
         else:
             self._selection_type = "none"
@@ -407,19 +418,10 @@ class AssetManagerPanel(Panel):
         }.get(status, "asset_manager.status.unverified")
         return tr(key)
 
-    def _get_asset_display_fields(
-        self,
-        asset: Dict[str, Any],
-        folder_name: str = "",
-    ) -> Dict[str, str]:
+    def _get_asset_display_name(self, asset: Dict[str, Any]) -> str:
         path = str(asset.get("path") or "")
         path_stem = Path(path).stem if path else ""
-        display_name = str(asset.get("name") or path_stem or tr("asset_manager.unnamed"))
-        if display_name != path_stem and path:
-            subtitle = Path(path).name
-        else:
-            subtitle = self._ellipsize_path(str(Path(path).parent) if path else folder_name)
-        return {"display_name": display_name, "display_subtitle": subtitle}
+        return str(asset.get("name") or path_stem or tr("asset_manager.unnamed"))
 
     @staticmethod
     def _thumbnail_decorator(asset: Dict[str, Any]) -> str:
@@ -431,10 +433,9 @@ class AssetManagerPanel(Panel):
 
     def _format_asset_for_ui(self, asset: Dict[str, Any]) -> Dict[str, Any]:
         folder_name = self._folder_name(asset.get("folder_id"))
-        fields = self._get_asset_display_fields(asset, folder_name)
         return {
             **asset,
-            **fields,
+            "display_name": self._get_asset_display_name(asset),
             "id": str(asset.get("id") or asset.get("project_uuid") or ""),
             "folder_name": folder_name,
             "size_label": self._format_size(asset.get("file_size_bytes", 0)),
@@ -449,23 +450,12 @@ class AssetManagerPanel(Panel):
     def _filtered_assets(self, folder_id: Optional[str] = None) -> List[Dict[str, Any]]:
         folder_id = self._selected_folder_id if folder_id is None else folder_id
         query = self._search_query.strip().casefold()
-        rows = []
+        rows: List[Dict[str, Any]] = []
         for asset in self._asset_index_assets().values():
-            if folder_id and asset.get("folder_id") != folder_id:
+            if folder_id not in (None, SCOPE_ALL) and asset.get("folder_id") != folder_id:
                 continue
-            if query:
-                haystack = " ".join(
-                    str(value)
-                    for value in (
-                        asset.get("name"),
-                        asset.get("path"),
-                        asset.get("project_uuid"),
-                        asset.get("status"),
-                        self._folder_name(asset.get("folder_id")),
-                    )
-                ).casefold()
-                if query not in haystack:
-                    continue
+            if not self._asset_matches_query(asset, query):
+                continue
             rows.append(asset)
         if self._sort_mode == "size":
             rows.sort(
@@ -524,22 +514,31 @@ class AssetManagerPanel(Panel):
     def get_folder_list(self) -> List[Dict[str, Any]]:
         counts: Dict[str, int] = {}
         query = self._search_query.strip().casefold()
-        for asset in self._asset_index_assets().values():
-            if query:
-                haystack = f"{asset.get('name', '')} {asset.get('path', '')}".casefold()
-                if query not in haystack:
-                    continue
+        matching_assets = [
+            asset
+            for asset in self._asset_index_assets().values()
+            if self._asset_matches_query(asset, query)
+        ]
+        for asset in matching_assets:
             folder_id = str(asset.get("folder_id") or "default")
             counts[folder_id] = counts.get(folder_id, 0) + 1
-        rows = [
+        folder_rows = [
             {
                 "id": folder_id,
                 "name": str(folder.get("name") or tr("asset_manager.unnamed_folder")),
                 "project_count": counts.get(folder_id, 0),
+                "can_manage": True,
             }
             for folder_id, folder in self._asset_index_folders().items()
         ]
-        return sorted(rows, key=lambda row: self._sort_text(row["name"]))
+        return sorted(folder_rows, key=lambda row: self._sort_text(row["name"]))
+
+    def get_all_assets_count(self) -> int:
+        query = self._search_query.strip().casefold()
+        return sum(
+            self._asset_matches_query(asset, query)
+            for asset in self._asset_index_assets().values()
+        )
 
     def get_asset_results_summary(self) -> str:
         try:
@@ -555,7 +554,7 @@ class AssetManagerPanel(Panel):
 
     def get_selected_asset_name(self) -> str:
         asset = self._get_selected_asset()
-        return self._get_asset_display_fields(asset)["display_name"] if asset else ""
+        return self._get_asset_display_name(asset) if asset else ""
 
     def get_selected_asset_folder_name(self) -> str:
         asset = self._get_selected_asset()
@@ -622,6 +621,7 @@ class AssetManagerPanel(Panel):
         folder = self._asset_index.create_folder(name.strip())
         self._selected_folder_id = folder.id
         self._selected_asset_ids.clear()
+        self._selection_cursor_id = None
         self._update_selection_type()
         self.refresh_catalog(scan_watched=False)
         return folder.id
@@ -654,25 +654,32 @@ class AssetManagerPanel(Panel):
         try:
             project, _created = self._asset_index.register_licht_asset(
                 path,
-                folder_id=self._selected_folder_id or self._default_folder_id(),
+                folder_id=(
+                    self._selected_folder_id
+                    if self._selected_folder_id in self._asset_index_folders()
+                    else self._default_folder_id()
+                ),
             )
             if project is not None:
                 self._selected_asset_ids = {project.id}
+                self._selection_cursor_id = project.id
                 self._update_selection_type()
                 self.refresh_catalog(scan_watched=False)
         except Exception as exc:
             self._log_error("Failed to import .licht project %s: %s", path, exc)
 
     def _select_folder_id(self, folder_id: str) -> bool:
-        if folder_id not in self._asset_index_folders():
+        if folder_id not in {*self._asset_index_folders(), SCOPE_ALL}:
             return False
         self._selected_folder_id = folder_id
         self._selected_asset_ids.clear()
+        self._selection_cursor_id = None
         self._update_selection_type()
         self._reset_scroll()
         self._refresh_records(assets=True, folders=True)
         self._dirty_fields(
             "selected_folder_id",
+            "all_assets_selected",
             "show_selection_none",
             "show_selection_asset",
             "show_selection_folder",
@@ -702,6 +709,9 @@ class AssetManagerPanel(Panel):
                 self._selected_asset_ids.add(asset_id)
         else:
             self._selected_asset_ids = {asset_id}
+        self._selection_cursor_id = (
+            asset_id if asset_id in self._selected_asset_ids else next(iter(self._selected_asset_ids), None)
+        )
         self._update_selection_type()
         self._sync_asset_selection_dom(container, row_element)
         self._dirty_selection()
@@ -759,6 +769,7 @@ class AssetManagerPanel(Panel):
             self.refresh_catalog(scan_watched=False)
             return
         self._selected_asset_ids = {asset_id}
+        self._selection_cursor_id = asset_id
         self._update_selection_type()
         self._dirty_selection()
         from .file_menu import open_project_with_confirmation
@@ -769,6 +780,8 @@ class AssetManagerPanel(Panel):
         asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
         if asset_id and self._asset_index and self._asset_index.delete_asset(asset_id):
             self._selected_asset_ids.discard(asset_id)
+            if self._selection_cursor_id == asset_id:
+                self._selection_cursor_id = None
             self.refresh_catalog(scan_watched=False)
 
     def _get_available_folders_for_asset(self, asset: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -980,8 +993,9 @@ class AssetManagerPanel(Panel):
         folder_id = self._resolve_event_value(args, _ev, "data-folder-id")
         if folder_id and folder_id != "default" and self._asset_index:
             if self._asset_index.delete_folder(folder_id):
-                self._selected_folder_id = self._default_folder_id()
+                self._selected_folder_id = SCOPE_ALL
                 self._selected_asset_ids.clear()
+                self._selection_cursor_id = None
                 self.refresh_catalog(scan_watched=False)
 
     def clean_missing(self, _handle=None, _ev=None, _args=None):
@@ -995,7 +1009,30 @@ class AssetManagerPanel(Panel):
         removed = self._asset_index.delete_assets(missing) if missing else 0
         if removed:
             self._selected_asset_ids.difference_update(missing)
+            if self._selection_cursor_id in missing:
+                self._selection_cursor_id = None
             self.refresh_catalog(scan_watched=False)
+
+    def refresh_and_clean(self, _handle=None, _ev=None, _args=None):
+        if not self._asset_index:
+            return
+        self._asset_index.verify_projects()
+        missing = [
+            asset_id
+            for asset_id, asset in self._asset_index_assets().items()
+            if not asset.get("exists", False)
+        ]
+        if missing:
+            self._asset_index.delete_assets(missing)
+            self._selected_asset_ids.difference_update(missing)
+            if self._selection_cursor_id in missing:
+                self._selection_cursor_id = None
+        self._repair_selection()
+        self._refresh_records(assets=True, folders=True)
+        if self._handle:
+            self._handle.dirty_all()
+        self._request_model_update()
+        self._scan_watched_projects()
 
     def refresh_catalog(
         self,
@@ -1070,6 +1107,7 @@ class AssetManagerPanel(Panel):
         if folders:
             self._handle.update_record_list("folders", self.get_folder_list())
             self._handle.dirty("folders")
+            self._handle.dirty("all_assets_count")
         if assets:
             self._handle.update_record_list("assets", self.get_filtered_assets())
             self._handle.dirty("assets")
@@ -1154,10 +1192,13 @@ class AssetManagerPanel(Panel):
             shell.add_event_listener("mousedown", self._on_asset_manager_mousedown)
             shell.add_event_listener("click", self._on_asset_manager_click)
             shell.add_event_listener("dblclick", self._on_asset_manager_double_click)
+            shell.add_event_listener("dragstart", self._on_asset_drag_start)
+            shell.add_event_listener("dragend", self._on_asset_drag_end)
         scroll = doc.get_element_by_id("asset-gallery-scroll")
         if scroll:
             scroll.add_event_listener("scroll", self._on_asset_scroll)
             scroll.add_event_listener("mousescroll", self._on_gallery_precise_scroll)
+            scroll.add_event_listener("keydown", self._on_asset_results_keydown)
         doc.add_event_listener("mousemove", self._on_resize_mousemove)
         doc.add_event_listener("mouseup", self._on_resize_mouseup)
 
@@ -1209,6 +1250,7 @@ class AssetManagerPanel(Panel):
                     row_element=action_element,
                     container=container,
                 )
+                self._focus_asset_results()
             self._stop_event(event)
             return
         folder_element = rml_widgets.find_ancestor_with_attribute(target, "data-folder-id", container)
@@ -1250,6 +1292,167 @@ class AssetManagerPanel(Panel):
         if asset_id:
             self._load_asset(asset_id)
             self._stop_event(event)
+
+    def _on_asset_drag_start(self, event) -> None:
+        container = event.current_target()
+        element = rml_widgets.find_ancestor_with_attribute(
+            event.target(), "data-asset-action", container
+        )
+        if element is None or element.get_attribute("data-asset-action", "") != "select":
+            return
+        asset_id = element.get_attribute("data-asset-id", "")
+        if not asset_id or not self._asset_index:
+            return
+        verify_asset = getattr(self._asset_index, "verify_asset", None)
+        project = verify_asset(asset_id) if callable(verify_asset) else None
+        if callable(verify_asset) and project is None:
+            self.refresh_catalog(scan_watched=False)
+            return
+        asset = (
+            project.to_dict()
+            if project is not None and hasattr(project, "to_dict")
+            else self._asset_index_assets().get(asset_id, {})
+        )
+        if not self._project_available(asset):
+            self.refresh_catalog(scan_watched=False)
+            return
+        begin_drag = getattr(lf.ui, "begin_drag_payload", None)
+        if not callable(begin_drag):
+            return
+        if self._drag_payload_token is not None:
+            cancel_drag = getattr(lf.ui, "cancel_drag_payload", None)
+            if callable(cancel_drag):
+                cancel_drag(self._drag_payload_token)
+        token = begin_drag(
+            PROJECT_DRAG_PAYLOAD_TYPE,
+            str(asset.get("path") or ""),
+            self._get_asset_display_name(asset),
+        )
+        self._drag_payload_token = int(token)
+        self._selected_asset_ids = {asset_id}
+        self._selection_cursor_id = asset_id
+        self._update_selection_type()
+        self._sync_asset_selection_dom(container, element)
+        self._dirty_selection()
+        self._stop_event(event)
+
+    def _on_asset_drag_end(self, event) -> None:
+        token = self._drag_payload_token
+        self._drag_payload_token = None
+        end_drag = getattr(lf.ui, "end_drag_payload", None)
+        if token is not None and callable(end_drag):
+            end_drag(token)
+            self._stop_event(event)
+
+    def _focus_asset_results(self) -> None:
+        scroll = self._asset_scroll_container()
+        focus = getattr(scroll, "focus", None)
+        if callable(focus):
+            focus()
+
+    def _gallery_columns(self) -> int:
+        available_width = max(
+            ASSET_CARD_PREFERRED_WIDTH_DP,
+            self._asset_window_client_width - ASSET_CARD_GRID_HORIZONTAL_CHROME_DP,
+        )
+        return max(1, int(available_width // ASSET_CARD_PREFERRED_WIDTH_DP))
+
+    def _scroll_cursor_into_view(self, index: int) -> None:
+        scroll = self._asset_scroll_container()
+        if self._view_mode == "gallery":
+            row = index // self._gallery_columns()
+            start = row * ASSET_GALLERY_ROW_HEIGHT_DP
+            end = start + ASSET_GALLERY_ROW_HEIGHT_DP
+        else:
+            start = index * ASSET_LIST_ROW_HEIGHT_DP
+            end = start + ASSET_LIST_ROW_HEIGHT_DP
+        top = self._asset_window_scroll_top
+        height = self._asset_window_client_height
+        if start < top:
+            top = start
+        elif height > 0 and end > top + height:
+            top = max(0.0, end - height)
+        self._asset_window_scroll_top = top
+        if scroll is not None:
+            scroll.scroll_top = top
+
+    def _navigate_selection(self, key: int) -> bool:
+        rows = self._filtered_assets()
+        if not rows:
+            return False
+        ids = [str(asset.get("id") or asset.get("project_uuid") or "") for asset in rows]
+        if self._view_mode == "list":
+            offsets = {KI_UP: -1, KI_DOWN: 1}
+        else:
+            columns = self._gallery_columns()
+            offsets = {KI_LEFT: -1, KI_RIGHT: 1, KI_UP: -columns, KI_DOWN: columns}
+        offset = offsets.get(key)
+        if offset is None:
+            return False
+        if self._selection_cursor_id in ids:
+            index = ids.index(self._selection_cursor_id)
+            index = max(0, min(len(ids) - 1, index + offset))
+        else:
+            index = len(ids) - 1 if offset < 0 else 0
+        asset_id = ids[index]
+        self._selected_asset_ids = {asset_id}
+        self._selection_cursor_id = asset_id
+        self._update_selection_type()
+        self._scroll_cursor_into_view(index)
+        self._refresh_records(assets=True)
+        self._dirty_selection()
+        return True
+
+    def _delete_selected_assets(self) -> bool:
+        if not self._asset_index or not self._selected_asset_ids:
+            return False
+        rows = self._filtered_assets()
+        ids = [str(asset.get("id") or asset.get("project_uuid") or "") for asset in rows]
+        cursor_index = ids.index(self._selection_cursor_id) if self._selection_cursor_id in ids else 0
+        selected = set(self._selected_asset_ids)
+        if self._asset_index.delete_assets(list(selected)) <= 0:
+            return False
+        self._selected_asset_ids.clear()
+        self._selection_cursor_id = None
+        remaining = self._filtered_assets()
+        if remaining:
+            cursor_index = min(cursor_index, len(remaining) - 1)
+            asset_id = str(
+                remaining[cursor_index].get("id")
+                or remaining[cursor_index].get("project_uuid")
+                or ""
+            )
+            self._selected_asset_ids = {asset_id}
+            self._selection_cursor_id = asset_id
+            self._scroll_cursor_into_view(cursor_index)
+        self._update_selection_type()
+        self._refresh_records(assets=True, folders=True)
+        self._dirty_selection()
+        return True
+
+    def _on_asset_results_keydown(self, event) -> None:
+        try:
+            key = int(event.get_parameter("key_identifier", "0"))
+        except (TypeError, ValueError):
+            return
+        if self._navigate_selection(key):
+            self._stop_event(event)
+            return
+        if key == KI_RETURN:
+            asset_id = self._selection_cursor_id or self.get_selected_asset_id()
+            if asset_id:
+                self._load_asset(asset_id)
+                self._stop_event(event)
+            return
+        if key == KI_DELETE:
+            if self._delete_selected_assets():
+                self._stop_event(event)
+            return
+        if 2 <= key <= 37 and not self._event_multi_select(event):
+            search = self._doc.get_element_by_id("asset-search-input") if self._doc else None
+            focus = getattr(search, "focus", None)
+            if callable(focus):
+                focus()
 
     def _sync_asset_selection_dom(self, container=None, selected_element=None) -> None:
         root = container or self._doc
@@ -1406,6 +1609,11 @@ class AssetManagerPanel(Panel):
         return changed
 
     def on_unmount(self, doc):
+        if self._drag_payload_token is not None:
+            cancel_drag = getattr(lf.ui, "cancel_drag_payload", None)
+            if callable(cancel_drag):
+                cancel_drag(self._drag_payload_token)
+            self._drag_payload_token = None
         self._unsubscribe_reactive_state()
         try:
             doc.remove_data_model("asset_manager")

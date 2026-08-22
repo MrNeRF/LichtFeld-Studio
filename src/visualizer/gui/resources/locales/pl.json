@@ -194,6 +194,7 @@
     "toolbar.view_gallery": "Galeria",
     "toolbar.view_list": "Lista",
     "sidebar.folders": "FOLDERY",
+    "sidebar.all_assets": "Wszystkie zasoby",
     "info_panel.info": "Informacje",
     "info_panel.asset_details": "Szczegóły zasobu",
     "info_panel.folder_details": "Szczegóły folderu",
@@ -241,6 +242,8 @@
     "panel_title": "Menedżer Zasobów",
     "tooltip.refresh": "Sprawdź pliki projektów i odśwież stan katalogu",
     "tooltip.clean_missing": "Usuń projekty, których pliki nie istnieją już na dysku",
+    "tooltip.refresh_and_clean": "Odśwież katalog i usuń projekty z brakującymi plikami",
+    "drag.open_project": "Upuść, aby otworzyć projekt",
     "status.showing_projects.one": "Wyświetlono {count} projekt",
     "status.showing_projects.few": "Wyświetlono {count} projekty",
     "status.showing_projects.other": "Wyświetlono {count} projektów"

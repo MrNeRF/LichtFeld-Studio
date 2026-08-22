@@ -8,7 +8,7 @@
   <div id="asset-floating-header" class="hidden" data-class-hidden="!is_floating">
     <span id="asset-floating-title">{{panel_label}}</span>
     <div class="asset-panel-actions">
-      <button class="btn btn--secondary asset-panel-action" data-event-click="close_panel">{{close_label}}</button>
+      <button class="asset-button asset-button--text asset-panel-action" data-event-click="close_panel">{{close_label}}</button>
     </div>
   </div>
 
@@ -18,37 +18,37 @@
         <div class="toolbar-row toolbar-row-primary">
           <div class="asset-search-box">
             <span class="asset-search-icon">{{search_icon_label}}</span>
-            <input type="text" placeholder="{{search_placeholder}}" data-value="search_query" />
+            <input id="asset-search-input" type="text" placeholder="{{search_placeholder}}" data-value="search_query" />
           </div>
 
-          <button class="asset-import-button" data-event-click="on_import_project">{{import_project_label}}</button>
-          <button class="asset-panel-close" type="button" data-event-click="close_panel" data-tooltip="common.close">&#215;</button>
+          <button class="asset-button asset-button--text asset-button--primary asset-import-button" data-event-click="on_import_project">{{import_project_label}}</button>
+          <button class="asset-button asset-button--icon asset-panel-close" type="button" data-event-click="close_panel" data-tooltip="common.close">&#215;</button>
         </div>
 
         <div class="toolbar-row toolbar-row-secondary">
-          <button class="asset-sort-button" data-event-click="cycle_sort_mode">
+          <button class="asset-button asset-button--text asset-sort-button" data-event-click="cycle_sort_mode">
             <span>{{sort_label}}</span>
           </button>
 
-          <div class="asset-toolbar-right">
-            <div class="asset-view-toggle">
-              <button class="asset-view-button" data-class-is-active="is_gallery_view" data-event-click="set_view_mode('gallery')"><span class="asset-button-label">{{gallery_label}}</span></button>
-              <button class="asset-view-button" data-class-is-active="is_list_view" data-event-click="set_view_mode('list')"><span class="asset-button-label">{{list_label}}</span></button>
-            </div>
-          </div>
         </div>
       </div>
 
       <div id="asset-main-row">
         <div id="asset-sidebar" data-style-height="sidebar_height">
           <div class="asset-sidebar-inner">
+          <div class="asset-sidebar-global">
+            <div class="asset-filter-row" data-class-is-active="all_assets_selected" data-folder-id="__all__">
+              <span class="asset-row-label">{{all_assets_label}}</span>
+              <span class="asset-row-count">{{all_assets_count}}</span>
+            </div>
+          </div>
           <div class="asset-sidebar-section">
             <div class="asset-sidebar-title" style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" data-event-click="toggle_folders_collapsed">
               <div style="display: flex; align-items: center; gap: 4dp;">
                 <span class="section-arrow" data-class-is-expanded="!folders_collapsed">&#x25B6;</span>
                 <span>{{folders_title}}</span>
               </div>
-              <button class="asset-folder-menu" data-event-click="show_new_folder_menu"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 1V11M1 6H11" stroke="#d8d0c3" stroke-width="2" stroke-linecap="round"/></svg></button>
+              <button class="asset-button asset-button--small-icon asset-folder-menu" data-event-click="show_new_folder_menu"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 1V11M1 6H11" stroke="#d8d0c3" stroke-width="2" stroke-linecap="round"/></svg></button>
             </div>
             <div class="section-content collapsed" data-class-collapsed="!folders_expanded">
               <div data-for="folder : folders">
@@ -56,7 +56,7 @@
                   <span class="asset-row-label">{{folder.name}}</span>
                   <div class="asset-folder-row-right">
                     <span class="asset-row-count">{{folder.project_count}}</span>
-                    <button class="asset-folder-menu" data-attr-data-folder-id="folder.id" data-folder-action="menu"><img src="../icon/more-horizontal.png" /></button>
+                    <button class="asset-button asset-button--small-icon asset-folder-menu" data-if="folder.can_manage" data-attr-data-folder-id="folder.id" data-folder-action="menu"><img src="../icon/more-horizontal.png" /></button>
                   </div>
                 </div>
               </div>
@@ -72,41 +72,41 @@
         <div class="asset-gallery-header">
           <div class="asset-gallery-header-row">
             <div class="asset-gallery-header-copy">
-              <span class="asset-gallery-title" data-if="is_gallery_view">{{gallery_title}}</span>
-              <span class="asset-gallery-title" data-if="is_list_view">{{list_title}}</span>
+              <div class="asset-view-toggle asset-view-toggle-icons">
+                <button class="asset-button asset-button--icon asset-view-button asset-view-icon-button" data-class-is-active="is_gallery_view" data-event-click="set_view_mode('gallery')" data-tooltip="asset_manager.toolbar.view_gallery"><span class="asset-icon-grid"><span></span><span></span><span></span><span></span></span></button>
+                <button class="asset-button asset-button--icon asset-view-button asset-view-icon-button" data-class-is-active="is_list_view" data-event-click="set_view_mode('list')" data-tooltip="asset_manager.toolbar.view_list"><span class="asset-icon-list"><span></span><span></span><span></span></span></button>
+              </div>
               <span class="asset-gallery-subtitle" data-if="asset_results_summary_visible">{{asset_results_summary}}</span>
             </div>
 
-            <div class="asset-gallery-header-actions" data-if="is_list_view">
-              <button class="asset-view-button asset-header-action" data-event-click="refresh_catalog" data-tooltip="asset_manager.tooltip.refresh"><span class="asset-button-label">{{refresh_label}}</span></button>
-              <button class="asset-view-button asset-header-action" data-event-click="clean_missing" data-tooltip="asset_manager.tooltip.clean_missing"><span class="asset-button-label">{{clean_missing_label}}</span></button>
+            <div class="asset-gallery-header-actions">
+              <button class="asset-button asset-button--icon asset-view-button asset-refresh-clean-button" data-event-click="refresh_and_clean" data-tooltip="asset_manager.tooltip.refresh_and_clean"><img src="../icon/sequencer/rotate-cw.png" /></button>
             </div>
           </div>
         </div>
 
-          <div id="asset-gallery-scroll" class="asset-gallery-scroll">
+          <div id="asset-gallery-scroll" class="asset-gallery-scroll" tabindex="0">
             <div class="asset-scroll-shell asset-scroll-shell-gallery" data-if="is_gallery_view">
               <div id="asset-card-grid" class="asset-card-grid">
                 <div class="asset-virtual-spacer asset-card-top-spacer" data-style-height="asset_gallery_top_spacer_height"></div>
                 <div class="asset-card-grid-window">
                   <div class="asset-card-slot" data-style-width="asset_card_slot_width" data-for="asset : assets">
-                    <div class="asset-card" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-attr-data-asset-id="asset.id" data-asset-action="select">
+                    <div class="asset-card" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-class-is-draggable="asset.can_load" data-attr-data-asset-id="asset.id" data-asset-action="select">
                       <div class="asset-card-thumb asset-thumb-project" data-style-decorator="asset.thumbnail_decorator">
                       </div>
                       <div class="asset-card-body">
                         <div class="asset-card-title-row">
                           <span class="asset-card-title">{{asset.display_name}}</span>
                         </div>
-                        <div class="asset-card-subtitle">{{asset.display_subtitle}}</div>
                         <div class="asset-card-meta">
                           <span>{{asset.status_label}}</span>
                           <span>{{asset.size_label}}</span>
                         </div>
                         <div class="asset-card-actions">
-                          <button class="asset-card-button" data-if="asset.can_load" data-attr-data-asset-id="asset.id" data-asset-action="load">{{load_button_label}}</button>
+                          <button class="asset-button asset-button--text asset-card-button" data-if="asset.can_load" data-attr-data-asset-id="asset.id" data-asset-action="load">{{load_button_label}}</button>
                         </div>
                       </div>
-                      <button class="asset-card-menu" data-attr-data-asset-id="asset.id" data-asset-action="menu"><img src="../icon/more-vertical.png" /></button>
+                      <button class="asset-button asset-button--small-icon asset-card-menu" data-attr-data-asset-id="asset.id" data-asset-action="menu"><img src="../icon/more-vertical.png" /></button>
                     </div>
                   </div>
                 </div>
@@ -125,10 +125,9 @@
                 <div class="asset-virtual-spacer asset-list-top-spacer" data-style-height="asset_list_top_spacer_height"></div>
                 <div class="asset-list-window">
                   <div data-for="asset : assets">
-                    <div class="asset-list-row" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-attr-data-asset-id="asset.id" data-asset-action="select">
+                    <div class="asset-list-row" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-class-is-draggable="asset.can_load" data-attr-data-asset-id="asset.id" data-asset-action="select">
                       <span class="asset-col asset-col-name">
                         <span class="asset-list-primary">{{asset.display_name}}</span>
-                        <span class="asset-list-secondary">{{asset.display_subtitle}}</span>
                       </span>
                       <span class="asset-col asset-col-folder">{{asset.folder_name}}</span>
                       <span class="asset-col asset-col-size">{{asset.size_label}}</span>
@@ -198,7 +197,7 @@
                   <span class="parameter-label">{{prop_expected_path_label}}</span>
                   <span class="parameter-value">{{selected_asset_expected_path}}</span>
                 </div>
-                <button class="asset-info-button" data-event-click="on_locate_file">{{locate_file_button_label}}</button>
+                <button class="asset-button asset-button--text asset-info-button" data-event-click="on_locate_file">{{locate_file_button_label}}</button>
               </div>
 
             </div>

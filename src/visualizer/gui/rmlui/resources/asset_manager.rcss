@@ -42,41 +42,68 @@
     flex-shrink: 0;
 }
 
-.asset-panel-action {
-    min-width: 64dp;
-}
-
-.asset-panel-close {
+.asset-button {
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     flex-shrink: 0;
-    width: 28dp;
-    min-width: 28dp;
-    max-width: 28dp;
     height: 28dp;
     min-height: 28dp;
-    padding: 0;
-    margin-left: auto;
+    max-height: 28dp;
+    margin: 0;
+    padding: 0 10dp;
+    background-color: #302d29;
     border-width: 1dp;
     border-color: #514a42;
     border-radius: 4dp;
-    background-color: #302d29;
     color: #d8d0c3;
-    font-size: 18dp;
-    line-height: 26dp;
+    font-size: 12dp;
+    line-height: 16dp;
+    font-weight: 400;
     text-align: center;
     white-space: nowrap;
     overflow: hidden;
     cursor: pointer;
 }
 
-.asset-panel-close:hover {
+.asset-button:hover {
     background-color: #454038;
     border-color: #7fb9a5;
     color: #f0ebe2;
 }
 
-.asset-panel-close:active {
+.asset-button:active {
     background-color: #36564b;
     border-color: #7fb9a5;
+}
+
+.asset-button--text {
+    width: auto;
+    min-width: 64dp;
+    max-width: none;
+}
+
+.asset-button--icon {
+    width: 28dp;
+    min-width: 28dp;
+    max-width: 28dp;
+    padding: 0;
+}
+
+.asset-button--small-icon {
+    width: 24dp;
+    min-width: 24dp;
+    max-width: 24dp;
+    height: 24dp;
+    min-height: 24dp;
+    max-height: 24dp;
+    padding: 0;
+}
+
+.asset-panel-close {
+    margin-left: auto;
+    font-size: 18dp;
 }
 
 /* ── Shell wrapper ─────────────────────────────────────── */
@@ -193,43 +220,18 @@
     box-shadow: none;
 }
 
-.asset-sort-button,
-.asset-view-button,
-.asset-card-button,
-.asset-info-button {
-    background-color: #302d29;
-    border-width: 1dp;
-    border-color: #514a42;
-    color: #d8d0c3;
-    font-size: 12dp;
-    padding: 4dp 10dp;
-    border-radius: 4dp;
-    cursor: pointer;
-}
-
-.asset-sort-button:hover,
-.asset-view-button:hover,
-.asset-card-button:hover,
-.asset-info-button:hover {
-    background-color: #454038;
-    border-color: #7fb9a5;
-}
-
 .asset-view-toggle {
     display: flex;
     flex-direction: row;
     gap: 2dp;
 }
 
+.asset-view-toggle-icons {
+    flex-shrink: 0;
+}
+
 .asset-view-button {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
     color: #a9a093;
-    font-size: 12dp;
-    flex: 0 0 auto;
-    min-width: 52dp;
-    text-align: center;
 }
 
 .asset-view-button.is-active {
@@ -238,36 +240,52 @@
     border-color: #7fb9a5;
 }
 
-.asset-button-label {
-    display: block;
-    line-height: 16dp;
-    white-space: nowrap;
+.asset-icon-grid {
+    display: inline-flex;
+    flex-wrap: wrap;
+    width: 11dp;
+    height: 11dp;
+    gap: 1dp;
 }
 
-.asset-header-action {
+.asset-icon-grid > span {
+    display: block;
+    width: 5dp;
+    height: 5dp;
+    background-color: #d8d0c3;
+}
+
+.asset-icon-list {
     display: inline-flex;
-    flex: 0 0 auto;
-    align-items: center;
+    flex-direction: column;
     justify-content: center;
-    min-width: 72dp;
-    width: auto;
-    padding: 4dp 12dp;
-    white-space: nowrap;
-    text-align: center;
-    color: #f0ebe2;
-    font-weight: 600;
-    line-height: 16dp;
+    width: 11dp;
+    height: 11dp;
+    gap: 2dp;
+}
+
+.asset-icon-list > span {
+    display: block;
+    width: 11dp;
+    height: 1.5dp;
+    background-color: #d8d0c3;
+}
+
+.asset-refresh-clean-button img {
+    width: 18dp;
+    height: 18dp;
+    image-color: rgba(216, 208, 195, 235);
+}
+
+.asset-refresh-clean-button:hover img {
+    image-color: rgba(255, 255, 255, 255);
 }
 
 .asset-import-button {
     background-color: #7fb9a5;
-    border-width: 1dp;
     border-color: #6ba08d;
     color: #1a1a1a;
-    font-size: 12dp;
-    padding: 4dp 10dp;
-    border-radius: 4dp;
-    cursor: pointer;
+    font-weight: 600;
 }
 
 .asset-import-button:hover {
@@ -329,6 +347,13 @@
 
 .asset-sidebar-section {
     margin-bottom: 14dp;
+}
+
+.asset-sidebar-global {
+    margin-bottom: 10dp;
+    padding-bottom: 8dp;
+    border-bottom-width: 1dp;
+    border-bottom-color: #3c3630;
 }
 
 .asset-sidebar-title,
@@ -407,15 +432,8 @@
 }
 
 .asset-folder-menu {
-    width: 20dp;
-    height: 20dp;
-    padding: 0;
     background-color: transparent;
-    border-radius: 3dp;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    border-color: transparent;
 }
 
 .asset-folder-menu img {
@@ -458,7 +476,9 @@
 
 .asset-gallery-header-copy {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
+    align-items: center;
+    gap: 8dp;
     min-width: 0;
     flex: 1;
 }
@@ -484,7 +504,6 @@
     font-size: 12dp;
     color: #a9a093;
     display: block;
-    margin-top: 2dp;
 }
 
 .asset-gallery-scroll {
@@ -551,6 +570,17 @@
     position: relative;
 }
 
+.asset-card.is-draggable,
+.asset-list-row.is-draggable {
+    drag: drag;
+    cursor: grab;
+}
+
+.asset-card.is-draggable:active,
+.asset-list-row.is-draggable:active {
+    cursor: grabbing;
+}
+
 .asset-card:hover,
 .asset-list-row:hover {
     border-color: #7fb9a5;
@@ -604,13 +634,6 @@
     padding: 8dp;
 }
 
-.asset-card-subtitle,
-.asset-list-secondary {
-    font-size: 12dp;
-    color: #a9a093;
-}
-
-
 .asset-card-title-row {
     display: flex;
     flex-direction: row;
@@ -629,16 +652,8 @@
     text-overflow: ellipsis;
 }
 
-.asset-card-title,
-.asset-card-subtitle {
+.asset-card-title {
     min-width: 0;
-}
-
-.asset-card-subtitle {
-    margin-bottom: 4dp;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
 }
 
 
@@ -660,23 +675,14 @@
 
 .asset-card-button {
     flex: 1;
-    font-size: 12dp;
-    padding: 3dp 6dp;
 }
 
 .asset-card-menu {
     position: absolute;
     top: 4dp;
     right: 4dp;
-    width: 24dp;
-    height: 24dp;
-    padding: 0;
     background-color: rgba(48, 45, 41, 0.85);
-    border-radius: 4dp;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    border-color: transparent;
 }
 
 .asset-card-menu img {
@@ -794,8 +800,7 @@
     color: #f0ebe2;
 }
 
-.asset-list-primary,
-.asset-list-secondary {
+.asset-list-primary {
     display: block;
 }
 

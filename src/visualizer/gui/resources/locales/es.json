@@ -194,6 +194,7 @@
     "toolbar.view_gallery": "Galería",
     "toolbar.view_list": "Lista",
     "sidebar.folders": "CARPETAS",
+    "sidebar.all_assets": "Todos los activos",
     "info_panel.info": "Info",
     "info_panel.asset_details": "Detalles del Activo",
     "info_panel.folder_details": "Detalles de la Carpeta",
@@ -241,6 +242,8 @@
     "panel_title": "Gestor de Activos",
     "tooltip.refresh": "Verificar los archivos de proyecto y actualizar el estado del catálogo",
     "tooltip.clean_missing": "Eliminar proyectos cuyos archivos ya no existen en el disco",
+    "tooltip.refresh_and_clean": "Actualizar el catálogo y eliminar proyectos con archivos ausentes",
+    "drag.open_project": "Suelta para abrir el proyecto",
     "status.showing_projects.one": "Mostrando {count} proyecto",
     "status.showing_projects.few": "Mostrando {count} proyectos",
     "status.showing_projects.other": "Mostrando {count} proyectos"

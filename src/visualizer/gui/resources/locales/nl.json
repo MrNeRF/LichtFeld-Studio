@@ -194,6 +194,7 @@
     "toolbar.view_gallery": "Galerij",
     "toolbar.view_list": "Lijst",
     "sidebar.folders": "MAPPEN",
+    "sidebar.all_assets": "Alle assets",
     "info_panel.info": "Informatie",
     "info_panel.asset_details": "Assetdetails",
     "info_panel.folder_details": "Map Details",
@@ -241,6 +242,8 @@
     "panel_title": "Assetbeheer",
     "tooltip.refresh": "Projectbestanden verifiëren en catalogusstatus vernieuwen",
     "tooltip.clean_missing": "Projecten verwijderen waarvan de bestanden niet meer op de schijf bestaan",
+    "tooltip.refresh_and_clean": "Catalogus vernieuwen en projecten met ontbrekende bestanden verwijderen",
+    "drag.open_project": "Neerzetten om het project te openen",
     "status.showing_projects.one": "{count} project weergegeven",
     "status.showing_projects.few": "{count} projecten weergegeven",
     "status.showing_projects.other": "{count} projecten weergegeven"

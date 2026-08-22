@@ -194,6 +194,7 @@
     "toolbar.view_gallery": "ギャラリー",
     "toolbar.view_list": "リスト",
     "sidebar.folders": "フォルダ",
+    "sidebar.all_assets": "すべてのアセット",
     "info_panel.info": "情報",
     "info_panel.asset_details": "アセット詳細",
     "info_panel.folder_details": "フォルダ詳細",
@@ -241,6 +242,8 @@
     "panel_title": "アセットマネージャー",
     "tooltip.refresh": "プロジェクトファイルを検証し、カタログの状態を更新",
     "tooltip.clean_missing": "ファイルがディスク上に存在しないプロジェクトを削除",
+    "tooltip.refresh_and_clean": "カタログを更新し、ファイルが見つからないプロジェクトを削除",
+    "drag.open_project": "ドロップしてプロジェクトを開く",
     "status.showing_projects.one": "{count} 件のプロジェクトを表示中",
     "status.showing_projects.few": "{count} 件のプロジェクトを表示中",
     "status.showing_projects.other": "{count} 件のプロジェクトを表示中"

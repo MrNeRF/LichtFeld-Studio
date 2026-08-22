@@ -194,6 +194,7 @@
     "toolbar.view_gallery": "Galerie",
     "toolbar.view_list": "Liste",
     "sidebar.folders": "ORDNER",
+    "sidebar.all_assets": "Alle Assets",
     "info_panel.info": "Info",
     "info_panel.asset_details": "Asset-Details",
     "info_panel.folder_details": "Ordner-Details",
@@ -241,6 +242,8 @@
     "panel_title": "Asset-Manager",
     "tooltip.refresh": "Projektdateien prüfen und Katalogstatus aktualisieren",
     "tooltip.clean_missing": "Projekte entfernen, deren Dateien nicht mehr auf der Festplatte existieren",
+    "tooltip.refresh_and_clean": "Katalog aktualisieren und Projekte mit fehlenden Dateien entfernen",
+    "drag.open_project": "Ablegen, um das Projekt zu öffnen",
     "status.showing_projects.one": "{count} Projekt angezeigt",
     "status.showing_projects.few": "{count} Projekte angezeigt",
     "status.showing_projects.other": "{count} Projekte angezeigt"

@@ -195,6 +195,7 @@
     "toolbar.view_gallery": "Galerie",
     "toolbar.view_list": "Liste",
     "sidebar.folders": "DOSSIERS",
+    "sidebar.all_assets": "Toutes les ressources",
     "info_panel.info": "Informations",
     "info_panel.asset_details": "Détails de la ressource",
     "info_panel.folder_details": "Détails du dossier",
@@ -242,6 +243,8 @@
     "panel_title": "Gestionnaire de Ressources",
     "tooltip.refresh": "Vérifier les fichiers de projet et actualiser l’état du catalogue",
     "tooltip.clean_missing": "Supprimer les projets dont les fichiers n’existent plus sur le disque",
+    "tooltip.refresh_and_clean": "Actualiser le catalogue et supprimer les projets dont les fichiers sont absents",
+    "drag.open_project": "Déposer pour ouvrir le projet",
     "status.showing_projects.one": "Affichage de {count} projet",
     "status.showing_projects.few": "Affichage de {count} projets",
     "status.showing_projects.other": "Affichage de {count} projets"

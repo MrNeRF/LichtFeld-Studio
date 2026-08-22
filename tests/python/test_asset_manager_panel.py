@@ -27,6 +27,9 @@ def _install_lf_stub(monkeypatch):
         opened=[],
         revealed=[],
         enabled=[],
+        drag_begins=[],
+        drag_ends=[],
+        drag_cancels=[],
         dialog_path="",
         project_dirty=False,
     )
@@ -35,6 +38,11 @@ def _install_lf_stub(monkeypatch):
         context_menus.append(
             {"items": items, "position": (x, y), "on_action": on_action}
         )
+
+    def begin_drag_payload(payload_type, data, label=""):
+        token = len(state.drag_begins) + 1
+        state.drag_begins.append((token, payload_type, data, label))
+        return token
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
@@ -62,6 +70,9 @@ def _install_lf_stub(monkeypatch):
             (panel_id, enabled)
         ),
         schedule_on_ui_thread=lambda callback: callback(),
+        begin_drag_payload=begin_drag_payload,
+        end_drag_payload=lambda token: state.drag_ends.append(token),
+        cancel_drag_payload=lambda token: state.drag_cancels.append(token),
     )
     lf_stub.log = SimpleNamespace(info=lambda _msg: None, warn=lambda _msg: None, error=lambda _msg: None)
     lf_stub.project_is_dirty = lambda: state.project_dirty
@@ -122,6 +133,7 @@ class _Element:
         self.scroll_height = 900.0
         self.client_height = 300.0
         self.client_width = 800.0
+        self.focused = False
         if parent is not None:
             parent.children.append(self)
 
@@ -161,6 +173,9 @@ class _Element:
 
     def is_class_set(self, name):
         return name in self.classes
+
+    def focus(self):
+        self.focused = True
 
 
 class _Event:
@@ -260,6 +275,46 @@ def test_rml_and_panel_have_no_scene_or_disk_thumbnail_model():
     assert 'data-style-decorator="asset.thumbnail_decorator"' in rml
 
 
+def test_results_header_uses_icon_views_and_one_combined_refresh_action():
+    root = Path(__file__).resolve().parents[2]
+    rml = (root / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
+    rcss = (root / "src/visualizer/gui/rmlui/resources/asset_manager.rcss").read_text()
+
+    assert "{{gallery_label}}" not in rml
+    assert "{{list_label}}" not in rml
+    assert "asset-icon-grid" in rml
+    assert "asset-icon-list" in rml
+    assert rml.count('data-event-click="refresh_and_clean"') == 1
+    assert 'data-event-click="refresh_catalog"' not in rml
+    assert 'data-event-click="clean_missing"' not in rml
+    assert "asset-list-secondary" not in rml
+    assert "display_subtitle" not in rml
+    assert ".asset-refresh-clean-button img" in rcss
+    assert "width: 18dp;" in rcss
+
+
+def test_all_asset_manager_buttons_use_strict_size_variants():
+    root = Path(__file__).resolve().parents[2]
+    rml = (root / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
+    rcss = (root / "src/visualizer/gui/rmlui/resources/asset_manager.rcss").read_text()
+
+    button_tags = [part.split(">", 1)[0] for part in rml.split("<button")[1:]]
+    assert button_tags
+    assert all("asset-button" in tag for tag in button_tags)
+    assert all(
+        "asset-button--text" in tag
+        or "asset-button--icon" in tag
+        or "asset-button--small-icon" in tag
+        for tag in button_tags
+    )
+    assert ".asset-button {" in rcss
+    assert "max-height: 28dp;" in rcss
+    assert ".asset-button--icon {" in rcss
+    assert "max-width: 28dp;" in rcss
+    assert ".asset-button--small-icon {" in rcss
+    assert "max-height: 24dp;" in rcss
+
+
 def test_embedded_preview_url_encodes_path_and_keys_cache_by_commit(panel_module):
     panel = panel_module.AssetManagerPanel()
     asset = _project(path="/tmp/a folder/project & one.licht")
@@ -283,7 +338,7 @@ def test_asset_rows_use_custom_name_and_runtime_metadata(panel_module):
     row = panel.get_filtered_assets()[0]
 
     assert row["display_name"] == "Bicycle"
-    assert row["display_subtitle"] == "bicycle project.licht"
+    assert "display_subtitle" not in row
     assert row["status_label"] == "asset_manager.status.available"
     assert row["saved_label"]
     assert row["thumbnail_decorator"].startswith("image(preview://kind=licht")
@@ -478,6 +533,49 @@ def test_folder_counts_match_search_results(panel_module):
     assert panel.get_folder_list()[0]["project_count"] == 1
 
 
+def test_search_matches_path_and_type(panel_module):
+    asset = _project(type="capture")
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={asset["id"]: asset})
+
+    for query in ("bicycle project.licht", "capture", "licht project"):
+        panel._search_query = query
+        assert [row["id"] for row in panel.get_filtered_assets()] == [asset["id"]]
+
+
+def test_all_assets_navigation_and_folder_scopes_filter_catalog(panel_module):
+    first = _project(name="Bicycle")
+    second = _project(
+        "44444444-4444-4444-8444-444444444444",
+        name="Garden",
+        path="/tmp/garden.licht",
+        folder_id="archive",
+    )
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(
+        assets={first["id"]: first, second["id"]: second},
+        folders={
+            "default": {"id": "default", "name": "Default", "watch_directories": []},
+            "archive": {"id": "archive", "name": "Archive", "watch_directories": []},
+        },
+    )
+
+    assert panel._selected_folder_id == panel_module.SCOPE_ALL
+    assert [row["id"] for row in panel.get_filtered_assets()] == [first["id"], second["id"]]
+    assert panel._select_folder_id("archive") is True
+    assert [row["id"] for row in panel.get_filtered_assets()] == [second["id"]]
+
+    folders = panel.get_folder_list()
+    assert {row["id"] for row in folders} == {"default", "archive"}
+    assert all(row["can_manage"] for row in folders)
+    assert panel.get_all_assets_count() == 2
+
+
+def test_folder_tree_is_expanded_by_default(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    assert panel._folders_collapsed is False
+
+
 def test_precise_scroll_moves_gallery_container(panel_module):
     panel = panel_module.AssetManagerPanel()
     scroll = _Element()
@@ -498,9 +596,172 @@ def test_mount_binds_stable_delegated_handlers(panel_module):
 
     panel._bind_dom_event_listeners(doc)
 
-    assert {"mousedown", "click", "dblclick"}.issubset(shell.listeners)
-    assert {"scroll", "mousescroll"}.issubset(scroll.listeners)
+    assert {"mousedown", "click", "dblclick", "dragstart", "dragend"}.issubset(shell.listeners)
+    assert {"scroll", "mousescroll", "keydown"}.issubset(scroll.listeners)
     assert {"mousemove", "mouseup"}.issubset(doc.listeners)
+
+
+def test_keyboard_navigation_enter_delete_and_typeahead(panel_module, monkeypatch):
+    first = _project(name="Alpha", path="/tmp/alpha.licht")
+    second = _project(
+        "44444444-4444-4444-8444-444444444444",
+        name="Beta",
+        path="/tmp/beta.licht",
+    )
+    third = _project(
+        "55555555-5555-4555-8555-555555555555",
+        name="Gamma",
+        path="/tmp/gamma.licht",
+    )
+    assets = {first["id"]: first, second["id"]: second, third["id"]: third}
+    deleted = []
+
+    def delete_assets(asset_ids):
+        deleted.append(list(asset_ids))
+        for asset_id in asset_ids:
+            assets.pop(asset_id, None)
+        return len(asset_ids)
+
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    panel._asset_index = _index(assets=assets, delete_assets=delete_assets)
+    scroll = _Element()
+    search = _Element()
+    panel._doc = _Document({"asset-gallery-scroll": scroll, "asset-search-input": search})
+
+    panel._on_asset_results_keydown(
+        _Event(scroll, params={"key_identifier": str(panel_module.KI_DOWN)})
+    )
+    assert panel.get_selected_asset_id() == first["id"]
+    panel._on_asset_results_keydown(
+        _Event(scroll, params={"key_identifier": str(panel_module.KI_DOWN)})
+    )
+    assert panel.get_selected_asset_id() == second["id"]
+
+    opened = []
+    monkeypatch.setattr(panel, "_load_asset", lambda asset_id: opened.append(asset_id))
+    panel._on_asset_results_keydown(
+        _Event(scroll, params={"key_identifier": str(panel_module.KI_RETURN)})
+    )
+    assert opened == [second["id"]]
+
+    panel._on_asset_results_keydown(
+        _Event(scroll, params={"key_identifier": str(panel_module.KI_DELETE)})
+    )
+    assert deleted == [[second["id"]]]
+    assert panel.get_selected_asset_id() == third["id"]
+
+    panel._on_asset_results_keydown(_Event(scroll, params={"key_identifier": "12"}))
+    assert search.focused is True
+
+
+def test_gallery_keyboard_navigation_uses_visual_columns(panel_module):
+    assets = {}
+    for index, name in enumerate(("Alpha", "Beta", "Gamma", "Omega"), start=1):
+        asset = _project(
+            f"{index:08d}-1111-4111-8111-111111111111",
+            name=name,
+            path=f"/tmp/{name.casefold()}.licht",
+        )
+        assets[asset["id"]] = asset
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets=assets)
+    panel._view_mode = "gallery"
+    panel._asset_window_client_width = 500.0
+
+    assert panel._navigate_selection(panel_module.KI_RIGHT) is True
+    assert panel.get_selected_asset_id() == list(assets)[0]
+    panel._navigate_selection(panel_module.KI_DOWN)
+    assert panel.get_selected_asset_id() == list(assets)[2]
+    panel._navigate_selection(panel_module.KI_LEFT)
+    assert panel.get_selected_asset_id() == list(assets)[1]
+
+
+def test_refresh_and_clean_verifies_deletes_then_scans(panel_module, monkeypatch):
+    missing = _project(exists=False, available=False, status="MISSING")
+    present = _project(
+        "44444444-4444-4444-8444-444444444444",
+        name="Garden",
+        path="/tmp/garden.licht",
+    )
+    assets = {missing["id"]: missing, present["id"]: present}
+    calls = []
+
+    def verify_projects():
+        calls.append("verify")
+        return 1, 2
+
+    def delete_assets(asset_ids):
+        calls.append(("delete", list(asset_ids)))
+        for asset_id in asset_ids:
+            assets.pop(asset_id, None)
+        return len(asset_ids)
+
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    panel._asset_index = _index(
+        assets=assets,
+        verify_projects=verify_projects,
+        delete_assets=delete_assets,
+    )
+    monkeypatch.setattr(panel, "_scan_watched_projects", lambda: calls.append("scan"))
+
+    panel.refresh_and_clean()
+
+    assert calls == ["verify", ("delete", [missing["id"]]), "scan"]
+    assert set(assets) == {present["id"]}
+
+
+def test_drag_available_project_publishes_typed_payload(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project()
+    panel._handle = _Handle()
+    panel._asset_index = _index(
+        assets={asset["id"]: asset},
+        verify_asset=lambda _asset_id: SimpleNamespace(to_dict=lambda: asset),
+    )
+    shell = _Element()
+    row = _Element(
+        {
+            "class": "asset-list-row is-draggable",
+            "data-asset-id": asset["id"],
+            "data-asset-action": "select",
+        },
+        shell,
+    )
+
+    start = _Event(shell, row)
+    panel._on_asset_drag_start(start)
+
+    state = panel_module.lf._test_state
+    assert state.drag_begins == [
+        (1, panel_module.PROJECT_DRAG_PAYLOAD_TYPE, asset["path"], "Bicycle")
+    ]
+    assert start.stopped is True
+    assert panel.get_selected_asset_id() == asset["id"]
+
+    end = _Event(shell, row)
+    panel._on_asset_drag_end(end)
+    assert state.drag_ends == [1]
+    assert end.stopped is True
+
+
+def test_drag_missing_project_is_rejected(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project()
+    panel._asset_index = _index(
+        assets={asset["id"]: asset},
+        verify_asset=lambda _asset_id: None,
+    )
+    monkeypatch.setattr(panel, "refresh_catalog", lambda **_kwargs: None)
+    shell = _Element()
+    row = _Element(
+        {"data-asset-id": asset["id"], "data-asset-action": "select"}, shell
+    )
+
+    panel._on_asset_drag_start(_Event(shell, row))
+
+    assert panel_module.lf._test_state.drag_begins == []
 
 
 def test_default_folder_cannot_be_renamed_or_deleted_from_menu(panel_module):

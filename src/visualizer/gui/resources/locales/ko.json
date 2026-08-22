@@ -194,6 +194,7 @@
     "toolbar.view_gallery": "갤러리",
     "toolbar.view_list": "목록",
     "sidebar.folders": "폴더",
+    "sidebar.all_assets": "모든 에셋",
     "info_panel.info": "정보",
     "info_panel.asset_details": "에셋 세부정보",
     "info_panel.folder_details": "폴더 세부정보",
@@ -241,6 +242,8 @@
     "panel_title": "에셋 관리자",
     "tooltip.refresh": "프로젝트 파일을 확인하고 카탈로그 상태 새로 고침",
     "tooltip.clean_missing": "파일이 디스크에 더 이상 존재하지 않는 프로젝트 제거",
+    "tooltip.refresh_and_clean": "카탈로그를 새로 고치고 파일이 없는 프로젝트 제거",
+    "drag.open_project": "놓아서 프로젝트 열기",
     "status.showing_projects.one": "{count}개 프로젝트 표시 중",
     "status.showing_projects.few": "{count}개 프로젝트 표시 중",
     "status.showing_projects.other": "{count}개 프로젝트 표시 중"

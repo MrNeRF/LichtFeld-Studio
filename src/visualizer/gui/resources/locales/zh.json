@@ -194,6 +194,7 @@
     "toolbar.view_gallery": "画廊",
     "toolbar.view_list": "列表",
     "sidebar.folders": "文件夹",
+    "sidebar.all_assets": "所有资源",
     "info_panel.info": "信息",
     "info_panel.asset_details": "资源详情",
     "info_panel.folder_details": "文件夹详情",
@@ -241,6 +242,8 @@
     "panel_title": "资源管理器",
     "tooltip.refresh": "验证项目文件并刷新目录状态",
     "tooltip.clean_missing": "删除文件已不存在于磁盘上的项目",
+    "tooltip.refresh_and_clean": "刷新目录并删除文件缺失的项目",
+    "drag.open_project": "拖放以打开项目",
     "status.showing_projects.one": "正在显示 {count} 个项目",
     "status.showing_projects.few": "正在显示 {count} 个项目",
     "status.showing_projects.other": "正在显示 {count} 个项目"
