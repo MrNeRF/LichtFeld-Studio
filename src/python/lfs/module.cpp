@@ -62,6 +62,7 @@
 #include "core/session_breadcrumb.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/rmlui/elements/loss_graph_element.hpp"
+#include "gui/utils/file_association.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/formats/colmap.hpp"
@@ -286,6 +287,44 @@ namespace {
             return;
         }
         std::forward<EmitFn>(emit_fn)();
+    }
+
+    bool consume_project_save_started_and_wait(
+        lfs::vis::Visualizer* viewer,
+        bool wait,
+        const char* wait_task_name) {
+        const bool started =
+            viewer->consumeProjectSaveStarted();
+        if (!started || !wait) {
+            return started;
+        }
+        const lfs::core::TaskContext context{
+            .name = wait_task_name,
+            .domain = lfs::ErrorDomain::Python,
+            .operation_id =
+                lfs::OperationId::generate(),
+            .site = LFS_SOURCE_SITE_CURRENT(),
+        };
+        if (auto posted =
+                lfs::vis::post_guarded_and_wait<
+                    void>(
+                    *viewer, context,
+                    [viewer]()
+                        -> lfs::Result<void> {
+                        viewer
+                            ->projectWaitWrite();
+                        return {};
+                    },
+                    python_viewer_shutdown_error());
+            !posted) {
+            throw std::runtime_error(
+                std::format(
+                    "{} failed: {}",
+                    wait_task_name,
+                    lfs::format_for_developer(
+                        posted.error())));
+        }
+        return started;
     }
 
     std::expected<void, std::string> clear_scene_from_python() {
@@ -913,7 +952,9 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "reset_training", []() {
             nb::gil_scoped_release release;
-            lfs::core::events::cmd::ResetTraining{}.emit();
+            emit_project_cmd_marshaled(
+                "python.reset_training",
+                [] { lfs::core::events::cmd::ResetTraining{}.emit(); });
         },
         "Reset training state to initial");
     m.def(
@@ -958,34 +999,11 @@ NB_MODULE(lichtfeld, m) {
                 return false;
             }
             const bool started =
-                viewer->consumeProjectSaveAsStarted();
+                consume_project_save_started_and_wait(
+                    viewer, wait,
+                    "python.project_save.wait");
             if (!started || !wait) {
                 return started;
-            }
-            const lfs::core::TaskContext context{
-                .name = "python.project_save.wait",
-                .domain = lfs::ErrorDomain::Python,
-                .operation_id =
-                    lfs::OperationId::generate(),
-                .site = LFS_SOURCE_SITE_CURRENT(),
-            };
-            if (auto posted =
-                    lfs::vis::post_guarded_and_wait<
-                        void>(
-                        *viewer, context,
-                        [viewer]()
-                            -> lfs::Result<void> {
-                            viewer
-                                ->projectWaitWrite();
-                            return {};
-                        },
-                        python_viewer_shutdown_error());
-                !posted) {
-                throw std::runtime_error(
-                    std::format(
-                        "python.project_save.wait failed: {}",
-                        lfs::format_for_developer(
-                            posted.error())));
             }
             auto poll = viewer->projectPollWrite();
             if (!poll) {
@@ -1014,38 +1032,9 @@ NB_MODULE(lichtfeld, m) {
             if (!viewer) {
                 return false;
             }
-            const bool started =
-                viewer->consumeProjectSaveAsStarted();
-            if (!started || !wait) {
-                return started;
-            }
-            const lfs::core::TaskContext context{
-                .name =
-                    "python.project_save_as.wait",
-                .domain = lfs::ErrorDomain::Python,
-                .operation_id =
-                    lfs::OperationId::generate(),
-                .site = LFS_SOURCE_SITE_CURRENT(),
-            };
-            if (auto posted =
-                    lfs::vis::post_guarded_and_wait<
-                        void>(
-                        *viewer, context,
-                        [viewer]()
-                            -> lfs::Result<void> {
-                            viewer
-                                ->projectWaitWrite();
-                            return {};
-                        },
-                        python_viewer_shutdown_error());
-                !posted) {
-                throw std::runtime_error(
-                    std::format(
-                        "python.project_save_as.wait failed: {}",
-                        lfs::format_for_developer(
-                            posted.error())));
-            }
-            return started;
+            return consume_project_save_started_and_wait(
+                viewer, wait,
+                "python.project_save_as.wait");
         },
         nb::arg("path") = "",
         nb::arg("wait") = false,
@@ -1356,9 +1345,11 @@ NB_MODULE(lichtfeld, m) {
            std::optional<int> max_width,
            bool apply_auto_crop,
            std::optional<int> min_track_length,
-           bool stop_training) {
+           bool stop_training,
+           bool discard_changes,
+           bool replace) {
             nb::gil_scoped_release release;
-            lfs::core::events::cmd::LoadFile{
+            lfs::core::events::cmd::LoadFile command{
                 .path = python_utf8_path(path),
                 .is_dataset = is_dataset,
                 .output_path = python_utf8_path(output_path),
@@ -1367,8 +1358,12 @@ NB_MODULE(lichtfeld, m) {
                 .max_width = max_width,
                 .min_track_length = min_track_length,
                 .apply_auto_crop = apply_auto_crop,
-                .stop_training = stop_training}
-                .emit();
+                .stop_training = stop_training,
+                .discard_changes = discard_changes,
+                .replace = replace};
+            emit_project_cmd_marshaled(
+                "python.load_file",
+                [command = std::move(command)] { command.emit(); });
         },
         nb::arg("path"), nb::arg("is_dataset") = false,
         nb::arg("output_path") = "", nb::arg("init_path") = "",
@@ -1377,6 +1372,8 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("apply_auto_crop") = false,
         nb::arg("min_track_length") = nb::none(),
         nb::arg("stop_training") = false,
+        nb::arg("discard_changes") = false,
+        nb::arg("replace") = false,
         "Load a file (PLY, checkpoint) or dataset into the scene.");
 
     m.def(
@@ -1390,12 +1387,14 @@ NB_MODULE(lichtfeld, m) {
         "load_checkpoint_for_training",
         [](const std::string& checkpoint_path, const std::string& dataset_path, const std::string& output_path) {
             nb::gil_scoped_release release;
-            lfs::core::events::cmd::LoadCheckpointForTraining{
+            lfs::core::events::cmd::LoadCheckpointForTraining command{
                 .checkpoint_path = python_utf8_path(checkpoint_path),
                 .dataset_path = python_utf8_path(dataset_path),
                 .output_path = python_utf8_path(output_path),
-            }
-                .emit();
+            };
+            emit_project_cmd_marshaled(
+                "python.load_checkpoint_for_training",
+                [command = std::move(command)] { command.emit(); });
         },
         nb::arg("checkpoint_path"), nb::arg("dataset_path"), nb::arg("output_path"),
         "Load a checkpoint for training with specified dataset and output paths.");
@@ -2185,6 +2184,27 @@ NB_MODULE(lichtfeld, m) {
             lfs::vis::saveCameraViewSnapPreference(enabled);
         },
         nb::arg("enabled"), "Enable or disable camera axis-view snapping");
+    m.def(
+        "file_associations_status", []() {
+            nb::list rows;
+            for (const auto& entry : lfs::vis::gui::fileAssociationsStatus()) {
+                nb::dict row;
+                row["extension"] = entry.extension;
+                row["registered"] = entry.registered;
+                rows.append(row);
+            }
+            return rows;
+        },
+        "Return whether LichtFeld Studio is registered as a handler for each known file extension (Windows only)");
+    m.def(
+        "file_association_set",
+        [](const std::string& extension, bool enabled) -> bool {
+            if (enabled)
+                return lfs::vis::gui::registerFileAssociation(extension);
+            return lfs::vis::gui::unregisterFileAssociation(extension);
+        },
+        nb::arg("extension"), nb::arg("enabled"),
+        "Register or unregister LichtFeld Studio as a handler for one file extension (Windows only)");
     m.def(
         "toggle_fullscreen", []() { lfs::core::events::ui::ToggleFullscreen{}.emit(); },
         "Toggle fullscreen mode");

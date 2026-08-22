@@ -84,10 +84,16 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float fy,
         const float cx,
         const float cy,
+        const float clip_left,
+        const float clip_right,
+        const float clip_top,
+        const float clip_bottom,
         const float near_, // near and far are macros in windowns
         const float far_,
         const uint depth_bits,
         const bool mip_filter) {
+        (void)w;
+        (void)h;
         auto primitive_idx = cg::this_grid().thread_rank();
         bool active = true;
         if (primitive_idx >= n_primitives) {
@@ -136,9 +142,10 @@ namespace fast_lfs::rasterization::kernels::forward {
         if (__ballot_sync(0xffffffffu, active) == 0)
             return;
         const float q_norm_sq_safe = fmaxf(q_norm_sq, 1e-8f);
-        const float qxx = 2.0f * qxx_raw / q_norm_sq_safe, qyy = 2.0f * qyy_raw / q_norm_sq_safe, qzz = 2.0f * qzz_raw / q_norm_sq_safe;
-        const float qxy = 2.0f * qx * qy / q_norm_sq_safe, qxz = 2.0f * qx * qz / q_norm_sq_safe, qyz = 2.0f * qy * qz / q_norm_sq_safe;
-        const float qrx = 2.0f * qr * qx / q_norm_sq_safe, qry = 2.0f * qr * qy / q_norm_sq_safe, qrz = 2.0f * qr * qz / q_norm_sq_safe;
+        const float inv_q_norm_sq = 2.0f / q_norm_sq_safe;
+        const float qxx = qxx_raw * inv_q_norm_sq, qyy = qyy_raw * inv_q_norm_sq, qzz = qzz_raw * inv_q_norm_sq;
+        const float qxy = qx * qy * inv_q_norm_sq, qxz = qx * qz * inv_q_norm_sq, qyz = qy * qz * inv_q_norm_sq;
+        const float qrx = qr * qx * inv_q_norm_sq, qry = qr * qy * inv_q_norm_sq, qrz = qr * qz * inv_q_norm_sq;
         const mat3x3 rotation = {
             1.0f - (qyy + qzz), qxy - qrz, qry + qxz,
             qrz + qxy, 1.0f - (qxx + qzz), qyz - qrx,
@@ -157,21 +164,18 @@ namespace fast_lfs::rasterization::kernels::forward {
         };
 
         // compute 2d mean in normalized image coordinates
+        const float inv_depth = 1.0f / depth;
         const float4 w2c_r1 = w2c[0];
-        const float x = (w2c_r1.x * mean3d.x + w2c_r1.y * mean3d.y + w2c_r1.z * mean3d.z + w2c_r1.w) / depth;
+        const float x = (w2c_r1.x * mean3d.x + w2c_r1.y * mean3d.y + w2c_r1.z * mean3d.z + w2c_r1.w) * inv_depth;
         const float4 w2c_r2 = w2c[1];
-        const float y = (w2c_r2.x * mean3d.x + w2c_r2.y * mean3d.y + w2c_r2.z * mean3d.z + w2c_r2.w) / depth;
+        const float y = (w2c_r2.x * mean3d.x + w2c_r2.y * mean3d.y + w2c_r2.z * mean3d.z + w2c_r2.w) * inv_depth;
 
-        // ewa splatting
-        const float clip_left = (-0.15f * w - cx) / fx;
-        const float clip_right = (1.15f * w - cx) / fx;
-        const float clip_top = (-0.15f * h - cy) / fy;
-        const float clip_bottom = (1.15f * h - cy) / fy;
+        // ewa splatting (clip box is grid-uniform; computed once on the host)
         const float tx = clamp(x, clip_left, clip_right);
         const float ty = clamp(y, clip_top, clip_bottom);
-        const float j11 = fx / depth;
+        const float j11 = fx * inv_depth;
         const float j13 = -j11 * tx;
-        const float j22 = fy / depth;
+        const float j22 = fy * inv_depth;
         const float j23 = -j22 * ty;
         const float3 jw_r1 = make_float3(
             j11 * w2c_r1.x + j13 * w2c_r3.x,
@@ -212,12 +216,8 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float power_threshold_factor = sqrtf(2.0f * power_threshold);
         float extent_x = fmaxf(power_threshold_factor * sqrtf(cov2d.x) - 0.5f, 0.0f);
         float extent_y = fmaxf(power_threshold_factor * sqrtf(cov2d.z) - 0.5f, 0.0f);
-        const uint4 screen_bounds = make_uint4(
-            min(grid_width, static_cast<uint>(max(0, __float2int_rd((mean2d.x - extent_x) / static_cast<float>(config::tile_width))))),   // x_min
-            min(grid_width, static_cast<uint>(max(0, __float2int_ru((mean2d.x + extent_x) / static_cast<float>(config::tile_width))))),   // x_max
-            min(grid_height, static_cast<uint>(max(0, __float2int_rd((mean2d.y - extent_y) / static_cast<float>(config::tile_height))))), // y_min
-            min(grid_height, static_cast<uint>(max(0, __float2int_ru((mean2d.y + extent_y) / static_cast<float>(config::tile_height)))))  // y_max
-        );
+        const uint4 screen_bounds = compute_screen_tile_bounds(
+            mean2d, extent_x, extent_y, grid_width, grid_height);
         const uint n_touched_tiles_max = (screen_bounds.y - screen_bounds.x) * (screen_bounds.w - screen_bounds.z);
         if (n_touched_tiles_max == 0)
             active = false;
@@ -290,6 +290,112 @@ namespace fast_lfs::rasterization::kernels::forward {
         }
     }
 
+    __device__ __forceinline__ void emit_ellipse_tile_span(
+        const uint2 span,
+        const uint scan_index,
+        const bool along_x,
+        const uint grid_width,
+        const uint depth_key,
+        const uint depth_bits,
+        const uint primitive_idx,
+        uint& write_at,
+        const uint write_end,
+        InstanceKey* __restrict__ instance_keys,
+        uint* __restrict__ instance_primitive_indices) {
+        for (uint t = span.x; t < span.y && write_at < write_end; t++) {
+            const uint tile_key = along_x ? (scan_index * grid_width + t) : (t * grid_width + scan_index);
+            instance_keys[write_at] = make_instance_key(tile_key, depth_key, depth_bits);
+            instance_primitive_indices[write_at] = primitive_idx;
+            write_at++;
+        }
+    }
+
+    // Long-tail primitives: 32 lanes cooperate over rows of one source lane
+    // at a time. Isolated so the serial emit path does not inherit its
+    // register footprint.
+    __device__ __noinline__ void create_instances_coop_warp(
+        const bool active,
+        const uint n_scan,
+        const uint scan0,
+        const uint cross0,
+        const uint cross1,
+        const uint write_offset_end,
+        const uint current_write_offset,
+        const uint primitive_idx,
+        const uint depth_key,
+        const bool scan_along_x,
+        const float2 mean2d_shifted,
+        const float3 conic,
+        const float radius_sq,
+        const uint grid_width,
+        const uint depth_bits,
+        const uint4 diagnostic_bounds,
+        InstanceKey* __restrict__ instance_keys,
+        uint* __restrict__ instance_primitive_indices,
+        FastGSForwardStatus* __restrict__ status) {
+        const uint lane = threadIdx.x & 31u;
+        for (int src = 0; src < 32; ++src) {
+            const bool src_active = __shfl_sync(0xffffffffu, static_cast<unsigned>(active), src) != 0u;
+            const uint src_n_scan = __shfl_sync(0xffffffffu, n_scan, src);
+            if (!src_active || src_n_scan == 0u)
+                continue;
+            const uint src_scan0 = __shfl_sync(0xffffffffu, scan0, src);
+            const uint src_cross0 = __shfl_sync(0xffffffffu, cross0, src);
+            const uint src_cross1 = __shfl_sync(0xffffffffu, cross1, src);
+            const uint src_write_end = __shfl_sync(0xffffffffu, write_offset_end, src);
+            const uint src_write = __shfl_sync(0xffffffffu, current_write_offset, src);
+            const uint src_prim = __shfl_sync(0xffffffffu, primitive_idx, src);
+            const uint src_dkey = __shfl_sync(0xffffffffu, depth_key, src);
+            const bool src_along_x = __shfl_sync(0xffffffffu, static_cast<unsigned>(scan_along_x), src) != 0u;
+            const float2 src_mean = make_float2(
+                __shfl_sync(0xffffffffu, mean2d_shifted.x, src),
+                __shfl_sync(0xffffffffu, mean2d_shifted.y, src));
+            const float3 src_conic = make_float3(
+                __shfl_sync(0xffffffffu, conic.x, src),
+                __shfl_sync(0xffffffffu, conic.y, src),
+                __shfl_sync(0xffffffffu, conic.z, src));
+            const float src_radius_sq = __shfl_sync(0xffffffffu, radius_sq, src);
+
+            uint emitted_unclamped = 0u;
+            for (uint row0 = 0; row0 < src_n_scan; row0 += 32u) {
+                const uint row = row0 + lane;
+                uint2 span = make_uint2(0, 0);
+                uint cnt = 0u;
+                const uint scan_index = src_scan0 + row;
+                if (row < src_n_scan) {
+                    span = ellipse_touched_tile_span(
+                        src_conic, src_radius_sq, src_mean, src_along_x, scan_index, src_cross0, src_cross1);
+                    cnt = tile_span_count(span);
+                }
+                const uint excl = warp_exclusive_scan_uint(cnt);
+                uint write_at = src_write + emitted_unclamped + excl;
+                if (row < src_n_scan) {
+                    emit_ellipse_tile_span(
+                        span, scan_index, src_along_x, grid_width, src_dkey, depth_bits, src_prim,
+                        write_at, src_write_end, instance_keys, instance_primitive_indices);
+                }
+                emitted_unclamped += lfs::core::warp_ops::warp_reduce_sum(cnt);
+            }
+
+            if (lane == static_cast<uint>(src)) {
+                const uint actual = src_write + emitted_unclamped > src_write_end
+                                        ? src_write_end
+                                        : src_write + emitted_unclamped;
+                if (actual != src_write_end) {
+                    report_forward_status(
+                        status,
+                        kFastGSForwardStatusInstanceWriteMismatch,
+                        src_prim,
+                        0,
+                        actual,
+                        diagnostic_bounds,
+                        src_write_end,
+                        actual);
+                }
+            }
+        }
+    }
+
     // based on https://github.com/r4dl/StopThePop-Rasterization/blob/d8cad09919ff49b11be3d693d1e71fa792f559bb/cuda_rasterizer/stopthepop/stopthepop_common.cuh#L325
     __global__ void create_instances_cu(
         const std::uint64_t* __restrict__ primitive_n_touched_tiles,
@@ -349,52 +455,43 @@ namespace fast_lfs::rasterization::kernels::forward {
         if (current_write_offset > max_instances) {
             current_write_offset = max_instances;
         }
-        if (active) {
-            const uint screen_bounds_width = static_cast<uint>(screen_bounds.y - screen_bounds.x);
-            const uint screen_bounds_height = static_cast<uint>(screen_bounds.w - screen_bounds.z);
 
-            if (screen_bounds_height <= screen_bounds_width) {
-                for (uint tile_y = screen_bounds.z; tile_y < screen_bounds.w; tile_y++) {
-                    const float y0 = static_cast<float>(tile_y * config::tile_height) - mean2d_shifted.y;
-                    const float y1 = y0 + static_cast<float>(config::tile_height);
-                    const float2 bound = ellipse_range_bound(conic, radius_sq, y0, y1);
-                    const uint min_x = floor_tile_clamped(bound.x + mean2d_shifted.x, screen_bounds.x, screen_bounds.y, config::tile_width);
-                    const uint max_x = ceil_tile_clamped(bound.y + mean2d_shifted.x, screen_bounds.x, screen_bounds.y, config::tile_width);
-                    for (uint tile_x = min_x; tile_x < max_x && current_write_offset < write_offset_end; tile_x++) {
-                        const uint tile_key = tile_y * grid_width + tile_x;
-                        instance_keys[current_write_offset] = make_instance_key(tile_key, depth_key, depth_bits);
-                        instance_primitive_indices[current_write_offset] = primitive_idx;
-                        current_write_offset++;
-                    }
+        const uint screen_bounds_width = static_cast<uint>(screen_bounds.y - screen_bounds.x);
+        const uint screen_bounds_height = static_cast<uint>(screen_bounds.w - screen_bounds.z);
+        const bool scan_along_x = screen_bounds_height <= screen_bounds_width;
+        const uint scan0 = scan_along_x ? static_cast<uint>(screen_bounds.z) : static_cast<uint>(screen_bounds.x);
+        const uint scan1 = scan_along_x ? static_cast<uint>(screen_bounds.w) : static_cast<uint>(screen_bounds.y);
+        const uint cross0 = scan_along_x ? static_cast<uint>(screen_bounds.x) : static_cast<uint>(screen_bounds.z);
+        const uint cross1 = scan_along_x ? static_cast<uint>(screen_bounds.y) : static_cast<uint>(screen_bounds.w);
+        const uint n_scan = active && scan1 >= scan0 ? scan1 - scan0 : 0u;
+        const uint max_scan = lfs::core::warp_ops::warp_reduce_max(n_scan);
+
+        if (max_scan < 32u) {
+            if (active) {
+                for (uint scan_index = scan0; scan_index < scan1 && current_write_offset < write_offset_end; scan_index++) {
+                    const uint2 span = ellipse_touched_tile_span(
+                        conic, radius_sq, mean2d_shifted, scan_along_x, scan_index, cross0, cross1);
+                    emit_ellipse_tile_span(
+                        span, scan_index, scan_along_x, grid_width, depth_key, depth_bits, primitive_idx,
+                        current_write_offset, write_offset_end, instance_keys, instance_primitive_indices);
                 }
-            } else {
-                const float3 conic_transposed = make_float3(conic.z, conic.y, conic.x);
-                for (uint tile_x = screen_bounds.x; tile_x < screen_bounds.y; tile_x++) {
-                    const float x0 = static_cast<float>(tile_x * config::tile_width) - mean2d_shifted.x;
-                    const float x1 = x0 + static_cast<float>(config::tile_width);
-                    const float2 bound = ellipse_range_bound(conic_transposed, radius_sq, x0, x1);
-                    const uint min_y = floor_tile_clamped(bound.x + mean2d_shifted.y, screen_bounds.z, screen_bounds.w, config::tile_height);
-                    const uint max_y = ceil_tile_clamped(bound.y + mean2d_shifted.y, screen_bounds.z, screen_bounds.w, config::tile_height);
-                    for (uint tile_y = min_y; tile_y < max_y && current_write_offset < write_offset_end; tile_y++) {
-                        const uint tile_key = tile_y * grid_width + tile_x;
-                        instance_keys[current_write_offset] = make_instance_key(tile_key, depth_key, depth_bits);
-                        instance_primitive_indices[current_write_offset] = primitive_idx;
-                        current_write_offset++;
-                    }
+                if (current_write_offset != write_offset_end) {
+                    report_forward_status(
+                        status,
+                        kFastGSForwardStatusInstanceWriteMismatch,
+                        primitive_idx,
+                        0,
+                        current_write_offset,
+                        diagnostic_bounds,
+                        write_offset_end,
+                        current_write_offset);
                 }
             }
-
-            if (current_write_offset != write_offset_end) {
-                report_forward_status(
-                    status,
-                    kFastGSForwardStatusInstanceWriteMismatch,
-                    primitive_idx,
-                    0,
-                    current_write_offset,
-                    diagnostic_bounds,
-                    write_offset_end,
-                    current_write_offset);
-            }
+        } else {
+            create_instances_coop_warp(
+                active, n_scan, scan0, cross0, cross1, write_offset_end, current_write_offset,
+                primitive_idx, depth_key, scan_along_x, mean2d_shifted, conic, radius_sq,
+                grid_width, depth_bits, diagnostic_bounds, instance_keys, instance_primitive_indices, status);
         }
     }
 
@@ -541,7 +638,8 @@ namespace fast_lfs::rasterization::kernels::forward {
         batch_size = max(32, min(batch_size, config::block_size_blend_forward));
         batch_size = batch_size & ~31; // force multiple of 32
 
-        __shared__ PackedMeanBBox collected_geom[config::block_size_blend_forward];
+        __shared__ float2 collected_mean2d[config::block_size_blend_forward];
+        __shared__ ushort4 s_bbox[config::block_size_blend_forward];
         __shared__ float4 collected_conic_opacity[config::block_size_blend_forward];
         __shared__ float4 collected_color[config::block_size_blend_forward];
         __shared__ float collected_depth[config::block_size_blend_forward];
@@ -572,11 +670,25 @@ namespace fast_lfs::rasterization::kernels::forward {
                 const int fetch_idx = static_cast<int>(tile_range.x) + batch_base + static_cast<int>(thread_rank);
                 if (fetch_idx < static_cast<int>(tile_range.y)) {
                     const uint primitive_idx = instance_primitive_indices[fetch_idx];
-                    collected_geom[thread_rank] = primitive_mean2d[primitive_idx];
-                    collected_conic_opacity[thread_rank] = primitive_conic_opacity[primitive_idx];
+                    const PackedMeanBBox geom = primitive_mean2d[primitive_idx];
+                    collected_mean2d[thread_rank] = geom.mean2d;
+                    s_bbox[thread_rank] = geom.pixel_bbox;
+                    float4 conic_opacity = primitive_conic_opacity[primitive_idx];
+                    // Fold 0.5 into the diagonal of the staged conic so the per-pixel
+                    // quadric is cxx*dx^2 + cxy*dx*dy + czz*dy^2. The stored primitive
+                    // conic is left unscaled for backward. conic.y is already the 1.0
+                    // coefficient of dx*dy (the 0.5 and the 2 cancel). *0.5 is exact
+                    // for finite normals and commutes with a correctly rounded FMA.
+                    conic_opacity.x *= 0.5f;
+                    conic_opacity.z *= 0.5f;
+                    collected_conic_opacity[thread_rank] = conic_opacity;
                     const float4 raw_c = primitive_color[primitive_idx];
                     const float3 clamped = fminf(fmaxf(make_float3(raw_c), 0.0f), config::max_blend_color);
-                    collected_color[thread_rank] = make_float4(clamped, 0.0f);
+                    // log(opacity*255): skip __expf when sigma/2 is already past the
+                    // alpha=1/255 contour. Dead .w slot; pairs that pass still run the
+                    // exact opacity*exp test.
+                    collected_color[thread_rank] = make_float4(
+                        clamped, logf(conic_opacity.w * config::min_alpha_threshold_rcp));
                     collected_depth[thread_rank] = primitive_depths[primitive_idx];
                     if constexpr (kRenderNormal) {
                         collected_normal[thread_rank] = primitive_normals[primitive_idx];
@@ -592,7 +704,7 @@ namespace fast_lfs::rasterization::kernels::forward {
                 bool intersects0 = false;
                 bool intersects1 = false;
                 if (j_test < current_batch_size) {
-                    const ushort4 bb = collected_geom[j_test].pixel_bbox;
+                    const ushort4 bb = s_bbox[j_test];
                     intersects0 = (static_cast<uint>(bb.x) < sub0_ix1) &&
                                   (static_cast<uint>(bb.y) > sub0_ix0) &&
                                   (static_cast<uint>(bb.z) < sub0_iy1) &&
@@ -628,7 +740,7 @@ namespace fast_lfs::rasterization::kernels::forward {
 
                     const float4 conic_opacity = collected_conic_opacity[j];
                     const float3 conic = make_float3(conic_opacity);
-                    const float2 mean2d = collected_geom[j].mean2d;
+                    const float2 mean2d = collected_mean2d[j];
                     const float opacity = conic_opacity.w;
                     const float4 c = collected_color[j];
                     const float depth = collected_depth[j];
@@ -636,11 +748,18 @@ namespace fast_lfs::rasterization::kernels::forward {
                     if constexpr (kRenderNormal) {
                         normal = collected_normal[j];
                     }
+                    // One-sided slack: skip only when even a 2-ulp-high __expf still
+                    // fails alpha >= 1/255. Bound is ~1.3e-6 (2 ulp __expf ≈ 2^-22 in
+                    // the exponent, 1 ulp logf at log(255)≈5.54 is 2^-20, plus 0.5 ulp
+                    // of opacity*255); 1e-5 is ~8x that. Survivors always take the
+                    // exact test below.
+                    constexpr float kLogAlphaGateEps = 1.0e-5f;
+                    const float log_alpha_pt = c.w;
 
                     if (hit0) {
                         const float2 delta = mean2d - pixel0;
-                        const float sigma_over_2 = 0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) + conic.y * delta.x * delta.y;
-                        if (!(sigma_over_2 < 0.0f)) {
+                        const float sigma_over_2 = (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) + conic.y * delta.x * delta.y;
+                        if (!(sigma_over_2 < 0.0f) && !(sigma_over_2 > log_alpha_pt + kLogAlphaGateEps)) {
                             // __expf: -6.7% blend kernel time vs expf at equal 30k PSNR/SSIM (bonsai A/B).
                             const float gaussian = __expf(-sigma_over_2);
                             const float alpha = fminf(opacity * gaussian, config::max_fragment_alpha);
@@ -661,8 +780,8 @@ namespace fast_lfs::rasterization::kernels::forward {
                     }
                     if (hit1) {
                         const float2 delta = mean2d - pixel1;
-                        const float sigma_over_2 = 0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) + conic.y * delta.x * delta.y;
-                        if (!(sigma_over_2 < 0.0f)) {
+                        const float sigma_over_2 = (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) + conic.y * delta.x * delta.y;
+                        if (!(sigma_over_2 < 0.0f) && !(sigma_over_2 > log_alpha_pt + kLogAlphaGateEps)) {
                             const float gaussian = __expf(-sigma_over_2);
                             const float alpha = fminf(opacity * gaussian, config::max_fragment_alpha);
                             if (!(alpha < config::min_alpha_threshold)) {

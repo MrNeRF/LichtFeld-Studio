@@ -618,4 +618,130 @@ namespace {
             << "scale pass took " << std::chrono::duration<double>(elapsed).count() << "s";
     }
 
+    CameraRecord make_chapter_camera(const bool has_image = true) {
+        CameraRecord camera;
+        camera.uid = 3;
+        camera.camera_id = 1;
+        camera.rotation = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+        camera.translation = {0.0f, 0.0f, 1.0f};
+        camera.focal_x = 800.0f;
+        camera.focal_y = 800.0f;
+        camera.center_x = 640.0f;
+        camera.center_y = 360.0f;
+        camera.camera_width = 1280;
+        camera.camera_height = 720;
+        camera.image_width = 1280;
+        camera.image_height = 720;
+        camera.image_name = "frame_0003.png";
+        camera.image_path = "images/frame_0003.png";
+        camera.split = "train";
+        camera.has_image = has_image;
+        return camera;
+    }
+
+    TEST(ProjectChapterTest,
+         SceneGraphCameraVisibleAndTrainingEnabledRoundTripSeparatesHasImage) {
+        const auto hidden_id =
+            uuid_literal("53000000-0000-4000-8000-000000000001");
+        const auto disabled_id =
+            uuid_literal("53000000-0000-4000-8000-000000000002");
+        const auto missing_id =
+            uuid_literal("53000000-0000-4000-8000-000000000003");
+
+        SceneGraphChapter chapter;
+        ASSERT_TRUE(chapter.upsert_node(SceneNodeRecord{
+            .uuid = hidden_id,
+            .type = "camera",
+            .name = "hidden",
+            .child_order = 0,
+            .visible = false,
+            .training_enabled = true,
+            .camera = make_chapter_camera(true),
+        }));
+        auto disabled_camera = make_chapter_camera(true);
+        disabled_camera.uid = 1;
+        disabled_camera.image_name = "frame_0001.png";
+        ASSERT_TRUE(chapter.upsert_node(SceneNodeRecord{
+            .uuid = disabled_id,
+            .type = "camera",
+            .name = "disabled",
+            .child_order = 1,
+            .visible = true,
+            .training_enabled = false,
+            .camera = std::move(disabled_camera),
+        }));
+        auto missing_camera = make_chapter_camera(false);
+        missing_camera.uid = 2;
+        missing_camera.image_name = "frame_0002.png";
+        ASSERT_TRUE(chapter.upsert_node(SceneNodeRecord{
+            .uuid = missing_id,
+            .type = "camera",
+            .name = "missing-image",
+            .child_order = 2,
+            .visible = true,
+            .training_enabled = true,
+            .camera = std::move(missing_camera),
+        }));
+
+        auto reparsed =
+            SceneGraphChapter::from_bytes(chapter.to_bytes());
+        ASSERT_TRUE(reparsed)
+            << lfs::format_for_developer(reparsed.error());
+        auto nodes = reparsed->nodes();
+        ASSERT_TRUE(nodes)
+            << lfs::format_for_developer(nodes.error());
+        ASSERT_EQ(nodes->size(), 3u);
+
+        EXPECT_EQ((*nodes)[0].uuid, hidden_id);
+        EXPECT_FALSE((*nodes)[0].visible);
+        EXPECT_TRUE((*nodes)[0].training_enabled);
+        ASSERT_TRUE((*nodes)[0].camera);
+        EXPECT_TRUE((*nodes)[0].camera->has_image);
+
+        EXPECT_EQ((*nodes)[1].uuid, disabled_id);
+        EXPECT_TRUE((*nodes)[1].visible);
+        EXPECT_FALSE((*nodes)[1].training_enabled);
+        ASSERT_TRUE((*nodes)[1].camera);
+        EXPECT_TRUE((*nodes)[1].camera->has_image);
+
+        EXPECT_EQ((*nodes)[2].uuid, missing_id);
+        EXPECT_TRUE((*nodes)[2].visible);
+        EXPECT_TRUE((*nodes)[2].training_enabled);
+        ASSERT_TRUE((*nodes)[2].camera);
+        EXPECT_FALSE((*nodes)[2].camera->has_image);
+    }
+
+    TEST(ProjectChapterTest, SceneGraphCameraHasImageDefaultsTrueWhenAbsent) {
+        const auto node_id =
+            uuid_literal("53000000-0000-4000-8000-000000000010");
+        SceneGraphChapter chapter;
+        ASSERT_TRUE(chapter.upsert_node(SceneNodeRecord{
+            .uuid = node_id,
+            .type = "camera",
+            .name = "legacy-camera",
+            .child_order = 0,
+            .visible = true,
+            .training_enabled = false,
+            .camera = make_chapter_camera(false),
+        }));
+
+        auto dumped =
+            lfs::io::JsonChapterDom::Json::parse(chapter.dom().dump());
+        ASSERT_EQ(dumped["nodes"].size(), 1);
+        ASSERT_TRUE(dumped["nodes"][0].contains("camera"));
+        dumped["nodes"][0]["camera"].erase("has_image");
+        EXPECT_FALSE(dumped["nodes"][0]["camera"].contains("has_image"));
+
+        auto reparsed = SceneGraphChapter::parse(dumped.dump());
+        ASSERT_TRUE(reparsed)
+            << lfs::format_for_developer(reparsed.error());
+        auto found = reparsed->find(node_id);
+        ASSERT_TRUE(found)
+            << lfs::format_for_developer(found.error());
+        ASSERT_TRUE(*found);
+        EXPECT_FALSE((*found)->training_enabled);
+        ASSERT_TRUE((*found)->camera);
+        EXPECT_TRUE((*found)->camera->has_image);
+    }
+
 } // namespace

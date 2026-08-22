@@ -14,6 +14,8 @@ the user's application preferences or desktop window placement.
 The Preferences panel currently exposes:
 
 - language;
+- working folder (the parent of the temp project directory used for untitled
+  sessions);
 - application theme and UI scale;
 - viewport scene reconstruction backend and backend-specific preset;
 - camera navigation mode and axis/view snap;
@@ -106,7 +108,38 @@ logs/
 logs/mcp/
 plugins/
 venv/
+temp/
+recovery/   (legacy untitled crash files; scanned at startup if present)
 ```
+
+The **working folder** preference (`working_directory` in
+`config/preferences.json`) defaults to this unified root (`UserPaths::rootDir()`:
+`~/.lichtfeld` or `%USERPROFILE%\\.lichtfeld`, still overridden by `LFS_HOME`
+and portable mode). An empty or absent key means the default. A custom value
+must be an absolute, writable directory; LichtFeld creates it if needed and
+rejects the change without persisting when the write probe fails.
+
+Untitled crash files and untitled training snapshots live in
+`<working folder>/tmp/<session-uuid>.licht`, not under `dataset.output_path`.
+The temp directory is created lazily on first scratch write. Changing the
+working folder applies to the next untitled session (New Project or restart);
+a live session keeps the temp file it already bound. Cache, logs, plugins,
+the venv, and ONNX models stay on the unified root and do not follow the
+working folder.
+
+The legacy `<root>/recovery` directory is no longer created up front. Startup
+still scans it, if it exists and differs from `<working folder>/tmp`, so
+crash files from older builds can be offered and then pruned.
+
+A GUI load that **replaces** the scene (dataset import, Asset Manager Load New,
+a splat or mesh load onto a Dataset scene, or checkpoint resume) closes the
+current project document without writing it and starts a fresh untitled
+session. The previous `.licht` file and MRU entry are left unchanged, and the
+import panel's chosen parameters (output path, images folder, iterations,
+strategy, max cap, init path, and the rest of the LoadFile fields) are kept.
+Adding a splat or mesh onto an existing SplatFiles scene does not start a new
+session. Machine paths (`scene.load_dataset`, `lf.load_dataset`, CLI `-d`)
+do not take this reset.
 
 `config/layout.json` is a legacy, import-only layout source. New project
 workspace state is not written there.

@@ -979,6 +979,35 @@ namespace lfs::io::project {
                     }
                 }
             }
+
+            bool missing_ply_owner = false;
+            if (const auto clips =
+                    sequencer.dom().get_json("ply_sequences");
+                clips && clips->is_array()) {
+                for (const auto& clip : *clips) {
+                    if (!clip.is_object()) {
+                        continue;
+                    }
+                    const auto owner = clip.find("node_uuid");
+                    if (owner == clip.end() || owner->is_null()) {
+                        continue;
+                    }
+                    auto uuid = parse_session_uuid(
+                        *owner, "SEQR.ply_sequences.node_uuid");
+                    if (!uuid) {
+                        return lfs::Result<void>::failure(
+                            std::move(uuid).error());
+                    }
+                    if (!nodes_by_uuid.contains(*uuid)) {
+                        missing_ply_owner = true;
+                    }
+                }
+            }
+            if (missing_ply_owner) {
+                degraded_states.push_back(
+                    ProjectDocumentDegradedState::MissingPlySequenceNode);
+            }
+
             for (const auto& selected : selection.selected_node_uuids()) {
                 if (!nodes_by_uuid.contains(selected)) {
                     return fail<void>(
@@ -1960,6 +1989,12 @@ namespace lfs::io::project {
         return impl_->source_path;
     }
 
+    void ProjectDocument::forget_source_path() noexcept {
+        if (impl_) {
+            impl_->source_path.reset();
+        }
+    }
+
     const ProjectReader* ProjectDocument::source_reader() const noexcept {
         return impl_->source_reader.get();
     }
@@ -2644,12 +2679,13 @@ namespace lfs::io::project {
         const ProjectDocumentAutosaveOptions* autosave) {
         const bool is_autosave = autosave != nullptr;
         if (!options.preview_png.empty() &&
-            (options.commit.kind != CommitKind::Explicit ||
+            ((options.commit.kind != CommitKind::Explicit &&
+              options.commit.kind != CommitKind::Recovered) ||
              is_autosave)) {
             return fail<ProjectDocumentSaveReport>(
                 lfs::ErrorCode::FailedPrecondition,
                 "Only an explicit project save may regenerate the preview.",
-                "Autosave and recovered generations must carry THMB forward",
+                "Automatic saves must carry THMB forward",
                 "save.preview_png");
         }
         auto normalized = normalized_absolute_path(path);
@@ -3344,12 +3380,16 @@ namespace lfs::io::project {
         }
         writer.reset();
 
-        if (is_autosave) {
+        if (is_autosave || options.leave_unbound) {
+            ReaderOptions reader_options;
+            if (impl_->source_reader) {
+                reader_options =
+                    impl_->source_reader
+                        ->reader_options();
+            }
             auto reader =
                 ProjectReader::open(
-                    *normalized,
-                    impl_->source_reader
-                        ->reader_options());
+                    *normalized, reader_options);
             if (!reader) {
                 return std::move(reader).error();
             }

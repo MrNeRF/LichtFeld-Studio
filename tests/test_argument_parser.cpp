@@ -8,6 +8,7 @@
 #include "core/optimization_properties.hpp"
 #include "core/parameters.hpp"
 #include "core/property_registry.hpp"
+#include "io/project_path.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -191,6 +192,56 @@ TEST(ArgumentParserTest, RemovedProjectAndRecoverFlagsAreUnknown) {
     EXPECT_FALSE(recover_parsed);
 }
 
+TEST(ArgumentParserTest, BarePositionalPlyAndLichtFollowViewFlag) {
+    const auto directory =
+        make_test_path("lfs_arg_parser_bare_positional");
+    const auto ply =
+        std::filesystem::path(directory) / "model.ply";
+    const auto project =
+        std::filesystem::path(directory) / "session.licht";
+    std::ofstream(ply).put('\n');
+    std::ofstream(project).put('\n');
+    const auto ply_text = ply.string();
+    const auto project_text = project.string();
+
+    const char* ply_argv[] = {
+        "LichtFeld-Studio",
+        ply_text.c_str(),
+    };
+    auto ply_parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(ply_argv)), ply_argv);
+    ASSERT_TRUE(ply_parsed) << ply_parsed.error();
+    ASSERT_EQ((*ply_parsed)->view_paths.size(), 1u);
+    EXPECT_EQ((*ply_parsed)->view_paths.front(), ply);
+    EXPECT_FALSE((*ply_parsed)->project_path);
+
+    const char* project_argv[] = {
+        "LichtFeld-Studio",
+        project_text.c_str(),
+    };
+    auto project_parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(project_argv)), project_argv);
+    ASSERT_TRUE(project_parsed) << project_parsed.error();
+    EXPECT_EQ((*project_parsed)->project_path, project);
+    EXPECT_TRUE((*project_parsed)->view_paths.empty());
+
+    const auto unpublished =
+        std::filesystem::path(directory) /
+        "session.project-write.1.tmp.licht";
+    std::ofstream(unpublished).put('\n');
+    const auto unpublished_text = unpublished.string();
+    const char* unpublished_argv[] = {
+        "LichtFeld-Studio",
+        unpublished_text.c_str(),
+    };
+    auto unpublished_parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(unpublished_argv)), unpublished_argv);
+    ASSERT_FALSE(unpublished_parsed);
+    EXPECT_EQ(
+        unpublished_parsed.error(),
+        lfs::io::project::unpublishedLichtUserMessage(unpublished));
+}
+
 TEST(ArgumentParserTest, GuiViewProjectExtensionIsCaseInsensitive) {
     const auto directory = make_test_path("lfs_arg_parser_view_project");
     const auto project = std::filesystem::path(directory) / "session.LICHT";
@@ -319,6 +370,39 @@ TEST(ArgumentParserTest, TrainingDefaultsApplyMaxWidthCap) {
     EXPECT_FLOAT_EQ((*parsed)->optimization.cropbox_lr_scale, 0.1f);
     EXPECT_FLOAT_EQ((*parsed)->optimization.cropbox_loss_weight, 0.1f);
     EXPECT_FLOAT_EQ((*parsed)->freeze_lr_scale, 0.0f);
+    EXPECT_EQ((*parsed)->optimization.morton_reorder_interval, 5000u);
+}
+
+TEST(ArgumentParserTest, MortonReorderIntervalFlag) {
+    const auto data_path = make_test_path("lfs_arg_parser_morton_data");
+    const auto output_path = make_test_path("lfs_arg_parser_morton_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--morton-reorder-interval",
+        "0"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_EQ((*parsed)->optimization.morton_reorder_interval, 0u);
+
+    const char* argv_1000[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--morton-reorder-interval=1000"};
+    auto parsed_1000 = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv_1000)), argv_1000);
+    ASSERT_TRUE(parsed_1000.has_value()) << parsed_1000.error();
+    EXPECT_EQ((*parsed_1000)->optimization.morton_reorder_interval, 1000u);
 }
 
 TEST(ArgumentParserTest, SafeModeIsProcessLocalAndNotATrainingConfigurationOption) {

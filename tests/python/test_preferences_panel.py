@@ -50,6 +50,8 @@ def preferences_panel_module(monkeypatch):
             "safe_mode": False,
         },
         set_mcp_calls=[],
+        file_associations=[],
+        file_association_set_calls=[],
         panel_enabled_calls=[],
         section_request="",
         render_settings=SimpleNamespace(
@@ -57,7 +59,15 @@ def preferences_panel_module(monkeypatch):
             scene_upscaler_preset="native",
         ),
         scene_reconstruction_presets={"native": "native", "spatial": "quality"},
+        working_directory="",
     )
+
+    def set_working_directory(path):
+        state.working_directory = str(path)
+        return ""
+
+    def clear_working_directory():
+        state.working_directory = ""
 
     def set_mcp_preferences(enabled, expose_network, port, request_logging):
         config = {
@@ -95,6 +105,13 @@ def preferences_panel_module(monkeypatch):
         get_mcp_preferences=lambda: dict(state.mcp_preferences),
         set_mcp_preferences=set_mcp_preferences,
         get_mcp_status=lambda: dict(state.mcp_status),
+        get_working_directory=lambda: state.working_directory or "/home/tester/.lichtfeld",
+        get_working_directory_preference=lambda: state.working_directory,
+        get_default_working_directory=lambda: "/home/tester/.lichtfeld",
+        get_temp_project_directory=lambda: (state.working_directory or "/home/tester/.lichtfeld") + "/tmp",
+        set_working_directory=set_working_directory,
+        clear_working_directory=clear_working_directory,
+        open_folder_dialog=lambda title, start: "",
         set_panel_enabled=lambda panel_id, enabled: state.panel_enabled_calls.append(
             (panel_id, bool(enabled))
         ),
@@ -263,9 +280,23 @@ def preferences_panel_module(monkeypatch):
         get_captured_trigger=lambda: None,
         get_trigger_description=lambda *_a, **_k: "",
     )
+
+    def file_associations_status():
+        return [dict(row) for row in state.file_associations]
+
+    def file_association_set(extension, enabled):
+        state.file_association_set_calls.append((str(extension), bool(enabled)))
+        for row in state.file_associations:
+            if row["extension"] == extension:
+                row["registered"] = bool(enabled)
+                return True
+        return False
+
     lf_stub.get_render_settings = lambda: state.render_settings
     lf_stub.get_camera_navigation_mode = lambda: "orbit"
     lf_stub.get_camera_view_snap_enabled = lambda: False
+    lf_stub.file_associations_status = file_associations_status
+    lf_stub.file_association_set = file_association_set
 
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
     sys.modules.pop("lfs_plugins.preferences_panel", None)
@@ -689,3 +720,60 @@ def test_mcp_failed_listener_does_not_advertise_inactive_endpoints(
     )
 
     assert panel._mcp_endpoint_text() == "preferences.mcp_no_active_endpoint"
+
+
+def test_file_associations_section_hidden_when_status_empty(preferences_panel_module):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    records = {}
+    panel._handle = SimpleNamespace(
+        update_record_list=lambda name, items: records.__setitem__(name, list(items)),
+        dirty=lambda *_a, **_k: None,
+    )
+
+    panel._reload_file_associations()
+
+    assert panel._has_file_associations() is False
+    panel._section = "file_associations"
+    assert panel._show_file_associations() is False
+    assert records.get("file_associations") == []
+
+    rml = (
+        Path(__file__).parent.parent.parent
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+        / "preferences.rml"
+    ).read_text(encoding="utf-8")
+    assert 'data-if="has_file_associations"' in rml
+    assert 'data-if="show_file_associations"' in rml
+    assert 'data-for="row : file_associations"' in rml
+
+
+def test_file_associations_rows_toggle_calls_set(preferences_panel_module):
+    module, state = preferences_panel_module
+    state.file_associations = [
+        {"extension": ".ply", "registered": False},
+        {"extension": ".licht", "registered": True},
+    ]
+    panel = module.PreferencesPanel()
+    records = {}
+    panel._handle = SimpleNamespace(
+        update_record_list=lambda name, items: records.__setitem__(name, list(items)),
+        dirty=lambda *_a, **_k: None,
+    )
+
+    panel._reload_file_associations()
+
+    assert panel._has_file_associations() is True
+    panel._section = "file_associations"
+    assert panel._show_file_associations() is True
+    assert [row["extension"] for row in records["file_associations"]] == [".ply", ".licht"]
+    assert [row["registered"] for row in records["file_associations"]] == [False, True]
+
+    panel._set_file_association(".ply", True)
+
+    assert state.file_association_set_calls == [(".ply", True)]
+    assert [row["registered"] for row in records["file_associations"]] == [True, True]

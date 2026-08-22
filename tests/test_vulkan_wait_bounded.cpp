@@ -1029,3 +1029,61 @@ TEST(VulkanWaitBounded, Phase7CP3Mesh2SplatFingerprintQuarantine) {
     EXPECT_EQ(map_mesh2splat_resource_disposition(true, false),
               Mesh2SplatResourceAction::RetainFenceAndCb);
 }
+
+// ---------------------------------------------------------------------------
+// #1721: GUI-frame timeline wait accounting. GPU-free cursor used by
+// VulkanContext::addFrameTimelineWait. Same-value re-wait after a no-submit
+// frame is not an error; a later bump still queues.
+// ---------------------------------------------------------------------------
+
+TEST(FrameTimelineWaitCursor, SameValueAfterNoSubmitRequeues) {
+    lfs::rendering::FrameTimelineWaitCursor cursor;
+    EXPECT_EQ(cursor.note(2331), lfs::rendering::FrameTimelineWaitAction::Queue);
+    EXPECT_EQ(cursor.pending, 2331u);
+    EXPECT_EQ(cursor.committed, 0u);
+
+    cursor.submit_rejected();
+    EXPECT_EQ(cursor.pending, 0u);
+    EXPECT_EQ(cursor.committed, 0u);
+
+    // No-submit frame: the wait never reached the GPU, so the same value
+    // must be queued again rather than treated as a contract violation.
+    EXPECT_EQ(cursor.note(2331), lfs::rendering::FrameTimelineWaitAction::Queue);
+    EXPECT_EQ(cursor.pending, 2331u);
+}
+
+TEST(FrameTimelineWaitCursor, SameValueAfterSubmitIsAlreadySatisfied) {
+    lfs::rendering::FrameTimelineWaitCursor cursor;
+    EXPECT_EQ(cursor.note(2331), lfs::rendering::FrameTimelineWaitAction::Queue);
+    cursor.submit_accepted();
+    EXPECT_EQ(cursor.committed, 2331u);
+    EXPECT_EQ(cursor.pending, 0u);
+
+    EXPECT_EQ(cursor.note(2331), lfs::rendering::FrameTimelineWaitAction::AlreadySatisfied);
+    EXPECT_EQ(cursor.note(2300), lfs::rendering::FrameTimelineWaitAction::AlreadySatisfied);
+    EXPECT_EQ(cursor.pending, 0u);
+    EXPECT_EQ(cursor.committed, 2331u);
+}
+
+TEST(FrameTimelineWaitCursor, BumpAfterSubmitQueues) {
+    lfs::rendering::FrameTimelineWaitCursor cursor;
+    EXPECT_EQ(cursor.note(2331), lfs::rendering::FrameTimelineWaitAction::Queue);
+    cursor.submit_accepted();
+
+    EXPECT_EQ(cursor.note(2332), lfs::rendering::FrameTimelineWaitAction::Queue);
+    EXPECT_EQ(cursor.pending, 2332u);
+    EXPECT_EQ(cursor.committed, 2331u);
+    cursor.submit_accepted();
+    EXPECT_EQ(cursor.committed, 2332u);
+    EXPECT_EQ(cursor.pending, 0u);
+}
+
+TEST(FrameTimelineWaitCursor, WithinFrameDuplicateIsAlreadySatisfied) {
+    lfs::rendering::FrameTimelineWaitCursor cursor;
+    EXPECT_EQ(cursor.note(10), lfs::rendering::FrameTimelineWaitAction::Queue);
+    EXPECT_EQ(cursor.note(10), lfs::rendering::FrameTimelineWaitAction::AlreadySatisfied);
+    EXPECT_EQ(cursor.note(11), lfs::rendering::FrameTimelineWaitAction::Queue);
+    EXPECT_EQ(cursor.pending, 11u);
+    cursor.submit_accepted();
+    EXPECT_EQ(cursor.committed, 11u);
+}

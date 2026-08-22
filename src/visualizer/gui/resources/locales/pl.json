@@ -15,6 +15,11 @@
     "file.recent_missing_message": "Nie można znaleźć pliku projektu:\n{path}",
     "file.remove_from_recent": "Usuń z ostatnich projektów",
     "file.recent_entry": "{name} — {parent}",
+    "file.import": "Importuj",
+    "file.import_failed": "Import nie powiódł się",
+    "file.import_failed_message": "Nie można zaimportować:\n{path}\n\n{reason}",
+    "file.dataset_not_recognized": "Wybrany folder nie został rozpoznany jako obsługiwany zbiór danych:\n{path}",
+    "file.checkpoint_not_recognized": "Wybrany plik nie został rozpoznany jako prawidłowy checkpoint:\n{path}",
     "file.import_dataset": "Importuj Zbiór Danych",
     "file.import_ply": "Importuj PLY, SOG, SPZ, RAD, USD",
     "file.import_mesh": "Importuj Mesh",
@@ -383,6 +388,7 @@
     "refinement.refine_every": "  Udoskonalaj co:",
     "refinement.start_refine": "  Rozpocznij udoskonalanie:",
     "refinement.stop_refine": "  Zatrzymaj udoskonalanie:",
+    "refinement.morton_reorder_interval": "  Przegrupowanie Morton:",
     "refinement.grow_until_iter": "  Wzrost do iteracji:",
     "refinement.reset_every": "  Resetuj co:",
     "refinement.sh_upgrade_every": "  Zwiększaj SH co:",
@@ -428,6 +434,7 @@
     "tooltip.refine_every": "Interwał zagęszczania (iteracje)",
     "tooltip.start_refine": "Pierwszy krok zagęszczania",
     "tooltip.stop_refine": "Ostatni krok udoskonalania. W MRNF dodawanie nowych splatów kończy się przy „Wzrost do iteracji”.",
+    "tooltip.morton_reorder_interval": "Przegrupuj gaussy co N iteracji według kodu Mortona 3D (0 wyłącza).",
     "tooltip.grow_until_iter": "Ostatni krok MRNF, który może dodać nowe splaty.",
     "tooltip.reset_every": "Interwał resetowania nieprzezroczystości",
     "tooltip.sh_upgrade_every": "Interwał zwiększania stopnia SH",
@@ -788,7 +795,14 @@
     "language": "Język:",
     "select_language": "Wybierz Język",
     "interface": "Interfejs",
+    "file_associations": "Skojarzenia plików",
+    "file_associations_description": "Zarejestruj lub usuń LichtFeld Studio jako program obsługujący każdy typ pliku.",
     "general": "Ogólne",
+    "working_directory": "Folder roboczy",
+    "working_directory_hint": "Projekty tymczasowe: {path}",
+    "working_directory_use_default": "Użyj domyślnego",
+    "working_directory_applies_next_session": "Dotyczy nowych sesji",
+    "working_directory_invalid": "Tego folderu nie można użyć jako folderu roboczego.",
     "appearance": "Wygląd",
     "scene_rendering": "Renderowanie sceny",
     "scene_reconstruction": "Rekonstrukcja sceny",
@@ -1253,6 +1267,10 @@
   "project_switch": {
     "stop_training_title": "Zatrzymać trening?",
     "stop_training_message": "Trening trzeba zatrzymać przed zmianą projektu. Zatrzymać bieżącą sesję?"
+  },
+  "unsaved_work": {
+    "title": "Niezapisane zmiany",
+    "continue_without_saving": "Kontynuuj bez zapisywania"
   },
   "load_dataset_popup": {
     "title": "Wczytaj Zbiór Danych",
@@ -2016,7 +2034,7 @@
   },
   "file_association": {
     "title": "Ustaw jako domyślną aplikację",
-    "message": "Czy chcesz ustawić LichtFeld Studio jako domyślną aplikację dla plików splat (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz)?",
+    "message": "Czy chcesz ustawić LichtFeld Studio jako domyślną aplikację dla plików splat i projektów (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht)?",
     "yes": "Tak",
     "not_now": "Nie teraz",
     "dont_ask": "Nie pytaj ponownie",
@@ -2411,6 +2429,14 @@
       "title": "Nie przywrócono trenera",
       "message": "Model projektu jest dostępny do podglądu, ale nie udało się wznowić treningu. Sprawdź ścieżkę zestawu danych i logi."
     }
+  },
+  "recovery": {
+    "crash_title": "LichtFeld Studio zostało nieoczekiwanie zamknięte",
+    "body": "Znaleziono plik odzyskiwania dla {}. (zapisano {})",
+    "unsaved_session": "niezapisana sesja",
+    "recover": "Odzyskaj",
+    "open_saved": "Otwórz zapisany",
+    "skip": "Pomiń i utwórz nowy"
   },
   "startup_recent": {
     "title": "Ostatnie projekty",

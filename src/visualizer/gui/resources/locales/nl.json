@@ -15,6 +15,11 @@
     "file.recent_missing_message": "Het projectbestand kon niet worden gevonden:\n{path}",
     "file.remove_from_recent": "Verwijderen uit recente projecten",
     "file.recent_entry": "{name} — {parent}",
+    "file.import": "Importeren",
+    "file.import_failed": "Importeren mislukt",
+    "file.import_failed_message": "Kan niet importeren:\n{path}\n\n{reason}",
+    "file.dataset_not_recognized": "De geselecteerde map wordt niet herkend als een ondersteunde dataset:\n{path}",
+    "file.checkpoint_not_recognized": "Het geselecteerde bestand wordt niet herkend als een geldig checkpoint:\n{path}",
     "file.import_dataset": "Dataset Importeren",
     "file.import_ply": "PLY, SOG, SPZ, RAD, USD Importeren",
     "file.import_mesh": "Mesh Importeren",
@@ -383,6 +388,7 @@
     "refinement.refine_every": "  Verfijnen elke:",
     "refinement.start_refine": "  Verfijning starten:",
     "refinement.stop_refine": "  Verfijning stoppen:",
+    "refinement.morton_reorder_interval": "  Morton-herschikking:",
     "refinement.grow_until_iter": "  Groeien tot iteratie:",
     "refinement.reset_every": "  Resetten elke:",
     "refinement.sh_upgrade_every": "  SH verhogen elke:",
@@ -428,6 +434,7 @@
     "tooltip.refine_every": "Verdichtingsinterval (iteraties)",
     "tooltip.start_refine": "Eerste verdichtingsstap",
     "tooltip.stop_refine": "Laatste verfijningsstap. In MRNF stopt het toevoegen van nieuwe splats bij 'Groeien tot iteratie'.",
+    "tooltip.morton_reorder_interval": "Herschik Gaussians elke N iteraties via 3D-Morton-code (0 schakelt uit).",
     "tooltip.grow_until_iter": "Laatste MRNF-stap die nieuwe splats kan toevoegen",
     "tooltip.reset_every": "Dekking reset interval",
     "tooltip.sh_upgrade_every": "SH graad verhogingsinterval",
@@ -788,7 +795,14 @@
     "language": "Taal:",
     "select_language": "Selecteer Taal",
     "interface": "Interface",
+    "file_associations": "Bestandskoppelingen",
+    "file_associations_description": "LichtFeld Studio als programma voor elk bestandstype registreren of verwijderen.",
     "general": "Algemeen",
+    "working_directory": "Werkmap",
+    "working_directory_hint": "Tijdelijke projecten: {path}",
+    "working_directory_use_default": "Standaard gebruiken",
+    "working_directory_applies_next_session": "Geldt voor nieuwe sessies",
+    "working_directory_invalid": "Deze map kan niet als werkmap worden gebruikt.",
     "appearance": "Uiterlijk",
     "scene_rendering": "Scènerendering",
     "scene_reconstruction": "Scènereconstructie",
@@ -1253,6 +1267,10 @@
   "project_switch": {
     "stop_training_title": "Training stoppen?",
     "stop_training_message": "De training moet worden gestopt voordat u van project wisselt. Huidige sessie stoppen?"
+  },
+  "unsaved_work": {
+    "title": "Niet-opgeslagen wijzigingen",
+    "continue_without_saving": "Doorgaan zonder op te slaan"
   },
   "load_dataset_popup": {
     "title": "Dataset Laden",
@@ -2016,7 +2034,7 @@
   },
   "file_association": {
     "title": "Instellen als standaardtoepassing",
-    "message": "Wilt u LichtFeld Studio instellen als de standaardtoepassing voor splat-bestanden (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz)?",
+    "message": "Wilt u LichtFeld Studio instellen als de standaardtoepassing voor splat- en projectbestanden (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht)?",
     "yes": "Ja",
     "not_now": "Niet nu",
     "dont_ask": "Niet meer vragen",
@@ -2411,6 +2429,14 @@
       "title": "Trainer niet hersteld",
       "message": "Het projectmodel is beschikbaar om te bekijken, maar training kon niet worden hervat. Controleer het datasetpad en de logboeken."
     }
+  },
+  "recovery": {
+    "crash_title": "LichtFeld Studio is onverwacht afgesloten",
+    "body": "Er is een herstelbestand gevonden voor {}. (opgeslagen {})",
+    "unsaved_session": "een niet-opgeslagen sessie",
+    "recover": "Herstellen",
+    "open_saved": "Opgeslagen openen",
+    "skip": "Overslaan en nieuw maken"
   },
   "startup_recent": {
     "title": "Recente projecten",

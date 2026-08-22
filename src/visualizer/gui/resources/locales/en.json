@@ -15,6 +15,11 @@
     "file.recent_missing_message": "The project file could not be found:\n{path}",
     "file.remove_from_recent": "Remove from Recent",
     "file.recent_entry": "{name} — {parent}",
+    "file.import": "Import",
+    "file.import_failed": "Import Failed",
+    "file.import_failed_message": "Could not import:\n{path}\n\n{reason}",
+    "file.dataset_not_recognized": "The selected folder is not recognized as a supported dataset:\n{path}",
+    "file.checkpoint_not_recognized": "The selected file is not recognized as a valid checkpoint:\n{path}",
     "file.import_dataset": "Import Dataset",
     "file.import_ply": "Import PLY, SOG, SPZ, RAD, USD",
     "file.import_mesh": "Import Mesh",
@@ -383,6 +388,7 @@
     "refinement.refine_every": "  Refine Every:",
     "refinement.start_refine": "  Start Refine:",
     "refinement.stop_refine": "  Stop Refine:",
+    "refinement.morton_reorder_interval": "  Morton Reorder:",
     "refinement.grow_until_iter": "  Grow Until Iter:",
     "refinement.reset_every": "  Reset Every:",
     "refinement.sh_upgrade_every": "  SH Upgrade Every:",
@@ -428,6 +434,7 @@
     "tooltip.refine_every": "Densification interval (iterations)",
     "tooltip.start_refine": "First densification step",
     "tooltip.stop_refine": "Last refinement step. In MRNF, adding new splats stops at Grow Until Iter.",
+    "tooltip.morton_reorder_interval": "Reorder Gaussians by 3D Morton code every N iterations (0 disables). Restores rasterizer cache locality during densification.",
     "tooltip.grow_until_iter": "Last MRNF step that can add new splats",
     "tooltip.reset_every": "Opacity reset interval",
     "tooltip.sh_upgrade_every": "SH degree increase interval",
@@ -788,7 +795,14 @@
     "language": "Language:",
     "select_language": "Select Language",
     "interface": "Interface",
+    "file_associations": "File Associations",
+    "file_associations_description": "Register or remove LichtFeld Studio as a handler for each file type.",
     "general": "General",
+    "working_directory": "Working folder",
+    "working_directory_hint": "Temporary projects: {path}",
+    "working_directory_use_default": "Use default",
+    "working_directory_applies_next_session": "Applies to new sessions",
+    "working_directory_invalid": "This folder cannot be used as the working folder.",
     "appearance": "Appearance",
     "scene_rendering": "Scene Rendering",
     "scene_reconstruction": "Scene Reconstruction",
@@ -1253,6 +1267,10 @@
   "project_switch": {
     "stop_training_title": "Stop Training?",
     "stop_training_message": "Training must be stopped before switching projects. Stop the current session?"
+  },
+  "unsaved_work": {
+    "title": "Unsaved changes",
+    "continue_without_saving": "Continue without saving"
   },
   "load_dataset_popup": {
     "title": "Load Dataset",
@@ -2016,7 +2034,7 @@
   },
   "file_association": {
     "title": "Set as Default Application",
-    "message": "Would you like to set LichtFeld Studio as the default application for splat files (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz)?",
+    "message": "Would you like to set LichtFeld Studio as the default application for splat and project files (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht)?",
     "yes": "Yes",
     "not_now": "Not Now",
     "dont_ask": "Don't Ask Again",
@@ -2411,6 +2429,14 @@
       "title": "Trainer not restored",
       "message": "The project model is available for viewing, but training could not be resumed. Check the dataset path and logs."
     }
+  },
+  "recovery": {
+    "crash_title": "LichtFeld Studio closed unexpectedly",
+    "body": "A recovery file was found for {}. (saved {})",
+    "unsaved_session": "an unsaved session",
+    "recover": "Recover",
+    "open_saved": "Open saved",
+    "skip": "Skip and create new"
   },
   "startup_recent": {
     "title": "Recent Projects",

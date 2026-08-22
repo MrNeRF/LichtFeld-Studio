@@ -358,6 +358,7 @@ namespace lfs::vis::gui {
         bool register_panel(PanelInfo info);
         void unregister_panel(const std::string& id);
         void unregister_all_non_native();
+        void unregister_all();
 
         float render_panels(const PanelRenderOptions& options, const PanelDrawContext& ctx);
         bool has_panels(PanelSpace space) const;

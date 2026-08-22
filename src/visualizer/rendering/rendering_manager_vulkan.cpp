@@ -1563,7 +1563,7 @@ namespace lfs::vis {
         initialized_ = true;
 
         std::optional<lfs::core::CUDAStreamGuard> frame_stream_guard;
-        const auto cached_frame_result = [this]() -> VulkanFrameResult {
+        const auto cached_frame_result = [this, current_size]() -> VulkanFrameResult {
             if (vulkan_external_viewport_image_ != VK_NULL_HANDLE) {
                 return {.image = {},
                         .external_image = vulkan_external_viewport_image_,
@@ -1573,20 +1573,26 @@ namespace lfs::vis {
                         .image_generation = vulkan_viewport_image_generation_,
                         .size = vulkan_viewport_image_size_,
                         .alloc_size = vulkan_viewport_image_alloc_size_,
-                        .flip_y = vulkan_viewport_image_flip_y_};
+                        .flip_y = vulkan_viewport_image_flip_y_,
+                        .matches_viewport_extent =
+                            vulkan_viewport_coordinate_size_ == current_size};
             }
             if (!vulkan_viewport_image_) {
                 return {.image = {},
                         .image_generation = split_view_image_generation_,
                         .size = vulkan_viewport_image_size_,
                         .alloc_size = vulkan_viewport_image_alloc_size_,
-                        .flip_y = vulkan_viewport_image_flip_y_};
+                        .flip_y = vulkan_viewport_image_flip_y_,
+                        .matches_viewport_extent =
+                            vulkan_viewport_coordinate_size_ == current_size};
             }
             return {.image = vulkan_viewport_image_,
                     .image_generation = vulkan_viewport_image_generation_,
                     .size = vulkan_viewport_image_size_,
                     .alloc_size = vulkan_viewport_image_alloc_size_,
-                    .flip_y = vulkan_viewport_image_flip_y_};
+                    .flip_y = vulkan_viewport_image_flip_y_,
+                    .matches_viewport_extent =
+                        vulkan_viewport_coordinate_size_ == current_size};
         };
         const auto update_cached_split_position = [this, &frame_settings](const bool require_position_change) -> bool {
             if (!split_view_service_.isActive(frame_settings)) {
@@ -1679,7 +1685,7 @@ namespace lfs::vis {
             frame_settings.render_scale,
             frame_settings.scene_upscaler_scale,
             spatial_runtime_ready);
-        if (resize_result.render_interactive_frame) {
+        if (resize_result.use_interactive_render_scale) {
             scale = std::min(scale, kInteractiveResizeRenderScale);
         }
         // Under an active VRAM pressure lease, halve the viewer render resolution
@@ -1731,10 +1737,11 @@ namespace lfs::vis {
         // recreate waits ring watermarks only). pauseTrainingTemporary is not
         // used on this path — other interactive wait sites keep it.
 
-        // Passive training preview: try the step-boundary render lock so densify
-        // (exclusive) never stalls the UI frame. On contention, retain the last
-        // splat image and retry on the next cadence tick. First frame / no cache
-        // falls back to a blocking acquire below.
+        // Training previews never wait for a step-boundary read, including
+        // discrete layout resizes. On contention, retain the previous matching
+        // frame and retry on the next cadence tick; the GUI commits a staged
+        // layout only after matches_viewport_extent reports a fresh output.
+        // First frame / no cache still falls back to one blocking acquire below.
         const bool training_try_lock = is_training;
         auto render_lock = acquireLiveModelRenderLock(scene_manager, training_try_lock);
         bool render_lock_contended = training_try_lock && !render_lock.has_value() &&
@@ -1840,9 +1847,10 @@ namespace lfs::vis {
             vulkan_viewport_image_ != nullptr ||
             vulkan_external_viewport_image_ != VK_NULL_HANDLE ||
             has_cached_gpu_only_frame;
-        LOG_PERF("renderVulkanFrame.resize deferring={} render={} completed={} render_scale={:.2f} render_size={}x{} current_size={}x{}",
+        LOG_PERF("renderVulkanFrame.resize deferring={} render={} interactive_scale={} completed={} render_scale={:.2f} render_size={}x{} current_size={}x{}",
                  resize_deferring,
-                 resize_result.render_interactive_frame,
+                 resize_result.render_resized_frame,
+                 resize_result.use_interactive_render_scale,
                  resize_result.completed,
                  scale,
                  render_size.x,
@@ -1908,11 +1916,12 @@ namespace lfs::vis {
         // hidden, so model-change tracking never clears the stale image.
         if (!has_render_content) {
             clearVulkanViewportImageState();
+            vulkan_viewport_coordinate_size_ = current_size;
             last_logged_vksplat_render_error_.clear();
             viewport_artifact_service_.clearViewportOutput();
             clearVulkanMeshFrame();
             render_lock.reset();
-            return {};
+            return {.matches_viewport_extent = true};
         }
 
         const DirtyMask split_deferred_dirty = frame_dirty & ~DirtyFlag::SPLIT_POSITION;
@@ -1932,7 +1941,7 @@ namespace lfs::vis {
 
         if (resize_deferring &&
             has_cached_viewport_output &&
-            !resize_result.render_interactive_frame) {
+            !resize_result.render_resized_frame) {
             if (!splitViewUsesIndependentPanels(frame_settings.split_view_mode)) {
                 update_cached_split_position(false);
             }
@@ -1962,7 +1971,8 @@ namespace lfs::vis {
             // producer/consumer watermarks; the viewport-independent exportable
             // model import is retained. A normal live submit then re-arms the
             // handshake.
-            if (has_cached_viewport_output &&
+            if (!resize_result.require_immediate_output_resize &&
+                has_cached_viewport_output &&
                 frame_lifecycle_service_.resizeRecentlyChanged(kTrainingOutputResizeStableDelay)) {
                 dirty_mask_.fetch_or(vksplatOutputResizeRetryDirty(frame_dirty),
                                      std::memory_order_relaxed);
@@ -3366,6 +3376,7 @@ namespace lfs::vis {
                     clearVulkanMeshFrame();
                 }
 
+                vulkan_viewport_coordinate_size_ = current_size;
                 return VulkanFrameResult{
                     .image = {},
                     .external_image = vulkan_external_viewport_image_,
@@ -3373,7 +3384,8 @@ namespace lfs::vis {
                     .external_image_layout = vulkan_external_viewport_image_layout_,
                     .external_image_generation = vulkan_external_viewport_image_generation_,
                     .size = vulkan_viewport_image_size_,
-                    .flip_y = vulkan_viewport_image_flip_y_};
+                    .flip_y = vulkan_viewport_image_flip_y_,
+                    .matches_viewport_extent = true};
             };
             if (auto vk_result = try_vulkan(); vk_result) {
                 return *vk_result;
@@ -3754,10 +3766,12 @@ namespace lfs::vis {
                                     publish_mesh_frame_for_vksplat();
                                     release_inactive_split_outputs();
 
+                                    vulkan_viewport_coordinate_size_ = current_size;
                                     return {.image = vulkan_viewport_image_,
                                             .image_generation = vulkan_viewport_image_generation_,
                                             .size = vulkan_viewport_image_size_,
-                                            .flip_y = vulkan_viewport_image_flip_y_};
+                                            .flip_y = vulkan_viewport_image_flip_y_,
+                                            .matches_viewport_extent = true};
                                 }
                                 LOG_WARN("VkSplat PPISP correction produced no valid viewport image; falling back to uncorrected external image");
                             } else {
@@ -3832,6 +3846,7 @@ namespace lfs::vis {
                         publish_mesh_frame_for_vksplat();
                         release_inactive_split_outputs();
 
+                        vulkan_viewport_coordinate_size_ = current_size;
                         return {.image = {},
                                 .external_image = vulkan_external_viewport_image_,
                                 .external_image_view = vulkan_external_viewport_image_view_,
@@ -3841,7 +3856,8 @@ namespace lfs::vis {
                                 .completion_value = render_result.completion_value,
                                 .size = vulkan_viewport_image_size_,
                                 .alloc_size = vulkan_viewport_image_alloc_size_,
-                                .flip_y = vulkan_viewport_image_flip_y_};
+                                .flip_y = vulkan_viewport_image_flip_y_,
+                                .matches_viewport_extent = true};
                     };
 
                     const DirtyMask non_overlay_dirty = frame_dirty & ~DirtyFlag::SELECTION;
@@ -4082,6 +4098,8 @@ namespace lfs::vis {
             }
             result.size = vulkan_viewport_image_size_;
             result.flip_y = vulkan_viewport_image_flip_y_;
+            result.matches_viewport_extent = true;
+            vulkan_viewport_coordinate_size_ = current_size;
 
             const auto tensor_size = [](const lfs::core::Tensor& t) -> glm::ivec2 {
                 const auto layout = lfs::rendering::detectImageLayout(t);
@@ -4187,6 +4205,7 @@ namespace lfs::vis {
         vulkan_external_viewport_image_generation_ = 0;
         vulkan_viewport_image_size_ = render_size;
         vulkan_viewport_image_alloc_size_ = render_size;
+        vulkan_viewport_coordinate_size_ = current_size;
         vulkan_viewport_image_flip_y_ = !rendered_metadata.flip_y;
         vulkan_gt_comparison_content_size_ =
             rendered_image_contains_ground_truth ? rendered_gt_content_size : glm::ivec2{0, 0};
@@ -4210,7 +4229,8 @@ namespace lfs::vis {
         return {.image = vulkan_viewport_image_,
                 .image_generation = vulkan_viewport_image_generation_,
                 .size = vulkan_viewport_image_size_,
-                .flip_y = vulkan_viewport_image_flip_y_};
+                .flip_y = vulkan_viewport_image_flip_y_,
+                .matches_viewport_extent = true};
     }
 
     std::expected<void, std::string> RenderingManager::ensureVksplatTrainingSharedScratchReady(

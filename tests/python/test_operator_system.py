@@ -27,6 +27,22 @@ class TestOperatorAPIWithoutBackend:
         assert not lf.ui.has_active_operator()
 
 
+class TestModalOverlayBindings:
+    """Confirm-dialog inspection bindings without a live GUI overlay."""
+
+    def test_modal_get_none_without_backend(self, lf):
+        assert lf.ui.modal_get() is None
+
+    def test_modal_press_false_without_backend(self, lf):
+        assert lf.ui.modal_press("OK") is False
+
+    def test_modal_binding_docs(self, lf):
+        assert callable(lf.ui.modal_get)
+        assert callable(lf.ui.modal_press)
+        assert "currently shown modal" in lf.ui.modal_get.__doc__
+        assert "enabled modal button" in lf.ui.modal_press.__doc__
+
+
 class TestOperatorAPISignatures:
     """Tests that verify API signatures exist correctly."""
 

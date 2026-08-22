@@ -43,6 +43,7 @@ class PreferencesPanel(Panel):
 
     EXPANDABLE_SECTIONS = (
         "language",
+        "working_directory",
         "appearance",
         "scene_rendering",
         "navigation",
@@ -50,6 +51,7 @@ class PreferencesPanel(Panel):
         "key_bindings",
         "interface",
         "scene_graph",
+        "file_associations",
         "mcp",
     )
 
@@ -70,10 +72,14 @@ class PreferencesPanel(Panel):
         self._mcp_request_logging = False
         self._mcp_safe_mode = False
         self._last_mcp_runtime_config = None
+        self._working_directory = ""
+        self._applied_working_directory = ""
         self._document = None
+        self._file_associations = []
 
     def on_bind_model(self, ctx):
         self._read_mcp_preferences()
+        self._read_working_directory()
         model = ctx.create_data_model("preferences")
         if model is None:
             return
@@ -83,6 +89,8 @@ class PreferencesPanel(Panel):
         model.bind_func("show_appearance", lambda: self._section == "appearance")
         model.bind_func("show_input", lambda: self._section == "input")
         model.bind_func("show_interface", lambda: self._section == "interface")
+        model.bind_func("show_file_associations", self._show_file_associations)
+        model.bind_func("has_file_associations", self._has_file_associations)
         model.bind_func("show_mcp", lambda: self._section == "mcp")
         model.bind_func("show_section_reset", lambda: True)
         model.bind_func("reset_section_label", self._reset_section_label)
@@ -120,6 +128,8 @@ class PreferencesPanel(Panel):
         model.bind("mcp_enabled", lambda: self._mcp_enabled, self._set_mcp_enabled)
         model.bind("mcp_expose_network", lambda: self._mcp_expose_network, self._set_mcp_expose_network)
         model.bind("mcp_port", lambda: self._mcp_port, self._set_mcp_port)
+        model.bind("working_directory", lambda: self._working_directory, self._set_working_directory_draft)
+        model.bind_func("working_directory_hint", self._working_directory_hint)
         model.bind("mcp_request_logging", lambda: self._mcp_request_logging, self._set_mcp_request_logging)
         model.bind_func("mcp_safe_mode", lambda: self._mcp_safe_mode)
         model.bind_func("mcp_status", self._mcp_status_text)
@@ -135,10 +145,16 @@ class PreferencesPanel(Panel):
         model.bind_event("show_appearance", lambda *_: self._set_section("appearance"))
         model.bind_event("show_input", lambda *_: self._set_section("input"))
         model.bind_event("show_interface", lambda *_: self._set_section("interface"))
+        model.bind_event("show_file_associations", lambda *_: self._set_section("file_associations"))
         model.bind_event("show_mcp", lambda *_: self._set_section("mcp"))
+        model.bind_event("set_file_association", self._on_set_file_association)
         model.bind_event("toggle_mcp_enabled", self._on_toggle_mcp_enabled)
         model.bind_event("mcp_port_change", self._on_mcp_port_change)
         model.bind_event("confirm_mcp_port", self._on_confirm_mcp_port)
+        model.bind_event("working_directory_change", self._on_working_directory_change)
+        model.bind_event("confirm_working_directory", self._on_confirm_working_directory)
+        model.bind_event("browse_working_directory", self._on_browse_working_directory)
+        model.bind_event("use_default_working_directory", self._on_use_default_working_directory)
         model.bind_event("open_mcp_log_folder", self._on_open_mcp_log_folder)
         model.bind_event("toggle_section", self._on_toggle_section)
         model.bind_record_list("themes")
@@ -147,8 +163,10 @@ class PreferencesPanel(Panel):
         model.bind_record_list("scene_upscaler_presets")
         model.bind_record_list("languages")
         model.bind_record_list("navigation_modes")
+        model.bind_record_list("file_associations")
         self._handle = model.get_handle()
         self._keymap.bind(model)
+        self._reload_file_associations()
 
     def on_mount(self, doc):
         # The title bar is a cancellation boundary for the drafted MCP port,
@@ -251,6 +269,7 @@ class PreferencesPanel(Panel):
                 for index, (_mode, label) in enumerate(self.NAVIGATION_OPTIONS)
             ],
         )
+        self._reload_file_associations()
 
     def _theme_index(self):
         current = lf.ui.get_theme()
@@ -462,6 +481,69 @@ class PreferencesPanel(Panel):
         lf.ui.set_scene_graph_selection_markers(bool(enabled))
         self._refresh_selection()
 
+    def _read_working_directory(self):
+        stored = lf.ui.get_working_directory_preference()
+        self._applied_working_directory = stored or lf.ui.get_default_working_directory()
+        self._working_directory = self._applied_working_directory
+        self._dirty_working_directory()
+
+    def _set_working_directory_draft(self, value):
+        self._working_directory = str(value).strip()
+        self._dirty_working_directory()
+
+    def _on_working_directory_change(self, _handle, event, args):
+        if args:
+            self._set_working_directory_draft(args[0])
+        if event.get_bool_parameter("linebreak", False):
+            self._commit_working_directory()
+
+    def _on_confirm_working_directory(self, _handle, _event, _args):
+        self._commit_working_directory()
+
+    def _on_browse_working_directory(self, _handle, _event, _args):
+        start = self._working_directory or lf.ui.get_default_working_directory()
+        chosen = lf.ui.open_folder_dialog(
+            lf.ui.tr("preferences.working_directory"), start)
+        if not chosen:
+            return
+        self._working_directory = chosen
+        self._commit_working_directory()
+
+    def _on_use_default_working_directory(self, _handle, _event, _args):
+        lf.ui.clear_working_directory()
+        self._read_working_directory()
+
+    def _working_directory_hint(self):
+        path = lf.ui.get_temp_project_directory()
+        template = lf.ui.tr("preferences.working_directory_hint") or "Temporary projects: {path}"
+        return template.replace("{path}", path)
+
+    def _commit_working_directory(self):
+        draft = (self._working_directory or "").strip()
+        default_path = lf.ui.get_default_working_directory()
+        if not draft or draft == default_path:
+            lf.ui.clear_working_directory()
+            self._read_working_directory()
+            return True
+        error = lf.ui.set_working_directory(draft)
+        if error:
+            lf.ui.message_dialog(
+                lf.ui.tr("preferences.working_directory"),
+                error or lf.ui.tr("preferences.working_directory_invalid"),
+                "error",
+            )
+            self._working_directory = self._applied_working_directory
+            self._dirty_working_directory()
+            return False
+        self._read_working_directory()
+        return True
+
+    def _dirty_working_directory(self):
+        if not self._handle:
+            return
+        self._handle.dirty("working_directory")
+        self._handle.dirty("working_directory_hint")
+
     def _read_mcp_preferences(self):
         preferences = lf.ui.get_mcp_preferences()
         self._mcp_enabled = bool(preferences.get("enabled", True))
@@ -647,9 +729,76 @@ class PreferencesPanel(Panel):
     def _on_open_mcp_log_folder(self, _handle, _event, _args):
         lf.ui.open_url(lf.ui.get_mcp_log_directory())
 
+    @staticmethod
+    def _coerce_bool(value):
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    def _file_association_status_rows(self):
+        getter = getattr(lf, "file_associations_status", None)
+        if not callable(getter):
+            return []
+        rows = getter()
+        if not rows:
+            return []
+        result = []
+        for row in rows:
+            extension = str(row.get("extension", "")).strip()
+            if not extension:
+                continue
+            result.append(
+                {
+                    "extension": extension,
+                    "registered": bool(row.get("registered", False)),
+                    "label": extension,
+                }
+            )
+        return result
+
+    def _reload_file_associations(self):
+        self._file_associations = self._file_association_status_rows()
+        if self._handle:
+            self._handle.update_record_list(
+                "file_associations",
+                [
+                    {
+                        "extension": row["extension"],
+                        "registered": row["registered"],
+                        "label": row["label"],
+                    }
+                    for row in self._file_associations
+                ],
+            )
+            dirty = getattr(self._handle, "dirty", None)
+            if callable(dirty):
+                dirty("has_file_associations")
+                dirty("show_file_associations")
+
+    def _has_file_associations(self):
+        return bool(self._file_associations)
+
+    def _show_file_associations(self):
+        return self._section == "file_associations" and self._has_file_associations()
+
+    def _on_set_file_association(self, _handle, _event, args):
+        if not args or len(args) < 2:
+            return
+        self._set_file_association(args[0], args[1])
+
+    def _set_file_association(self, extension, enabled):
+        setter = getattr(lf, "file_association_set", None)
+        if not callable(setter):
+            return False
+        ok = bool(setter(str(extension), self._coerce_bool(enabled)))
+        self._reload_file_associations()
+        return ok
+
     def _consume_section_request(self):
         section = lf.ui.take_preferences_section_request()
-        if section in ("general", "appearance", "input", "interface", "mcp"):
+        if section in ("general", "appearance", "input", "interface", "file_associations", "mcp"):
+            if section == "file_associations" and not self._has_file_associations():
+                return
             self._set_section(section)
 
     def _dirty_mcp(self):
@@ -678,11 +827,15 @@ class PreferencesPanel(Panel):
         # The floating-window title bar is cancellation: discard an unconfirmed
         # port draft while preserving settings that were already applied live.
         self._mcp_port = str(self._mcp_applied_port)
+        self._working_directory = self._applied_working_directory
         self._dirty_mcp()
+        self._dirty_working_directory()
         lf.ui.set_panel_enabled(self.id, False)
 
     def _on_accept_and_close(self, _handle, _event, _args):
         if not self._commit_mcp_port():
+            return
+        if not self._commit_working_directory():
             return
         lf.ui.set_panel_enabled(self.id, False)
 
@@ -691,8 +844,17 @@ class PreferencesPanel(Panel):
             return
         self._section = section
         if self._handle:
-            for name in ("show_general", "show_appearance", "show_input", "show_interface", "show_mcp",
-                          "show_section_reset", "reset_section_label"):
+            for name in (
+                "show_general",
+                "show_appearance",
+                "show_input",
+                "show_interface",
+                "show_file_associations",
+                "has_file_associations",
+                "show_mcp",
+                "show_section_reset",
+                "reset_section_label",
+            ):
                 self._handle.dirty(name)
 
     def _on_toggle_section(self, _handle, _event, args):
@@ -777,6 +939,8 @@ class PreferencesPanel(Panel):
         section = section or self._section
         if section == "general":
             lf.ui.set_language("en")
+            lf.ui.clear_working_directory()
+            self._read_working_directory()
         elif section == "appearance":
             lf.ui.set_theme("dark")
             lf.ui.set_ui_scale(0.0)
@@ -817,3 +981,4 @@ class PreferencesPanel(Panel):
             self._handle.dirty("remember_view_snap")
             self._handle.dirty("scene_graph_selection_markers")
             self._dirty_mcp()
+            self._dirty_working_directory()

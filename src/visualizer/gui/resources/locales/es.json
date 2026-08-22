@@ -15,6 +15,11 @@
     "file.recent_missing_message": "No se encontró el archivo de proyecto:\n{path}",
     "file.remove_from_recent": "Eliminar de recientes",
     "file.recent_entry": "{name} — {parent}",
+    "file.import": "Importar",
+    "file.import_failed": "Error de importación",
+    "file.import_failed_message": "No se pudo importar:\n{path}\n\n{reason}",
+    "file.dataset_not_recognized": "La carpeta seleccionada no se reconoce como un dataset compatible:\n{path}",
+    "file.checkpoint_not_recognized": "El archivo seleccionado no se reconoce como un checkpoint válido:\n{path}",
     "file.import_dataset": "Importar Dataset",
     "file.import_ply": "Importar PLY, SOG, SPZ, RAD, USD",
     "file.import_mesh": "Importar Mesh",
@@ -383,6 +388,7 @@
     "refinement.refine_every": "  Refinar cada:",
     "refinement.start_refine": "  Iniciar refinamiento:",
     "refinement.stop_refine": "  Detener refinamiento:",
+    "refinement.morton_reorder_interval": "  Reordenación Morton:",
     "refinement.grow_until_iter": "Densificar hasta la iteración",
     "refinement.reset_every": "  Restablecer cada:",
     "refinement.sh_upgrade_every": "  Aumentar SH cada:",
@@ -428,6 +434,7 @@
     "tooltip.refine_every": "Intervalo de densificación (iteraciones)",
     "tooltip.start_refine": "Primer paso de densificación",
     "tooltip.stop_refine": "Último paso de refinamiento. En MRNF, la adición de nuevos splats se detiene en Grow Until Iter.",
+    "tooltip.morton_reorder_interval": "Reordenar gaussianas cada N iteraciones por código Morton 3D (0 desactiva).",
     "tooltip.grow_until_iter": "Continuar la densificación hasta esta iteración de entrenamiento.",
     "tooltip.reset_every": "Intervalo de restablecimiento de opacidad",
     "tooltip.sh_upgrade_every": "Intervalo de aumento del grado SH",
@@ -788,7 +795,14 @@
     "language": "Idioma:",
     "select_language": "Seleccionar idioma",
     "interface": "Interfaz",
+    "file_associations": "Asociaciones de archivos",
+    "file_associations_description": "Registrar o quitar LichtFeld Studio como controlador de cada tipo de archivo.",
     "general": "General",
+    "working_directory": "Carpeta de trabajo",
+    "working_directory_hint": "Proyectos temporales: {path}",
+    "working_directory_use_default": "Usar predeterminado",
+    "working_directory_applies_next_session": "Se aplica a las sesiones nuevas",
+    "working_directory_invalid": "Esta carpeta no se puede usar como carpeta de trabajo.",
     "appearance": "Apariencia",
     "scene_rendering": "Renderizado de la escena",
     "scene_reconstruction": "Reconstrucción de la escena",
@@ -1253,6 +1267,10 @@
   "project_switch": {
     "stop_training_title": "¿Detener el entrenamiento?",
     "stop_training_message": "El entrenamiento debe detenerse antes de cambiar de proyecto. ¿Detener la sesión actual?"
+  },
+  "unsaved_work": {
+    "title": "Cambios sin guardar",
+    "continue_without_saving": "Continuar sin guardar"
   },
   "load_dataset_popup": {
     "title": "Cargar Dataset",
@@ -2016,7 +2034,7 @@
   },
   "file_association": {
     "title": "Establecer como Aplicación Predeterminada",
-    "message": "¿Quieres establecer LichtFeld Studio como la aplicación predeterminada para los archivos de splat (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz)?",
+    "message": "¿Quieres establecer LichtFeld Studio como la aplicación predeterminada para los archivos de splat y de proyecto (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht)?",
     "yes": "Sí",
     "not_now": "Ahora no",
     "dont_ask": "No volver a preguntar",
@@ -2411,6 +2429,14 @@
       "title": "Entrenador no restaurado",
       "message": "El modelo del proyecto está disponible para visualización, pero no se pudo reanudar el entrenamiento. Compruebe la ruta del conjunto de datos y los registros."
     }
+  },
+  "recovery": {
+    "crash_title": "LichtFeld Studio se cerró inesperadamente",
+    "body": "Se encontró un archivo de recuperación para {}. (guardado {})",
+    "unsaved_session": "una sesión sin guardar",
+    "recover": "Recuperar",
+    "open_saved": "Abrir guardado",
+    "skip": "Omitir y crear nuevo"
   },
   "startup_recent": {
     "title": "Proyectos recientes",

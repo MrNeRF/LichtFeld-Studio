@@ -275,6 +275,7 @@ namespace lfs::core {
                                                         {"language", "en"},
                                                         {"theme", "dark"},
                                                         {"ui_scale", "auto"},
+                                                        {"working_directory", ""},
                                                         {"mcp", {
                                                                     {"enabled", true},
                                                                     {"expose_network", false},
@@ -413,6 +414,12 @@ namespace lfs::core {
     std::filesystem::path UserPaths::presetDir() const { return data_dir_ / "presets"; }
     std::filesystem::path UserPaths::assetLibraryDir() const { return data_dir_ / "asset_library"; }
     std::filesystem::path UserPaths::backupDir() const { return data_dir_ / "backups"; }
+    std::filesystem::path UserPaths::rootDir() const {
+        return config_dir_.parent_path();
+    }
+    std::filesystem::path UserPaths::recoveryDir() const {
+        return config_dir_.parent_path() / "recovery";
+    }
     std::filesystem::path UserPaths::mcpLogDir() const { return log_dir_ / "mcp"; }
     lfs::Status UserPaths::appendMcpLogLine(
         const std::filesystem::path& filename, const std::string& line) const {

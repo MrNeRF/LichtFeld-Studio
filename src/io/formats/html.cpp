@@ -4,18 +4,22 @@
 
 #include "html.hpp"
 #include "core/base64.hpp"
+#include "core/executable_path.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
-#include "html_viewer_resources.hpp"
 #include "io/atomic_output.hpp"
 #include "io/error.hpp"
 #include "sogs.hpp"
 
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <optional>
+#include <sstream>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace lfs::io {
 
@@ -32,6 +36,89 @@ namespace lfs::io {
             std::vector<uint8_t> buffer(size);
             file.read(reinterpret_cast<char*>(buffer.data()), size);
             return buffer;
+        }
+
+        // Viewer export resources (template/css/js/gizmo/measure-tool) are read
+        // from disk at export time, so editing them needs no rebuild.
+        Result<std::string> read_text_file(const std::filesystem::path& path) {
+            std::ifstream file;
+            if (!lfs::core::open_file_for_read(path, std::ios::binary, file)) {
+                return make_error(ErrorCode::READ_FAILURE, "Failed to open HTML viewer resource", path);
+            }
+            std::ostringstream contents;
+            contents << file.rdbuf();
+            if (file.bad()) {
+                return make_error(ErrorCode::READ_FAILURE, "Failed to read HTML viewer resource", path);
+            }
+            return contents.str();
+        }
+
+        // Strips a trailing `export { ... };` statement (only whitespace may
+        // follow it) so the source can be concatenated into a plain IIFE
+        // instead of a real ES module. Missing or non-trailing `export` is an
+        // error: inside the IIFE it is a SyntaxError and the viewer never starts.
+        Result<std::string> strip_trailing_export(std::string_view js, std::string_view export_statement,
+                                                  const std::filesystem::path& path) {
+            std::string result(js);
+            const size_t pos = result.rfind(export_statement);
+            if (pos == std::string::npos) {
+                return make_error(ErrorCode::CORRUPTED_DATA,
+                                  "HTML viewer resource has no trailing export statement", path);
+            }
+            const size_t after = pos + export_statement.size();
+            if (result.find_first_not_of(" \t\r\n", after) != std::string::npos) {
+                return make_error(ErrorCode::CORRUPTED_DATA,
+                                  "HTML viewer resource has no trailing export statement", path);
+            }
+            result.erase(pos);
+            return result;
+        }
+
+        // Vendored gizmo.js + measure-tool.js, wrapped in an IIFE so their
+        // top-level declarations can't collide with index.js's own (they
+        // share index.js's classes/constants only via closure), and exposed
+        // via a single `window` hook the template calls after `main()` resolves.
+        Result<std::string> build_measure_tool_script(const std::string& gizmo_js,
+                                                      const std::string& measure_tool_js,
+                                                      const std::filesystem::path& gizmo_path,
+                                                      const std::filesystem::path& measure_tool_path) {
+            auto gizmo_body = strip_trailing_export(gizmo_js, "export { Gizmo, TranslateGizmo };", gizmo_path);
+            if (!gizmo_body) {
+                return std::unexpected(gizmo_body.error());
+            }
+            auto measure_body = strip_trailing_export(measure_tool_js, "export { initMeasureTool };",
+                                                      measure_tool_path);
+            if (!measure_body) {
+                return std::unexpected(measure_body.error());
+            }
+
+            std::string wrapped;
+            wrapped.reserve(gizmo_body->size() + measure_body->size() + 128);
+            wrapped += "\n(function () {\n";
+            wrapped += *gizmo_body;
+            wrapped += "\n";
+            wrapped += *measure_body;
+            wrapped += "\nwindow.__lfsInitMeasureTool = initMeasureTool;\n})();\n";
+            return wrapped;
+        }
+
+        Result<std::filesystem::path> resolve_viewer_resources_dir() {
+            std::vector<std::filesystem::path> candidates;
+            candidates.push_back(lfs::core::getViewerResourcesDir());
+#ifdef LFS_DEV_VIEWER_SOURCE_DIR
+            candidates.push_back(lfs::core::utf8_to_path(LFS_DEV_VIEWER_SOURCE_DIR));
+#endif
+            for (const auto& dir : candidates) {
+                if (std::filesystem::exists(dir / "viewer_template.html")) {
+                    return dir;
+                }
+            }
+
+            std::string error_msg = "Cannot find HTML viewer resources.\nSearched in:\n";
+            for (const auto& dir : candidates) {
+                error_msg += "  - " + lfs::core::path_to_utf8(dir) + "\n";
+            }
+            return make_error(ErrorCode::PATH_NOT_FOUND, error_msg);
         }
 
         std::string replace_placeholder(std::string_view input, std::string_view placeholder, std::string_view replacement) {
@@ -70,11 +157,38 @@ namespace lfs::io {
             return result;
         }
 
-        std::string generate_html(const std::string& base64_sog,
-                                  const std::optional<core::ProvenanceStamp>& provenance) {
-            const auto tmpl = get_viewer_template();
-            const auto css = get_viewer_css();
-            const auto js = get_viewer_js();
+        Result<std::string> generate_html(const std::string& base64_sog,
+                                          const std::optional<core::ProvenanceStamp>& provenance) {
+            auto resource_dir_result = resolve_viewer_resources_dir();
+            if (!resource_dir_result)
+                return std::unexpected(resource_dir_result.error());
+            const auto& resource_dir = *resource_dir_result;
+
+            auto tmpl_result = read_text_file(resource_dir / "viewer_template.html");
+            if (!tmpl_result)
+                return std::unexpected(tmpl_result.error());
+            auto css_result = read_text_file(resource_dir / "index.css");
+            if (!css_result)
+                return std::unexpected(css_result.error());
+            auto js_result = read_text_file(resource_dir / "index.js");
+            if (!js_result)
+                return std::unexpected(js_result.error());
+            auto gizmo_result = read_text_file(resource_dir / "gizmo.js");
+            if (!gizmo_result)
+                return std::unexpected(gizmo_result.error());
+            auto measure_tool_result = read_text_file(resource_dir / "measure-tool.js");
+            if (!measure_tool_result)
+                return std::unexpected(measure_tool_result.error());
+
+            auto measure_script_result = build_measure_tool_script(*gizmo_result, *measure_tool_result,
+                                                                   resource_dir / "gizmo.js",
+                                                                   resource_dir / "measure-tool.js");
+            if (!measure_script_result)
+                return std::unexpected(measure_script_result.error());
+
+            const auto& tmpl = *tmpl_result;
+            const auto& css = *css_result;
+            const std::string js = *js_result + *measure_script_result;
 
             std::string html{tmpl};
 
@@ -180,7 +294,11 @@ namespace lfs::io {
             return make_error(ErrorCode::CANCELLED, "HTML export cancelled", options.output_path);
         }
 
-        const auto html = generate_html(base64_data, options.provenance);
+        auto html_result = generate_html(base64_data, options.provenance);
+        if (!html_result) {
+            return std::unexpected(html_result.error());
+        }
+        const auto& html = *html_result;
 
         if (!report_export_progress(options.progress_callback, 0.9f, "Writing HTML...")) {
             return make_error(ErrorCode::CANCELLED, "HTML export cancelled", options.output_path);

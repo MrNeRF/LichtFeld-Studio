@@ -15,6 +15,11 @@
     "file.recent_missing_message": "找不到项目文件：\n{path}",
     "file.remove_from_recent": "从最近打开中移除",
     "file.recent_entry": "{name} — {parent}",
+    "file.import": "导入",
+    "file.import_failed": "导入失败",
+    "file.import_failed_message": "无法导入：\n{path}\n\n{reason}",
+    "file.dataset_not_recognized": "所选文件夹未被识别为受支持的数据集：\n{path}",
+    "file.checkpoint_not_recognized": "所选文件未被识别为有效检查点：\n{path}",
     "file.import_dataset": "导入数据集",
     "file.import_ply": "导入PLY, SOG, SPZ, RAD, USD",
     "file.import_mesh": "导入网格",
@@ -383,6 +388,7 @@
     "refinement.refine_every": "  细化间隔:",
     "refinement.start_refine": "  开始细化:",
     "refinement.stop_refine": "  停止细化:",
+    "refinement.morton_reorder_interval": "  Morton 重排:",
     "refinement.grow_until_iter": "  增长截止迭代:",
     "refinement.reset_every": "  重置间隔:",
     "refinement.sh_upgrade_every": "  SH 阶数升级间隔:",
@@ -428,6 +434,7 @@
     "tooltip.refine_every": "密度化间隔（迭代）",
     "tooltip.start_refine": "首次密度化步骤",
     "tooltip.stop_refine": "最后的细化步骤。在 MRNF 中，新增 splat 会在“增长截止迭代”处停止。",
+    "tooltip.morton_reorder_interval": "每 N 次迭代按三维 Morton 码重排高斯（0 表示关闭）。",
     "tooltip.grow_until_iter": "MRNF 中还能新增 splat 的最后一步",
     "tooltip.reset_every": "不透明度重置间隔",
     "tooltip.sh_upgrade_every": "SH阶数提升间隔",
@@ -788,7 +795,14 @@
     "language": "语言：",
     "select_language": "选择语言",
     "interface": "界面",
+    "file_associations": "文件关联",
+    "file_associations_description": "为每种文件类型注册或取消 LichtFeld Studio 作为打开程序。",
     "general": "常规",
+    "working_directory": "工作文件夹",
+    "working_directory_hint": "临时项目：{path}",
+    "working_directory_use_default": "使用默认值",
+    "working_directory_applies_next_session": "应用于新会话",
+    "working_directory_invalid": "无法将此文件夹用作工作文件夹。",
     "appearance": "外观",
     "scene_rendering": "场景渲染",
     "scene_reconstruction": "场景重建",
@@ -1253,6 +1267,10 @@
   "project_switch": {
     "stop_training_title": "停止训练？",
     "stop_training_message": "切换项目前必须停止训练。是否停止当前会话？"
+  },
+  "unsaved_work": {
+    "title": "未保存的更改",
+    "continue_without_saving": "不保存并继续"
   },
   "load_dataset_popup": {
     "title": "加载数据集",
@@ -2016,7 +2034,7 @@
   },
   "file_association": {
     "title": "设为默认应用程序",
-    "message": "是否要将 LichtFeld Studio 设为 splat 文件（.ply、.sog、.spz、.rad、.usd、.usda、.usdc、.usdz）的默认应用程序？",
+    "message": "是否要将 LichtFeld Studio 设为 splat 和项目文件（.ply、.sog、.spz、.rad、.usd、.usda、.usdc、.usdz、.licht）的默认应用程序？",
     "yes": "是",
     "not_now": "暂不",
     "dont_ask": "不再询问",
@@ -2411,6 +2429,14 @@
       "title": "未能恢复训练器",
       "message": "项目模型可供查看，但无法恢复训练。请检查数据集路径和日志。"
     }
+  },
+  "recovery": {
+    "crash_title": "LichtFeld Studio 意外关闭",
+    "body": "找到了 {} 的恢复文件。（保存于 {}）",
+    "unsaved_session": "未保存的会话",
+    "recover": "恢复",
+    "open_saved": "打开已保存",
+    "skip": "跳过并新建"
   },
   "startup_recent": {
     "title": "最近的项目",

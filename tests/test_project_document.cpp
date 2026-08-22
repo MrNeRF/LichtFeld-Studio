@@ -42,7 +42,10 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <unordered_set>
 #include <vector>
+
+#include <cuda_runtime.h>
 
 #if defined(__linux__)
 #include <csignal>
@@ -955,6 +958,128 @@ namespace {
         EXPECT_EQ(live.getNodeUuid(root_node->children[2]), third);
     }
 
+    bool cuda_device_available() {
+        int count = 0;
+        return cudaGetDeviceCount(&count) == cudaSuccess && count > 0;
+    }
+
+    std::shared_ptr<lfs::core::Camera> make_adapter_test_camera(
+        const std::string& image_name, const int uid) {
+        const auto empty_distortion = Tensor::zeros(
+            {0}, Device::CPU, DataType::Float32);
+        return std::make_shared<lfs::core::Camera>(
+            Tensor::eye(3, Device::CPU),
+            Tensor::zeros({3}, Device::CPU),
+            100.0f, 100.0f, 32.0f, 32.0f,
+            empty_distortion, empty_distortion,
+            lfs::core::CameraModelType::PINHOLE,
+            image_name, std::filesystem::path{},
+            std::filesystem::path{}, 64, 64, uid);
+    }
+
+    TEST(SceneChapterAdapterTest,
+         CameraVisibleTrainingEnabledAndHasImageRoundTripIndependently) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+
+        Scene source;
+        const auto dataset = source.addDataset("Dataset");
+        const auto group =
+            source.addCameraGroup("Training", dataset, 3);
+        ASSERT_NE(dataset, lfs::core::NULL_NODE);
+        ASSERT_NE(group, lfs::core::NULL_NODE);
+
+        auto disabled = make_adapter_test_camera("frame_0001.png", 1);
+        auto missing = make_adapter_test_camera("frame_0002.png", 2);
+        missing->set_has_image(false);
+        auto hidden = make_adapter_test_camera("frame_0003.png", 3);
+
+        const auto disabled_id =
+            source.addCamera("frame_0001.png", group, disabled);
+        const auto missing_id =
+            source.addCamera("frame_0002.png", group, missing);
+        const auto hidden_id =
+            source.addCamera("frame_0003.png", group, hidden);
+        ASSERT_NE(disabled_id, lfs::core::NULL_NODE);
+        ASSERT_NE(missing_id, lfs::core::NULL_NODE);
+        ASSERT_NE(hidden_id, lfs::core::NULL_NODE);
+
+        source.setCameraTrainingEnabled(disabled_id, false);
+        source.setNodeVisibility(hidden_id, false);
+
+        auto chapter = capture_scene_graph(source, ScenePayloadBindings{});
+        ASSERT_TRUE(chapter)
+            << lfs::format_for_developer(chapter.error());
+        auto captured_nodes = chapter->nodes();
+        ASSERT_TRUE(captured_nodes)
+            << lfs::format_for_developer(captured_nodes.error());
+        const auto captured_disabled = std::ranges::find_if(
+            *captured_nodes, [](const auto& node) {
+                return node.name == "frame_0001.png";
+            });
+        const auto captured_missing = std::ranges::find_if(
+            *captured_nodes, [](const auto& node) {
+                return node.name == "frame_0002.png";
+            });
+        const auto captured_hidden = std::ranges::find_if(
+            *captured_nodes, [](const auto& node) {
+                return node.name == "frame_0003.png";
+            });
+        ASSERT_NE(captured_disabled, captured_nodes->end());
+        ASSERT_NE(captured_missing, captured_nodes->end());
+        ASSERT_NE(captured_hidden, captured_nodes->end());
+        EXPECT_TRUE(captured_disabled->visible);
+        EXPECT_FALSE(captured_disabled->training_enabled);
+        ASSERT_TRUE(captured_disabled->camera);
+        EXPECT_TRUE(captured_disabled->camera->has_image);
+        EXPECT_TRUE(captured_missing->visible);
+        EXPECT_TRUE(captured_missing->training_enabled);
+        ASSERT_TRUE(captured_missing->camera);
+        EXPECT_FALSE(captured_missing->camera->has_image);
+        EXPECT_FALSE(captured_hidden->visible);
+        EXPECT_TRUE(captured_hidden->training_enabled);
+        ASSERT_TRUE(captured_hidden->camera);
+        EXPECT_TRUE(captured_hidden->camera->has_image);
+
+        Scene live;
+        auto restored =
+            hydrate_scene_graph(*chapter, live, ScenePayloadResolver{});
+        ASSERT_TRUE(restored)
+            << lfs::format_for_developer(restored.error());
+
+        const auto* live_disabled = live.getNode("frame_0001.png");
+        const auto* live_missing = live.getNode("frame_0002.png");
+        const auto* live_hidden = live.getNode("frame_0003.png");
+        ASSERT_NE(live_disabled, nullptr);
+        ASSERT_NE(live_missing, nullptr);
+        ASSERT_NE(live_hidden, nullptr);
+        EXPECT_TRUE(live_disabled->visible.get());
+        EXPECT_FALSE(live_disabled->training_enabled);
+        ASSERT_NE(live_disabled->camera, nullptr);
+        EXPECT_TRUE(live_disabled->camera->has_image());
+        EXPECT_TRUE(live_missing->visible.get());
+        EXPECT_TRUE(live_missing->training_enabled);
+        ASSERT_NE(live_missing->camera, nullptr);
+        EXPECT_FALSE(live_missing->camera->has_image());
+        EXPECT_FALSE(live_hidden->visible.get());
+        EXPECT_TRUE(live_hidden->training_enabled);
+        ASSERT_NE(live_hidden->camera, nullptr);
+        EXPECT_TRUE(live_hidden->camera->has_image());
+
+        const auto active = live.getActiveCameras();
+        ASSERT_EQ(active.size(), 2u);
+        EXPECT_TRUE(std::ranges::none_of(active, [](const auto& camera) {
+            return camera && camera->uid() == 1;
+        }));
+        EXPECT_TRUE(std::ranges::any_of(active, [](const auto& camera) {
+            return camera && camera->uid() == 2;
+        }));
+        EXPECT_TRUE(std::ranges::any_of(active, [](const auto& camera) {
+            return camera && camera->uid() == 3;
+        }));
+    }
+
     TEST(ProjectDocumentTest,
          SaveReportReusesRefreshedSourceReader) {
         TemporaryDirectory temporary;
@@ -1626,6 +1751,82 @@ namespace {
             invalid.error().code(),
             lfs::ErrorCode::
                 FailedPrecondition);
+
+        invalid_options.commit.kind =
+            CommitKind::Compaction;
+        auto compaction =
+            reopened->save(
+                path, invalid_options);
+        ASSERT_FALSE(compaction);
+        EXPECT_EQ(
+            compaction.error().code(),
+            lfs::ErrorCode::
+                FailedPrecondition);
+    }
+
+    TEST(ProjectDocumentTest,
+         RecoveredSaveAsRegeneratesPreviewOnDifferentDestination) {
+        TemporaryDirectory temporary;
+        const auto source =
+            temporary.path / "recovered-preview-source.licht";
+        const auto destination =
+            temporary.path / "recovered-preview-dest.licht";
+        auto document = make_empty_document(fixed_uuid(1990), 100);
+        auto first =
+            document->save(source, save_options(1991, 200));
+        ASSERT_TRUE(first)
+            << lfs::format_for_developer(
+                   first.error());
+
+        const auto preview = one_pixel_png();
+        auto recovered_options =
+            save_options(1994, 300);
+        recovered_options.commit.kind =
+            CommitKind::Recovered;
+        recovered_options.preview_png =
+            std::span<const std::byte>(preview);
+        auto saved = document->save_as(
+            destination, recovered_options);
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(
+                   saved.error());
+
+        auto reader = ProjectReader::open(destination);
+        ASSERT_TRUE(reader);
+        EXPECT_EQ(
+            reader->commit().kind,
+            CommitKind::Recovered);
+        ASSERT_TRUE(reader->preview());
+        auto bytes = reader->read_preview();
+        ASSERT_TRUE(bytes);
+        EXPECT_EQ(*bytes, preview);
+    }
+
+    TEST(ProjectDocumentTest,
+         RecoveredSaveRegeneratesPreviewOnSamePath) {
+        TemporaryDirectory temporary;
+        const auto path =
+            temporary.path / "recovered-preview-same.licht";
+        auto document = make_empty_document(fixed_uuid(2000), 100);
+        const auto preview = one_pixel_png();
+        auto options = save_options(2001, 200);
+        options.commit.kind = CommitKind::Recovered;
+        options.preview_png =
+            std::span<const std::byte>(preview);
+        auto saved = document->save(path, options);
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(
+                   saved.error());
+
+        auto reader = ProjectReader::open(path);
+        ASSERT_TRUE(reader);
+        EXPECT_EQ(
+            reader->commit().kind,
+            CommitKind::Recovered);
+        ASSERT_TRUE(reader->preview());
+        auto bytes = reader->read_preview();
+        ASSERT_TRUE(bytes);
+        EXPECT_EQ(*bytes, preview);
     }
 
     TEST(ProjectDocumentTest,
@@ -3281,6 +3482,110 @@ namespace {
         EXPECT_EQ(
             saved->snapshot_uuid,
             overlay.commit().snapshot_uuid);
+    }
+
+    TEST(ProjectDocumentTest,
+         UnboundCheckpointIsRemovedWhenCapturedSceneHasNoBinding) {
+        const auto training_uuid = fixed_uuid(9970);
+        const auto checkpoint_uuid = fixed_uuid(9971);
+        auto document = make_empty_document(fixed_uuid(9972), 100);
+        require_status(document->edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = training_uuid,
+                .type = "splat",
+                .name = "Training",
+                .child_order = 0,
+                .payload = PayloadBinding{
+                    .fourcc = "CKPT",
+                    .instance_uuid = checkpoint_uuid,
+                    .source_kind = "training",
+                },
+            }));
+        require_status(
+            document->edit_scene_graph().set_training_model_uuid(
+                training_uuid));
+        require_status(document->set_checkpoint(
+            checkpoint_uuid,
+            make_autosave_checkpoint_payload(checkpoint_uuid)));
+        ASSERT_EQ(document->checkpoint_uuids().size(), 1u);
+
+        document->edit_scene_graph() = SceneGraphChapter{};
+        Scene live;
+        auto before_prune = document->stage_hydration(live);
+        ASSERT_FALSE(before_prune);
+        EXPECT_EQ(
+            before_prune.error().code(), lfs::ErrorCode::DataLoss);
+
+        std::unordered_set<Uuid> bound;
+        if (const auto nodes = document->scene_graph().nodes();
+            nodes) {
+            for (const auto& node : *nodes) {
+                if (node.payload && node.payload->fourcc == "CKPT") {
+                    bound.insert(node.payload->instance_uuid);
+                }
+            }
+        }
+        for (const auto& uuid : document->checkpoint_uuids()) {
+            if (!bound.contains(uuid)) {
+                EXPECT_TRUE(document->remove_checkpoint(uuid));
+            }
+        }
+        EXPECT_TRUE(document->checkpoint_uuids().empty());
+
+        Scene after_scene;
+        auto after_prune = document->stage_hydration(after_scene);
+        ASSERT_TRUE(after_prune)
+            << lfs::format_for_developer(after_prune.error());
+
+        TemporaryDirectory temporary;
+        const auto path =
+            temporary.path / "ckpt-omit-prune.licht";
+        (void)require_result(
+            document->save(path, save_options(9973, 200)));
+        auto reopened = require_result_ptr(ProjectDocument::open(path));
+        EXPECT_TRUE(reopened->checkpoint_uuids().empty());
+    }
+
+    TEST(ProjectDocumentTest,
+         BoundCheckpointSurvivesWhenCapturedSceneStillBindsIt) {
+        const auto training_uuid = fixed_uuid(9974);
+        const auto checkpoint_uuid = fixed_uuid(9975);
+        auto document = make_empty_document(fixed_uuid(9976), 100);
+        require_status(document->edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = training_uuid,
+                .type = "splat",
+                .name = "Training",
+                .child_order = 0,
+                .payload = PayloadBinding{
+                    .fourcc = "CKPT",
+                    .instance_uuid = checkpoint_uuid,
+                    .source_kind = "training",
+                },
+            }));
+        require_status(
+            document->edit_scene_graph().set_training_model_uuid(
+                training_uuid));
+        require_status(document->set_checkpoint(
+            checkpoint_uuid,
+            make_autosave_checkpoint_payload(checkpoint_uuid)));
+
+        std::unordered_set<Uuid> bound;
+        if (const auto nodes = document->scene_graph().nodes();
+            nodes) {
+            for (const auto& node : *nodes) {
+                if (node.payload && node.payload->fourcc == "CKPT") {
+                    bound.insert(node.payload->instance_uuid);
+                }
+            }
+        }
+        for (const auto& uuid : document->checkpoint_uuids()) {
+            if (!bound.contains(uuid)) {
+                static_cast<void>(document->remove_checkpoint(uuid));
+            }
+        }
+        ASSERT_EQ(document->checkpoint_uuids().size(), 1u);
+        EXPECT_EQ(document->checkpoint_uuids().front(), checkpoint_uuid);
     }
 
     TEST(ProjectDocumentTest,

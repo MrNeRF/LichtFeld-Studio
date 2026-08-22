@@ -103,6 +103,13 @@
                         </svg>
                     </button>
 
+                    <button id="measure" class="controlButton" title="Measure Distance">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">
+                            <g class='stroke'><use href="#measureIcon"/></g>
+                            <g class='fill'><use href="#measureIcon"/></g>
+                        </svg>
+                    </button>
+
                     <button id="arMode" class="controlButton hidden">
                         <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28">
                             <g class='stroke'><use href="#arIcon"/></g>
@@ -306,6 +313,15 @@
                 <path d="M8.40039 2.09961C8.89727 2.09982 9.2998 2.50307 9.2998 3C9.2998 3.49693 8.89727 3.90018 8.40039 3.90039H4C3.94477 3.90039 3.90039 3.94477 3.90039 4V8.40039C3.90018 8.89727 3.49693 9.2998 3 9.2998C2.50307 9.2998 2.09982 8.89727 2.09961 8.40039V4C2.09961 2.95066 2.95066 2.09961 4 2.09961H8.40039Z"/>
                 <path d="M20 2.09961C21.0493 2.09961 21.9004 2.95066 21.9004 4V8.40039C21.9002 8.89727 21.4969 9.2998 21 9.2998C20.5031 9.2998 20.0998 8.89727 20.0996 8.40039V4C20.0996 3.94477 20.0552 3.90039 20 3.90039H15.5996C15.1027 3.90018 14.7002 3.49693 14.7002 3C14.7002 2.50307 15.1027 2.09982 15.5996 2.09961H20Z"/>
             </symbol>
+            <symbol id="measureIcon" viewBox="0 0 24 24">
+                <g transform="rotate(-45 12 12)">
+                    <rect x="1" y="10.5" width="22" height="3" rx="1"/>
+                    <rect x="4" y="8" width="2" height="4"/>
+                    <rect x="9" y="8" width="2" height="4"/>
+                    <rect x="14" y="8" width="2" height="4"/>
+                    <rect x="19" y="8" width="2" height="4"/>
+                </g>
+            </symbol>
             <symbol id="exitFullscreenIcon" viewBox="0 0 24 24">
                 <path d="M8 15.0996C8.49706 15.0996 8.90039 15.5029 8.90039 16V21C8.90039 21.4971 8.49706 21.9004 8 21.9004C7.50294 21.9004 7.09961 21.4971 7.09961 21V16.9004H3C2.50294 16.9004 2.09961 16.4971 2.09961 16C2.09961 15.5029 2.50294 15.0996 3 15.0996H8Z" />
                 <path d="M21 15.0996C21.4971 15.0996 21.9004 15.5029 21.9004 16C21.9004 16.4971 21.4971 16.9004 21 16.9004H16.9004V21C16.9004 21.4971 16.4971 21.9004 16 21.9004C15.5029 21.9004 15.0996 21.4971 15.0996 21V16C15.0996 15.5029 15.5029 15.0996 16 15.0996H21Z" />
@@ -340,6 +356,10 @@
                 ]);
 
                 const viewer = await main(appElement.app, cameraElement.entity, settingsJson, config);
+                // Vendored gizmo/measurement-tool code (see gizmo.js, measure-tool.js)
+                // is appended after this bundle at export time and exposes itself
+                // via this hook so it can share the viewer's app/camera/events.
+                window.__lfsInitMeasureTool?.(viewer.global);
             });
         </script>
     </body>

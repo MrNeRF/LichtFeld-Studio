@@ -787,6 +787,10 @@ class Camera:
         """Whether a depth map file exists"""
 
     @property
+    def has_image(self) -> bool:
+        """Whether the bound dataset image file exists"""
+
+    @property
     def uid(self) -> int:
         """Unique camera identifier"""
 

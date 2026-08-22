@@ -3879,10 +3879,9 @@ class AssetManagerPanel(Panel):
                 ):
                     return
             else:
-                if replace_scene:
-                    lf.clear_scene()
-                # Regular mesh/splat file loading
-                transform_node_name = self._load_asset_with_hierarchy(file_path)
+                transform_node_name = self._load_asset_with_hierarchy(
+                    file_path, replace=replace_scene
+                )
                 self._apply_asset_transform(asset, transform_node_name)
                 self._log_info("Loaded asset: %s", asset.get("name", "unknown"))
 
@@ -3900,10 +3899,15 @@ class AssetManagerPanel(Panel):
         except Exception:
             return ""
 
-    def _load_asset_with_hierarchy(self, file_path: str) -> Optional[str]:
+    def _load_asset_with_hierarchy(
+        self, file_path: str, *, replace: bool = False
+    ) -> Optional[str]:
         scene = lf.get_scene()
         before_ids = {node.id for node in scene.get_nodes()} if scene is not None else set()
-        lf.load_file(file_path)
+        if replace:
+            lf.load_file(file_path, replace=True)
+        else:
+            lf.load_file(file_path)
         scene = lf.get_scene()
         if scene is None:
             return None

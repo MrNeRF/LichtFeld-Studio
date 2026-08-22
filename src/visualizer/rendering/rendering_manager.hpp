@@ -103,6 +103,10 @@ namespace lfs::vis {
             glm::ivec2 size{0, 0};       // valid/logical viewport extent
             glm::ivec2 alloc_size{0, 0}; // bucketed image extent (0 = treat as size)
             bool flip_y = false;
+            // True only when this output was rendered for the logical viewport
+            // extent in the current request. Internal reconstruction resolution
+            // may differ from that extent.
+            bool matches_viewport_extent = false;
 
             // Split-view right panel. The left panel reuses the `image` slot above
             // (rideshares the existing scene-image interop). When this is set, the
@@ -567,7 +571,9 @@ namespace lfs::vis {
         void setEllipsoidGizmoActive(bool active) { viewport_overlay_service_.setEllipsoidActive(active); }
         [[nodiscard]] GizmoState getGizmoState() const { return viewport_overlay_service_.makeFrameGizmoState(); }
 
-        void setViewportResizeActive(bool active);
+        void setViewportResizeActive(
+            bool active,
+            ViewportResizeRenderPolicy render_policy = ViewportResizeRenderPolicy::InteractivePreview);
         [[nodiscard]] bool isViewportResizeDeferring() const {
             return frame_lifecycle_service_.isResizeDeferring();
         }
@@ -807,6 +813,7 @@ namespace lfs::vis {
         std::function<void()> wake_callback_;
         glm::ivec2 vulkan_viewport_image_size_{0, 0};
         glm::ivec2 vulkan_viewport_image_alloc_size_{0, 0};
+        glm::ivec2 vulkan_viewport_coordinate_size_{0, 0};
         bool vulkan_viewport_image_flip_y_ = false;
         glm::ivec2 vulkan_gt_comparison_content_size_{0, 0};
         struct GTComparisonImageCacheEntry {

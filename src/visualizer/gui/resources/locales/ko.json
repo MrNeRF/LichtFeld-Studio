@@ -15,6 +15,11 @@
     "file.recent_missing_message": "프로젝트 파일을 찾을 수 없습니다:\n{path}",
     "file.remove_from_recent": "최근 프로젝트에서 제거",
     "file.recent_entry": "{name} — {parent}",
+    "file.import": "가져오기",
+    "file.import_failed": "가져오기 실패",
+    "file.import_failed_message": "가져올 수 없습니다:\n{path}\n\n{reason}",
+    "file.dataset_not_recognized": "선택한 폴더가 지원되는 데이터셋으로 인식되지 않습니다:\n{path}",
+    "file.checkpoint_not_recognized": "선택한 파일이 유효한 체크포인트로 인식되지 않습니다:\n{path}",
     "file.import_dataset": "데이터셋 가져오기",
     "file.import_ply": "PLY, SOG, SPZ, RAD, USD 가져오기",
     "file.import_mesh": "메시 가져오기",
@@ -383,6 +388,7 @@
     "refinement.refine_every": "  정제 간격:",
     "refinement.start_refine": "  정제 시작:",
     "refinement.stop_refine": "  정제 종료:",
+    "refinement.morton_reorder_interval": "  Morton 재정렬:",
     "refinement.grow_until_iter": "  성장 종료 반복:",
     "refinement.reset_every": "  재설정 간격:",
     "refinement.sh_upgrade_every": "  SH 차수 갱신 간격:",
@@ -428,6 +434,7 @@
     "tooltip.refine_every": "밀도화 간격 (반복)",
     "tooltip.start_refine": "첫 밀도화 단계",
     "tooltip.stop_refine": "마지막 정제 단계입니다. MRNF에서는 새 스플랫 추가가 '성장 종료 반복'에서 끝납니다.",
+    "tooltip.morton_reorder_interval": "N번 반복마다 3D Morton 코드로 가우시안을 재정렬합니다(0이면 비활성).",
     "tooltip.grow_until_iter": "MRNF에서 새 스플랫을 추가할 수 있는 마지막 단계",
     "tooltip.reset_every": "불투명도 재설정 간격",
     "tooltip.sh_upgrade_every": "SH 차수 증가 간격",
@@ -788,7 +795,14 @@
     "language": "언어:",
     "select_language": "언어 선택",
     "interface": "인터페이스",
+    "file_associations": "파일 연결",
+    "file_associations_description": "각 파일 형식별 LichtFeld Studio 연결을 등록하거나 해제합니다.",
     "general": "일반",
+    "working_directory": "작업 폴더",
+    "working_directory_hint": "임시 프로젝트: {path}",
+    "working_directory_use_default": "기본값 사용",
+    "working_directory_applies_next_session": "새 세션에 적용됩니다",
+    "working_directory_invalid": "이 폴더는 작업 폴더로 사용할 수 없습니다.",
     "appearance": "모양",
     "scene_rendering": "장면 렌더링",
     "scene_reconstruction": "장면 재구성",
@@ -1253,6 +1267,10 @@
   "project_switch": {
     "stop_training_title": "훈련을 중단할까요?",
     "stop_training_message": "프로젝트를 전환하려면 훈련을 먼저 중단해야 합니다. 현재 세션을 중단할까요?"
+  },
+  "unsaved_work": {
+    "title": "저장되지 않은 변경 사항",
+    "continue_without_saving": "저장하지 않고 계속"
   },
   "load_dataset_popup": {
     "title": "데이터셋 불러오기",
@@ -2016,7 +2034,7 @@
   },
   "file_association": {
     "title": "기본 응용 프로그램으로 설정",
-    "message": "LichtFeld Studio를 스플랫 파일(.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz)의 기본 응용 프로그램으로 설정하시겠습니까?",
+    "message": "LichtFeld Studio를 스플랫 및 프로젝트 파일(.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .licht)의 기본 응용 프로그램으로 설정하시겠습니까?",
     "yes": "예",
     "not_now": "나중에",
     "dont_ask": "다시 묻지 않기",
@@ -2411,6 +2429,14 @@
       "title": "트레이너를 복원하지 못함",
       "message": "프로젝트 모델은 볼 수 있지만 학습을 재개할 수 없습니다. 데이터세트 경로와 로그를 확인하세요."
     }
+  },
+  "recovery": {
+    "crash_title": "LichtFeld Studio가 예기치 않게 종료되었습니다",
+    "body": "{}의 복구 파일이 있습니다. (저장 시각 {})",
+    "unsaved_session": "저장되지 않은 세션",
+    "recover": "복구",
+    "open_saved": "저장된 파일 열기",
+    "skip": "건너뛰고 새로 만들기"
   },
   "startup_recent": {
     "title": "최근 프로젝트",

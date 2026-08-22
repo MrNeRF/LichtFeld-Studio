@@ -216,9 +216,9 @@ namespace lfs::vis {
         projectPollWrite() {
             return ProjectWritePoll{};
         }
-        // True when the last ProjectSaveAs command started a write.
-        // Empty-path Save As that the user cancelled returns false.
-        [[nodiscard]] virtual bool consumeProjectSaveAsStarted() {
+        // True when the last ProjectSave or ProjectSaveAs command
+        // started a write. A cancelled save dialog returns false.
+        [[nodiscard]] virtual bool consumeProjectSaveStarted() {
             return false;
         }
         virtual void projectWaitWrite() {}
@@ -248,6 +248,16 @@ namespace lfs::vis {
         projectRemoveRecentFile(
             const std::filesystem::path&) {
             return {};
+        }
+
+        [[nodiscard]] virtual bool loadFileWipeWouldNeedConfirmation(
+            bool is_dataset,
+            bool replace,
+            bool discard_changes) {
+            (void)is_dataset;
+            (void)replace;
+            (void)discard_changes;
+            return false;
         }
 
         virtual ~Visualizer() = default;

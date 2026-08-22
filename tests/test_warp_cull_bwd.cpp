@@ -10,6 +10,8 @@
 #include "training/rasterization/fastgs/rasterization/include/forward.h"
 
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <cuda_runtime.h>
 #include <fstream>
 #include <gtest/gtest.h>
@@ -263,4 +265,103 @@ TEST_F(WarpCullBwdTest, EnabledIsDeterministic) {
     constexpr float kTol = 1e-6f;
     EXPECT_LE(max_abs_diff(a.means, b.means), kTol);
     EXPECT_LE(max_abs_diff(a.opacity, b.opacity), kTol);
+}
+
+namespace {
+
+    bool tensors_bit_identical(const Tensor& a, const Tensor& b) {
+        if (!a.is_valid() || !b.is_valid() || a.numel() != b.numel()) {
+            return false;
+        }
+        if (a.numel() == 0) {
+            return true;
+        }
+        const auto* pa = reinterpret_cast<const std::uint8_t*>(a.ptr<float>());
+        const auto* pb = reinterpret_cast<const std::uint8_t*>(b.ptr<float>());
+        return std::memcmp(pa, pb, a.numel() * sizeof(float)) == 0;
+    }
+
+    struct Warp8x4Snapshot {
+        Tensor image;
+        Tensor alpha;
+        Tensor depth;
+        Tensor normal;
+        Tensor means;
+        Tensor opacity;
+        Tensor sh0;
+        Tensor scaling;
+        Tensor densification;
+        bool ok = false;
+    };
+
+    Warp8x4Snapshot run_8x4_step() {
+        Warp8x4Snapshot out{};
+        Camera cam = make_camera(8, 4);
+        auto splat = make_synthetic_splat(12);
+        splat->_densification_info = Tensor::zeros({2, static_cast<size_t>(12)}, Device::CUDA);
+        Tensor bg = Tensor::zeros({3}, Device::CUDA);
+
+        set_warp_cull_mode_for_testing(0);
+        set_blend_batch_size_for_testing(0);
+        auto r = fast_rasterize_forward(cam, *splat, bg, 0, 0, 0, 0, false, {}, true);
+        if (!r.has_value()) {
+            ADD_FAILURE() << lfs::format_for_developer(r.error());
+            return out;
+        }
+
+        AdamConfig cfg{.lr = 0.01f, .beta1 = 0.9, .beta2 = 0.999, .eps = 1e-15};
+        auto opt = std::make_unique<AdamOptimizer>(*splat, cfg);
+        opt->allocate_gradients();
+        opt->zero_grad(0);
+
+        auto grad_out = r->first.image.mul(2.0f);
+        auto grad_depth = Tensor::ones_like(r->first.depth);
+        auto grad_normal = Tensor::ones_like(r->first.normal);
+        auto pixel_error = Tensor::ones({4, 8}, Device::CUDA);
+        fast_rasterize_backward(
+            r->second,
+            grad_out,
+            *splat,
+            *opt,
+            {},
+            pixel_error,
+            DensificationType::MCMC,
+            1,
+            {},
+            grad_depth,
+            grad_normal);
+
+        out.image = r->first.image.to(Device::CPU).contiguous().clone();
+        out.alpha = r->first.alpha.to(Device::CPU).contiguous().clone();
+        out.depth = r->first.depth.to(Device::CPU).contiguous().clone();
+        out.normal = r->first.normal.to(Device::CPU).contiguous().clone();
+        out.means = splat->means().to(Device::CPU).contiguous().clone();
+        out.opacity = splat->opacity_raw().to(Device::CPU).contiguous().clone();
+        out.sh0 = splat->sh0().to(Device::CPU).contiguous().clone();
+        out.scaling = splat->scaling_raw().to(Device::CPU).contiguous().clone();
+        out.densification = splat->_densification_info.to(Device::CPU).contiguous().clone();
+        out.ok = true;
+
+        r->second.release_forward_context();
+        EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        return out;
+    }
+
+} // namespace
+
+// 8x4 image = one warp sub-tile, so blend_backward atomics have a single writer
+// per splat/field and are bit-deterministic (dense tiles are not).
+TEST_F(WarpCullBwdTest, SingleWarp8x4_BitIdenticalAcrossRuns) {
+    auto a = run_8x4_step();
+    auto b = run_8x4_step();
+    ASSERT_TRUE(a.ok && b.ok);
+    EXPECT_TRUE(tensors_bit_identical(a.image, b.image)) << "image";
+    EXPECT_TRUE(tensors_bit_identical(a.alpha, b.alpha)) << "alpha";
+    EXPECT_TRUE(tensors_bit_identical(a.depth, b.depth)) << "depth";
+    EXPECT_TRUE(tensors_bit_identical(a.normal, b.normal)) << "normal";
+    EXPECT_TRUE(tensors_bit_identical(a.means, b.means)) << "means";
+    EXPECT_TRUE(tensors_bit_identical(a.opacity, b.opacity)) << "opacity";
+    EXPECT_TRUE(tensors_bit_identical(a.sh0, b.sh0)) << "sh0";
+    EXPECT_TRUE(tensors_bit_identical(a.scaling, b.scaling)) << "scaling";
+    EXPECT_TRUE(tensors_bit_identical(a.densification, b.densification)) << "densification";
 }

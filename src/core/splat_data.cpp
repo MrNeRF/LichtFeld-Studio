@@ -1080,6 +1080,17 @@ namespace lfs::core {
         _active_sh_degree = target_degree;
     }
 
+    void SplatData::set_active_sh_degree(int sh_degree, Tensor shN_value_bounds) {
+        if (shN_value_bounds.is_valid() && shN_value_bounds.numel() > 0) {
+            _shN_value_bounds = std::move(shN_value_bounds);
+            if (_shN.is_valid() && _shN.shape().rank() > 0 &&
+                _shN.capacity() < _shN.shape()[0]) {
+                _shN.reserve(_shN.shape()[0]);
+            }
+        }
+        set_active_sh_degree(sh_degree);
+    }
+
     // Non-quantized shN maintenance shared by the degree setters. IEEE f16 is only
     // accepted when the sizing matches its declared topology; a Float16 buffer that
     // matches neither ieee-f16 nor a legal grow target is q16 codes whose bounds were

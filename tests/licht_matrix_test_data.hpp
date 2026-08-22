@@ -32,7 +32,7 @@ namespace lfs::test::licht {
     inline constexpr std::string_view OPTIMIZATION_PARAMETER_FIELD_DATA =
         "iterations means_lr means_lr_end shs_lr opacity_lr scaling_lr scaling_lr_end "
         "rotation_lr cropbox_lr_scale cropbox_loss_weight lambda_dssim min_opacity "
-        "refine_every start_refine stop_refine sh_degree opacity_reg scale_reg "
+        "refine_every start_refine stop_refine morton_reorder_interval sh_degree opacity_reg scale_reg "
         "init_opacity init_scaling max_cap eval_steps save_steps enable_eval "
         "enable_save_eval_images strategy mip_filter use_bilateral_grid bilateral_grid_X "
         "bilateral_grid_Y bilateral_grid_W bilateral_grid_lr tv_loss_weight use_ppisp ppisp_lr "

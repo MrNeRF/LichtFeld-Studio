@@ -8,6 +8,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/parameter_manager.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
@@ -902,18 +903,33 @@ namespace lfs::vis::gui {
         cmd::LoadFile::when([this](const auto& cmd) {
             if (!cmd.is_dataset)
                 return;
-            if (viewer_->deferDatasetLoadForTraining(cmd))
+            if (viewer_->preflightLoadFileWipe(cmd))
                 return;
-            const auto* const data_loader = viewer_->getDataLoader();
+            if (viewer_->deferLoadFileForTraining(cmd))
+                return;
+            if (!viewer_->resetUntitledSessionForReplaceLoad())
+                return;
+            auto* const data_loader = viewer_->getDataLoader();
             if (!data_loader) {
                 LOG_ERROR("LoadFile: no data loader");
                 return;
             }
-            auto params = data_loader->getParameters();
+            const auto output_path =
+                cmd.output_path.empty()
+                    ? lfs::core::param::default_dataset_output_path(cmd.path)
+                    : cmd.output_path;
+            lfs::core::param::TrainingParameters params;
+            if (auto* const param_mgr = viewer_->getParameterManager();
+                param_mgr && param_mgr->ensureLoaded()) {
+                params = param_mgr->createForDataset(cmd.path, output_path);
+            } else {
+                params = data_loader->getParameters();
+                params.dataset.data_path = cmd.path;
+                params.dataset.output_path = output_path;
+            }
             params.init_path = std::nullopt;
             params.resume_checkpoint = std::nullopt;
-            params.dataset.output_path =
-                cmd.output_path.empty() ? lfs::core::param::default_dataset_output_path(cmd.path) : cmd.output_path;
+            params.dataset.output_path = output_path;
             if (!cmd.init_path.empty())
                 params.init_path = lfs::core::path_to_utf8(cmd.init_path);
             if (!cmd.centralize_dataset.empty())
@@ -922,6 +938,10 @@ namespace lfs::vis::gui {
                 params.dataset.max_width = *cmd.max_width;
             if (cmd.min_track_length.has_value() && *cmd.min_track_length >= 0)
                 params.dataset.min_track_length = *cmd.min_track_length;
+            if (auto* const param_mgr = viewer_->getParameterManager()) {
+                param_mgr->getDatasetConfig() = params.dataset;
+            }
+            data_loader->setParameters(params);
             import_state_.apply_auto_crop.store(cmd.apply_auto_crop);
             startAsyncImport(cmd.path, params);
         });
