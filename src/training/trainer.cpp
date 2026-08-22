@@ -2730,12 +2730,6 @@ namespace lfs::training {
         if (const auto validation_error = params.validate(); !validation_error.empty()) {
             return std::unexpected("Invalid training parameters: " + validation_error);
         }
-        if (params.optimization.gut && params.optimization.sh_degree > 0) {
-            return std::unexpected(
-                "GUT/gsplat training with sh_degree > 0 is unsupported: the unfused "
-                "optimizer cannot update joint-codec SH-rest values. Use sh_degree=0 "
-                "or select the FastGS training path.");
-        }
 
         // Thread-safe initialization using mutex
         std::lock_guard<std::mutex> lock(init_mutex_);

@@ -68,6 +68,10 @@ namespace lfs::vis {
     class VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
     class VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
     class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
+    class VisualizerImplResetTest_StartupPrunesOlderUnlockedScratchFilesAfterOffer_Test;
+    class VisualizerImplResetTest_StartupScansLegacyRecoveryDirectory_Test;
+    class VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;
+    class VisualizerImplResetTest_RecoverLegacyScratchThenSaveAsRemovesLegacyFile_Test;
 
     namespace gui {
         class NativeScenePanel;
@@ -106,6 +110,10 @@ namespace lfs::vis {
             [[nodiscard]] AsyncTaskManager& asyncTasks() { return async_tasks_; }
             [[nodiscard]] const AsyncTaskManager& asyncTasks() const { return async_tasks_; }
             void enqueueModal(lfs::core::ModalRequest request);
+            [[nodiscard]] RmlModalOverlay* modalOverlay() { return rml_modal_overlay_.get(); }
+            [[nodiscard]] const RmlModalOverlay* modalOverlay() const {
+                return rml_modal_overlay_.get();
+            }
             void enqueueToast(ToastRequest request);
             [[nodiscard]] GizmoManager& gizmo() { return gizmo_manager_; }
             [[nodiscard]] const GizmoManager& gizmo() const { return gizmo_manager_; }
@@ -221,6 +229,10 @@ namespace lfs::vis {
             friend class lfs::vis::VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
             friend class lfs::vis::VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
             friend class lfs::vis::VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
+            friend class lfs::vis::VisualizerImplResetTest_StartupPrunesOlderUnlockedScratchFilesAfterOffer_Test;
+            friend class lfs::vis::VisualizerImplResetTest_StartupScansLegacyRecoveryDirectory_Test;
+            friend class lfs::vis::VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;
+            friend class lfs::vis::VisualizerImplResetTest_RecoverLegacyScratchThenSaveAsRemovesLegacyFile_Test;
             [[nodiscard]] bool isPositionOverRightPanelResizeEdge(double x, double y) const;
             [[nodiscard]] VulkanViewportPassParams buildVulkanViewportParams(VkExtent2D extent,
                                                                              std::size_t frame_slot) const;

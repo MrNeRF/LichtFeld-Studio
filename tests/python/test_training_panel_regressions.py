@@ -1201,3 +1201,157 @@ def test_action_start_opens_overwrite_dialog_instead_of_starting(
     assert buttons == [OVERWRITE_BTN, SAVE_AS_BTN, CANCEL_BTN]
     assert save_as_calls == []
     assert starts == []
+
+
+def test_reset_prompts_when_dirty_then_resets_on_continue(
+    training_panel_module, monkeypatch
+):
+    dialogs = []
+    resets = []
+    monkeypatch.setattr(
+        training_panel_module.lf.ui,
+        "confirm_dialog",
+        lambda title, message, buttons, callback=None: dialogs.append(
+            (title, message, list(buttons), callback)
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "project_is_dirty", lambda: True, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "project_has_path", lambda: False, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "is_training_active", lambda: False, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "reset_training",
+        lambda: resets.append(True),
+        raising=False,
+    )
+
+    panel = training_panel_module.TrainingPanel()
+    panel._on_action(None, None, ["reset"])
+
+    assert resets == []
+    assert len(dialogs) == 1
+    title, message, buttons, callback = dialogs[0]
+    assert title == "training_panel.reset"
+    assert message == "exit_popup.unsaved_warning"
+    assert buttons == [
+        "menu.file.save_project_as",
+        "unsaved_work.continue_without_saving",
+        "common.cancel",
+    ]
+
+    callback("common.cancel")
+    assert resets == []
+
+    callback("unsaved_work.continue_without_saving")
+    assert resets == [True]
+
+
+def test_reset_when_dirty_and_training_does_not_ask_stop(
+    training_panel_module, monkeypatch
+):
+    dialogs = []
+    resets = []
+    monkeypatch.setattr(
+        training_panel_module.lf.ui,
+        "confirm_dialog",
+        lambda title, message, buttons, callback=None: dialogs.append(
+            (title, message, list(buttons), callback)
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "project_is_dirty", lambda: True, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "project_has_path", lambda: False, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "is_training_active", lambda: True, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "reset_training",
+        lambda: resets.append(True),
+        raising=False,
+    )
+
+    panel = training_panel_module.TrainingPanel()
+    panel._on_action(None, None, ["reset"])
+
+    assert resets == []
+    assert len(dialogs) == 1
+    title, message, buttons, callback = dialogs[0]
+    assert title == "training_panel.reset"
+    assert message == "exit_popup.unsaved_warning"
+    assert buttons == [
+        "menu.file.save_project_as",
+        "unsaved_work.continue_without_saving",
+        "common.cancel",
+    ]
+
+    callback("unsaved_work.continue_without_saving")
+    assert resets == [True]
+    assert len(dialogs) == 1
+
+
+def test_reset_when_training_and_clean_runs_immediately(
+    training_panel_module, monkeypatch
+):
+    dialogs = []
+    resets = []
+    monkeypatch.setattr(
+        training_panel_module.lf.ui,
+        "confirm_dialog",
+        lambda title, message, buttons, callback=None: dialogs.append(
+            (title, message, list(buttons), callback)
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "project_is_dirty", lambda: False, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "is_training_active", lambda: True, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "reset_training",
+        lambda: resets.append(True),
+        raising=False,
+    )
+
+    panel = training_panel_module.TrainingPanel()
+    panel._on_action(None, None, ["reset"])
+
+    assert dialogs == []
+    assert resets == [True]
+
+
+def test_reset_without_dirty_or_training_runs_immediately(
+    training_panel_module, monkeypatch
+):
+    resets = []
+    monkeypatch.setattr(
+        training_panel_module.lf, "project_is_dirty", lambda: False, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "is_training_active", lambda: False, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "reset_training",
+        lambda: resets.append(True),
+        raising=False,
+    )
+
+    panel = training_panel_module.TrainingPanel()
+    panel._on_action(None, None, ["reset"])
+
+    assert resets == [True]

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/error.hpp"
 #include "core/path_utils.hpp"
 #include "core/user_paths.hpp"
 #include "visualizer/internal/resource_paths.hpp"
@@ -304,6 +305,53 @@ TEST(ThemePreferencesContract, McpPreferencesRoundTripAndValidateInput) {
         EXPECT_FALSE(invalid.request_logging);
     }
     std::filesystem::remove_all(invalid_root, error);
+    std::filesystem::remove_all(root, error);
+}
+
+TEST(ThemePreferencesContract, WorkingDirectoryRoundTripAndRejectsUnwritable) {
+    const auto root = std::filesystem::temp_directory_path() / "lfs_working_directory_preferences";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << lfs::format_for_developer(paths.error());
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+
+    EXPECT_TRUE(lfs::vis::workingDirectoryPreferenceRaw().empty());
+    EXPECT_EQ(
+        lfs::vis::loadWorkingDirectoryPreference().lexically_normal(),
+        paths->rootDir().lexically_normal());
+    EXPECT_EQ(
+        lfs::vis::defaultWorkingDirectory().lexically_normal(),
+        paths->rootDir().lexically_normal());
+    EXPECT_EQ(
+        lfs::vis::tempProjectDirectoryPreference().lexically_normal(),
+        (paths->rootDir() / "tmp").lexically_normal());
+
+    const auto custom = root / "custom-working";
+    auto set = lfs::vis::setWorkingDirectoryPreference(custom);
+    ASSERT_TRUE(set) << lfs::format_for_developer(set.error());
+    EXPECT_EQ(
+        lfs::vis::workingDirectoryPreferenceRaw().lexically_normal(),
+        custom.lexically_normal());
+    EXPECT_EQ(
+        lfs::vis::loadWorkingDirectoryPreference().lexically_normal(),
+        custom.lexically_normal());
+    EXPECT_TRUE(std::filesystem::is_directory(custom));
+
+    const auto as_file = root / "not-a-directory";
+    {
+        std::ofstream(as_file) << "file";
+    }
+    const auto before = lfs::vis::workingDirectoryPreferenceRaw();
+    auto rejected = lfs::vis::setWorkingDirectoryPreference(as_file);
+    ASSERT_FALSE(rejected);
+    EXPECT_EQ(
+        lfs::vis::workingDirectoryPreferenceRaw().lexically_normal(),
+        before.lexically_normal());
+
+    lfs::vis::clearWorkingDirectoryPreference();
+    EXPECT_TRUE(lfs::vis::workingDirectoryPreferenceRaw().empty());
     std::filesystem::remove_all(root, error);
 }
 

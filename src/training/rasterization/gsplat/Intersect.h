@@ -28,17 +28,25 @@ namespace gsplat_lfs {
         int32_t* tiles_per_gauss, // [C, N] or [nnz] optional (for first pass)
         int64_t* isect_ids,       // [n_isects] optional (for second pass)
         int32_t* flatten_ids,     // [n_isects] optional (for second pass)
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        int64_t max_isects = -1);
+
+    void launch_fill_isect_sentinels_kernel(
+        int64_t* isect_ids,
+        int32_t* flatten_ids,
+        int64_t n,
+        int64_t sentinel_key,
+        cudaStream_t stream);
 
     void launch_intersect_offset_kernel(
         // inputs
-        const int64_t* isect_ids, // [n_isects]
-        uint32_t n_isects,
+        const int64_t* isect_ids, // [n_keys] sorted, unused slots hold sentinel keys
+        uint32_t n_keys,
         uint32_t C,
         uint32_t tile_width,
         uint32_t tile_height,
         // outputs
-        int32_t* offsets, // [C, tile_height, tile_width]
+        int32_t* offsets, // [C * tile_height * tile_width + 1]
         cudaStream_t stream = nullptr);
 
     void radix_sort_double_buffer(
@@ -49,6 +57,11 @@ namespace gsplat_lfs {
         int32_t* flatten_ids,
         int64_t* isect_ids_sorted,
         int32_t* flatten_ids_sorted,
+        int64_t** keys_out,
+        int32_t** vals_out,
+        size_t& cub_ws_bytes,
+        int64_t& cub_n,
+        uint32_t& cub_end_bit,
         cudaStream_t stream = nullptr);
 
     void compute_cumsum_gpu(

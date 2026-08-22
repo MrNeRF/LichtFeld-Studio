@@ -14,6 +14,7 @@ This project builds upon and is inspired by the following:
 | Project | Description | License |
 |---------|-------------|---------|
 | [SuperSplat](https://github.com/playcanvas/supersplat) | PlayCanvas Gaussian Splat editor | MIT |
+| [PlayCanvas Engine](https://github.com/playcanvas/engine) | WebGL/WebGPU engine; the exported HTML viewer bundles a trimmed supersplat-viewer build plus a vendored, adapted `TranslateGizmo` (`src/visualizer/gui/resources/viewer/gizmo.js`) | MIT |
 | [SplatShop](https://github.com/m-schuetz/Splatshop) | Gaussian Splat editing tool | MIT |
 | [splat-transform](https://github.com/playcanvas/splat-transform) | Transformation utilities for splats | MIT |
 | [spz](https://github.com/nianticlabs/spz) | Niantic's compressed splat format (vendored at affd0ec) | MIT |

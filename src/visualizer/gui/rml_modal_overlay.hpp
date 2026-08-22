@@ -15,6 +15,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace Rml {
     class Context;
@@ -37,11 +38,21 @@ namespace lfs::vis {
     class VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
     class VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
     class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
+    class VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;
+    class VisualizerImplResetTest_RecoverLegacyScratchThenSaveAsRemovesLegacyFile_Test;
 } // namespace lfs::vis
 namespace lfs::vis::gui {
 
     class RmlUIManager;
     struct PanelInputState;
+
+    struct LFS_VIS_API ModalSnapshot {
+        std::string title;
+        std::string body_text;
+        std::vector<std::string> button_labels;
+        std::vector<bool> button_enabled;
+        bool has_input = false;
+    };
 
     class LFS_VIS_API RmlModalOverlay {
     public:
@@ -61,6 +72,9 @@ namespace lfs::vis::gui {
         void preload();
 
         [[nodiscard]] bool isOpen() const;
+        [[nodiscard]] std::optional<ModalSnapshot> current() const;
+        [[nodiscard]] std::size_t pending_count() const;
+        bool dismiss(const std::string& button_label);
         [[nodiscard]] bool hasPendingRequest() const;
         [[nodiscard]] bool hasPendingRenderWork() const;
         [[nodiscard]] bool needsAnimationFrame() const;
@@ -80,12 +94,13 @@ namespace lfs::vis::gui {
         friend class lfs::vis::VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
         friend class lfs::vis::VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
         friend class lfs::vis::VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoverLegacyScratchThenSaveAsRemovesLegacyFile_Test;
         void initContext();
         bool syncTheme();
         void cacheElements();
 
         void showNext();
-        void dismiss(const std::string& button_label);
         bool dismissFirstEnabledButton();
         void bindTextInputRevert();
         void cancel();

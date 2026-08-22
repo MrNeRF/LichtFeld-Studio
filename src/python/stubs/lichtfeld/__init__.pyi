@@ -327,7 +327,7 @@ def clear_scene() -> None:
 def switch_to_edit_mode() -> None:
     """Switch from training to edit mode"""
 
-def load_file(path: str, is_dataset: bool = False, output_path: str = '', init_path: str = '', centralize_dataset: str = 'off', max_width: int | None = None, apply_auto_crop: bool = False, min_track_length: int | None = None, stop_training: bool = False) -> None:
+def load_file(path: str, is_dataset: bool = False, output_path: str = '', init_path: str = '', centralize_dataset: str = 'off', max_width: int | None = None, apply_auto_crop: bool = False, min_track_length: int | None = None, stop_training: bool = False, discard_changes: bool = False, replace: bool = False) -> None:
     """Load a file (PLY, checkpoint) or dataset into the scene."""
 
 def load_config_file(path: str) -> None:

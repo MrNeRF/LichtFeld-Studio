@@ -12,7 +12,12 @@ from . import rml_widgets as w
 from . import property_view
 from .property_view import parse_number as _parse_num
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
-from .training_confirm import _project_has_path
+from .training_confirm import (
+    _invoke_project_save_as,
+    _project_has_path,
+    _schedule_once_project_bound,
+    confirm_discard_work_then,
+)
 from .types import Panel
 from .ui import RuntimeState, PanelStateBinding
 
@@ -192,7 +197,6 @@ class TrainingPanel(Panel):
         self._step_repeat_last = 0.0
         self._text_bufs = {}
         self._last_project_saved_visible = False
-        self._save_as_start_generation = 0
         self._last_loss_signature = None
         self._psnr_graph_el = None
         self._last_psnr_signature = None
@@ -2146,7 +2150,7 @@ class TrainingPanel(Panel):
         elif action == "stop":
             lf.stop_training()
         elif action == "reset":
-            lf.reset_training()
+            self._action_reset()
         elif action == "clear":
             lf.new_project()
         elif action == "switch_edit":
@@ -2195,6 +2199,13 @@ class TrainingPanel(Panel):
                 if params.enable_eval:
                     self._sync_eval_steps_with_save_steps(params)
                 self._refresh_save_steps_model(params)
+
+    def _action_reset(self):
+        confirm_discard_work_then(
+            tr("training_panel.reset"),
+            lambda stop_training: lf.reset_training(),
+            ask_stop_training=False,
+        )
 
     def _action_start(self):
         params = lf.optimization_params()
@@ -2265,38 +2276,14 @@ class TrainingPanel(Panel):
     def _project_is_bound(self):
         return _project_has_path()
 
-    def _invoke_project_save_as(self):
-        save_as = getattr(lf, "project_save_as", None)
-        if not callable(save_as):
-            return False
-        try:
-            return save_as("", wait=True)
-        except TypeError:
-            return save_as("")
-
     def _save_as_then_start(self):
-        accepted = self._invoke_project_save_as()
+        accepted = _invoke_project_save_as()
         if accepted is False:
             return
         if self._project_is_bound():
             self._start_after_consent()
             return
-        self._schedule_start_once_project_bound()
-
-    def _schedule_start_once_project_bound(self):
-        scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
-        if not callable(scheduler):
-            return
-        self._save_as_start_generation += 1
-        generation = self._save_as_start_generation
-
-        def _on_ui():
-            if self._save_as_start_generation != generation:
-                return
-            if self._project_is_bound():
-                self._start_after_consent()
-
-        scheduler(_on_ui)
+        _schedule_once_project_bound(self._start_after_consent)
 
     def _should_offer_pc_save(self):
         scene = lf.get_scene()

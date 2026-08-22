@@ -6,10 +6,12 @@
 #include "core/environment.hpp"
 #include "core/error.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/user_paths.hpp"
 #include "rendering/scene_upscaler_registry.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -17,6 +19,14 @@
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <stdexcept>
+#include <string>
+#include <system_error>
+
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace lfs::vis {
     namespace {
@@ -28,6 +38,107 @@ namespace lfs::vis {
 
         [[nodiscard]] bool knownCameraMode(const std::string& mode) {
             return mode == "orbit" || mode == "trackball" || mode == "fpv" || mode == "drone";
+        }
+
+        [[nodiscard]] lfs::Error workingDirectoryError(
+            const lfs::ErrorCode code,
+            std::string user_message,
+            std::string detail,
+            const std::filesystem::path& path = {}) {
+            lfs::SmallFields fields;
+            if (!path.empty())
+                fields.add("path", lfs::core::path_to_utf8(path));
+            return lfs::make_error(lfs::ErrorInit{
+                .code = code,
+                .domain = lfs::ErrorDomain::IO,
+                .severity = lfs::Severity::Error,
+                .retryability = lfs::Retryability::NotRetryable,
+                .user_message = std::move(user_message),
+                .detail = std::move(detail),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+                .fields = std::move(fields),
+            });
+        }
+
+        [[nodiscard]] lfs::Status validateWritableWorkingDirectory(
+            const std::filesystem::path& candidate) {
+            if (candidate.empty()) {
+                return lfs::Status::failure(workingDirectoryError(
+                    lfs::ErrorCode::InvalidArgument,
+                    "The working folder path is empty.",
+                    "working_directory is empty"));
+            }
+            std::error_code error;
+            auto absolute = std::filesystem::absolute(candidate, error);
+            if (error || absolute.empty()) {
+                return lfs::Status::failure(workingDirectoryError(
+                    lfs::ErrorCode::InvalidArgument,
+                    "The working folder path could not be resolved to an absolute path.",
+                    error ? error.message() : "absolute() returned an empty path",
+                    candidate));
+            }
+            std::filesystem::create_directories(absolute, error);
+            if (error) {
+                return lfs::Status::failure(workingDirectoryError(
+                    lfs::ErrorCode::PermissionDenied,
+                    "The working folder could not be created.",
+                    error.message(),
+                    absolute));
+            }
+            if (!std::filesystem::is_directory(absolute, error) || error) {
+                return lfs::Status::failure(workingDirectoryError(
+                    lfs::ErrorCode::InvalidArgument,
+                    "The working folder path is not a directory.",
+                    error ? error.message() : "path exists but is not a directory",
+                    absolute));
+            }
+#ifdef _WIN32
+            const auto pid = static_cast<std::uint64_t>(_getpid());
+#else
+            const auto pid = static_cast<std::uint64_t>(::getpid());
+#endif
+            const auto probe =
+                absolute /
+                (".lfs-write-probe-" + std::to_string(pid) + "-" +
+                 std::to_string(
+                     std::chrono::steady_clock::now().time_since_epoch().count()));
+            {
+                std::ofstream output(probe, std::ios::binary | std::ios::trunc);
+                if (!output) {
+                    return lfs::Status::failure(workingDirectoryError(
+                        lfs::ErrorCode::PermissionDenied,
+                        "The working folder is not writable.",
+                        "write probe could not be created",
+                        absolute));
+                }
+                output.put('x');
+                output.flush();
+                if (!output) {
+                    std::error_code ignored;
+                    std::filesystem::remove(probe, ignored);
+                    return lfs::Status::failure(workingDirectoryError(
+                        lfs::ErrorCode::PermissionDenied,
+                        "The working folder is not writable.",
+                        "write probe could not be written",
+                        absolute));
+                }
+            }
+            std::filesystem::remove(probe, error);
+            if (error) {
+                return lfs::Status::failure(workingDirectoryError(
+                    lfs::ErrorCode::PermissionDenied,
+                    "The working folder is not writable.",
+                    error.message(),
+                    absolute));
+            }
+            return {};
+        }
+
+        [[nodiscard]] std::filesystem::path defaultWorkingDirectoryPath() {
+            const auto resolved = lfs::core::UserPaths::resolve();
+            if (!resolved)
+                return {};
+            return resolved->rootDir();
         }
     } // namespace
 
@@ -344,6 +455,74 @@ namespace lfs::vis {
     }
     std::string loadSceneUpscalerPresetPreference(const std::string& backend_id) {
         return UserPreferences::instance().sceneUpscalerPreset(backend_id);
+    }
+
+    lfs::Status UserPreferences::setWorkingDirectory(const std::filesystem::path& path) {
+        if (auto validated = validateWritableWorkingDirectory(path); !validated)
+            return validated;
+        std::error_code error;
+        auto absolute = std::filesystem::absolute(path, error);
+        if (error || absolute.empty()) {
+            return lfs::Status::failure(workingDirectoryError(
+                lfs::ErrorCode::InvalidArgument,
+                "The working folder path could not be resolved to an absolute path.",
+                error ? error.message() : "absolute() returned an empty path",
+                path));
+        }
+        absolute = absolute.lexically_normal();
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["working_directory"] = lfs::core::path_to_utf8(absolute);
+        impl_->saveLocked();
+        return {};
+    }
+
+    std::filesystem::path UserPreferences::workingDirectory() {
+        const auto raw = workingDirectoryPreference();
+        if (raw.empty())
+            return defaultWorkingDirectoryPath();
+        return raw;
+    }
+
+    std::filesystem::path UserPreferences::workingDirectoryPreference() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("working_directory");
+        if (it == impl_->values.end() || !it->is_string())
+            return {};
+        const std::string stored = it->get<std::string>();
+        if (stored.empty())
+            return {};
+        return lfs::core::utf8_to_path(stored);
+    }
+
+    void UserPreferences::clearWorkingDirectory() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["working_directory"] = "";
+        impl_->saveLocked();
+    }
+
+    lfs::Status setWorkingDirectoryPreference(const std::filesystem::path& path) {
+        return UserPreferences::instance().setWorkingDirectory(path);
+    }
+    std::filesystem::path loadWorkingDirectoryPreference() {
+        return UserPreferences::instance().workingDirectory();
+    }
+    std::filesystem::path workingDirectoryPreferenceRaw() {
+        return UserPreferences::instance().workingDirectoryPreference();
+    }
+    void clearWorkingDirectoryPreference() {
+        UserPreferences::instance().clearWorkingDirectory();
+    }
+    std::filesystem::path defaultWorkingDirectory() {
+        return defaultWorkingDirectoryPath();
+    }
+    std::filesystem::path tempProjectDirectoryPreference() {
+        const auto root = UserPreferences::instance().workingDirectory();
+        if (root.empty())
+            return {};
+        return root / "tmp";
     }
 
 } // namespace lfs::vis

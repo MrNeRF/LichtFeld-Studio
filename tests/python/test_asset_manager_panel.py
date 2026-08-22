@@ -476,12 +476,16 @@ def test_open_project_confirms_before_discarding_unsaved_changes(panel_module):
     assert len(state.confirm_dialogs) == 1
     title, _message, buttons, callback = state.confirm_dialogs[0]
     assert title == "menu.file.open_project"
-    assert buttons == ["menu.file.open_project", "common.cancel"]
+    assert buttons == [
+        "menu.file.save_project_as",
+        "unsaved_work.continue_without_saving",
+        "common.cancel",
+    ]
 
     callback("common.cancel")
     assert state.opened == []
 
-    callback("menu.file.open_project")
+    callback("unsaved_work.continue_without_saving")
     assert state.opened == [(asset["path"], True, False)]
 
 

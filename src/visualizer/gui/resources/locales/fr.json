@@ -704,6 +704,11 @@
     "file_associations": "Associations de fichiers",
     "file_associations_description": "Enregistrer ou retirer LichtFeld Studio comme gestionnaire pour chaque type de fichier.",
     "general": "Général",
+    "working_directory": "Dossier de travail",
+    "working_directory_hint": "Projets temporaires : {path}",
+    "working_directory_use_default": "Utiliser la valeur par défaut",
+    "working_directory_applies_next_session": "S'applique aux nouvelles sessions",
+    "working_directory_invalid": "Ce dossier ne peut pas être utilisé comme dossier de travail.",
     "appearance": "Apparence",
     "scene_rendering": "Rendu de la scène",
     "scene_reconstruction": "Reconstruction de la scène",
@@ -1165,6 +1170,10 @@
   "project_switch": {
     "stop_training_title": "Arrêter l'entraînement ?",
     "stop_training_message": "L'entraînement doit être arrêté avant de changer de projet. Arrêter la session en cours ?"
+  },
+  "unsaved_work": {
+    "title": "Modifications non enregistrées",
+    "continue_without_saving": "Continuer sans enregistrer"
   },
   "load_dataset_popup": {
     "title": "Charger Dataset",

@@ -4,9 +4,20 @@
 
 #include "core/logger.hpp"
 #include "py_ui.hpp"
+#include "python/python_runtime.hpp"
+#include "visualizer/gui/gui_manager.hpp"
+#include "visualizer/gui/rml_modal_overlay.hpp"
+#include "visualizer/post_work_utils.hpp"
+#include "visualizer/visualizer.hpp"
 
 #include <algorithm>
 #include <cassert>
+#include <cstddef>
+#include <functional>
+#include <optional>
+#include <string>
+#include <type_traits>
+#include <utility>
 
 namespace lfs::python {
 
@@ -43,6 +54,63 @@ namespace lfs::python {
             case MessageStyle::Error: return lfs::core::ModalStyle::Error;
             default: return lfs::core::ModalStyle::Info;
             }
+        }
+
+        struct ModalView {
+            std::optional<vis::gui::ModalSnapshot> snap;
+            std::size_t pending = 0;
+        };
+
+        template <typename F>
+        auto invoke_on_viewer(F&& fn, std::invoke_result_t<F> fallback) {
+            auto* const viewer = get_visualizer();
+            if (!viewer || viewer->isOnViewerThread())
+                return std::invoke(std::forward<F>(fn));
+            if (!viewer->acceptsPostedWork())
+                return fallback;
+            nb::gil_scoped_release release;
+            return vis::post_work_and_wait(
+                [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
+                std::forward<F>(fn),
+                [fallback]() { return fallback; });
+        }
+
+        ModalView read_modal_view() {
+            auto* const gui = get_gui_manager();
+            auto* const overlay = gui ? gui->modalOverlay() : nullptr;
+            if (!overlay)
+                return {};
+            return ModalView{overlay->current(), overlay->pending_count()};
+        }
+
+        bool press_modal_button(const std::string& label) {
+            auto* const gui = get_gui_manager();
+            auto* const overlay = gui ? gui->modalOverlay() : nullptr;
+            if (!overlay)
+                return false;
+            return overlay->dismiss(label);
+        }
+
+        std::optional<nb::dict> modal_view_to_dict(const ModalView& view) {
+            if (!view.snap)
+                return std::nullopt;
+            nb::dict result;
+            result["title"] = view.snap->title;
+            result["body"] = view.snap->body_text;
+            nb::list buttons;
+            const auto n = view.snap->button_labels.size() < view.snap->button_enabled.size()
+                               ? view.snap->button_labels.size()
+                               : view.snap->button_enabled.size();
+            for (std::size_t i = 0; i < n; ++i) {
+                nb::dict button;
+                button["label"] = view.snap->button_labels[i];
+                button["enabled"] = static_cast<bool>(view.snap->button_enabled[i]);
+                buttons.append(button);
+            }
+            result["buttons"] = buttons;
+            result["has_input"] = view.snap->has_input;
+            result["pending"] = view.pending;
+            return result;
         }
     } // namespace
 
@@ -190,6 +258,21 @@ namespace lfs::python {
             nb::arg("style") = "info",
             nb::arg("callback") = nb::none(),
             "Show a message dialog (style: 'info', 'warning', or 'error')");
+
+        m.def(
+            "modal_get",
+            []() -> std::optional<nb::dict> {
+                return modal_view_to_dict(invoke_on_viewer([] { return read_modal_view(); }, ModalView{}));
+            },
+            "Return the currently shown modal dialog as a dict, or None if none is open");
+
+        m.def(
+            "modal_press",
+            [](const std::string& label) {
+                return invoke_on_viewer([label] { return press_modal_button(label); }, false);
+            },
+            nb::arg("label"),
+            "Press an enabled modal button by label. Returns False if no matching enabled button.");
     }
 
 } // namespace lfs::python

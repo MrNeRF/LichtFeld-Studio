@@ -256,6 +256,8 @@ namespace lfs::python {
         nb::object
             g_project_switch_confirmation_callback;
         nb::object
+            g_show_load_file_confirmation_callback;
+        nb::object
             g_stop_training_confirmation_callback;
         nb::object g_open_camera_preview_callback;
         constexpr std::string_view LEGACY_POPUP_PANEL = "__legacy_popup__";
@@ -3746,6 +3748,46 @@ namespace lfs::python {
             "Register callback for a dirty project-switch decision");
 
         m.def(
+            "on_show_load_file_confirmation",
+            [](nb::object callback) {
+                g_show_load_file_confirmation_callback =
+                    callback;
+                lfs::core::events::cmd::
+                    ShowLoadFileConfirmation::
+                        when([](const auto& event) {
+                            if (g_show_load_file_confirmation_callback &&
+                                !g_show_load_file_confirmation_callback
+                                     .is_none()) {
+                                nb::gil_scoped_acquire
+                                    guard;
+                                try {
+                                    nb::list paths;
+                                    for (const auto& path :
+                                         event.paths) {
+                                        paths.append(
+                                            lfs::core::
+                                                path_to_utf8(
+                                                    path));
+                                    }
+                                    g_show_load_file_confirmation_callback(
+                                        paths,
+                                        event.is_dataset,
+                                        event.replace);
+                                } catch (
+                                    const std::
+                                        exception& error) {
+                                    LOG_ERROR(
+                                        "Load-file confirmation callback error: {}",
+                                        error.what());
+                                }
+                            }
+                        });
+            },
+            nb::arg("callback"),
+            "Register callback for a load-file wipe confirmation "
+            "(receives paths: list[str], is_dataset: bool, replace: bool)");
+
+        m.def(
             "on_stop_training_confirmation",
             [](nb::object callback) {
                 g_stop_training_confirmation_callback =
@@ -4984,6 +5026,62 @@ namespace lfs::python {
             "Persist and immediately apply MCP HTTP server preferences");
 
         m.def(
+            "get_working_directory",
+            []() -> std::string {
+                nb::gil_scoped_release release;
+                return lfs::core::path_to_utf8(vis::loadWorkingDirectoryPreference());
+            },
+            "Get the effective working folder (absolute). Empty preference uses the default root.");
+
+        m.def(
+            "get_working_directory_preference",
+            []() -> std::string {
+                nb::gil_scoped_release release;
+                return lfs::core::path_to_utf8(vis::workingDirectoryPreferenceRaw());
+            },
+            "Get the raw working folder preference. Empty string means the default root.");
+
+        m.def(
+            "get_default_working_directory",
+            []() -> std::string {
+                nb::gil_scoped_release release;
+                return lfs::core::path_to_utf8(vis::defaultWorkingDirectory());
+            },
+            "Get the default working folder (UserPaths root).");
+
+        m.def(
+            "get_temp_project_directory",
+            []() -> std::string {
+                nb::gil_scoped_release release;
+                return lfs::core::path_to_utf8(vis::tempProjectDirectoryPreference());
+            },
+            "Get the temp project directory for the next untitled session (<working folder>/tmp).");
+
+        m.def(
+            "set_working_directory",
+            [](const std::string& path) -> std::string {
+                lfs::Status result;
+                {
+                    nb::gil_scoped_release release;
+                    result = vis::setWorkingDirectoryPreference(
+                        lfs::core::utf8_to_path(path));
+                }
+                if (!result)
+                    return std::string(result.error().user_message());
+                return {};
+            },
+            nb::arg("path"),
+            "Set the working folder. Returns an empty string on success, or a user-facing error.");
+
+        m.def(
+            "clear_working_directory",
+            [] {
+                nb::gil_scoped_release release;
+                vis::clearWorkingDirectoryPreference();
+            },
+            "Clear the working folder preference so the default root is used.");
+
+        m.def(
             "get_mcp_status",
             [] {
                 mcp::McpHttpStatus status;
@@ -5226,6 +5324,8 @@ namespace lfs::python {
                 g_request_exit_handler_id = 0;
             }
             g_project_switch_confirmation_callback =
+                nb::object();
+            g_show_load_file_confirmation_callback =
                 nb::object();
             g_stop_training_confirmation_callback =
                 nb::object();

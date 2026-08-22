@@ -703,6 +703,11 @@
     "file_associations": "Skojarzenia plików",
     "file_associations_description": "Zarejestruj lub usuń LichtFeld Studio jako program obsługujący każdy typ pliku.",
     "general": "Ogólne",
+    "working_directory": "Folder roboczy",
+    "working_directory_hint": "Projekty tymczasowe: {path}",
+    "working_directory_use_default": "Użyj domyślnego",
+    "working_directory_applies_next_session": "Dotyczy nowych sesji",
+    "working_directory_invalid": "Tego folderu nie można użyć jako folderu roboczego.",
     "appearance": "Wygląd",
     "scene_rendering": "Renderowanie sceny",
     "scene_reconstruction": "Rekonstrukcja sceny",
@@ -1164,6 +1169,10 @@
   "project_switch": {
     "stop_training_title": "Zatrzymać trening?",
     "stop_training_message": "Trening trzeba zatrzymać przed zmianą projektu. Zatrzymać bieżącą sesję?"
+  },
+  "unsaved_work": {
+    "title": "Niezapisane zmiany",
+    "continue_without_saving": "Kontynuuj bez zapisywania"
   },
   "load_dataset_popup": {
     "title": "Wczytaj Zbiór Danych",

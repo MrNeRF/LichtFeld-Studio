@@ -62,6 +62,7 @@ Pull narrower resources only when needed:
 - inspect `lichtfeld://ui/tools`, `lichtfeld://ui/menus`, or `lichtfeld://operators/registry`
 - call `ui_*` or `operator_*`
 - if the tool goes modal, watch `operator.modal` and `lichtfeld://operators/modal_state`
+- for confirm/input overlays, `ui_modal_get` then `ui_modal_press` with a button label
 
 ### Work On Gaussian Selection
 

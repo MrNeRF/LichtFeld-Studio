@@ -7,6 +7,7 @@
 #include "core/scene.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
+#include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/morton_reorder.hpp"
@@ -443,20 +444,14 @@ TEST(MortonReorderTest, PermuteWritesNPrimsAndLeavesCapacityTailZero) {
 
     const bool shN_same_storage = splat.shN().data_ptr() == shN_ptr_before;
     const bool bounds_same_storage = splat.shN_value_bounds().data_ptr() == bounds_ptr_before;
-    if (shN_same_storage) {
-        EXPECT_TRUE(bytes_all_equal(shN_tail, kPoison))
-            << "in-place shN capacity tail [n, cap) was overwritten";
-    } else {
-        EXPECT_TRUE(bytes_all_equal(shN_tail, 0))
-            << "replaced shN capacity tail [n, cap) is neither zero nor left untouched";
-    }
-    if (bounds_same_storage) {
-        EXPECT_TRUE(bytes_all_equal(bounds_tail, kPoison))
-            << "in-place shN bounds capacity tail was overwritten";
-    } else {
-        EXPECT_TRUE(bytes_all_equal(bounds_tail, 0))
-            << "replaced shN bounds capacity tail is neither zero nor left untouched";
-    }
+    // In-place storage may keep the poisoned tail or re-zero it (the q16 commit
+    // zero-fills [n, cap)); replaced storage must come back zeroed. Anything else
+    // is a stray write past n.
+    const auto tail_ok = [&](const std::vector<std::uint8_t>& tail, const bool same_storage) {
+        return bytes_all_equal(tail, 0) || (same_storage && bytes_all_equal(tail, kPoison));
+    };
+    EXPECT_TRUE(tail_ok(shN_tail, shN_same_storage)) << "shN capacity tail [n, cap) holds stray data";
+    EXPECT_TRUE(tail_ok(bounds_tail, bounds_same_storage)) << "shN bounds capacity tail holds stray data";
 
     std::vector<std::uint16_t> codes(splat.shN().numel());
     ASSERT_EQ(cudaMemcpy(codes.data(), splat.shN().data_ptr(),
@@ -606,4 +601,66 @@ TEST(MortonReorderTest, TrainingLossStaysContinuousAndCountMatches) {
             << "loss diverged at sample " << i << " off=" << off_losses[i]
             << " on=" << on_losses[i];
     }
+}
+
+// The exportable allocator hands out views at fixed region offsets per parameter
+// name (the GUI renders straight from that block). A permute that gathers into a
+// freshly "allocated" tensor of the same name therefore gathers a buffer into
+// itself; rows must still come out exactly permuted.
+TEST(MortonReorderTest, ExportableAliasingAllocatorPermutesRowsExactly) {
+    constexpr size_t n = 4096;
+    constexpr int sh_degree = 1;
+    auto storage_result = SplatExportableStorage::create(n, sh_degree, 0, n * 2);
+    ASSERT_TRUE(storage_result.has_value()) << storage_result.error();
+    auto storage = std::move(*storage_result);
+
+    auto splat = make_mixed_splat(n, sh_degree);
+    const auto means_before = splat.means().cpu().contiguous();
+    const auto sh0_before = splat.sh0().cpu().contiguous();
+    const auto scale_before = splat.scaling_raw().cpu().contiguous();
+    const auto rot_before = splat.rotation_raw().cpu().contiguous();
+    const auto opa_before = splat.opacity_raw().cpu().contiguous();
+    const auto shN_before = splat.shN_canonical().cpu().contiguous();
+
+    {
+        auto ok = storage.rebindSplatData(splat, storage.make_allocator());
+        ASSERT_TRUE(ok.has_value()) << ok.error();
+    }
+    splat.set_tensor_allocator(storage.make_allocator());
+    ASSERT_TRUE(splat.means().has_exportable_provenance());
+
+    const auto result = morton::apply_morton_reorder(splat, nullptr);
+    ASSERT_TRUE(result.applied);
+    ASSERT_EQ(result.permutation.numel(), n);
+    const auto perm = result.permutation.cpu().contiguous();
+    const auto* ip = perm.ptr<std::int64_t>();
+
+    // Rows must still live in the exportable block after the reorder.
+    EXPECT_TRUE(splat.means().has_exportable_provenance());
+    EXPECT_TRUE(splat.opacity_raw().has_exportable_provenance());
+
+    const auto check_rows = [&](const Tensor& before, const Tensor& after_gpu,
+                                const size_t row_floats, const char* what) {
+        const auto after = after_gpu.cpu().contiguous();
+        const auto* b = before.ptr<float>();
+        const auto* a = after.ptr<float>();
+        size_t mismatches = 0;
+        for (size_t i = 0; i < n; ++i) {
+            const auto src = static_cast<size_t>(ip[i]);
+            for (size_t k = 0; k < row_floats; ++k) {
+                if (a[i * row_floats + k] != b[src * row_floats + k]) {
+                    ++mismatches;
+                    break;
+                }
+            }
+        }
+        EXPECT_EQ(mismatches, 0u) << what << ": " << mismatches << " of " << n
+                                  << " rows differ from the permuted source";
+    };
+    check_rows(means_before, splat.means(), 3, "means");
+    check_rows(sh0_before, splat.sh0(), 3, "sh0");
+    check_rows(scale_before, splat.scaling_raw(), 3, "scaling");
+    check_rows(rot_before, splat.rotation_raw(), 4, "rotation");
+    check_rows(opa_before, splat.opacity_raw(), 1, "opacity");
+    check_rows(shN_before, splat.shN_canonical(), 3 * 3, "shN");
 }

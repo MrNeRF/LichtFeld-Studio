@@ -14,12 +14,14 @@
 #include <algorithm>
 #include <chrono>
 #include <concepts>
+#include <cwctype>
 #include <format>
 #include <limits>
 #include <map>
 #include <optional>
 #include <ranges>
 #include <set>
+#include <string>
 #include <type_traits>
 
 namespace lfs::io::project {
@@ -827,10 +829,27 @@ namespace lfs::io::project {
             path.lexically_normal();
         const auto normalized_dir =
             recovery_directory.lexically_normal();
+#ifdef _WIN32
+        const auto lowercase = [](std::wstring value) {
+            std::transform(
+                value.begin(), value.end(), value.begin(),
+                [](const wchar_t character) {
+                    return static_cast<wchar_t>(
+                        std::towlower(character));
+                });
+            return value;
+        };
+        if (lowercase(normalized_path.parent_path()
+                          .generic_wstring()) !=
+            lowercase(normalized_dir.generic_wstring())) {
+            return false;
+        }
+#else
         if (normalized_path.parent_path() !=
             normalized_dir) {
             return false;
         }
+#endif
         const auto name =
             normalized_path.filename().string();
         constexpr std::string_view extension = ".licht";

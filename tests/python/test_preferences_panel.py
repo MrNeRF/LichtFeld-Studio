@@ -59,7 +59,15 @@ def preferences_panel_module(monkeypatch):
             scene_upscaler_preset="native",
         ),
         scene_reconstruction_presets={"native": "native", "spatial": "quality"},
+        working_directory="",
     )
+
+    def set_working_directory(path):
+        state.working_directory = str(path)
+        return ""
+
+    def clear_working_directory():
+        state.working_directory = ""
 
     def set_mcp_preferences(enabled, expose_network, port, request_logging):
         config = {
@@ -97,6 +105,13 @@ def preferences_panel_module(monkeypatch):
         get_mcp_preferences=lambda: dict(state.mcp_preferences),
         set_mcp_preferences=set_mcp_preferences,
         get_mcp_status=lambda: dict(state.mcp_status),
+        get_working_directory=lambda: state.working_directory or "/home/tester/.lichtfeld",
+        get_working_directory_preference=lambda: state.working_directory,
+        get_default_working_directory=lambda: "/home/tester/.lichtfeld",
+        get_temp_project_directory=lambda: (state.working_directory or "/home/tester/.lichtfeld") + "/tmp",
+        set_working_directory=set_working_directory,
+        clear_working_directory=clear_working_directory,
+        open_folder_dialog=lambda title, start: "",
         set_panel_enabled=lambda panel_id, enabled: state.panel_enabled_calls.append(
             (panel_id, bool(enabled))
         ),

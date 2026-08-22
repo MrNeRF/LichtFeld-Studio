@@ -62,7 +62,14 @@ namespace lfs::vis {
     class VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
     class VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
     class VisualizerImplResetTest_AdoptedStepBoundaryPublishRebasesAutosaveBase_Test;
+    class VisualizerImplResetTest_ExplicitSaveAfterUnadoptedTrainerAppendUsesCurrentHead_Test;
+    class VisualizerImplResetTest_ExplicitSaveAfterTrainerRewriteUsesCurrentHead_Test;
+    class VisualizerImplResetTest_UntitledTrainerRewriteAdoptThenSaveAsUsesCurrentHead_Test;
     class VisualizerImplResetTest_EditModeSaveDropsFormerTrainingCheckpoint_Test;
+    class VisualizerImplResetTest_UntitledTrainingSnapshotAdoptionKeepsSessionUntitledAndOutOfMru_Test;
+    class VisualizerImplResetTest_SaveAsAfterUntitledTrainingMigratesTempIncludingCheckpoint_Test;
+    class VisualizerImplResetTest_CompletedUntitledTrainingBlocksCleanClose_Test;
+    class VisualizerImplResetTest_SaveAsAfterUntitledTrainingRoutesThroughFinishedTrainer_Test;
 } // namespace lfs::vis
 
 namespace lfs::vis::project {
@@ -412,7 +419,14 @@ namespace lfs::training {
         friend class lfs::vis::VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
         friend class lfs::vis::VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
         friend class lfs::vis::VisualizerImplResetTest_AdoptedStepBoundaryPublishRebasesAutosaveBase_Test;
+        friend class lfs::vis::VisualizerImplResetTest_ExplicitSaveAfterUnadoptedTrainerAppendUsesCurrentHead_Test;
+        friend class lfs::vis::VisualizerImplResetTest_ExplicitSaveAfterTrainerRewriteUsesCurrentHead_Test;
+        friend class lfs::vis::VisualizerImplResetTest_UntitledTrainerRewriteAdoptThenSaveAsUsesCurrentHead_Test;
         friend class lfs::vis::VisualizerImplResetTest_EditModeSaveDropsFormerTrainingCheckpoint_Test;
+        friend class lfs::vis::VisualizerImplResetTest_UntitledTrainingSnapshotAdoptionKeepsSessionUntitledAndOutOfMru_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SaveAsAfterUntitledTrainingMigratesTempIncludingCheckpoint_Test;
+        friend class lfs::vis::VisualizerImplResetTest_CompletedUntitledTrainingBlocksCleanClose_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SaveAsAfterUntitledTrainingRoutesThroughFinishedTrainer_Test;
         friend class lfs::vis::project::ProjectLifecycle;
         friend struct TrainerRetryTestAccess;
         friend struct TrainerCropboxMaskTestAccess;

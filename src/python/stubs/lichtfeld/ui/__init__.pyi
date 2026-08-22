@@ -933,6 +933,16 @@ def input_dialog(title: str, message: str, default_value: str = '', callback: ob
 def message_dialog(title: str, message: str, style: str = 'info', callback: object | None = None) -> None:
     """Show a message dialog (style: 'info', 'warning', or 'error')"""
 
+def modal_get() -> dict | None:
+    """
+    Return the currently shown modal dialog as a dict, or None if none is open
+    """
+
+def modal_press(label: str) -> bool:
+    """
+    Press an enabled modal button by label. Returns False if no matching enabled button.
+    """
+
 def begin_drag_payload(type: str, data: str, label: str = '') -> int:
     """
     Begin one typed cross-context RmlUI drag payload and return its source token
@@ -2078,6 +2088,11 @@ def on_request_exit(callback: object) -> None:
 def on_project_switch_confirmation(callback: object) -> None:
     """Register callback for a dirty project-switch decision"""
 
+def on_show_load_file_confirmation(callback: object) -> None:
+    """
+    Register callback for a load-file wipe confirmation (receives paths: list[str], is_dataset: bool, replace: bool)
+    """
+
 def on_stop_training_confirmation(callback: object) -> None:
     """Register callback for a stop-training project-switch decision"""
 
@@ -2588,6 +2603,32 @@ def get_mcp_preferences() -> dict:
 
 def set_mcp_preferences(enabled: bool, expose_network: bool, port: int, request_logging: bool = False) -> bool:
     """Persist and immediately apply MCP HTTP server preferences"""
+
+def get_working_directory() -> str:
+    """
+    Get the effective working folder (absolute). Empty preference uses the default root.
+    """
+
+def get_working_directory_preference() -> str:
+    """
+    Get the raw working folder preference. Empty string means the default root.
+    """
+
+def get_default_working_directory() -> str:
+    """Get the default working folder (UserPaths root)."""
+
+def get_temp_project_directory() -> str:
+    """
+    Get the temp project directory for the next untitled session (<working folder>/tmp).
+    """
+
+def set_working_directory(path: str) -> str:
+    """
+    Set the working folder. Returns an empty string on success, or a user-facing error.
+    """
+
+def clear_working_directory() -> None:
+    """Clear the working folder preference so the default root is used."""
 
 def get_mcp_status() -> dict:
     """Get current MCP HTTP server runtime status"""

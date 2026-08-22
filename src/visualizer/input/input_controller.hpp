@@ -35,6 +35,7 @@ namespace lfs::vis {
         class SelectionTool;
     } // namespace tools
     class ToolContext;
+    class Visualizer;
 
     class LFS_VIS_API InputController {
     public:
@@ -71,6 +72,8 @@ namespace lfs::vis {
         void setToolContext(ToolContext* context) {
             tool_context_ = context;
         }
+
+        void setViewer(Visualizer* viewer) { viewer_ = viewer; }
 
         // Called every frame by GUI manager to update viewport bounds
         void updateViewportBounds(float x, float y, float w, float h) {
@@ -225,6 +228,7 @@ namespace lfs::vis {
         std::shared_ptr<tools::AlignTool> align_tool_;
         std::shared_ptr<tools::SelectionTool> selection_tool_;
         ToolContext* tool_context_ = nullptr;
+        Visualizer* viewer_ = nullptr;
 
         // Viewport bounds for focus detection
         struct {

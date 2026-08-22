@@ -501,6 +501,24 @@ namespace gsplat_lfs {
         }
     }
 
+    __global__ void spherical_harmonics_sh0_bwd_kernel(
+        const uint32_t N,
+        const uint32_t K,
+        const bool* __restrict__ masks,
+        const float* __restrict__ v_colors,
+        float* __restrict__ v_coeffs) {
+        const uint32_t idx = cg::this_grid().thread_rank();
+        if (idx >= N * 3u) {
+            return;
+        }
+        const uint32_t elem_id = idx / 3u;
+        const uint32_t c = idx % 3u;
+        if (masks != nullptr && !masks[elem_id]) {
+            return;
+        }
+        v_coeffs[elem_id * K * 3u + c] = SH_C0 * v_colors[elem_id * 3u + c];
+    }
+
     void launch_spherical_harmonics_swizzled_bwd_kernel(
         uint32_t degrees_to_use,
         const float* dirs,
@@ -522,6 +540,12 @@ namespace gsplat_lfs {
 
         dim3 threads(256);
         dim3 grid((n_elements + threads.x - 1) / threads.x);
+        if (degrees_to_use == 0) {
+            spherical_harmonics_sh0_bwd_kernel<<<grid, threads, 0, stream>>>(
+                N, static_cast<uint32_t>(K), masks, v_colors, v_coeffs);
+            LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.sh0_bwd");
+            return;
+        }
         spherical_harmonics_swizzled_bwd_kernel<float>
             <<<grid, threads, 0, stream>>>(
                 N,

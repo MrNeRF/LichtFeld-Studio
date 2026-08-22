@@ -55,7 +55,9 @@ namespace gsplat_lfs {
 
         // shift pointers to the current gaussian
         const glm::fvec3 mean = glm::make_vec3(means + gid * 3);
-        const glm::fvec3 scale = glm::make_vec3(scales + gid * 3);
+        const glm::fvec3 scale_raw = glm::make_vec3(scales + gid * 3);
+        const glm::fvec3 scale = glm::fvec3(
+            expf(scale_raw.x), expf(scale_raw.y), expf(scale_raw.z));
         glm::fquat quat = glm::fquat{
             quats[gid * 4 + 0],
             quats[gid * 4 + 1],
@@ -198,7 +200,7 @@ namespace gsplat_lfs {
 
         float extend = 3.33f;
         if (opacities != nullptr) {
-            float opacity = opacities[gid];
+            float opacity = activated_opacity(opacities[gid]);
             opacity *= compensation;
             if (opacity < ALPHA_THRESHOLD) {
                 radii[idx * 2] = 0;

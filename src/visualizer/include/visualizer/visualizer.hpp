@@ -250,6 +250,16 @@ namespace lfs::vis {
             return {};
         }
 
+        [[nodiscard]] virtual bool loadFileWipeWouldNeedConfirmation(
+            bool is_dataset,
+            bool replace,
+            bool discard_changes) {
+            (void)is_dataset;
+            (void)replace;
+            (void)discard_changes;
+            return false;
+        }
+
         virtual ~Visualizer() = default;
     };
 

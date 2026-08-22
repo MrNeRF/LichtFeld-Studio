@@ -79,6 +79,7 @@ namespace lfs::core {
     inline std::filesystem::path getFontsDir() { return getAssetsDir() / "fonts"; }
     inline std::filesystem::path getThemesDir() { return getAssetsDir() / "themes"; }
     inline std::filesystem::path getLocalesDir() { return getResourceBaseDir() / "locales"; }
+    inline std::filesystem::path getViewerResourcesDir() { return getResourceBaseDir() / "viewer"; }
 
     // Library path lookup: production (bin/../lib) or build directory
     inline std::filesystem::path getLibDir() {

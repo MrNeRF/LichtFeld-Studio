@@ -98,8 +98,9 @@ namespace {
         EXPECT_TRUE(fs::is_directory(paths.venvDir()));
         EXPECT_EQ(paths.uiPreferencesFile(), paths.configDir() / "ui_preferences.json");
         EXPECT_EQ(paths.projectLifecycleFile(), paths.configDir() / "project_lifecycle.json");
+        EXPECT_EQ(paths.rootDir(), paths.configDir().parent_path());
         EXPECT_EQ(paths.recoveryDir(), paths.configDir().parent_path() / "recovery");
-        EXPECT_TRUE(fs::is_directory(paths.recoveryDir()));
+        EXPECT_FALSE(fs::exists(paths.recoveryDir()));
         EXPECT_FALSE(fs::exists(root_ / "LichtFeldStudio"));
     }
 
@@ -123,6 +124,9 @@ namespace {
         EXPECT_FALSE(json.at("mcp").at("expose_network").get<bool>());
         EXPECT_EQ(json.at("mcp").at("port").get<int>(), 45677);
         EXPECT_FALSE(json.at("mcp").at("request_logging").get<bool>());
+        ASSERT_TRUE(json.contains("working_directory"));
+        EXPECT_TRUE(json.at("working_directory").is_string());
+        EXPECT_EQ(json.at("working_directory").get<std::string>(), "");
     }
 
     TEST_F(UserPathsContractTest, ResetPreferencesBacksUpExistingFile) {

@@ -378,6 +378,7 @@ namespace lfs::vis::gui {
                                                           std::abs(kf.time - time) < REPLACE_EPSILON_S;
                                                });
             if (existing != keyframes.end()) {
+                LOG_INFO("Replaced keyframe {} at t={:.3f}s instead of adding a new one", existing->id, time);
                 controller_.updateKeyframeById(existing->id, position, rotation, focal_mm);
             } else {
                 lfs::sequencer::Keyframe kf;

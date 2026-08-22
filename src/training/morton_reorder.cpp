@@ -25,15 +25,6 @@ namespace lfs::training::morton {
         using core::Tensor;
         using core::TensorShape;
 
-        [[nodiscard]] std::size_t prim_capacity(const core::SplatData& splat) {
-            const auto n = static_cast<std::size_t>(splat.size());
-            if (!splat.means().is_valid()) {
-                return n;
-            }
-            const auto cap = splat.means().capacity();
-            return std::max(cap > 0 ? cap : n, n);
-        }
-
         void permute_dim0_prefix(Tensor& tensor, const Tensor& perm) {
             const std::size_t n = perm.numel();
             if (!tensor.is_valid() || tensor.numel() == 0 || n == 0) {
@@ -68,11 +59,10 @@ namespace lfs::training::morton {
             tensor = std::move(dest);
         }
 
-        void permute_named_param(
-            core::SplatData& splat,
-            Tensor& tensor,
-            const Tensor& perm,
-            std::string_view name) {
+        // Gather through a private scratch buffer and copy back into the live
+        // tensor. The exportable allocator returns views at fixed region
+        // offsets per name, so a fresh "allocation" would alias the source.
+        void permute_named_param(Tensor& tensor, const Tensor& perm) {
             const std::size_t n = perm.numel();
             if (!tensor.is_valid() || tensor.numel() == 0 || n == 0) {
                 return;
@@ -81,11 +71,10 @@ namespace lfs::training::morton {
                 permute_dim0_prefix(tensor, perm);
                 return;
             }
-            const std::size_t cap = std::max(tensor.capacity() > 0 ? tensor.capacity() : n, n);
-            Tensor dest = splat.allocate_named_param(tensor.shape(), cap, tensor.dtype(), name);
-            dest.set_stream(tensor.stream());
-            tensor.index_select_into(dest, 0, perm, BoundaryMode::Assert);
-            tensor = std::move(dest);
+            Tensor scratch = Tensor::zeros_direct(tensor.shape(), n, tensor.device(), tensor.dtype());
+            scratch.set_stream(tensor.stream());
+            tensor.index_select_into(scratch, 0, perm, BoundaryMode::Assert);
+            tensor.copy_from(scratch);
         }
 
         void permute_shN(core::SplatData& splat, const Tensor& perm, cudaStream_t stream) {
@@ -105,28 +94,29 @@ namespace lfs::training::morton {
                 return;
             }
 
-            const std::size_t cap = prim_capacity(splat);
             const std::size_t logical = core::sh_swizzled_float_count(n, rest);
-            const std::size_t cap_floats = core::sh_swizzled_float_count(cap, rest);
-            Tensor dest = splat.allocate_named_param(
-                TensorShape({logical}),
-                std::max(logical, cap_floats),
-                DataType::Float32,
-                "SplatData.shN");
-            dest.set_name("splat.shN");
-            dest.set_stream(stream);
+            if (live.numel() < logical) {
+                throw std::runtime_error("Morton reorder: shN storage smaller than its logical size");
+            }
+            Tensor scratch = Tensor::zeros_direct(
+                TensorShape({logical}), logical, Device::CUDA, DataType::Float32);
+            scratch.set_stream(stream);
             if (live.stream() != stream) {
                 live.set_stream(stream);
             }
             core::shN_swizzled_gather_self_i64(
                 live.ptr<float>(),
-                dest.ptr<float>(),
+                scratch.ptr<float>(),
                 perm.ptr<std::int64_t>(),
                 n,
                 0,
                 rest,
                 stream);
-            live = std::move(dest);
+            if (live.numel() == logical) {
+                live.copy_from(scratch);
+            } else {
+                live.slice(0, 0, logical).copy_from(scratch);
+            }
             if (expanded) {
                 (void)sh_value::commit_shN_after_mutation(splat);
             }
@@ -312,11 +302,11 @@ namespace lfs::training::morton {
             return result;
         }
 
-        permute_named_param(splat, splat.means(), result.permutation, "SplatData.means");
-        permute_named_param(splat, splat.sh0(), result.permutation, "SplatData.sh0");
-        permute_named_param(splat, splat.scaling_raw(), result.permutation, "SplatData.scaling");
-        permute_named_param(splat, splat.rotation_raw(), result.permutation, "SplatData.rotation");
-        permute_named_param(splat, splat.opacity_raw(), result.permutation, "SplatData.opacity");
+        permute_named_param(splat.means(), result.permutation);
+        permute_named_param(splat.sh0(), result.permutation);
+        permute_named_param(splat.scaling_raw(), result.permutation);
+        permute_named_param(splat.rotation_raw(), result.permutation);
+        permute_named_param(splat.opacity_raw(), result.permutation);
         permute_shN(splat, result.permutation, stream);
 
         if (splat._densification_info.is_valid() && splat._densification_info.numel() > 0) {

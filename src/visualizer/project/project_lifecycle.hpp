@@ -50,7 +50,16 @@ namespace lfs::vis {
     class VisualizerImplResetTest_ProgressedPausedTrainerStillBlocksCleanClose_Test;
     class VisualizerImplResetTest_CloseSaveRoutesTrainingSnapshotToLiveDocument_Test;
     class VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
-    class VisualizerImplResetTest_StartTrainingPreparesProjectAndGrantsSaves_Test;
+    class VisualizerImplResetTest_StartTrainingUntitledBindsTempProjectAndStaysUntitled_Test;
+    class VisualizerImplResetTest_UntitledTrainingSnapshotAdoptionKeepsSessionUntitledAndOutOfMru_Test;
+    class VisualizerImplResetTest_SaveAsAfterUntitledTrainingMigratesTempIncludingCheckpoint_Test;
+    class VisualizerImplResetTest_UntitledStartConflictNeverReportsExistingOutputProject_Test;
+    class VisualizerImplResetTest_CompletedUntitledTrainingBlocksCleanClose_Test;
+    class VisualizerImplResetTest_TempProjectSaveRefusesAndStaysOutOfMru_Test;
+    class VisualizerImplResetTest_TempSessionLightAutosaveWritesSidecarWithScratchLease_Test;
+    class VisualizerImplResetTest_WorkingDirectoryPreferenceChangeAppliesToNextSession_Test;
+    class VisualizerImplResetTest_StartupPrunesOlderUnlockedScratchFilesAfterOffer_Test;
+    class VisualizerImplResetTest_StartupScansLegacyRecoveryDirectory_Test;
     class VisualizerImplResetTest_StartConflictSeesDiskCheckpointAfterTrainerReplacement_Test;
     class VisualizerImplResetTest_SaveAsRoutesThroughFinishedTrainer_Test;
     class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
@@ -61,6 +70,9 @@ namespace lfs::vis {
     class VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
     class VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
     class VisualizerImplResetTest_AdoptedStepBoundaryPublishRebasesAutosaveBase_Test;
+    class VisualizerImplResetTest_ExplicitSaveAfterUnadoptedTrainerAppendUsesCurrentHead_Test;
+    class VisualizerImplResetTest_ExplicitSaveAfterTrainerRewriteUsesCurrentHead_Test;
+    class VisualizerImplResetTest_UntitledTrainerRewriteAdoptThenSaveAsUsesCurrentHead_Test;
     class VisualizerImplResetTest_TrainingAutosaveIsLightOnlyAndRecoversSpecifiedCkpt_Test;
     class VisualizerImplResetTest_TrainingAutosaveWithoutSpecifiedCkptStillWritesLightChapters_Test;
     class VisualizerImplResetTest_CancelExitDuringCloseSaveDoesNotClose_Test;
@@ -91,6 +103,14 @@ namespace lfs::vis {
     class VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
     class VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
     class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
+    class VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;
+    class VisualizerImplResetTest_RecoverLegacyScratchThenSaveAsRemovesLegacyFile_Test;
+    class VisualizerImplResetTest_StartTrainingWaitsOutInFlightScratchAutosave_Test;
+    class VisualizerImplResetTest_SaveAsAfterUntitledTrainingRoutesThroughFinishedTrainer_Test;
+    class VisualizerImplResetTest_ForceExitDiscardOnTempSessionLeavesNoFilesAndNoWarning_Test;
+    class VisualizerImplResetTest_DatasetLoadIntoTitledProjectStartsUntitledSessionAndKeepsProjectFile_Test;
+    class VisualizerImplResetTest_DatasetLoadIntoTrainedTempSessionRemovesOldTempFile_Test;
+    class VisualizerImplResetTest_SplatDropOntoTitledDatasetProjectStartsUntitledSessionAndKeepsProjectFile_Test;
 } // namespace lfs::vis
 
 namespace lfs::vis::project {
@@ -179,6 +199,8 @@ namespace lfs::vis::project {
                 ProjectSwitchDisposition::RequireClean);
         [[nodiscard]] bool isDirty();
         [[nodiscard]] bool hasSourcePath() const;
+        [[nodiscard]] bool isTempProject() const;
+        [[nodiscard]] bool isBlankUntitledSession() const;
         [[nodiscard]] lfs::Result<ProjectInfo> info();
         [[nodiscard]] ProjectWritePoll pollWrite();
         void joinPendingWrite();
@@ -224,9 +246,9 @@ namespace lfs::vis::project {
         [[nodiscard]] lfs::Result<void>
         prepareTrainingStartProject();
         // Returns the blocking conflict a fresh training start would overwrite, if any:
-        // the bound checkpoint iteration of the open project (in memory or on the
-        // titled master), or -1 when an untitled session's default destination file
-        // already exists or an existing master is unreadable (contents unknown).
+        // the bound checkpoint iteration of the open titled project (in memory or
+        // on the titled master), or -1 when an existing titled master is unreadable.
+        // Untitled and temp sessions never report a conflict.
         [[nodiscard]] std::optional<int>
         trainingStartOverwriteConflict();
         [[nodiscard]] lfs::Result<void>
@@ -262,7 +284,16 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_ProgressedPausedTrainerStillBlocksCleanClose_Test;
         friend class lfs::vis::VisualizerImplResetTest_CloseSaveRoutesTrainingSnapshotToLiveDocument_Test;
         friend class lfs::vis::VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
-        friend class lfs::vis::VisualizerImplResetTest_StartTrainingPreparesProjectAndGrantsSaves_Test;
+        friend class lfs::vis::VisualizerImplResetTest_StartTrainingUntitledBindsTempProjectAndStaysUntitled_Test;
+        friend class lfs::vis::VisualizerImplResetTest_UntitledTrainingSnapshotAdoptionKeepsSessionUntitledAndOutOfMru_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SaveAsAfterUntitledTrainingMigratesTempIncludingCheckpoint_Test;
+        friend class lfs::vis::VisualizerImplResetTest_UntitledStartConflictNeverReportsExistingOutputProject_Test;
+        friend class lfs::vis::VisualizerImplResetTest_CompletedUntitledTrainingBlocksCleanClose_Test;
+        friend class lfs::vis::VisualizerImplResetTest_TempProjectSaveRefusesAndStaysOutOfMru_Test;
+        friend class lfs::vis::VisualizerImplResetTest_TempSessionLightAutosaveWritesSidecarWithScratchLease_Test;
+        friend class lfs::vis::VisualizerImplResetTest_WorkingDirectoryPreferenceChangeAppliesToNextSession_Test;
+        friend class lfs::vis::VisualizerImplResetTest_StartupPrunesOlderUnlockedScratchFilesAfterOffer_Test;
+        friend class lfs::vis::VisualizerImplResetTest_StartupScansLegacyRecoveryDirectory_Test;
         friend class lfs::vis::VisualizerImplResetTest_StartConflictSeesDiskCheckpointAfterTrainerReplacement_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsRoutesThroughFinishedTrainer_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
@@ -273,6 +304,9 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
         friend class lfs::vis::VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
         friend class lfs::vis::VisualizerImplResetTest_AdoptedStepBoundaryPublishRebasesAutosaveBase_Test;
+        friend class lfs::vis::VisualizerImplResetTest_ExplicitSaveAfterUnadoptedTrainerAppendUsesCurrentHead_Test;
+        friend class lfs::vis::VisualizerImplResetTest_ExplicitSaveAfterTrainerRewriteUsesCurrentHead_Test;
+        friend class lfs::vis::VisualizerImplResetTest_UntitledTrainerRewriteAdoptThenSaveAsUsesCurrentHead_Test;
         friend class lfs::vis::VisualizerImplResetTest_TrainingAutosaveIsLightOnlyAndRecoversSpecifiedCkpt_Test;
         friend class lfs::vis::VisualizerImplResetTest_TrainingAutosaveWithoutSpecifiedCkptStillWritesLightChapters_Test;
         friend class lfs::vis::VisualizerImplResetTest_CancelExitDuringCloseSaveDoesNotClose_Test;
@@ -303,6 +337,14 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
         friend class lfs::vis::VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
         friend class lfs::vis::VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoverLegacyScratchThenSaveAsRemovesLegacyFile_Test;
+        friend class lfs::vis::VisualizerImplResetTest_StartTrainingWaitsOutInFlightScratchAutosave_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SaveAsAfterUntitledTrainingRoutesThroughFinishedTrainer_Test;
+        friend class lfs::vis::VisualizerImplResetTest_ForceExitDiscardOnTempSessionLeavesNoFilesAndNoWarning_Test;
+        friend class lfs::vis::VisualizerImplResetTest_DatasetLoadIntoTitledProjectStartsUntitledSessionAndKeepsProjectFile_Test;
+        friend class lfs::vis::VisualizerImplResetTest_DatasetLoadIntoTrainedTempSessionRemovesOldTempFile_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SplatDropOntoTitledDatasetProjectStartsUntitledSessionAndKeepsProjectFile_Test;
         enum class Hydration {
             Empty,
             ShellReady,
@@ -365,10 +407,20 @@ namespace lfs::vis::project {
         openScratchRecovered(
             const std::filesystem::path& scratch_path,
             ProjectSwitchDisposition disposition);
+        [[nodiscard]] lfs::Result<void>
+        adoptRecoveredScratchAsTempSession();
         [[nodiscard]] std::filesystem::path
         scratchAutosaveDirectory() const;
+        [[nodiscard]] bool isScratchPath(
+            const std::filesystem::path& path) const;
+        void freezeTempProjectDirectory();
+        void pruneUnlockedScratchFilesExcept(
+            const std::optional<std::filesystem::path>& keep);
+        [[nodiscard]] std::optional<
+            lfs::io::project::WriterLockLease>
+        snapshotWriterLease(
+            const std::filesystem::path& destination) const;
         void removeScratchAutosave();
-        [[nodiscard]] bool isBlankUntitledSession() const;
         [[nodiscard]] lfs::Result<void>
         ensureScratchAutosaveBinding();
         [[nodiscard]] lfs::Result<void>
@@ -432,6 +484,12 @@ namespace lfs::vis::project {
         void cancelBackgroundAutosaveIfRunning();
         [[nodiscard]] lfs::Result<void>
         waitOutBackgroundAutosaveForExplicitSave();
+        [[nodiscard]] lfs::Result<void>
+        waitOutTrainerPublishForExplicitSave();
+        [[nodiscard]] lfs::Result<void>
+        ensureDocumentMatchesBoundMaster();
+        [[nodiscard]] lfs::Result<void>
+        rebaseOntoCurrentMasterHead();
         void cleanupRecoverySession();
         void removeDiscardedAutosaveArtifacts(
             const std::filesystem::path& master);
@@ -501,7 +559,9 @@ namespace lfs::vis::project {
         ProjectLifecycleSettings settings_;
         mutable std::mutex settings_mutex_;
         std::filesystem::path settings_path_;
-        std::filesystem::path recovery_directory_;
+        std::filesystem::path temp_project_directory_;
+        std::filesystem::path legacy_recovery_directory_;
+        bool isolated_scratch_storage_ = false;
         bool settings_persistence_enabled_ = true;
         std::atomic<std::uint64_t> epoch_{0};
         std::atomic<std::uint64_t> scene_mutation_serial_{0};

@@ -54,6 +54,28 @@ Use the schema returned by `operator_describe` instead of guessing the payload:
 }
 ```
 
+## Confirm Dialogs
+
+Use these for `lf.ui.confirm_dialog` overlays (exit, recovery, unsaved work), not operator modal tools:
+
+```json
+{
+  "tool": "ui_modal_get",
+  "arguments": {}
+}
+```
+
+Press an enabled button by its exact label:
+
+```json
+{
+  "tool": "ui_modal_press",
+  "arguments": {
+    "label": "Cancel"
+  }
+}
+```
+
 ## Handle Modal State
 
 Inspect current modal state:

@@ -307,6 +307,7 @@ set(TEST_FILES
     test_compact_splats_peak.cpp
     test_adam_capacity_invariant.cpp
     test_dual_rep_optimizer.cpp
+    test_gut_shN_joint_adam.cpp
     test_sparsity_optimizer.cpp
     test_mcmc_tensor_ops.cpp
     test_training_cropbox_mask.cpp
@@ -1001,6 +1002,15 @@ add_custom_target(run_full_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Running fast and slow tests (excluding nightly)"
 )
+
+foreach(TEST_TARGET lichtfeld_tests)
+    add_custom_command(TARGET ${TEST_TARGET} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${TEST_TARGET}>/resources/viewer"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+            "${PROJECT_SOURCE_DIR}/src/visualizer/gui/resources/viewer"
+            "$<TARGET_FILE_DIR:${TEST_TARGET}>/resources/viewer"
+    )
+endforeach()
 
 # Platform-specific settings
 if(WIN32)
