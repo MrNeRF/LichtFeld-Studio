@@ -313,6 +313,11 @@ def test_all_asset_manager_buttons_use_strict_size_variants():
     assert "max-width: 28dp;" in rcss
     assert ".asset-button--small-icon {" in rcss
     assert "max-height: 24dp;" in rcss
+    assert '<span class="asset-button-text">{{import_project_label}}</span>' in rml
+    assert '<span class="asset-button-glyph">&#215;</span>' in rml
+    assert ".asset-button-text {" in rcss
+    assert ".asset-button-glyph {" in rcss
+    assert "margin-top: 4dp;" in rcss
     assert "padding: 0 32dp 32dp 12dp;" in rcss
     assert "padding: 12dp 0 0 0;" in rcss
 

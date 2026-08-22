@@ -101,9 +101,20 @@
     padding: 0;
 }
 
+.asset-button-text {
+    display: block;
+    line-height: 16dp;
+    white-space: nowrap;
+}
+
+.asset-button-glyph {
+    display: block;
+    font-size: 18dp;
+    line-height: 20dp;
+}
+
 .asset-panel-close {
     margin-left: auto;
-    font-size: 18dp;
 }
 
 /* ── Shell wrapper ─────────────────────────────────────── */
@@ -174,6 +185,7 @@
 
 .toolbar-row-secondary {
     flex-shrink: 0;
+    margin-top: 4dp;
 }
 
 .asset-toolbar-right {

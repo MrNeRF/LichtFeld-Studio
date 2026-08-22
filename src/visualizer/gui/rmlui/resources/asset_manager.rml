@@ -8,7 +8,7 @@
   <div id="asset-floating-header" class="hidden" data-class-hidden="!is_floating">
     <span id="asset-floating-title">{{panel_label}}</span>
     <div class="asset-panel-actions">
-      <button class="asset-button asset-button--text asset-panel-action" data-event-click="close_panel">{{close_label}}</button>
+      <button class="asset-button asset-button--text asset-panel-action" data-event-click="close_panel"><span class="asset-button-text">{{close_label}}</span></button>
     </div>
   </div>
 
@@ -21,13 +21,13 @@
             <input id="asset-search-input" type="text" placeholder="{{search_placeholder}}" data-value="search_query" />
           </div>
 
-          <button class="asset-button asset-button--text asset-button--primary asset-import-button" data-event-click="on_import_project">{{import_project_label}}</button>
-          <button class="asset-button asset-button--icon asset-panel-close" type="button" data-event-click="close_panel" data-tooltip="common.close">&#215;</button>
+          <button class="asset-button asset-button--text asset-button--primary asset-import-button" data-event-click="on_import_project"><span class="asset-button-text">{{import_project_label}}</span></button>
+          <button class="asset-button asset-button--icon asset-panel-close" type="button" data-event-click="close_panel" data-tooltip="common.close"><span class="asset-button-glyph">&#215;</span></button>
         </div>
 
         <div class="toolbar-row toolbar-row-secondary">
           <button class="asset-button asset-button--text asset-sort-button" data-event-click="cycle_sort_mode">
-            <span>{{sort_label}}</span>
+            <span class="asset-button-text">{{sort_label}}</span>
           </button>
 
         </div>
@@ -103,7 +103,7 @@
                           <span>{{asset.size_label}}</span>
                         </div>
                         <div class="asset-card-actions">
-                          <button class="asset-button asset-button--text asset-card-button" data-if="asset.can_load" data-attr-data-asset-id="asset.id" data-asset-action="load">{{load_button_label}}</button>
+                          <button class="asset-button asset-button--text asset-card-button" data-if="asset.can_load" data-attr-data-asset-id="asset.id" data-asset-action="load"><span class="asset-button-text">{{load_button_label}}</span></button>
                         </div>
                       </div>
                       <button class="asset-button asset-button--small-icon asset-card-menu" data-attr-data-asset-id="asset.id" data-asset-action="menu"><img src="../icon/more-vertical.png" /></button>
@@ -197,7 +197,7 @@
                   <span class="parameter-label">{{prop_expected_path_label}}</span>
                   <span class="parameter-value">{{selected_asset_expected_path}}</span>
                 </div>
-                <button class="asset-button asset-button--text asset-info-button" data-event-click="on_locate_file">{{locate_file_button_label}}</button>
+                <button class="asset-button asset-button--text asset-info-button" data-event-click="on_locate_file"><span class="asset-button-text">{{locate_file_button_label}}</span></button>
               </div>
 
             </div>
