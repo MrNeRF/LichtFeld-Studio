@@ -119,15 +119,17 @@ namespace gsplat_lfs {
         int32_t range_start = tile_offsets[tile_id];
         int32_t range_end = tile_offsets[tile_id + 1];
         const uint32_t block_size = block.size();
+        const uint32_t stage_n =
+            (CDIM == 3 && block_size == 256u) ? 128u : block_size;
         uint32_t num_batches =
-            (range_end - range_start + block_size - 1) / block_size;
+            (range_end - range_start + stage_n - 1) / stage_n;
 
         extern __shared__ int s[];
-        vec4* xyz_opacity_batch = reinterpret_cast<vec4*>(s); // [block_size]
+        vec4* xyz_opacity_batch = reinterpret_cast<vec4*>(s); // [stage_n]
         mat3* iscl_rot_batch =
-            reinterpret_cast<mat3*>(&xyz_opacity_batch[block_size]); // [block_size]
+            reinterpret_cast<mat3*>(&xyz_opacity_batch[stage_n]); // [stage_n]
         float* rgbs_batch =
-            reinterpret_cast<float*>(&iscl_rot_batch[block_size]); // [block_size * CDIM]
+            reinterpret_cast<float*>(&iscl_rot_batch[stage_n]); // [stage_n * CDIM]
 
         // current visibility left to render
         // transmittance is gonna be used in the backward pass which requires a high
@@ -152,9 +154,9 @@ namespace gsplat_lfs {
 
             // each thread fetch 1 gaussian from front to back
             // index of gaussian to load
-            uint32_t batch_start = range_start + block_size * b;
+            uint32_t batch_start = range_start + stage_n * b;
             uint32_t idx = batch_start + tr;
-            if (idx < range_end) {
+            if (tr < stage_n && idx < range_end) {
                 int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
                 const float3 xyz_f = load_float3(reinterpret_cast<const float*>(&means[g]));
                 const float opac = activated_opacity(opacities[g]);
@@ -197,7 +199,7 @@ namespace gsplat_lfs {
             block.sync();
 
             // process gaussians in the current batch for this pixel
-            uint32_t batch_size = min(block_size, range_end - batch_start);
+            uint32_t batch_size = min(stage_n, range_end - batch_start);
             for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
                 const float4 xyz_opac = load_float4(reinterpret_cast<const float*>(&xyz_opacity_batch[t]));
                 const float opac = xyz_opac.w;
@@ -316,8 +318,10 @@ namespace gsplat_lfs {
             camera_model, rs_type, viewmats1,
             radial_coeffs, tangential_coeffs, thin_prism_coeffs);
 
+        const uint32_t n_stage =
+            (CDIM == 3 && tile_size == 16) ? 128u : (tile_size * tile_size);
         int64_t shmem_size =
-            tile_size * tile_size *
+            n_stage *
             (sizeof(vec4) + sizeof(mat3) + sizeof(float) * CDIM);
 
         if (n_isects == 0) {

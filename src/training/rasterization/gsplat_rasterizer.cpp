@@ -689,14 +689,12 @@ namespace lfs::training {
             if (!have_color_grad) {
                 v_render_colors_ptr = reinterpret_cast<float*>(bwd_ptr);
                 bwd_ptr += v_render_colors_size;
-                cudaMemsetAsync(v_render_colors_ptr, 0, H * W * channels * sizeof(float), stream);
             } else {
                 v_render_colors_ptr = const_cast<float*>(grad_image.ptr<float>());
             }
             if (!have_alpha_grad) {
                 v_render_alphas_ptr = reinterpret_cast<float*>(bwd_ptr);
                 bwd_ptr += v_render_alphas_size;
-                cudaMemsetAsync(v_render_alphas_ptr, 0, H * W * sizeof(float), stream);
             } else {
                 v_render_alphas_ptr = const_cast<float*>(grad_alpha.ptr<float>());
             }
@@ -710,11 +708,9 @@ namespace lfs::training {
             bwd_ptr += v_opacities_size;
             auto* v_sh_coeffs_ptr = reinterpret_cast<float*>(bwd_ptr);
 
-            cudaMemsetAsync(v_means_ptr, 0, N * 3 * sizeof(float), stream);
-            cudaMemsetAsync(v_quats_ptr, 0, N * 4 * sizeof(float), stream);
-            cudaMemsetAsync(v_scales_ptr, 0, N * 3 * sizeof(float), stream);
-            cudaMemsetAsync(v_opacities_ptr, 0, N * sizeof(float), stream);
-            cudaMemsetAsync(v_sh_coeffs_ptr, 0, N * K * 3 * sizeof(float), stream);
+            LFS_CUDA_CHECK_MSG(
+                cudaMemsetAsync(bwd_blob, 0, total_bwd_size, stream),
+                "gsplat backward gradient arena clear");
 
             UnscentedTransformParameters ut_params;
 
