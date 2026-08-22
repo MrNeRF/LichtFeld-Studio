@@ -1711,6 +1711,21 @@ namespace lfs::vis {
                     gui->openPreferences();
                 return;
 
+            case input::Action::SELECT_ALL_SCENE_NODES:
+                if (gui)
+                    (void)gui->selectAllSceneNodesIfFocused();
+                return;
+
+            case input::Action::TOGGLE_SCENE_SELECTION_VISIBILITY:
+                if (gui)
+                    (void)gui->toggleSceneSelectionVisibilityIfFocused();
+                return;
+
+            case input::Action::TOGGLE_SCENE_SELECTION_TRAINING:
+                if (gui)
+                    (void)gui->toggleSceneSelectionTrainingIfFocused();
+                return;
+
             case input::Action::TOGGLE_MCP_SERVER:
                 toggleMcpRuntimeEnabled();
                 return;

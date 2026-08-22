@@ -15,6 +15,7 @@
 #include "gui/utils/native_file_dialog.hpp"
 #include "internal/resource_paths.hpp"
 #include "operation/undo_history.hpp"
+#include "preferences.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/services.hpp"
 
@@ -405,6 +406,7 @@ namespace lfs::vis::gui {
         filter_clear_el_ = nullptr;
         selection_action_bar_el_ = nullptr;
         selection_action_count_el_ = nullptr;
+        selection_clear_el_ = nullptr;
         selection_visibility_el_ = nullptr;
         selection_visibility_icon_el_ = nullptr;
         selection_training_el_ = nullptr;
@@ -612,6 +614,7 @@ namespace lfs::vis::gui {
         filter_clear_el_ = document_->GetElementById("filter-clear");
         selection_action_bar_el_ = document_->GetElementById("selection-action-bar");
         selection_action_count_el_ = document_->GetElementById("selection-action-count");
+        selection_clear_el_ = document_->GetElementById("selection-clear");
         selection_visibility_el_ = document_->GetElementById("selection-visibility");
         selection_visibility_icon_el_ = document_->GetElementById("selection-visibility-icon");
         selection_training_el_ = document_->GetElementById("selection-training");
@@ -659,6 +662,11 @@ namespace lfs::vis::gui {
             if (!clear_icon_source.empty())
                 clear_icon->SetAttribute("src", clear_icon_source);
         }
+        if (auto* clear_icon = document_->GetElementById("selection-clear-icon")) {
+            const std::string clear_icon_source = resolveRmlImageSource("icon/scene/x.png");
+            if (!clear_icon_source.empty())
+                clear_icon->SetAttribute("src", clear_icon_source);
+        }
 
         visible_icon_source_ = resolveRmlImageSource("icon/scene/visible.png");
         hidden_icon_source_ = resolveRmlImageSource("icon/scene/hidden.png");
@@ -684,7 +692,8 @@ namespace lfs::vis::gui {
             !asset_manager_button_el_ || !summary_model_chip_el_ || !summary_node_chip_el_ ||
             !summary_filter_chip_el_ || !scene_view_el_ || !search_container_el_ ||
             !filter_input_el_ || !filter_clear_el_ || !selection_action_bar_el_ ||
-            !selection_action_count_el_ || !selection_visibility_el_ || !selection_visibility_icon_el_ ||
+            !selection_action_count_el_ || !selection_clear_el_ ||
+            !selection_visibility_el_ || !selection_visibility_icon_el_ ||
             !selection_training_el_ || !selection_training_icon_el_ ||
             !selection_delete_el_ || !empty_state_el_ || !empty_primary_el_ ||
             !empty_secondary_el_ || !history_container_el_ || !history_summary_label_el_ ||
@@ -706,6 +715,7 @@ namespace lfs::vis::gui {
         asset_manager_button_el_->AddEventListener(Rml::EventId::Click, &listener_);
         filter_clear_el_->AddEventListener(Rml::EventId::Click, &listener_);
         selection_visibility_el_->AddEventListener(Rml::EventId::Click, &listener_);
+        selection_clear_el_->AddEventListener(Rml::EventId::Click, &listener_);
         selection_training_el_->AddEventListener(Rml::EventId::Click, &listener_);
         selection_delete_el_->AddEventListener(Rml::EventId::Click, &listener_);
         history_undo_btn_el_->AddEventListener(Rml::EventId::Click, &listener_);
@@ -763,6 +773,7 @@ namespace lfs::vis::gui {
     NativeScenePanel::SyncStamp NativeScenePanel::makeSyncStamp() const {
         SyncStamp stamp;
         stamp.active_tab = active_tab_;
+        stamp.scene_graph_selection_markers = loadSceneGraphSelectionMarkersPreference();
         auto& store = app_store();
         stamp.language_generation = store.language_generation.get();
         stamp.dp_ratio_milli = manager_
@@ -799,6 +810,7 @@ namespace lfs::vis::gui {
         const std::string filter_text =
             filter_input_el_ ? filter_input_el_->GetAttribute<Rml::String>("value", "") : "";
         tree_el_->setFilterText(filter_text);
+        tree_el_->setSelectionMarkersVisible(loadSceneGraphSelectionMarkersPreference());
         return tree_el_->syncFromScene(ctx);
     }
 
@@ -1080,6 +1092,12 @@ namespace lfs::vis::gui {
             event.StopPropagation();
             return true;
         }
+        if (id == "selection-clear" || id == "selection-clear-icon" ||
+            current_id == "selection-clear") {
+            tree_el_->clearSelectedNodes();
+            event.StopPropagation();
+            return true;
+        }
         if (id == "selection-training" || id == "selection-training-icon" ||
             current_id == "selection-training") {
             const auto state = tree_el_->selectionActionState();
@@ -1283,6 +1301,18 @@ namespace lfs::vis::gui {
         if (auto* input = dynamic_cast<Rml::ElementFormControlInput*>(filter_input_el_))
             input->SetValue("");
         host_.markContentDirty();
+    }
+
+    bool NativeScenePanel::selectAllIfFocused() {
+        return active_tab_ == Tab::Scene && tree_el_ && tree_el_->selectAllIfFocused();
+    }
+
+    bool NativeScenePanel::toggleSelectionVisibilityIfFocused() {
+        return active_tab_ == Tab::Scene && tree_el_ && tree_el_->toggleSelectedVisibilityIfFocused();
+    }
+
+    bool NativeScenePanel::toggleSelectionTrainingIfFocused() {
+        return active_tab_ == Tab::Scene && tree_el_ && tree_el_->toggleSelectedTrainingIfFocused();
     }
 
     void NativeScenePanel::applyPendingTreeChrome() {

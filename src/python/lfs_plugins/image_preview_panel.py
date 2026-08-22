@@ -35,6 +35,7 @@ FILMSTRIP_WINDOW = 40
 THUMB_MAX_PX = 256
 
 _instance = None
+_pending_open = None
 _RML_PATH_SAFE_CHARS = "/:._-~"
 
 
@@ -53,7 +54,7 @@ class ImagePreviewPanel(Panel):
     update_policy = "dirty"
 
     def __init__(self):
-        global _instance
+        global _instance, _pending_open
         _instance = self
 
         self._image_paths: list[Path] = []
@@ -96,6 +97,9 @@ class ImagePreviewPanel(Panel):
         self._decorator_cache: dict[str, str] = {}
         self._reactive_unsubscribers = []
         self._pending_view_chrome = None
+        if _pending_open is not None:
+            self.open(*_pending_open)
+            _pending_open = None
 
     def capture_chrome(self):
         return {
@@ -1201,9 +1205,12 @@ def _set_text(doc, element_id: str, text: str):
 
 def open_image_preview(image_paths: list[Path], mask_paths: list[Path],
                        start_index: int, camera_uids: list[int] | None = None):
-    if _instance:
-        _instance.open(image_paths, mask_paths, start_index, camera_uids)
+    global _pending_open
+    _pending_open = (image_paths, mask_paths, start_index, camera_uids)
     lf.ui.set_panel_enabled("lfs.image_preview", True)
+    if _instance and _pending_open is not None:
+        _instance.open(*_pending_open)
+        _pending_open = None
 
 
 def open_camera_preview_by_uid(cam_uid: int):

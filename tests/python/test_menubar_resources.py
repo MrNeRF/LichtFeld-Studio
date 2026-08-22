@@ -393,7 +393,43 @@ def test_scene_tree_multi_selection_actions_are_fixed_below_the_scroll_view():
     assert "checkboxState(child_id)" in scene_graph
     checkbox_rule = _rule_body(scene_rcss, ".tree-checkbox")
     assert "position: absolute;" in checkbox_rule
-    assert "left: 4dp;" in checkbox_rule
+    assert "left: 5dp;" in checkbox_rule
+    assert "width: 9dp;" in checkbox_rule
+    assert "height: 9dp;" in checkbox_rule
     assert "opacity:" not in checkbox_rule
     assert ".tree-row:hover .tree-checkbox" not in scene_rcss
-    assert ".padding_left_dp = formatDp(21 + depth * 16)" in scene_graph
+    assert "(selection_markers_visible_ ? 17 : 4) + depth * 16" in scene_graph
+    assert 'selection_markers_visible_ ? "inline-block" : "none"' in scene_graph
+    assert "border-radius: 5dp;" in checkbox_rule
+    assert 'prefixedAction("select_hierarchy")' in scene_graph
+    assert "selectHierarchyFromSelection()" in scene_graph
+    assert "if (ctrl && shift)" in scene_graph
+    assert "selectHierarchy(node_id);" in scene_graph
+    assert "case Rml::Input::KI_SPACE:" not in scene_graph
+    assert "previewCameraNode" not in scene_graph
+    input_bindings = (
+        PROJECT_ROOT / "src" / "visualizer" / "input" / "input_bindings.cpp"
+    ).read_text(encoding="utf-8")
+    assert "Action::SELECT_ALL_SCENE_NODES" in input_bindings
+    assert "MODIFIER_CTRL | MODIFIER_SHIFT" in input_bindings
+    assert 'id="selection-clear"' in scene_rml
+    assert "clearSelectedNodes()" in scene_panel
+    assert "const core::NodeId toggled = current != core::NULL_NODE ? current : target" in scene_graph
+    assert 'is_panel_enabled("lfs.image_preview")' in scene_graph
+
+
+def test_scene_graph_selection_markers_are_optional_user_preferences():
+    preferences_hpp = (PROJECT_ROOT / "src" / "visualizer" / "preferences.hpp").read_text(encoding="utf-8")
+    preferences_cpp = (PROJECT_ROOT / "src" / "visualizer" / "preferences.cpp").read_text(encoding="utf-8")
+    preferences_rml = (
+        PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources" / "preferences.rml"
+    ).read_text(encoding="utf-8")
+    panel = (PROJECT_ROOT / "src" / "python" / "lfs_plugins" / "preferences_panel.py").read_text(encoding="utf-8")
+
+    assert "setSceneGraphSelectionMarkers(bool enabled)" in preferences_hpp
+    assert 'values["scene_graph_selection_markers"] = enabled' in preferences_cpp
+    assert 'value("scene_graph_selection_markers", false)' in preferences_cpp
+    assert 'data-checked="scene_graph_selection_markers"' in preferences_rml
+    assert 'toggle_section(\'scene_graph\')' in preferences_rml
+    assert '@tr:preferences.scene_graph' in preferences_rml
+    assert "lf.ui.set_scene_graph_selection_markers" in panel

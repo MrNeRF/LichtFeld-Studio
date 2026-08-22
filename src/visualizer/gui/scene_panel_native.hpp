@@ -50,6 +50,9 @@ namespace lfs::vis::gui {
             const core::Scene& scene) const;
         void applyTreeChrome(const SceneTreeSessionChrome& chrome);
         void resetTreeChrome();
+        [[nodiscard]] bool selectAllIfFocused();
+        [[nodiscard]] bool toggleSelectionVisibilityIfFocused();
+        [[nodiscard]] bool toggleSelectionTrainingIfFocused();
 
     private:
         struct EventListener : Rml::EventListener {
@@ -85,6 +88,7 @@ namespace lfs::vis::gui {
             uint64_t render_settings_generation = 0;
             int dp_ratio_milli = 1000;
             bool invert_masks = false;
+            bool scene_graph_selection_markers = false;
 
             bool operator==(const SyncStamp&) const = default;
         };
@@ -139,6 +143,7 @@ namespace lfs::vis::gui {
         Rml::Element* filter_clear_el_ = nullptr;
         Rml::Element* selection_action_bar_el_ = nullptr;
         Rml::Element* selection_action_count_el_ = nullptr;
+        Rml::Element* selection_clear_el_ = nullptr;
         Rml::Element* selection_visibility_el_ = nullptr;
         Rml::Element* selection_visibility_icon_el_ = nullptr;
         Rml::Element* selection_training_el_ = nullptr;

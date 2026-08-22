@@ -1022,7 +1022,7 @@ namespace lfs::vis::gui {
             .label = snapshot.label,
             .node_id_text = std::to_string(snapshot.id),
             .encoded_label = encode(snapshot.label),
-            .padding_left_dp = formatDp(21 + depth * 16),
+            .padding_left_dp = formatDp((selection_markers_visible_ ? 17 : 4) + depth * 16),
             .has_mask = snapshot.has_mask,
             .can_delete = snapshot.can_delete,
             .delete_enabled = snapshot.delete_enabled,
@@ -1366,6 +1366,7 @@ namespace lfs::vis::gui {
         const auto [checkbox_checked, checkbox_mixed] = checkboxState(row.id);
         setCachedClass(slot.root, "selected", selected_ids_.contains(row.id) || checkbox_checked);
         setCachedClass(slot.root, "selection-partial", checkbox_mixed);
+        setCachedClass(slot.root, "keyboard-cursor", keyboard_cursor_id_ == row.id);
         setCachedClass(slot.root, "drop-target", drop_into_group_id_ == row.id);
         setCachedClass(slot.root, "dragging",
                        drag_source_id_ != core::NULL_NODE && drag_source_id_ == row.id);
@@ -1376,10 +1377,11 @@ namespace lfs::vis::gui {
         setCachedClass(slot.vis_icon, "icon-vis-off", !row.visible);
 
         setCachedAttribute(slot.selection_checkbox, "data-node-id", row.node_id_text);
+        setCachedProperty(slot.selection_checkbox, "display",
+                          selection_markers_visible_ ? "inline-block" : "none");
         setCachedClass(slot.selection_checkbox, "checked", checkbox_checked);
         setCachedClass(slot.selection_checkbox, "mixed", checkbox_mixed);
-        setCachedInnerRml(slot.selection_checkbox,
-                          checkbox_mixed ? "\u2212" : checkbox_checked ? "\u2713" : "");
+        setCachedInnerRml(slot.selection_checkbox, checkbox_mixed ? "\u2212" : "");
 
         setCachedAttribute(slot.delete_icon, "data-node-id", row.node_id_text);
         setCachedProperty(slot.delete_icon, "display", row.can_delete ? "inline" : "none");
@@ -1756,6 +1758,95 @@ namespace lfs::vis::gui {
         scene_manager->selectNodesById(
             std::vector<core::NodeId>(selected_ids_.begin(), selected_ids_.end()));
         click_anchor_id_ = node_id;
+        keyboard_cursor_id_ = node_id;
+        markStateDirty();
+    }
+
+    void SceneGraphElement::collectHierarchyIds(
+        const core::NodeId node_id,
+        std::unordered_set<core::NodeId>& ids) const {
+        const auto it = node_snapshots_.find(node_id);
+        if (it == node_snapshots_.end() || !ids.insert(node_id).second)
+            return;
+        for (const core::NodeId child_id : it->second.children)
+            collectHierarchyIds(child_id, ids);
+    }
+
+    void SceneGraphElement::selectHierarchyFromSelection() {
+        auto* scene_manager = services().sceneOrNull();
+        if (!scene_manager || selected_ids_.empty())
+            return;
+
+        std::unordered_set<core::NodeId> hierarchy_ids;
+        for (const core::NodeId id : selected_ids_)
+            collectHierarchyIds(id, hierarchy_ids);
+        selected_ids_ = std::move(hierarchy_ids);
+        scene_manager->selectNodesById(
+            std::vector<core::NodeId>(selected_ids_.begin(), selected_ids_.end()));
+        markStateDirty();
+    }
+
+    void SceneGraphElement::selectHierarchy(const core::NodeId node_id) {
+        auto* scene_manager = services().sceneOrNull();
+        if (!scene_manager || !node_snapshots_.contains(node_id))
+            return;
+
+        std::unordered_set<core::NodeId> hierarchy_ids;
+        collectHierarchyIds(node_id, hierarchy_ids);
+        bool all_selected = true;
+        for (const core::NodeId id : hierarchy_ids)
+            all_selected = all_selected && selected_ids_.contains(id);
+        if (all_selected) {
+            for (const core::NodeId id : hierarchy_ids)
+                selected_ids_.erase(id);
+        } else {
+            selected_ids_.insert(hierarchy_ids.begin(), hierarchy_ids.end());
+        }
+        scene_manager->selectNodesById(
+            std::vector<core::NodeId>(selected_ids_.begin(), selected_ids_.end()));
+        click_anchor_id_ = node_id;
+        keyboard_cursor_id_ = node_id;
+        markStateDirty();
+    }
+
+    bool SceneGraphElement::selectAllIfFocused() {
+        if (!IsPseudoClassSet("focus"))
+            return false;
+        auto* scene_manager = services().sceneOrNull();
+        if (!scene_manager || node_snapshots_.empty())
+            return false;
+        selected_ids_.clear();
+        for (const auto& [id, _] : node_snapshots_)
+            selected_ids_.insert(id);
+        scene_manager->selectNodesById(
+            std::vector<core::NodeId>(selected_ids_.begin(), selected_ids_.end()));
+        markStateDirty();
+        return true;
+    }
+
+    bool SceneGraphElement::toggleSelectedVisibilityIfFocused() {
+        if (!IsPseudoClassSet("focus") || selected_ids_.empty())
+            return false;
+        const auto state = selectionActionState();
+        setSelectedVisibility(!state.all_visible);
+        return true;
+    }
+
+    bool SceneGraphElement::toggleSelectedTrainingIfFocused() {
+        if (!IsPseudoClassSet("focus") || selected_ids_.empty())
+            return false;
+        const auto state = selectionActionState();
+        if (!state.all_training_compatible)
+            return false;
+        setSelectedTrainingEnabled(!state.all_training_enabled);
+        return true;
+    }
+
+    void SceneGraphElement::setSelectionMarkersVisible(const bool visible) {
+        if (selection_markers_visible_ == visible)
+            return;
+        selection_markers_visible_ = visible;
+        tree_rebuild_needed_ = true;
         markStateDirty();
     }
 
@@ -1767,8 +1858,18 @@ namespace lfs::vis::gui {
 
         const bool ctrl = ctrlDown();
         const bool shift = shiftDown();
+        keyboard_cursor_id_ = node_id;
 
-        if (ctrl) {
+        if (ctrl && shift) {
+            selectHierarchy(node_id);
+            return;
+        }
+        if (shift && click_anchor_id_ != core::NULL_NODE) {
+            const auto range_ids = rangeSelectionIds(click_anchor_id_, node_id);
+            selected_ids_.clear();
+            selected_ids_.insert(range_ids.begin(), range_ids.end());
+            scene_manager->selectNodesById(range_ids);
+        } else if (ctrl) {
             if (selected_ids_.contains(node_id)) {
                 selected_ids_.erase(node_id);
                 scene_manager->selectNodesById(std::vector<core::NodeId>(selected_ids_.begin(), selected_ids_.end()));
@@ -1777,19 +1878,6 @@ namespace lfs::vis::gui {
                 selected_ids_.insert(node_id);
             }
             click_anchor_id_ = node_id;
-        } else if (shift && click_anchor_id_ != core::NULL_NODE) {
-            scene_manager->selectNodesById(rangeSelectionIds(click_anchor_id_, node_id));
-            selected_ids_.clear();
-            const auto lo = flat_index_by_id_.find(click_anchor_id_);
-            const auto hi = flat_index_by_id_.find(node_id);
-            if (lo != flat_index_by_id_.end() && hi != flat_index_by_id_.end()) {
-                const size_t start = std::min(lo->second, hi->second);
-                const size_t end = std::max(lo->second, hi->second);
-                for (size_t i = start; i <= end; ++i)
-                    selected_ids_.insert(flat_rows_[i].id);
-            } else {
-                selected_ids_.insert(node_id);
-            }
         } else {
             if (selected_ids_.size() == 1 && selected_ids_.contains(node_id))
                 return;
@@ -1830,10 +1918,12 @@ namespace lfs::vis::gui {
             return false;
 
         if (node->type == core::NodeType::CAMERA) {
+            camera_preview_navigation_active_ = true;
             cmd::OpenCameraPreview{.cam_id = node->camera_uid}.emit();
             return true;
         }
         if (node->type == core::NodeType::KEYFRAME && node->keyframe) {
+            camera_preview_navigation_active_ = false;
             cmd::SequencerGoToKeyframe{.keyframe_index = node->keyframe->keyframe_index}.emit();
             return true;
         }
@@ -1862,6 +1952,9 @@ namespace lfs::vis::gui {
     }
 
     core::NodeId SceneGraphElement::selectionCursor() const {
+        if (keyboard_cursor_id_ != core::NULL_NODE &&
+            flat_index_by_id_.contains(keyboard_cursor_id_))
+            return keyboard_cursor_id_;
         if (click_anchor_id_ != core::NULL_NODE && selected_ids_.contains(click_anchor_id_))
             return click_anchor_id_;
         for (const FlatRow& row : flat_rows_) {
@@ -1871,7 +1964,9 @@ namespace lfs::vis::gui {
         return core::NULL_NODE;
     }
 
-    bool SceneGraphElement::moveSelection(const int delta, const bool extend) {
+    bool SceneGraphElement::moveSelectionCursor(const int delta,
+                                                const bool extend,
+                                                const bool toggle) {
         auto* scene_manager = services().sceneOrNull();
         if (!scene_manager || flat_rows_.empty())
             return false;
@@ -1890,7 +1985,10 @@ namespace lfs::vis::gui {
             return false;
 
         if (extend) {
-            const core::NodeId anchor = click_anchor_id_ != core::NULL_NODE ? click_anchor_id_ : target;
+            const core::NodeId anchor = click_anchor_id_ != core::NULL_NODE
+                                            ? click_anchor_id_
+                                            : (current != core::NULL_NODE ? current : target);
+            click_anchor_id_ = anchor;
             scene_manager->selectNodesById(rangeSelectionIds(anchor, target));
             selected_ids_.clear();
             const auto lo = flat_index_by_id_.find(anchor);
@@ -1903,11 +2001,23 @@ namespace lfs::vis::gui {
             } else {
                 selected_ids_.insert(target);
             }
+        } else if (toggle) {
+            const core::NodeId toggled = current != core::NULL_NODE ? current : target;
+            if (selected_ids_.contains(toggled))
+                selected_ids_.erase(toggled);
+            else
+                selected_ids_.insert(toggled);
+            scene_manager->selectNodesById(
+                std::vector<core::NodeId>(selected_ids_.begin(), selected_ids_.end()));
+        }
+        keyboard_cursor_id_ = target;
+        if (camera_preview_navigation_active_ &&
+            PanelRegistry::instance().is_panel_enabled("lfs.image_preview")) {
+            const auto* node = scene_manager->getScene().getNodeById(target);
+            if (node && node->type == core::NodeType::CAMERA)
+                cmd::OpenCameraPreview{.cam_id = node->camera_uid}.emit();
         } else {
-            scene_manager->selectNode(target);
-            selected_ids_.clear();
-            selected_ids_.insert(target);
-            click_anchor_id_ = target;
+            camera_preview_navigation_active_ = false;
         }
         scrollNodeIntoView(target);
         markStateDirty();
@@ -2348,6 +2458,8 @@ namespace lfs::vis::gui {
             return;
 
         if (selected_ids_.size() > 1) {
+            items.push_back(makeAction(tr("scene.select_hierarchy"),
+                                       prefixedAction("select_hierarchy")));
             bool all_camera_like = true;
             for (const core::NodeId id : selected_ids_) {
                 const auto* selected = scene->getNodeById(id);
@@ -2374,6 +2486,10 @@ namespace lfs::vis::gui {
                     !items.empty()));
             }
         } else {
+            if (node_snapshots_.at(node_id).has_children) {
+                items.push_back(makeAction(tr("scene.select_hierarchy"),
+                                           prefixedAction("select_hierarchy")));
+            }
             switch (node->type) {
             case core::NodeType::CAMERA:
                 items.push_back(makeAction(
@@ -2558,6 +2674,10 @@ namespace lfs::vis::gui {
             return;
 
         const std::string& kind = parts[0];
+        if (kind == "select_hierarchy") {
+            selectHierarchyFromSelection();
+            return;
+        }
         if (kind == "go_to_camera" && parts.size() >= 2) {
             cmd::GoToCamView{.cam_id = std::stoi(parts[1])}.emit();
             Blur();
@@ -2818,11 +2938,11 @@ namespace lfs::vis::gui {
 
             switch (key) {
             case Rml::Input::KI_UP:
-                if (!ctrlDown() && moveSelection(-1, shiftDown()))
+                if (moveSelectionCursor(-1, shiftDown(), ctrlDown() && !shiftDown()))
                     event.StopPropagation();
                 break;
             case Rml::Input::KI_DOWN:
-                if (!ctrlDown() && moveSelection(1, shiftDown()))
+                if (moveSelectionCursor(1, shiftDown(), ctrlDown() && !shiftDown()))
                     event.StopPropagation();
                 break;
             case Rml::Input::KI_RETURN: {

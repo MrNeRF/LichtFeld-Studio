@@ -41,6 +41,8 @@ namespace lfs::vis::gui {
 
         void setPanelScreenOffset(float x, float y);
         void setFilterText(std::string_view text);
+        void setSelectionMarkersVisible(bool visible);
+        [[nodiscard]] bool selectionMarkersVisible() const { return selection_markers_visible_; }
         [[nodiscard]] bool syncFromScene(const PanelDrawContext& ctx);
         [[nodiscard]] bool executeContextMenuAction(std::string_view action);
 
@@ -51,6 +53,9 @@ namespace lfs::vis::gui {
         void setSelectedVisibility(bool visible);
         void setSelectedTrainingEnabled(bool enabled);
         void requestDeleteSelection();
+        [[nodiscard]] bool selectAllIfFocused();
+        [[nodiscard]] bool toggleSelectedVisibilityIfFocused();
+        [[nodiscard]] bool toggleSelectedTrainingIfFocused();
         void clearSelectedNodes();
         [[nodiscard]] const std::string& filterText() const { return filter_text_; }
         [[nodiscard]] bool hasNodes() const { return scene_has_nodes_; }
@@ -188,10 +193,14 @@ namespace lfs::vis::gui {
         void collectCheckboxSelectionIds(core::NodeId node_id,
                                          std::vector<core::NodeId>& ids) const;
         void toggleCheckboxSelection(core::NodeId node_id);
+        void selectHierarchyFromSelection();
+        void selectHierarchy(core::NodeId node_id);
+        void collectHierarchyIds(core::NodeId node_id,
+                                 std::unordered_set<core::NodeId>& ids) const;
         void handlePrimaryClick(core::NodeId node_id);
         void handleSecondaryClick(core::NodeId node_id, float mouse_x, float mouse_y);
         bool activateNode(core::NodeId node_id);
-        bool moveSelection(int delta, bool extend);
+        bool moveSelectionCursor(int delta, bool extend, bool toggle);
         std::vector<core::NodeId> rangeSelectionIds(core::NodeId a, core::NodeId b) const;
         core::NodeId selectionCursor() const;
         bool isTextInputTarget(Rml::Element* target) const;
@@ -231,11 +240,14 @@ namespace lfs::vis::gui {
         std::unordered_map<core::NodeId, size_t> flat_index_by_id_;
         std::unordered_set<core::NodeId> collapsed_ids_;
         std::unordered_set<core::NodeId> selected_ids_;
+        bool selection_markers_visible_ = false;
         core::NodeId pending_reveal_node_id_ = core::NULL_NODE;
 
         std::string filter_text_;
         std::string last_training_model_node_name_;
         core::NodeId click_anchor_id_ = core::NULL_NODE;
+        core::NodeId keyboard_cursor_id_ = core::NULL_NODE;
+        bool camera_preview_navigation_active_ = false;
         core::NodeId rename_node_id_ = core::NULL_NODE;
         std::string rename_buffer_;
         RenameInputListener rename_input_listener_;

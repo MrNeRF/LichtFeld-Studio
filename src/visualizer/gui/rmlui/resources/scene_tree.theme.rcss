@@ -170,6 +170,10 @@
     image-color: @{error};
 }
 
+#selection-clear-icon {
+    image-color: @{text_dim};
+}
+
 .scene-tab:hover,
 .scene-tab:focus-visible {
     color: @{text};

@@ -1214,6 +1214,81 @@ namespace lfs::vis {
                   input::ActionSection::UI);
     }
 
+    TEST_F(InputControllerFocusTest, SelectAllSceneNodesDefaultsToRemappableCtrlShiftA) {
+        input::InputBindings bindings;
+
+        EXPECT_EQ(bindings.getActionForKey(input::ToolMode::GLOBAL,
+                                           input::KEY_A,
+                                           input::MODIFIER_CTRL | input::MODIFIER_SHIFT),
+                  input::Action::SELECT_ALL_SCENE_NODES);
+
+        const auto trigger = bindings.getTriggerForAction(
+            input::Action::SELECT_ALL_SCENE_NODES, input::ToolMode::GLOBAL);
+        ASSERT_TRUE(trigger.has_value());
+        const auto* key_trigger = std::get_if<input::KeyTrigger>(&*trigger);
+        ASSERT_NE(key_trigger, nullptr);
+        EXPECT_EQ(key_trigger->key, input::KEY_A);
+        EXPECT_EQ(key_trigger->modifiers,
+                  input::MODIFIER_CTRL | input::MODIFIER_SHIFT);
+        EXPECT_EQ(input::describe(input::Action::SELECT_ALL_SCENE_NODES).ui_section,
+                  input::ActionSection::UI);
+    }
+
+    TEST_F(InputControllerFocusTest, SceneGraphActionsUseRemappableNonConflictingDefaults) {
+        input::InputBindings bindings;
+
+        EXPECT_EQ(bindings.getActionForKey(input::ToolMode::GLOBAL,
+                                           input::KEY_SPACE,
+                                           input::MODIFIER_CTRL),
+                  input::Action::NONE);
+        EXPECT_EQ(bindings.getActionForKey(input::ToolMode::GLOBAL,
+                                           input::KEY_H,
+                                           input::MODIFIER_CTRL | input::MODIFIER_SHIFT),
+                  input::Action::TOGGLE_SCENE_SELECTION_VISIBILITY);
+        EXPECT_EQ(bindings.getActionForKey(input::ToolMode::GLOBAL,
+                                           input::KEY_T,
+                                           input::MODIFIER_CTRL | input::MODIFIER_SHIFT),
+                  input::Action::TOGGLE_SCENE_SELECTION_TRAINING);
+        EXPECT_EQ(input::describe(input::Action::TOGGLE_SCENE_SELECTION_VISIBILITY).ui_section,
+                  input::ActionSection::UI);
+        EXPECT_EQ(input::describe(input::Action::TOGGLE_SCENE_SELECTION_TRAINING).ui_section,
+                  input::ActionSection::UI);
+    }
+
+    TEST_F(InputControllerFocusTest, VersionTwentyFourSceneGraphBindingsMigrateToFinalDefaults) {
+        const auto profile_path = std::filesystem::temp_directory_path() /
+                                  "lfs_input_bindings_transient_v24.json";
+        std::filesystem::remove(profile_path);
+        {
+            std::ofstream file(profile_path);
+            ASSERT_TRUE(file.is_open());
+            file << R"({
+  "name": "TransientV24",
+  "version": 24,
+  "bindings": [
+    {"mode":0,"action":82,"description":"Select Scene Hierarchy","trigger_type":"key","key":65,"modifiers":3},
+    {"mode":0,"action":83,"description":"Toggle Scene Cursor Selection","trigger_type":"key","key":32,"modifiers":2},
+    {"mode":0,"action":84,"description":"Toggle Scene Selection Visibility","trigger_type":"key","key":72,"modifiers":4},
+    {"mode":0,"action":85,"description":"Toggle Scene Selection Training","trigger_type":"key","key":84,"modifiers":4}
+  ]
+})";
+        }
+
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL, input::KEY_SPACE,
+                                         input::MODIFIER_CTRL),
+                  input::Action::NONE);
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL, input::KEY_H,
+                                         input::MODIFIER_CTRL | input::MODIFIER_SHIFT),
+                  input::Action::TOGGLE_SCENE_SELECTION_VISIBILITY);
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL, input::KEY_T,
+                                         input::MODIFIER_CTRL | input::MODIFIER_SHIFT),
+                  input::Action::TOGGLE_SCENE_SELECTION_TRAINING);
+
+        std::filesystem::remove(profile_path);
+    }
+
     TEST_F(InputControllerFocusTest, VersionTwentyProfileMigratesPreferencesShortcut) {
         const auto profile_path = std::filesystem::temp_directory_path() /
                                   "lfs_input_bindings_legacy_v20.json";
@@ -1316,7 +1391,7 @@ namespace lfs::vis {
         std::ifstream persisted(profile_path);
         ASSERT_TRUE(persisted.is_open());
         const std::string contents((std::istreambuf_iterator<char>(persisted)), {});
-        EXPECT_NE(contents.find("\"version\": 23"), std::string::npos); // PROFILE_VERSION
+        EXPECT_NE(contents.find("\"version\": 25"), std::string::npos); // PROFILE_VERSION
         EXPECT_NE(contents.find("Toggle MCP Server"), std::string::npos);
         EXPECT_NE(contents.find("Toggle MCP Local/Network Binding"), std::string::npos);
 

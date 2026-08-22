@@ -3187,6 +3187,18 @@ namespace lfs::vis::gui {
             native_scene_panel_->setProjectActiveTab(tab);
     }
 
+    bool GuiManager::selectAllSceneNodesIfFocused() {
+        return native_scene_panel_ && native_scene_panel_->selectAllIfFocused();
+    }
+
+    bool GuiManager::toggleSceneSelectionVisibilityIfFocused() {
+        return native_scene_panel_ && native_scene_panel_->toggleSelectionVisibilityIfFocused();
+    }
+
+    bool GuiManager::toggleSceneSelectionTrainingIfFocused() {
+        return native_scene_panel_ && native_scene_panel_->toggleSelectionTrainingIfFocused();
+    }
+
     SceneTreeSessionChrome GuiManager::captureSceneTreeChrome(
         const lfs::core::Scene& scene) const {
         return native_scene_panel_

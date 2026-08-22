@@ -44,6 +44,8 @@
         <div id="selection-action-bar" class="selection-action-bar">
             <span id="selection-action-count" class="selection-action-count"></span>
             <span class="selection-action-spacer"></span>
+            <button id="selection-clear" class="selection-action-button" type="button"
+                    data-tooltip="scene.clear_selection"><img id="selection-clear-icon" /></button>
             <button id="selection-visibility" class="selection-action-button" type="button"
                     data-tooltip="scene.hide_selected"><img id="selection-visibility-icon" /></button>
             <button id="selection-training" class="selection-action-button" type="button"
