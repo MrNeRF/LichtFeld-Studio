@@ -9,6 +9,18 @@
 
 namespace fast_lfs::optimizer {
 
+    struct JointContiguousBatchEntry {
+        float* param = nullptr;
+        std::uint8_t* packed = nullptr;
+        float* bounds = nullptr;
+        const float* grad = nullptr;
+        int n_prims = 0;
+        int n_attr = 0;
+        float lr = 0.0f;
+        float bias_correction1_rcp = 1.0f;
+        float bias_correction2_sqrt_rcp = 1.0f;
+    };
+
     // Pure CUDA interface - no torch dependencies
 
     // Non-fused joint (u,log_s) Adam step for contiguous [n_prims, n_attr] parameters.
@@ -35,6 +47,21 @@ namespace fast_lfs::optimizer {
         float eps,
         float bias_correction1_rcp,
         float bias_correction2_sqrt_rcp,
+        cudaStream_t stream = nullptr);
+
+    // One launch over a device table of contiguous joint params (means/sh0/scale/rot/opa).
+    void adam_step_joint_contiguous_batched(
+        const JointContiguousBatchEntry* host_entries,
+        int n_entries,
+        const bool* frozen_mask,
+        int frozen_mask_size,
+        float frozen_lr_scale,
+        const bool* crop_damping_mask,
+        int crop_damping_mask_size,
+        float cropbox_lr_scale,
+        float beta1,
+        float beta2,
+        float eps,
         cudaStream_t stream = nullptr);
 
     // Standalone joint 8-bit shN Adam over a swizzled fp32 gradient buffer.

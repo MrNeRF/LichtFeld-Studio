@@ -276,16 +276,12 @@ namespace gsplat_lfs {
             nullptr, nullptr,
             C, N, tile_size, tile_width, tile_height,
             true,
-            result.tiles_per_gauss, stream);
+            result.tiles_per_gauss, stream, result.tile_offsets);
 
         result.n_isects = isect_result.n_isects;
+        result.n_sort = isect_result.n_sort;
         result.isect_ids = isect_result.isect_ids;
         result.flatten_ids = isect_result.flatten_ids;
-
-        intersect_offset(
-            result.isect_ids, result.n_isects,
-            C, tile_width, tile_height,
-            result.tile_offsets, stream);
 
         // Step 3: Compute viewing directions and evaluate SH
         if (render_mode == 0 || render_mode == 3 || render_mode == 4) {
@@ -298,11 +294,15 @@ namespace gsplat_lfs {
                 result.colors, stream);
         }
 
-        // Step 4: Rasterize to pixels
+        // Step 4: Rasterize to pixels. Last-tile range_end is tile_offsets[n_tiles]
+        // (extra slot), so n_isects is only the empty-launch skip.
+        const uint32_t raster_n_isects =
+            isect_result.n_sort > 0 ? static_cast<uint32_t>(isect_result.n_sort)
+                                    : static_cast<uint32_t>(result.n_isects);
         rasterize_to_pixels_from_world_3dgs_fwd(
             means, quats, scaled_scales, result.colors, opacities,
             backgrounds, bg_images, masks,
-            C, N, result.n_isects, channels,
+            C, N, raster_n_isects, channels,
             image_width, image_height, tile_size,
             viewmats0, viewmats1, Ks, camera_model,
             ut_params, rs_type,

@@ -46,6 +46,7 @@ namespace lfs::training {
         int64_t* isect_ids_ptr = nullptr;
         int32_t* flatten_ids_ptr = nullptr;
         int32_t n_isects = 0;
+        int32_t n_sort = 0;
 
         // Saved input tensors (references, not copies)
         lfs::core::Tensor means;     // [N, 3]

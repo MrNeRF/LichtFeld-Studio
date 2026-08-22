@@ -118,10 +118,7 @@ namespace gsplat_lfs {
         // first collect gaussians between range.x and range.y in batches
         // which gaussians to look through in this tile
         int32_t range_start = tile_offsets[tile_id];
-        int32_t range_end =
-            (cid == C - 1) && (tile_id == tile_width * tile_height - 1)
-                ? n_isects
-                : tile_offsets[tile_id + 1];
+        int32_t range_end = tile_offsets[tile_id + 1];
         const uint32_t block_size = block.size();
         const uint32_t num_batches =
             (range_end - range_start + block_size - 1) / block_size;

@@ -185,9 +185,91 @@ namespace lfs::training {
             return;
         }
         last_step_zeroed_gradients_ = false;
-        for (const auto type : all_param_types()) {
-            step_param(type, iteration);
+
+        fast_lfs::optimizer::JointContiguousBatchEntry entries[5];
+        int n_entries = 0;
+        cudaStream_t batch_stream = nullptr;
+        const ParamType contiguous[] = {
+            ParamType::Means, ParamType::Sh0, ParamType::Scaling,
+            ParamType::Rotation, ParamType::Opacity};
+
+        auto prepare_contiguous = [&](ParamType type) {
+            auto& param = get_param(type);
+            if (!param.is_valid() || param.numel() == 0) {
+                return;
+            }
+            const auto name = param_name(type);
+            if (!states_.contains(name)) {
+                init_state(type, false);
+            }
+            auto& state = states_[name];
+            if (!state.grad.is_valid() || state.grad.numel() == 0 ||
+                !state.exp_avg.is_valid() || state.exp_avg.numel() == 0 ||
+                !state.is_joint() || !state.joint_bounds.is_valid()) {
+                return;
+            }
+            auto& param_live = get_param(type);
+            const size_t param_size = param_live.shape()[0];
+            if (param_size != state.size) {
+                throw std::runtime_error("Optimizer state desync: " + name);
+            }
+            state.step_count++;
+            const double bias_correction1_rcp =
+                1.0 / (1.0 - std::pow(config_.beta1, state.step_count));
+            const double bias_correction2_sqrt_rcp =
+                1.0 / std::sqrt(1.0 - std::pow(config_.beta2, state.step_count));
+            const float param_lr = static_cast<float>(get_param_lr(type));
+            cudaStream_t execution_stream = state.grad.stream();
+            if (execution_stream == nullptr) {
+                execution_stream = param_live.stream();
+            }
+            if (execution_stream == nullptr) {
+                execution_stream = state.exp_avg.stream();
+            }
+            if (batch_stream == nullptr) {
+                batch_stream = execution_stream;
+            }
+            lfs::core::waitForCUDAStream(batch_stream, param_live.stream());
+            lfs::core::waitForCUDAStream(batch_stream, state.exp_avg.stream());
+            lfs::core::waitForCUDAStream(batch_stream, state.joint_bounds.stream());
+            lfs::core::waitForCUDAStream(batch_stream, state.grad.stream());
+            const size_t feature_dim = param_live.numel() / param_size;
+            auto& e = entries[n_entries++];
+            e.param = param_live.ptr<float>();
+            e.packed = state.exp_avg.ptr<uint8_t>();
+            e.bounds = state.joint_bounds.ptr<float>();
+            e.grad = state.grad.ptr<float>();
+            e.n_prims = static_cast<int>(state.size);
+            e.n_attr = static_cast<int>(feature_dim);
+            e.lr = param_lr;
+            e.bias_correction1_rcp = static_cast<float>(bias_correction1_rcp);
+            e.bias_correction2_sqrt_rcp = static_cast<float>(bias_correction2_sqrt_rcp);
+            param_live.set_stream(batch_stream);
+            state.exp_avg.set_stream(batch_stream);
+            state.joint_bounds.set_stream(batch_stream);
+            state.grad.set_stream(batch_stream);
+        };
+
+        for (const auto type : contiguous) {
+            prepare_contiguous(type);
         }
+        if (n_entries > 0) {
+            if (frozen_mask_.is_valid()) {
+                lfs::core::waitForCUDAStream(batch_stream, frozen_mask_.stream());
+            }
+            if (crop_damping_mask_.is_valid()) {
+                crop_damping_mask_.sync_to_stream(batch_stream);
+            }
+            fast_lfs::optimizer::adam_step_joint_contiguous_batched(
+                entries, n_entries,
+                frozen_mask_ptr(), frozen_mask_size(), frozen_lr_scale_,
+                crop_damping_mask_ptr(), crop_damping_mask_size(), cropbox_lr_scale_,
+                static_cast<float>(config_.beta1),
+                static_cast<float>(config_.beta2),
+                static_cast<float>(config_.eps),
+                batch_stream);
+        }
+        step_param(ParamType::ShN, iteration);
     }
 
     size_t AdamOptimizer::compute_state_growth(ParamType type, size_t n_new) const {

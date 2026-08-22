@@ -6,6 +6,7 @@
 #include "core/crash_handler.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/cuda_error.hpp"
 #include "core/error.hpp"
 #include "core/logger.hpp"
 #include "core/splat_exportable_storage.hpp"
@@ -13,19 +14,86 @@
 #include "gsplat/Ops.h"
 #include "lfs/training/sh_value_quant_kernels.hpp"
 #include "training/kernels/grad_alpha.hpp"
+#include <algorithm>
 #include <array>
 #include <cassert>
+#include <cstring>
 #include <cuda_runtime.h>
 #include <spdlog/spdlog.h>
 
 namespace lfs::training {
 
     namespace {
+        struct PinnedDeviceFloats {
+            float* pinned = nullptr;
+            size_t pinned_cap = 0;
+            size_t bump = 0;
+
+            void release() noexcept {
+                if (pinned) {
+                    (void)cudaFreeHost(pinned);
+                    pinned = nullptr;
+                    pinned_cap = 0;
+                    bump = 0;
+                }
+            }
+
+            ~PinnedDeviceFloats() { release(); }
+
+            void begin_frame() {
+                bump = 0;
+                // K(9) + radial(6) + tangential(2) + thin-prism(4)
+                ensure_pinned(32);
+            }
+
+            void ensure_pinned(size_t n) {
+                if (n <= pinned_cap && pinned) {
+                    return;
+                }
+                float* next = nullptr;
+                LFS_CUDA_CHECK(cudaMallocHost(&next, n * sizeof(float)));
+                if (pinned) {
+                    if (bump > 0) {
+                        std::memcpy(next, pinned, bump * sizeof(float));
+                    }
+                    (void)cudaFreeHost(pinned);
+                }
+                pinned = next;
+                pinned_cap = n;
+            }
+
+            void copy_to(core::Tensor& dest, const float* src, size_t n, cudaStream_t stream) {
+                if (n == 0) {
+                    dest = {};
+                    return;
+                }
+                ensure_pinned(bump + n);
+                float* const slot = pinned + bump;
+                bump += n;
+                std::memcpy(slot, src, n * sizeof(float));
+                if (!dest.is_valid() || dest.numel() < n) {
+                    dest = core::Tensor::empty(
+                        {n}, core::Device::CUDA, core::DataType::Float32);
+                }
+                if (dest.stream() != stream) {
+                    dest.set_stream(stream);
+                }
+                LFS_CUDA_CHECK(cudaMemcpyAsync(
+                    dest.ptr<float>(), slot, n * sizeof(float),
+                    cudaMemcpyHostToDevice, stream));
+            }
+        };
+
         struct GsplatThreadLocalCaches {
+            PinnedDeviceFloats staging;
             core::Tensor K;
+            core::Tensor radial;
+            core::Tensor tangential;
+            core::Tensor thin_prism;
             core::Tensor image_chw;
             core::Tensor alpha_chw;
             core::Tensor depth_chw;
+            core::Tensor shN_dequant;
         };
 
         thread_local GsplatThreadLocalCaches gsplat_thread_caches;
@@ -117,25 +185,14 @@ namespace lfs::training {
                                                 ? core::getCurrentCUDAStream()
                                                 : means.stream();
 
-            // Keep K tensor cached and update values in-place to avoid per-call allocations.
-            auto& cached_K_tensor = gsplat_thread_caches.K;
-            if (!cached_K_tensor.is_valid() || cached_K_tensor.numel() != 9 ||
-                cached_K_tensor.stream() != fwd_stream) {
-                cached_K_tensor = core::Tensor::empty({1, 3, 3}, core::Device::CUDA, core::DataType::Float32);
-                if (cached_K_tensor.stream() != fwd_stream)
-                    cached_K_tensor.set_stream(fwd_stream);
-            }
             const std::array<float, 9> K_host = {
                 k00, 0.0f, k02,
                 0.0f, k11, k12,
                 0.0f, 0.0f, 1.0f};
-            cudaMemcpyAsync(
-                cached_K_tensor.ptr<float>(),
-                K_host.data(),
-                sizeof(float) * K_host.size(),
-                cudaMemcpyHostToDevice,
-                fwd_stream);
-            K_tensor = cached_K_tensor;
+            gsplat_thread_caches.staging.begin_frame();
+            gsplat_thread_caches.staging.copy_to(
+                gsplat_thread_caches.K, K_host.data(), 9, fwd_stream);
+            K_tensor = gsplat_thread_caches.K;
 
             // Get raw pointers
             const float* means_ptr = means.ptr<float>();
@@ -154,8 +211,16 @@ namespace lfs::training {
                     const auto rest =
                         static_cast<std::uint32_t>(gaussian_model.max_sh_coeffs_rest());
                     const auto n_floats = core::sh_swizzled_float_count(n_prims, rest);
-                    shN_dequant_temp = core::Tensor::zeros(
-                        core::TensorShape({n_floats}), core::Device::CUDA, core::DataType::Float32);
+                    auto& dequant = gsplat_thread_caches.shN_dequant;
+                    if (!dequant.is_valid() || dequant.numel() < n_floats) {
+                        dequant = core::Tensor::empty(
+                            core::TensorShape({n_floats}), core::Device::CUDA,
+                            core::DataType::Float32);
+                    }
+                    if (dequant.stream() != fwd_stream) {
+                        dequant.set_stream(fwd_stream);
+                    }
+                    shN_dequant_temp = dequant;
                     const auto q16 = lfs::core::resolve_q16_bind_ptrs(gaussian_model);
                     lfs::training::sh_value::decode_shN_u16_to_float4(
                         reinterpret_cast<const std::uint16_t*>(q16.codes),
@@ -202,7 +267,9 @@ namespace lfs::training {
             const bool calc_compensations = antialiased;
             const float* K_ptr = K_tensor.ptr<float>();
 
-            // Distortion coefficients
+            // Distortion coefficients. CPU tensors are uploaded through the
+            // persistent pinned staging (distinct slots from K). Device tensors
+            // are reused as-is.
             const core::Tensor radial_dist = viewpoint_camera.radial_distortion();
             const core::Tensor tangential_dist = viewpoint_camera.tangential_distortion();
             core::Tensor radial_cuda, tangential_cuda, thin_prism_cuda;
@@ -210,43 +277,73 @@ namespace lfs::training {
             const float* tangential_ptr = nullptr;
             const float* thin_prism_ptr = nullptr;
 
-            // Helper to copy tensor to CUDA
-            auto to_cuda_contiguous = [](core::Tensor t) {
-                if (t.device() != core::Device::CUDA) {
-                    t = t.to(core::Device::CUDA);
+            auto upload_dist = [&](const core::Tensor& src, size_t n, core::Tensor& dest) {
+                if (!src.is_valid() || src.numel() == 0 || n == 0) {
+                    dest = {};
+                    return;
                 }
-                return t.is_contiguous() ? t : t.contiguous();
+                const size_t copy_n = std::min(n, static_cast<size_t>(src.numel()));
+                if (src.device() == core::Device::CUDA && src.is_contiguous() &&
+                    src.numel() == copy_n) {
+                    dest = src;
+                    if (dest.stream() != fwd_stream) {
+                        dest.set_stream(fwd_stream);
+                    }
+                    return;
+                }
+                core::Tensor host = src;
+                if (!host.is_contiguous()) {
+                    host = host.contiguous();
+                }
+                if (host.device() != core::Device::CPU) {
+                    host = host.cpu();
+                }
+                gsplat_thread_caches.staging.copy_to(dest, host.ptr<float>(), copy_n, fwd_stream);
             };
 
             switch (camera_model) {
             case CameraModelType::THIN_PRISM_FISHEYE:
                 if (radial_dist.is_valid() && radial_dist.numel() == 4) {
-                    radial_cuda = to_cuda_contiguous(radial_dist);
-                    radial_ptr = radial_cuda.ptr<float>();
+                    upload_dist(radial_dist, 4, gsplat_thread_caches.radial);
+                    radial_cuda = gsplat_thread_caches.radial;
                 }
                 if (tangential_dist.is_valid() && tangential_dist.numel() == 4) {
-                    thin_prism_cuda = to_cuda_contiguous(tangential_dist);
-                    thin_prism_ptr = thin_prism_cuda.ptr<float>();
+                    upload_dist(tangential_dist, 4, gsplat_thread_caches.thin_prism);
+                    thin_prism_cuda = gsplat_thread_caches.thin_prism;
                 }
                 break;
             case CameraModelType::FISHEYE:
                 if (radial_dist.is_valid() && radial_dist.numel() >= 4) {
-                    radial_cuda = to_cuda_contiguous(radial_dist.numel() == 4 ? radial_dist : radial_dist.slice(0, 0, 4));
-                    radial_ptr = radial_cuda.ptr<float>();
+                    upload_dist(radial_dist.numel() == 4 ? radial_dist : radial_dist.slice(0, 0, 4),
+                                4, gsplat_thread_caches.radial);
+                    radial_cuda = gsplat_thread_caches.radial;
                 }
                 break;
-            case CameraModelType::PINHOLE:
+            case CameraModelType::PINHOLE: {
                 if (radial_dist.is_valid() && radial_dist.numel() > 0) {
-                    radial_cuda = to_cuda_contiguous(radial_dist.numel() == 6 ? radial_dist : radial_dist.slice(0, 0, std::min(radial_dist.numel(), size_t(6))));
-                    radial_ptr = radial_cuda.ptr<float>();
+                    const size_t n_rad = std::min(radial_dist.numel(), size_t(6));
+                    upload_dist(radial_dist.numel() == n_rad ? radial_dist : radial_dist.slice(0, 0, n_rad),
+                                n_rad, gsplat_thread_caches.radial);
+                    radial_cuda = gsplat_thread_caches.radial;
                 }
                 if (tangential_dist.is_valid() && tangential_dist.numel() >= 2) {
-                    tangential_cuda = to_cuda_contiguous(tangential_dist.numel() == 2 ? tangential_dist : tangential_dist.slice(0, 0, 2));
-                    tangential_ptr = tangential_cuda.ptr<float>();
+                    upload_dist(tangential_dist.numel() == 2 ? tangential_dist : tangential_dist.slice(0, 0, 2),
+                                2, gsplat_thread_caches.tangential);
+                    tangential_cuda = gsplat_thread_caches.tangential;
                 }
                 break;
+            }
             default:
                 break;
+            }
+            if (radial_cuda.is_valid() && radial_cuda.numel() > 0) {
+                radial_ptr = radial_cuda.ptr<float>();
+            }
+            if (tangential_cuda.is_valid() && tangential_cuda.numel() > 0) {
+                tangential_ptr = tangential_cuda.ptr<float>();
+            }
+            if (thin_prism_cuda.is_valid() && thin_prism_cuda.numel() > 0) {
+                thin_prism_ptr = thin_prism_cuda.ptr<float>();
             }
 
             UnscentedTransformParameters ut_params;
@@ -281,7 +378,8 @@ namespace lfs::training {
             const size_t conics_size = align(C * N * 3 * sizeof(float));
             const size_t compensations_size = calc_compensations ? align(C * N * sizeof(float)) : 0;
             const size_t tiles_per_gauss_size = align(C * N * sizeof(int32_t));
-            const size_t tile_offsets_size = align(C * num_tiles_y * num_tiles_x * sizeof(int32_t));
+            const size_t tile_offsets_size =
+                align((C * num_tiles_y * num_tiles_x + 1u) * sizeof(int32_t));
             const size_t colors_size = align(C * N * channels * sizeof(float));
             const size_t last_ids_size = align(C * H * W * sizeof(int32_t));
 
@@ -331,18 +429,18 @@ namespace lfs::training {
             auto& cached_depth_chw = gsplat_thread_caches.depth_chw;
             const core::TensorShape image_shape = {
                 static_cast<size_t>(channels), static_cast<size_t>(H), static_cast<size_t>(W)};
-            if (!cached_image_chw.is_valid() || cached_image_chw.shape() != image_shape ||
-                cached_image_chw.stream() != fwd_stream) {
+            if (!cached_image_chw.is_valid() || cached_image_chw.shape() != image_shape) {
                 cached_image_chw = core::Tensor::empty(image_shape, core::Device::CUDA, core::DataType::Float32);
-                if (cached_image_chw.stream() != fwd_stream)
-                    cached_image_chw.set_stream(fwd_stream);
+            }
+            if (cached_image_chw.stream() != fwd_stream) {
+                cached_image_chw.set_stream(fwd_stream);
             }
             const core::TensorShape alpha_shape = {1UL, static_cast<size_t>(H), static_cast<size_t>(W)};
-            if (!cached_alpha_chw.is_valid() || cached_alpha_chw.shape() != alpha_shape ||
-                cached_alpha_chw.stream() != fwd_stream) {
+            if (!cached_alpha_chw.is_valid() || cached_alpha_chw.shape() != alpha_shape) {
                 cached_alpha_chw = core::Tensor::empty(alpha_shape, core::Device::CUDA, core::DataType::Float32);
-                if (cached_alpha_chw.stream() != fwd_stream)
-                    cached_alpha_chw.set_stream(fwd_stream);
+            }
+            if (cached_alpha_chw.stream() != fwd_stream) {
+                cached_alpha_chw.set_stream(fwd_stream);
             }
             float* const render_colors_ptr_out = cached_image_chw.ptr<float>();
             float* const render_alphas_ptr_out = cached_alpha_chw.ptr<float>();
@@ -462,6 +560,7 @@ namespace lfs::training {
             ctx.isect_ids_ptr = result.isect_ids;
             ctx.flatten_ids_ptr = result.flatten_ids;
             ctx.n_isects = result.n_isects;
+            ctx.n_sort = result.n_sort;
 
             // Save input tensors for backward (these are references, not copies)
             ctx.means = means;
@@ -697,7 +796,8 @@ namespace lfs::training {
                 ctx.last_ids_ptr,
                 ctx.tile_offsets_ptr,
                 ctx.flatten_ids_ptr,
-                ctx.n_isects,
+                ctx.n_sort > 0 ? static_cast<uint32_t>(ctx.n_sort)
+                               : static_cast<uint32_t>(ctx.n_isects),
                 ctx.colors_ptr,
                 ctx.dirs_ptr,
                 ctx.radii_ptr,
@@ -795,10 +895,15 @@ namespace lfs::training {
     }
 
     bool release_gsplat_rasterizer_thread_local_caches() noexcept {
+        gsplat_thread_caches.staging.release();
         gsplat_thread_caches.K = {};
+        gsplat_thread_caches.radial = {};
+        gsplat_thread_caches.tangential = {};
+        gsplat_thread_caches.thin_prism = {};
         gsplat_thread_caches.image_chw = {};
         gsplat_thread_caches.alpha_chw = {};
         gsplat_thread_caches.depth_chw = {};
+        gsplat_thread_caches.shN_dequant = {};
         return !gsplat_thread_caches.K.is_valid() &&
                !gsplat_thread_caches.image_chw.is_valid() &&
                !gsplat_thread_caches.alpha_chw.is_valid() &&
