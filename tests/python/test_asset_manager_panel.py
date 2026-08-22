@@ -313,6 +313,8 @@ def test_all_asset_manager_buttons_use_strict_size_variants():
     assert "max-width: 28dp;" in rcss
     assert ".asset-button--small-icon {" in rcss
     assert "max-height: 24dp;" in rcss
+    assert "padding: 0 32dp 32dp 12dp;" in rcss
+    assert "padding: 12dp 0 0 0;" in rcss
 
 
 def test_embedded_preview_url_encodes_path_and_keys_cache_by_commit(panel_module):

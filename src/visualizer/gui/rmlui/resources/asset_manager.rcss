@@ -528,6 +528,8 @@
 
 .asset-scroll-shell-list {
     gap: 4dp;
+    padding: 0 32dp 32dp 12dp;
+    box-sizing: border-box;
 }
 
 .asset-card-grid,
@@ -707,7 +709,7 @@
     overflow: visible;
     /* Reserve a real gutter for the native scrollbars so rows never paint into
      * the scrollbar lane when the panel is docked and space is tight. */
-    padding: 12dp 32dp 32dp 12dp;
+    padding: 12dp 0 0 0;
     box-sizing: border-box;
 }
 
