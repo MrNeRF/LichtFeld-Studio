@@ -87,10 +87,6 @@ function initMeasureTool(global) {
     lengthInput.step = '0.01';
     lengthInput.min = '0.0001';
 
-    const lengthUnit = document.createElement('span');
-    lengthUnit.id = 'measureLengthUnit';
-    lengthUnit.textContent = 'm';
-
     const clearButton = document.createElement('button');
     clearButton.id = 'measureClear';
     clearButton.type = 'button';
@@ -99,7 +95,6 @@ function initMeasureTool(global) {
 
     panel.appendChild(lengthLabel);
     panel.appendChild(lengthInput);
-    panel.appendChild(lengthUnit);
     panel.appendChild(clearButton);
     panel.addEventListener('pointerdown', (e) => e.stopPropagation());
     document.getElementById('ui').appendChild(panel);
@@ -218,6 +213,7 @@ function initMeasureTool(global) {
     // ---- point picking on click (drag = camera navigation, not a pick) --
     const isPrimary = (e) => (e.pointerType === 'mouse' ? e.button === 0 : e.isPrimary);
     let clicked = false;
+    let picking = false;
     let downX = 0;
     let downY = 0;
 
@@ -237,6 +233,7 @@ function initMeasureTool(global) {
     const onPointerUp = async (e) => {
         if (!active || !clicked || !isPrimary(e)) return;
         clicked = false;
+        if (picking) return;
 
         let closestIdx = -1;
         for (let i = 0; i < points.length; i++) {
@@ -254,16 +251,19 @@ function initMeasureTool(global) {
         }
 
         if (points.length < 2) {
-            e.preventDefault();
-            e.stopPropagation();
             if (!picker) {
                 picker = new Picker(app, camera);
             }
-            const result = await picker.pick(e.offsetX, e.offsetY);
-            if (result) {
-                points.push(result.clone());
-                selection = points.length - 1;
-                syncGizmo();
+            picking = true;
+            try {
+                const result = await picker.pick(e.offsetX, e.offsetY);
+                if (result && points.length < 2) {
+                    points.push(result.clone());
+                    selection = points.length - 1;
+                    syncGizmo();
+                }
+            } finally {
+                picking = false;
             }
         }
     };

@@ -259,9 +259,6 @@ button {
   background-color: #222;
   font-size: 13px;
 }
-#measurePanel > #measureLengthUnit {
-  color: #AAA;
-}
 #measurePanel > #measureClear {
   width: 24px;
   height: 24px;

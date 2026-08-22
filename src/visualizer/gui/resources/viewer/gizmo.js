@@ -350,12 +350,14 @@ class Gizmo extends EventHandler {
         this._onPointerDown = this._onPointerDown.bind(this);
         this._onPointerMove = this._onPointerMove.bind(this);
         this._onPointerUp = this._onPointerUp.bind(this);
+        this._onPointerCancel = this._onPointerCancel.bind(this);
         // Capture phase: on the event target itself, capturing listeners run
         // before bubbling ones (see the file header note), so this reliably
         // runs before the viewer's own bubble-phase camera-control listeners.
         this._device.canvas.addEventListener('pointerdown', this._onPointerDown, true);
         this._device.canvas.addEventListener('pointermove', this._onPointerMove, true);
         this._device.canvas.addEventListener('pointerup', this._onPointerUp, true);
+        this._device.canvas.addEventListener('pointercancel', this._onPointerCancel, true);
         this._handles.push(this._app.on('prerender', () => this.prerender()));
         this._handles.push(this._app.on('update', () => this.update()));
         this._handles.push(this._app.on('destroy', () => this.destroy()));
@@ -460,17 +462,27 @@ class Gizmo extends EventHandler {
     }
 
     _onPointerUp(e) {
-        if (!this.enabled || document.pointerLockElement) return;
         if (!this.mouseButtons[e.button]) return;
+        const wasDragging = this._activeDrag;
+        this._activeDrag = false;
+        if (!this.enabled || document.pointerLockElement) return;
         const selection = this._getSelection(e.offsetX, e.offsetY);
-        if (selection[0] || this._activeDrag) {
+        if (selection[0] || wasDragging) {
             if (this.preventDefault) e.preventDefault();
             e.stopImmediatePropagation();
         }
-        this._activeDrag = false;
         const { canvas } = this._device;
         canvas.releasePointerCapture(e.pointerId);
         this.fire(Gizmo.EVENT_POINTERUP, e.offsetX, e.offsetY, selection[0]);
+    }
+
+    _onPointerCancel(e) {
+        this._activeDrag = false;
+        const { canvas } = this._device;
+        canvas.releasePointerCapture(e.pointerId);
+        if (this.enabled) {
+            this.fire(Gizmo.EVENT_POINTERUP, e.offsetX, e.offsetY, null);
+        }
     }
 
     _updatePosition() {
@@ -569,6 +581,7 @@ class Gizmo extends EventHandler {
 
     detach() {
         this.enabled = false;
+        this._activeDrag = false;
         this.fire(Gizmo.EVENT_NODESDETACH);
         this.nodes = [];
     }
@@ -591,6 +604,7 @@ class Gizmo extends EventHandler {
         this._device.canvas.removeEventListener('pointerdown', this._onPointerDown, true);
         this._device.canvas.removeEventListener('pointermove', this._onPointerMove, true);
         this._device.canvas.removeEventListener('pointerup', this._onPointerUp, true);
+        this._device.canvas.removeEventListener('pointercancel', this._onPointerCancel, true);
         this._handles.forEach((handle) => handle.off());
         this.root.destroy();
     }

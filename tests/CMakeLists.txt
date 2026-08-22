@@ -1000,6 +1000,15 @@ add_custom_target(run_full_tests
     COMMENT "Running fast and slow tests (excluding nightly)"
 )
 
+foreach(TEST_TARGET lichtfeld_tests)
+    add_custom_command(TARGET ${TEST_TARGET} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${TEST_TARGET}>/resources/viewer"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+            "${PROJECT_SOURCE_DIR}/src/visualizer/gui/resources/viewer"
+            "$<TARGET_FILE_DIR:${TEST_TARGET}>/resources/viewer"
+    )
+endforeach()
+
 # Platform-specific settings
 if(WIN32)
     # Copy Torch DLLs for testing on Windows

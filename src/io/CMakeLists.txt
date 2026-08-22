@@ -397,6 +397,11 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     endif ()
 endif ()
 
+if(LFS_DEV_IMPORT_SOURCE_RESOURCES AND NOT BUILD_PORTABLE)
+    target_compile_definitions(lfs_io PRIVATE
+        LFS_DEV_VIEWER_SOURCE_DIR="${PROJECT_SOURCE_DIR}/src/visualizer/gui/resources/viewer")
+endif()
+
 if(NOT BUILD_PORTABLE)
     install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/io
             DESTINATION include)
