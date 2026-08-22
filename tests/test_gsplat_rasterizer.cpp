@@ -61,6 +61,31 @@ namespace {
             0);
     }
 
+    // London OPENCV_FISHEYE (COLMAP model 5, 3504x2336) scaled to (w,h).
+    Camera make_fisheye_camera(int w, int h) {
+        std::vector<float> R_data = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+        std::vector<float> T_data = {0, 0, 3};
+        auto R = Tensor::from_blob(R_data.data(), {3, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+        auto T = Tensor::from_blob(T_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+        const float fx = 1212.4493198497419f * (static_cast<float>(w) / 3504.f);
+        const float fy = 1212.5428599857478f * (static_cast<float>(h) / 2336.f);
+        auto radial = Tensor::from_vector(
+            {0.03556234340872849f, 0.007709264733622488f,
+             0.0006652110074087792f, -0.0003144582282973898f},
+            {4}, Device::CPU);
+        return Camera(
+            R, T,
+            fx, fy,
+            static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.5f,
+            radial, Tensor(),
+            lfs::core::CameraModelType::FISHEYE,
+            "test_fisheye",
+            "",
+            std::filesystem::path{},
+            w, h,
+            0);
+    }
+
     std::unique_ptr<SplatData> make_visible_splat(int n) {
         auto means = Tensor::zeros({static_cast<size_t>(n), 3}, Device::CUDA);
         if (n > 0) {
@@ -574,11 +599,8 @@ TEST_F(GsplatRasterizerTest, ForwardWritesChwAndBackwardIsStable) {
     }
 }
 
-TEST_F(GsplatRasterizerTest, GutFromWorldGradParity) {
+void run_gut_from_world_parity(Camera& camera, const char* dump_env, const char* ref_env) {
     constexpr int kN = 50000;
-    constexpr int kW = 96;
-    constexpr int kH = 64;
-    auto camera = make_camera(kW, kH);
     auto splat = make_parity_splat(kN, 0xC0FFEE01u);
     auto bg = Tensor::zeros({3}, Device::CUDA);
     bg.fill_(0.25f);
@@ -625,7 +647,7 @@ TEST_F(GsplatRasterizerTest, GutFromWorldGradParity) {
     EXPECT_LT(max_rel_diff_tensors(opa_g, opt.get_grad(ParamType::Opacity)), 1e-4f);
     EXPECT_LT(max_rel_diff_tensors(color_g, opt.get_grad(ParamType::Sh0)), 1e-4f);
 
-    if (const char* dump_dir = std::getenv("GUT_GRAD_DUMP")) {
+    if (const char* dump_dir = std::getenv(dump_env)) {
         std::filesystem::create_directories(dump_dir);
         write_float_bin(std::filesystem::path(dump_dir) / "v_means.bin", means_g);
         write_float_bin(std::filesystem::path(dump_dir) / "v_scales.bin", scale_g);
@@ -633,9 +655,9 @@ TEST_F(GsplatRasterizerTest, GutFromWorldGradParity) {
         write_float_bin(std::filesystem::path(dump_dir) / "v_opacities.bin", opa_g);
         write_float_bin(std::filesystem::path(dump_dir) / "v_colors.bin", color_g);
         write_float_bin(std::filesystem::path(dump_dir) / "render.bin", image0);
-        std::cout << "GUT_GRAD_DUMP wrote tensors to " << dump_dir << std::endl;
+        std::cout << dump_env << " wrote tensors to " << dump_dir << std::endl;
     }
-    if (const char* ref_dir = std::getenv("GUT_GRAD_REF")) {
+    if (const char* ref_dir = std::getenv(ref_env)) {
         const auto rel_means = max_rel_diff(means_g, read_float_bin(std::filesystem::path(ref_dir) / "v_means.bin"));
         const auto rel_scales = max_rel_diff(scale_g, read_float_bin(std::filesystem::path(ref_dir) / "v_scales.bin"));
         const auto rel_quats = max_rel_diff(quat_g, read_float_bin(std::filesystem::path(ref_dir) / "v_quats.bin"));
@@ -652,7 +674,7 @@ TEST_F(GsplatRasterizerTest, GutFromWorldGradParity) {
             render_max_abs = std::max(render_max_abs, std::abs(pi[i] - render_ref[i]));
             render_bit_identical = render_bit_identical && (pi[i] == render_ref[i]);
         }
-        std::cout << "GUT_GRAD_REF max|a-b|/max|a| means=" << rel_means
+        std::cout << ref_env << " max|a-b|/max|a| means=" << rel_means
                   << " scales=" << rel_scales << " quats=" << rel_quats
                   << " opacities=" << rel_opa << " colors=" << rel_color
                   << " render_max_abs=" << render_max_abs
@@ -664,5 +686,20 @@ TEST_F(GsplatRasterizerTest, GutFromWorldGradParity) {
         EXPECT_LT(rel_opa, 1e-4f);
         EXPECT_LT(rel_color, 1e-4f);
         EXPECT_LE(render_max_abs, 1e-6f);
+        EXPECT_TRUE(render_bit_identical);
     }
+}
+
+TEST_F(GsplatRasterizerTest, GutFromWorldGradParity) {
+    constexpr int kW = 96;
+    constexpr int kH = 64;
+    auto camera = make_camera(kW, kH);
+    run_gut_from_world_parity(camera, "GUT_GRAD_DUMP", "GUT_GRAD_REF");
+}
+
+TEST_F(GsplatRasterizerTest, GutFromWorldFisheyeGradParity) {
+    constexpr int kW = 96;
+    constexpr int kH = 64;
+    auto camera = make_fisheye_camera(kW, kH);
+    run_gut_from_world_parity(camera, "GUT_FISHEYE_GRAD_DUMP", "GUT_FISHEYE_GRAD_REF");
 }

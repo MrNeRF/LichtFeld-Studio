@@ -39,7 +39,7 @@ namespace gsplat_lfs {
         float pixel_error;
     };
 
-    template <bool kPinholeGlobal>
+    template <bool kPerfectPinhole>
     __device__ __forceinline__ void init_pixel_bwd(
         PixelBwd& pix,
         const uint32_t i,
@@ -67,7 +67,7 @@ namespace gsplat_lfs {
         const float px = (float)j + 0.5f;
         const float py = (float)i + 0.5f;
         pix.pix_id = min(i * image_width + j, image_width * image_height - 1);
-        const WorldRay ray = from_world_pixel_ray<kPinholeGlobal>(
+        const WorldRay ray = from_world_pixel_ray<kPerfectPinhole>(
             camera_model_type, rs_type, image_width, image_height, px, py,
             viewmats0, viewmats1, Ks, cid,
             radial_coeffs, tangential_coeffs, thin_prism_coeffs);
@@ -288,7 +288,7 @@ namespace gsplat_lfs {
         }
     }
 
-    template <typename scalar_t, bool kPinholeGlobal>
+    template <typename scalar_t, bool kSharedOrigin, bool kPerfectPinhole>
     __global__ void rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel(
         const uint32_t C,
         const uint32_t N,
@@ -361,13 +361,13 @@ namespace gsplat_lfs {
         const bool do_dens = densification_info != nullptr && densification_error_map != nullptr;
 
         PixelBwd pix0, pix1;
-        init_pixel_bwd<kPinholeGlobal>(
+        init_pixel_bwd<kPerfectPinhole>(
             pix0, i, j0, image_width, image_height,
             camera_model_type, rs_type, viewmats0, viewmats1, Ks, cid,
             radial_coeffs, tangential_coeffs, thin_prism_coeffs,
             render_alphas, last_ids, v_render_colors, v_render_alphas,
             backgrounds, bg_images, have_bg, do_dens, densification_error_map);
-        init_pixel_bwd<kPinholeGlobal>(
+        init_pixel_bwd<kPerfectPinhole>(
             pix1, i, j1, image_width, image_height,
             camera_model_type, rs_type, viewmats0, viewmats1, Ks, cid,
             radial_coeffs, tangential_coeffs, thin_prism_coeffs,
@@ -443,7 +443,7 @@ namespace gsplat_lfs {
 
                 bool hit0 = false;
                 bool hit1 = false;
-                contribute_pixel_pair<kPinholeGlobal>(
+                contribute_pixel_pair<kSharedOrigin>(
                     pix0, pix1, isect_idx, xyz_opac, Mt, scale_act, quat, rgb0, rgb1, rgb2,
                     have_bg, do_dens, v_rgb_local, v_mean_local, v_scale_local, v_quat_local,
                     v_opacity_local, densification_weight_local, densification_error_weighted_local,
@@ -483,7 +483,7 @@ namespace gsplat_lfs {
         }
     }
 
-    template <uint32_t CDIM, typename scalar_t, bool kPinholeGlobal>
+    template <uint32_t CDIM, typename scalar_t, bool kPerfectPinhole>
     __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         const uint32_t C,
         const uint32_t N,
@@ -566,7 +566,7 @@ namespace gsplat_lfs {
         const int32_t pix_id =
             min(i * image_width + j, image_width * image_height - 1);
 
-        const WorldRay ray = from_world_pixel_ray<kPinholeGlobal>(
+        const WorldRay ray = from_world_pixel_ray<kPerfectPinhole>(
             camera_model_type, rs_type, image_width, image_height, px, py,
             viewmats0, viewmats1, Ks, cid,
             radial_coeffs, tangential_coeffs, thin_prism_coeffs);
@@ -857,9 +857,9 @@ namespace gsplat_lfs {
             return;
         }
 
-        const bool pinhole_global = is_pinhole_global_launch(
-            camera_model, rs_type, viewmats1,
-            radial_coeffs, tangential_coeffs, thin_prism_coeffs);
+        const bool global_shutter = is_global_shutter_launch(rs_type, viewmats1);
+        const bool perfect_pinhole = is_perfect_pinhole_launch(
+            camera_model, radial_coeffs, tangential_coeffs, thin_prism_coeffs);
 
         auto launch_args = [&](auto kernel, dim3 grid, dim3 threads, int64_t shmem_size) {
             set_kernel_max_dynamic_smem(
@@ -915,14 +915,20 @@ namespace gsplat_lfs {
                     int64_t(kBwdDualBatch) *
                     (sizeof(int32_t) + sizeof(vec4) + sizeof(vec3) + sizeof(vec4) +
                      sizeof(mat3) + sizeof(float) * CDIM);
-                if (pinhole_global) {
-                    launch_args(
-                        rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, true>,
-                        grid, threads, shmem_size);
+                if (global_shutter) {
+                    if (perfect_pinhole) {
+                        launch_args(
+                            rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, true, true>,
+                            grid, threads, shmem_size);
+                    } else {
+                        launch_args(
+                            rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, true, false>,
+                            grid, threads, shmem_size);
+                    }
                     return;
                 }
                 launch_args(
-                    rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, false>,
+                    rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, false, false>,
                     grid, threads, shmem_size);
                 return;
             }
@@ -941,7 +947,7 @@ namespace gsplat_lfs {
             }
         }
         if constexpr (CDIM == 3) {
-            if (pinhole_global) {
+            if (global_shutter && perfect_pinhole) {
                 launch_args(
                     rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float, true>,
                     grid, threads, shmem_size);

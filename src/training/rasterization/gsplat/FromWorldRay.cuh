@@ -27,7 +27,7 @@ namespace gsplat_lfs {
         return camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
     }
 
-    inline __device__ __noinline__ WorldRay from_world_pixel_ray_generic(
+    inline __device__ WorldRay from_world_pixel_ray_generic(
         const CameraModelType camera_model_type,
         const ShutterType rs_type,
         const uint32_t image_width,
@@ -121,7 +121,9 @@ namespace gsplat_lfs {
         return ray;
     }
 
-    template <bool kPinholeGlobal>
+    // kPerfectPinhole inlines the undistorted pinhole formula. Otherwise the
+    // generic camera model runs once per pixel before the splat loop.
+    template <bool kPerfectPinhole>
     inline __device__ WorldRay from_world_pixel_ray(
         const CameraModelType camera_model_type,
         const ShutterType rs_type,
@@ -136,7 +138,7 @@ namespace gsplat_lfs {
         const float* radial_coeffs,
         const float* tangential_coeffs,
         const float* thin_prism_coeffs) {
-        if constexpr (kPinholeGlobal) {
+        if constexpr (kPerfectPinhole) {
             return from_world_pixel_ray_pinhole_global(
                 image_width, image_height, px, py, viewmats0, Ks, cid);
         } else {
@@ -147,16 +149,18 @@ namespace gsplat_lfs {
         }
     }
 
-    inline bool is_pinhole_global_launch(
-        const CameraModelType camera_model,
+    inline bool is_global_shutter_launch(
         const ShutterType rs_type,
-        const float* viewmats1,
+        const float* viewmats1) {
+        return rs_type == ShutterType::GLOBAL && viewmats1 == nullptr;
+    }
+
+    inline bool is_perfect_pinhole_launch(
+        const CameraModelType camera_model,
         const float* radial_coeffs,
         const float* tangential_coeffs,
         const float* thin_prism_coeffs) {
         return camera_model == PINHOLE &&
-               rs_type == ShutterType::GLOBAL &&
-               viewmats1 == nullptr &&
                radial_coeffs == nullptr &&
                tangential_coeffs == nullptr &&
                thin_prism_coeffs == nullptr;

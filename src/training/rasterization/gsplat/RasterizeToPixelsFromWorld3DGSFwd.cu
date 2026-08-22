@@ -19,7 +19,7 @@ namespace gsplat_lfs {
     // Forward Kernel
     ////////////////////////////////////////////////////////////////
 
-    template <uint32_t CDIM, typename scalar_t, bool kPinholeGlobal>
+    template <uint32_t CDIM, typename scalar_t, bool kPerfectPinhole>
     __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         const uint32_t C,
         const uint32_t N,
@@ -84,7 +84,7 @@ namespace gsplat_lfs {
         float py = (float)i + 0.5f;
         int32_t pix_id = i * image_width + j;
 
-        const WorldRay ray = from_world_pixel_ray<kPinholeGlobal>(
+        const WorldRay ray = from_world_pixel_ray<kPerfectPinhole>(
             camera_model_type, rs_type, image_width, image_height, px, py,
             viewmats0, viewmats1, Ks, cid,
             radial_coeffs, tangential_coeffs, thin_prism_coeffs);
@@ -314,9 +314,9 @@ namespace gsplat_lfs {
         dim3 threads = {tile_size, tile_size, 1};
         dim3 grid = {C, tile_height, tile_width};
 
-        const bool pinhole_global = is_pinhole_global_launch(
-            camera_model, rs_type, viewmats1,
-            radial_coeffs, tangential_coeffs, thin_prism_coeffs);
+        const bool global_shutter = is_global_shutter_launch(rs_type, viewmats1);
+        const bool perfect_pinhole = is_perfect_pinhole_launch(
+            camera_model, radial_coeffs, tangential_coeffs, thin_prism_coeffs);
 
         const uint32_t n_stage =
             (CDIM == 3 && tile_size == 16) ? 128u : (tile_size * tile_size);
@@ -381,7 +381,7 @@ namespace gsplat_lfs {
         };
 
         if constexpr (CDIM == 3) {
-            if (pinhole_global) {
+            if (global_shutter && perfect_pinhole) {
                 launch(rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float, true>);
                 return;
             }
