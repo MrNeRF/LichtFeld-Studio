@@ -18,10 +18,14 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cuda_runtime.h>
+#include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -80,6 +84,119 @@ namespace {
                             .to(Device::CUDA);
         auto opacity = Tensor::full({static_cast<size_t>(n)}, 2.0f, Device::CUDA);
         return std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
+    }
+
+    // Deterministic ~50k-splat GUT fixture for gradient / image parity.
+    std::unique_ptr<SplatData> make_parity_splat(int n, uint32_t seed) {
+        std::vector<float> means(static_cast<size_t>(n) * 3);
+        std::vector<float> sh0(static_cast<size_t>(n) * 3);
+        std::vector<float> scaling(static_cast<size_t>(n) * 3);
+        std::vector<float> rotation(static_cast<size_t>(n) * 4);
+        std::vector<float> opacity(static_cast<size_t>(n));
+        uint32_t s = seed;
+        auto rnd = [&]() {
+            s = s * 1664525u + 1013904223u;
+            return static_cast<float>(s >> 8) * (1.0f / 16777216.0f);
+        };
+        for (int i = 0; i < n; ++i) {
+            means[static_cast<size_t>(i) * 3 + 0] = rnd() * 2.4f - 1.2f;
+            means[static_cast<size_t>(i) * 3 + 1] = rnd() * 2.4f - 1.2f;
+            means[static_cast<size_t>(i) * 3 + 2] = rnd() * 1.0f - 0.5f;
+            sh0[static_cast<size_t>(i) * 3 + 0] = rnd() * 0.8f + 0.1f;
+            sh0[static_cast<size_t>(i) * 3 + 1] = rnd() * 0.8f + 0.1f;
+            sh0[static_cast<size_t>(i) * 3 + 2] = rnd() * 0.8f + 0.1f;
+            scaling[static_cast<size_t>(i) * 3 + 0] = -3.2f + rnd() * 0.6f;
+            scaling[static_cast<size_t>(i) * 3 + 1] = -3.2f + rnd() * 0.6f;
+            scaling[static_cast<size_t>(i) * 3 + 2] = -3.2f + rnd() * 0.6f;
+            rotation[static_cast<size_t>(i) * 4 + 0] = 0.7f + rnd();
+            rotation[static_cast<size_t>(i) * 4 + 1] = rnd() * 0.4f - 0.2f;
+            rotation[static_cast<size_t>(i) * 4 + 2] = rnd() * 0.4f - 0.2f;
+            rotation[static_cast<size_t>(i) * 4 + 3] = rnd() * 0.4f - 0.2f;
+            opacity[static_cast<size_t>(i)] = 0.5f + rnd() * 2.0f;
+        }
+        auto means_t = Tensor::from_blob(means.data(), {static_cast<size_t>(n), 3}, Device::CPU, DataType::Float32)
+                           .to(Device::CUDA);
+        auto sh0_t = Tensor::from_blob(sh0.data(), {static_cast<size_t>(n), 1, 3}, Device::CPU, DataType::Float32)
+                         .to(Device::CUDA);
+        auto shN_t = Tensor::zeros({static_cast<size_t>(n), 0, 3}, Device::CUDA);
+        auto scaling_t = Tensor::from_blob(scaling.data(), {static_cast<size_t>(n), 3}, Device::CPU, DataType::Float32)
+                             .to(Device::CUDA);
+        auto rotation_t = Tensor::from_blob(rotation.data(), {static_cast<size_t>(n), 4}, Device::CPU, DataType::Float32)
+                              .to(Device::CUDA);
+        auto opacity_t = Tensor::from_blob(opacity.data(), {static_cast<size_t>(n)}, Device::CPU, DataType::Float32)
+                             .to(Device::CUDA);
+        return std::make_unique<SplatData>(0, means_t, sh0_t, shN_t, scaling_t, rotation_t, opacity_t, 1.0f);
+    }
+
+    void write_float_bin(const std::filesystem::path& path, const Tensor& t) {
+        auto cpu = t.cpu();
+        std::ofstream out(path, std::ios::binary);
+        ASSERT_TRUE(out) << "failed to write " << path;
+        const auto n = static_cast<size_t>(cpu.numel());
+        out.write(reinterpret_cast<const char*>(cpu.ptr<float>()),
+                  static_cast<std::streamsize>(n * sizeof(float)));
+        ASSERT_TRUE(out) << "failed to write " << path;
+    }
+
+    std::vector<float> read_float_bin(const std::filesystem::path& path) {
+        std::ifstream in(path, std::ios::binary | std::ios::ate);
+        EXPECT_TRUE(in) << "failed to read " << path;
+        if (!in) {
+            return {};
+        }
+        const auto bytes = static_cast<size_t>(in.tellg());
+        in.seekg(0);
+        std::vector<float> v(bytes / sizeof(float));
+        in.read(reinterpret_cast<char*>(v.data()), static_cast<std::streamsize>(bytes));
+        return v;
+    }
+
+    float max_rel_diff(const Tensor& a, const std::vector<float>& b) {
+        auto cpu = a.cpu();
+        const auto n = static_cast<size_t>(cpu.numel());
+        EXPECT_EQ(n, b.size());
+        if (n != b.size()) {
+            return 1.0f;
+        }
+        const float* p = cpu.ptr<float>();
+        float max_abs = 0.0f;
+        float max_diff = 0.0f;
+        for (size_t i = 0; i < n; ++i) {
+            max_abs = std::max(max_abs, std::abs(p[i]));
+            max_diff = std::max(max_diff, std::abs(p[i] - b[i]));
+        }
+        const float denom = std::max(max_abs, 1e-8f);
+        return max_diff / denom;
+    }
+
+    float max_rel_diff_tensors(const Tensor& a, const Tensor& b) {
+        auto ac = a.cpu();
+        auto bc = b.cpu();
+        const auto n = static_cast<size_t>(ac.numel());
+        EXPECT_EQ(n, static_cast<size_t>(bc.numel()));
+        const float* pa = ac.ptr<float>();
+        const float* pb = bc.ptr<float>();
+        float max_abs = 0.0f;
+        float max_diff = 0.0f;
+        for (size_t i = 0; i < n; ++i) {
+            max_abs = std::max(max_abs, std::abs(pa[i]));
+            max_diff = std::max(max_diff, std::abs(pa[i] - pb[i]));
+        }
+        return max_diff / std::max(max_abs, 1e-8f);
+    }
+
+    float max_abs_diff_tensors(const Tensor& a, const Tensor& b) {
+        auto ac = a.cpu();
+        auto bc = b.cpu();
+        const auto n = static_cast<size_t>(ac.numel());
+        EXPECT_EQ(n, static_cast<size_t>(bc.numel()));
+        const float* pa = ac.ptr<float>();
+        const float* pb = bc.ptr<float>();
+        float max_diff = 0.0f;
+        for (size_t i = 0; i < n; ++i) {
+            max_diff = std::max(max_diff, std::abs(pa[i] - pb[i]));
+        }
+        return max_diff;
     }
 
 } // namespace
@@ -454,5 +571,98 @@ TEST_F(GsplatRasterizerTest, ForwardWritesChwAndBackwardIsStable) {
     for (size_t i = 0; i < static_cast<size_t>(img0.numel()); ++i) {
         EXPECT_EQ(p0[i], p1[i]);
         EXPECT_TRUE(std::isfinite(p0[i]));
+    }
+}
+
+TEST_F(GsplatRasterizerTest, GutFromWorldGradParity) {
+    constexpr int kN = 50000;
+    constexpr int kW = 96;
+    constexpr int kH = 64;
+    auto camera = make_camera(kW, kH);
+    auto splat = make_parity_splat(kN, 0xC0FFEE01u);
+    auto bg = Tensor::zeros({3}, Device::CUDA);
+    bg.fill_(0.25f);
+
+    AdamConfig cfg;
+    cfg.lr = 1e-3f;
+    cfg.initial_capacity = static_cast<size_t>(kN);
+    AdamOptimizer opt(*splat, cfg);
+    opt.allocate_gradients(static_cast<size_t>(kN));
+
+    Tensor image0, image1;
+    auto run_once = [&](Tensor& image_out) {
+        auto r = gsplat_rasterize_forward(
+            camera, *splat, bg, 0, 0, 0, 0, 1.0f, false, GsplatRenderMode::RGB,
+            /*use_gut=*/true);
+        ASSERT_TRUE(r.has_value()) << r.error();
+        auto output = std::move(r->first);
+        auto ctx = std::move(r->second);
+        ASSERT_GT(ctx.n_isects, 0);
+        auto grad_image = Tensor::ones_like(output.image);
+        auto grad_alpha = Tensor::zeros_like(output.alpha);
+        gsplat_rasterize_backward(ctx, grad_image, grad_alpha, *splat, opt, Tensor{});
+        image_out = output.image.clone();
+        ctx.isect_ids_ptr = nullptr;
+        ctx.flatten_ids_ptr = nullptr;
+    };
+
+    run_once(image0);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    auto means_g = opt.get_grad(ParamType::Means).clone();
+    auto scale_g = opt.get_grad(ParamType::Scaling).clone();
+    auto quat_g = opt.get_grad(ParamType::Rotation).clone();
+    auto opa_g = opt.get_grad(ParamType::Opacity).clone();
+    auto color_g = opt.get_grad(ParamType::Sh0).clone();
+
+    opt.zero_grad(1);
+    run_once(image1);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    EXPECT_EQ(max_abs_diff_tensors(image0, image1), 0.0f);
+    EXPECT_LT(max_rel_diff_tensors(means_g, opt.get_grad(ParamType::Means)), 1e-4f);
+    EXPECT_LT(max_rel_diff_tensors(scale_g, opt.get_grad(ParamType::Scaling)), 1e-4f);
+    EXPECT_LT(max_rel_diff_tensors(quat_g, opt.get_grad(ParamType::Rotation)), 1e-4f);
+    EXPECT_LT(max_rel_diff_tensors(opa_g, opt.get_grad(ParamType::Opacity)), 1e-4f);
+    EXPECT_LT(max_rel_diff_tensors(color_g, opt.get_grad(ParamType::Sh0)), 1e-4f);
+
+    if (const char* dump_dir = std::getenv("GUT_GRAD_DUMP")) {
+        std::filesystem::create_directories(dump_dir);
+        write_float_bin(std::filesystem::path(dump_dir) / "v_means.bin", means_g);
+        write_float_bin(std::filesystem::path(dump_dir) / "v_scales.bin", scale_g);
+        write_float_bin(std::filesystem::path(dump_dir) / "v_quats.bin", quat_g);
+        write_float_bin(std::filesystem::path(dump_dir) / "v_opacities.bin", opa_g);
+        write_float_bin(std::filesystem::path(dump_dir) / "v_colors.bin", color_g);
+        write_float_bin(std::filesystem::path(dump_dir) / "render.bin", image0);
+        std::cout << "GUT_GRAD_DUMP wrote tensors to " << dump_dir << std::endl;
+    }
+    if (const char* ref_dir = std::getenv("GUT_GRAD_REF")) {
+        const auto rel_means = max_rel_diff(means_g, read_float_bin(std::filesystem::path(ref_dir) / "v_means.bin"));
+        const auto rel_scales = max_rel_diff(scale_g, read_float_bin(std::filesystem::path(ref_dir) / "v_scales.bin"));
+        const auto rel_quats = max_rel_diff(quat_g, read_float_bin(std::filesystem::path(ref_dir) / "v_quats.bin"));
+        const auto rel_opa = max_rel_diff(opa_g, read_float_bin(std::filesystem::path(ref_dir) / "v_opacities.bin"));
+        const auto rel_color = max_rel_diff(color_g, read_float_bin(std::filesystem::path(ref_dir) / "v_colors.bin"));
+        auto render_ref = read_float_bin(std::filesystem::path(ref_dir) / "render.bin");
+        auto render_cpu = image0.cpu();
+        float render_max_abs = 0.0f;
+        const auto nimg = static_cast<size_t>(render_cpu.numel());
+        ASSERT_EQ(nimg, render_ref.size());
+        const float* pi = render_cpu.ptr<float>();
+        bool render_bit_identical = true;
+        for (size_t i = 0; i < nimg; ++i) {
+            render_max_abs = std::max(render_max_abs, std::abs(pi[i] - render_ref[i]));
+            render_bit_identical = render_bit_identical && (pi[i] == render_ref[i]);
+        }
+        std::cout << "GUT_GRAD_REF max|a-b|/max|a| means=" << rel_means
+                  << " scales=" << rel_scales << " quats=" << rel_quats
+                  << " opacities=" << rel_opa << " colors=" << rel_color
+                  << " render_max_abs=" << render_max_abs
+                  << " render_bit_identical=" << (render_bit_identical ? "yes" : "no")
+                  << std::endl;
+        EXPECT_LT(rel_means, 1e-4f);
+        EXPECT_LT(rel_scales, 1e-4f);
+        EXPECT_LT(rel_quats, 1e-4f);
+        EXPECT_LT(rel_opa, 1e-4f);
+        EXPECT_LT(rel_color, 1e-4f);
+        EXPECT_LE(render_max_abs, 1e-6f);
     }
 }

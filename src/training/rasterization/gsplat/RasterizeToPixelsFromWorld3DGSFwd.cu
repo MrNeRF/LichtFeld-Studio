@@ -7,6 +7,7 @@
 
 #include "Cameras.cuh"
 #include "Common.h"
+#include "FromWorldRay.cuh"
 #include "Rasterization.h"
 #include "Utils.cuh"
 #include "core/cuda_safe_format.hpp"
@@ -19,7 +20,7 @@ namespace gsplat_lfs {
     // Forward Kernel
     ////////////////////////////////////////////////////////////////
 
-    template <uint32_t CDIM, typename scalar_t>
+    template <uint32_t CDIM, typename scalar_t, bool kPinholeGlobal>
     __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         const uint32_t C,
         const uint32_t N,
@@ -84,94 +85,10 @@ namespace gsplat_lfs {
         float py = (float)i + 0.5f;
         int32_t pix_id = i * image_width + j;
 
-        // Create rolling shutter parameter
-        auto rs_params = RollingShutterParameters(
-            viewmats0 + cid * 16,
-            viewmats1 == nullptr ? nullptr : viewmats1 + cid * 16);
-        // shift pointers to the current camera. note that glm is colume-major.
-        const vec2 focal_length = {Ks[cid * 9 + 0], Ks[cid * 9 + 4]};
-        const vec2 principal_point = {Ks[cid * 9 + 2], Ks[cid * 9 + 5]};
-
-        // Create ray from pixel
-        WorldRay ray;
-        if (camera_model_type == CameraModelType::PINHOLE) {
-            if (radial_coeffs == nullptr && tangential_coeffs == nullptr && thin_prism_coeffs == nullptr) {
-                PerfectPinholeCameraModel::Parameters cm_params = {};
-                cm_params.resolution = {image_width, image_height};
-                cm_params.shutter_type = rs_type;
-                cm_params.principal_point = {principal_point.x, principal_point.y};
-                cm_params.focal_length = {focal_length.x, focal_length.y};
-                PerfectPinholeCameraModel camera_model(cm_params);
-                ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
-            } else {
-                OpenCVPinholeCameraModel<>::Parameters cm_params = {};
-                cm_params.resolution = {image_width, image_height};
-                cm_params.shutter_type = rs_type;
-                cm_params.principal_point = {principal_point.x, principal_point.y};
-                cm_params.focal_length = {focal_length.x, focal_length.y};
-                if (radial_coeffs != nullptr) {
-                    cm_params.radial_coeffs = make_array<float, 6>(radial_coeffs + cid * 6);
-                }
-                if (tangential_coeffs != nullptr) {
-                    cm_params.tangential_coeffs = make_array<float, 2>(tangential_coeffs + cid * 2);
-                }
-                if (thin_prism_coeffs != nullptr) {
-                    cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + cid * 4);
-                }
-                OpenCVPinholeCameraModel camera_model(cm_params);
-                ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
-            }
-        } else if (camera_model_type == CameraModelType::FISHEYE) {
-            OpenCVFisheyeCameraModel<>::Parameters cm_params = {};
-            cm_params.resolution = {image_width, image_height};
-            cm_params.shutter_type = rs_type;
-            cm_params.principal_point = {principal_point.x, principal_point.y};
-            cm_params.focal_length = {focal_length.x, focal_length.y};
-            if (radial_coeffs != nullptr) {
-                cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + cid * 4);
-            }
-            OpenCVFisheyeCameraModel camera_model(cm_params);
-            ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
-        } else if (camera_model_type == CameraModelType::EQUIRECTANGULAR) {
-            // For equirectangular cameras in tile mode, the K matrix encodes tile information:
-            //   K[0][0] (focal_length.x) = full_image_width
-            //   K[1][1] (focal_length.y) = full_image_height
-            //   K[0][2] (principal_point.x) = tile_x_offset
-            //   K[1][2] (principal_point.y) = tile_y_offset
-            // This avoids changing all function interfaces for a camera-specific fix.
-            const uint32_t full_image_width = static_cast<uint32_t>(focal_length.x);
-            const uint32_t full_image_height = static_cast<uint32_t>(focal_length.y);
-            const float tile_x_offset = principal_point.x;
-            const float tile_y_offset = principal_point.y;
-
-            EquirectangularCameraModel::Parameters cm_params = {};
-            cm_params.resolution = {full_image_width, full_image_height};
-            cm_params.shutter_type = rs_type;
-            EquirectangularCameraModel camera_model(cm_params);
-
-            // Convert tile-local pixel coords to full image coords for correct angular mapping
-            const float px_full = px + tile_x_offset;
-            const float py_full = py + tile_y_offset;
-            ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px_full, py_full), rs_params);
-        } else if (camera_model_type == CameraModelType::THIN_PRISM_FISHEYE) {
-            ThinPrismFisheyeCameraModel<>::Parameters cm_params = {};
-            cm_params.resolution = {image_width, image_height};
-            cm_params.shutter_type = rs_type;
-            cm_params.principal_point = {principal_point.x, principal_point.y};
-            cm_params.focal_length = {focal_length.x, focal_length.y};
-            if (radial_coeffs != nullptr) {
-                cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + cid * 4);
-            }
-            if (thin_prism_coeffs != nullptr) {
-                cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + cid * 4);
-            }
-            ThinPrismFisheyeCameraModel camera_model(cm_params);
-            ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
-        } else {
-            // should never reach here
-            assert(false);
-            return;
-        }
+        const WorldRay ray = from_world_pixel_ray<kPinholeGlobal>(
+            camera_model_type, rs_type, image_width, image_height, px, py,
+            viewmats0, viewmats1, Ks, cid,
+            radial_coeffs, tangential_coeffs, thin_prism_coeffs);
         const vec3 ray_d = ray.ray_dir;
         const vec3 ray_o = ray.ray_org;
 
@@ -397,22 +314,25 @@ namespace gsplat_lfs {
             return;
         }
 
-        auto err = cudaFuncSetAttribute(
-            rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float>,
-            cudaFuncAttributeMaxDynamicSharedMemorySize,
-            shmem_size);
-        if (err != cudaSuccess) {
-            lfs::core::ensure_cuda_success(
-                err, "cudaFuncSetAttribute(gsplat forward shared memory)",
-                lfs::core::detail::format_cuda_safe(
-                    "requested_bytes={}, try lowering tile_size", shmem_size),
-                LFS_SOURCE_SITE_CURRENT(),
-                lfs::core::CudaFailureDisposition::LogOnly);
-            return;
-        }
+        const bool pinhole_global = is_pinhole_global_launch(
+            camera_model, rs_type, viewmats1,
+            radial_coeffs, tangential_coeffs, thin_prism_coeffs);
 
-        rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float>
-            <<<grid, threads, shmem_size, stream>>>(
+        auto launch = [&](auto kernel) {
+            auto err = cudaFuncSetAttribute(
+                kernel,
+                cudaFuncAttributeMaxDynamicSharedMemorySize,
+                shmem_size);
+            if (err != cudaSuccess) {
+                lfs::core::ensure_cuda_success(
+                    err, "cudaFuncSetAttribute(gsplat forward shared memory)",
+                    lfs::core::detail::format_cuda_safe(
+                        "requested_bytes={}, try lowering tile_size", shmem_size),
+                    LFS_SOURCE_SITE_CURRENT(),
+                    lfs::core::CudaFailureDisposition::LogOnly);
+                return;
+            }
+            kernel<<<grid, threads, shmem_size, stream>>>(
                 C,
                 N,
                 n_isects,
@@ -444,7 +364,16 @@ namespace gsplat_lfs {
                 renders,
                 alphas,
                 last_ids);
-        LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.rasterize_to_pixels_fwd");
+            LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.rasterize_to_pixels_fwd");
+        };
+
+        if constexpr (CDIM == 3) {
+            if (pinhole_global) {
+                launch(rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float, true>);
+                return;
+            }
+        }
+        launch(rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float, false>);
     }
 
     ////////////////////////////////////////////////////////////////
