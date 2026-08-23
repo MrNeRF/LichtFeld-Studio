@@ -494,8 +494,8 @@ namespace lfs::core::nn {
         for (int g = 0; g < params.groups; ++g) {
             kernels::im2col(raw(in_c), raw_mut(scratch), n, cin, h, w, kh, kw, out_h, out_w,
                             params.stride_h, params.stride_w, params.pad_h, params.pad_w,
-                            params.dilation_h, params.dilation_w, g * cin_g, cin_g, in_c.dtype(),
-                            stream);
+                            params.dilation_h, params.dilation_w, g * cin_g, cin_g,
+                            static_cast<int>(params.pad_mode), in_c.dtype(), stream);
             const char* w_base = static_cast<const char*>(raw(w_c)) +
                                  static_cast<std::size_t>(g * cout_g) * static_cast<std::size_t>(kdim) *
                                      elem;
@@ -582,6 +582,8 @@ namespace lfs::core::nn {
         for (int g = 0; g < params.groups; ++g) {
             auto in_g = in_c.slice(1, static_cast<std::size_t>(g * cin_g),
                                    static_cast<std::size_t>((g + 1) * cin_g))
+                            .contiguous()
+                            .permute({0, 2, 3, 1})
                             .contiguous()
                             .reshape(TensorShape{std::vector<std::size_t>{
                                 static_cast<std::size_t>(m), static_cast<std::size_t>(cin_g)}});

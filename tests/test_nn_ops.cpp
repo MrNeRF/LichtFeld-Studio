@@ -320,6 +320,30 @@ TEST_F(NnOpsTest, SoftmaxLastDim) {
     EXPECT_TRUE(all_close(host_f32(y), cpu_softmax(x, 2, 3), kF32Rtol, kF32Atol));
 }
 
+TEST_F(NnOpsTest, AttentionWmmaTileParity) {
+    const int b = 1, h = 1, n = 17, d = 64;
+    std::vector<float> q(b * h * n * d), k(q.size()), v(q.size());
+    std::mt19937 rng(11);
+    std::uniform_real_distribution<float> dist(-0.6f, 0.6f);
+    for (auto& val : q) {
+        val = dist(rng);
+    }
+    for (auto& val : k) {
+        val = dist(rng);
+    }
+    for (auto& val : v) {
+        val = dist(rng);
+    }
+    const auto ref = cpu_attention(q, k, v, b, h, n, d);
+    auto shape = std::vector<std::size_t>{1, 1, static_cast<std::size_t>(n),
+                                          static_cast<std::size_t>(d)};
+    auto Q = upload(q, shape, lfs::core::DataType::Float16);
+    auto K = upload(k, shape, lfs::core::DataType::Float16);
+    auto V = upload(v, shape, lfs::core::DataType::Float16);
+    auto O = lfs::core::nn::attention(Q, K, V);
+    EXPECT_TRUE(all_close(host_f32(O), ref, kF16Rtol, kF16Atol));
+}
+
 TEST_F(NnOpsTest, AttentionVsExplicitSoftmax) {
     const int b = 1, h = 2, n = 9, d = 8;
     std::vector<float> q(b * h * n * d), k(q.size()), v(q.size());
@@ -435,6 +459,19 @@ TEST_F(NnOpsTest, ConvTranspose2dBasic) {
     EXPECT_EQ(Out.shape()[1], 3u);
     EXPECT_GT(Out.shape()[2], 3u);
     EXPECT_GT(Out.shape()[3], 3u);
+
+    // ONNX ConvTranspose: each input channel contributes W[cin, cout, kh, kw]
+    // at out[y*s+kh, x*s+kw]. With ones input and 0.25 weights, overlapped
+    // 2x2 kernels on stride 2 do not overlap, so every spatial output is 0.5.
+    const auto got = host_f32(Out);
+    const float expected = 0.5f; // 2 input channels * 0.25
+    int mismatches = 0;
+    for (float v : got) {
+        if (std::abs(v - expected) > 1e-5f) {
+            ++mismatches;
+        }
+    }
+    EXPECT_EQ(mismatches, 0);
 }
 
 TEST_F(NnOpsTest, ResizeMatchesNumpyFixture) {

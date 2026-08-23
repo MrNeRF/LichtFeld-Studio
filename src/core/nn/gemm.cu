@@ -269,10 +269,174 @@ namespace lfs::core::nn::kernels {
             }
         }
 
+        // 128×64 WMMA tile. 8 warps cover a 128×64 output tile (4 along M × 2
+        // along N). Used for the large-N ViT GEMMs.
+        template <bool kTransB>
+        __global__ void __launch_bounds__(256, 3)
+            hgemm_wmma_128x64_kernel(const __half* __restrict__ A, const __half* __restrict__ B,
+                                     __half* __restrict__ C, const __half* __restrict__ bias,
+                                     int m, int n, int k, long long stride_a, long long stride_b,
+                                     long long stride_c, bool trans_a, int activation) {
+            const int batch = static_cast<int>(blockIdx.z);
+            A += batch * stride_a;
+            B += batch * stride_b;
+            C += batch * stride_c;
+
+            const int tid = static_cast<int>(threadIdx.x);
+            const int block_row = static_cast<int>(blockIdx.y) * 128;
+            const int block_col = static_cast<int>(blockIdx.x) * 64;
+
+#if __CUDA_ARCH__ >= 700
+            using namespace nvcuda::wmma;
+            constexpr int BM = 128;
+            constexpr int BN = 64;
+            constexpr int BK = 32;
+            constexpr int WM = 16;
+            constexpr int WN = 16;
+            constexpr int WK = 16;
+
+            const int warp_id = tid / 32;
+            const int warp_m = warp_id / 2;
+            const int warp_n = warp_id % 2;
+
+            __shared__ __half As[BM][BK];
+            __shared__ __half Bs[BN][BK];
+            __shared__ float Cs[BM][BN];
+
+            fragment<matrix_a, WM, WN, WK, __half, row_major> a_frag[2];
+            fragment<matrix_b, WM, WN, WK, __half, col_major> b_frag[2];
+            fragment<accumulator, WM, WN, WK, float> c_frag[2][2];
+#pragma unroll
+            for (int i = 0; i < 2; ++i) {
+#pragma unroll
+                for (int j = 0; j < 2; ++j) {
+                    fill_fragment(c_frag[i][j], 0.0f);
+                }
+            }
+
+            auto load_a = [&](int row, int col) -> __half {
+                if (row >= m || col >= k) {
+                    return __float2half(0.0f);
+                }
+                return trans_a ? A[col * m + row] : A[row * k + col];
+            };
+            auto load_b = [&](int brow, int bcol) -> __half {
+                if constexpr (kTransB) {
+                    if (bcol >= n || brow >= k) {
+                        return __float2half(0.0f);
+                    }
+                    return B[bcol * k + brow];
+                } else {
+                    if (brow >= k || bcol >= n) {
+                        return __float2half(0.0f);
+                    }
+                    return B[brow * n + bcol];
+                }
+            };
+
+            for (int k0 = 0; k0 < k; k0 += BK) {
+                for (int i = tid; i < BM * BK; i += 256) {
+                    const int r = i / BK;
+                    const int c = i % BK;
+                    As[r][c] = load_a(block_row + r, k0 + c);
+                }
+                for (int i = tid; i < BN * BK; i += 256) {
+                    const int r = i / BK;
+                    const int c = i % BK;
+                    Bs[r][c] = load_b(k0 + c, block_col + r);
+                }
+                __syncthreads();
+
+#pragma unroll
+                for (int kk = 0; kk < BK; kk += WK) {
+                    const int am = warp_m * 32;
+                    const int bn = warp_n * 32;
+                    load_matrix_sync(a_frag[0], &As[am][kk], BK);
+                    load_matrix_sync(a_frag[1], &As[am + 16][kk], BK);
+                    load_matrix_sync(b_frag[0], &Bs[bn][kk], BK);
+                    load_matrix_sync(b_frag[1], &Bs[bn + 16][kk], BK);
+                    mma_sync(c_frag[0][0], a_frag[0], b_frag[0], c_frag[0][0]);
+                    mma_sync(c_frag[0][1], a_frag[0], b_frag[1], c_frag[0][1]);
+                    mma_sync(c_frag[1][0], a_frag[1], b_frag[0], c_frag[1][0]);
+                    mma_sync(c_frag[1][1], a_frag[1], b_frag[1], c_frag[1][1]);
+                }
+                __syncthreads();
+            }
+
+            const int am = warp_m * 32;
+            const int bn = warp_n * 32;
+            store_matrix_sync(&Cs[am][bn], c_frag[0][0], BN, mem_row_major);
+            store_matrix_sync(&Cs[am][bn + 16], c_frag[0][1], BN, mem_row_major);
+            store_matrix_sync(&Cs[am + 16][bn], c_frag[1][0], BN, mem_row_major);
+            store_matrix_sync(&Cs[am + 16][bn + 16], c_frag[1][1], BN, mem_row_major);
+            __syncthreads();
+
+            for (int i = tid; i < BM * BN; i += 256) {
+                const int r = i / BN;
+                const int c = i % BN;
+                const int gr = block_row + r;
+                const int gc = block_col + c;
+                if (gr < m && gc < n) {
+                    float val = Cs[r][c];
+                    if (bias) {
+                        val += __half2float(bias[gc]);
+                    }
+                    C[gr * n + gc] = __float2half_rn(device::apply_activation(val, activation));
+                }
+            }
+#else
+            for (int i = tid; i < 128 * 64; i += 256) {
+                const int r = i / 64;
+                const int c = i % 64;
+                const int gr = block_row + r;
+                const int gc = block_col + c;
+                if (gr >= m || gc >= n) {
+                    continue;
+                }
+                float acc = 0.0f;
+                for (int kk = 0; kk < k; ++kk) {
+                    const float av = trans_a ? __half2float(A[kk * m + gr])
+                                             : __half2float(A[gr * k + kk]);
+                    const float bv = kTransB ? __half2float(B[gc * k + kk])
+                                             : __half2float(B[kk * n + gc]);
+                    acc += av * bv;
+                }
+                if (bias) {
+                    acc += __half2float(bias[gc]);
+                }
+                C[gr * n + gc] = __float2half_rn(device::apply_activation(acc, activation));
+            }
+#endif
+        }
+
         void launch_hgemm_wmma(const __half* a, const __half* b, __half* c, const __half* bias,
                                int m, int n, int k, long long stride_a, long long stride_b,
                                long long stride_c, int batch, bool trans_a, bool trans_b,
                                int activation, cudaStream_t stream) {
+            const bool large = m >= 96 && n >= 64 && k >= 32;
+            if (large) {
+                constexpr int BM = 128, BN = 64;
+                dim3 block(256);
+                const int max_rows = kMaxGridY * BM;
+                for (int row0 = 0; row0 < m; row0 += max_rows) {
+                    const int rows = std::min(max_rows, m - row0);
+                    dim3 grid((n + BN - 1) / BN, (rows + BM - 1) / BM, batch);
+                    const __half* a_off = trans_a ? a + row0 : a + static_cast<long long>(row0) * k;
+                    __half* c_off = c + static_cast<long long>(row0) * n;
+                    if (trans_b) {
+                        hgemm_wmma_128x64_kernel<true><<<grid, block, 0, stream>>>(
+                            a_off, b, c_off, bias, rows, n, k, stride_a, stride_b, stride_c,
+                            trans_a, activation);
+                        LFS_CUDA_LAUNCH_CHECK(stream, "nn.gemm.hgemm_wmma_128x64_nt");
+                    } else {
+                        hgemm_wmma_128x64_kernel<false><<<grid, block, 0, stream>>>(
+                            a_off, b, c_off, bias, rows, n, k, stride_a, stride_b, stride_c,
+                            trans_a, activation);
+                        LFS_CUDA_LAUNCH_CHECK(stream, "nn.gemm.hgemm_wmma_128x64_nn");
+                    }
+                }
+                return;
+            }
             constexpr int BM = 64, BN = 64;
             dim3 block(128);
             const int max_rows = kMaxGridY * BM;

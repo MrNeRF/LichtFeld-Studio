@@ -48,6 +48,7 @@ set(TENSOR_SOURCES
         tensor/tensor_exports.cu
         nn/ops.cpp
         nn/weight_file.cpp
+        nn/models/moge2.cpp
 )
 
 # Core module sources

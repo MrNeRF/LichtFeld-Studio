@@ -30,6 +30,12 @@ namespace lfs::core::nn {
     enum class ResizeMode : int {
         Nearest = 0,
         Bilinear = 1,
+        Cubic = 2,
+    };
+
+    enum class ConvPadMode : int {
+        Zeros = 0,
+        Replicate = 1,
     };
 
     // Matches ONNX Resize coordinate_transformation_mode for the subset we
@@ -50,6 +56,7 @@ namespace lfs::core::nn {
         int groups = 1;
         int output_pad_h = 0;
         int output_pad_w = 0;
+        ConvPadMode pad_mode = ConvPadMode::Zeros;
     };
 
     // C = op(A) @ op(B) [+ bias] [+ activation].
@@ -127,7 +134,8 @@ namespace lfs::core::nn {
                                                        Tensor* workspace = nullptr);
 
     // NCHW resize. nearest uses floor(x_orig) after the coordinate transform
-    // (ONNX nearest_mode=floor). bilinear is the ONNX linear mode.
+    // (ONNX nearest_mode=floor). bilinear is the ONNX linear mode. cubic is
+    // the ONNX cubic kernel with cubic_coeff_a = -0.75.
     [[nodiscard]] LFS_CORE_API Tensor resize2d(const Tensor& input, int out_h, int out_w,
                                                ResizeMode mode, CoordTransform coord);
 

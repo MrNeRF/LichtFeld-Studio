@@ -1379,6 +1379,14 @@ namespace {
         "  Use --overwrite to recreate existing outputs.\n"
         "  PNG compression defaults to level 1; use 0 for fastest/largest files.\n"
         "  The auto-downloaded default model is SHA-256 verified before use.\n"
+        "\n"
+        "INFERENCE BACKEND:\n"
+        "  --inference-backend auto|native|onnxruntime\n"
+        "  auto uses the in-tree network when a .lfw weight file sits next to the ONNX\n"
+        "  (same stem, .lfw suffix) and ONNX Runtime otherwise.\n"
+        "  native always runs the in-tree network. If only the ONNX is present, preprocess\n"
+        "  converts it once with tools/nn_export/export_onnx_weights.py (fp16) into that\n"
+        "  .lfw. If conversion is not possible, it prints the command to run by hand.\n"
         "\n";
 
     std::optional<lfs::core::param::OutputFormat> parseFormat(const std::string& str) {
@@ -1658,6 +1666,15 @@ namespace {
                                                                            {"both", param::PreprocessOutputMode::Both}});
         ::args::ValueFlag<std::string> images(parser, "folder", "Images subfolder (default: images)", {"images"});
         ::args::ValueFlag<std::string> model(parser, "path", "Local ONNX model path; skips default cache download", {"model"});
+        ::args::MapFlag<std::string, param::InferenceBackend> backend(
+            parser, "backend",
+            "Inference backend: auto, native, onnxruntime (default: auto; auto uses native when a .lfw sits next to the ONNX)",
+            {"inference-backend"},
+            std::unordered_map<std::string, param::InferenceBackend>{
+                {"auto", param::InferenceBackend::Auto},
+                {"native", param::InferenceBackend::Native},
+                {"onnxruntime", param::InferenceBackend::OnnxRuntime},
+                {"ort", param::InferenceBackend::OnnxRuntime}});
         ::args::ValueFlag<int> max_side(parser, "pixels", "Inference longest side, rounded to /14 (default: 518; 0 disables resize)", {"max-side"});
         ::args::ValueFlag<std::int64_t> num_tokens(parser, "tokens", "MoGe dynamic-token input when present (default: 1800)", {"num-tokens"});
         ::args::ValueFlag<int> threads(parser, "count", "ONNX Runtime CPU threads (default: all available cores)", {"threads"});
@@ -1690,6 +1707,9 @@ namespace {
         }
         if (model) {
             params.model_path = lfs::core::utf8_to_path(::args::get(model));
+        }
+        if (backend) {
+            params.inference_backend = ::args::get(backend);
         }
         if (mode) {
             params.mode = ::args::get(mode);

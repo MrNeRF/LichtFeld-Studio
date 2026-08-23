@@ -34,7 +34,7 @@ namespace lfs::core::nn::kernels {
 
     void im2col(const void* input, void* col, int n, int c, int h, int w, int k_h, int k_w,
                 int out_h, int out_w, int stride_h, int stride_w, int pad_h, int pad_w,
-                int dil_h, int dil_w, int c_start, int c_count, DataType dtype,
+                int dil_h, int dil_w, int c_start, int c_count, int pad_mode, DataType dtype,
                 cudaStream_t stream);
 
     void col2im(const void* col, void* output, int n, int c, int h, int w, int k_h, int k_w,

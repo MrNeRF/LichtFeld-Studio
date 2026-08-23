@@ -168,6 +168,41 @@ namespace lfs::core::nn::kernels {
                     (((static_cast<long long>(ni) * c + ch) * h + yy) * w + xx);
                 return device::ld_strided(input, idx, is_half);
             };
+            if (mode == 2) {
+                const int y_base = static_cast<int>(floorf(y));
+                const int x_base = static_cast<int>(floorf(x));
+                const float fy = y - static_cast<float>(y_base);
+                const float fx = x - static_cast<float>(x_base);
+                auto cubic = [](float t) {
+                    const float a = -0.75f;
+                    const float abs_t = fabsf(t);
+                    if (abs_t <= 1.0f) {
+                        return ((a + 2.0f) * abs_t - (a + 3.0f)) * abs_t * abs_t + 1.0f;
+                    }
+                    if (abs_t < 2.0f) {
+                        return ((a * abs_t - 5.0f * a) * abs_t + 8.0f * a) * abs_t - 4.0f * a;
+                    }
+                    return 0.0f;
+                };
+                float wy[4];
+                float wx[4];
+#pragma unroll
+                for (int i = 0; i < 4; ++i) {
+                    wy[i] = cubic(fy - static_cast<float>(i - 1));
+                    wx[i] = cubic(fx - static_cast<float>(i - 1));
+                }
+                float acc = 0.0f;
+#pragma unroll
+                for (int i = 0; i < 4; ++i) {
+                    float row = 0.0f;
+#pragma unroll
+                    for (int j = 0; j < 4; ++j) {
+                        row += at(y_base + i - 1, x_base + j - 1) * wx[j];
+                    }
+                    acc += row * wy[i];
+                }
+                return acc;
+            }
             const float v00 = at(y0, x0);
             const float v01 = at(y0, x1);
             const float v10 = at(y1, x0);

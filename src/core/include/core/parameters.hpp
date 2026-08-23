@@ -438,11 +438,19 @@ namespace lfs::core {
                                           Normals,
                                           Both };
 
+        // auto: native `.lfw` if it sits next to the ONNX, otherwise ONNX Runtime.
+        // native: in-tree MoGe-2; converts the ONNX to `.lfw` on first use if needed.
+        // onnxruntime: always the bundled ORT session.
+        enum class InferenceBackend { Auto,
+                                      Native,
+                                      OnnxRuntime };
+
         struct LFS_CORE_API PreprocessParameters {
             std::filesystem::path dataset_path;
             std::string images_folder = "images";
             std::filesystem::path model_path;
             PreprocessOutputMode mode = PreprocessOutputMode::Both;
+            InferenceBackend inference_backend = InferenceBackend::Auto;
             int max_side = 518;
             std::int64_t num_tokens = 1800;
             int threads = 0;

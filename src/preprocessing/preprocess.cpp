@@ -5,6 +5,7 @@
 #include "preprocessing/preprocess.hpp"
 
 #include "core/logger.hpp"
+#include "core/nn/models/moge2.hpp"
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/tensor.hpp"
@@ -65,6 +66,9 @@ namespace {
         "https://huggingface.co/Ruicheng/moge-2-vitb-normal-onnx/resolve/main/model.onnx";
     constexpr std::string_view kDefaultModelSha256 =
         "bbf14e07a30f11e69d36ab861590123f5598ababcbc8946a063eb4a966f35a21";
+
+    void remove_file_if_exists(const fs::path& path);
+    void replace_file(const fs::path& source, const fs::path& destination);
 
     bool stdout_is_tty() {
 #ifdef _WIN32
@@ -156,6 +160,87 @@ namespace {
 
     fs::path default_model_path() {
         return home_directory() / ".lichtfeld" / "onnx" / std::string(kDefaultModelFile);
+    }
+
+    fs::path lfw_path_for_onnx(const fs::path& onnx_path) {
+        fs::path out = onnx_path;
+        out.replace_extension(".lfw");
+        return out;
+    }
+
+    const char* backend_name(lfs::core::param::InferenceBackend backend) {
+        switch (backend) {
+        case lfs::core::param::InferenceBackend::Native:
+            return "native";
+        case lfs::core::param::InferenceBackend::OnnxRuntime:
+            return "onnxruntime";
+        case lfs::core::param::InferenceBackend::Auto:
+        default:
+            return "auto";
+        }
+    }
+
+    fs::path find_nn_export_script() {
+        if (const char* env = std::getenv("LFS_NN_EXPORT"); env && env[0])
+            return fs::path(env);
+        std::error_code ec;
+        std::vector<fs::path> roots;
+#ifdef __linux__
+        const auto exe = fs::read_symlink("/proc/self/exe", ec);
+        if (!ec)
+            roots.push_back(exe.parent_path());
+#endif
+        roots.push_back(fs::current_path());
+        for (const auto& root : roots) {
+            fs::path cursor = root;
+            for (int i = 0; i < 6; ++i) {
+                const auto candidate = cursor / "tools" / "nn_export" / "export_onnx_weights.py";
+                if (fs::is_regular_file(candidate))
+                    return candidate;
+                if (!cursor.has_parent_path() || cursor.parent_path() == cursor)
+                    break;
+                cursor = cursor.parent_path();
+            }
+        }
+        return {};
+    }
+
+    fs::path find_python_for_export(const fs::path& script) {
+        if (const char* env = std::getenv("LFS_PYTHON"); env && env[0])
+            return fs::path(env);
+        if (!script.empty()) {
+            const auto vcpkg = script.parent_path().parent_path().parent_path() / "build" /
+                               "vcpkg_installed" / "x64-linux" / "tools" / "python3" / "python3";
+            if (fs::is_regular_file(vcpkg))
+                return vcpkg;
+        }
+        return "python3";
+    }
+
+    void convert_onnx_to_lfw(const fs::path& onnx_path, const fs::path& lfw_path) {
+        const auto script = find_nn_export_script();
+        if (script.empty()) {
+            throw std::runtime_error(
+                "Native inference needs " + path_to_string(lfw_path) +
+                " next to the ONNX. Could not find tools/nn_export/export_onnx_weights.py. Run:\n"
+                "  python3 tools/nn_export/export_onnx_weights.py --onnx " +
+                path_to_string(onnx_path) + " --out " + path_to_string(lfw_path) +
+                " --fp16 --moge2");
+        }
+        const auto python = find_python_for_export(script);
+        const fs::path tmp = lfw_path.string() + ".tmp";
+        const std::string cmd = path_to_string(python) + " " + path_to_string(script) +
+                                " --onnx " + path_to_string(onnx_path) + " --out " +
+                                path_to_string(tmp) + " --fp16 --moge2";
+        std::cout << "Converting ONNX weights to " << path_to_string(lfw_path) << "\n";
+        const int rc = std::system(cmd.c_str());
+        if (rc != 0 || !fs::is_regular_file(tmp)) {
+            remove_file_if_exists(tmp);
+            throw std::runtime_error(
+                "ONNX to .lfw conversion failed (status " + std::to_string(rc) +
+                "). Install the `onnx` package in that Python and run:\n  " + cmd);
+        }
+        replace_file(tmp, lfw_path);
     }
 
     fs::path legacy_model_path() {
@@ -854,6 +939,106 @@ namespace {
         std::string_view provider_;
     };
 
+    VectorMap tensor_to_vector3(const lfs::core::Tensor& tensor, int fallback_width,
+                                int fallback_height) {
+        auto cpu = tensor.to(lfs::core::DataType::Float32)
+                       .to(lfs::core::Device::CPU)
+                       .contiguous();
+        const auto shape = cpu.shape();
+        int width = fallback_width;
+        int height = fallback_height;
+        if (shape.rank() == 4 && shape[3] == 3) {
+            height = static_cast<int>(shape[1]);
+            width = static_cast<int>(shape[2]);
+        } else if (shape.rank() == 3 && shape[2] == 3) {
+            height = static_cast<int>(shape[0]);
+            width = static_cast<int>(shape[1]);
+        }
+        auto values = cpu.to_vector();
+        const std::size_t pixels = static_cast<std::size_t>(width) * height;
+        if (values.size() < pixels * 3)
+            throw std::runtime_error("Native normal/points tensor is smaller than expected");
+        values.resize(pixels * 3);
+        return VectorMap{.width = width, .height = height, .xyz_hwc = std::move(values)};
+    }
+
+    SpatialMap tensor_to_mask(const lfs::core::Tensor& tensor, int fallback_width,
+                              int fallback_height) {
+        auto cpu = tensor.to(lfs::core::DataType::Float32)
+                       .to(lfs::core::Device::CPU)
+                       .contiguous();
+        const auto shape = cpu.shape();
+        int width = fallback_width;
+        int height = fallback_height;
+        if (shape.rank() == 3) {
+            height = static_cast<int>(shape[shape.rank() - 2]);
+            width = static_cast<int>(shape[shape.rank() - 1]);
+        } else if (shape.rank() == 2) {
+            height = static_cast<int>(shape[0]);
+            width = static_cast<int>(shape[1]);
+        } else if (shape.rank() == 4) {
+            height = static_cast<int>(shape[2]);
+            width = static_cast<int>(shape[3]);
+        }
+        auto values = cpu.to_vector();
+        const std::size_t expected = static_cast<std::size_t>(width) * height;
+        if (values.size() < expected)
+            throw std::runtime_error("Native mask tensor is smaller than expected");
+        values.resize(expected);
+        return SpatialMap{.width = width, .height = height, .values = std::move(values)};
+    }
+
+    class NativeMogeSession {
+    public:
+        explicit NativeMogeSession(const fs::path& lfw_path) {
+            auto loaded = lfs::core::nn::models::Moge2::load(lfw_path, lfs::core::Device::CUDA);
+            if (!loaded)
+                throw std::runtime_error("Failed to load native MoGe-2 weights from " +
+                                         path_to_string(lfw_path) + ": " +
+                                         std::string(loaded.error().detail()));
+            model_ = std::move(*loaded);
+        }
+
+        OrtOutputs run(const Image& image, int64_t num_tokens) {
+            auto chw = hwc_to_nchw(image);
+            auto input = lfs::core::Tensor::from_vector(
+                chw,
+                lfs::core::TensorShape(std::vector<std::size_t>{
+                    1, 3, static_cast<std::size_t>(image.height),
+                    static_cast<std::size_t>(image.width)}),
+                lfs::core::Device::CUDA);
+            auto result = model_.forward(input, num_tokens);
+            if (!result)
+                throw std::runtime_error("Native MoGe-2 forward failed: " +
+                                         std::string(result.error().detail()));
+            return OrtOutputs{
+                .mask = tensor_to_mask(result->mask, image.width, image.height),
+                .points = tensor_to_vector3(result->points, image.width, image.height),
+                .normals = tensor_to_vector3(result->normal, image.width, image.height),
+            };
+        }
+
+        static constexpr std::string_view provider() { return "native"; }
+
+    private:
+        lfs::core::nn::models::Moge2 model_;
+    };
+
+    bool use_native_backend(lfs::core::param::InferenceBackend requested, const fs::path& lfw_path,
+                            bool convert_if_missing, const fs::path& onnx_path) {
+        if (requested == lfs::core::param::InferenceBackend::OnnxRuntime)
+            return false;
+        if (fs::is_regular_file(lfw_path))
+            return requested != lfs::core::param::InferenceBackend::OnnxRuntime;
+        if (requested == lfs::core::param::InferenceBackend::Native) {
+            if (!convert_if_missing)
+                throw std::runtime_error("Native weights not found: " + path_to_string(lfw_path));
+            convert_onnx_to_lfw(onnx_path, lfw_path);
+            return true;
+        }
+        return false;
+    }
+
     template <typename PixelT>
     std::vector<PixelT> build_depth_png(const SpatialMap& mask,
                                         const VectorMap& points,
@@ -1131,6 +1316,7 @@ namespace {
         std::cout << "Images: " << plan.images.size() << " under " << path_to_string(plan.images_dir) << "\n";
         std::cout << "Threads: " << resolve_thread_count(params.threads) << "\n";
         std::cout << "PNG compression: " << params.png_compression << "\n";
+        std::cout << "Inference backend: " << backend_name(params.inference_backend) << "\n";
     }
 
     void process_dataset(const lfs::core::param::PreprocessParameters& params,
@@ -1138,8 +1324,25 @@ namespace {
                          const PreprocessPlan& plan) {
         print_plan_summary(params, plan, &model_path);
 
-        MogeOnnxSession session(model_path, resolve_thread_count(params.threads), params.force_cpu);
-        std::cout << "Execution provider: " << session.provider() << "\n";
+        const fs::path lfw_path = lfw_path_for_onnx(model_path);
+        const bool native = use_native_backend(params.inference_backend, lfw_path, true, model_path);
+        std::unique_ptr<MogeOnnxSession> ort_session;
+        std::unique_ptr<NativeMogeSession> native_session;
+        if (native) {
+            native_session = std::make_unique<NativeMogeSession>(lfw_path);
+            std::cout << "Execution provider: " << NativeMogeSession::provider()
+                      << " (" << path_to_string(lfw_path) << ")\n";
+        } else {
+            ort_session = std::make_unique<MogeOnnxSession>(
+                model_path, resolve_thread_count(params.threads), params.force_cpu);
+            std::cout << "Execution provider: " << ort_session->provider() << "\n";
+        }
+
+        const auto run_inference = [&](const Image& image, int64_t num_tokens) {
+            if (native_session)
+                return native_session->run(image, num_tokens);
+            return ort_session->run(image, num_tokens);
+        };
 
         const auto load_job = [&params](const PreprocessJob& job) {
             LoadedImage loaded{.original = load_image_rgb(job.image_path)};
@@ -1166,19 +1369,23 @@ namespace {
 
         for (std::size_t i = 0; i < plan.jobs.size(); ++i) {
             const PreprocessJob& job = plan.jobs[i];
-            if (!bar)
-                std::cout << "[" << (i + 1) << "/" << plan.jobs.size() << "] " << path_to_string(job.image_path) << "\n";
+            if (!bar) {
+                std::cout << "[" << (i + 1) << "/" << plan.jobs.size() << "] "
+                          << path_to_string(job.image_path) << "\n";
+            }
 
             const LoadedImage loaded = pending_loads.front().get();
             pending_loads.pop_front();
             top_up_loads();
 
             const auto inference_start = std::chrono::steady_clock::now();
-            auto outputs = std::make_shared<const OrtOutputs>(session.run(loaded.inference, params.num_tokens));
+            auto outputs = std::make_shared<const OrtOutputs>(run_inference(loaded.inference, params.num_tokens));
             const double inference_ms =
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - inference_start).count();
             if (bar)
                 bar->report(i + 1, job.image_path.filename().string(), inference_ms);
+            else
+                std::cout << "  inference " << inference_ms << " ms\n";
 
             while (!writes.empty() && writes.front().wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
                 writes.front().get();

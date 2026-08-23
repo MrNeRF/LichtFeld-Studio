@@ -16,7 +16,8 @@ namespace lfs::core::nn::kernels {
         __global__ void im2col_kernel(const void* __restrict__ input, void* __restrict__ col,
                                       int n, int c, int h, int w, int k_h, int k_w, int out_h,
                                       int out_w, int stride_h, int stride_w, int pad_h, int pad_w,
-                                      int dil_h, int dil_w, int c_start, int c_count, bool is_half) {
+                                      int dil_h, int dil_w, int c_start, int c_count, int pad_mode,
+                                      bool is_half) {
             const int m = n * out_h * out_w;
             const int kk = c_count * k_h * k_w;
             const int total = m * kk;
@@ -34,9 +35,15 @@ namespace lfs::core::nn::kernels {
                 const int iw = ow * stride_w - pad_w + kw * dil_w;
                 const int ic = c_start + ci;
                 float v = 0.0f;
-                if (ih >= 0 && ih < h && iw >= 0 && iw < w && ic >= 0 && ic < c) {
+                int yh = ih;
+                int xw = iw;
+                if (pad_mode == 1) {
+                    yh = yh < 0 ? 0 : (yh >= h ? h - 1 : yh);
+                    xw = xw < 0 ? 0 : (xw >= w ? w - 1 : xw);
+                }
+                if (yh >= 0 && yh < h && xw >= 0 && xw < w && ic >= 0 && ic < c) {
                     const long long in_i =
-                        (((static_cast<long long>(ni) * c + ic) * h + ih) * w + iw);
+                        (((static_cast<long long>(ni) * c + ic) * h + yh) * w + xw);
                     v = device::ld_strided(input, in_i, is_half);
                 }
                 device::st_strided(col, idx, v, is_half);
@@ -166,7 +173,7 @@ namespace lfs::core::nn::kernels {
 
     void im2col(const void* input, void* col, int n, int c, int h, int w, int k_h, int k_w,
                 int out_h, int out_w, int stride_h, int stride_w, int pad_h, int pad_w,
-                int dil_h, int dil_w, int c_start, int c_count, DataType dtype,
+                int dil_h, int dil_w, int c_start, int c_count, int pad_mode, DataType dtype,
                 cudaStream_t stream) {
         const int total = n * out_h * out_w * c_count * k_h * k_w;
         if (total <= 0) {
@@ -174,7 +181,7 @@ namespace lfs::core::nn::kernels {
         }
         im2col_kernel<<<grid_for(total), 256, 0, stream>>>(
             input, col, n, c, h, w, k_h, k_w, out_h, out_w, stride_h, stride_w, pad_h, pad_w,
-            dil_h, dil_w, c_start, c_count, dtype == DataType::Float16);
+            dil_h, dil_w, c_start, c_count, pad_mode, dtype == DataType::Float16);
         LFS_CUDA_LAUNCH_CHECK(stream, "nn.conv.im2col");
     }
 
