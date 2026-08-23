@@ -198,6 +198,7 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.morton_reorder_interval")
             .precision(0)
             .ui_step(1000)
+            .flags(PROP_ADVANCED)
             .all_strategies()
             .float_prop(&OptimizationParameters::min_opacity,
                         "min_opacity", "Min Opacity", d.min_opacity, 0.0f, std::numeric_limits<float>::infinity(),
