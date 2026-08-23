@@ -739,6 +739,19 @@ namespace lfs::training {
                                     r_output.normal, prior, r_output.alpha)) {
                                 normal_values.push_back(*angle);
                             }
+                            if (_params.optimization.enable_save_eval_images &&
+                                std::getenv("LFS_EVAL_SAVE_NORMALS")) {
+                                const std::vector<lfs::core::Tensor> normal_maps = {
+                                    r_output.normal.clamp(-1.0f, 1.0f).mul(0.5f) + 0.5f,
+                                    prior.clamp(-1.0f, 1.0f).mul(0.5f) + 0.5f};
+                                lfs::core::image_io::save_images_async(
+                                    eval_dir / (std::to_string(image_idx) + "_normals.png"),
+                                    normal_maps,
+                                    true, // horizontal: rendered | prior
+                                    4,
+                                    lfs::core::provenance_to_json(
+                                        lfs::core::make_minimal_provenance_stamp()));
+                            }
                         }
                     }
                 }
