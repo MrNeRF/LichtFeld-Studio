@@ -5,6 +5,7 @@
 #include "core/export.hpp"
 #include "core/tensor.hpp"
 
+#include <array>
 #include <cstddef>
 #include <optional>
 #include <utility>
@@ -153,5 +154,19 @@ namespace lfs::core::nn {
     [[nodiscard]] LFS_CORE_API Tensor relu(const Tensor& input);
 
     [[nodiscard]] LFS_CORE_API Tensor cast(const Tensor& input, DataType dtype);
+
+    // qkv is [B, S, 3*H*D] or [B, S, 3, H, D]. Returns Q,K,V each [B, H, S, D].
+    [[nodiscard]] LFS_CORE_API std::array<Tensor, 3> split_qkv(const Tensor& qkv, int heads);
+
+    // context [B, H, S, D] -> [B, S, H*D].
+    [[nodiscard]] LFS_CORE_API Tensor merge_heads(const Tensor& context);
+
+    // MoGe-2 unit-circle UV encoding as NCHW [1, 2, H, W].
+    [[nodiscard]] LFS_CORE_API Tensor uv_grid(int height, int width, float aspect, DataType dtype,
+                                              Device device, cudaStream_t stream);
+
+    // y = x + hidden * gamma with gamma broadcast on the last dimension.
+    [[nodiscard]] LFS_CORE_API Tensor residual_scale(const Tensor& x, const Tensor& hidden,
+                                                     const Tensor& gamma);
 
 } // namespace lfs::core::nn

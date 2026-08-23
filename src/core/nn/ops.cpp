@@ -9,6 +9,7 @@
 #include "nn_kernels.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <format>
 #include <vector>
@@ -476,6 +477,7 @@ namespace lfs::core::nn {
             b_c = &b_s;
         }
 
+        pin_operands({&in_c, &w_c});
         const std::size_t bytes = conv2d_workspace_bytes(in_c.shape(), w_c.shape(), params, in_c.dtype());
         Tensor scratch = ensure_workspace(workspace, bytes, in_c, "conv2d");
         auto nhwc = empty_like_shape(
@@ -483,7 +485,6 @@ namespace lfs::core::nn {
                                                        static_cast<std::size_t>(out_h),
                                                        static_cast<std::size_t>(out_w),
                                                        static_cast<std::size_t>(cout)}});
-        pin_operands({&in_c, &w_c});
         const cudaStream_t stream = prepare_inputs_for_stream({&in_c, &w_c}, nhwc.stream());
         nhwc.set_stream(stream);
         scratch.set_stream(stream);
@@ -714,6 +715,101 @@ namespace lfs::core::nn {
     Tensor cast(const Tensor& input, DataType dtype) {
         tensor_contract::require_valid(input, "cast", "input", LFS_SOURCE_SITE_CURRENT());
         return input.to(dtype);
+    }
+
+    std::array<Tensor, 3> split_qkv(const Tensor& qkv, int heads) {
+        require_nn_tensor(qkv, "split_qkv", "qkv");
+        LFS_ASSERT_MSG(heads > 0, "split_qkv heads must be positive");
+        const Tensor in_c = qkv.contiguous();
+        LFS_ASSERT_MSG(in_c.ndim() == 3 || in_c.ndim() == 5, "split_qkv expects [B,S,3HD] or [B,S,3,H,D]");
+        const int b = static_cast<int>(in_c.shape()[0]);
+        const int seq = static_cast<int>(in_c.shape()[1]);
+        int d = 0;
+        if (in_c.ndim() == 5) {
+            LFS_ASSERT_MSG(static_cast<int>(in_c.shape()[3]) == heads, "split_qkv head count mismatch");
+            d = static_cast<int>(in_c.shape()[4]);
+        } else {
+            const int packed = static_cast<int>(in_c.shape()[2]);
+            LFS_ASSERT_MSG(packed % (3 * heads) == 0, "split_qkv packed width is not 3*H*D");
+            d = packed / (3 * heads);
+        }
+        const auto shape = TensorShape{std::vector<std::size_t>{
+            static_cast<std::size_t>(b), static_cast<std::size_t>(heads),
+            static_cast<std::size_t>(seq), static_cast<std::size_t>(d)}};
+        auto q = empty_like_shape(in_c, shape);
+        auto k = empty_like_shape(in_c, shape);
+        auto v = empty_like_shape(in_c, shape);
+        pin_operands({&in_c});
+        const cudaStream_t stream = prepare_inputs_for_stream({&in_c}, q.stream());
+        q.set_stream(stream);
+        k.set_stream(stream);
+        v.set_stream(stream);
+        kernels::split_qkv(raw(in_c), raw_mut(q), raw_mut(k), raw_mut(v), b, seq, heads, d,
+                           in_c.dtype(), stream);
+        return {std::move(q), std::move(k), std::move(v)};
+    }
+
+    Tensor merge_heads(const Tensor& context) {
+        require_nn_tensor(context, "merge_heads", "context");
+        LFS_ASSERT_MSG(context.ndim() == 4, "merge_heads expects [B, H, S, D]");
+        const Tensor in_c = context.contiguous();
+        const int b = static_cast<int>(in_c.shape()[0]);
+        const int heads = static_cast<int>(in_c.shape()[1]);
+        const int seq = static_cast<int>(in_c.shape()[2]);
+        const int d = static_cast<int>(in_c.shape()[3]);
+        auto out = empty_like_shape(
+            in_c, TensorShape{std::vector<std::size_t>{
+                      static_cast<std::size_t>(b), static_cast<std::size_t>(seq),
+                      static_cast<std::size_t>(heads) * static_cast<std::size_t>(d)}});
+        pin_operands({&in_c});
+        const cudaStream_t stream = prepare_inputs_for_stream({&in_c}, out.stream());
+        out.set_stream(stream);
+        kernels::merge_heads(raw(in_c), raw_mut(out), b, heads, seq, d, in_c.dtype(), stream);
+        return out;
+    }
+
+    Tensor uv_grid(int height, int width, float aspect, DataType dtype, Device device,
+                   cudaStream_t stream) {
+        LFS_ASSERT_MSG(height > 0 && width > 0, "uv_grid size must be positive");
+        LFS_ASSERT_MSG(device == Device::CUDA, "uv_grid requires CUDA");
+        LFS_ASSERT_MSG(dtype == DataType::Float16 || dtype == DataType::Float32,
+                       "uv_grid dtype must be float16 or float32");
+        const float span_x = aspect / std::sqrt(1.0f + aspect * aspect);
+        const float span_y = 1.0f / std::sqrt(1.0f + aspect * aspect);
+        const float u0 = -span_x * static_cast<float>(width - 1) / static_cast<float>(width);
+        const float u1 = span_x * static_cast<float>(width - 1) / static_cast<float>(width);
+        const float v0 = -span_y * static_cast<float>(height - 1) / static_cast<float>(height);
+        const float v1 = span_y * static_cast<float>(height - 1) / static_cast<float>(height);
+        auto out = Tensor::empty(
+            TensorShape{std::vector<std::size_t>{1, 2, static_cast<std::size_t>(height),
+                                                 static_cast<std::size_t>(width)}},
+            device, dtype);
+        out.set_stream(stream);
+        kernels::uv_grid(raw_mut(out), height, width, u0, u1, v0, v1, dtype, stream);
+        return out;
+    }
+
+    Tensor residual_scale(const Tensor& x, const Tensor& hidden, const Tensor& gamma) {
+        require_nn_tensor(x, "residual_scale", "x");
+        require_nn_tensor(hidden, "residual_scale", "hidden");
+        require_nn_tensor(gamma, "residual_scale", "gamma");
+        require_same_dtype_device(x, hidden, "residual_scale", "x", "hidden");
+        require_same_dtype_device(x, gamma, "residual_scale", "x", "gamma");
+        LFS_ASSERT_MSG(x.shape() == hidden.shape(), "residual_scale x/hidden shape mismatch");
+        const int cols = static_cast<int>(x.shape()[x.ndim() - 1]);
+        LFS_ASSERT_MSG(gamma.numel() == static_cast<std::size_t>(cols),
+                       "residual_scale gamma must match the last dim");
+        const Tensor x_c = x.contiguous();
+        const Tensor h_c = hidden.contiguous();
+        const Tensor g_c = gamma.contiguous();
+        auto out = empty_like_shape(x_c, x_c.shape());
+        pin_operands({&x_c, &h_c, &g_c});
+        const cudaStream_t stream = prepare_inputs_for_stream({&x_c, &h_c, &g_c}, out.stream());
+        out.set_stream(stream);
+        const int rows = static_cast<int>(x_c.numel() / static_cast<std::size_t>(cols));
+        kernels::residual_scale(raw(x_c), raw(h_c), raw(g_c), raw_mut(out), rows, cols, x_c.dtype(),
+                                stream);
+        return out;
     }
 
 } // namespace lfs::core::nn

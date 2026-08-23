@@ -4,6 +4,7 @@
 #include "core/cuda_error.hpp"
 #include "nn_device.cuh"
 #include "nn_kernels.hpp"
+#include "nn_nvtx.hpp"
 
 #include <algorithm>
 #include <cuda_fp16.h>
@@ -241,6 +242,7 @@ namespace lfs::core::nn::kernels {
 
     void layer_norm(const void* x, const void* weight, const void* bias, void* y, int rows,
                     int cols, float eps, DataType dtype, cudaStream_t stream) {
+        NvtxRange nvtx("nn.op/layer_norm");
         if (rows <= 0 || cols <= 0) {
             return;
         }
@@ -263,6 +265,7 @@ namespace lfs::core::nn::kernels {
 
     void gelu(const void* x, void* y, std::size_t n, int approx, DataType dtype,
               cudaStream_t stream) {
+        NvtxRange nvtx("nn.op/gelu");
         if (n == 0) {
             return;
         }
@@ -280,6 +283,7 @@ namespace lfs::core::nn::kernels {
     }
 
     void relu(const void* x, void* y, std::size_t n, DataType dtype, cudaStream_t stream) {
+        NvtxRange nvtx("nn.op/relu");
         if (n == 0) {
             return;
         }
@@ -301,6 +305,7 @@ namespace lfs::core::nn::kernels {
 
     void channel_bias(void* nchw, const void* bias, int n, int c, int spatial, DataType dtype,
                       cudaStream_t stream) {
+        NvtxRange nvtx("nn.op/channel_bias");
         const int total = n * c * spatial;
         if (total <= 0) {
             return;
@@ -314,6 +319,7 @@ namespace lfs::core::nn::kernels {
 
     void resize2d(const void* input, void* output, int n, int c, int in_h, int in_w, int out_h,
                   int out_w, int mode, int coord, DataType dtype, cudaStream_t stream) {
+        NvtxRange nvtx("nn.op/resize2d");
         const int total = n * c * out_h * out_w;
         if (total <= 0) {
             return;
@@ -324,6 +330,137 @@ namespace lfs::core::nn::kernels {
             input, output, n, c, in_h, in_w, out_h, out_w, mode, coord,
             dtype == DataType::Float16);
         LFS_CUDA_LAUNCH_CHECK(stream, "nn.resize2d");
+    }
+
+    __global__ void split_qkv_kernel(const void* __restrict__ qkv, void* __restrict__ q,
+                                     void* __restrict__ k, void* __restrict__ v, int batch,
+                                     int seq, int heads, int d, bool is_half) {
+        const int total = batch * seq * heads * d;
+        for (int idx = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x); idx < total;
+             idx += static_cast<int>(blockDim.x * gridDim.x)) {
+            const int dd = idx % d;
+            const int h = (idx / d) % heads;
+            const int s = (idx / (d * heads)) % seq;
+            const int b = idx / (d * heads * seq);
+            const long long src_q =
+                (((((static_cast<long long>(b) * seq + s) * 3 + 0) * heads + h) * d) + dd);
+            const long long src_k =
+                (((((static_cast<long long>(b) * seq + s) * 3 + 1) * heads + h) * d) + dd);
+            const long long src_v =
+                (((((static_cast<long long>(b) * seq + s) * 3 + 2) * heads + h) * d) + dd);
+            const long long dst =
+                ((((static_cast<long long>(b) * heads + h) * seq + s) * d) + dd);
+            device::st_strided(q, dst, device::ld_strided(qkv, src_q, is_half), is_half);
+            device::st_strided(k, dst, device::ld_strided(qkv, src_k, is_half), is_half);
+            device::st_strided(v, dst, device::ld_strided(qkv, src_v, is_half), is_half);
+        }
+    }
+
+    __global__ void merge_heads_kernel(const void* __restrict__ context, void* __restrict__ packed,
+                                       int batch, int heads, int seq, int d, bool is_half) {
+        const int total = batch * seq * heads * d;
+        for (int idx = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x); idx < total;
+             idx += static_cast<int>(blockDim.x * gridDim.x)) {
+            const int dd = idx % d;
+            const int h = (idx / d) % heads;
+            const int s = (idx / (d * heads)) % seq;
+            const int b = idx / (d * heads * seq);
+            const long long src =
+                ((((static_cast<long long>(b) * heads + h) * seq + s) * d) + dd);
+            const long long dst =
+                ((((static_cast<long long>(b) * seq + s) * heads + h) * d) + dd);
+            device::st_strided(packed, dst, device::ld_strided(context, src, is_half), is_half);
+        }
+    }
+
+    __global__ void uv_grid_kernel(void* __restrict__ output, int height, int width, float u0,
+                                   float u1, float v0, float v1, bool is_half) {
+        const int total = height * width;
+        for (int idx = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x); idx < total;
+             idx += static_cast<int>(blockDim.x * gridDim.x)) {
+            const int x = idx % width;
+            const int y = idx / width;
+            const float uu = (width == 1)
+                                 ? u0
+                                 : u0 + (u1 - u0) * static_cast<float>(x) /
+                                            static_cast<float>(width - 1);
+            const float vv = (height == 1)
+                                 ? v0
+                                 : v0 + (v1 - v0) * static_cast<float>(y) /
+                                            static_cast<float>(height - 1);
+            device::st_strided(output, idx, uu, is_half);
+            device::st_strided(output, static_cast<long long>(total) + idx, vv, is_half);
+        }
+    }
+
+    __global__ void residual_scale_kernel(const void* __restrict__ x, const void* __restrict__ hidden,
+                                          const void* __restrict__ gamma, void* __restrict__ y,
+                                          int rows, int cols, bool is_half) {
+        const int total = rows * cols;
+        for (int idx = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x); idx < total;
+             idx += static_cast<int>(blockDim.x * gridDim.x)) {
+            const int c = idx % cols;
+            const float xv = device::ld_strided(x, idx, is_half);
+            const float hv = device::ld_strided(hidden, idx, is_half);
+            const float g = device::ld_strided(gamma, c, is_half);
+            device::st_strided(y, idx, xv + hv * g, is_half);
+        }
+    }
+
+    void split_qkv(const void* qkv, void* q, void* k, void* v, int batch, int seq, int heads,
+                   int d, DataType dtype, cudaStream_t stream) {
+        NvtxRange nvtx("nn.op/split_qkv");
+        const int total = batch * seq * heads * d;
+        if (total <= 0) {
+            return;
+        }
+        const int block = 256;
+        const int grid = std::min(2048, (total + block - 1) / block);
+        split_qkv_kernel<<<grid, block, 0, stream>>>(qkv, q, k, v, batch, seq, heads, d,
+                                                     dtype == DataType::Float16);
+        LFS_CUDA_LAUNCH_CHECK(stream, "nn.split_qkv");
+    }
+
+    void merge_heads(const void* context, void* packed, int batch, int heads, int seq, int d,
+                     DataType dtype, cudaStream_t stream) {
+        NvtxRange nvtx("nn.op/merge_heads");
+        const int total = batch * seq * heads * d;
+        if (total <= 0) {
+            return;
+        }
+        const int block = 256;
+        const int grid = std::min(2048, (total + block - 1) / block);
+        merge_heads_kernel<<<grid, block, 0, stream>>>(context, packed, batch, heads, seq, d,
+                                                       dtype == DataType::Float16);
+        LFS_CUDA_LAUNCH_CHECK(stream, "nn.merge_heads");
+    }
+
+    void uv_grid(void* output, int height, int width, float u0, float u1, float v0, float v1,
+                 DataType dtype, cudaStream_t stream) {
+        NvtxRange nvtx("nn.op/uv_grid");
+        const int total = height * width;
+        if (total <= 0) {
+            return;
+        }
+        const int block = 256;
+        const int grid = std::min(2048, (total + block - 1) / block);
+        uv_grid_kernel<<<grid, block, 0, stream>>>(output, height, width, u0, u1, v0, v1,
+                                                   dtype == DataType::Float16);
+        LFS_CUDA_LAUNCH_CHECK(stream, "nn.uv_grid");
+    }
+
+    void residual_scale(const void* x, const void* hidden, const void* gamma, void* y, int rows,
+                        int cols, DataType dtype, cudaStream_t stream) {
+        NvtxRange nvtx("nn.op/residual_scale");
+        const int total = rows * cols;
+        if (total <= 0) {
+            return;
+        }
+        const int block = 256;
+        const int grid = std::min(2048, (total + block - 1) / block);
+        residual_scale_kernel<<<grid, block, 0, stream>>>(x, hidden, gamma, y, rows, cols,
+                                                          dtype == DataType::Float16);
+        LFS_CUDA_LAUNCH_CHECK(stream, "nn.residual_scale");
     }
 
 } // namespace lfs::core::nn::kernels

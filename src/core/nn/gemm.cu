@@ -4,6 +4,7 @@
 #include "core/cuda_error.hpp"
 #include "nn_device.cuh"
 #include "nn_kernels.hpp"
+#include "nn_nvtx.hpp"
 
 #include <algorithm>
 #include <cuda_fp16.h>
@@ -465,6 +466,7 @@ namespace lfs::core::nn::kernels {
               long long stride_a, long long stride_b, long long stride_c, int batch,
               bool trans_a, bool trans_b, const void* bias, int activation,
               DataType dtype, cudaStream_t stream) {
+        NvtxRange nvtx("nn.op/gemm");
         if (m <= 0 || n <= 0 || batch <= 0) {
             return;
         }

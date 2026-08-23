@@ -4,6 +4,7 @@
 #include "core/cuda_error.hpp"
 #include "nn_device.cuh"
 #include "nn_kernels.hpp"
+#include "nn_nvtx.hpp"
 
 #include <algorithm>
 #include <cuda_fp16.h>
@@ -175,6 +176,7 @@ namespace lfs::core::nn::kernels {
                 int out_h, int out_w, int stride_h, int stride_w, int pad_h, int pad_w,
                 int dil_h, int dil_w, int c_start, int c_count, int pad_mode, DataType dtype,
                 cudaStream_t stream) {
+        NvtxRange nvtx("nn.op/im2col");
         const int total = n * out_h * out_w * c_count * k_h * k_w;
         if (total <= 0) {
             return;
@@ -189,6 +191,7 @@ namespace lfs::core::nn::kernels {
                 int in_h, int in_w, int stride_h, int stride_w, int pad_h, int pad_w,
                 int dil_h, int dil_w, int c_start, int c_count, DataType dtype,
                 cudaStream_t stream) {
+        NvtxRange nvtx("nn.op/col2im");
         const int total = n * c_count * h * w;
         if (total <= 0) {
             return;

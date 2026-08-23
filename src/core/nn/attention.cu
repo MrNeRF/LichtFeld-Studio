@@ -4,6 +4,7 @@
 #include "core/cuda_error.hpp"
 #include "nn_device.cuh"
 #include "nn_kernels.hpp"
+#include "nn_nvtx.hpp"
 
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
@@ -172,11 +173,11 @@ namespace lfs::core::nn::kernels {
         }
 
         // fp16 tensor-core attention. Br query rows × one (batch, head).
-        // K/V stream in Bc-wide tiles. QKᵀ / PV on WMMA 16×16×16 with fp32
-        // accumulate; online softmax in fp32. Dpad must be 64 (ViT-B and any
-        // d<=64 padded to 64).
+        // Q stays in smem (scaled by 1/sqrt(d)); K/V stream in Bc tiles.
+        // P is packed into its own buffer so Q is not overwritten. O lives in
+        // registers so two blocks fit per SM on Ada (48 KB dynamic smem).
         template <int Br, int Bc, int D>
-        __global__ void __launch_bounds__(128, 3)
+        __global__ void __launch_bounds__(128, 2)
             flash_attn_wmma_kernel(const __half* __restrict__ q_ptr, const __half* __restrict__ k_ptr,
                                    const __half* __restrict__ v_ptr, const void* __restrict__ mask_ptr,
                                    __half* __restrict__ o_ptr, int batch, int heads, int n_q, int n_k,
@@ -196,8 +197,8 @@ namespace lfs::core::nn::kernels {
             auto* Qs = reinterpret_cast<__half*>(raw);
             auto* Ks = Qs + Br * D;
             auto* Vs = Ks + Bc * D;
-            auto* Ss = reinterpret_cast<float*>(Vs + Bc * D);
-            auto* Os = Ss + Br * Bc;
+            auto* Ps = Vs + Bc * D;
+            auto* Ss = reinterpret_cast<float*>(Ps + Br * Bc);
 
             const long long q_head =
                 (static_cast<long long>(b) * heads + h) * static_cast<long long>(n_q) * d;
@@ -214,18 +215,20 @@ namespace lfs::core::nn::kernels {
                 }
                 Qs[i] = val;
             }
-            for (int i = tid; i < Br * D; i += 128) {
-                Os[i] = 0.0f;
-            }
-            __syncthreads();
 
             const int row = tid;
             const bool softmax_lane = tid < Br;
             const bool valid_q = softmax_lane && (q0 + row) < n_q;
             float m_i = -FLT_MAX;
             float l_i = 0.0f;
+            float acc[D];
+#pragma unroll
+            for (int i = 0; i < D; ++i) {
+                acc[i] = 0.0f;
+            }
             const int warp = tid / 32;
             const int warp_row = warp * 16;
+            __syncthreads();
 
             for (int k0 = 0; k0 < n_k; k0 += Bc) {
                 for (int i = tid; i < Bc * D; i += 128) {
@@ -305,9 +308,7 @@ namespace lfs::core::nn::kernels {
                     if (valid_q) {
 #pragma unroll
                         for (int dd = 0; dd < D; ++dd) {
-                            if (dd < d) {
-                                Os[row * D + dd] *= alpha;
-                            }
+                            acc[dd] *= alpha;
                         }
                     }
                     l_i = l_i * alpha + l_add;
@@ -315,11 +316,8 @@ namespace lfs::core::nn::kernels {
                 }
                 __syncthreads();
 
-                // Pack P into Qs as fp16, [Br, Bc] with ld = D (D == Bc).
                 for (int i = tid; i < Br * Bc; i += 128) {
-                    const int r = i / Bc;
-                    const int c = i % Bc;
-                    Qs[r * D + c] = __float2half_rn(Ss[r * Bc + c]);
+                    Ps[i] = __float2half_rn(Ss[i]);
                 }
                 __syncthreads();
 
@@ -334,7 +332,7 @@ namespace lfs::core::nn::kernels {
                         fill_fragment(o_frag, 0.0f);
 #pragma unroll
                         for (int ns = 0; ns < Bc; ns += 16) {
-                            load_matrix_sync(p_frag, Qs + warp_row * D + ns, D);
+                            load_matrix_sync(p_frag, Ps + warp_row * Bc + ns, Bc);
                             load_matrix_sync(v_frag, Vs + ns * D + ds, D);
                             mma_sync(o_frag, p_frag, v_frag, o_frag);
                         }
@@ -348,7 +346,7 @@ namespace lfs::core::nn::kernels {
                     float sum = 0.0f;
                     if (c < d) {
                         for (int j = 0; j < Bc; ++j) {
-                            sum += __half2float(Qs[r * D + j]) * __half2float(Vs[j * D + c]);
+                            sum += __half2float(Ps[r * Bc + j]) * __half2float(Vs[j * D + c]);
                         }
                     }
                     Ss[r * Bc + c] = sum;
@@ -356,24 +354,13 @@ namespace lfs::core::nn::kernels {
 #endif
                 __syncthreads();
 
-                for (int i = tid; i < Br * D; i += 128) {
-                    const int r = i / D;
-                    const int c = i % D;
-                    if (c < d) {
-                        Os[r * D + c] += Ss[r * Bc + c];
+                if (valid_q) {
+#pragma unroll
+                    for (int dd = 0; dd < D; ++dd) {
+                        if (dd < d) {
+                            acc[dd] += Ss[row * Bc + dd];
+                        }
                     }
-                }
-                __syncthreads();
-
-                for (int i = tid; i < Br * D; i += 128) {
-                    const int r = i / D;
-                    const int c = i % D;
-                    const int q_row = q0 + r;
-                    __half val = __float2half(0.0f);
-                    if (c < d && q_row < n_q) {
-                        val = q_ptr[q_head + static_cast<long long>(q_row) * d + c];
-                    }
-                    Qs[i] = val;
                 }
                 __syncthreads();
             }
@@ -382,8 +369,11 @@ namespace lfs::core::nn::kernels {
                 const float inv = (l_i == 0.0f) ? 0.0f : 1.0f / l_i;
                 const int q_row = q0 + row;
                 const long long o_base = q_head + static_cast<long long>(q_row) * d;
-                for (int dd = 0; dd < d; ++dd) {
-                    o_ptr[o_base + dd] = __float2half_rn(Os[row * D + dd] * inv);
+#pragma unroll
+                for (int dd = 0; dd < D; ++dd) {
+                    if (dd < d) {
+                        o_ptr[o_base + dd] = __float2half_rn(acc[dd] * inv);
+                    }
                 }
             }
         }
@@ -465,8 +455,9 @@ namespace lfs::core::nn::kernels {
 
         int wmma_smem_bytes(int br, int bc, int dpad) {
             const int qkv = (br + bc + bc) * dpad * static_cast<int>(sizeof(__half));
-            const int so = (br * bc + br * dpad) * static_cast<int>(sizeof(float));
-            return qkv + so;
+            const int p = br * bc * static_cast<int>(sizeof(__half));
+            const int s = br * bc * static_cast<int>(sizeof(float));
+            return qkv + p + s;
         }
 
     } // namespace
@@ -475,6 +466,7 @@ namespace lfs::core::nn::kernels {
                    int batch, int heads, int n_q, int n_k, int d, float scale,
                    long long mask_sb, long long mask_sh, long long mask_sq, long long mask_sk,
                    bool has_mask, DataType dtype, cudaStream_t stream) {
+        NvtxRange nvtx("nn.op/attention");
         if (batch <= 0 || heads <= 0 || n_q <= 0 || d <= 0) {
             return;
         }

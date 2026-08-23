@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/alloc_counter.hpp"
 #include "core/nn.hpp"
 
 #include <array>
@@ -215,4 +216,34 @@ TEST(Moge2Test, FullModelParityIsOptIn) {
     }
     std::cout << "normal Linf=" << linf << "\n";
     EXPECT_LE(linf, kNormalLinf);
+
+    const char* home = std::getenv("HOME");
+    const std::string weights16 = (home && home[0])
+                                      ? std::string(home) + "/.lichtfeld/onnx/moge-2-vitb-normal.lfw"
+                                      : "";
+    if (!weights16.empty()) {
+        std::ifstream probe(weights16, std::ios::binary);
+        if (probe.good()) {
+            auto model16 = lfs::core::nn::models::Moge2::load(weights16, lfs::core::Device::CUDA,
+                                                              lfs::core::DataType::Float16);
+            ASSERT_TRUE(model16.has_value()) << std::string(model16.error().detail());
+            auto ran16 = model16->forward(image, num_tokens);
+            ASSERT_TRUE(ran16.has_value()) << std::string(ran16.error().detail());
+            const auto got16 = host_f32(ran16->normal);
+            ASSERT_EQ(got16.size(), vals.size());
+            float linf16 = 0.0f;
+            for (std::size_t i = 0; i < got16.size(); ++i) {
+                linf16 = std::max(linf16, std::abs(got16[i] - vals[i].get<float>()));
+            }
+            std::cout << "fp16 normal Linf=" << linf16 << "\n";
+            EXPECT_LE(linf16, 5e-3f);
+        }
+    }
+
+    const auto alloc0 = lfs::core::alloc_counter::snapshot();
+    auto again = model->forward(image, num_tokens);
+    ASSERT_TRUE(again.has_value()) << std::string(again.error().detail());
+    (void)again->normal.to(lfs::core::Device::CPU);
+    const auto driver_allocs = lfs::core::alloc_counter::delta_since(alloc0);
+    std::cout << "steady-state driver allocs=" << driver_allocs << "\n";
 }

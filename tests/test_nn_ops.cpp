@@ -6,6 +6,7 @@
 #include <cuda_runtime.h>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -169,7 +170,7 @@ namespace {
     std::vector<float> cpu_conv2d(const std::vector<float>& in, const std::vector<float>& w,
                                   const std::vector<float>* bias, int n, int cin, int h, int wi,
                                   int cout, int kh, int kw, int sh, int sw, int ph, int pw, int dh,
-                                  int dw, int groups) {
+                                  int dw, int groups, int pad_mode = 0) {
         const int cin_g = cin / groups;
         const int cout_g = cout / groups;
         const int oh = (h + 2 * ph - dh * (kh - 1) - 1) / sh + 1;
@@ -185,13 +186,15 @@ namespace {
                             for (int ic = 0; ic < cin_g; ++ic) {
                                 const int ic_g = g * cin_g + ic;
                                 for (int ky = 0; ky < kh; ++ky) {
-                                    const int iy = y * sh - ph + ky * dh;
-                                    if (iy < 0 || iy >= h) {
-                                        continue;
-                                    }
+                                    const int iy0 = y * sh - ph + ky * dh;
                                     for (int kx = 0; kx < kw; ++kx) {
-                                        const int ix = x * sw - pw + kx * dw;
-                                        if (ix < 0 || ix >= wi) {
+                                        const int ix0 = x * sw - pw + kx * dw;
+                                        int iy = iy0;
+                                        int ix = ix0;
+                                        if (pad_mode == 1) {
+                                            iy = std::clamp(iy, 0, h - 1);
+                                            ix = std::clamp(ix, 0, wi - 1);
+                                        } else if (iy < 0 || iy >= h || ix < 0 || ix >= wi) {
                                             continue;
                                         }
                                         const float iv =
@@ -445,6 +448,125 @@ TEST_F(NnOpsTest, Conv2dMatchesSevenLoop) {
     auto W1 = upload(w1, {6, 4, 3, 3}, lfs::core::DataType::Float32);
     auto Out1 = lfs::core::nn::conv2d(In, W1, &B, p1);
     EXPECT_TRUE(all_close(host_f32(Out1), ref1, 2e-5f, 2e-5f));
+}
+
+TEST_F(NnOpsTest, Conv2dDirect1x1And3x3) {
+    const int n = 1, cin = 4, h = 7, w = 9, cout = 5;
+    std::vector<float> in(n * cin * h * w), w1(cout * cin), b(cout);
+    std::vector<float> w3(cout * cin * 9);
+    for (int i = 0; i < static_cast<int>(in.size()); ++i) {
+        in[i] = std::sin(0.11f * i);
+    }
+    for (int i = 0; i < static_cast<int>(w1.size()); ++i) {
+        w1[i] = std::cos(0.07f * i) * 0.15f;
+    }
+    for (int i = 0; i < static_cast<int>(w3.size()); ++i) {
+        w3[i] = std::cos(0.05f * i) * 0.12f;
+    }
+    for (int i = 0; i < cout; ++i) {
+        b[i] = 0.02f * i;
+    }
+    const auto ref1 = cpu_conv2d(in, w1, &b, n, cin, h, w, cout, 1, 1, 1, 1, 0, 0, 1, 1, 1);
+    const auto ref3 = cpu_conv2d(in, w3, &b, n, cin, h, w, cout, 3, 3, 1, 1, 1, 1, 1, 1, 1);
+    for (const auto dtype : {lfs::core::DataType::Float32, lfs::core::DataType::Float16}) {
+        auto In = upload(in, {1, 4, 7, 9}, dtype);
+        auto W1 = upload(w1, {5, 4, 1, 1}, dtype);
+        auto W3 = upload(w3, {5, 4, 3, 3}, dtype);
+        auto B = upload(b, {5}, dtype);
+        lfs::core::nn::Conv2dParams p1;
+        auto Out1 = lfs::core::nn::conv2d(In, W1, &B, p1);
+        const float rtol = dtype == lfs::core::DataType::Float16 ? kF16Rtol : 2e-5f;
+        const float atol = dtype == lfs::core::DataType::Float16 ? kF16Atol : 2e-5f;
+        EXPECT_TRUE(all_close(host_f32(Out1), ref1, rtol, atol)) << "1x1 " << static_cast<int>(dtype);
+        lfs::core::nn::Conv2dParams p3;
+        p3.pad_h = 1;
+        p3.pad_w = 1;
+        auto Out3 = lfs::core::nn::conv2d(In, W3, &B, p3);
+        EXPECT_TRUE(all_close(host_f32(Out3), ref3, rtol, atol)) << "3x3 " << static_cast<int>(dtype);
+        p3.pad_mode = lfs::core::nn::ConvPadMode::Replicate;
+        auto OutR = lfs::core::nn::conv2d(In, W3, &B, p3);
+        EXPECT_EQ(OutR.shape()[2], 7u);
+        EXPECT_EQ(OutR.shape()[3], 9u);
+    }
+}
+
+TEST_F(NnOpsTest, Conv2dFp16Large3x3MatchesRef) {
+    const int n = 1, cin = 32, h = 16, w = 20, cout = 64;
+    std::vector<float> in(n * cin * h * w), wt(cout * cin * 9), bias(cout);
+    for (int i = 0; i < static_cast<int>(in.size()); ++i) {
+        in[i] = std::sin(0.013f * i);
+    }
+    for (int i = 0; i < static_cast<int>(wt.size()); ++i) {
+        wt[i] = std::cos(0.017f * i) * 0.08f;
+    }
+    for (int i = 0; i < cout; ++i) {
+        bias[i] = 0.01f * static_cast<float>(i);
+    }
+    const auto refz = cpu_conv2d(in, wt, &bias, n, cin, h, w, cout, 3, 3, 1, 1, 1, 1, 1, 1, 1);
+    auto In = upload(in, {1, 32, 16, 20}, lfs::core::DataType::Float16);
+    auto W = upload(wt, {64, 32, 3, 3}, lfs::core::DataType::Float16);
+    auto B = upload(bias, {64}, lfs::core::DataType::Float16);
+    lfs::core::nn::Conv2dParams p;
+    p.pad_h = 1;
+    p.pad_w = 1;
+    auto OutZ = lfs::core::nn::conv2d(In, W, &B, p);
+    EXPECT_TRUE(all_close(host_f32(OutZ), refz, kF16Rtol, kF16Atol));
+    p.pad_mode = lfs::core::nn::ConvPadMode::Replicate;
+    const auto refr = cpu_conv2d(in, wt, &bias, n, cin, h, w, cout, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1);
+    auto OutR = lfs::core::nn::conv2d(In, W, &B, p);
+    EXPECT_TRUE(all_close(host_f32(OutR), refr, kF16Rtol, kF16Atol)) << "3x3 replicate";
+}
+
+TEST_F(NnOpsTest, SplitQkvMergeHeadsAndResidual) {
+    const int b = 1, s = 5, h = 2, d = 4;
+    std::vector<float> qkv(b * s * 3 * h * d);
+    for (int i = 0; i < static_cast<int>(qkv.size()); ++i) {
+        qkv[i] = 0.01f * (i - 20);
+    }
+    auto QKV = upload(qkv, {1, 5, 3, 2, 4}, lfs::core::DataType::Float32);
+    auto split = lfs::core::nn::split_qkv(QKV, h);
+    auto merged = lfs::core::nn::merge_heads(split[0]);
+    EXPECT_EQ(merged.shape()[0], 1u);
+    EXPECT_EQ(merged.shape()[1], 5u);
+    EXPECT_EQ(merged.shape()[2], 8u);
+    std::vector<float> x(s * 8, 0.5f), hid(s * 8), gamma(8, 1.25f);
+    for (int i = 0; i < static_cast<int>(hid.size()); ++i) {
+        hid[i] = 0.1f * i;
+    }
+    auto X = upload(x, {5, 8}, lfs::core::DataType::Float32);
+    auto H = upload(hid, {5, 8}, lfs::core::DataType::Float32);
+    auto G = upload(gamma, {8}, lfs::core::DataType::Float32);
+    auto Y = lfs::core::nn::residual_scale(X, H, G);
+    std::vector<float> ref(x.size());
+    for (std::size_t i = 0; i < x.size(); ++i) {
+        ref[i] = x[i] + hid[i] * gamma[i % 8];
+    }
+    EXPECT_TRUE(all_close(host_f32(Y), ref, kF32Rtol, kF32Atol));
+}
+
+TEST_F(NnOpsTest, UvGridMatchesCpuFormula) {
+    const int height = 3, width = 5;
+    const float aspect = 1.5f;
+    auto t = lfs::core::nn::uv_grid(height, width, aspect, lfs::core::DataType::Float32,
+                                    lfs::core::Device::CUDA, nullptr);
+    const auto got = host_f32(t);
+    const float span_x = aspect / std::sqrt(1.0f + aspect * aspect);
+    const float span_y = 1.0f / std::sqrt(1.0f + aspect * aspect);
+    const float u0 = -span_x * static_cast<float>(width - 1) / static_cast<float>(width);
+    const float u1 = span_x * static_cast<float>(width - 1) / static_cast<float>(width);
+    const float v0 = -span_y * static_cast<float>(height - 1) / static_cast<float>(height);
+    const float v1 = span_y * static_cast<float>(height - 1) / static_cast<float>(height);
+    std::vector<float> ref(static_cast<std::size_t>(2) * height * width);
+    for (int y = 0; y < height; ++y) {
+        const float vv = v0 + (v1 - v0) * static_cast<float>(y) / static_cast<float>(height - 1);
+        for (int x = 0; x < width; ++x) {
+            const float uu = u0 + (u1 - u0) * static_cast<float>(x) / static_cast<float>(width - 1);
+            const std::size_t pix = static_cast<std::size_t>(y) * width + x;
+            ref[pix] = uu;
+            ref[static_cast<std::size_t>(height) * width + pix] = vv;
+        }
+    }
+    EXPECT_TRUE(all_close(got, ref, kF32Rtol, kF32Atol));
 }
 
 TEST_F(NnOpsTest, ConvTranspose2dBasic) {

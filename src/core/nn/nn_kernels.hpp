@@ -65,4 +65,19 @@ namespace lfs::core::nn::kernels {
     void channel_bias(void* nchw, const void* bias, int n, int c, int spatial, DataType dtype,
                       cudaStream_t stream);
 
+    // qkv is [B, S, 3, H, D] packed; q/k/v are [B, H, S, D].
+    void split_qkv(const void* qkv, void* q, void* k, void* v, int batch, int seq, int heads,
+                   int d, DataType dtype, cudaStream_t stream);
+
+    // context [B, H, S, D] -> packed [B, S, H, D].
+    void merge_heads(const void* context, void* packed, int batch, int heads, int seq, int d,
+                     DataType dtype, cudaStream_t stream);
+
+    void uv_grid(void* output, int height, int width, float u0, float u1, float v0, float v1,
+                 DataType dtype, cudaStream_t stream);
+
+    // y = x + hidden * gamma, gamma has `cols` elements.
+    void residual_scale(const void* x, const void* hidden, const void* gamma, void* y, int rows,
+                        int cols, DataType dtype, cudaStream_t stream);
+
 } // namespace lfs::core::nn::kernels
