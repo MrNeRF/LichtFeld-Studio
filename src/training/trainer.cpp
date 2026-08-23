@@ -8011,6 +8011,14 @@ namespace lfs::training {
                     }
                 }
             }
+            if (evaluator_) {
+                evaluator_->set_normal_prior_decode({
+                    .srgb = normal_prior_srgb_,
+                    .flip_yz = normal_prior_flip_yz_,
+                    .world_space = normal_prior_world_space_,
+                    .world_rotation = normal_prior_world_rotation_,
+                });
+            }
             if (params_.optimization.mask_mode != lfs::core::param::MaskMode::None) {
                 aux_pipeline_config.invert_masks = params_.optimization.invert_masks;
                 aux_pipeline_config.mask_threshold = params_.optimization.mask_threshold;

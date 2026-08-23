@@ -8,12 +8,14 @@
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -53,6 +55,8 @@ namespace lfs::training {
         int num_gaussians = 0;
         int iteration = 0;
         bool valid = false;
+        std::optional<float> normal_angle_deg;
+        std::optional<float> depth_absrel;
 
         [[nodiscard]] std::string to_string() const {
             if (!valid) {
@@ -64,11 +68,17 @@ namespace lfs::training {
                << ", SSIM: " << ssim
                << ", Time: " << elapsed_time << "s/image"
                << ", #GS: " << num_gaussians;
+            if (normal_angle_deg && std::isfinite(*normal_angle_deg)) {
+                ss << ", normal_angle_deg: " << *normal_angle_deg;
+            }
+            if (depth_absrel && std::isfinite(*depth_absrel)) {
+                ss << ", depth_absrel: " << *depth_absrel;
+            }
             return ss.str();
         }
 
         static std::string to_csv_header() {
-            return "iteration,psnr,ssim,time_per_image,num_gaussians";
+            return "iteration,psnr,ssim,time_per_image,num_gaussians,normal_angle_deg,depth_absrel";
         }
 
         [[nodiscard]] std::string to_csv_row() const {
@@ -78,10 +88,32 @@ namespace lfs::training {
                << psnr << ","
                << ssim << ","
                << elapsed_time << ","
-               << num_gaussians;
+               << num_gaussians << ",";
+            if (normal_angle_deg && std::isfinite(*normal_angle_deg)) {
+                ss << *normal_angle_deg;
+            }
+            ss << ",";
+            if (depth_absrel && std::isfinite(*depth_absrel)) {
+                ss << *depth_absrel;
+            }
             return ss.str();
         }
     };
+
+    [[nodiscard]] std::optional<float> mean_normal_angle_deg(
+        const lfs::core::Tensor& rendered_normal,
+        const lfs::core::Tensor& prior_normal,
+        const lfs::core::Tensor& rendered_alpha);
+
+    struct DepthAbsRelSample {
+        float u = 0.0f;
+        float v = 0.0f;
+        float true_depth = 0.0f;
+    };
+
+    [[nodiscard]] std::optional<float> median_depth_absrel(
+        const lfs::core::Tensor& rendered_depth,
+        const std::vector<DepthAbsRelSample>& samples);
 
     // Metrics reporter class
     class MetricsReporter {
@@ -110,6 +142,11 @@ namespace lfs::training {
         void set_appearance(AppearanceFn fn) { appearance_ = std::move(fn); }
         [[nodiscard]] bool has_appearance() const { return static_cast<bool>(appearance_); }
 
+        void set_normal_prior_decode(const lfs::core::Camera::NormalPriorDecode& decode) {
+            _normal_prior_decode = decode;
+        }
+
+
         // Check if evaluation is enabled
         bool is_enabled() const { return _params.optimization.enable_eval; }
 
@@ -137,6 +174,7 @@ namespace lfs::training {
     private:
         // Configuration
         const lfs::core::param::TrainingParameters _params;
+        lfs::core::Camera::NormalPriorDecode _normal_prior_decode{};
 
         // Metrics
         std::unique_ptr<PSNR> _psnr_metric;

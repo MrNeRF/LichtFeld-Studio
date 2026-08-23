@@ -2244,6 +2244,90 @@ namespace lfs::io {
         return PointCloud(std::move(means), std::move(colors_tensor));
     }
 
+    std::unordered_map<uint64_t, std::array<float, 3>>
+    load_colmap_point_positions_if_needed(const std::filesystem::path& base,
+                                          const std::vector<ImageData>& images,
+                                          const LoadOptions& options) {
+        std::unordered_map<uint64_t, std::array<float, 3>> points_xyz;
+        bool any_observations = false;
+        for (const auto& image : images) {
+            if (!image.points2D.empty()) {
+                any_observations = true;
+                break;
+            }
+        }
+        if (!any_observations) {
+            return points_xyz;
+        }
+
+        try {
+            const auto search_paths = get_colmap_search_paths(base);
+            const fs::path points_bin = find_file_in_paths(search_paths, "points3D.bin");
+            const fs::path points_txt = find_file_in_paths(search_paths, "points3D.txt");
+            std::vector<Point3DData> records;
+            if (!points_bin.empty()) {
+                records = read_point3D_binary_records(points_bin, options);
+            } else if (!points_txt.empty()) {
+                records = read_point3D_text_records(points_txt, options, TrackParseMode::CountOnly);
+            }
+            points_xyz.reserve(records.size());
+            for (const auto& point : records) {
+                if (!std::isfinite(point.xyz[0]) || !std::isfinite(point.xyz[1]) ||
+                    !std::isfinite(point.xyz[2])) {
+                    continue;
+                }
+                points_xyz.emplace(
+                    point.point3D_id,
+                    std::array<float, 3>{
+                        static_cast<float>(point.xyz[0]),
+                        static_cast<float>(point.xyz[1]),
+                        static_cast<float>(point.xyz[2])});
+            }
+        } catch (const std::exception& e) {
+            LOG_WARN("COLMAP SfM points unavailable for eval depth_absrel: {}", e.what());
+        }
+        return points_xyz;
+    }
+
+    void attach_sfm_observations(
+        Camera& camera,
+        const ImageData& image,
+        const CameraDataIntermediate& cam_data,
+        const std::unordered_map<uint64_t, std::array<float, 3>>& points_xyz) {
+        if (image.points2D.empty() || points_xyz.empty()) {
+            return;
+        }
+        const float u_scale =
+            cam_data.original_width > 0
+                ? static_cast<float>(cam_data.width) / static_cast<float>(cam_data.original_width)
+                : 1.0f;
+        const float v_scale =
+            cam_data.original_height > 0
+                ? static_cast<float>(cam_data.height) / static_cast<float>(cam_data.original_height)
+                : 1.0f;
+        std::vector<Camera::SfmObservation> observations;
+        observations.reserve(image.points2D.size());
+        for (const auto& point : image.points2D) {
+            if (point.point3D_id == INVALID_POINT3D_ID) {
+                continue;
+            }
+            const auto xyz = points_xyz.find(point.point3D_id);
+            if (xyz == points_xyz.end()) {
+                continue;
+            }
+            if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+                continue;
+            }
+            observations.push_back(Camera::SfmObservation{
+                .u = static_cast<float>(point.x) * u_scale,
+                .v = static_cast<float>(point.y) * v_scale,
+                .x = xyz->second[0],
+                .y = xyz->second[1],
+                .z = xyz->second[2]});
+        }
+        camera.set_sfm_observations(std::move(observations));
+    }
+
     // -----------------------------------------------------------------------------
     //  Assemble cameras with dimension verification
     // -----------------------------------------------------------------------------
@@ -2252,7 +2336,8 @@ namespace lfs::io {
                             const std::unordered_map<uint32_t, CameraDataIntermediate>& cam_map,
                             const std::vector<ImageData>& images,
                             const std::string& images_folder,
-                            const LoadOptions& options = {}) {
+                            const LoadOptions& options = {},
+                            const std::unordered_map<uint64_t, std::array<float, 3>>& points_xyz = {}) {
 
         LOG_TIMER_TRACE("Assemble COLMAP cameras");
 
@@ -2600,6 +2685,7 @@ namespace lfs::io {
                 normal_path);
 
             camera->precompute_undistortion();
+            attach_sfm_observations(*camera, img, cam_data, points_xyz);
             if (!image_file_present) {
                 camera->set_has_image(false);
                 missing_images.push_back(img.name);
@@ -3753,7 +3839,8 @@ namespace lfs::io {
                 return std::unexpected(validation.error());
             }
 
-            auto assembled = assemble_colmap_cameras(base, cam_map, images, images_folder, options);
+            auto points_xyz = load_colmap_point_positions_if_needed(base, images, options);
+            auto assembled = assemble_colmap_cameras(base, cam_map, images, images_folder, options, points_xyz);
             if (!assembled) {
                 return std::unexpected(assembled.error());
             }
@@ -3858,7 +3945,8 @@ namespace lfs::io {
             if (auto validation = validate_colmap_dataset_layout_impl(base, images_folder, images, options); !validation) {
                 return std::unexpected(validation.error());
             }
-            auto assembled = assemble_colmap_cameras(base, cam_map, images, images_folder, options);
+            auto points_xyz = load_colmap_point_positions_if_needed(base, images, options);
+            auto assembled = assemble_colmap_cameras(base, cam_map, images, images_folder, options, points_xyz);
             if (!assembled) {
                 return std::unexpected(assembled.error());
             }
