@@ -61,13 +61,11 @@ namespace fs = std::filesystem;
 
 namespace {
 
-    constexpr std::string_view kDefaultModelFile = "moge-2-vitb-normal.onnx";
+    constexpr std::string_view kDefaultModelFile = "moge-2-vitb-normal.lfw";
     constexpr std::string_view kDefaultModelUrl =
-        "https://github.com/MrNeRF/LichtFeld-Studio/releases/download/model-moge2-v1/moge-2-vitb-normal.onnx";
-    constexpr std::string_view kFallbackModelUrl =
-        "https://huggingface.co/Ruicheng/moge-2-vitb-normal-onnx/resolve/main/model.onnx";
+        "https://github.com/MrNeRF/LichtFeld-Studio/releases/download/model-moge2-v1/moge-2-vitb-normal.lfw";
     constexpr std::string_view kDefaultModelSha256 =
-        "bbf14e07a30f11e69d36ab861590123f5598ababcbc8946a063eb4a966f35a21";
+        "db1fbe8dcd6ff91f6cdb0369c3a31f9f04e1a71a8114573ef189593f10de9cd9";
 
     void remove_file_if_exists(const fs::path& path);
     void replace_file(const fs::path& source, const fs::path& destination);
@@ -476,17 +474,9 @@ namespace {
             }
         }
 
-        std::cout << "Downloading MoGe-2 ViT-B normal model (MIT license, (c) Microsoft) to "
+        std::cout << "Downloading MoGe-2 ViT-B normal model weights (MIT license, (c) Microsoft) to "
                   << path_to_string(path) << "\n";
-        try {
-            download_verified_file(kDefaultModelUrl, path, kDefaultModelSha256);
-        } catch (const DownloadIntegrityError&) {
-            throw;
-        } catch (const std::exception& e) {
-            std::cerr << "Primary download failed (" << e.what() << "); retrying from "
-                      << kFallbackModelUrl << "\n";
-            download_verified_file(kFallbackModelUrl, path, kDefaultModelSha256);
-        }
+        download_verified_file(kDefaultModelUrl, path, kDefaultModelSha256);
         require_sha256(path, kDefaultModelSha256, "Cached model");
         return path;
     }
