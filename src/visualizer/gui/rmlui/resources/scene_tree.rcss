@@ -146,6 +146,8 @@ body {
     min-height: 0;
     display: flex;
     flex-direction: column;
+    margin-left: 6dp;
+    margin-right: 6dp;
 }
 
 #search-icon {
@@ -193,10 +195,20 @@ scene-graph,
 #tree-container {
     flex: 1;
     display: block;
-    overflow: auto;
+    overflow-x: auto;
+    overflow-y: scroll;
     min-height: 0;
     position: relative;
     tab-index: auto;
+}
+
+/* Match the compact Training parameter scrollbar without hiding scroll state. */
+scene-graph scrollbarvertical {
+    width: 4dp;
+}
+
+scene-graph scrollbarvertical sliderbar {
+    min-height: 12dp;
 }
 
 .scene-graph-content {
@@ -608,8 +620,147 @@ scene-graph,
 .row-icon.trash-icon {
     width: 14dp;
     height: 14dp;
-    margin-right: 2dp;
-    image-color: rgba(180, 80, 80, 178);
+    margin-left: 2dp;
+    margin-right: 0;
+    flex-shrink: 0;
+    image-color: rgba(230, 90, 90, 210);
+}
+
+.tree-row.keyboard-cursor {
+    border-left-width: 2dp;
+    border-left-color: rgba(245, 194, 107, 210);
+}
+
+.tree-checkbox {
+    display: inline-block;
+    position: absolute;
+    left: 5dp;
+    top: 5dp;
+    width: 9dp;
+    height: 9dp;
+    box-sizing: border-box;
+    border-width: 1dp;
+    border-color: rgba(166, 173, 200, 90);
+    border-radius: 5dp;
+    background-color: rgba(166, 173, 200, 10);
+    color: rgba(166, 173, 200, 150);
+    font-size: 8dp;
+    line-height: 7dp;
+    text-align: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    z-index: 2;
+}
+
+.tree-checkbox:hover {
+    border-color: rgba(137, 180, 250, 155);
+    background-color: rgba(137, 180, 250, 35);
+}
+
+.tree-checkbox.checked {
+    border-color: rgba(137, 180, 250, 185);
+    background-color: rgba(137, 180, 250, 145);
+}
+
+.tree-checkbox.mixed {
+    border-color: rgba(137, 180, 250, 145);
+    background-color: rgba(137, 180, 250, 24);
+}
+
+.selection-action-bar {
+    display: none;
+    align-items: center;
+    box-sizing: border-box;
+    flex-shrink: 0;
+    height: 27dp;
+    margin-top: 2dp;
+    padding: 2dp 1dp 2dp 6dp;
+    border-top-width: 1dp;
+}
+
+.selection-action-count {
+    font-size: 11dp;
+    height: 22dp;
+    line-height: 22dp;
+    white-space: nowrap;
+}
+
+#selection-clear {
+    margin-left: 3dp;
+}
+
+.selection-action-spacer {
+    flex: 1;
+    min-width: 3dp;
+}
+
+.selection-action-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    width: 22dp;
+    height: 22dp;
+    padding: 0;
+    margin-left: 1dp;
+    border-width: 0;
+    background-color: transparent;
+    cursor: pointer;
+}
+
+.selection-action-button img {
+    display: block;
+    width: 14dp;
+    height: 14dp;
+}
+
+.selection-action-button.disabled {
+    opacity: 0.28;
+    cursor: default;
+}
+
+
+.row-actions {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    margin-left: auto;
+    margin-right: -11dp;
+    padding-left: 4dp;
+    padding-right: 3dp;
+}
+
+.row-action-slot {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    width: 23dp;
+    height: 20dp;
+    flex-shrink: 0;
+}
+
+.row-action-slot .row-icon {
+    margin-left: 0;
+    margin-right: 0;
+}
+
+.row-icon.training-toggle-icon {
+    width: 14dp;
+    height: 14dp;
+    margin-left: 0;
+    margin-right: 0;
+    flex-shrink: 0;
+}
+
+.training-mixed-mark {
+    position: absolute;
+    right: 1dp;
+    bottom: 3dp;
+    width: 6dp;
+    height: 2dp;
+    border-radius: 1dp;
+    pointer-events: none;
 }
 
 .row-icon.trash-icon:hover {
@@ -622,6 +773,9 @@ scene-graph,
 
 .node-name {
     display: block;
+    min-width: 0;
+    flex-grow: 1;
+    flex-shrink: 1;
     color: #cdd6f4;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -636,7 +790,10 @@ scene-graph,
 /* Inline rename input */
 .rename-input {
     display: inline;
-    width: 150dp;
+    min-width: 0;
+    width: auto;
+    flex-grow: 1;
+    flex-shrink: 1;
     padding: 2dp 4dp;
     font-size: 12dp;
     color: #cdd6f4;

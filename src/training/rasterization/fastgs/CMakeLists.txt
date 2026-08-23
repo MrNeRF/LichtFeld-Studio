@@ -11,6 +11,7 @@ set(FASTLFS_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/rasterization/src/backward.cu
         # optimizer
         ${CMAKE_CURRENT_SOURCE_DIR}/optimizer/src/adam_api.cu
+        ${CMAKE_CURRENT_SOURCE_DIR}/optimizer/src/adam_shN_joint.cu
 )
 
 # One unified library - renamed from fastgs_backend to fastlfs_backend

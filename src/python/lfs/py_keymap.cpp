@@ -182,7 +182,10 @@ namespace lfs::python {
             .value("OPEN_PREFERENCES", Action::OPEN_PREFERENCES)
             .value("TOGGLE_MCP_SERVER", Action::TOGGLE_MCP_SERVER)
             .value("TOGGLE_MCP_BINDING", Action::TOGGLE_MCP_BINDING)
-            .value("TOGGLE_GRID", Action::TOGGLE_GRID);
+            .value("TOGGLE_GRID", Action::TOGGLE_GRID)
+            .value("SELECT_ALL_SCENE_NODES", Action::SELECT_ALL_SCENE_NODES)
+            .value("TOGGLE_SCENE_SELECTION_VISIBILITY", Action::TOGGLE_SCENE_SELECTION_VISIBILITY)
+            .value("TOGGLE_SCENE_SELECTION_TRAINING", Action::TOGGLE_SCENE_SELECTION_TRAINING);
 
         // Expose ToolMode enum
         nb::enum_<ToolMode>(keymap, "ToolMode")

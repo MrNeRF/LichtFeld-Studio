@@ -110,8 +110,11 @@ namespace lfs::vis {
 
         [[nodiscard]] std::expected<void, std::string> canRemoveNode(core::NodeId id) const;
         [[nodiscard]] std::expected<void, std::string> removePLYWithResult(std::string name, bool keep_children = false);
-        [[nodiscard]] std::expected<void, std::string> removeNodesWithResult(const std::vector<std::string>& names,
-                                                                             bool keep_children = false);
+        using BatchNodeRemovalResult = std::expected<void, std::string>;
+        [[nodiscard]] BatchNodeRemovalResult removeNodesWithResult(const std::vector<std::string>& names,
+                                                                   bool keep_children = false);
+        [[nodiscard]] BatchNodeRemovalResult removeNodesByIdsWithResult(const std::vector<core::NodeId>& ids,
+                                                                        bool keep_children = false);
         size_t publishLiveCameraCount();
         void removePLY(std::string name, bool keep_children = false);
         void setPLYVisibility(std::string name, bool visible);
@@ -132,6 +135,7 @@ namespace lfs::vis {
         void clearSelection();
         [[nodiscard]] std::string getSelectedNodeName() const;
         [[nodiscard]] std::vector<std::string> getSelectedNodeNames() const;
+        [[nodiscard]] std::vector<core::NodeId> getSelectedNodeIds() const;
         [[nodiscard]] bool hasSelectedNode() const;
         [[nodiscard]] core::NodeType getSelectedNodeType() const;
         [[nodiscard]] std::vector<bool> getSelectedNodeMask() const;

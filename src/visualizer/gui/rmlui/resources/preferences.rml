@@ -181,6 +181,20 @@
         </div>
       </div>
 
+      <div class="preferences-section preferences-scene-graph-section" data-if="show_interface">
+        <div class="section-header text-accent" data-class-is-expanded="scene_graph_expanded" data-event-click="toggle_section('scene_graph')">
+          <span class="section-arrow text-accent" data-class-is-expanded="scene_graph_expanded">&#x25B6;</span>
+          <span class="text-accent">@tr:preferences.scene_graph</span>
+        </div>
+        <div class="section-content" data-if="scene_graph_expanded">
+          <div class="preferences-row preferences-checkbox-row preferences-interface-option">
+            <span class="preferences-label">@tr:preferences.scene_graph_selection_markers</span>
+            <input type="checkbox" data-checked="scene_graph_selection_markers" data-attrif-disabled="mcp_safe_mode" />
+          </div>
+          <span class="preferences-description">@tr:preferences.scene_graph_selection_markers_description</span>
+        </div>
+      </div>
+
       <div class="preferences-section" data-if="show_file_associations">
         <div class="section-header text-accent" data-class-is-expanded="file_associations_expanded" data-event-click="toggle_section('file_associations')">
           <span class="section-arrow text-accent" data-class-is-expanded="file_associations_expanded">&#x25B6;</span>

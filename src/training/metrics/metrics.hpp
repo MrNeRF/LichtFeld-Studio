@@ -10,6 +10,7 @@
 #include "core/tensor.hpp"
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -103,6 +104,12 @@ namespace lfs::training {
     public:
         explicit MetricsEvaluator(const lfs::core::param::TrainingParameters& params);
 
+        using AppearanceFn =
+            std::function<lfs::core::Tensor(const lfs::core::Tensor& rgb_chw, const lfs::core::Camera& cam)>;
+
+        void set_appearance(AppearanceFn fn) { appearance_ = std::move(fn); }
+        [[nodiscard]] bool has_appearance() const { return static_cast<bool>(appearance_); }
+
         // Check if evaluation is enabled
         bool is_enabled() const { return _params.optimization.enable_eval; }
 
@@ -135,6 +142,7 @@ namespace lfs::training {
         std::unique_ptr<PSNR> _psnr_metric;
         std::unique_ptr<SSIM> _ssim_metric;
         std::unique_ptr<MetricsReporter> _reporter;
+        AppearanceFn appearance_;
 
         // Helper functions
         lfs::core::Tensor load_eval_mask(lfs::core::Camera* cam, lfs::core::Tensor& gt_image,

@@ -162,6 +162,10 @@ namespace lfs::vis {
             }
             [[nodiscard]] std::string scenePanelActiveTab() const;
             void setScenePanelActiveTab(std::string_view tab);
+            [[nodiscard]] bool selectAllSceneNodesIfFocused();
+            [[nodiscard]] bool toggleSceneSelectionVisibilityIfFocused();
+            [[nodiscard]] bool toggleSceneSelectionTrainingIfFocused();
+            [[nodiscard]] bool requestDeleteSceneSelectionIfAvailable();
             [[nodiscard]] SceneTreeSessionChrome captureSceneTreeChrome(
                 const lfs::core::Scene& scene) const;
             void applySceneTreeChrome(const SceneTreeSessionChrome& chrome);

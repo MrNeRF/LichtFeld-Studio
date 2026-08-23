@@ -383,6 +383,10 @@ EXPECTED_CHECKBOX_ROWS = {
     "undistort": ("training_params.undistort", "training.tooltip.undistort"),
     "mip_filter": ("training_params.mip_filter", "training.tooltip.mip_filter"),
     "ppisp": ("training_params.ppisp", "training.tooltip.ppisp"),
+    "ppisp_exposure_from_exif": (
+        "training_params.ppisp_exposure_from_exif",
+        "training.tooltip.ppisp_exposure_from_exif",
+    ),
     "ppisp_use_controller": (
         "training_params.ppisp_controller",
         "training.tooltip.ppisp_controller",
@@ -478,13 +482,13 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     assert property_view.NUMBER_PROPS == tuple(EXPECTED_NUMBER_ROWS)
     assert property_view.BOOL_PROPS == tuple(EXPECTED_CHECKBOX_ROWS)
     assert property_view.SELECT_PROPS == tuple(EXPECTED_SELECT_ROWS)
-    assert len(property_view.MIGRATED_PROP_IDS) == 54
-    assert len(set(property_view.MIGRATED_PROP_IDS)) == 54
+    assert len(property_view.MIGRATED_PROP_IDS) == 55
+    assert len(set(property_view.MIGRATED_PROP_IDS)) == 55
 
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(rendered) == len(set(rendered)) == 68
+    assert len(rendered) == len(set(rendered)) == 69
     assert set(rendered) == (
         set(property_view.MIGRATED_PROP_IDS) | set(EXPECTED_ADVANCED_IDS)
     ) - set(property_view.BESPOKE_OR_HIDDEN)

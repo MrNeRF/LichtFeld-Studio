@@ -9,12 +9,24 @@
 
 namespace fast_lfs::optimizer {
 
+    struct JointContiguousBatchEntry {
+        float* param = nullptr;
+        std::uint8_t* packed = nullptr;
+        float* bounds = nullptr;
+        const float* grad = nullptr;
+        int n_prims = 0;
+        int n_attr = 0;
+        float lr = 0.0f;
+        float bias_correction1_rcp = 1.0f;
+        float bias_correction2_sqrt_rcp = 1.0f;
+    };
+
     // Pure CUDA interface - no torch dependencies
 
     // Non-fused joint (u,log_s) Adam step for contiguous [n_prims, n_attr] parameters.
     // Launches one 256-thread block per joint-bounds block (blockIdx.x is the bounds row).
-    // bits is the joint codec cell width and is 16 for the non-SH parameters this path
-    // serves; shN (8-bit cells) is fused-only and rejected here.
+    // bits is the joint codec cell width (8 or 16). Swizzled shN uses
+    // adam_step_shN_joint_from_grad instead of this contiguous step.
     void adam_step_joint_contiguous_raw(
         float* param,
         std::uint8_t* packed,
@@ -34,6 +46,50 @@ namespace fast_lfs::optimizer {
         float beta2,
         float eps,
         float bias_correction1_rcp,
+        float bias_correction2_sqrt_rcp,
+        cudaStream_t stream = nullptr);
+
+    // One launch over a device table of contiguous joint params (means/sh0/scale/rot/opa).
+    void adam_step_joint_contiguous_batched(
+        const JointContiguousBatchEntry* host_entries,
+        int n_entries,
+        const bool* frozen_mask,
+        int frozen_mask_size,
+        float frozen_lr_scale,
+        const bool* crop_damping_mask,
+        int crop_damping_mask_size,
+        float cropbox_lr_scale,
+        float beta1,
+        float beta2,
+        float eps,
+        cudaStream_t stream = nullptr);
+
+    // Standalone joint 8-bit shN Adam over a swizzled fp32 gradient buffer.
+    // Reuses apply_shN_grads_packed_joint (same device code as fused FastGS).
+    // Grid is ceil(n_prims/256) blocks of 256 threads; blockIdx.x is the bounds row.
+    // active_sh_bases is 4/9/16 for SH degree 1/2/3. sh_value_bits is 0 (fp32),
+    // 16 with bounds (q16), or 16 without bounds (IEEE f16 swizzle).
+    void adam_step_shN_joint_from_grad(
+        float* param,
+        std::uint8_t* packed,
+        float* bounds,
+        float* sh_value_bounds,
+        const float* shN_grad,
+        const bool* frozen_mask,
+        int frozen_mask_size,
+        float frozen_lr_scale,
+        const bool* crop_damping_mask,
+        int crop_damping_mask_size,
+        float cropbox_lr_scale,
+        int n_prims,
+        int sh_layout_slots,
+        int active_sh_bases,
+        int sh_value_bits,
+        int sh_value_n_cells,
+        float step_size,
+        float beta1,
+        float beta2,
+        float eps,
         float bias_correction2_sqrt_rcp,
         cudaStream_t stream = nullptr);
 

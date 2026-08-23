@@ -513,6 +513,12 @@ namespace lfs::core::param {
             .locale("training_params.ppisp")
             .tooltip("training.tooltip.ppisp")
             .all_strategies()
+            .bool_prop(&OptimizationParameters::ppisp_exposure_from_exif,
+                       "ppisp_exposure_from_exif", "EXIF Exposure", d.ppisp_exposure_from_exif,
+                       "Seed per-frame PPISP exposure from image EXIF")
+            .locale("training_params.ppisp_exposure_from_exif")
+            .tooltip("training.tooltip.ppisp_exposure_from_exif")
+            .all_strategies()
             .float_prop(&OptimizationParameters::ppisp_lr,
                         "ppisp_lr", "PPISP Learning Rate", d.ppisp_lr, 0.0f, 0.1f,
                         "Learning rate for PPISP parameters")

@@ -136,6 +136,9 @@ namespace lfs::vis::input {
         TOGGLE_MCP_SERVER,
         TOGGLE_MCP_BINDING,
         TOGGLE_GRID,
+        SELECT_ALL_SCENE_NODES,
+        TOGGLE_SCENE_SELECTION_VISIBILITY,
+        TOGGLE_SCENE_SELECTION_TRAINING,
 
     };
 

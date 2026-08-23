@@ -249,6 +249,15 @@ def preferences_panel_module(monkeypatch):
             DELETE_SELECTED=SimpleNamespace(name="DELETE_SELECTED", value=73),
             BRUSH_RESIZE=SimpleNamespace(name="BRUSH_RESIZE", value=74),
             DELETE_NODE=SimpleNamespace(name="DELETE_NODE", value=75),
+            SELECT_ALL_SCENE_NODES=SimpleNamespace(
+                name="SELECT_ALL_SCENE_NODES", value=82
+            ),
+            TOGGLE_SCENE_SELECTION_VISIBILITY=SimpleNamespace(
+                name="TOGGLE_SCENE_SELECTION_VISIBILITY", value=83
+            ),
+            TOGGLE_SCENE_SELECTION_TRAINING=SimpleNamespace(
+                name="TOGGLE_SCENE_SELECTION_TRAINING", value=84
+            ),
         ),
         get_available_profiles=lambda: ["Default"],
         get_current_profile=lambda: "Default",
@@ -634,7 +643,7 @@ def test_safe_mode_disables_preferences_and_status_bar_mcp_controls():
     preferences = (resources / "preferences.rml").read_text(encoding="utf-8")
     status_bar = (resources / "statusbar.rml").read_text(encoding="utf-8")
 
-    assert preferences.count('data-attrif-disabled="mcp_safe_mode"') == 7
+    assert preferences.count('data-attrif-disabled="mcp_safe_mode"') == 8
     assert preferences.count('data-class-disabled="mcp_safe_mode"') == 2
     assert (
         '<button id="mcp-toggle" data-class-is-on="mcp_server_enabled" '

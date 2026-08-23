@@ -9,7 +9,7 @@
   <span class="status-text status-muted" data-if="show_no_trainer">{{label_no_trainer}}</span>
   <span class="status-text status-muted" data-if="show_no_params">{{label_no_params}}</span>
 
-  <div data-if="show_main">
+  <div class="training-panel-layout" data-if="show_main">
 
   <!-- ── Controls ──────────────────────────────────────── -->
   <div id="controls">
@@ -52,12 +52,49 @@
   </div>
 
   <!-- ── Training Parameters ── -->
-  <div class="training-search-row">
-    <input type="text" class="number-input training-search-input"
-           placeholder="{{pv_search_placeholder}}" data-value="pv_search_query" />
-    <button type="button" class="btn btn--secondary training-search-clear"
-            data-if="pv_search_active" data-event-click="pv_search_clear">{{label_clear}}</button>
+  <div id="training-search-container">
+    <img id="training-search-icon" src="../icon/scene/search.png" />
+    <input id="training-search-input" type="text" data-value="pv_search_query" />
+    <button id="training-search-clear" type="button"
+            data-if="pv_search_active" data-event-click="pv_search_clear">
+      <img src="../icon/scene/x.png" />
+    </button>
   </div>
+
+  <!-- Training telemetry remains visible while parameter rows scroll independently. -->
+  <div class="section-gap training-telemetry" data-if="show_training_telemetry">
+    <span class="status-text text-default training-status-line">{{status_mode}}</span>
+    <span class="status-text text-default training-status-line">{{status_iteration}}</span>
+    <span class="status-text text-default training-status-line">{{status_gaussians}}</span>
+    <div class="training-progress-wrap">
+      <progress id="training-progress" max="1" data-attr-value="progress_value" />
+      <span class="progress__text">{{progress_text}}</span>
+    </div>
+    <div id="loss-graph-container">
+      <span id="loss-label" class="status-text text-default training-status-line">{{loss_label}}</span>
+      <div class="loss-graph-wrap">
+        <div class="loss-graph-ticks">
+          <span id="loss-tick-max" class="loss-tick">{{loss_tick_max}}</span>
+          <span id="loss-tick-mid" class="loss-tick">{{loss_tick_mid}}</span>
+          <span id="loss-tick-min" class="loss-tick">{{loss_tick_min}}</span>
+        </div>
+        <loss-graph id="loss-graph-el" />
+      </div>
+    </div>
+    <div id="psnr-graph-container" data-if="dep_eval">
+      <span id="psnr-label" class="status-text text-default training-status-line">{{psnr_label}}</span>
+      <div class="loss-graph-wrap">
+        <div class="loss-graph-ticks">
+          <span id="psnr-tick-max" class="loss-tick">{{psnr_tick_max}}</span>
+          <span id="psnr-tick-mid" class="loss-tick">{{psnr_tick_mid}}</span>
+          <span id="psnr-tick-min" class="loss-tick">{{psnr_tick_min}}</span>
+        </div>
+        <loss-graph id="psnr-graph-el" />
+      </div>
+    </div>
+  </div>
+
+  <div class="training-scroll-region">
   <div class="training-panel-title" data-if="pv_section_basic_params_visible">
     <img class="training-panel-title-icon" src="../icon/settings.png" />
     <span>{{pv_header_basic_params}}</span>
@@ -624,40 +661,7 @@
     </div>
   </div>
 
-  <!-- ── Status Section ────────────────────────────────── -->
-  <div class="section-gap">
-    <span class="status-text text-default training-status-line">{{status_mode}}</span>
-    <span class="status-text text-default training-status-line">{{status_iteration}}</span>
-    <span class="status-text text-default training-status-line">{{status_gaussians}}</span>
-    <div data-if="show_progress">
-      <div class="training-progress-wrap">
-        <progress id="training-progress" max="1" data-attr-value="progress_value" />
-        <span class="progress__text">{{progress_text}}</span>
-      </div>
-    </div>
-    <div id="loss-graph-container">
-      <span id="loss-label" class="status-text text-default training-status-line">{{loss_label}}</span>
-      <div class="loss-graph-wrap">
-        <div class="loss-graph-ticks">
-          <span id="loss-tick-max" class="loss-tick">{{loss_tick_max}}</span>
-          <span id="loss-tick-mid" class="loss-tick">{{loss_tick_mid}}</span>
-          <span id="loss-tick-min" class="loss-tick">{{loss_tick_min}}</span>
-        </div>
-        <loss-graph id="loss-graph-el" />
-      </div>
-    </div>
-    <div id="psnr-graph-container" data-if="dep_eval">
-      <span id="psnr-label" class="status-text text-default training-status-line">{{psnr_label}}</span>
-      <div class="loss-graph-wrap">
-        <div class="loss-graph-ticks">
-          <span id="psnr-tick-max" class="loss-tick">{{psnr_tick_max}}</span>
-          <span id="psnr-tick-mid" class="loss-tick">{{psnr_tick_mid}}</span>
-          <span id="psnr-tick-min" class="loss-tick">{{psnr_tick_min}}</span>
-        </div>
-        <loss-graph id="psnr-graph-el" />
-      </div>
-    </div>
-  </div>
+  </div><!-- /training-scroll-region -->
 
   <div id="color-picker-popup" class="color-picker-popup">
     <color-picker id="color-picker-el"

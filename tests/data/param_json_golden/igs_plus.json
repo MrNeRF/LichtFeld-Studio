@@ -55,6 +55,7 @@
   "opacity_reg": 0.0,
   "ppisp_controller_activation_step": -1,
   "ppisp_controller_lr": 0.0020000000949949026,
+  "ppisp_exposure_from_exif": true,
   "ppisp_freeze_from_sidecar": false,
   "ppisp_freeze_gaussians_on_distill": true,
   "ppisp_lr": 0.0020000000949949026,

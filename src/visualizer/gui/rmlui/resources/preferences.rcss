@@ -183,6 +183,14 @@ body.floating-panel {
     margin-left: auto;
 }
 
+.preferences-interface-option {
+    margin-top: 10dp;
+}
+
+.preferences-scene-graph-section {
+    margin-top: 14dp;
+}
+
 .preferences-actions {
     flex: 0 0 auto;
     display: flex;

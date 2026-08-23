@@ -214,7 +214,15 @@ namespace lichtfeld::Strings {
         inline constexpr const char* ADD_GROUP_ELLIPSIS = "scene.add_group_ellipsis";
         inline constexpr const char* EXPORT = "scene.export";
         inline constexpr const char* DELETE_ITEM = "scene.delete";
+        inline constexpr const char* DELETE_CONFIRMATION_TITLE = "scene.delete_confirmation_title";
+        inline constexpr const char* DELETE_CONFIRMATION_SINGLE = "scene.delete_confirmation_single";
+        inline constexpr const char* DELETE_CONFIRMATION_MULTIPLE = "scene.delete_confirmation_multiple";
+        inline constexpr const char* SELECTED_COUNT = "scene.selected_count";
+        inline constexpr const char* SHOW_SELECTED = "scene.show_selected";
+        inline constexpr const char* HIDE_SELECTED = "scene.hide_selected";
         inline constexpr const char* RENAME = "scene.rename";
+        inline constexpr const char* RENAME_CONFLICT_TITLE = "scene.rename_conflict_title";
+        inline constexpr const char* RENAME_CONFLICT_MESSAGE = "scene.rename_conflict_message";
         inline constexpr const char* DUPLICATE_ITEM = "scene.duplicate";
         inline constexpr const char* GO_TO_CAMERA_VIEW = "scene.go_to_camera_view";
         inline constexpr const char* GO_TO_IMAGE = "scene.go_to_image";

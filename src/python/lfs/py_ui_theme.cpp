@@ -123,6 +123,10 @@ namespace lfs::python {
               "Return whether camera view snap is persisted between launches");
         m.def("set_remember_camera_view_snap", &lfs::vis::setRememberCameraViewSnapPreference,
               nb::arg("enabled"), "Enable or disable camera view snap persistence");
+        m.def("scene_graph_selection_markers", &lfs::vis::loadSceneGraphSelectionMarkersPreference,
+              "Return whether Scene Graph selection markers are visible");
+        m.def("set_scene_graph_selection_markers", &lfs::vis::saveSceneGraphSelectionMarkersPreference,
+              nb::arg("enabled"), "Show or hide Scene Graph selection markers");
     }
 
 } // namespace lfs::python

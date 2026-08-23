@@ -186,7 +186,7 @@ namespace lfs::vis {
         bool isPointerOverBlockingUi(double x, double y) const;
         bool isPointerOverUiHover(double x, double y) const;
         bool shouldCameraHandleInput() const;
-        void selectCameraByUid(int uid);
+        void selectCameraByUid(int uid, bool toggle_selection);
         void updateCameraSpeed(bool increase);
         void updateZoomSpeed(bool increase);
         void publishCameraMove(Viewport* target_viewport = nullptr);
@@ -267,6 +267,7 @@ namespace lfs::vis {
         SplitViewPanelId drag_split_panel_ = SplitViewPanelId::Left;
         SplitViewPanelId node_rect_panel_ = SplitViewPanelId::Left;
         int node_rect_button_ = -1;
+        int node_rect_modifiers_ = input::MODIFIER_NONE;
         bool node_point_pick_enabled_ = false;
         bool node_rect_select_enabled_ = false;
         struct PendingClickDragGesture {
@@ -343,6 +344,7 @@ namespace lfs::vis {
         int hovered_camera_id_ = -1;
         int last_clicked_camera_id_ = -1;
         int pressed_camera_frustum_id_ = -1;
+        int pressed_camera_frustum_modifiers_ = input::MODIFIER_NONE;
         bool press_selected_camera_frustum_ = false;
         std::chrono::steady_clock::time_point last_click_time_;
         glm::dvec2 last_click_pos_{0, 0};

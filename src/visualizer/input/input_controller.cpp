@@ -406,6 +406,7 @@ namespace lfs::vis {
             clearSelectedCameraContextMenuGesture();
             press_selected_camera_frustum_ = false;
             pressed_camera_frustum_id_ = -1;
+            pressed_camera_frustum_modifiers_ = input::MODIFIER_NONE;
             std::fill(std::begin(keys_movement_), std::end(keys_movement_), false);
             clearWasdMomentumViewport();
             hovered_camera_id_ = -1;
@@ -557,6 +558,7 @@ namespace lfs::vis {
         text_input_viewport_click_button_ = -1;
         is_node_rect_dragging_ = false;
         node_rect_button_ = -1;
+        node_rect_modifiers_ = input::MODIFIER_NONE;
         node_point_pick_enabled_ = false;
         node_rect_select_enabled_ = false;
     }
@@ -639,13 +641,17 @@ namespace lfs::vis {
             press_selected_camera_frustum_;
         const int pressed_camera_frustum_id = pressed_camera_frustum_id_;
         const glm::dvec2 pressed_camera_frustum_pos = pressed_camera_frustum_pos_;
+        const int pressed_camera_frustum_modifiers = pressed_camera_frustum_modifiers_;
         if (action == input::ACTION_PRESS && is_left_button)
             press_selected_camera_frustum_ = false;
         if (action == input::ACTION_PRESS && is_left_button)
             pressed_camera_frustum_id_ = -1;
+        if (action == input::ACTION_PRESS && is_left_button)
+            pressed_camera_frustum_modifiers_ = input::MODIFIER_NONE;
         if (action == input::ACTION_RELEASE && is_left_button) {
             press_selected_camera_frustum_ = false;
             pressed_camera_frustum_id_ = -1;
+            pressed_camera_frustum_modifiers_ = input::MODIFIER_NONE;
         }
         const bool over_gizmo = gui && gui->gizmo().isPositionInViewportGizmo(x, y);
         const bool over_gui = isPointerOverBlockingUi(x, y);
@@ -749,9 +755,12 @@ namespace lfs::vis {
             const bool allow_camera_frustum_pick =
                 tool_mode == input::ToolMode::GLOBAL ||
                 tool_mode == input::ToolMode::SELECTION;
+            const bool camera_selection_modifier =
+                (mods & (input::KEYMOD_CTRL | input::KEYMOD_SHIFT)) != 0;
             if (allow_camera_frustum_pick &&
                 hovered_camera_id_ >= 0 && !over_gizmo && !over_transform_gizmo) {
-                if (is_double_click && hovered_camera_id_ == last_clicked_camera_id_) {
+                if (!camera_selection_modifier && is_double_click &&
+                    hovered_camera_id_ == last_clicked_camera_id_) {
                     cmd::GoToCamView{.cam_id = hovered_camera_id_}.emit();
 
                     // Reset click tracking to prevent triple-click
@@ -765,6 +774,7 @@ namespace lfs::vis {
                 last_clicked_camera_id_ = hovered_camera_id_;
                 pressed_camera_frustum_id_ = hovered_camera_id_;
                 pressed_camera_frustum_pos_ = {x, y};
+                pressed_camera_frustum_modifiers_ = mods;
                 press_selected_camera_frustum_ = true;
             } else {
                 last_click_time_ = std::chrono::steady_clock::time_point();
@@ -868,6 +878,7 @@ namespace lfs::vis {
                 if (!over_gui && !over_gizmo && tool_context_ && !over_transform_gizmo) {
                     is_node_rect_dragging_ = true;
                     node_rect_button_ = button;
+                    node_rect_modifiers_ = mods;
                     node_point_pick_enabled_ = point_pick_enabled;
                     node_rect_select_enabled_ = rect_select_enabled;
                     node_rect_panel_ = splitPanelForScreenX(x);
@@ -1133,10 +1144,12 @@ namespace lfs::vis {
                 if (allow_camera_frustum_pick &&
                     was_click && pressed_camera_frustum_id >= 0 &&
                     !over_gui && !over_transform_gizmo) {
-                    selectCameraByUid(pressed_camera_frustum_id);
+                    selectCameraByUid(pressed_camera_frustum_id,
+                                      (pressed_camera_frustum_modifiers & input::KEYMOD_CTRL) != 0);
                     if (button == node_rect_button_) {
                         is_node_rect_dragging_ = false;
                         node_rect_button_ = -1;
+                        node_rect_modifiers_ = input::MODIFIER_NONE;
                         node_point_pick_enabled_ = false;
                         node_rect_select_enabled_ = false;
                     }
@@ -1150,6 +1163,8 @@ namespace lfs::vis {
                 const bool rect_select_enabled = node_rect_select_enabled_;
                 is_node_rect_dragging_ = false;
                 node_rect_button_ = -1;
+                const int node_rect_modifiers = node_rect_modifiers_;
+                node_rect_modifiers_ = input::MODIFIER_NONE;
                 node_point_pick_enabled_ = false;
                 node_rect_select_enabled_ = false;
                 if (tool_context_ && !isPointerOverBlockingUi(x, y)) {
@@ -1163,10 +1178,23 @@ namespace lfs::vis {
                             const auto [ray_origin, ray_dir] = computePickRay(x, y);
                             const std::string picked = scene_manager->pickNodeByRay(ray_origin, ray_dir);
                             if (!picked.empty()) {
-                                if (auto result = cap::selectNode(*scene_manager, picked); !result) {
+                                const auto* const picked_node = scene_manager->getScene().getNode(picked);
+                                const bool ctrl_held =
+                                    (node_rect_modifiers & input::KEYMOD_CTRL) != 0;
+                                const bool shift_held =
+                                    (node_rect_modifiers & input::KEYMOD_SHIFT) != 0;
+                                if (picked_node && ctrl_held) {
+                                    if (scene_manager->selectionState().isNodeSelected(picked_node->id))
+                                        scene_manager->removeFromSelection(picked_node->id);
+                                    else
+                                        scene_manager->addToSelection(picked_node->id);
+                                } else if (picked_node && shift_held) {
+                                    scene_manager->addToSelection(picked_node->id);
+                                } else if (auto result = cap::selectNode(*scene_manager, picked); !result) {
                                     LOG_WARN("Node pick selection failed: {}", result.error());
                                 }
-                            } else {
+                            } else if ((node_rect_modifiers &
+                                        (input::KEYMOD_CTRL | input::KEYMOD_SHIFT)) == 0) {
                                 (void)cap::clearNodeSelection(*scene_manager);
                             }
                         } else if (drag_dist >= CLICK_THRESHOLD_PX && rect_select_enabled) {
@@ -1218,8 +1246,8 @@ namespace lfs::vis {
                             // remove, no mod = replace. An empty rect with no
                             // modifier clears the selection; with a modifier it
                             // is a no-op so transient drags don't wipe state.
-                            const bool shift_held = (mods & input::KEYMOD_SHIFT) != 0;
-                            const bool ctrl_held = (mods & input::KEYMOD_CTRL) != 0;
+                            const bool shift_held = (node_rect_modifiers & input::KEYMOD_SHIFT) != 0;
+                            const bool ctrl_held = (node_rect_modifiers & input::KEYMOD_CTRL) != 0;
                             const std::string_view select_mode = ctrl_held    ? "remove"
                                                                  : shift_held ? "add"
                                                                               : "replace";
@@ -1406,6 +1434,7 @@ namespace lfs::vis {
             if (isTransformGizmoUsing()) {
                 is_node_rect_dragging_ = false;
                 node_rect_button_ = -1;
+                node_rect_modifiers_ = input::MODIFIER_NONE;
                 node_point_pick_enabled_ = false;
                 node_rect_select_enabled_ = false;
             } else {
@@ -1712,6 +1741,21 @@ namespace lfs::vis {
                     gui->openPreferences();
                 return;
 
+            case input::Action::SELECT_ALL_SCENE_NODES:
+                if (gui)
+                    (void)gui->selectAllSceneNodesIfFocused();
+                return;
+
+            case input::Action::TOGGLE_SCENE_SELECTION_VISIBILITY:
+                if (gui)
+                    (void)gui->toggleSceneSelectionVisibilityIfFocused();
+                return;
+
+            case input::Action::TOGGLE_SCENE_SELECTION_TRAINING:
+                if (gui)
+                    (void)gui->toggleSceneSelectionTrainingIfFocused();
+                return;
+
             case input::Action::TOGGLE_MCP_SERVER:
                 toggleMcpRuntimeEnabled();
                 return;
@@ -1858,6 +1902,8 @@ namespace lfs::vis {
                 return;
 
             case input::Action::DELETE_NODE:
+                if (gui && gui->requestDeleteSceneSelectionIfAvailable())
+                    return;
                 // Delete selected PLY node(s)
                 if (tool_context_) {
                     if (auto* sm = tool_context_->getSceneManager()) {
@@ -2047,6 +2093,7 @@ namespace lfs::vis {
             drag_viewport_ = nullptr;
             press_selected_camera_frustum_ = false;
             pressed_camera_frustum_id_ = -1;
+            pressed_camera_frustum_modifiers_ = input::MODIFIER_NONE;
 
             ui::CameraMove{
                 .rotation = released_viewport->getRotationMatrix(),
@@ -2061,6 +2108,7 @@ namespace lfs::vis {
             drag_viewport_ = nullptr;
             press_selected_camera_frustum_ = false;
             pressed_camera_frustum_id_ = -1;
+            pressed_camera_frustum_modifiers_ = input::MODIFIER_NONE;
         }
 
         if (drag_mode_ == DragMode::Rotate && drag_button_released) {
@@ -2069,6 +2117,7 @@ namespace lfs::vis {
             drag_viewport_ = nullptr;
             press_selected_camera_frustum_ = false;
             pressed_camera_frustum_id_ = -1;
+            pressed_camera_frustum_modifiers_ = input::MODIFIER_NONE;
         }
 
         if (drag_mode_ == DragMode::Splitter &&
@@ -2077,6 +2126,7 @@ namespace lfs::vis {
             drag_button_ = -1;
             press_selected_camera_frustum_ = false;
             pressed_camera_frustum_id_ = -1;
+            pressed_camera_frustum_modifiers_ = input::MODIFIER_NONE;
             SDL_SetCursor(SDL_GetDefaultCursor());
             current_cursor_ = CursorType::Default;
         }
@@ -2523,7 +2573,7 @@ namespace lfs::vis {
         last_camview_ = event.cam_id;
     }
 
-    void InputController::selectCameraByUid(const int uid) {
+    void InputController::selectCameraByUid(const int uid, const bool toggle_selection) {
         if (!tool_context_)
             return;
         auto* const sm = tool_context_->getSceneManager();
@@ -2531,10 +2581,17 @@ namespace lfs::vis {
             return;
         for (const auto* node : sm->getScene().getNodes()) {
             if (node->type == core::NodeType::CAMERA && node->camera_uid == uid) {
-                if (auto result = cap::selectNode(*sm, node->name); !result) {
-                    LOG_WARN("Camera selection failed for '{}': {}", node->name, result.error());
-                } else if (auto* rendering_manager = services().renderingOrNull()) {
-                    rendering_manager->markDirty(DirtyFlag::OVERLAY);
+                if (toggle_selection) {
+                    const auto selected_ids = sm->getSelectedNodeIds();
+                    if (std::ranges::find(selected_ids, node->id) != selected_ids.end())
+                        sm->removeFromSelection(node->id);
+                    else
+                        sm->addToSelection(node->id);
+                } else {
+                    sm->selectNode(node->id);
+                }
+                if (auto* rendering_manager = services().renderingOrNull()) {
+                    rendering_manager->markDirty(DirtyFlag::SELECTION | DirtyFlag::OVERLAY);
                 }
                 return;
             }
@@ -2798,11 +2855,13 @@ namespace lfs::vis {
         forced_mouse_press_action_ = input::Action::NONE;
         is_node_rect_dragging_ = false;
         node_rect_button_ = -1;
+        node_rect_modifiers_ = input::MODIFIER_NONE;
         node_point_pick_enabled_ = false;
         node_rect_select_enabled_ = false;
         clearSelectedCameraContextMenuGesture();
         press_selected_camera_frustum_ = false;
         pressed_camera_frustum_id_ = -1;
+        pressed_camera_frustum_modifiers_ = input::MODIFIER_NONE;
 
         if (was_camera_drag) {
             onCameraMovementEnd();

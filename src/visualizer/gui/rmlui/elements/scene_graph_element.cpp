@@ -66,15 +66,6 @@ namespace lfs::vis::gui {
             return result;
         }
 
-        [[nodiscard]] std::string formatLocalizedCount(std::string pattern, const size_t count) {
-            const std::string formatted = formatWithThousands(count);
-            if (const size_t pos = pattern.find("{}"); pos != std::string::npos) {
-                pattern.replace(pos, 2, formatted);
-                return pattern;
-            }
-            return std::format("{} ({})", pattern, formatted);
-        }
-
         [[nodiscard]] std::string formatSplatLabel(const std::string& name, const size_t count) {
             if (count > 0)
                 return std::format("{}  ({})", name, formatWithThousands(count));
@@ -86,7 +77,7 @@ namespace lfs::vis::gui {
             const core::Scene::CameraTrainingCounts counts) {
             if (counts.enabled == counts.total)
                 return std::format("{}  ({})", name, formatWithThousands(counts.total));
-            return std::format("{}  ({}/{})",
+            return std::format("{}  ({} / {})",
                                name,
                                formatWithThousands(counts.enabled),
                                formatWithThousands(counts.total));
@@ -509,12 +500,10 @@ namespace lfs::vis::gui {
         panel_screen_y_ = y;
     }
 
-    void SceneGraphElement::setModelsCollapsed(const bool collapsed) {
-        if (models_collapsed_ == collapsed)
-            return;
-        models_collapsed_ = collapsed;
-        markStateDirty();
-        syncVisibleRows(true);
+    void SceneGraphElement::setModelsCollapsed(const bool /*collapsed*/) {
+        // The redundant Models header was removed. Keep accepting legacy session
+        // state, but never let an old collapsed flag hide the root rows.
+        models_collapsed_ = false;
     }
 
     void SceneGraphElement::applySessionCollapseUuids(
@@ -644,6 +633,7 @@ namespace lfs::vis::gui {
 
         auto label = doc->CreateElement("span");
         header_label_el_ = header_el_->AppendChild(std::move(label));
+        header_el_->SetProperty("display", "none");
 
         auto insert_line = doc->CreateElement("div");
         insert_line->SetClass("tree-insert-line", true);
@@ -679,17 +669,18 @@ namespace lfs::vis::gui {
             if (!slot.content)
                 return;
 
-            auto vis_icon = doc->CreateElement("img");
-            vis_icon->SetClass("row-icon", true);
-            vis_icon->SetAttribute("data-action", "toggle-vis");
-            slot.vis_icon = slot.content->AppendChild(std::move(vis_icon));
+            auto selection_checkbox = doc->CreateElement("span");
+            selection_checkbox->SetClass("tree-checkbox", true);
+            selection_checkbox->SetAttribute("data-action", "toggle-select");
+            slot.selection_checkbox = slot.content->AppendChild(std::move(selection_checkbox));
 
-            auto trash_icon = doc->CreateElement("img");
-            trash_icon->SetClass("row-icon", true);
-            trash_icon->SetClass("trash-icon", true);
-            trash_icon->SetAttribute("sprite", "icon-trash");
-            trash_icon->SetAttribute("data-action", "delete");
-            slot.delete_icon = slot.content->AppendChild(std::move(trash_icon));
+            auto expand = doc->CreateElement("span");
+            expand->SetClass("expand-toggle", true);
+            slot.expand_toggle = slot.content->AppendChild(std::move(expand));
+
+            auto leaf = doc->CreateElement("span");
+            leaf->SetClass("leaf-spacer", true);
+            slot.leaf_spacer = slot.content->AppendChild(std::move(leaf));
 
             auto type_icon = doc->CreateElement("img");
             type_icon->SetClass("row-icon", true);
@@ -706,14 +697,6 @@ namespace lfs::vis::gui {
             mask_icon->SetAttribute("sprite", "icon-mask");
             slot.mask_icon = slot.content->AppendChild(std::move(mask_icon));
 
-            auto expand = doc->CreateElement("span");
-            expand->SetClass("expand-toggle", true);
-            slot.expand_toggle = slot.content->AppendChild(std::move(expand));
-
-            auto leaf = doc->CreateElement("span");
-            leaf->SetClass("leaf-spacer", true);
-            slot.leaf_spacer = slot.content->AppendChild(std::move(leaf));
-
             auto rename_input = doc->CreateElement("input");
             rename_input->SetAttribute("type", "text");
             rename_input->SetClass("rename-input", true);
@@ -724,6 +707,44 @@ namespace lfs::vis::gui {
             auto node_name = doc->CreateElement("span");
             node_name->SetClass("node-name", true);
             slot.node_name = slot.content->AppendChild(std::move(node_name));
+
+            auto actions = doc->CreateElement("span");
+            actions->SetClass("row-actions", true);
+            auto* actions_el = slot.content->AppendChild(std::move(actions));
+
+            auto visibility_slot = doc->CreateElement("span");
+            visibility_slot->SetClass("row-action-slot", true);
+            auto* visibility_slot_el = actions_el->AppendChild(std::move(visibility_slot));
+            auto vis_icon = doc->CreateElement("img");
+            vis_icon->SetClass("row-icon", true);
+            vis_icon->SetAttribute("data-action", "toggle-vis");
+            slot.vis_icon = visibility_slot_el->AppendChild(std::move(vis_icon));
+
+            auto training_slot = doc->CreateElement("span");
+            training_slot->SetClass("row-action-slot", true);
+            training_slot->SetClass("training-action-slot", true);
+            auto* training_slot_el = actions_el->AppendChild(std::move(training_slot));
+
+            auto training_toggle_icon = doc->CreateElement("img");
+            training_toggle_icon->SetClass("row-icon", true);
+            training_toggle_icon->SetClass("training-toggle-icon", true);
+            training_toggle_icon->SetAttribute("data-action", "toggle-training");
+            slot.training_toggle_icon = training_slot_el->AppendChild(std::move(training_toggle_icon));
+
+            auto mixed_mark = doc->CreateElement("span");
+            mixed_mark->SetClass("training-mixed-mark", true);
+            slot.training_mixed_mark = training_slot_el->AppendChild(std::move(mixed_mark));
+
+            auto delete_slot = doc->CreateElement("span");
+            delete_slot->SetClass("row-action-slot", true);
+            auto* delete_slot_el = actions_el->AppendChild(std::move(delete_slot));
+
+            auto trash_icon = doc->CreateElement("img");
+            trash_icon->SetClass("row-icon", true);
+            trash_icon->SetClass("trash-icon", true);
+            trash_icon->SetAttribute("sprite", "icon-trash");
+            trash_icon->SetAttribute("data-action", "delete");
+            slot.delete_icon = delete_slot_el->AppendChild(std::move(trash_icon));
 
             row_slots_.push_back(slot);
         }
@@ -739,6 +760,7 @@ namespace lfs::vis::gui {
         click_anchor_id_ = core::NULL_NODE;
         rename_node_id_ = core::NULL_NODE;
         rename_buffer_.clear();
+        rename_conflict_modal_pending_ = false;
         context_menu_node_id_ = core::NULL_NODE;
         drag_source_id_ = core::NULL_NODE;
         drop_into_group_id_ = core::NULL_NODE;
@@ -871,11 +893,17 @@ namespace lfs::vis::gui {
                                       formatWithThousands(frame_count > 0 ? frame_count : node->children.size()));
                 break;
             }
-            case core::NodeType::CAMERA_GROUP:
+            case core::NodeType::CAMERA_GROUP: {
+                const auto counts = scene.getCameraTrainingCounts(node->id);
                 snapshot.label = formatCameraGroupLabel(
                     node->name,
-                    scene.getCameraTrainingCounts(node->id));
+                    counts);
+                snapshot.training_enabled = counts.enabled == counts.total;
+                snapshot.training_mixed = counts.enabled > 0 && counts.enabled < counts.total;
+                snapshot.training_enabled_count = counts.enabled;
+                snapshot.training_total_count = counts.total;
                 break;
+            }
             case core::NodeType::KEYFRAME:
                 if (node->keyframe)
                     snapshot.label = LOCF(string_keys::Scene::KEYFRAME_NODE_LABEL,
@@ -934,6 +962,9 @@ namespace lfs::vis::gui {
             snapshot.delete_enabled = snapshot.can_delete && !delete_blocked_ids.contains(id);
             snapshot.can_rename = isRenamable(snapshot.type, parent_is_dataset);
             snapshot.rename_enabled = snapshot.can_rename;
+            snapshot.can_toggle_training =
+                snapshot.type == core::NodeType::CAMERA ||
+                snapshot.type == core::NodeType::CAMERA_GROUP;
             snapshot.camera_frustum_container =
                 (snapshot.type == core::NodeType::GROUP &&
                  std::ranges::any_of(snapshot.children, [&](const core::NodeId child_id) {
@@ -984,11 +1015,15 @@ namespace lfs::vis::gui {
             .collapsed = collapsed_ids_.contains(snapshot.id),
             .draggable = snapshot.draggable,
             .training_enabled = snapshot.training_enabled,
+            .training_mixed = snapshot.training_mixed,
+            .training_enabled_count = snapshot.training_enabled_count,
+            .training_total_count = snapshot.training_total_count,
+            .can_toggle_training = snapshot.can_toggle_training,
             .name = snapshot.name,
             .label = snapshot.label,
             .node_id_text = std::to_string(snapshot.id),
             .encoded_label = encode(snapshot.label),
-            .padding_left_dp = formatDp(4 + depth * 16),
+            .padding_left_dp = formatDp((selection_markers_visible_ ? 17 : 4) + depth * 16),
             .has_mask = snapshot.has_mask,
             .can_delete = snapshot.can_delete,
             .delete_enabled = snapshot.delete_enabled,
@@ -1033,7 +1068,7 @@ namespace lfs::vis::gui {
         rebuildIndex();
         row_top_dp_cache_.resize(flat_rows_.size());
         for (size_t i = 0; i < row_top_dp_cache_.size(); ++i)
-            row_top_dp_cache_[i] = formatDp(kHeaderHeightDpInt + static_cast<int>(i) * kRowHeightDpInt);
+            row_top_dp_cache_[i] = formatDp(static_cast<int>(i) * kRowHeightDpInt);
         tree_rebuild_needed_ = false;
 
         std::erase_if(selected_ids_, [this](const core::NodeId id) {
@@ -1044,6 +1079,7 @@ namespace lfs::vis::gui {
         if (rename_node_id_ != core::NULL_NODE && !node_snapshots_.contains(rename_node_id_)) {
             rename_node_id_ = core::NULL_NODE;
             rename_buffer_.clear();
+            rename_conflict_modal_pending_ = false;
         }
         if (context_menu_node_id_ != core::NULL_NODE && !node_snapshots_.contains(context_menu_node_id_))
             context_menu_node_id_ = core::NULL_NODE;
@@ -1277,27 +1313,7 @@ namespace lfs::vis::gui {
     }
 
     void SceneGraphElement::updateHeader() {
-        if (!header_el_ || !header_arrow_el_ || !header_label_el_)
-            return;
-
-        const bool expanded = !models_collapsed_;
-        const bool visible = scene_has_nodes_;
-        const std::string header_text =
-            encode(formatLocalizedCount(tr(string_keys::Scene::MODELS), root_count_));
-
-        if (expanded != last_header_expanded_) {
-            header_el_->SetClass("is-expanded", expanded);
-            header_arrow_el_->SetInnerRML(expanded ? "\u25BC" : "\u25B6");
-            last_header_expanded_ = expanded;
-        }
-        if (header_text != last_header_text_) {
-            header_label_el_->SetInnerRML(header_text);
-            last_header_text_ = header_text;
-        }
-        if (visible != last_header_visible_) {
-            header_el_->SetProperty("display", visible ? "block" : "none");
-            last_header_visible_ = visible;
-        }
+        // Kept as a no-op while legacy session fields remain readable.
     }
 
     void SceneGraphElement::updateContentHeight() {
@@ -1312,9 +1328,7 @@ namespace lfs::vis::gui {
             return;
         }
 
-        const float total_height = models_collapsed_
-                                       ? kHeaderHeightDp
-                                       : (kHeaderHeightDp + static_cast<float>(flat_rows_.size()) * kRowHeightDp);
+        const float total_height = static_cast<float>(flat_rows_.size()) * kRowHeightDp;
         if (std::abs(total_height - last_content_height_) < 0.01f)
             return;
 
@@ -1346,12 +1360,15 @@ namespace lfs::vis::gui {
             setCachedProperty(slot.root, "top", row_top_dp_cache_[absolute_index]);
         else
             setCachedProperty(slot.root, "top",
-                              formatDp(kHeaderHeightDpInt + static_cast<int>(absolute_index) * kRowHeightDpInt));
+                              formatDp(static_cast<int>(absolute_index) * kRowHeightDpInt));
         setCachedProperty(slot.root, "padding-left", row.padding_left_dp);
         setCachedProperty(slot.root, "drag", row.draggable ? "drag-drop" : "none");
         setCachedClass(slot.root, "even", absolute_index % 2 == 0);
         setCachedClass(slot.root, "odd", absolute_index % 2 == 1);
-        setCachedClass(slot.root, "selected", selected_ids_.contains(row.id));
+        const auto [checkbox_checked, checkbox_mixed] = checkboxState(row.id);
+        setCachedClass(slot.root, "selected", selected_ids_.contains(row.id) || checkbox_checked);
+        setCachedClass(slot.root, "selection-partial", checkbox_mixed);
+        setCachedClass(slot.root, "keyboard-cursor", keyboard_cursor_id_ == row.id);
         setCachedClass(slot.root, "drop-target", drop_into_group_id_ == row.id);
         setCachedClass(slot.root, "dragging",
                        drag_source_id_ != core::NULL_NODE && drag_source_id_ == row.id);
@@ -1361,9 +1378,32 @@ namespace lfs::vis::gui {
         setCachedClass(slot.vis_icon, "icon-vis-on", row.visible);
         setCachedClass(slot.vis_icon, "icon-vis-off", !row.visible);
 
+        setCachedAttribute(slot.selection_checkbox, "data-node-id", row.node_id_text);
+        setCachedProperty(slot.selection_checkbox, "display",
+                          selection_markers_visible_ ? "inline-block" : "none");
+        setCachedClass(slot.selection_checkbox, "checked", checkbox_checked);
+        setCachedClass(slot.selection_checkbox, "mixed", checkbox_mixed);
+        setCachedInnerRml(slot.selection_checkbox, checkbox_mixed ? "\u2212" : "");
+
         setCachedAttribute(slot.delete_icon, "data-node-id", row.node_id_text);
         setCachedProperty(slot.delete_icon, "display", row.can_delete ? "inline" : "none");
         setCachedClass(slot.delete_icon, "trash-disabled", row.can_delete && !row.delete_enabled);
+
+        setCachedAttribute(slot.training_toggle_icon, "data-node-id", row.node_id_text);
+        setCachedProperty(slot.training_toggle_icon, "display", row.can_toggle_training ? "inline" : "none");
+        setCachedAttribute(slot.training_toggle_icon, "sprite",
+                           row.training_enabled ? "icon-unlocked" : "icon-locked");
+        const std::string training_title = row.training_mixed
+                                               ? std::format("{} / {}",
+                                                             row.training_enabled_count,
+                                                             row.training_total_count)
+                                           : row.training_enabled
+                                               ? tr(string_keys::Scene::DISABLE_FOR_TRAINING)
+                                               : tr(string_keys::Scene::ENABLE_FOR_TRAINING);
+        setCachedAttribute(slot.training_toggle_icon, "title", training_title);
+        setCachedClass(slot.training_toggle_icon, "training-disabled", !row.training_enabled);
+        setCachedClass(slot.training_toggle_icon, "training-mixed", row.training_mixed);
+        setCachedProperty(slot.training_mixed_mark, "display", row.training_mixed ? "block" : "none");
 
         const std::string_view icon_sprite = typeIconSprite(row.type);
         const std::string_view unicode = unicodeIcon(row.type);
@@ -1431,7 +1471,6 @@ namespace lfs::vis::gui {
         const float dp_ratio = currentDpRatio(this);
         const bool dp_ratio_changed = std::abs(dp_ratio - last_bound_dp_ratio_) > 0.001f;
         const float row_height = kRowHeightDp * dp_ratio;
-        const float header_height = kHeaderHeightDp * dp_ratio;
         const float client_height = GetClientHeight();
         const float scroll_top = GetScrollTop();
         const bool has_prev_window =
@@ -1440,7 +1479,7 @@ namespace lfs::vis::gui {
         const size_t prev_end = has_prev_window ? last_visible_end_ : 0;
         const size_t prev_count = has_prev_window ? prev_end - prev_start : 0;
 
-        if (!scene_has_nodes_ || models_collapsed_ || client_height <= 0.0f) {
+        if (!scene_has_nodes_ || client_height <= 0.0f) {
             for (RowSlot& slot : row_slots_)
                 hideRow(slot);
             last_visible_start_ = 0;
@@ -1451,8 +1490,7 @@ namespace lfs::vis::gui {
             return;
         }
 
-        const float rows_scroll_top = std::max(0.0f, scroll_top - header_height);
-        const size_t start = std::max(0, static_cast<int>(rows_scroll_top / row_height) - kOverscanRows);
+        const size_t start = std::max(0, static_cast<int>(scroll_top / row_height) - kOverscanRows);
         const size_t visible_count = static_cast<size_t>(std::max(
             1, static_cast<int>(std::ceil(client_height / row_height)) + kOverscanRows * 2));
         const size_t end = std::min(flat_rows_.size(), start + visible_count);
@@ -1529,8 +1567,7 @@ namespace lfs::vis::gui {
 
         const float dp_ratio = currentDpRatio(this);
         const float row_height = kRowHeightDp * dp_ratio;
-        const float header_height = kHeaderHeightDp * dp_ratio;
-        const float row_top = header_height + static_cast<float>(it->second) * row_height;
+        const float row_top = static_cast<float>(it->second) * row_height;
         const float row_bottom = row_top + row_height;
         const float scroll_top = GetScrollTop();
         const float view_h = GetClientHeight();
@@ -1554,9 +1591,8 @@ namespace lfs::vis::gui {
 
         const float dp_ratio = currentDpRatio(this);
         const float row_height = kRowHeightDp * dp_ratio;
-        const float header_height = kHeaderHeightDp * dp_ratio;
-        const float row_top = header_height + static_cast<float>(it->second) * row_height;
-        const float content_h = header_height + static_cast<float>(flat_rows_.size()) * row_height;
+        const float row_top = static_cast<float>(it->second) * row_height;
+        const float content_h = static_cast<float>(flat_rows_.size()) * row_height;
         const float max_scroll = std::max(0.0f, content_h - view_h);
         const float desired = row_top + 0.5f * row_height - 0.5f * view_h;
         SetScrollTop(std::clamp(desired, 0.0f, max_scroll));
@@ -1579,7 +1615,7 @@ namespace lfs::vis::gui {
     }
 
     void SceneGraphElement::confirmRename() {
-        if (rename_node_id_ == core::NULL_NODE)
+        if (rename_node_id_ == core::NULL_NODE || rename_conflict_modal_pending_)
             return;
         captureRenameBuffer();
         auto* scene_manager = services().sceneOrNull();
@@ -1599,9 +1635,40 @@ namespace lfs::vis::gui {
         if (next_name != it->second.name) {
             const core::NodeId existing_id = scene->getNodeIdByName(next_name);
             if (existing_id != core::NULL_NODE && existing_id != rename_node_id_) {
-                rename_focus_pending_ = true;
-                markStateDirty();
-                syncVisibleRows(true);
+                LOG_WARN("Scene node rename rejected: name '{}' is already in use", next_name);
+                auto* gui = services().guiOrNull();
+                if (!gui)
+                    return;
+
+                const core::NodeId rename_node_id = rename_node_id_;
+                const std::string rename_button = tr(string_keys::Scene::RENAME);
+                rename_conflict_modal_pending_ = true;
+
+                lfs::core::ModalRequest request;
+                request.title = tr(string_keys::Scene::RENAME_CONFLICT_TITLE);
+                request.style = lfs::core::ModalStyle::Warning;
+                request.width_dp = 440;
+                request.body_rml = encode(LOCF(string_keys::Scene::RENAME_CONFLICT_MESSAGE, next_name));
+                request.buttons = {
+                    {tr(string_keys::Common::CANCEL), "secondary"},
+                    {rename_button, "primary"},
+                };
+                request.on_result = [this, rename_node_id, rename_button](
+                                        const lfs::core::ModalResult& result) {
+                    rename_conflict_modal_pending_ = false;
+                    if (result.button_label == rename_button && rename_node_id_ == rename_node_id) {
+                        rename_focus_pending_ = true;
+                        markStateDirty();
+                        syncVisibleRows(true);
+                    } else {
+                        cancelRename();
+                    }
+                };
+                request.on_cancel = [this] {
+                    rename_conflict_modal_pending_ = false;
+                    cancelRename();
+                };
+                gui->enqueueModal(std::move(request));
                 return;
             }
             cmd::RenameNodeById{.node_id = static_cast<int32_t>(rename_node_id_), .new_name = next_name}.emit();
@@ -1609,6 +1676,7 @@ namespace lfs::vis::gui {
 
         rename_node_id_ = core::NULL_NODE;
         rename_buffer_.clear();
+        rename_conflict_modal_pending_ = false;
         markStateDirty();
         syncVisibleRows(true);
     }
@@ -1618,6 +1686,7 @@ namespace lfs::vis::gui {
             return;
         rename_node_id_ = core::NULL_NODE;
         rename_buffer_.clear();
+        rename_conflict_modal_pending_ = false;
         markStateDirty();
     }
 
@@ -1631,7 +1700,9 @@ namespace lfs::vis::gui {
         if (!node)
             return;
 
-        if (action == "toggle-vis") {
+        if (action == "toggle-select") {
+            toggleCheckboxSelection(node_id);
+        } else if (action == "toggle-vis") {
             if (const auto snapshot_it = node_snapshots_.find(node_id);
                 snapshot_it != node_snapshots_.end() && snapshot_it->second.camera_frustum_container) {
                 if (auto* rendering = services().renderingOrNull()) {
@@ -1654,12 +1725,160 @@ namespace lfs::vis::gui {
             const auto snapshot_it = node_snapshots_.find(node_id);
             if (snapshot_it == node_snapshots_.end() || !snapshot_it->second.delete_enabled)
                 return;
-            if (const auto result = scene_manager->canRemoveNode(node_id); !result)
-                return;
-            cmd::RemoveNodeById{.node_id = static_cast<int32_t>(node_id), .keep_children = false}.emit();
+            requestDeleteNodes({node_id});
+        } else if (action == "toggle-training") {
+            if (node->type == core::NodeType::CAMERA) {
+                scene->setCameraTrainingEnabled(node_id, !node->training_enabled);
+            } else if (node->type == core::NodeType::CAMERA_GROUP) {
+                const auto counts = scene->getCameraTrainingCounts(node_id);
+                toggleChildrenTraining(node_id, counts.enabled != counts.total);
+            }
             tree_rebuild_needed_ = true;
             markStateDirty();
         }
+    }
+
+    std::pair<bool, bool> SceneGraphElement::checkboxState(const core::NodeId node_id) const {
+        const auto it = node_snapshots_.find(node_id);
+        if (it == node_snapshots_.end())
+            return {false, false};
+        if (it->second.children.empty())
+            return {selected_ids_.contains(node_id), false};
+
+        bool any_selected = false;
+        bool all_selected = true;
+        for (const core::NodeId child_id : it->second.children) {
+            const auto [child_checked, child_mixed] = checkboxState(child_id);
+            any_selected = any_selected || child_checked || child_mixed;
+            all_selected = all_selected && child_checked && !child_mixed;
+        }
+        return {all_selected && any_selected, any_selected && !all_selected};
+    }
+
+    void SceneGraphElement::collectCheckboxSelectionIds(
+        const core::NodeId node_id,
+        std::vector<core::NodeId>& ids) const {
+        const auto it = node_snapshots_.find(node_id);
+        if (it == node_snapshots_.end())
+            return;
+        if (it->second.children.empty()) {
+            ids.push_back(node_id);
+            return;
+        }
+        for (const core::NodeId child_id : it->second.children)
+            collectCheckboxSelectionIds(child_id, ids);
+    }
+
+    void SceneGraphElement::toggleCheckboxSelection(const core::NodeId node_id) {
+        auto* scene_manager = services().sceneOrNull();
+        if (!scene_manager)
+            return;
+
+        std::vector<core::NodeId> affected;
+        collectCheckboxSelectionIds(node_id, affected);
+        if (affected.empty())
+            return;
+
+        const bool all_checked = checkboxState(node_id).first;
+        if (all_checked) {
+            for (const core::NodeId id : affected)
+                selected_ids_.erase(id);
+        } else {
+            selected_ids_.insert(affected.begin(), affected.end());
+        }
+        scene_manager->selectNodesById(
+            std::vector<core::NodeId>(selected_ids_.begin(), selected_ids_.end()));
+        click_anchor_id_ = node_id;
+        keyboard_cursor_id_ = node_id;
+        markStateDirty();
+    }
+
+    void SceneGraphElement::collectHierarchyIds(
+        const core::NodeId node_id,
+        std::unordered_set<core::NodeId>& ids) const {
+        const auto it = node_snapshots_.find(node_id);
+        if (it == node_snapshots_.end() || !ids.insert(node_id).second)
+            return;
+        for (const core::NodeId child_id : it->second.children)
+            collectHierarchyIds(child_id, ids);
+    }
+
+    void SceneGraphElement::selectHierarchyFromSelection() {
+        auto* scene_manager = services().sceneOrNull();
+        if (!scene_manager || selected_ids_.empty())
+            return;
+
+        std::unordered_set<core::NodeId> hierarchy_ids;
+        for (const core::NodeId id : selected_ids_)
+            collectHierarchyIds(id, hierarchy_ids);
+        selected_ids_ = std::move(hierarchy_ids);
+        scene_manager->selectNodesById(
+            std::vector<core::NodeId>(selected_ids_.begin(), selected_ids_.end()));
+        markStateDirty();
+    }
+
+    void SceneGraphElement::selectHierarchy(const core::NodeId node_id) {
+        auto* scene_manager = services().sceneOrNull();
+        if (!scene_manager || !node_snapshots_.contains(node_id))
+            return;
+
+        std::unordered_set<core::NodeId> hierarchy_ids;
+        collectHierarchyIds(node_id, hierarchy_ids);
+        bool all_selected = true;
+        for (const core::NodeId id : hierarchy_ids)
+            all_selected = all_selected && selected_ids_.contains(id);
+        if (all_selected) {
+            for (const core::NodeId id : hierarchy_ids)
+                selected_ids_.erase(id);
+        } else {
+            selected_ids_.insert(hierarchy_ids.begin(), hierarchy_ids.end());
+        }
+        scene_manager->selectNodesById(
+            std::vector<core::NodeId>(selected_ids_.begin(), selected_ids_.end()));
+        click_anchor_id_ = node_id;
+        keyboard_cursor_id_ = node_id;
+        markStateDirty();
+    }
+
+    bool SceneGraphElement::selectAllIfFocused() {
+        if (!IsPseudoClassSet("focus"))
+            return false;
+        auto* scene_manager = services().sceneOrNull();
+        if (!scene_manager || node_snapshots_.empty())
+            return false;
+        selected_ids_.clear();
+        for (const auto& [id, _] : node_snapshots_)
+            selected_ids_.insert(id);
+        scene_manager->selectNodesById(
+            std::vector<core::NodeId>(selected_ids_.begin(), selected_ids_.end()));
+        markStateDirty();
+        return true;
+    }
+
+    bool SceneGraphElement::toggleSelectedVisibilityIfFocused() {
+        if (!IsPseudoClassSet("focus") || selected_ids_.empty())
+            return false;
+        const auto state = selectionActionState();
+        setSelectedVisibility(!state.all_visible);
+        return true;
+    }
+
+    bool SceneGraphElement::toggleSelectedTrainingIfFocused() {
+        if (!IsPseudoClassSet("focus") || selected_ids_.empty())
+            return false;
+        const auto state = selectionActionState();
+        if (!state.all_training_compatible)
+            return false;
+        setSelectedTrainingEnabled(!state.all_training_enabled);
+        return true;
+    }
+
+    void SceneGraphElement::setSelectionMarkersVisible(const bool visible) {
+        if (selection_markers_visible_ == visible)
+            return;
+        selection_markers_visible_ = visible;
+        tree_rebuild_needed_ = true;
+        markStateDirty();
     }
 
     void SceneGraphElement::handlePrimaryClick(const core::NodeId node_id) {
@@ -1670,8 +1889,18 @@ namespace lfs::vis::gui {
 
         const bool ctrl = ctrlDown();
         const bool shift = shiftDown();
+        keyboard_cursor_id_ = node_id;
 
-        if (ctrl) {
+        if (ctrl && shift) {
+            selectHierarchy(node_id);
+            return;
+        }
+        if (shift && click_anchor_id_ != core::NULL_NODE) {
+            const auto range_ids = rangeSelectionIds(click_anchor_id_, node_id);
+            selected_ids_.clear();
+            selected_ids_.insert(range_ids.begin(), range_ids.end());
+            scene_manager->selectNodesById(range_ids);
+        } else if (ctrl) {
             if (selected_ids_.contains(node_id)) {
                 selected_ids_.erase(node_id);
                 scene_manager->selectNodesById(std::vector<core::NodeId>(selected_ids_.begin(), selected_ids_.end()));
@@ -1680,19 +1909,6 @@ namespace lfs::vis::gui {
                 selected_ids_.insert(node_id);
             }
             click_anchor_id_ = node_id;
-        } else if (shift && click_anchor_id_ != core::NULL_NODE) {
-            scene_manager->selectNodesById(rangeSelectionIds(click_anchor_id_, node_id));
-            selected_ids_.clear();
-            const auto lo = flat_index_by_id_.find(click_anchor_id_);
-            const auto hi = flat_index_by_id_.find(node_id);
-            if (lo != flat_index_by_id_.end() && hi != flat_index_by_id_.end()) {
-                const size_t start = std::min(lo->second, hi->second);
-                const size_t end = std::max(lo->second, hi->second);
-                for (size_t i = start; i <= end; ++i)
-                    selected_ids_.insert(flat_rows_[i].id);
-            } else {
-                selected_ids_.insert(node_id);
-            }
         } else {
             if (selected_ids_.size() == 1 && selected_ids_.contains(node_id))
                 return;
@@ -1733,10 +1949,12 @@ namespace lfs::vis::gui {
             return false;
 
         if (node->type == core::NodeType::CAMERA) {
+            camera_preview_navigation_active_ = true;
             cmd::OpenCameraPreview{.cam_id = node->camera_uid}.emit();
             return true;
         }
         if (node->type == core::NodeType::KEYFRAME && node->keyframe) {
+            camera_preview_navigation_active_ = false;
             cmd::SequencerGoToKeyframe{.keyframe_index = node->keyframe->keyframe_index}.emit();
             return true;
         }
@@ -1765,6 +1983,9 @@ namespace lfs::vis::gui {
     }
 
     core::NodeId SceneGraphElement::selectionCursor() const {
+        if (keyboard_cursor_id_ != core::NULL_NODE &&
+            flat_index_by_id_.contains(keyboard_cursor_id_))
+            return keyboard_cursor_id_;
         if (click_anchor_id_ != core::NULL_NODE && selected_ids_.contains(click_anchor_id_))
             return click_anchor_id_;
         for (const FlatRow& row : flat_rows_) {
@@ -1774,7 +1995,9 @@ namespace lfs::vis::gui {
         return core::NULL_NODE;
     }
 
-    bool SceneGraphElement::moveSelection(const int delta, const bool extend) {
+    bool SceneGraphElement::moveSelectionCursor(const int delta,
+                                                const bool extend,
+                                                const bool toggle) {
         auto* scene_manager = services().sceneOrNull();
         if (!scene_manager || flat_rows_.empty())
             return false;
@@ -1793,7 +2016,10 @@ namespace lfs::vis::gui {
             return false;
 
         if (extend) {
-            const core::NodeId anchor = click_anchor_id_ != core::NULL_NODE ? click_anchor_id_ : target;
+            const core::NodeId anchor = click_anchor_id_ != core::NULL_NODE
+                                            ? click_anchor_id_
+                                            : (current != core::NULL_NODE ? current : target);
+            click_anchor_id_ = anchor;
             scene_manager->selectNodesById(rangeSelectionIds(anchor, target));
             selected_ids_.clear();
             const auto lo = flat_index_by_id_.find(anchor);
@@ -1806,11 +2032,23 @@ namespace lfs::vis::gui {
             } else {
                 selected_ids_.insert(target);
             }
+        } else if (toggle) {
+            const core::NodeId toggled = current != core::NULL_NODE ? current : target;
+            if (selected_ids_.contains(toggled))
+                selected_ids_.erase(toggled);
+            else
+                selected_ids_.insert(toggled);
+            scene_manager->selectNodesById(
+                std::vector<core::NodeId>(selected_ids_.begin(), selected_ids_.end()));
+        }
+        keyboard_cursor_id_ = target;
+        if (camera_preview_navigation_active_ &&
+            PanelRegistry::instance().is_panel_enabled("lfs.image_preview")) {
+            const auto* node = scene_manager->getScene().getNodeById(target);
+            if (node && node->type == core::NodeType::CAMERA)
+                cmd::OpenCameraPreview{.cam_id = node->camera_uid}.emit();
         } else {
-            scene_manager->selectNode(target);
-            selected_ids_.clear();
-            selected_ids_.insert(target);
-            click_anchor_id_ = target;
+            camera_preview_navigation_active_ = false;
         }
         scrollNodeIntoView(target);
         markStateDirty();
@@ -1867,11 +2105,7 @@ namespace lfs::vis::gui {
         markStateDirty();
     }
 
-    void SceneGraphElement::toggleModelsSection() {
-        models_collapsed_ = !models_collapsed_;
-        markStateDirty();
-        syncVisibleRows(true);
-    }
+    void SceneGraphElement::toggleModelsSection() {}
 
     bool SceneGraphElement::isValidDropContainer(const core::NodeId container_id) const {
         if (drag_source_id_ == core::NULL_NODE)
@@ -1933,12 +2167,12 @@ namespace lfs::vis::gui {
         int index = -1;
         core::NodeId into_group = core::NULL_NODE;
         bool show_line = false;
-        int line_top_dp = kHeaderHeightDpInt;
+        int line_top_dp = 0;
         int line_left_dp = 4;
 
         if (hovered_id == core::NULL_NODE || !hovered_slot) {
             show_line = true;
-            line_top_dp = kHeaderHeightDpInt + static_cast<int>(flat_rows_.size()) * kRowHeightDpInt;
+            line_top_dp = static_cast<int>(flat_rows_.size()) * kRowHeightDpInt;
         } else {
             const auto snap_it = node_snapshots_.find(hovered_id);
             const auto flat_it = flat_index_by_id_.find(hovered_id);
@@ -1961,9 +2195,9 @@ namespace lfs::vis::gui {
                 parent = snap_it->second.parent_id;
                 index = siblingIndexOf(hovered_id) + (after ? 1 : 0);
                 show_line = true;
-                line_top_dp = kHeaderHeightDpInt + static_cast<int>(fidx) * kRowHeightDpInt +
+                line_top_dp = static_cast<int>(fidx) * kRowHeightDpInt +
                               (after ? kRowHeightDpInt : 0);
-                line_left_dp = 4 + depth * 16;
+                line_left_dp = 21 + depth * 16;
             }
         }
 
@@ -2030,15 +2264,163 @@ namespace lfs::vis::gui {
             drag_ghost_->SetProperty("display", "none");
     }
 
-    std::vector<core::NodeId> SceneGraphElement::deleteEnabledSelectedNodeIds() const {
-        std::vector<core::NodeId> ids;
-        ids.reserve(selected_ids_.size());
+    SceneGraphElement::SelectionActionState SceneGraphElement::selectionActionState() const {
+        SelectionActionState state;
+        state.count = selected_ids_.size();
+        if (selected_ids_.empty())
+            return state;
+
+        state.all_visible = true;
+        state.all_training_compatible = true;
+        state.all_training_enabled = true;
+        state.all_delete_enabled = true;
         for (const core::NodeId id : selected_ids_) {
             const auto it = node_snapshots_.find(id);
-            if (it != node_snapshots_.end() && it->second.delete_enabled)
-                ids.push_back(id);
+            if (it == node_snapshots_.end()) {
+                state.all_visible = false;
+                state.all_training_compatible = false;
+                state.all_training_enabled = false;
+                state.all_delete_enabled = false;
+                continue;
+            }
+            const NodeSnapshot& node = it->second;
+            state.all_visible = state.all_visible && node.visible;
+            state.any_visible = state.any_visible || node.visible;
+            state.all_training_compatible = state.all_training_compatible && node.can_toggle_training;
+            state.all_training_enabled = state.all_training_enabled &&
+                                         node.can_toggle_training && node.training_enabled;
+            state.any_training_enabled = state.any_training_enabled ||
+                                         (node.can_toggle_training &&
+                                          (node.training_enabled || node.training_mixed));
+            state.all_delete_enabled = state.all_delete_enabled && node.delete_enabled;
         }
-        return ids;
+        return state;
+    }
+
+    void SceneGraphElement::setSelectedVisibility(const bool visible) {
+        auto* scene_manager = services().sceneOrNull();
+        if (!scene_manager)
+            return;
+
+        bool update_frustums = false;
+        for (const core::NodeId id : selected_ids_) {
+            const auto snapshot_it = node_snapshots_.find(id);
+            if (snapshot_it == node_snapshots_.end())
+                continue;
+            if (snapshot_it->second.camera_frustum_container) {
+                update_frustums = true;
+            } else if (snapshot_it->second.visible != visible) {
+                scene_manager->setNodeVisibility(id, visible);
+            }
+        }
+        if (update_frustums) {
+            if (auto* rendering = services().renderingOrNull()) {
+                auto settings = rendering->getSettings();
+                settings.show_camera_frustums = visible;
+                rendering->updateSettings(settings);
+            }
+        }
+        tree_rebuild_needed_ = true;
+        markStateDirty();
+    }
+
+    void SceneGraphElement::setSelectedTrainingEnabled(const bool enabled) {
+        if (!selectionActionState().all_training_compatible)
+            return;
+        toggleSelectedTraining(enabled);
+        tree_rebuild_needed_ = true;
+        markStateDirty();
+    }
+
+    void SceneGraphElement::requestDeleteSelection() {
+        if (!selectionActionState().all_delete_enabled)
+            return;
+        deleteSelectedNodes();
+    }
+
+    void SceneGraphElement::clearSelectedNodes() {
+        if (selected_ids_.empty())
+            return;
+        if (auto* scene_manager = services().sceneOrNull())
+            scene_manager->clearSelection();
+        selected_ids_.clear();
+        click_anchor_id_ = core::NULL_NODE;
+        markStateDirty();
+    }
+
+    void SceneGraphElement::requestDeleteNodes(const std::vector<core::NodeId>& node_ids) {
+        auto* gui = services().guiOrNull();
+        auto* scene_manager = services().sceneOrNull();
+        if (!gui || !scene_manager || node_ids.empty())
+            return;
+
+        const auto& scene = scene_manager->getScene();
+        std::vector<core::Uuid> node_uuids;
+        node_uuids.reserve(node_ids.size());
+        std::string single_name;
+        for (const core::NodeId node_id : node_ids) {
+            const auto snapshot_it = node_snapshots_.find(node_id);
+            const auto* node = scene.getNodeById(node_id);
+            if (!node || snapshot_it == node_snapshots_.end() || !snapshot_it->second.delete_enabled) {
+                LOG_WARN("Scene node deletion request aborted: the complete selection is no longer removable");
+                return;
+            }
+            if (const auto result = scene_manager->canRemoveNode(node_id); !result) {
+                LOG_WARN("Scene node deletion request aborted: {}", result.error());
+                return;
+            }
+            node_uuids.push_back(node->uuid);
+            if (single_name.empty())
+                single_name = node->name;
+        }
+        if (node_uuids.empty())
+            return;
+
+        const std::string delete_button = tr(string_keys::Scene::DELETE_ITEM);
+        lfs::core::ModalRequest request;
+        request.title = tr(string_keys::Scene::DELETE_CONFIRMATION_TITLE);
+        request.style = lfs::core::ModalStyle::Warning;
+        request.width_dp = 440;
+        const std::string message = node_uuids.size() == 1
+                                        ? LOCF(string_keys::Scene::DELETE_CONFIRMATION_SINGLE, single_name)
+                                        : LOCF(string_keys::Scene::DELETE_CONFIRMATION_MULTIPLE, node_uuids.size());
+        request.body_rml = encode(message);
+        request.buttons = {
+            {tr(string_keys::Common::CANCEL), "secondary"},
+            {delete_button, "warning"},
+        };
+        request.on_result = [node_uuids = std::move(node_uuids), delete_button](
+                                const lfs::core::ModalResult& result) {
+            if (result.button_label != delete_button)
+                return;
+            auto* live_manager = services().sceneOrNull();
+            if (!live_manager)
+                return;
+            auto& live_scene = live_manager->getScene();
+            std::vector<core::NodeId> live_ids;
+            live_ids.reserve(node_uuids.size());
+            for (const core::Uuid& uuid : node_uuids) {
+                const core::NodeId live_id = live_scene.getNodeIdByUuid(uuid);
+                const auto* live_node = live_scene.getNodeById(live_id);
+                if (!live_node) {
+                    LOG_WARN("Scene node deletion aborted after confirmation: a selected node no longer exists");
+                    return;
+                }
+                if (const auto can_remove = live_manager->canRemoveNode(live_id); !can_remove) {
+                    LOG_WARN("Scene node deletion aborted after confirmation: {}", can_remove.error());
+                    return;
+                }
+                live_ids.push_back(live_id);
+            }
+            if (live_ids.size() != node_uuids.size())
+                return;
+            if (const auto delete_result =
+                    live_manager->removeNodesByIdsWithResult(live_ids, /*keep_children=*/false);
+                !delete_result) {
+                LOG_WARN("Scene node deletion failed after confirmation: {}", delete_result.error());
+            }
+        };
+        gui->enqueueModal(std::move(request));
     }
 
     void SceneGraphElement::deleteSelectedNodes() {
@@ -2046,24 +2428,10 @@ namespace lfs::vis::gui {
         if (!scene_manager)
             return;
 
-        const auto ids = deleteEnabledSelectedNodeIds();
-        if (ids.empty())
+        if (selected_ids_.empty())
             return;
-
-        std::vector<std::string> names;
-        names.reserve(ids.size());
-        for (const core::NodeId id : ids) {
-            const auto* node = scene_manager->getScene().getNodeById(id);
-            if (!node)
-                continue;
-            names.push_back(node->name);
-        }
-        if (names.empty())
-            return;
-
-        if (const auto result = scene_manager->removeNodesWithResult(names, /*keep_children=*/false); !result) {
-            LOG_WARN("{}", result.error());
-        }
+        const std::vector<core::NodeId> ids(selected_ids_.begin(), selected_ids_.end());
+        requestDeleteNodes(ids);
     }
 
     void SceneGraphElement::toggleChildrenTraining(const core::NodeId group_id, const bool enabled) {
@@ -2117,6 +2485,8 @@ namespace lfs::vis::gui {
             return;
 
         if (selected_ids_.size() > 1) {
+            items.push_back(makeAction(tr("scene.select_hierarchy"),
+                                       prefixedAction("select_hierarchy")));
             bool all_camera_like = true;
             for (const core::NodeId id : selected_ids_) {
                 const auto* selected = scene->getNodeById(id);
@@ -2135,14 +2505,18 @@ namespace lfs::vis::gui {
                                            prefixedAction("disable_all_selected_train")));
             }
 
-            const auto delete_enabled = deleteEnabledSelectedNodeIds();
-            if (!delete_enabled.empty()) {
+            const auto selection_state = selectionActionState();
+            if (selection_state.all_delete_enabled) {
                 items.push_back(makeAction(
-                    std::format("{} ({})", tr(string_keys::Scene::DELETE_ITEM), delete_enabled.size()),
+                    std::format("{} ({})", tr(string_keys::Scene::DELETE_ITEM), selection_state.count),
                     prefixedAction("delete_selected"),
                     !items.empty()));
             }
         } else {
+            if (node_snapshots_.at(node_id).has_children) {
+                items.push_back(makeAction(tr("scene.select_hierarchy"),
+                                           prefixedAction("select_hierarchy")));
+            }
             switch (node->type) {
             case core::NodeType::CAMERA:
                 items.push_back(makeAction(
@@ -2327,6 +2701,10 @@ namespace lfs::vis::gui {
             return;
 
         const std::string& kind = parts[0];
+        if (kind == "select_hierarchy") {
+            selectHierarchyFromSelection();
+            return;
+        }
         if (kind == "go_to_camera" && parts.size() >= 2) {
             cmd::GoToCamView{.cam_id = std::stoi(parts[1])}.emit();
             Blur();
@@ -2376,9 +2754,7 @@ namespace lfs::vis::gui {
                 const auto snapshot_it = node_snapshots_.find(node_id);
                 if (snapshot_it == node_snapshots_.end() || !snapshot_it->second.delete_enabled)
                     return;
-                if (const auto result = scene_manager->canRemoveNode(node_id); !result)
-                    return;
-                cmd::RemoveNodeById{.node_id = static_cast<int32_t>(node_id), .keep_children = false}.emit();
+                requestDeleteNodes({node_id});
             }
         } else if (kind == "rename" && parts.size() >= 2) {
             core::NodeId node_id = core::NULL_NODE;
@@ -2480,7 +2856,7 @@ namespace lfs::vis::gui {
         } else if (kind == "disable_all_selected_train") {
             toggleSelectedTraining(false);
         } else if (kind == "delete_selected") {
-            deleteSelectedNodes();
+            requestDeleteSelection();
         } else if (kind == "set_easing" && parts.size() >= 3) {
             cmd::SequencerSetKeyframeEasing{
                 .keyframe_index = static_cast<size_t>(std::stoul(parts[1])),
@@ -2555,10 +2931,19 @@ namespace lfs::vis::gui {
             if (node_id != core::NULL_NODE) {
                 handlePrimaryClick(node_id);
                 event.StopPropagation();
+            } else if (target == this || target == content_el_) {
+                clearSelectedNodes();
+                event.StopPropagation();
             }
         } else if (type == "dblclick") {
             if (isTextInputTarget(target))
                 return;
+            for (auto* current = target; current && current != this; current = current->GetParentNode()) {
+                if (!current->GetAttribute<Rml::String>("data-action", "").empty()) {
+                    event.StopPropagation();
+                    return;
+                }
+            }
             const core::NodeId node_id = nodeIdFromTarget(target);
             if (node_id != core::NULL_NODE && activateNode(node_id))
                 event.StopPropagation();
@@ -2571,7 +2956,7 @@ namespace lfs::vis::gui {
                                          event.GetParameter("mouse_x", 0.0f),
                                          event.GetParameter("mouse_y", 0.0f));
                     event.StopPropagation();
-                } else if (isModelsHeaderTarget(target)) {
+                } else if (target == this || target == content_el_ || isModelsHeaderTarget(target)) {
                     showModelsHeaderContextMenu(event.GetParameter("mouse_x", 0.0f),
                                                 event.GetParameter("mouse_y", 0.0f));
                     event.StopPropagation();
@@ -2586,11 +2971,11 @@ namespace lfs::vis::gui {
 
             switch (key) {
             case Rml::Input::KI_UP:
-                if (!ctrlDown() && moveSelection(-1, shiftDown()))
+                if (moveSelectionCursor(-1, shiftDown(), ctrlDown() && !shiftDown()))
                     event.StopPropagation();
                 break;
             case Rml::Input::KI_DOWN:
-                if (!ctrlDown() && moveSelection(1, shiftDown()))
+                if (moveSelectionCursor(1, shiftDown(), ctrlDown() && !shiftDown()))
                     event.StopPropagation();
                 break;
             case Rml::Input::KI_RETURN: {
@@ -2606,13 +2991,16 @@ namespace lfs::vis::gui {
                 break;
             case Rml::Input::KI_DELETE:
                 if (rename_node_id_ == core::NULL_NODE) {
-                    deleteSelectedNodes();
+                    requestDeleteSelection();
                     event.StopPropagation();
                 }
                 break;
             case Rml::Input::KI_ESCAPE:
                 if (rename_node_id_ != core::NULL_NODE) {
                     cancelRename();
+                    event.StopPropagation();
+                } else if (!selected_ids_.empty()) {
+                    clearSelectedNodes();
                     event.StopPropagation();
                 }
                 break;
