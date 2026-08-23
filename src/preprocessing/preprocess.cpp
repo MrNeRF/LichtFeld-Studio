@@ -655,6 +655,10 @@ namespace {
                              const fs::path& image_path,
                              const fs::path& images_dir) {
         fs::path rel = image_path.lexically_relative(images_dir);
+        const auto generic = rel.generic_string();
+        if (rel.empty() || generic == "." || generic == ".." || generic.starts_with("../")) {
+            rel = image_path.filename();
+        }
         rel.replace_extension(".png");
         return dataset_root / std::string(folder) / rel;
     }

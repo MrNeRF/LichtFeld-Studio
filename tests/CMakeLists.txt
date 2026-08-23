@@ -424,6 +424,8 @@ set(TEST_FILES
     test_operator_registry_props.cpp
     test_fastgs_analytical_gradients.cpp
     test_normal_prior_decode.cpp
+    test_normal_auto_generate.cpp
+    test_metrics_evaluator.cpp
     test_background_image.cpp
     test_nvcodec_jpeg2k_16bit.cpp
     test_compressed_blob_tier.cpp

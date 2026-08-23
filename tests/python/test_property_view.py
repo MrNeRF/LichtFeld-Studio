@@ -252,6 +252,24 @@ EXPECTED_NUMBER_ROWS = {
         1_000.0,
         False,
     ),
+    "normal_start_fraction": (
+        "training_params.normal_start_fraction",
+        "training.tooltip.normal_start_fraction",
+        3,
+        0.01,
+        0.0,
+        1.0,
+        False,
+    ),
+    "normal_end_fraction": (
+        "training_params.normal_end_fraction",
+        "training.tooltip.normal_end_fraction",
+        3,
+        0.01,
+        0.0,
+        1.0,
+        False,
+    ),
     "opacity_reg": (
         "training.losses.opacity_reg",
         "training.tooltip.opacity_reg",
@@ -375,6 +393,10 @@ EXPECTED_CHECKBOX_ROWS = {
         "training_params.use_normal_loss",
         "training.tooltip.use_normal_loss",
     ),
+    "normal_auto_generate": (
+        "training_params.normal_auto_generate",
+        "training.tooltip.normal_auto_generate",
+    ),
     "enable_sparsity": (
         "training_params.sparsity",
         "training.tooltip.sparsity",
@@ -446,6 +468,7 @@ EXPECTED_ADVANCED_IDS = (
     "scaling_lr_end",
     "cropbox_lr_scale",
     "cropbox_loss_weight",
+    "morton_reorder_interval",
     "min_opacity",
     "growth_grad_threshold",
     "grow_fraction",
@@ -482,13 +505,13 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     assert property_view.NUMBER_PROPS == tuple(EXPECTED_NUMBER_ROWS)
     assert property_view.BOOL_PROPS == tuple(EXPECTED_CHECKBOX_ROWS)
     assert property_view.SELECT_PROPS == tuple(EXPECTED_SELECT_ROWS)
-    assert len(property_view.MIGRATED_PROP_IDS) == 55
-    assert len(set(property_view.MIGRATED_PROP_IDS)) == 55
+    assert len(property_view.MIGRATED_PROP_IDS) == 58
+    assert len(set(property_view.MIGRATED_PROP_IDS)) == 58
 
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(rendered) == len(set(rendered)) == 69
+    assert len(rendered) == len(set(rendered)) == 73
     assert set(rendered) == (
         set(property_view.MIGRATED_PROP_IDS) | set(EXPECTED_ADVANCED_IDS)
     ) - set(property_view.BESPOKE_OR_HIDDEN)

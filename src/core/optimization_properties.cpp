@@ -198,6 +198,7 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.morton_reorder_interval")
             .precision(0)
             .ui_step(1000)
+            .flags(PROP_ADVANCED)
             .all_strategies()
             .float_prop(&OptimizationParameters::min_opacity,
                         "min_opacity", "Min Opacity", d.min_opacity, 0.0f, std::numeric_limits<float>::infinity(),
@@ -295,6 +296,12 @@ namespace lfs::core::param {
             .locale("training_params.use_normal_loss")
             .tooltip("training.tooltip.use_normal_loss")
             .all_strategies()
+            .bool_prop(&OptimizationParameters::normal_auto_generate,
+                       "normal_auto_generate", "Auto-generate Normals", d.normal_auto_generate,
+                       "Generate missing or size-mismatched maps with MoGe-2 from the full-resolution images/ folder so they work at every training resolution")
+            .locale("training_params.normal_auto_generate")
+            .tooltip("training.tooltip.normal_auto_generate")
+            .all_strategies()
             .float_prop(&OptimizationParameters::normal_loss_weight,
                         "normal_loss_weight", "Normal Loss Weight", d.normal_loss_weight, 0.0f, 100.0f,
                         "Weight for prior normal supervision")
@@ -318,6 +325,22 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.normal_flatten_weight")
             .precision(3)
             .ui_step(0.1)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::normal_start_fraction,
+                        "normal_start_fraction", "Normal Start Fraction", d.normal_start_fraction, 0.0f, 1.0f,
+                        "Fraction of total iterations at which normal supervision starts")
+            .locale("training_params.normal_start_fraction")
+            .tooltip("training.tooltip.normal_start_fraction")
+            .precision(3)
+            .ui_step(0.01)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::normal_end_fraction,
+                        "normal_end_fraction", "Normal End Fraction", d.normal_end_fraction, 0.0f, 1.0f,
+                        "Fraction of total iterations at which normal supervision stops; 1.0 keeps it on until the end")
+            .locale("training_params.normal_end_fraction")
+            .tooltip("training.tooltip.normal_end_fraction")
+            .precision(3)
+            .ui_step(0.01)
             .all_strategies()
             .enum_prop(&OptimizationParameters::normal_loss_space,
                        "normal_loss_space", "Normal Loss Space", d.normal_loss_space,

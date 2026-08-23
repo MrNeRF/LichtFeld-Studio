@@ -568,6 +568,9 @@ namespace lfs::training {
             AdamOptimizer& optimizer);
         [[nodiscard]] bool morton_reorder_due(int iter) const;
         void maybe_morton_reorder(int iter);
+        [[nodiscard]] bool normal_supervision_active(int iter) const {
+            return params_.optimization.normal_supervision_active(iter);
+        }
 
         // Cleanup method for re-initialization
         void cleanup();

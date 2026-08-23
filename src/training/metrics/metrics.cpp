@@ -3,8 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "metrics.hpp"
+#include "../kernels/normal_loss.hpp"
 #include "../rasterization/fast_rasterizer.hpp"
 #include "../rasterization/gsplat_rasterizer.hpp"
+#include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/events.hpp"
 #include "core/image_io.hpp"
@@ -18,12 +20,15 @@
 #include <cassert>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <ctime>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace lfs::training {
 
@@ -212,6 +217,180 @@ namespace lfs::training {
         return value;
     }
 
+    namespace {
+        lfs::core::Tensor squeeze_to_hw(const lfs::core::Tensor& t) {
+            if (t.ndim() == 3 && t.shape()[0] == 1) {
+                return t.squeeze(0);
+            }
+            return t;
+        }
+
+        float bilinear_sample_hw(const float* depth, const int height, const int width,
+                                 const float x, const float y) {
+            const float px = std::clamp(x - 0.5f, 0.0f, static_cast<float>(std::max(width - 1, 0)));
+            const float py = std::clamp(y - 0.5f, 0.0f, static_cast<float>(std::max(height - 1, 0)));
+            const int x0 = static_cast<int>(px);
+            const int y0 = static_cast<int>(py);
+            const int x1 = std::min(x0 + 1, std::max(width - 1, 0));
+            const int y1 = std::min(y0 + 1, std::max(height - 1, 0));
+            const float wx = px - static_cast<float>(x0);
+            const float wy = py - static_cast<float>(y0);
+            const float v00 = depth[static_cast<size_t>(y0) * static_cast<size_t>(width) + static_cast<size_t>(x0)];
+            const float v10 = depth[static_cast<size_t>(y0) * static_cast<size_t>(width) + static_cast<size_t>(x1)];
+            const float v01 = depth[static_cast<size_t>(y1) * static_cast<size_t>(width) + static_cast<size_t>(x0)];
+            const float v11 = depth[static_cast<size_t>(y1) * static_cast<size_t>(width) + static_cast<size_t>(x1)];
+            return v00 * (1.0f - wx) * (1.0f - wy) +
+                   v10 * wx * (1.0f - wy) +
+                   v01 * (1.0f - wx) * wy +
+                   v11 * wx * wy;
+        }
+
+        std::optional<float> mean_of_finite(const std::vector<float>& values) {
+            double sum = 0.0;
+            size_t count = 0;
+            for (const float value : values) {
+                if (std::isfinite(value)) {
+                    sum += static_cast<double>(value);
+                    ++count;
+                }
+            }
+            if (count == 0) {
+                return std::nullopt;
+            }
+            return static_cast<float>(sum / static_cast<double>(count));
+        }
+    } // namespace
+
+    std::optional<float> mean_normal_angle_deg(
+        const lfs::core::Tensor& rendered_normal,
+        const lfs::core::Tensor& prior_normal,
+        const lfs::core::Tensor& rendered_alpha) {
+        if (!rendered_normal.is_valid() || !prior_normal.is_valid() || !rendered_alpha.is_valid()) {
+            return std::nullopt;
+        }
+        if (rendered_normal.ndim() != 3 || rendered_normal.shape()[0] != 3 ||
+            prior_normal.ndim() != 3 || prior_normal.shape()[0] != 3) {
+            return std::nullopt;
+        }
+        const int height = static_cast<int>(rendered_normal.shape()[1]);
+        const int width = static_cast<int>(rendered_normal.shape()[2]);
+        if (height <= 0 || width <= 0) {
+            return std::nullopt;
+        }
+        if (prior_normal.shape()[1] != static_cast<size_t>(height) ||
+            prior_normal.shape()[2] != static_cast<size_t>(width)) {
+            return std::nullopt;
+        }
+
+        auto alpha = squeeze_to_hw(rendered_alpha);
+        if (alpha.ndim() != 2 ||
+            alpha.shape()[0] != static_cast<size_t>(height) ||
+            alpha.shape()[1] != static_cast<size_t>(width)) {
+            return std::nullopt;
+        }
+
+        const auto rendered_cpu = rendered_normal.cpu().contiguous();
+        const auto prior_cpu = prior_normal.cpu().contiguous();
+        const auto alpha_cpu = alpha.cpu().contiguous();
+        if (rendered_cpu.dtype() != lfs::core::DataType::Float32 ||
+            prior_cpu.dtype() != lfs::core::DataType::Float32 ||
+            alpha_cpu.dtype() != lfs::core::DataType::Float32) {
+            return std::nullopt;
+        }
+
+        const float* const rendered = rendered_cpu.ptr<float>();
+        const float* const prior = prior_cpu.ptr<float>();
+        const float* const alpha_ptr = alpha_cpu.ptr<float>();
+        const size_t hw = static_cast<size_t>(height) * static_cast<size_t>(width);
+
+        double sum_deg = 0.0;
+        size_t count = 0;
+        constexpr float kRad2Deg = 57.29577951308232f;
+        for (size_t i = 0; i < hw; ++i) {
+            const float a = alpha_ptr[i];
+            if (!std::isfinite(a) || a <= kernels::kNormalLossMinAlpha) {
+                continue;
+            }
+            const float tx = prior[i];
+            const float ty = prior[hw + i];
+            const float tz = prior[2 * hw + i];
+            const float nx = rendered[i];
+            const float ny = rendered[hw + i];
+            const float nz = rendered[2 * hw + i];
+            if (!std::isfinite(tx) || !std::isfinite(ty) || !std::isfinite(tz) ||
+                !std::isfinite(nx) || !std::isfinite(ny) || !std::isfinite(nz)) {
+                continue;
+            }
+            const float t_norm = std::sqrt(tx * tx + ty * ty + tz * tz);
+            const float n_norm = std::sqrt(nx * nx + ny * ny + nz * nz);
+            if (t_norm < kernels::kNormalLossMinPriorNorm ||
+                n_norm < kernels::kNormalLossMinRenderNorm) {
+                continue;
+            }
+            float cos_ang = (tx * nx + ty * ny + tz * nz) / (t_norm * n_norm);
+            cos_ang = std::clamp(cos_ang, -1.0f, 1.0f);
+            sum_deg += static_cast<double>(std::acos(cos_ang) * kRad2Deg);
+            ++count;
+        }
+        if (count == 0) {
+            return std::nullopt;
+        }
+        return static_cast<float>(sum_deg / static_cast<double>(count));
+    }
+
+    std::optional<float> median_depth_absrel(
+        const lfs::core::Tensor& rendered_depth,
+        const std::vector<DepthAbsRelSample>& samples) {
+        if (!rendered_depth.is_valid() || samples.empty()) {
+            return std::nullopt;
+        }
+        auto depth = squeeze_to_hw(rendered_depth);
+        if (depth.ndim() != 2) {
+            return std::nullopt;
+        }
+        const int height = static_cast<int>(depth.shape()[0]);
+        const int width = static_cast<int>(depth.shape()[1]);
+        if (height <= 0 || width <= 0) {
+            return std::nullopt;
+        }
+
+        const auto depth_cpu = depth.cpu().contiguous();
+        if (depth_cpu.dtype() != lfs::core::DataType::Float32) {
+            return std::nullopt;
+        }
+        const float* const depth_ptr = depth_cpu.ptr<float>();
+
+        std::vector<float> errors;
+        errors.reserve(samples.size());
+        for (const auto& sample : samples) {
+            if (!std::isfinite(sample.true_depth) || sample.true_depth <= 1.0e-6f ||
+                !std::isfinite(sample.u) || !std::isfinite(sample.v)) {
+                continue;
+            }
+            if (sample.u < 0.0f || sample.v < 0.0f ||
+                sample.u > static_cast<float>(width) ||
+                sample.v > static_cast<float>(height)) {
+                continue;
+            }
+            const float rendered = bilinear_sample_hw(depth_ptr, height, width, sample.u, sample.v);
+            if (!std::isfinite(rendered) || rendered <= 0.0f) {
+                continue;
+            }
+            errors.push_back(std::abs(rendered - sample.true_depth) / sample.true_depth);
+        }
+        if (errors.empty()) {
+            return std::nullopt;
+        }
+        const size_t mid = errors.size() / 2;
+        std::nth_element(errors.begin(), errors.begin() + static_cast<std::ptrdiff_t>(mid), errors.end());
+        if (errors.size() % 2 == 0 && mid > 0) {
+            const float upper = errors[mid];
+            const float lower = *std::max_element(errors.begin(), errors.begin() + static_cast<std::ptrdiff_t>(mid));
+            return 0.5f * (lower + upper);
+        }
+        return errors[mid];
+    }
+
     // MetricsReporter Implementation
     MetricsReporter::MetricsReporter(const std::filesystem::path& output_dir)
         : output_dir_(output_dir),
@@ -288,6 +467,12 @@ namespace lfs::training {
             report_file << "SSIM:  " << final.ssim << "\n";
             report_file << "Time per image: " << final.elapsed_time << " seconds\n";
             report_file << "Number of Gaussians: " << final.num_gaussians << "\n";
+            if (final.normal_angle_deg && std::isfinite(*final.normal_angle_deg)) {
+                report_file << "Normal angle (deg): " << *final.normal_angle_deg << "\n";
+            }
+            if (final.depth_absrel && std::isfinite(*final.depth_absrel)) {
+                report_file << "Depth AbsRel: " << *final.depth_absrel << "\n";
+            }
         }
 
         // Detailed results
@@ -430,7 +615,7 @@ namespace lfs::training {
         result.num_gaussians = static_cast<int>(splatData.size());
         result.iteration = iteration;
 
-        std::vector<float> psnr_values, ssim_values;
+        std::vector<float> psnr_values, ssim_values, normal_values, depth_values;
         const auto start_time = std::chrono::steady_clock::now();
 
         // Create directory for evaluation images
@@ -450,6 +635,16 @@ namespace lfs::training {
             mask_mode == lfs::core::param::MaskMode::Segment ||
             mask_mode == lfs::core::param::MaskMode::Ignore ||
             mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore;
+
+        bool render_normal = false;
+        if (!_params.optimization.gut) {
+            for (size_t image_idx = 0; image_idx < val_dataset_size; ++image_idx) {
+                if (val_dataset->get_camera(image_idx)->has_normal()) {
+                    render_normal = true;
+                    break;
+                }
+            }
+        }
 
         for (size_t image_idx = 0; image_idx < val_dataset_size; ++image_idx) {
             lfs::core::Camera* cam = val_dataset->get_camera(image_idx);
@@ -488,7 +683,8 @@ namespace lfs::training {
                 r_output = gsplat_rasterize(*cam, splatData_mutable, background,
                                             1.0f, false, GsplatRenderMode::RGB, true);
             } else {
-                r_output = fast_rasterize(*cam, splatData_mutable, background, _params.optimization.mip_filter);
+                r_output = fast_rasterize(*cam, splatData_mutable, background,
+                                          _params.optimization.mip_filter, {}, render_normal);
             }
             if (appearance_ && r_output.image.is_valid()) {
                 r_output.image = appearance_(r_output.image, *cam);
@@ -516,6 +712,93 @@ namespace lfs::training {
             psnr_values.push_back(psnr);
             ssim_values.push_back(ssim);
             evaluated_images++;
+
+            try {
+                if (render_normal && cam->has_normal()) {
+                    if (!r_output.normal.is_valid() || r_output.normal.numel() == 0) {
+                        LOG_DEBUG("Eval: normal_angle_deg skipped for '{}': rendered normal is empty",
+                                  cam->image_name());
+                    } else {
+                        lfs::core::Tensor prior = cam->load_and_get_normal(
+                            _params.dataset.resize_factor,
+                            _params.dataset.max_width,
+                            _normal_prior_decode);
+                        cam->release_normal_cache();
+                        if (!prior.is_valid() || prior.ndim() != 3 || prior.shape()[0] != 3) {
+                            LOG_DEBUG("Eval: normal_angle_deg skipped for '{}': prior normal is missing",
+                                      cam->image_name());
+                        } else {
+                            const int render_h = static_cast<int>(r_output.normal.shape()[1]);
+                            const int render_w = static_cast<int>(r_output.normal.shape()[2]);
+                            if (static_cast<int>(prior.shape()[1]) != render_h ||
+                                static_cast<int>(prior.shape()[2]) != render_w) {
+                                prior = lfs::core::lanczos_resize_float_chw(
+                                    prior, render_h, render_w, 2, r_output.normal.stream());
+                            }
+                            if (const auto angle = mean_normal_angle_deg(
+                                    r_output.normal, prior, r_output.alpha)) {
+                                normal_values.push_back(*angle);
+                            }
+                            if (_params.optimization.enable_save_eval_images &&
+                                std::getenv("LFS_EVAL_SAVE_NORMALS")) {
+                                const std::vector<lfs::core::Tensor> normal_maps = {
+                                    r_output.normal.clamp(-1.0f, 1.0f).mul(0.5f) + 0.5f,
+                                    prior.clamp(-1.0f, 1.0f).mul(0.5f) + 0.5f};
+                                lfs::core::image_io::save_images_async(
+                                    eval_dir / (std::to_string(image_idx) + "_normals.png"),
+                                    normal_maps,
+                                    true, // horizontal: rendered | prior
+                                    4,
+                                    lfs::core::provenance_to_json(
+                                        lfs::core::make_minimal_provenance_stamp()));
+                            }
+                        }
+                    }
+                }
+            } catch (const std::exception& e) {
+                LOG_DEBUG("Eval: normal_angle_deg skipped for '{}': {}", cam->image_name(), e.what());
+            }
+
+            try {
+                const auto& observations = cam->sfm_observations();
+                if (!observations.empty() &&
+                    r_output.depth.is_valid() &&
+                    r_output.depth.numel() > 0 &&
+                    cam->camera_width() > 0 &&
+                    cam->camera_height() > 0) {
+                    auto depth = squeeze_to_hw(r_output.depth);
+                    if (depth.ndim() == 2) {
+                        const int depth_h = static_cast<int>(depth.shape()[0]);
+                        const int depth_w = static_cast<int>(depth.shape()[1]);
+                        const float u_scale = static_cast<float>(depth_w) /
+                                              static_cast<float>(cam->camera_width());
+                        const float v_scale = static_cast<float>(depth_h) /
+                                              static_cast<float>(cam->camera_height());
+                        auto R_cpu = cam->R().cpu().contiguous();
+                        auto T_cpu = cam->T().cpu().contiguous();
+                        const float* const R = R_cpu.ptr<float>();
+                        const float* const T = T_cpu.ptr<float>();
+                        std::vector<DepthAbsRelSample> samples;
+                        samples.reserve(observations.size());
+                        for (const auto& observation : observations) {
+                            const float z = R[6] * observation.x + R[7] * observation.y +
+                                            R[8] * observation.z + T[2];
+                            if (!std::isfinite(z) || z <= 1.0e-6f) {
+                                continue;
+                            }
+                            samples.push_back(DepthAbsRelSample{
+                                .u = observation.u * u_scale,
+                                .v = observation.v * v_scale,
+                                .true_depth = z});
+                        }
+                        if (const auto absrel = median_depth_absrel(depth, samples)) {
+                            depth_values.push_back(*absrel);
+                        }
+                    }
+                }
+            } catch (const std::exception& e) {
+                LOG_DEBUG("Eval: depth_absrel skipped for '{}': {}", cam->image_name(), e.what());
+            }
 
             if (_params.optimization.enable_save_eval_images) {
                 auto gt_vis = image_as_float01(gt_image);
@@ -562,6 +845,8 @@ namespace lfs::training {
             result.psnr = std::accumulate(psnr_values.begin(), psnr_values.end(), 0.0f) / psnr_values.size();
             result.ssim = std::accumulate(ssim_values.begin(), ssim_values.end(), 0.0f) / ssim_values.size();
         }
+        result.normal_angle_deg = mean_of_finite(normal_values);
+        result.depth_absrel = mean_of_finite(depth_values);
         const size_t elapsed_denom = evaluated_images > 0 ? evaluated_images : std::max<size_t>(val_dataset_size, 1);
         result.elapsed_time = elapsed / static_cast<float>(elapsed_denom);
 

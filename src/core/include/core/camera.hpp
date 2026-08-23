@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <future>
 #include <string>
+#include <vector>
 
 namespace lfs::core {
 
@@ -156,6 +157,26 @@ namespace lfs::core {
         const std::filesystem::path& mask_path() const noexcept { return _mask_path; }
         const std::filesystem::path& depth_path() const noexcept { return _depth_path; }
         const std::filesystem::path& normal_path() const noexcept { return _normal_path; }
+        void set_normal_path(std::filesystem::path path);
+
+        // Sparse SfM observations for this image (COLMAP 2D points with a 3D id).
+        // Pixel coordinates are in the camera's native width/height at load
+        // (images_N scale already applied). World xyz is reconstruction space
+        // and follows Camera::translate.
+        struct SfmObservation {
+            float u = 0.0f;
+            float v = 0.0f;
+            float x = 0.0f;
+            float y = 0.0f;
+            float z = 0.0f;
+        };
+
+        void set_sfm_observations(std::vector<SfmObservation> observations) {
+            _sfm_observations = std::move(observations);
+        }
+        [[nodiscard]] const std::vector<SfmObservation>& sfm_observations() const noexcept {
+            return _sfm_observations;
+        }
 
         // Rewrites image/mask/depth/normal paths that live under old_root to the same
         // relative location under new_root. Paths outside old_root are left unchanged.
@@ -264,6 +285,8 @@ namespace lfs::core {
 
         // CUDA stream for async operations
         cudaStream_t _stream = nullptr;
+
+        std::vector<SfmObservation> _sfm_observations;
     };
     inline float focal2fov(float focal, int pixels) {
         return 2.0f * std::atan(pixels / (2.0f * focal));

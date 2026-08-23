@@ -93,6 +93,28 @@ namespace lfs::io {
         ".tiff",
     };
 
+    // Depth/normal sidecars are accepted at the COLMAP original image size, or at
+    // any integer multiple of the currently loaded training image. Original-size
+    // maps therefore work for every --images folder (images_2, images_8, ...).
+    [[nodiscard]] inline bool sidecar_dimensions_match_contract(
+        const int sidecar_width,
+        const int sidecar_height,
+        const int requested_width,
+        const int requested_height,
+        const int original_width,
+        const int original_height) noexcept {
+        if (sidecar_width == original_width && sidecar_height == original_height) {
+            return true;
+        }
+        if (requested_width <= 0 || requested_height <= 0 || sidecar_width <= 0 || sidecar_height <= 0) {
+            return false;
+        }
+        if (sidecar_width % requested_width != 0 || sidecar_height % requested_height != 0) {
+            return false;
+        }
+        return sidecar_width / requested_width == sidecar_height / requested_height;
+    }
+
     // Safe filesystem operations that don't throw
     inline bool safe_exists(const fs::path& path) {
         std::error_code ec;

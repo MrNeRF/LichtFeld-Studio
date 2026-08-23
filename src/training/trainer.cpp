@@ -48,6 +48,7 @@
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/vram_ledger.hpp"
 #include "losses/losses.hpp"
+#include "normal_auto_generate.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "python/runner.hpp"
 #include "rasterization/fast_rasterizer.hpp"
@@ -421,10 +422,6 @@ namespace lfs::training {
 
         constexpr float kDepthLossFinalScale = 0.02f;
         constexpr float kDepthLossGradientTermWeight = 1.0f;
-        // Normal supervision starts once the geometry has roughly formed
-        // (2DGS enables its normal term at ~23% of training): rotating fat,
-        // mispositioned Gaussians early only fights densification.
-        constexpr float kNormalSupervisionStartFraction = 0.2f;
 
         [[nodiscard]] kernels::DepthPriorType depth_prior_from_mode(const std::string_view mode) {
             if (mode == "ssi-disparity") {
@@ -5949,11 +5946,7 @@ namespace lfs::training {
                     install_cropbox_step_damping(strategy_->get_model(), strategy_->get_optimizer());
                 }
 
-                const int normal_start_iter = static_cast<int>(
-                    kNormalSupervisionStartFraction *
-                    static_cast<float>(std::max(1, params_.optimization.resolved_total_iterations())));
-                const bool normal_supervision_started =
-                    params_.optimization.use_normal_loss && iter >= normal_start_iter;
+                const bool normal_supervision_started = normal_supervision_active(iter);
 
                 FastGSFusedExtraGradients fused_extra_gradients;
                 lfs::core::Tensor fused_scale_reg_loss_gpu;
@@ -6678,7 +6671,7 @@ namespace lfs::training {
                         }
 
                         if (run_fastgs_gaussian_backward &&
-                            params_.optimization.use_normal_loss &&
+                            normal_supervision_started &&
                             params_.optimization.normal_loss_weight > 0.0f &&
                             output.normal.is_valid() &&
                             output.normal.numel() > 0 &&
@@ -6854,7 +6847,7 @@ namespace lfs::training {
                         }
 
                         if (run_fastgs_gaussian_backward &&
-                            params_.optimization.use_normal_loss &&
+                            normal_supervision_started &&
                             params_.optimization.normal_consistency_weight > 0.0f &&
                             output.normal.is_valid() &&
                             output.normal.numel() > 0 &&
@@ -7945,6 +7938,7 @@ namespace lfs::training {
                 params_.optimization.use_normal_loss &&
                 params_.optimization.normal_loss_weight > 0.0f;
             if (aux_pipeline_config.load_normals) {
+                ensure_training_normal_maps(params_, train_dataset_->get_cameras());
                 normal_prior_flip_yz_ = false;
                 normal_prior_world_space_ = false;
                 normal_prior_srgb_ = false;
@@ -8016,6 +8010,14 @@ namespace lfs::training {
                                 normal_prior_world_rotation_);
                     }
                 }
+            }
+            if (evaluator_) {
+                evaluator_->set_normal_prior_decode({
+                    .srgb = normal_prior_srgb_,
+                    .flip_yz = normal_prior_flip_yz_,
+                    .world_space = normal_prior_world_space_,
+                    .world_rotation = normal_prior_world_rotation_,
+                });
             }
             if (params_.optimization.mask_mode != lfs::core::param::MaskMode::None) {
                 aux_pipeline_config.invert_masks = params_.optimization.invert_masks;

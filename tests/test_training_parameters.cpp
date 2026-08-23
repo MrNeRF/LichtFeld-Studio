@@ -7,6 +7,7 @@
 #include "core/property_registry.hpp"
 #include "python/lfs/py_params.hpp"
 
+#include <algorithm>
 #include <any>
 #include <array>
 #include <cstdint>
@@ -359,6 +360,107 @@ namespace {
             old_json["normal_loss_space"] = wire;
             EXPECT_EQ(OptimizationParameters::from_json(old_json).normal_loss_space, space);
         }
+    }
+
+    TEST_F(TrainingParametersTest, NormalAutoGenerateRoundTripAndDefault) {
+        auto params = OptimizationParameters::mrnf_defaults();
+        EXPECT_TRUE(params.normal_auto_generate);
+        EXPECT_TRUE(params.validate().empty());
+
+        params.normal_auto_generate = false;
+        const auto json = params.to_json();
+        EXPECT_FALSE(json.at("normal_auto_generate").get<bool>());
+
+        const auto restored = OptimizationParameters::from_json(json);
+        EXPECT_FALSE(restored.normal_auto_generate);
+
+        auto missing = json;
+        missing.erase("normal_auto_generate");
+        const auto defaults = OptimizationParameters::from_json(missing);
+        EXPECT_TRUE(defaults.normal_auto_generate);
+    }
+
+    TEST_F(TrainingParametersTest, NormalSupervisionScheduleRoundTripAndValidation) {
+        auto params = OptimizationParameters::mrnf_defaults();
+        EXPECT_FLOAT_EQ(params.normal_start_fraction, 0.2f);
+        EXPECT_FLOAT_EQ(params.normal_end_fraction, 1.0f);
+        EXPECT_TRUE(params.validate().empty());
+
+        params.normal_start_fraction = 0.3f;
+        params.normal_end_fraction = 0.9f;
+        const auto json = params.to_json();
+        EXPECT_FLOAT_EQ(json.at("normal_start_fraction").get<float>(), 0.3f);
+        EXPECT_FLOAT_EQ(json.at("normal_end_fraction").get<float>(), 0.9f);
+
+        const auto restored = OptimizationParameters::from_json(json);
+        EXPECT_FLOAT_EQ(restored.normal_start_fraction, 0.3f);
+        EXPECT_FLOAT_EQ(restored.normal_end_fraction, 0.9f);
+        EXPECT_TRUE(restored.validate().empty());
+
+        auto missing = json;
+        missing.erase("normal_start_fraction");
+        missing.erase("normal_end_fraction");
+        const auto defaults = OptimizationParameters::from_json(missing);
+        EXPECT_FLOAT_EQ(defaults.normal_start_fraction, 0.2f);
+        EXPECT_FLOAT_EQ(defaults.normal_end_fraction, 1.0f);
+
+        params.normal_start_fraction = 0.8f;
+        params.normal_end_fraction = 0.4f;
+        const auto order_error = params.validate();
+        EXPECT_NE(order_error.find("normal_start_fraction must not exceed normal_end_fraction"),
+                  std::string::npos)
+            << order_error;
+
+        params.normal_start_fraction = 0.4f;
+        params.normal_end_fraction = 0.4f;
+        EXPECT_TRUE(params.validate().empty());
+
+        params.normal_start_fraction = 1.1f;
+        params.normal_end_fraction = 1.0f;
+        EXPECT_NE(params.validate().find("normal_start_fraction"), std::string::npos);
+        params.normal_start_fraction = 0.2f;
+        params.normal_end_fraction = -0.1f;
+        EXPECT_NE(params.validate().find("normal_end_fraction"), std::string::npos);
+    }
+
+    TEST_F(TrainingParametersTest, NormalSupervisionActiveRespectsStartEndAndStepsScaler) {
+        OptimizationParameters params;
+        params.use_normal_loss = true;
+        params.iterations = 30'000;
+        params.normal_start_fraction = 0.2f;
+        params.normal_end_fraction = 1.0f;
+
+        const int total = params.resolved_total_iterations();
+        ASSERT_EQ(total, 30'000);
+        const int start_iter = static_cast<int>(
+            params.normal_start_fraction * static_cast<float>(std::max(1, total)));
+        EXPECT_EQ(start_iter, 6'000);
+
+        EXPECT_FALSE(params.normal_supervision_active(start_iter - 1));
+        EXPECT_TRUE(params.normal_supervision_active(start_iter));
+        EXPECT_TRUE(params.normal_supervision_active(total));
+
+        params.use_normal_loss = false;
+        EXPECT_FALSE(params.normal_supervision_active(start_iter));
+        params.use_normal_loss = true;
+
+        params.normal_end_fraction = 0.8f;
+        EXPECT_TRUE(params.normal_supervision_active(start_iter));
+        EXPECT_TRUE(params.normal_supervision_active(23'999));
+        EXPECT_FALSE(params.normal_supervision_active(24'000));
+        EXPECT_FALSE(params.normal_supervision_active(total));
+
+        params.normal_end_fraction = 1.0f;
+        params.steps_scaler = 0.5f;
+        params.apply_step_scaling();
+        const int scaled_total = params.resolved_total_iterations();
+        EXPECT_EQ(scaled_total, 15'000);
+        const int scaled_start = static_cast<int>(
+            params.normal_start_fraction * static_cast<float>(std::max(1, scaled_total)));
+        EXPECT_EQ(scaled_start, 3'000);
+        EXPECT_FALSE(params.normal_supervision_active(scaled_start - 1));
+        EXPECT_TRUE(params.normal_supervision_active(scaled_start));
+        EXPECT_TRUE(params.normal_supervision_active(scaled_total));
     }
 
     TEST_F(TrainingParametersTest, OldNewToJsonParity) {
