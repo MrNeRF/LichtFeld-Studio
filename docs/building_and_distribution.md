@@ -3,7 +3,6 @@
 ## Requirements
 
 - CUDA Toolkit 12.8+
-- cuDNN 9 for CUDA 12 (CI installs cuDNN 9.5.0 only when the runner image does not already provide it)
 - CMake 3.30+
 - vcpkg (`VCPKG_ROOT` environment variable set)
 - GCC 14+ (Linux) or Visual Studio 2022 v17.10+ (Windows)
@@ -18,17 +17,6 @@ example from the x64 Native Tools Command Prompt). **MSBuild support for LLVM
 selectable in Visual Studio IDE projects; the vcpkg port itself does not use
 MSBuild. The rest of LichtFeld Studio continues to use the configured Visual
 Studio/MSVC toolchain.
-
-On Windows, set `CUDNN_ROOT_DIR` to the cuDNN version root so the build can copy
-the CUDA-versioned cuDNN runtime DLLs next to the executable and into portable
-installs:
-
-```bat
-set CUDNN_ROOT_DIR=C:\Program Files\NVIDIA\CUDNN\v9.24
-```
-
-For unusual layouts, pass `-DLFS_CUDNN_BIN_DIR=...` directly to the cuDNN DLL
-directory, for example `...\bin\<cuda-version>\x64`.
 
 ## Contributor Setup
 
