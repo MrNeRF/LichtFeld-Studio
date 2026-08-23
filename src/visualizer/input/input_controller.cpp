@@ -1873,6 +1873,8 @@ namespace lfs::vis {
                 return;
 
             case input::Action::DELETE_NODE:
+                if (gui && gui->requestDeleteSceneSelectionIfAvailable())
+                    return;
                 // Delete selected PLY node(s)
                 if (tool_context_) {
                     if (auto* sm = tool_context_->getSceneManager()) {

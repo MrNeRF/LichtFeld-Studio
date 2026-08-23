@@ -320,11 +320,10 @@ namespace lfs::core {
     }
 
     std::vector<std::unique_ptr<lfs::core::SplatData>> Scene::detachSplatModelsForRemoval(
-        std::string name,
+        const NodeId root_id,
         const bool keep_children) {
         std::vector<std::unique_ptr<lfs::core::SplatData>> detached;
 
-        const NodeId root_id = getNodeIdByName(name);
         if (root_id == NULL_NODE) {
             return detached;
         }

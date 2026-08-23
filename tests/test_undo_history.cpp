@@ -2605,6 +2605,77 @@ TEST_F(UndoHistoryTest, RemoveNodesWithResultValidatesAllBeforeDeletingAny) {
     EXPECT_EQ(scene.getNodeById(child_id), nullptr);
 }
 
+TEST_F(UndoHistoryTest, RemoveNodesWithResultUsesStableIdsForDuplicateNames) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto first_id = scene.restoreNodeWithUuid(lfs::core::Scene::RestoreNodeDesc{
+        .uuid = lfs::core::generate_uuid_v4(),
+        .type = lfs::core::NodeType::GROUP,
+        .name = "duplicate",
+    });
+    const auto second_id = scene.restoreNodeWithUuid(lfs::core::Scene::RestoreNodeDesc{
+        .uuid = lfs::core::generate_uuid_v4(),
+        .type = lfs::core::NodeType::GROUP,
+        .name = "duplicate",
+    });
+    ASSERT_NE(first_id, lfs::core::NULL_NODE);
+    ASSERT_NE(second_id, lfs::core::NULL_NODE);
+    ASSERT_NE(first_id, second_id);
+    const auto first_child_id = scene.addSplat("first-child", make_test_splat({0.0f, 0.0f, 0.0f}), first_id);
+    const auto second_child_id = scene.addSplat("second-child", make_test_splat({1.0f, 0.0f, 0.0f}), second_id);
+    const auto first_uuid = scene.getNodeById(first_id)->uuid;
+    const auto second_uuid = scene.getNodeById(second_id)->uuid;
+    const auto first_child_uuid = scene.getNodeById(first_child_id)->uuid;
+    const auto second_child_uuid = scene.getNodeById(second_child_id)->uuid;
+
+    const auto result = scene_manager->removeNodesByIdsWithResult(
+        std::vector<lfs::core::NodeId>{second_id}, false);
+    ASSERT_TRUE(result) << (result ? "" : result.error());
+    EXPECT_NE(scene.getNodeByUuid(first_uuid), nullptr);
+    EXPECT_NE(scene.getNodeByUuid(first_child_uuid), nullptr);
+    EXPECT_EQ(scene.getNodeByUuid(second_uuid), nullptr);
+    EXPECT_EQ(scene.getNodeByUuid(second_child_uuid), nullptr);
+
+    const auto undo_result = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(undo_result.success) << undo_result.error;
+    EXPECT_NE(scene.getNodeByUuid(first_uuid), nullptr);
+    EXPECT_NE(scene.getNodeByUuid(first_child_uuid), nullptr);
+    EXPECT_NE(scene.getNodeByUuid(second_uuid), nullptr);
+    EXPECT_NE(scene.getNodeByUuid(second_child_uuid), nullptr);
+}
+
+TEST_F(UndoHistoryTest, RemoveNodesByIdValidatesWholeBatchBeforeDeletingAny) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    auto trainer_manager = std::make_unique<lfs::vis::TrainerManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+    lfs::vis::services().set(trainer_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto model_id = scene.addSplat("Model", make_test_splat({0.0f, 0.0f, 0.0f}));
+    const auto free_id = scene.addSplat("free", make_test_splat({1.0f, 0.0f, 0.0f}));
+    const auto cameras_id = scene.addGroup("Cameras");
+    const auto train_group_id = scene.addCameraGroup("Training", cameras_id, 1);
+    scene.addCamera("train.png", train_group_id, make_test_camera("train.png", 1));
+    scene.setTrainingModelNode("Model");
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::Dataset);
+
+    trainer_manager->setScene(&scene);
+    trainer_manager->setTrainerFromCheckpoint(std::make_unique<lfs::training::Trainer>(scene), 0);
+    ASSERT_FALSE(trainer_manager->canPerform(lfs::vis::TrainingAction::DeleteTrainingNode));
+
+    const auto result = scene_manager->removeNodesByIdsWithResult(
+        std::vector<lfs::core::NodeId>{free_id, model_id}, false);
+    EXPECT_FALSE(result);
+    EXPECT_NE(scene.getNodeById(free_id), nullptr);
+    EXPECT_NE(scene.getNodeById(model_id), nullptr);
+}
+
 TEST_F(UndoHistoryTest, CameraDeleteUndoRepublishesCameraCount) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();

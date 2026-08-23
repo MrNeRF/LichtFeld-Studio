@@ -2842,16 +2842,34 @@ namespace lfs::vis::op {
     SceneGraphStateSnapshot SceneGraphPatchEntry::captureState(const SceneManager& scene_manager,
                                                                const std::vector<std::string>& root_names,
                                                                const SceneGraphCaptureOptions options) {
+        std::vector<lfs::core::NodeId> root_ids;
+        root_ids.reserve(root_names.size());
+        for (const auto& name : root_names) {
+            const auto id = scene_manager.getScene().getNodeIdByName(name);
+            if (id != lfs::core::NULL_NODE) {
+                root_ids.push_back(id);
+            }
+        }
+        return captureStateByIds(scene_manager, root_ids, options);
+    }
+
+    SceneGraphStateSnapshot SceneGraphPatchEntry::captureStateByIds(const SceneManager& scene_manager,
+                                                                    const std::vector<lfs::core::NodeId>& root_ids,
+                                                                    const SceneGraphCaptureOptions options) {
         SceneGraphStateSnapshot snapshot;
         if (options.include_selected_nodes) {
-            snapshot.selected_node_names = scene_manager.getSelectedNodeNames();
+            const auto selected_node_ids = scene_manager.getSelectedNodeIds();
+            std::vector<std::string> selected_node_names;
             std::vector<lfs::core::Uuid> selected_node_uuids;
-            selected_node_uuids.reserve(snapshot.selected_node_names->size());
-            for (const auto& name : *snapshot.selected_node_names) {
-                if (const auto* node = scene_manager.getScene().getNode(name)) {
+            selected_node_names.reserve(selected_node_ids.size());
+            selected_node_uuids.reserve(selected_node_ids.size());
+            for (const auto id : selected_node_ids) {
+                if (const auto* node = scene_manager.getScene().getNodeById(id)) {
+                    selected_node_names.push_back(node->name);
                     selected_node_uuids.push_back(node->uuid);
                 }
             }
+            snapshot.selected_node_names = std::move(selected_node_names);
             snapshot.selected_node_uuids = std::move(selected_node_uuids);
         }
         if (options.include_scene_context) {
@@ -2865,21 +2883,21 @@ namespace lfs::vis::op {
             };
         }
 
-        std::vector<std::string> unique_names;
-        unique_names.reserve(root_names.size());
-        std::set<std::string> seen;
-        for (const auto& name : root_names) {
-            if (!name.empty() && seen.insert(name).second) {
-                unique_names.push_back(name);
+        std::vector<lfs::core::NodeId> unique_ids;
+        unique_ids.reserve(root_ids.size());
+        std::set<lfs::core::NodeId> seen;
+        for (const auto id : root_ids) {
+            if (id != lfs::core::NULL_NODE && seen.insert(id).second) {
+                unique_ids.push_back(id);
             }
         }
 
         const auto& scene = scene_manager.getScene();
-        const std::set<std::string> requested(unique_names.begin(), unique_names.end());
+        const std::set<lfs::core::NodeId> requested(unique_ids.begin(), unique_ids.end());
         std::vector<const lfs::core::SceneNode*> root_nodes;
-        root_nodes.reserve(unique_names.size());
-        for (const auto& name : unique_names) {
-            const auto* node = scene.getNode(name);
+        root_nodes.reserve(unique_ids.size());
+        for (const auto id : unique_ids) {
+            const auto* node = scene.getNodeById(id);
             if (!node) {
                 continue;
             }
@@ -2890,7 +2908,7 @@ namespace lfs::vis::op {
                 if (!parent) {
                     break;
                 }
-                if (requested.contains(parent->name)) {
+                if (requested.contains(parent_id)) {
                     covered_by_parent = true;
                     break;
                 }

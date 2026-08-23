@@ -3205,6 +3205,10 @@ namespace lfs::vis::gui {
         return native_scene_panel_ && native_scene_panel_->toggleSelectionTrainingIfFocused();
     }
 
+    bool GuiManager::requestDeleteSceneSelectionIfAvailable() {
+        return native_scene_panel_ && native_scene_panel_->requestDeleteSelectionIfAvailable();
+    }
+
     SceneTreeSessionChrome GuiManager::captureSceneTreeChrome(
         const lfs::core::Scene& scene) const {
         if (native_scene_panel_)

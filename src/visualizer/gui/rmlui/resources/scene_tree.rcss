@@ -195,7 +195,8 @@ scene-graph,
 #tree-container {
     flex: 1;
     display: block;
-    overflow: auto;
+    overflow-x: auto;
+    overflow-y: scroll;
     min-height: 0;
     position: relative;
     tab-index: auto;
@@ -673,7 +674,7 @@ scene-graph scrollbarvertical sliderbar {
     flex-shrink: 0;
     height: 27dp;
     margin-top: 2dp;
-    padding: 2dp 3dp 2dp 6dp;
+    padding: 2dp 1dp 2dp 6dp;
     border-top-width: 1dp;
 }
 
@@ -724,7 +725,9 @@ scene-graph scrollbarvertical sliderbar {
     align-items: center;
     flex-shrink: 0;
     margin-left: auto;
+    margin-right: -11dp;
     padding-left: 4dp;
+    padding-right: 3dp;
 }
 
 .row-action-slot {
@@ -732,7 +735,7 @@ scene-graph scrollbarvertical sliderbar {
     align-items: center;
     justify-content: center;
     position: relative;
-    width: 17dp;
+    width: 23dp;
     height: 20dp;
     flex-shrink: 0;
 }

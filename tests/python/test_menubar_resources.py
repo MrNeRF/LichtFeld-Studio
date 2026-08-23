@@ -284,6 +284,9 @@ def test_scene_tree_aligns_hierarchy_and_keeps_row_actions_trailing():
     assert "margin-left: 6dp;" in scene_view_rule
     assert "margin-right: 6dp;" in scene_view_rule
 
+    tree_rule = _rule_body(scene_rcss, "#tree-container")
+    assert "overflow-y: scroll;" in tree_rule
+
     node_name_rule = _rule_body(scene_rcss, ".node-name")
     assert "flex-grow: 1;" in node_name_rule
     assert "flex-shrink: 1;" in node_name_rule
@@ -304,6 +307,30 @@ def test_scene_tree_aligns_hierarchy_and_keeps_row_actions_trailing():
     assert checkbox < expand < name < visibility < training_toggle < delete
     assert 'actions->SetClass("row-actions", true)' in scene_graph_cpp
     assert scene_graph_cpp.count('SetClass("row-action-slot", true)') == 3
+    row_actions_rule = _rule_body(scene_rcss, ".row-actions")
+    assert "margin-right: -11dp;" in row_actions_rule
+    assert "padding-right: 3dp;" in row_actions_rule
+    assert "width: 23dp;" in _rule_body(scene_rcss, ".row-action-slot")
+
+
+def test_scene_tree_inline_actions_cannot_trigger_row_double_click_activation():
+    scene_graph_cpp = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "elements"
+        / "scene_graph_element.cpp"
+    ).read_text(encoding="utf-8")
+
+    dblclick = scene_graph_cpp.split('} else if (type == "dblclick") {', 1)[1].split(
+        '} else if (type == "mousedown") {', 1
+    )[0]
+    action_guard = dblclick.index('GetAttribute<Rml::String>("data-action", "")')
+    activation = dblclick.index("activateNode(node_id)")
+    assert action_guard < activation
+    assert "event.StopPropagation();" in dblclick
 
 
 def test_scene_tree_removes_models_header_space_and_confirms_all_node_deletes():
@@ -326,15 +353,82 @@ def test_scene_tree_removes_models_header_space_and_confirms_all_node_deletes():
         / "scene_graph_element.cpp"
     ).read_text(encoding="utf-8")
 
-    assert "kHeaderHeightDpInt = 0" in scene_graph_hpp
-    assert "kHeaderHeightDp = 0.0f" in scene_graph_hpp
+    assert "kHeaderHeightDpInt" not in scene_graph_hpp
+    assert "kHeaderHeightDp" not in scene_graph_hpp
     assert 'header_el_->SetProperty("display", "none")' in scene_graph_cpp
     assert "void SceneGraphElement::requestDeleteNodes" in scene_graph_cpp
     assert "gui->enqueueModal(std::move(request))" in scene_graph_cpp
     assert "getNodeIdByUuid(uuid)" in scene_graph_cpp
+    assert "std::vector<core::NodeId> live_ids" in scene_graph_cpp
+    assert "live_ids.size() != node_uuids.size()" in scene_graph_cpp
+    assert "removeNodesByIdsWithResult(live_ids" in scene_graph_cpp
+    assert "live_names" not in scene_graph_cpp
+    request_body = scene_graph_cpp.split("void SceneGraphElement::requestDeleteNodes", 1)[1].split(
+        "void SceneGraphElement::deleteSelectedNodes", 1
+    )[0]
+    assert "the complete selection is no longer removable" in request_body
+    assert "Scene node deletion request aborted" in request_body
+    assert "continue;" not in request_body
     assert scene_graph_cpp.count("requestDeleteNodes({node_id})") == 2
     assert "requestDeleteNodes(ids);" in scene_graph_cpp
+    assert "deleteEnabledSelectedNodeIds" not in scene_graph_cpp
+    bulk_delete = scene_graph_cpp.split('kind == "delete_selected"', 1)[1].split(
+        '} else if (kind == "set_easing"', 1
+    )[0]
+    assert "requestDeleteSelection();" in bulk_delete
+    delete_key = scene_graph_cpp.split("case Rml::Input::KI_DELETE:", 1)[1].split(
+        "case Rml::Input::KI_ESCAPE:", 1
+    )[0]
+    assert "requestDeleteSelection();" in delete_key
     assert 'data-action", "toggle-training"' in scene_graph_cpp
+
+
+def test_scene_tree_delete_key_uses_selection_gated_confirmation_path():
+    input_controller = (
+        PROJECT_ROOT / "src" / "visualizer" / "input" / "input_controller.cpp"
+    ).read_text(encoding="utf-8")
+    gui_manager = (
+        PROJECT_ROOT / "src" / "visualizer" / "gui" / "gui_manager.cpp"
+    ).read_text(encoding="utf-8")
+    scene_panel = (
+        PROJECT_ROOT / "src" / "visualizer" / "gui" / "scene_panel_native.cpp"
+    ).read_text(encoding="utf-8")
+    scene_graph = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "elements"
+        / "scene_graph_element.cpp"
+    ).read_text(encoding="utf-8")
+
+    delete_case = input_controller.index("case input::Action::DELETE_NODE:")
+    confirmation_route = input_controller.index(
+        "gui->requestDeleteSceneSelectionIfAvailable()", delete_case
+    )
+    legacy_remove = input_controller.index("cmd::RemovePLY", delete_case)
+    assert delete_case < confirmation_route < legacy_remove
+    assert "requestDeleteSceneSelectionIfAvailable" in gui_manager
+    assert "requestDeleteSelectionIfAvailable" in scene_panel
+    assert "tree_el_->selectedCount() == 0" in scene_panel
+    assert "if (active_tab_ == Tab::Scene)" in scene_panel
+    assert "tree_el_->requestDeleteSelection();" in scene_panel
+    assert "return true;" in scene_panel.split(
+        "bool NativeScenePanel::requestDeleteSelectionIfAvailable()", 1
+    )[1].split("void NativeScenePanel::applyPendingTreeChrome", 1)[0]
+    assert "requestDeleteSelectionIfAvailable" not in scene_graph
+
+
+def test_scene_tree_filter_always_reads_the_live_form_control_value():
+    scene_panel = (
+        PROJECT_ROOT / "src" / "visualizer" / "gui" / "scene_panel_native.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert 'filter_input_el_->AddEventListener("input", &listener_)' in scene_panel
+    assert 'type == "input" && current == filter_input_el_' in scene_panel
+    assert scene_panel.count("input->GetValue()") >= 3
+    assert 'filter_input_el_->GetAttribute<Rml::String>("value"' not in scene_panel
 
 
 def test_scene_tree_multi_selection_actions_are_fixed_below_the_scroll_view():

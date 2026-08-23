@@ -221,7 +221,6 @@ namespace lfs::vis::gui {
         void showContextMenu(core::NodeId node_id, float mouse_x, float mouse_y);
         void showModelsHeaderContextMenu(float mouse_x, float mouse_y);
         bool isModelsHeaderTarget(Rml::Element* target) const;
-        std::vector<core::NodeId> deleteEnabledSelectedNodeIds() const;
         void requestDeleteNodes(const std::vector<core::NodeId>& node_ids);
         void deleteSelectedNodes();
         void toggleChildrenTraining(core::NodeId group_id, bool enabled);
@@ -285,9 +284,7 @@ namespace lfs::vis::gui {
         float panel_screen_y_ = 0.0f;
 
         static constexpr int kRowHeightDpInt = 20;
-        static constexpr int kHeaderHeightDpInt = 0;
         static constexpr float kRowHeightDp = 20.0f;
-        static constexpr float kHeaderHeightDp = 0.0f;
         static constexpr int kOverscanRows = 12;
         static constexpr int kAutoCollapseCameraGroupThreshold = 25;
     };

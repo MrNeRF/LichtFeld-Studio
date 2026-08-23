@@ -53,6 +53,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool selectAllIfFocused();
         [[nodiscard]] bool toggleSelectionVisibilityIfFocused();
         [[nodiscard]] bool toggleSelectionTrainingIfFocused();
+        [[nodiscard]] bool requestDeleteSelectionIfAvailable();
 
     private:
         struct EventListener : Rml::EventListener {

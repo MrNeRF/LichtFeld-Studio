@@ -550,6 +550,9 @@ namespace lfs::vis::op {
         static SceneGraphStateSnapshot captureState(const SceneManager& scene,
                                                     const std::vector<std::string>& root_names,
                                                     SceneGraphCaptureOptions options = {});
+        static SceneGraphStateSnapshot captureStateByIds(const SceneManager& scene,
+                                                         const std::vector<lfs::core::NodeId>& root_ids,
+                                                         SceneGraphCaptureOptions options = {});
 
         SceneGraphPatchEntry(SceneManager& scene,
                              std::string name,

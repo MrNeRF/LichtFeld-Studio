@@ -714,6 +714,7 @@ namespace lfs::vis::gui {
         logging_tab_el_->AddEventListener(Rml::EventId::Click, &listener_);
         asset_manager_button_el_->AddEventListener(Rml::EventId::Click, &listener_);
         filter_clear_el_->AddEventListener(Rml::EventId::Click, &listener_);
+        filter_input_el_->AddEventListener("input", &listener_);
         selection_visibility_el_->AddEventListener(Rml::EventId::Click, &listener_);
         selection_clear_el_->AddEventListener(Rml::EventId::Click, &listener_);
         selection_training_el_->AddEventListener(Rml::EventId::Click, &listener_);
@@ -807,8 +808,9 @@ namespace lfs::vis::gui {
         if (!tree_el_)
             return false;
 
-        const std::string filter_text =
-            filter_input_el_ ? filter_input_el_->GetAttribute<Rml::String>("value", "") : "";
+        const auto* filter_input =
+            dynamic_cast<const Rml::ElementFormControlInput*>(filter_input_el_);
+        const std::string filter_text = filter_input ? filter_input->GetValue() : "";
         tree_el_->setFilterText(filter_text);
         tree_el_->setSelectionMarkersVisible(loadSceneGraphSelectionMarkersPreference());
         return tree_el_->syncFromScene(ctx);
@@ -1035,6 +1037,11 @@ namespace lfs::vis::gui {
         auto* target = event.GetTargetElement();
         if (!current && !target)
             return false;
+
+        if (type == "input" && current == filter_input_el_) {
+            applyFilterInputValue();
+            return true;
+        }
 
         if (type == "change") {
             const Rml::String current_id = current ? current->GetId() : "";
@@ -1281,10 +1288,9 @@ namespace lfs::vis::gui {
         } else if (pending_tree_chrome_) {
             chrome = *pending_tree_chrome_;
         }
-        if (filter_input_el_) {
-            chrome.filter_text =
-                filter_input_el_->GetAttribute<Rml::String>("value", chrome.filter_text);
-        }
+        if (const auto* input =
+                dynamic_cast<const Rml::ElementFormControlInput*>(filter_input_el_))
+            chrome.filter_text = input->GetValue();
         return chrome;
     }
 
@@ -1315,6 +1321,14 @@ namespace lfs::vis::gui {
 
     bool NativeScenePanel::toggleSelectionTrainingIfFocused() {
         return active_tab_ == Tab::Scene && tree_el_ && tree_el_->toggleSelectedTrainingIfFocused();
+    }
+
+    bool NativeScenePanel::requestDeleteSelectionIfAvailable() {
+        if (!tree_el_ || tree_el_->selectedCount() == 0)
+            return false;
+        if (active_tab_ == Tab::Scene)
+            tree_el_->requestDeleteSelection();
+        return true;
     }
 
     void NativeScenePanel::applyPendingTreeChrome() {

@@ -173,6 +173,17 @@ namespace lfs::vis {
                                                            std::move(before), std::move(after)));
         }
 
+        void pushSceneGraphHistoryEntryByIds(SceneManager& scene_manager,
+                                             std::string label,
+                                             op::SceneGraphStateSnapshot before,
+                                             const std::vector<core::NodeId>& after_roots,
+                                             const op::SceneGraphCaptureOptions options = sceneGraphCaptureOptions()) {
+            auto after = op::SceneGraphPatchEntry::captureStateByIds(scene_manager, after_roots, options);
+            op::undoHistory().push(
+                std::make_unique<op::SceneGraphPatchEntry>(scene_manager, std::move(label),
+                                                           std::move(before), std::move(after)));
+        }
+
         void retireSplatModelAsync(std::shared_ptr<const core::SplatData> model) {
             if (!model) {
                 return;
@@ -1379,7 +1390,7 @@ namespace lfs::vis {
         const auto history_options = sceneGraphCaptureOptions(true, true);
         std::optional<op::SceneGraphStateSnapshot> history_before;
         if (record_history) {
-            history_before = op::SceneGraphPatchEntry::captureState(*this, {node_name}, history_options);
+            history_before = op::SceneGraphPatchEntry::captureStateByIds(*this, std::vector{id}, history_options);
         }
 
         if (removes_training_model) {
@@ -1401,12 +1412,12 @@ namespace lfs::vis {
         node_name = node_to_remove->name;
         assert(!node_name.empty());
 
-        std::vector<std::string> promoted_children;
+        std::vector<core::NodeId> promoted_children;
         if (record_history && keep_children) {
             promoted_children.reserve(node_to_remove->children.size());
             for (const auto child_id : node_to_remove->children) {
-                if (const auto* child = scene_.getNodeById(child_id)) {
-                    promoted_children.push_back(child->name);
+                if (scene_.getNodeById(child_id)) {
+                    promoted_children.push_back(child_id);
                 }
             }
         }
@@ -1450,7 +1461,7 @@ namespace lfs::vis {
             rendering->releaseSceneModelResources();
         }
 
-        auto detached_models = scene_.detachSplatModelsForRemoval(node_name, keep_children);
+        auto detached_models = scene_.detachSplatModelsForRemoval(id, keep_children);
         scene_.removeNodeById(id, keep_children);
         scheduleConsolidatedCompaction();
         {
@@ -1459,8 +1470,8 @@ namespace lfs::vis {
                 splat_paths_.erase(uuid);
             }
         }
-        for (const core::NodeId id : ids_to_deselect) {
-            selection_.removeFromSelection(id);
+        for (const core::NodeId selected_id : ids_to_deselect) {
+            selection_.removeFromSelection(selected_id);
         }
         if (!ids_to_deselect.empty()) {
             selection_.invalidateNodeMask();
@@ -1503,9 +1514,9 @@ namespace lfs::vis {
         }
 
         if (history_before) {
-            pushSceneGraphHistoryEntry(*this, "Delete Node", std::move(*history_before),
-                                       keep_children ? promoted_children : std::vector<std::string>{},
-                                       history_options);
+            pushSceneGraphHistoryEntryByIds(*this, "Delete Node", std::move(*history_before),
+                                            keep_children ? promoted_children : std::vector<core::NodeId>{},
+                                            history_options);
         }
         retireSplatModelsAsync(std::move(detached_models));
         return {};
@@ -1531,16 +1542,29 @@ namespace lfs::vis {
         return count;
     }
 
-    std::expected<void, std::string> SceneManager::removeNodesWithResult(const std::vector<std::string>& names,
-                                                                         const bool keep_children) {
-        std::vector<std::pair<core::NodeId, TrainingRemovalImpact>> planned_removals;
-        planned_removals.reserve(names.size());
-
+    SceneManager::BatchNodeRemovalResult SceneManager::removeNodesWithResult(
+        const std::vector<std::string>& names,
+        const bool keep_children) {
+        std::vector<core::NodeId> ids;
+        ids.reserve(names.size());
         for (const auto& name : names) {
             const core::NodeId id = scene_.getNodeIdByName(name);
-            if (id == core::NULL_NODE) {
+            if (id == core::NULL_NODE)
                 return std::unexpected("Node not found: " + name);
-            }
+            ids.push_back(id);
+        }
+        return removeNodesByIdsWithResult(ids, keep_children);
+    }
+
+    SceneManager::BatchNodeRemovalResult SceneManager::removeNodesByIdsWithResult(
+        const std::vector<core::NodeId>& ids,
+        const bool keep_children) {
+        std::vector<std::pair<core::NodeId, TrainingRemovalImpact>> planned_removals;
+        planned_removals.reserve(ids.size());
+
+        for (const core::NodeId id : ids) {
+            if (id == core::NULL_NODE || !scene_.getNodeById(id))
+                return std::unexpected("Node not found: " + std::to_string(id));
 
             const auto impact = classifyTrainingRemovalImpact(id);
             if (const auto result = validateNodeRemoval(id, impact); !result) {
@@ -1750,6 +1774,12 @@ namespace lfs::vis {
                 names.push_back(node->name);
         }
         return names;
+    }
+
+    std::vector<core::NodeId> SceneManager::getSelectedNodeIds() const {
+        std::shared_lock lock(selection_.mutex());
+        const auto& ids = selection_.selectedNodeIds();
+        return {ids.begin(), ids.end()};
     }
 
     bool SceneManager::hasSelectedNode() const {
