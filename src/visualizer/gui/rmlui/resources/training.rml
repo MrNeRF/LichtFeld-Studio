@@ -189,6 +189,12 @@
         <input type="checkbox" data-checked="row.checked"
                data-event-change="pv_value_change(row.id, row.checked)" />
       </div>
+      <div class="setting-row" data-for="row : pv_basic_normal_weights_rows" data-if="dep_normal_loss &amp;&amp; row.kind == 'checkbox'"
+           data-attr-data-tooltip="row.tooltip_key">
+        <span class="prop-label">{{row.label}}</span>
+        <input type="checkbox" data-checked="row.checked"
+               data-event-change="pv_value_change(row.id, row.checked)" />
+      </div>
       <div class="setting-row" data-for="row : pv_basic_normal_weights_rows" data-if="dep_normal_loss &amp;&amp; row.kind == 'number'"
            data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>

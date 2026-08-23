@@ -175,9 +175,12 @@ namespace lfs::core {
 
             // Normal supervision
             bool use_normal_loss = false;            // Use dataset normal maps when available
+            bool normal_auto_generate = true;        // Generate missing/mismatched maps from images/ with MoGe-2
             float normal_loss_weight = 0.05f;        // Prior normal supervision weight
             float normal_consistency_weight = 0.05f; // Depth-normal consistency weight
             float normal_flatten_weight = 1.0f;      // L1 on the smallest scale axis while normal supervision is active
+            float normal_start_fraction = 0.2f;      // Start normal supervision at floor(fraction * total iterations)
+            float normal_end_fraction = 1.0f;        // Active while iter < end_fraction * total; 1.0 means until the end
             NormalLossSpace normal_loss_space = NormalLossSpace::Auto;
 
             // Mip filter (anti-aliasing)
@@ -250,6 +253,7 @@ namespace lfs::core {
             void apply_step_scaling();
             void remove_step_scaling();
             [[nodiscard]] int resolved_total_iterations() const;
+            [[nodiscard]] bool normal_supervision_active(int iter) const;
             [[nodiscard]] int resolved_ppisp_controller_activation_step(int total_iterations) const;
 
             nlohmann::json to_json() const;
@@ -453,6 +457,8 @@ namespace lfs::core {
             bool overwrite = false;
             bool no_download = false;
             bool download_only = false;
+            std::vector<std::filesystem::path> image_paths; // Empty = scan images_folder
+            std::string normals_folder = "normals";
         };
 
         // Modern C++23 functions returning expected values

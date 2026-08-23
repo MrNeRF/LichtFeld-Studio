@@ -156,6 +156,7 @@ namespace lfs::core {
         const std::filesystem::path& mask_path() const noexcept { return _mask_path; }
         const std::filesystem::path& depth_path() const noexcept { return _depth_path; }
         const std::filesystem::path& normal_path() const noexcept { return _normal_path; }
+        void set_normal_path(std::filesystem::path path);
 
         // Rewrites image/mask/depth/normal paths that live under old_root to the same
         // relative location under new_root. Paths outside old_root are left unchanged.

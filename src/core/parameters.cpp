@@ -204,6 +204,18 @@ namespace lfs::core {
             return base_iters + sparse_tail;
         }
 
+        bool OptimizationParameters::normal_supervision_active(const int iter) const {
+            if (!use_normal_loss)
+                return false;
+            const float total_f = static_cast<float>(std::max(1, resolved_total_iterations()));
+            const int start_iter = static_cast<int>(normal_start_fraction * total_f);
+            if (iter < start_iter)
+                return false;
+            // 1.0 keeps supervision on through the inclusive last iteration.
+            return normal_end_fraction >= 1.0f ||
+                   static_cast<float>(iter) < normal_end_fraction * total_f;
+        }
+
         int OptimizationParameters::resolved_ppisp_controller_activation_step(const int total_iterations) const {
             if (ppisp_controller_activation_step >= 0)
                 return ppisp_controller_activation_step;
@@ -328,6 +340,8 @@ namespace lfs::core {
                 std::pair{"scale_decay", scale_decay},
                 std::pair{"bounds_percentile", bounds_percentile},
                 std::pair{"prune_ratio", prune_ratio},
+                std::pair{"normal_start_fraction", normal_start_fraction},
+                std::pair{"normal_end_fraction", normal_end_fraction},
             };
             for (const auto& [name, value] : probability_fields) {
                 if (auto error = invalid_probability(value, name); !error.empty())
@@ -357,6 +371,10 @@ namespace lfs::core {
                 normal_loss_space != NormalLossSpace::CameraOpenGL &&
                 normal_loss_space != NormalLossSpace::World)
                 return "normal_loss_space must be 'auto', 'camera-opencv', 'camera-opengl', or 'world'";
+            if (normal_start_fraction > normal_end_fraction)
+                return std::format(
+                    "normal_start_fraction must not exceed normal_end_fraction ({} > {})",
+                    normal_start_fraction, normal_end_fraction);
             return {};
         }
 

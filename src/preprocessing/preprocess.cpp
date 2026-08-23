@@ -43,6 +43,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <semaphore>
 #include <sstream>
@@ -586,6 +587,10 @@ namespace {
                              const fs::path& image_path,
                              const fs::path& images_dir) {
         fs::path rel = image_path.lexically_relative(images_dir);
+        const auto generic = rel.generic_string();
+        if (rel.empty() || generic == "." || generic == ".." || generic.starts_with("../")) {
+            rel = image_path.filename();
+        }
         rel.replace_extension(".png");
         return dataset_root / std::string(folder) / rel;
     }
@@ -756,10 +761,75 @@ namespace {
         return session_options;
     }
 
+    // Prefer the library named in "libfoo.so.12: cannot open shared object file".
+    [[nodiscard]] std::string missing_shared_library_from_ort_error(std::string_view what) {
+        constexpr std::string_view marker = "cannot open shared object file";
+        const auto marker_pos = what.find(marker);
+        if (marker_pos == std::string_view::npos)
+            return {};
+        const auto colon = what.rfind(':', marker_pos);
+        if (colon == std::string_view::npos || colon > marker_pos)
+            return {};
+        auto start = what.rfind(' ', colon);
+        if (start == std::string_view::npos || start > colon)
+            start = 0;
+        else
+            ++start;
+        auto name = what.substr(start, colon - start);
+        while (!name.empty() && (name.front() == '\'' || name.front() == '"' || name.front() == '['))
+            name.remove_prefix(1);
+        while (!name.empty() && (name.back() == '\'' || name.back() == '"' || name.back() == ']'))
+            name.remove_suffix(1);
+        return std::string(name);
+    }
+
+    void log_cuda_provider_cpu_fallback_once(std::string_view ort_error) {
+        static std::once_flag once;
+        std::call_once(once, [error = std::string(ort_error)] {
+            const auto missing = missing_shared_library_from_ort_error(error);
+            const auto message = missing.empty()
+                                     ? std::format(
+                                           "CUDA execution provider unavailable; "
+                                           "normal-map generation will be slow on CPU. {}",
+                                           error)
+                                     : std::format(
+                                           "CUDA execution provider unavailable (missing {}); "
+                                           "normal-map generation will be slow on CPU. {}",
+                                           missing, error);
+            LOG_WARN("{}", message);
+            std::cerr << message << '\n';
+        });
+    }
+
+    struct OrtCudaLoadLog {
+        std::string last_message;
+    };
+
+    void ort_log_capture(void* param, OrtLoggingLevel severity, const char* /*category*/,
+                         const char* /*logid*/, const char* /*code_location*/, const char* message) {
+        const std::string_view msg = message ? std::string_view(message) : std::string_view{};
+        const bool cuda_provider_load =
+            msg.find("cannot open shared object file") != std::string_view::npos ||
+            msg.find("libonnxruntime_providers_cuda") != std::string_view::npos ||
+            msg.find("AppendExecutionProvider_Cuda") != std::string_view::npos;
+        if (cuda_provider_load) {
+            if (auto* cap = static_cast<OrtCudaLoadLog*>(param); cap) {
+                if (msg.find("cannot open shared object file") != std::string_view::npos ||
+                    cap->last_message.empty()) {
+                    cap->last_message.assign(msg);
+                }
+            }
+            return;
+        }
+        if (severity >= ORT_LOGGING_LEVEL_WARNING && !msg.empty())
+            std::cerr << "[onnxruntime] " << msg << '\n';
+    }
+
     class MogeOnnxSession {
     public:
         MogeOnnxSession(const fs::path& model_path, int thread_count, bool force_cpu)
-            : env_(ORT_LOGGING_LEVEL_WARNING, "LichtFeld-Studio-preprocess") {
+            : env_(ORT_LOGGING_LEVEL_WARNING, "LichtFeld-Studio-preprocess",
+                   ort_log_capture, &log_capture_) {
 #ifdef _WIN32
             const auto model_string = model_path.wstring();
 #else
@@ -773,7 +843,10 @@ namespace {
                 } catch (const Ort::Exception& e) {
                     if (!use_cuda)
                         throw;
-                    std::cerr << "CUDA execution provider unavailable, falling back to CPU: " << e.what() << "\n";
+                    const std::string detail = log_capture_.last_message.empty()
+                                                   ? std::string(e.what())
+                                                   : log_capture_.last_message + " (" + e.what() + ")";
+                    log_cuda_provider_cpu_fallback_once(detail);
                     use_cuda = false;
                 }
             }
@@ -847,6 +920,7 @@ namespace {
         std::string_view provider() const { return provider_; }
 
     private:
+        OrtCudaLoadLog log_capture_;
         Ort::Env env_;
         std::unique_ptr<Ort::Session> session_;
         std::vector<std::string> input_names_;
@@ -1103,16 +1177,22 @@ namespace {
         if (flat_layout)
             plan.images_dir = plan.dataset_root;
 
-        plan.images = collect_images(plan.images_dir, !flat_layout);
+        if (!params.image_paths.empty()) {
+            plan.images = params.image_paths;
+        } else {
+            plan.images = collect_images(plan.images_dir, !flat_layout);
+        }
         if (plan.images.empty())
             throw std::runtime_error("No images found under " + path_to_string(plan.images_dir));
 
+        const std::string normals_folder =
+            params.normals_folder.empty() ? std::string("normals") : params.normals_folder;
         plan.jobs.reserve(plan.images.size());
         for (const auto& image_path : plan.images) {
             PreprocessJob job{
                 .image_path = image_path,
                 .depth_path = output_path_for(plan.dataset_root, "depth", image_path, plan.images_dir),
-                .normals_path = output_path_for(plan.dataset_root, "normals", image_path, plan.images_dir),
+                .normals_path = output_path_for(plan.dataset_root, normals_folder, image_path, plan.images_dir),
             };
             job.write_depth = should_write_output(needs_depth(params.mode), params.overwrite, job.depth_path);
             job.write_normals = should_write_output(needs_normals(params.mode), params.overwrite, job.normals_path);
@@ -1135,11 +1215,14 @@ namespace {
 
     void process_dataset(const lfs::core::param::PreprocessParameters& params,
                          const fs::path& model_path,
-                         const PreprocessPlan& plan) {
-        print_plan_summary(params, plan, &model_path);
+                         const PreprocessPlan& plan,
+                         const lfs::preprocessing::PreprocessProgressCallback& progress) {
+        if (!progress)
+            print_plan_summary(params, plan, &model_path);
 
         MogeOnnxSession session(model_path, resolve_thread_count(params.threads), params.force_cpu);
-        std::cout << "Execution provider: " << session.provider() << "\n";
+        if (!progress)
+            std::cout << "Execution provider: " << session.provider() << "\n";
 
         const auto load_job = [&params](const PreprocessJob& job) {
             LoadedImage loaded{.original = load_image_rgb(job.image_path)};
@@ -1151,7 +1234,7 @@ namespace {
         std::deque<std::future<void>> writes;
 
         std::optional<PreprocessProgressBar> bar;
-        if (stdout_is_tty() && !plan.jobs.empty())
+        if (!progress && stdout_is_tty() && !plan.jobs.empty())
             bar.emplace(plan.jobs.size());
 
         std::deque<std::future<LoadedImage>> pending_loads;
@@ -1166,7 +1249,7 @@ namespace {
 
         for (std::size_t i = 0; i < plan.jobs.size(); ++i) {
             const PreprocessJob& job = plan.jobs[i];
-            if (!bar)
+            if (!bar && !progress)
                 std::cout << "[" << (i + 1) << "/" << plan.jobs.size() << "] " << path_to_string(job.image_path) << "\n";
 
             const LoadedImage loaded = pending_loads.front().get();
@@ -1179,6 +1262,8 @@ namespace {
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - inference_start).count();
             if (bar)
                 bar->report(i + 1, job.image_path.filename().string(), inference_ms);
+            if (progress)
+                progress(i + 1, plan.jobs.size(), job.image_path.filename().string());
 
             while (!writes.empty() && writes.front().wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
                 writes.front().get();
@@ -1222,30 +1307,34 @@ namespace {
 
         if (bar)
             bar->complete();
-        std::cout << "Done. processed=" << plan.jobs.size() << " skipped=" << plan.skipped << "\n";
+        if (!progress)
+            std::cout << "Done. processed=" << plan.jobs.size() << " skipped=" << plan.skipped << "\n";
     }
 
-} // namespace
-
-namespace lfs::preprocessing {
-
-    int run_preprocess(const lfs::core::param::PreprocessParameters& params) {
+    lfs::preprocessing::PreprocessRunResult execute_preprocess(
+        const lfs::core::param::PreprocessParameters& params,
+        const lfs::preprocessing::PreprocessProgressCallback& progress) {
+        lfs::preprocessing::PreprocessRunResult result;
         try {
             if (params.download_only) {
                 fs::path model_path = params.model_path;
                 if (model_path.empty())
                     model_path = ensure_default_model(params.no_download);
-                std::cout << "Cached model: " << path_to_string(model_path) << "\n";
-                return 0;
+                if (!progress)
+                    std::cout << "Cached model: " << path_to_string(model_path) << "\n";
+                return result;
             }
 
             const PreprocessPlan plan = build_preprocess_plan(params);
+            result.skipped = plan.skipped;
             if (plan.jobs.empty()) {
-                print_plan_summary(params, plan, nullptr);
-                std::cout << "No outputs need preprocessing; model inference skipped.\n";
+                if (!progress) {
+                    print_plan_summary(params, plan, nullptr);
+                    std::cout << "No outputs need preprocessing; model inference skipped.\n";
+                    std::cout << "Done. processed=0 skipped=" << plan.skipped << "\n";
+                }
                 precompute_depth_anchors(params);
-                std::cout << "Done. processed=0 skipped=" << plan.skipped << "\n";
-                return 0;
+                return result;
             }
 
             fs::path model_path = params.model_path;
@@ -1255,13 +1344,33 @@ namespace lfs::preprocessing {
             if (!fs::is_regular_file(model_path))
                 throw std::runtime_error("Model file does not exist: " + path_to_string(model_path));
 
-            process_dataset(params, model_path, plan);
+            process_dataset(params, model_path, plan, progress);
+            result.processed = plan.jobs.size();
             precompute_depth_anchors(params);
-            return 0;
+            return result;
         } catch (const std::exception& e) {
-            std::cerr << "preprocess: " << e.what() << "\n";
+            result.ok = false;
+            result.error = e.what();
+            return result;
+        }
+    }
+
+} // namespace
+
+namespace lfs::preprocessing {
+
+    PreprocessRunResult run_preprocess_ex(const lfs::core::param::PreprocessParameters& params,
+                                          const PreprocessProgressCallback& progress) {
+        return execute_preprocess(params, progress);
+    }
+
+    int run_preprocess(const lfs::core::param::PreprocessParameters& params) {
+        const auto result = run_preprocess_ex(params, {});
+        if (!result.ok) {
+            std::cerr << "preprocess: " << result.error << "\n";
             return 1;
         }
+        return 0;
     }
 
 } // namespace lfs::preprocessing

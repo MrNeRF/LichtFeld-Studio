@@ -1058,6 +1058,11 @@ namespace lfs::python {
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.use_normal_loss = v; }); },
                 "Load normal maps and use normal-map supervision during training")
             .def_prop_rw(
+                "normal_auto_generate",
+                [](PyOptimizationParams& self) { return self.params().normal_auto_generate; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.normal_auto_generate = v; }); },
+                "Generate missing or size-mismatched maps with MoGe-2 from the full-resolution images/ folder so they work at every training resolution")
+            .def_prop_rw(
                 "normal_loss_weight",
                 [](PyOptimizationParams& self) { return self.params().normal_loss_weight; },
                 [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.normal_loss_weight = std::max(0.0f, v); }); },
@@ -1072,6 +1077,20 @@ namespace lfs::python {
                 [](PyOptimizationParams& self) { return self.params().normal_flatten_weight; },
                 [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.normal_flatten_weight = std::max(0.0f, v); }); },
                 "Min-axis scale flattening weight while normal supervision is active")
+            .def_prop_rw(
+                "normal_start_fraction",
+                [](PyOptimizationParams& self) { return self.params().normal_start_fraction; },
+                [](PyOptimizationParams&, float v) {
+                    modify_params([v](auto& p) { p.normal_start_fraction = std::clamp(v, 0.0f, 1.0f); });
+                },
+                "Fraction of total iterations at which normal supervision starts")
+            .def_prop_rw(
+                "normal_end_fraction",
+                [](PyOptimizationParams& self) { return self.params().normal_end_fraction; },
+                [](PyOptimizationParams&, float v) {
+                    modify_params([v](auto& p) { p.normal_end_fraction = std::clamp(v, 0.0f, 1.0f); });
+                },
+                "Fraction of total iterations at which normal supervision stops; 1.0 keeps it on until the end")
             .def_prop_rw(
                 "normal_loss_space",
                 [](PyOptimizationParams& self) { return std::string(normal_loss_space_name(self.params().normal_loss_space)); },

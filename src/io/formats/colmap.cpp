@@ -2247,24 +2247,6 @@ namespace lfs::io {
     // -----------------------------------------------------------------------------
     //  Assemble cameras with dimension verification
     // -----------------------------------------------------------------------------
-    static bool sidecar_dimensions_match_contract(const int sidecar_width,
-                                                  const int sidecar_height,
-                                                  const int requested_width,
-                                                  const int requested_height,
-                                                  const int original_width,
-                                                  const int original_height) noexcept {
-        if (sidecar_width == original_width && sidecar_height == original_height) {
-            return true;
-        }
-        if (requested_width <= 0 || requested_height <= 0 || sidecar_width <= 0 || sidecar_height <= 0) {
-            return false;
-        }
-        if (sidecar_width % requested_width != 0 || sidecar_height % requested_height != 0) {
-            return false;
-        }
-        return sidecar_width / requested_width == sidecar_height / requested_height;
-    }
-
     Result<LoadOutcome<std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>>>
     assemble_colmap_cameras(const std::filesystem::path& base_path,
                             const std::unordered_map<uint32_t, CameraDataIntermediate>& cam_map,
@@ -2580,11 +2562,21 @@ namespace lfs::io {
                                                        img_h,
                                                        cam_data.original_width,
                                                        cam_data.original_height)) {
-                    return make_error(ErrorCode::NORMAL_SIZE_MISMATCH,
-                                      std::format("Normal map '{}' is {}x{} but image '{}' is {}x{}",
-                                                  lfs::core::path_to_utf8(normal_path.filename()), normal_w, normal_h,
-                                                  img.name, img_w, img_h),
-                                      normal_path);
+                    if (options.normal_auto_generate) {
+                        LOG_WARN("Normal map '{}' is {}x{} but image '{}' is {}x{}; "
+                                 "ignoring it so auto-generate can overwrite that file",
+                                 lfs::core::path_to_utf8(normal_path.filename()),
+                                 normal_w, normal_h, img.name, img_w, img_h);
+                        if (normal_matched_count > 0)
+                            --normal_matched_count;
+                        normal_path.clear();
+                    } else {
+                        return make_error(ErrorCode::NORMAL_SIZE_MISMATCH,
+                                          std::format("Normal map '{}' is {}x{} but image '{}' is {}x{}",
+                                                      lfs::core::path_to_utf8(normal_path.filename()), normal_w, normal_h,
+                                                      img.name, img_w, img_h),
+                                          normal_path);
+                    }
                 }
             }
 

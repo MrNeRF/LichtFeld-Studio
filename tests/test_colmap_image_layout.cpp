@@ -511,6 +511,88 @@ TEST_F(ColmapImageLayoutTest, RejectsNonIntegerRatioDepthForScaledImages) {
     EXPECT_EQ(result.error().code, lfs::io::ErrorCode::DEPTH_SIZE_MISMATCH);
 }
 
+TEST(SidecarDimensionsContract, OriginalSizePassesForSmallerTrainingImage) {
+    // 1237x822 is a typical COLMAP original; images_8 is 154x102 and 1237 % 154 != 0,
+    // so only the original-size branch of the contract accepts a full-res map.
+    EXPECT_TRUE(lfs::io::sidecar_dimensions_match_contract(1237, 822, 154, 102, 1237, 822));
+    EXPECT_TRUE(lfs::io::sidecar_dimensions_match_contract(400, 200, 50, 25, 400, 200));
+    EXPECT_TRUE(lfs::io::sidecar_dimensions_match_contract(100, 50, 50, 25, 400, 200));
+    EXPECT_FALSE(lfs::io::sidecar_dimensions_match_contract(154, 102, 1237, 822, 1237, 822));
+    EXPECT_FALSE(lfs::io::sidecar_dimensions_match_contract(51, 25, 50, 25, 400, 200));
+}
+
+TEST_F(ColmapImageLayoutTest, AcceptsOriginalSizeNormalForScaledImages) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required for COLMAP camera load";
+    }
+
+    const fs::path dataset_dir = temp_dir_ / "original_normal_dataset";
+    const fs::path image_path = dataset_dir / "images_2" / "frame.png";
+    const fs::path normal_path = dataset_dir / "normals" / "frame.png";
+    const BicyclePixels source = read_bicycle_pixels();
+
+    write_text_file(dataset_dir / "cameras.txt",
+                    "1 PINHOLE " + std::to_string(source.width) + " " + std::to_string(source.height) +
+                        " 1000 1000 618.5 411\n");
+    write_text_file(dataset_dir / "images.txt", "1 1 0 0 0 0 0 0 1 frame.png\n");
+    write_derived_image(image_path, source, source.width / 2, source.height / 2);
+    write_derived_image(normal_path, source, source.width, source.height);
+
+    const auto result =
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images_2", {.load_normals = true});
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    ASSERT_EQ(std::get<0>(result->value).size(), 1u);
+    EXPECT_TRUE(std::get<0>(result->value)[0]->has_normal());
+}
+
+TEST_F(ColmapImageLayoutTest, RejectsMismatchedNormalWithoutAutoGenerate) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required for COLMAP camera load";
+    }
+
+    const fs::path dataset_dir = temp_dir_ / "mismatched_normal_dataset";
+    const fs::path image_path = dataset_dir / "images_2" / "frame.png";
+    const fs::path normal_path = dataset_dir / "normals" / "frame.png";
+    const BicyclePixels source = read_bicycle_pixels();
+
+    write_text_file(dataset_dir / "cameras.txt",
+                    "1 PINHOLE " + std::to_string(source.width) + " " + std::to_string(source.height) +
+                        " 1000 1000 618.5 411\n");
+    write_text_file(dataset_dir / "images.txt", "1 1 0 0 0 0 0 0 1 frame.png\n");
+    write_derived_image(image_path, source, source.width / 2, source.height / 2);
+    // Neither original size nor an integer multiple of the training image.
+    write_derived_image(normal_path, source, 8, 8);
+
+    const auto result =
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images_2", {.load_normals = true});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, lfs::io::ErrorCode::NORMAL_SIZE_MISMATCH);
+}
+
+TEST_F(ColmapImageLayoutTest, SkipsMismatchedNormalWhenAutoGenerate) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required for COLMAP camera load";
+    }
+
+    const fs::path dataset_dir = temp_dir_ / "regen_normal_dataset";
+    const fs::path image_path = dataset_dir / "images_2" / "frame.png";
+    const fs::path normal_path = dataset_dir / "normals" / "frame.png";
+    const BicyclePixels source = read_bicycle_pixels();
+
+    write_text_file(dataset_dir / "cameras.txt",
+                    "1 PINHOLE " + std::to_string(source.width) + " " + std::to_string(source.height) +
+                        " 1000 1000 618.5 411\n");
+    write_text_file(dataset_dir / "images.txt", "1 1 0 0 0 0 0 0 1 frame.png\n");
+    write_derived_image(image_path, source, source.width / 2, source.height / 2);
+    write_derived_image(normal_path, source, 8, 8);
+
+    const auto result = lfs::io::read_colmap_cameras_and_images_text(
+        dataset_dir, "images_2", {.load_normals = true, .normal_auto_generate = true});
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    ASSERT_EQ(std::get<0>(result->value).size(), 1u);
+    EXPECT_FALSE(std::get<0>(result->value)[0]->has_normal());
+}
+
 TEST_F(ColmapImageLayoutTest, DepthDirCacheResolvesDepthsFolderAndDepthExtension) {
     const fs::path dataset_dir = temp_dir_ / "dataset";
     const fs::path depth_path = dataset_dir / "depths" / "nested" / "frame_0001.depth.png";

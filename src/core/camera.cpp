@@ -509,6 +509,11 @@ namespace lfs::core {
         rebase_path_if_under(_normal_path, old_root, new_root);
     }
 
+    void Camera::set_normal_path(std::filesystem::path path) {
+        _normal_path = std::move(path);
+        release_normal_cache();
+    }
+
     void Camera::set_mask_tensor(Tensor mask) {
         _in_memory_mask_raw = std::move(mask);
         // Force reprocessing on the next load_and_get_mask call.

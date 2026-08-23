@@ -17,6 +17,7 @@
 #include <nlohmann/json.hpp>
 #include <set>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -954,6 +955,10 @@ TEST(ArgumentParserTest, TrainingParsesExplicitNormalLossOptions) {
         "0.25",
         "--normal-flatten-weight",
         "5.0",
+        "--normal-start-fraction",
+        "0.3",
+        "--normal-end-fraction",
+        "0.9",
         "--normal-loss-space",
         "world"};
 
@@ -961,10 +966,84 @@ TEST(ArgumentParserTest, TrainingParsesExplicitNormalLossOptions) {
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
     EXPECT_TRUE((*parsed)->optimization.use_normal_loss);
+    EXPECT_TRUE((*parsed)->optimization.normal_auto_generate);
     EXPECT_FLOAT_EQ((*parsed)->optimization.normal_loss_weight, 0.75f);
     EXPECT_FLOAT_EQ((*parsed)->optimization.normal_consistency_weight, 0.25f);
     EXPECT_FLOAT_EQ((*parsed)->optimization.normal_flatten_weight, 5.0f);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.normal_start_fraction, 0.3f);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.normal_end_fraction, 0.9f);
     EXPECT_EQ((*parsed)->optimization.normal_loss_space, lfs::core::param::NormalLossSpace::World);
+}
+
+TEST(ArgumentParserTest, TrainingParsesNoNormalAutoGenerate) {
+    const auto data_path = make_test_path("lfs_arg_parser_no_normal_auto_data");
+    const auto output_path = make_test_path("lfs_arg_parser_no_normal_auto_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--use-normal-loss",
+        "--no-normal-auto-generate"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->optimization.use_normal_loss);
+    EXPECT_FALSE((*parsed)->optimization.normal_auto_generate);
+}
+
+TEST(ArgumentParserTest, TrainingRejectsNormalStartAfterEnd) {
+    const auto data_path = make_test_path("lfs_arg_parser_normal_schedule_order_data");
+    const auto output_path = make_test_path("lfs_arg_parser_normal_schedule_order_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--use-normal-loss",
+        "--normal-start-fraction",
+        "0.8",
+        "--normal-end-fraction",
+        "0.4"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_NE(parsed.error().find("normal_start_fraction must not exceed normal_end_fraction"),
+              std::string::npos)
+        << parsed.error();
+}
+
+TEST(ArgumentParserTest, TrainingRejectsNormalScheduleOutsideUnitInterval) {
+    const auto data_path = make_test_path("lfs_arg_parser_normal_schedule_range_data");
+    const auto output_path = make_test_path("lfs_arg_parser_normal_schedule_range_output");
+
+    for (const auto& [flag, value] : {
+             std::pair{"--normal-start-fraction", "1.5"},
+             std::pair{"--normal-start-fraction", "-0.1"},
+             std::pair{"--normal-end-fraction", "1.5"},
+             std::pair{"--normal-end-fraction", "-0.1"}}) {
+        SCOPED_TRACE(std::string(flag) + "=" + value);
+        const char* argv[] = {
+            "LichtFeld-Studio",
+            "--headless",
+            "--data-path",
+            data_path.c_str(),
+            "--output-path",
+            output_path.c_str(),
+            flag,
+            value};
+
+        auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        ASSERT_FALSE(parsed.has_value());
+        EXPECT_NE(parsed.error().find("must be finite and within [0, 1]"), std::string::npos)
+            << parsed.error();
+    }
 }
 
 TEST(ArgumentParserTest, TrainingParsesBackgroundModeModulation) {

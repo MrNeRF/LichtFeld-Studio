@@ -115,6 +115,7 @@ set(TRAINING_NEW_SOURCES
         progress.cpp
         training_cropbox_mask.cpp
         trainer.cpp
+        normal_auto_generate.cpp
         vram_ledger.cpp
         perf_bench.cpp
     training_setup.cpp
@@ -157,6 +158,7 @@ target_link_libraries(lfs_training
 	edge_compute_backend    # For igs+ edge score rasterization
     PRIVATE
         lfs_depth_anchor        # Shared depth-anchor fit + sidecar cache
+        lfs_preprocessing       # MoGe-2 normal auto-generate
         lfs_python_utils
 )
 
