@@ -217,8 +217,8 @@ refactor and was not done here.
 ### vcpkg
 
 With binary archives populated, the baseline restored 97 packages in 7.3
-seconds. The final app manifest resolves 86 packages. ONNX Runtime and `uv`
-release archives now live in a shared, locked, checksum-verified download cache,
+seconds. The final app manifest resolves 86 packages. The `uv`
+release archive now lives in a shared, locked, checksum-verified download cache,
 so a fresh build tree does not repeat those network transfers.
 
 For scale only, existing local vcpkg logs show these uncontrolled first-build
@@ -270,7 +270,6 @@ or "not separable" where static linkage makes an honest isolation impossible.
 | glslang | radix/raster shaders and runtime mesh-to-splat/viewport compilation | yes | 43.4 s historical package build | keep for now | Not duplicate dead weight: call sites are active. Migrate all affected shaders before consolidation. |
 | Slang | primary Vulkan shader set and compiler | yes | 5.3 s historical package build | keep | Active and complementary to remaining glslang paths. |
 | curl | preprocess model download | yes | one implementation TU; prebuilt library | keep | TLS, redirects and robust transfer behavior; no compile poison. |
-| ONNX Runtime | preprocess depth/normal inference, including CUDA-provider fallback | yes | one implementation TU; prebuilt SDK extraction dominated part of clean-tree configure | keep, cache archive | Unique inference runtime. The verified shared archive removes repeated downloads without changing inference behavior. |
 | OpenSSL | preprocess model SHA-256 and HTTPS in MCP/LLM clients | yes | implementation-local in preprocess and MCP targets; prebuilt libraries | keep | Replacing it would duplicate crypto/TLS machinery and would not reduce broad header exposure. |
 | Zep | embedded Python editor | yes | 47.764 s aggregate compile time | keep | A real GUI feature, not an incidental text widget; isolate further only behind the existing visualizer boundary. |
 | tree-sitter + Python grammar | dirty-buffer Python parsing for the embedded editor | yes | 15 small vendored C compile edges; below the top-20 targets | keep | Narrow, compiled C surface and unique syntax behavior. |
@@ -329,7 +328,7 @@ on this corpus.
    device-code, cubin and PTX hits with no cache errors. The exact final source
    tree rebuilt the complete application from clean outputs in 28.01 s with
    775/775 cacheable artifacts hit and zero misses.
-2. **Shared verified downloads.** Fresh build trees reuse ONNX Runtime and uv
+2. **Shared verified downloads.** Fresh build trees reuse uv
    release archives from a platform cache. SHA-256 verification, cross-process
    locks, partial files, and atomic rename preserve supply-chain and concurrent
    configure safety. This changes download work, not the feature graph.

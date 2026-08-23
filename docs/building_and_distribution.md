@@ -214,18 +214,13 @@ dist/
 | `LFS_ENFORCE_LINUX_GUI_BACKENDS` | ON | Linux only. Fail configure if SDL3 would be built without both X11 and Wayland |
 | `LFS_CUDA_COMPILER_CACHE` | *(empty)* | Compiler cache for CUDA only. Empty follows the auto-detected launcher; `OFF` disables CUDA caching; or name/path of a launcher such as `ccache`. Needed where nvcc cannot be wrapped by sccache |
 
-ONNX Runtime is consumed as a pinned prebuilt GPU SDK on x64 Windows and Linux
-instead of being built by vcpkg. The default SDK is controlled by
-`LFS_ONNXRUNTIME_VERSION`; set `LFS_ONNXRUNTIME_ROOT` to an unpacked ONNX Runtime
-SDK to use a local or custom build. Set `LFS_ONNXRUNTIME_USE_PREBUILT=OFF` to
-fall back to a package-provided `onnxruntime` CMake config.
-
 ## Preprocess Model Downloads
 
 The `preprocess` subcommand downloads the default MoGe-2 ONNX model on first
-use when `--model` is not provided. The cached model and every downloaded
-temporary file are SHA-256 verified on Windows and Linux before ONNX Runtime can
-load them. A hash mismatch deletes the untrusted temporary file, rejects the
+use when `--model` is not provided, then converts it once to a sibling `.lfw`
+weight file for the in-tree native runtime. The cached model and every
+downloaded temporary file are SHA-256 verified on Windows and Linux before
+use. A hash mismatch deletes the untrusted temporary file, rejects the
 cached model, and exits with an error. Use `preprocess --download-only` to
 preload and verify the cache, or `--no-download` to require an already verified
 cache entry.

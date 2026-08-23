@@ -1363,7 +1363,7 @@ namespace {
         "  Metadata: --no-provenance strips identifying metadata; a minimal build stamp is always embedded\n"
         "\n";
 
-    constexpr const char* PREPROCESS_HELP_HEADER = "LichtFeld Studio - Generate dataset depth and normal maps with MoGe-2 ONNX\n";
+    constexpr const char* PREPROCESS_HELP_HEADER = "LichtFeld Studio - Generate dataset depth and normal maps with MoGe-2\n";
     constexpr const char* PREPROCESS_HELP_FOOTER =
         "\n"
         "EXAMPLES:\n"
@@ -1380,13 +1380,11 @@ namespace {
         "  PNG compression defaults to level 1; use 0 for fastest/largest files.\n"
         "  The auto-downloaded default model is SHA-256 verified before use.\n"
         "\n"
-        "INFERENCE BACKEND:\n"
-        "  --inference-backend auto|native|onnxruntime\n"
-        "  auto uses the in-tree network when a .lfw weight file sits next to the ONNX\n"
-        "  (same stem, .lfw suffix) and ONNX Runtime otherwise.\n"
-        "  native always runs the in-tree network. If only the ONNX is present, preprocess\n"
-        "  converts it once with tools/nn_export/export_onnx_weights.py (fp16) into that\n"
-        "  .lfw. If conversion is not possible, it prints the command to run by hand.\n"
+        "INFERENCE:\n"
+        "  Native in-tree MoGe-2 (CUDA). If only the ONNX is present, preprocess converts\n"
+        "  it once with tools/nn_export/export_onnx_weights.py (fp16) into a sibling .lfw.\n"
+        "  If conversion is not possible, it prints the command to run by hand.\n"
+        "  --inference-backend accepts native (default; auto is an alias).\n"
         "\n";
 
     std::optional<lfs::core::param::OutputFormat> parseFormat(const std::string& str) {
@@ -1668,19 +1666,16 @@ namespace {
         ::args::ValueFlag<std::string> model(parser, "path", "Local ONNX model path; skips default cache download", {"model"});
         ::args::MapFlag<std::string, param::InferenceBackend> backend(
             parser, "backend",
-            "Inference backend: auto, native, onnxruntime (default: auto; auto uses native when a .lfw sits next to the ONNX)",
+            "Inference backend: native (default; auto is an alias)",
             {"inference-backend"},
             std::unordered_map<std::string, param::InferenceBackend>{
-                {"auto", param::InferenceBackend::Auto},
-                {"native", param::InferenceBackend::Native},
-                {"onnxruntime", param::InferenceBackend::OnnxRuntime},
-                {"ort", param::InferenceBackend::OnnxRuntime}});
+                {"auto", param::InferenceBackend::Native},
+                {"native", param::InferenceBackend::Native}});
         ::args::ValueFlag<int> max_side(parser, "pixels", "Inference longest side, rounded to /14 (default: 518; 0 disables resize)", {"max-side"});
         ::args::ValueFlag<std::int64_t> num_tokens(parser, "tokens", "MoGe dynamic-token input when present (default: 1800)", {"num-tokens"});
-        ::args::ValueFlag<int> threads(parser, "count", "ONNX Runtime CPU threads (default: all available cores)", {"threads"});
+        ::args::ValueFlag<int> threads(parser, "count", "Host worker threads for image load/encode (default: all available cores)", {"threads"});
         ::args::ValueFlag<int> png_compression(parser, "level", "PNG compression level 0-9 (default: 1; 0 is fastest/largest)", {"png-compression"});
         ::args::ValueFlag<int> bit_depth(parser, "bits", "Output PNG bit depth, 8 or 16 (default: 16; 8-bit depth priors quantize visibly)", {"bit-depth"});
-        ::args::Flag cpu(parser, "cpu", "Force CPU inference even if CUDA is available", {"cpu"});
         ::args::Flag overwrite(parser, "overwrite", "Overwrite existing depth/normal files", {'y', "overwrite"});
         ::args::Flag no_download(parser, "no-download", "Fail if the default model is not already cached", {"no-download"});
         ::args::Flag download_only(parser, "download-only", "Download/verify the default model and exit", {"download-only"});
@@ -1729,7 +1724,6 @@ namespace {
         if (bit_depth) {
             params.bit_depth = ::args::get(bit_depth);
         }
-        params.force_cpu = cpu;
         params.overwrite = overwrite;
         params.no_download = no_download;
         params.download_only = download_only;
