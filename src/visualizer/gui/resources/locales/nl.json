@@ -530,6 +530,7 @@
     "button.switch_edit_mode": "Bewerkingsmodus",
     "tooltip": {
       "btn_switch_edit": "Schakel naar bewerkmodus voor de getrainde scène",
+      "ppisp_exposure_from_exif": "Per-frame PPISP-belichting uit EXIF van foto's, relatief t.o.v. het datasetgemiddelde",
       "ppisp_freeze_from_sidecar": "PPISP-gewichten laden uit een sidecar-bestand",
       "ppisp_sidecar_path": "Pad naar het PPISP-sidecar-bestand",
       "ppisp_sidecar_browse": "Bladeren naar een PPISP-sidecar-bestand",
@@ -1506,6 +1507,7 @@
     "init_rho": "Initiële rho:",
     "prune_ratio": "Snoeiverhouding:",
     "ppisp": "PPISP:",
+    "ppisp_exposure_from_exif": "EXIF-belichting:",
     "ppisp_controller": "  Controller:",
     "ppisp_lr": "Leersnelheid:",
     "ppisp_reg": "Regularisatie:",

@@ -20,6 +20,7 @@
 #include "core/cuda_error_typed.hpp"
 #include "core/environment.hpp"
 #include "core/events.hpp"
+#include "core/exif.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -73,6 +74,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <utility>
 
 #include <algorithm>
 #include <atomic>
@@ -1199,6 +1201,9 @@ namespace lfs::training {
         bilateral_grid_.reset();
         ppisp_.reset();
         ppisp_controller_pool_.reset();
+        ppisp_exif_exposure_mean_.reset();
+        eval_ppisp_applied_.store(0);
+        eval_ppisp_exif_.store(0);
         sparsity_optimizer_.reset();
         evaluator_.reset();
 
@@ -1322,6 +1327,36 @@ namespace lfs::training {
             LOG_INFO("PPISP initialized: {} cameras (physical), {} frames, lr={:.2e}, warmup={}, reg_weight={:.2e}",
                      ppisp_->num_cameras(), ppisp_->num_frames(), params_.optimization.ppisp_lr,
                      config.warmup_steps, reg_weight);
+
+            const bool resume = params_.resume_checkpoint.has_value() || params_.resume_project.has_value();
+            if (params_.optimization.ppisp_exposure_from_exif && !resume) {
+                std::vector<std::pair<int, float>> uid_ev;
+                for (const auto& cam : train_dataset_->get_cameras()) {
+                    if (!cam || !ppisp_->is_known_frame(cam->uid())) {
+                        continue;
+                    }
+                    const auto ev = lfs::core::exif_exposure_ev_for_training_image(
+                        cam->image_path(), params_.dataset.data_path);
+                    if (ev) {
+                        uid_ev.emplace_back(cam->uid(), static_cast<float>(*ev));
+                    }
+                }
+                const int n = static_cast<int>(uid_ev.size());
+                const int m = ppisp_->num_frames();
+                if (n == 0) {
+                    LOG_DEBUG("PPISP exposure EXIF seed skipped: no tags in {} frames", m);
+                } else {
+                    double sum = 0.0;
+                    for (const auto& item : uid_ev) {
+                        sum += static_cast<double>(item.second);
+                    }
+                    const double mean = sum / static_cast<double>(n);
+                    ppisp_exif_exposure_mean_ = static_cast<float>(mean);
+                    ppisp_->seed_exposure(uid_ev);
+                    LOG_INFO("PPISP exposure seeded from EXIF for {} of {} frames (mean {:.2f} EV)",
+                             n, m, mean);
+                }
+            }
 
             if (auto result = apply_ppisp_sidecar_if_configured(); !result) {
                 return result;
@@ -3027,6 +3062,11 @@ namespace lfs::training {
 
             // Initialize the evaluator - it handles all metrics internally
             evaluator_ = std::make_unique<lfs::training::MetricsEvaluator>(params_);
+            if (params_.optimization.use_ppisp && ppisp_ && ppisp_->isFinalized()) {
+                evaluator_->set_appearance([this](const lfs::core::Tensor& rgb, const lfs::core::Camera& cam) {
+                    return applyPPISPForEval(rgb, cam);
+                });
+            }
             LOG_DEBUG("Metrics evaluator initialized");
 
             // Resume from checkpoint if provided
@@ -3399,6 +3439,9 @@ namespace lfs::training {
         bilateral_grid_.reset();
         ppisp_.reset();
         ppisp_controller_pool_.reset();
+        ppisp_exif_exposure_mean_.reset();
+        eval_ppisp_applied_.store(0);
+        eval_ppisp_exif_.store(0);
         sparsity_optimizer_.reset();
         evaluator_.reset();
         progress_.reset();
@@ -7486,10 +7529,18 @@ namespace lfs::training {
                     // Clean evaluation - let the evaluator handle everything
                     if (evaluator_->is_enabled() && evaluator_->should_evaluate(iter)) {
                         evaluator_->print_evaluation_header(iter);
+                        eval_ppisp_applied_.store(0);
+                        eval_ppisp_exif_.store(0);
                         auto metrics = evaluator_->evaluate(iter,
                                                             strategy_->get_model(),
                                                             val_dataset_,
                                                             background_);
+                        if (evaluator_->has_appearance()) {
+                            const int n = eval_ppisp_applied_.load();
+                            const int k = eval_ppisp_exif_.load();
+                            LOG_INFO("Eval: PPISP applied to {} held-out frames ({} with EXIF exposure, {} at mean exposure)",
+                                     n, k, n - k);
+                        }
                         LOG_INFO("{}", metrics.to_string());
                         // B2: retain only the current active shape after evaluation.
                         photometric_loss_.arena().shrink_to_required();
@@ -8524,6 +8575,58 @@ namespace lfs::training {
                 "Project snapshot did not publish the requested destination");
         }
         return path;
+    }
+
+    lfs::core::Tensor Trainer::applyPPISPForEval(const lfs::core::Tensor& rgb,
+                                                 const lfs::core::Camera& cam) const {
+        eval_ppisp_applied_.fetch_add(1, std::memory_order_relaxed);
+
+        const auto params = getParams();
+        if (!ppisp_ || !params.optimization.use_ppisp || !ppisp_->isFinalized() ||
+            rgb.shape().rank() != 3) {
+            return rgb;
+        }
+
+        auto rgb_chw = rgb.device() == lfs::core::Device::CUDA ? rgb : rgb.cuda();
+        if (rgb_chw.shape()[0] != 3 && rgb_chw.shape()[2] == 3) {
+            rgb_chw = rgb_chw.permute({2, 0, 1}).contiguous();
+        } else if (!rgb_chw.is_contiguous()) {
+            rgb_chw = rgb_chw.contiguous();
+        }
+
+        auto* const pool = controller_pool_for_save(get_current_iteration());
+        if (pool && params.optimization.ppisp_use_controller) {
+            const bool is_training_camera = ppisp_->is_known_frame(cam.uid());
+            const int camera_idx =
+                is_training_camera ? ppisp_->camera_index(ppisp_->camera_for_frame(cam.uid())) : 0;
+            const int controller_idx =
+                (camera_idx >= 0 && camera_idx < pool->num_cameras()) ? camera_idx : 0;
+            std::lock_guard<std::mutex> controller_lock(pool->predict_mutex());
+            const auto controller_params = pool->predict(controller_idx, rgb_chw.unsqueeze(0), 1.0f);
+            return ppisp_->apply_with_controller_params(rgb_chw, controller_params, controller_idx);
+        }
+
+        int camera_id = cam.camera_id();
+        if (!ppisp_->is_known_camera(camera_id)) {
+            camera_id = ppisp_->any_camera_id();
+        }
+
+        if (ppisp_->is_known_frame(cam.uid())) {
+            return ppisp_->apply(rgb_chw, camera_id, cam.uid());
+        }
+
+        float exposure = 0.0f;
+        if (ppisp_exif_exposure_mean_) {
+            const auto ev = lfs::core::exif_exposure_ev_for_training_image(
+                cam.image_path(), params.dataset.data_path);
+            if (ev) {
+                exposure = std::clamp(0.5f * (static_cast<float>(*ev) - *ppisp_exif_exposure_mean_),
+                                      -16.0f, 16.0f);
+                eval_ppisp_exif_.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+
+        return ppisp_->apply_with_exposure(rgb_chw, camera_id, exposure);
     }
 
     lfs::core::Tensor Trainer::applyPPISPForViewport(const lfs::core::Tensor& rgb, const int camera_uid,

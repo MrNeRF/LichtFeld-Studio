@@ -354,6 +354,7 @@ set(TEST_FILES
     test_crash_handler.cpp
     test_gpu_teardown_order.cpp
     test_logger.cpp
+    test_exif.cpp
     test_system_info.cpp
     test_parameter_manager.cpp
     test_mcp_protocol.cpp
@@ -442,6 +443,8 @@ set(TEST_FILES
     test_ppisp_checkpoint_roundtrip.cpp
     test_ppisp_cuda_vs_torch.cpp
     test_ppisp_banded_region.cpp
+    test_ppisp_exposure_seed.cpp
+    test_metrics_evaluator_appearance.cpp
     test_export_env_composite.cpp
     test_undistort.cpp
     test_viewport_region_utils.cpp

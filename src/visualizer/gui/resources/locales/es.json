@@ -530,6 +530,7 @@
     "button.switch_edit_mode": "Modo Edición",
     "tooltip": {
       "btn_switch_edit": "Cambiar al modo de edición para la escena entrenada",
+      "ppisp_exposure_from_exif": "Inicializar la exposición PPISP por fotograma desde EXIF, relativa a la media del conjunto",
       "ppisp_freeze_from_sidecar": "Cargar los pesos PPISP desde un archivo sidecar",
       "ppisp_sidecar_path": "Ruta al archivo sidecar PPISP",
       "ppisp_sidecar_browse": "Buscar un archivo sidecar PPISP",
@@ -1506,6 +1507,7 @@
     "init_rho": "Rho inicial:",
     "prune_ratio": "Proporción de poda:",
     "ppisp": "PPISP:",
+    "ppisp_exposure_from_exif": "Exposición EXIF:",
     "ppisp_controller": "  Controlador:",
     "ppisp_lr": "Tasa de Aprendizaje:",
     "ppisp_reg": "Regularización:",

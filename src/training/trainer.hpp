@@ -343,6 +343,11 @@ namespace lfs::training {
             return ppisp_ != nullptr && params.optimization.use_ppisp && ppisp_->isFinalized();
         }
 
+        /// Held-out eval appearance hook is installed iff PPISP was enabled and finalized.
+        [[nodiscard]] bool hasEvalAppearance() const {
+            return evaluator_ && evaluator_->has_appearance();
+        }
+
         /// Check if PPISP controller is enabled and ready for novel views
         bool hasPPISPController() const {
             const auto params = getParams();
@@ -594,6 +599,7 @@ namespace lfs::training {
                    !params.optimization.ppisp_sidecar_path.empty();
         }
         [[nodiscard]] PPISPControllerPool* controller_pool_for_save(int iteration) const;
+        lfs::core::Tensor applyPPISPForEval(const lfs::core::Tensor& rgb, const lfs::core::Camera& cam) const;
         [[nodiscard]] lfs::core::param::TrainingParameters params_for_project_snapshot() const;
         [[nodiscard]] TrainingProgress::Phase get_progress_phase(
             int iter,
@@ -711,6 +717,11 @@ namespace lfs::training {
 
         // PPISP for physically-plausible ISP appearance modeling (optional)
         std::unique_ptr<PPISP> ppisp_;
+        // Train-set EXIF EV mean used by seed_exposure (0.5 * (ev - mean)). Unset
+        // when the seed was skipped or disabled; eval then uses exposure 0.
+        std::optional<float> ppisp_exif_exposure_mean_;
+        mutable std::atomic<int> eval_ppisp_applied_{0};
+        mutable std::atomic<int> eval_ppisp_exif_{0};
 
         // PPISP controller pool for novel-view distillation.
         // Shared CNN and per-camera FC weights for memory efficiency

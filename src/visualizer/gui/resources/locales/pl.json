@@ -530,6 +530,7 @@
     "button.switch_edit_mode": "Tryb Edycji",
     "tooltip": {
       "btn_switch_edit": "Przełącz na tryb edycji wytrenowanej sceny",
+      "ppisp_exposure_from_exif": "Inicjuj ekspozycję PPISP każdej klatki z EXIF, względem średniej zbioru",
       "ppisp_freeze_from_sidecar": "Załaduj wagi PPISP z pliku sidecar",
       "ppisp_sidecar_path": "Ścieżka do pliku sidecar PPISP",
       "ppisp_sidecar_browse": "Przeglądaj plik sidecar PPISP",
@@ -1506,6 +1507,7 @@
     "init_rho": "Początkowe rho:",
     "prune_ratio": "Współczynnik przycinania:",
     "ppisp": "PPISP:",
+    "ppisp_exposure_from_exif": "Ekspozycja EXIF:",
     "ppisp_controller": "  Kontroler:",
     "ppisp_lr": "Tempo uczenia:",
     "ppisp_reg": "Regularyzacja:",

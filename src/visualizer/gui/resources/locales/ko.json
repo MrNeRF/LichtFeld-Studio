@@ -530,6 +530,7 @@
     "button.switch_edit_mode": "편집 모드",
     "tooltip": {
       "btn_switch_edit": "훈련된 장면의 편집 모드로 전환",
+      "ppisp_exposure_from_exif": "사진 EXIF에서 프레임별 PPISP 노출을 데이터세트 평균 기준으로 초기화",
       "ppisp_freeze_from_sidecar": "사이드카 파일에서 PPISP 가중치 로드",
       "ppisp_sidecar_path": "PPISP 사이드카 파일 경로",
       "ppisp_sidecar_browse": "PPISP 사이드카 파일 찾아보기",
@@ -1506,6 +1507,7 @@
     "init_rho": "초기 rho:",
     "prune_ratio": "가지치기 비율:",
     "ppisp": "PPISP:",
+    "ppisp_exposure_from_exif": "EXIF 노출:",
     "ppisp_controller": "  컨트롤러:",
     "ppisp_lr": "학습률:",
     "ppisp_reg": "정규화:",

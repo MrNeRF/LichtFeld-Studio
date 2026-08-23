@@ -531,6 +531,7 @@
     "button.switch_edit_mode": "Mode Édition",
     "tooltip": {
       "btn_switch_edit": "Passer en mode édition pour la scène entraînée",
+      "ppisp_exposure_from_exif": "Initialiser l'exposition PPISP par image depuis EXIF, relative à la moyenne du jeu",
       "ppisp_freeze_from_sidecar": "Charger les poids PPISP depuis un fichier sidecar",
       "ppisp_sidecar_path": "Chemin vers le fichier sidecar PPISP",
       "ppisp_sidecar_browse": "Rechercher un fichier sidecar PPISP",
@@ -1507,6 +1508,7 @@
     "init_rho": "Rho initial :",
     "prune_ratio": "Ratio d'élagage :",
     "ppisp": "PPISP:",
+    "ppisp_exposure_from_exif": "Exposition EXIF :",
     "ppisp_controller": "  Contrôleur:",
     "ppisp_lr": "Taux d'apprentissage:",
     "ppisp_reg": "Régularisation:",

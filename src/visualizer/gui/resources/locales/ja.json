@@ -530,6 +530,7 @@
     "button.switch_edit_mode": "編集モード",
     "tooltip": {
       "btn_switch_edit": "トレーニング済みシーンの編集モードに切り替え",
+      "ppisp_exposure_from_exif": "各フレームの PPISP 露出を写真の EXIF からデータセット平均との相対値で初期化",
       "ppisp_freeze_from_sidecar": "サイドカーファイルから PPISP の重みを読み込み",
       "ppisp_sidecar_path": "PPISP サイドカーファイルのパス",
       "ppisp_sidecar_browse": "PPISP サイドカーファイルを参照",
@@ -1506,6 +1507,7 @@
     "init_rho": "初期 rho:",
     "prune_ratio": "プルーニング比率:",
     "ppisp": "PPISP:",
+    "ppisp_exposure_from_exif": "EXIF 露出:",
     "ppisp_controller": "  コントローラー:",
     "ppisp_lr": "学習率:",
     "ppisp_reg": "正則化:",

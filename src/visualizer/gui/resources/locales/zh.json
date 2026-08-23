@@ -530,6 +530,7 @@
     "button.switch_edit_mode": "编辑模式",
     "tooltip": {
       "btn_switch_edit": "切换到已训练场景的编辑模式",
+      "ppisp_exposure_from_exif": "从照片 EXIF 按数据集均值初始化每帧 PPISP 曝光",
       "ppisp_freeze_from_sidecar": "从 sidecar 文件加载 PPISP 权重",
       "ppisp_sidecar_path": "PPISP sidecar 文件路径",
       "ppisp_sidecar_browse": "浏览 PPISP sidecar 文件",
@@ -1506,6 +1507,7 @@
     "init_rho": "初始 rho:",
     "prune_ratio": "修剪比例:",
     "ppisp": "PPISP:",
+    "ppisp_exposure_from_exif": "EXIF 曝光：",
     "ppisp_controller": "  控制器:",
     "ppisp_lr": "学习率:",
     "ppisp_reg": "正则化:",

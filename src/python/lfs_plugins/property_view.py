@@ -78,6 +78,7 @@ BOOL_PROPS = (
     "undistort",
     "mip_filter",
     "ppisp",
+    "ppisp_exposure_from_exif",
     "ppisp_use_controller",
     "ppisp_freeze_from_sidecar",
     "ppisp_freeze_gaussians",
@@ -164,6 +165,7 @@ BASIC_RUNS = (
     _run("basic_after_gut", "undistort", "mip_filter", "ppisp"),
     _run(
         "ppisp_freeze",
+        "ppisp_exposure_from_exif",
         "ppisp_freeze_from_sidecar",
         visibility_condition_id="dep_ppisp",
     ),

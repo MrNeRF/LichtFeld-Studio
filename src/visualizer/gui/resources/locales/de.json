@@ -530,6 +530,7 @@
     "button.switch_edit_mode": "Bearbeitungsmodus",
     "tooltip": {
       "btn_switch_edit": "In Bearbeitungsmodus für die trainierte Szene wechseln",
+      "ppisp_exposure_from_exif": "Pro-Frame-PPISP-Belichtung aus EXIF der Fotos setzen, relativ zum Datensatzmittel",
       "ppisp_freeze_from_sidecar": "PPISP-Gewichte aus Sidecar-Datei laden",
       "ppisp_sidecar_path": "Pfad zur PPISP-Sidecar-Datei",
       "ppisp_sidecar_browse": "Nach PPISP-Sidecar-Datei suchen",
@@ -1506,6 +1507,7 @@
     "init_rho": "Init Rho:",
     "prune_ratio": "Prune Verhältnis:",
     "ppisp": "PPISP:",
+    "ppisp_exposure_from_exif": "EXIF-Belichtung:",
     "ppisp_controller": "  Controller:",
     "ppisp_lr": "Lernrate:",
     "ppisp_reg": "Regularisierung:",

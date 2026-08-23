@@ -530,6 +530,7 @@
     "button.switch_edit_mode": "Edit Mode",
     "tooltip": {
       "btn_switch_edit": "Switch to edit mode for the trained scene",
+      "ppisp_exposure_from_exif": "Seed per-frame PPISP exposure from photo EXIF, relative to the dataset mean",
       "ppisp_freeze_from_sidecar": "Load PPISP weights from a sidecar file",
       "ppisp_sidecar_path": "Path to the PPISP sidecar file",
       "ppisp_sidecar_browse": "Browse for a PPISP sidecar file",
@@ -1506,6 +1507,7 @@
     "init_rho": "Init Rho:",
     "prune_ratio": "Prune Ratio:",
     "ppisp": "PPISP:",
+    "ppisp_exposure_from_exif": "EXIF Exposure:",
     "ppisp_controller": "  Controller:",
     "ppisp_lr": "Learning Rate:",
     "ppisp_reg": "Regularization:",

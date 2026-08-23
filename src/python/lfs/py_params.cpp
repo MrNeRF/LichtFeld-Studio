@@ -957,6 +957,11 @@ namespace lfs::python {
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.use_ppisp = v; }); },
                 "Enable per-pixel image signal processing")
             .def_prop_rw(
+                "ppisp_exposure_from_exif",
+                [](PyOptimizationParams& self) { return self.params().ppisp_exposure_from_exif; },
+                [](PyOptimizationParams& self, bool v) { self.params().ppisp_exposure_from_exif = v; },
+                "Seed per-frame PPISP exposure from image EXIF")
+            .def_prop_rw(
                 "ppisp_use_controller",
                 [](PyOptimizationParams& self) { return self.params().ppisp_use_controller; },
                 [](PyOptimizationParams& self, bool v) { self.params().ppisp_use_controller = v; },

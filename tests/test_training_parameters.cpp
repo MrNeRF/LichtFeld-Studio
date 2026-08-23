@@ -304,6 +304,17 @@ namespace {
         EXPECT_THROW((void)OptimizationParameters::from_json(json), nlohmann::json::out_of_range);
     }
 
+    TEST_F(TrainingParametersTest, PpispExposureFromExifRoundTripsThroughJson) {
+        auto params = OptimizationParameters::mrnf_defaults();
+        EXPECT_TRUE(params.ppisp_exposure_from_exif);
+        EXPECT_TRUE(params.to_json().at("ppisp_exposure_from_exif").get<bool>());
+
+        params.ppisp_exposure_from_exif = false;
+        const auto json = params.to_json();
+        EXPECT_FALSE(json.at("ppisp_exposure_from_exif").get<bool>());
+        EXPECT_FALSE(OptimizationParameters::from_json(json).ppisp_exposure_from_exif);
+    }
+
     TEST_F(TrainingParametersTest, MissingOptionalJsonValuesUseStrategyDefaults) {
         auto mrnf_json = OptimizationParameters::mrnf_defaults().to_json();
         mrnf_json.erase("max_cap");
