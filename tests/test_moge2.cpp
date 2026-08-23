@@ -246,4 +246,5 @@ TEST(Moge2Test, FullModelParityIsOptIn) {
     (void)again->normal.to(lfs::core::Device::CPU);
     const auto driver_allocs = lfs::core::alloc_counter::delta_since(alloc0);
     std::cout << "steady-state driver allocs=" << driver_allocs << "\n";
+    EXPECT_EQ(driver_allocs, 0u);
 }

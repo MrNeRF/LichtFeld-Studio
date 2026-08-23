@@ -463,6 +463,13 @@ namespace lfs::core::nn {
         const int out_h = hw.first;
         const int out_w = hw.second;
         const int cout_g = cout / params.groups;
+        const bool pointwise = kh == 1 && kw == 1 && params.groups == 1 && params.stride_h == 1 &&
+                               params.stride_w == 1 && params.pad_h == 0 && params.pad_w == 0 &&
+                               params.dilation_h == 1 && params.dilation_w == 1;
+        const bool implicit_3x3 = kh == 3 && kw == 3 && params.groups == 1 && params.stride_h == 1 &&
+                                  params.stride_w == 1 && params.dilation_h == 1 &&
+                                  params.dilation_w == 1 && params.pad_h == 1 && params.pad_w == 1 &&
+                                  input.dtype() == DataType::Float16;
 
         Tensor b_s;
         const Tensor in_c = input.contiguous();
@@ -478,6 +485,40 @@ namespace lfs::core::nn {
         }
 
         pin_operands({&in_c, &w_c});
+
+        if (pointwise) {
+            auto nchw = empty_like_shape(
+                in_c, TensorShape{std::vector<std::size_t>{static_cast<std::size_t>(n),
+                                                           static_cast<std::size_t>(cout),
+                                                           static_cast<std::size_t>(out_h),
+                                                           static_cast<std::size_t>(out_w)}});
+            const cudaStream_t stream = prepare_inputs_for_stream({&in_c, &w_c}, nchw.stream());
+            nchw.set_stream(stream);
+            const int hw_n = out_h * out_w;
+            // Y^T = X^T @ W^T, NT GEMM, bias along Cout, store NCHW (trans_c).
+            // X is [N, Cin, HW], W is [Cout, Cin]. Same K-loop as im2col+NT.
+            kernels::gemm(raw(in_c), raw(w_c), raw_mut(nchw), hw_n, cout, cin,
+                          static_cast<long long>(cin) * hw_n, 0,
+                          static_cast<long long>(cout) * hw_n, n, true, true,
+                          b_c ? raw(*b_c) : nullptr, 0, in_c.dtype(), stream, true);
+            return nchw;
+        }
+
+        if (implicit_3x3) {
+            auto nchw = empty_like_shape(
+                in_c, TensorShape{std::vector<std::size_t>{static_cast<std::size_t>(n),
+                                                           static_cast<std::size_t>(cout),
+                                                           static_cast<std::size_t>(out_h),
+                                                           static_cast<std::size_t>(out_w)}});
+            const cudaStream_t stream = prepare_inputs_for_stream({&in_c, &w_c}, nchw.stream());
+            nchw.set_stream(stream);
+            kernels::conv2d_implicit(raw(in_c), raw(w_c), b_c ? raw(*b_c) : nullptr, raw_mut(nchw),
+                                     n, cin, h, w, cout, kh, kw, out_h, out_w, params.stride_h,
+                                     params.stride_w, params.pad_h, params.pad_w, params.dilation_h,
+                                     params.dilation_w, static_cast<int>(params.pad_mode),
+                                     in_c.dtype(), stream);
+            return nchw;
+        }
         const std::size_t bytes = conv2d_workspace_bytes(in_c.shape(), w_c.shape(), params, in_c.dtype());
         Tensor scratch = ensure_workspace(workspace, bytes, in_c, "conv2d");
         auto nhwc = empty_like_shape(

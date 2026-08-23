@@ -14,8 +14,6 @@
 namespace lfs::core::nn::kernels {
     namespace {
 
-        constexpr int kMaxGridY = 65535;
-
         __device__ __forceinline__ float load_a_f32(const float* a, int row, int col, int m,
                                                     int k, bool trans_a) {
             if (row >= m || col >= k) {
@@ -32,12 +30,47 @@ namespace lfs::core::nn::kernels {
             return trans_b ? __ldg(&b[col * k + row]) : __ldg(&b[row * n + col]);
         }
 
+        __device__ __forceinline__ void store_c_f32(float* C, int gr, int gc, int m, int n,
+                                                    float v, const float* bias, int activation,
+                                                    bool trans_c) {
+            if (gr >= m || gc >= n) {
+                return;
+            }
+            if (bias) {
+                v += __ldg(&bias[gc]);
+            }
+            v = device::apply_activation(v, activation);
+            if (trans_c) {
+                C[static_cast<long long>(gc) * m + gr] = v;
+            } else {
+                C[static_cast<long long>(gr) * n + gc] = v;
+            }
+        }
+
+        __device__ __forceinline__ void store_c_f16(__half* C, int gr, int gc, int m, int n,
+                                                    float v, const __half* bias, int activation,
+                                                    bool trans_c) {
+            if (gr >= m || gc >= n) {
+                return;
+            }
+            if (bias) {
+                v += __half2float(bias[gc]);
+            }
+            const __half h = __float2half_rn(device::apply_activation(v, activation));
+            if (trans_c) {
+                C[static_cast<long long>(gc) * m + gr] = h;
+            } else {
+                C[static_cast<long long>(gr) * n + gc] = h;
+            }
+        }
+
         template <int BM, int BN, int BK, int TM, int TN>
         __global__ void __launch_bounds__(256)
             sgemm_epilogue_kernel(const float* __restrict__ A, const float* __restrict__ B,
                                   float* __restrict__ C, const float* __restrict__ bias,
                                   int m, int n, int k, long long stride_a, long long stride_b,
-                                  long long stride_c, bool trans_a, bool trans_b, int activation) {
+                                  long long stride_c, bool trans_a, bool trans_b, int activation,
+                                  bool trans_c) {
             const int batch = static_cast<int>(blockIdx.z);
             A += batch * stride_a;
             B += batch * stride_b;
@@ -100,13 +133,7 @@ namespace lfs::core::nn::kernels {
                 for (int j = 0; j < TN; ++j) {
                     const int gr = block_row + thread_row + i;
                     const int gc = block_col + thread_col + j;
-                    if (gr < m && gc < n) {
-                        float v = acc[i][j];
-                        if (bias) {
-                            v += __ldg(&bias[gc]);
-                        }
-                        C[gr * n + gc] = device::apply_activation(v, activation);
-                    }
+                    store_c_f32(C, gr, gc, m, n, acc[i][j], bias, activation, trans_c);
                 }
             }
         }
@@ -119,7 +146,7 @@ namespace lfs::core::nn::kernels {
             hgemm_wmma_kernel(const __half* __restrict__ A, const __half* __restrict__ B,
                               __half* __restrict__ C, const __half* __restrict__ bias,
                               int m, int n, int k, long long stride_a, long long stride_b,
-                              long long stride_c, bool trans_a, int activation) {
+                              long long stride_c, bool trans_a, int activation, bool trans_c) {
             const int batch = static_cast<int>(blockIdx.z);
             A += batch * stride_a;
             B += batch * stride_b;
@@ -214,17 +241,19 @@ namespace lfs::core::nn::kernels {
             store_matrix_sync(&Cs[am + 16][bn + 16], c_frag[1][1], BN, mem_row_major);
             __syncthreads();
 
-            for (int i = tid; i < BM * BN; i += 128) {
-                const int r = i / BN;
-                const int c = i % BN;
-                const int gr = block_row + r;
-                const int gc = block_col + c;
-                if (gr < m && gc < n) {
-                    float v = Cs[r][c];
-                    if (bias) {
-                        v += __half2float(bias[gc]);
-                    }
-                    C[gr * n + gc] = __float2half_rn(device::apply_activation(v, activation));
+            if (trans_c) {
+                for (int i = tid; i < BM * BN; i += 128) {
+                    const int c = i / BM;
+                    const int r = i % BM;
+                    store_c_f16(C, block_row + r, block_col + c, m, n, Cs[r][c], bias, activation,
+                                true);
+                }
+            } else {
+                for (int i = tid; i < BM * BN; i += 128) {
+                    const int r = i / BN;
+                    const int c = i % BN;
+                    store_c_f16(C, block_row + r, block_col + c, m, n, Cs[r][c], bias, activation,
+                                false);
                 }
             }
 #else
@@ -244,10 +273,7 @@ namespace lfs::core::nn::kernels {
                                              : __half2float(B[kk * n + gc]);
                     acc += av * bv;
                 }
-                if (bias) {
-                    acc += __half2float(bias[gc]);
-                }
-                C[gr * n + gc] = __float2half_rn(device::apply_activation(acc, activation));
+                store_c_f16(C, gr, gc, m, n, acc, bias, activation, trans_c);
             }
 #endif
         }
@@ -255,19 +281,16 @@ namespace lfs::core::nn::kernels {
         void launch_sgemm_epilogue(const float* a, const float* b, float* c, const float* bias,
                                    int m, int n, int k, long long stride_a, long long stride_b,
                                    long long stride_c, int batch, bool trans_a, bool trans_b,
-                                   int activation, cudaStream_t stream) {
+                                   int activation, bool trans_c, cudaStream_t stream) {
             constexpr int BM = 64, BN = 64, BK = 8, TM = 4, TN = 4;
             dim3 block(BN / TN, BM / TM);
-            const int max_rows = kMaxGridY * BM;
-            for (int row0 = 0; row0 < m; row0 += max_rows) {
-                const int rows = std::min(max_rows, m - row0);
-                dim3 grid((n + BN - 1) / BN, (rows + BM - 1) / BM, batch);
-                const float* a_off = trans_a ? a + row0 : a + static_cast<long long>(row0) * k;
-                sgemm_epilogue_kernel<BM, BN, BK, TM, TN><<<grid, block, 0, stream>>>(
-                    a_off, b, c + static_cast<long long>(row0) * n, bias, rows, n, k,
-                    stride_a, stride_b, stride_c, trans_a, trans_b, activation);
-                LFS_CUDA_LAUNCH_CHECK(stream, "nn.gemm.sgemm_epilogue");
-            }
+            // trans_a / trans_c use the full M as the leading dimension, so the
+            // whole M is launched in one grid (65535 * 64 covers > 4M rows).
+            dim3 grid((n + BN - 1) / BN, (m + BM - 1) / BM, batch);
+            sgemm_epilogue_kernel<BM, BN, BK, TM, TN><<<grid, block, 0, stream>>>(
+                a, b, c, bias, m, n, k, stride_a, stride_b, stride_c, trans_a, trans_b,
+                activation, trans_c);
+            LFS_CUDA_LAUNCH_CHECK(stream, "nn.gemm.sgemm_epilogue");
         }
 
         // 128×64 WMMA tile. 8 warps cover a 128×64 output tile (4 along M × 2
@@ -277,7 +300,8 @@ namespace lfs::core::nn::kernels {
             hgemm_wmma_128x64_kernel(const __half* __restrict__ A, const __half* __restrict__ B,
                                      __half* __restrict__ C, const __half* __restrict__ bias,
                                      int m, int n, int k, long long stride_a, long long stride_b,
-                                     long long stride_c, bool trans_a, int activation) {
+                                     long long stride_c, bool trans_a, int activation,
+                                     bool trans_c) {
             const int batch = static_cast<int>(blockIdx.z);
             A += batch * stride_a;
             B += batch * stride_b;
@@ -372,17 +396,19 @@ namespace lfs::core::nn::kernels {
             store_matrix_sync(&Cs[am + 16][bn + 16], c_frag[1][1], BN, mem_row_major);
             __syncthreads();
 
-            for (int i = tid; i < BM * BN; i += 256) {
-                const int r = i / BN;
-                const int c = i % BN;
-                const int gr = block_row + r;
-                const int gc = block_col + c;
-                if (gr < m && gc < n) {
-                    float val = Cs[r][c];
-                    if (bias) {
-                        val += __half2float(bias[gc]);
-                    }
-                    C[gr * n + gc] = __float2half_rn(device::apply_activation(val, activation));
+            if (trans_c) {
+                for (int i = tid; i < BM * BN; i += 256) {
+                    const int c = i / BM;
+                    const int r = i % BM;
+                    store_c_f16(C, block_row + r, block_col + c, m, n, Cs[r][c], bias, activation,
+                                true);
+                }
+            } else {
+                for (int i = tid; i < BM * BN; i += 256) {
+                    const int r = i / BN;
+                    const int c = i % BN;
+                    store_c_f16(C, block_row + r, block_col + c, m, n, Cs[r][c], bias, activation,
+                                false);
                 }
             }
 #else
@@ -402,10 +428,7 @@ namespace lfs::core::nn::kernels {
                                              : __half2float(B[kk * n + gc]);
                     acc += av * bv;
                 }
-                if (bias) {
-                    acc += __half2float(bias[gc]);
-                }
-                C[gr * n + gc] = __float2half_rn(device::apply_activation(acc, activation));
+                store_c_f16(C, gr, gc, m, n, acc, bias, activation, trans_c);
             }
 #endif
         }
@@ -413,50 +436,38 @@ namespace lfs::core::nn::kernels {
         void launch_hgemm_wmma(const __half* a, const __half* b, __half* c, const __half* bias,
                                int m, int n, int k, long long stride_a, long long stride_b,
                                long long stride_c, int batch, bool trans_a, bool trans_b,
-                               int activation, cudaStream_t stream) {
+                               int activation, bool trans_c, cudaStream_t stream) {
             const bool large = m >= 96 && n >= 64 && k >= 32;
             if (large) {
                 constexpr int BM = 128, BN = 64;
                 dim3 block(256);
-                const int max_rows = kMaxGridY * BM;
-                for (int row0 = 0; row0 < m; row0 += max_rows) {
-                    const int rows = std::min(max_rows, m - row0);
-                    dim3 grid((n + BN - 1) / BN, (rows + BM - 1) / BM, batch);
-                    const __half* a_off = trans_a ? a + row0 : a + static_cast<long long>(row0) * k;
-                    __half* c_off = c + static_cast<long long>(row0) * n;
-                    if (trans_b) {
-                        hgemm_wmma_128x64_kernel<true><<<grid, block, 0, stream>>>(
-                            a_off, b, c_off, bias, rows, n, k, stride_a, stride_b, stride_c,
-                            trans_a, activation);
-                        LFS_CUDA_LAUNCH_CHECK(stream, "nn.gemm.hgemm_wmma_128x64_nt");
-                    } else {
-                        hgemm_wmma_128x64_kernel<false><<<grid, block, 0, stream>>>(
-                            a_off, b, c_off, bias, rows, n, k, stride_a, stride_b, stride_c,
-                            trans_a, activation);
-                        LFS_CUDA_LAUNCH_CHECK(stream, "nn.gemm.hgemm_wmma_128x64_nn");
-                    }
+                dim3 grid((n + BN - 1) / BN, (m + BM - 1) / BM, batch);
+                if (trans_b) {
+                    hgemm_wmma_128x64_kernel<true><<<grid, block, 0, stream>>>(
+                        a, b, c, bias, m, n, k, stride_a, stride_b, stride_c, trans_a, activation,
+                        trans_c);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "nn.gemm.hgemm_wmma_128x64_nt");
+                } else {
+                    hgemm_wmma_128x64_kernel<false><<<grid, block, 0, stream>>>(
+                        a, b, c, bias, m, n, k, stride_a, stride_b, stride_c, trans_a, activation,
+                        trans_c);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "nn.gemm.hgemm_wmma_128x64_nn");
                 }
                 return;
             }
             constexpr int BM = 64, BN = 64;
             dim3 block(128);
-            const int max_rows = kMaxGridY * BM;
-            for (int row0 = 0; row0 < m; row0 += max_rows) {
-                const int rows = std::min(max_rows, m - row0);
-                dim3 grid((n + BN - 1) / BN, (rows + BM - 1) / BM, batch);
-                const __half* a_off = trans_a ? a + row0 : a + static_cast<long long>(row0) * k;
-                __half* c_off = c + static_cast<long long>(row0) * n;
-                if (trans_b) {
-                    hgemm_wmma_kernel<true><<<grid, block, 0, stream>>>(
-                        a_off, b, c_off, bias, rows, n, k, stride_a, stride_b, stride_c,
-                        trans_a, activation);
-                    LFS_CUDA_LAUNCH_CHECK(stream, "nn.gemm.hgemm_wmma_nt");
-                } else {
-                    hgemm_wmma_kernel<false><<<grid, block, 0, stream>>>(
-                        a_off, b, c_off, bias, rows, n, k, stride_a, stride_b, stride_c,
-                        trans_a, activation);
-                    LFS_CUDA_LAUNCH_CHECK(stream, "nn.gemm.hgemm_wmma_nn");
-                }
+            dim3 grid((n + BN - 1) / BN, (m + BM - 1) / BM, batch);
+            if (trans_b) {
+                hgemm_wmma_kernel<true><<<grid, block, 0, stream>>>(
+                    a, b, c, bias, m, n, k, stride_a, stride_b, stride_c, trans_a, activation,
+                    trans_c);
+                LFS_CUDA_LAUNCH_CHECK(stream, "nn.gemm.hgemm_wmma_nt");
+            } else {
+                hgemm_wmma_kernel<false><<<grid, block, 0, stream>>>(
+                    a, b, c, bias, m, n, k, stride_a, stride_b, stride_c, trans_a, activation,
+                    trans_c);
+                LFS_CUDA_LAUNCH_CHECK(stream, "nn.gemm.hgemm_wmma_nn");
             }
         }
 
@@ -465,7 +476,7 @@ namespace lfs::core::nn::kernels {
     void gemm(const void* a, const void* b, void* c, int m, int n, int k,
               long long stride_a, long long stride_b, long long stride_c, int batch,
               bool trans_a, bool trans_b, const void* bias, int activation,
-              DataType dtype, cudaStream_t stream) {
+              DataType dtype, cudaStream_t stream, bool trans_c) {
         NvtxRange nvtx("nn.op/gemm");
         if (m <= 0 || n <= 0 || batch <= 0) {
             return;
@@ -477,13 +488,13 @@ namespace lfs::core::nn::kernels {
             launch_hgemm_wmma(static_cast<const __half*>(a), static_cast<const __half*>(b),
                               static_cast<__half*>(c), static_cast<const __half*>(bias),
                               m, n, k, stride_a, stride_b, stride_c, batch, trans_a, trans_b,
-                              activation, stream);
+                              activation, trans_c, stream);
             return;
         }
         launch_sgemm_epilogue(static_cast<const float*>(a), static_cast<const float*>(b),
                               static_cast<float*>(c), static_cast<const float*>(bias),
                               m, n, k, stride_a, stride_b, stride_c, batch, trans_a, trans_b,
-                              activation, stream);
+                              activation, trans_c, stream);
     }
 
 } // namespace lfs::core::nn::kernels

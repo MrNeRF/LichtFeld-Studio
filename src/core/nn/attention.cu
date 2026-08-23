@@ -460,6 +460,268 @@ namespace lfs::core::nn::kernels {
             return qkv + p + s;
         }
 
+        constexpr int kFlashBr = 64;
+        constexpr int kFlashBc = 64;
+        constexpr int kFlashD = 64;
+
+        __device__ __forceinline__ void cp_async16(void* smem_addr, const void* glob_addr) {
+#if __CUDA_ARCH__ >= 800
+            const unsigned smem = __cvta_generic_to_shared(smem_addr);
+            asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n" ::"r"(smem), "l"(glob_addr));
+#else
+            *reinterpret_cast<uint4*>(smem_addr) = *reinterpret_cast<const uint4*>(glob_addr);
+#endif
+        }
+
+        __device__ __forceinline__ void cp_async_commit() {
+#if __CUDA_ARCH__ >= 800
+            asm volatile("cp.async.commit_group;\n");
+#endif
+        }
+
+        __device__ __forceinline__ void cp_async_wait0() {
+#if __CUDA_ARCH__ >= 800
+            asm volatile("cp.async.wait_group 0;\n");
+#endif
+        }
+
+        __device__ __forceinline__ void load_kv_tile(__half* Ks, __half* Vs, const __half* K,
+                                                     const __half* V, int k0, int n_k,
+                                                     long long kv_head, int tid) {
+#pragma unroll
+            for (int i = 0; i < 4; ++i) {
+                const int off = (tid + i * 128) * 8;
+                const int row = off / kFlashD;
+                const int col = off % kFlashD;
+                const int k_idx = k0 + row;
+                if (k_idx < n_k) {
+                    const long long base = kv_head + static_cast<long long>(k_idx) * kFlashD + col;
+                    cp_async16(Ks + off, K + base);
+                    cp_async16(Vs + off, V + base);
+                } else {
+                    *reinterpret_cast<uint4*>(Ks + off) = uint4{0, 0, 0, 0};
+                    *reinterpret_cast<uint4*>(Vs + off) = uint4{0, 0, 0, 0};
+                }
+            }
+        }
+
+        // Flash attention for d=64: Q in WMMA fragments, K/V streamed with
+        // cp.async double-buffer, O fragment-resident, fused 1/sqrt(d).
+        __global__ void __launch_bounds__(128, 2)
+            flash_attn_d64_kernel(const __half* __restrict__ q_ptr, const __half* __restrict__ k_ptr,
+                                  const __half* __restrict__ v_ptr, __half* __restrict__ o_ptr,
+                                  int batch, int heads, int n_q, int n_k, float scale) {
+            const int tid = static_cast<int>(threadIdx.x);
+            const int q0 = static_cast<int>(blockIdx.x) * kFlashBr;
+            const int bh = static_cast<int>(blockIdx.y);
+            const int b = bh / heads;
+            const int h = bh % heads;
+            if (b >= batch) {
+                return;
+            }
+
+            extern __shared__ __align__(16) char raw[];
+            auto* Qs = reinterpret_cast<__half*>(raw);
+            auto* Ks0 = Qs + kFlashBr * kFlashD;
+            auto* Vs0 = Ks0 + kFlashBc * kFlashD;
+            auto* Ks1 = Vs0 + kFlashBc * kFlashD;
+            auto* Vs1 = Ks1 + kFlashBc * kFlashD;
+            auto* Ps = Qs;
+
+            const long long q_head =
+                (static_cast<long long>(b) * heads + h) * static_cast<long long>(n_q) * kFlashD;
+            const long long kv_head =
+                (static_cast<long long>(b) * heads + h) * static_cast<long long>(n_k) * kFlashD;
+
+            for (int i = tid; i < kFlashBr * kFlashD; i += 128) {
+                const int r = i / kFlashD;
+                const int c = i % kFlashD;
+                const int q_row = q0 + r;
+                float val = 0.0f;
+                if (q_row < n_q) {
+                    val = __half2float(q_ptr[q_head + static_cast<long long>(q_row) * kFlashD + c]);
+                }
+                Qs[i] = __float2half_rn(val * scale);
+            }
+            __syncthreads();
+
+#if __CUDA_ARCH__ >= 700
+            using namespace nvcuda::wmma;
+            const int warp = tid / 32;
+            const int lane = tid % 32;
+            const int warp_row = warp * 16;
+            const int base_row = lane / 4;
+            const int base_col = (lane % 4) * 2;
+            fragment<matrix_a, 16, 16, 16, __half, row_major> q_frag[4];
+#pragma unroll
+            for (int ds = 0; ds < 4; ++ds) {
+                load_matrix_sync(q_frag[ds], Qs + warp_row * kFlashD + ds * 16, kFlashD);
+            }
+            fragment<accumulator, 16, 16, 16, float> o_frag[4];
+#pragma unroll
+            for (int ds = 0; ds < 4; ++ds) {
+                fill_fragment(o_frag[ds], 0.0f);
+            }
+            float m_i[2] = {-FLT_MAX, -FLT_MAX};
+            float l_i[2] = {0.0f, 0.0f};
+            __syncthreads();
+
+            auto* Kcur = Ks0;
+            auto* Vcur = Vs0;
+            load_kv_tile(Kcur, Vcur, k_ptr, v_ptr, 0, n_k, kv_head, tid);
+            cp_async_commit();
+            cp_async_wait0();
+            __syncthreads();
+
+            for (int k0 = 0; k0 < n_k; k0 += kFlashBc) {
+                const int next = k0 + kFlashBc;
+                auto* Koth = (Kcur == Ks0) ? Ks1 : Ks0;
+                auto* Voth = (Vcur == Vs0) ? Vs1 : Vs0;
+                if (next < n_k) {
+                    load_kv_tile(Koth, Voth, k_ptr, v_ptr, next, n_k, kv_head, tid);
+                    cp_async_commit();
+                }
+
+                fragment<matrix_b, 16, 16, 16, __half, col_major> k_frag;
+                fragment<accumulator, 16, 16, 16, float> s_frag[4];
+#pragma unroll
+                for (int ns = 0; ns < 4; ++ns) {
+                    fill_fragment(s_frag[ns], 0.0f);
+#pragma unroll
+                    for (int ds = 0; ds < 4; ++ds) {
+                        load_matrix_sync(k_frag, Kcur + ns * 16 * kFlashD + ds * 16, kFlashD);
+                        mma_sync(s_frag[ns], q_frag[ds], k_frag, s_frag[ns]);
+                    }
+                }
+
+                float row_max[2] = {-FLT_MAX, -FLT_MAX};
+#pragma unroll
+                for (int ns = 0; ns < 4; ++ns) {
+#pragma unroll
+                    for (int i = 0; i < 8; ++i) {
+                        const int col = base_col + (i & 1) + ((i & 4) ? 8 : 0) + ns * 16;
+                        const int row_off = (i >> 1) & 1;
+                        const int k_idx = k0 + col;
+                        float s = s_frag[ns].x[i];
+                        if (k_idx >= n_k) {
+                            s = -FLT_MAX;
+                        }
+                        s_frag[ns].x[i] = s;
+                        row_max[row_off] = fmaxf(row_max[row_off], s);
+                    }
+                }
+#pragma unroll
+                for (int r = 0; r < 2; ++r) {
+                    row_max[r] = fmaxf(row_max[r], __shfl_xor_sync(0xffffffffu, row_max[r], 1));
+                    row_max[r] = fmaxf(row_max[r], __shfl_xor_sync(0xffffffffu, row_max[r], 2));
+                }
+
+                float alpha[2];
+                float m_new[2];
+#pragma unroll
+                for (int r = 0; r < 2; ++r) {
+                    m_new[r] = fmaxf(m_i[r], row_max[r]);
+                    alpha[r] = (m_i[r] == -FLT_MAX) ? 0.0f : expf(m_i[r] - m_new[r]);
+                }
+#pragma unroll
+                for (int ds = 0; ds < 4; ++ds) {
+#pragma unroll
+                    for (int i = 0; i < 8; ++i) {
+                        o_frag[ds].x[i] *= alpha[(i >> 1) & 1];
+                    }
+                }
+
+                float l_add[2] = {0.0f, 0.0f};
+#pragma unroll
+                for (int ns = 0; ns < 4; ++ns) {
+#pragma unroll
+                    for (int i = 0; i < 8; ++i) {
+                        const int col = base_col + (i & 1) + ((i & 4) ? 8 : 0) + ns * 16;
+                        const int row_off = (i >> 1) & 1;
+                        const int row = warp_row + base_row + row_off * 8;
+                        const float s = s_frag[ns].x[i];
+                        const float p = (s == -FLT_MAX) ? 0.0f : expf(s - m_new[row_off]);
+                        s_frag[ns].x[i] = p;
+                        l_add[row_off] += p;
+                        if (row < kFlashBr) {
+                            Ps[row * kFlashBc + col] = __float2half_rn(p);
+                        }
+                    }
+                }
+#pragma unroll
+                for (int r = 0; r < 2; ++r) {
+                    l_add[r] += __shfl_xor_sync(0xffffffffu, l_add[r], 1);
+                    l_add[r] += __shfl_xor_sync(0xffffffffu, l_add[r], 2);
+                    l_i[r] = l_i[r] * alpha[r] + l_add[r];
+                    m_i[r] = m_new[r];
+                }
+                __syncthreads();
+
+                fragment<matrix_a, 16, 16, 16, __half, row_major> p_frag;
+                fragment<matrix_b, 16, 16, 16, __half, row_major> v_frag;
+                fragment<accumulator, 16, 16, 16, float> pv_frag;
+#pragma unroll
+                for (int ds = 0; ds < 4; ++ds) {
+                    fill_fragment(pv_frag, 0.0f);
+#pragma unroll
+                    for (int ns = 0; ns < 4; ++ns) {
+                        load_matrix_sync(p_frag, Ps + warp_row * kFlashBc + ns * 16, kFlashBc);
+                        load_matrix_sync(v_frag, Vcur + ns * 16 * kFlashD + ds * 16, kFlashD);
+                        mma_sync(pv_frag, p_frag, v_frag, pv_frag);
+                    }
+#pragma unroll
+                    for (int i = 0; i < 8; ++i) {
+                        o_frag[ds].x[i] += pv_frag.x[i];
+                    }
+                }
+
+                if (next < n_k) {
+                    cp_async_wait0();
+                }
+                __syncthreads();
+                Kcur = Koth;
+                Vcur = Voth;
+            }
+
+#pragma unroll
+            for (int ds = 0; ds < 4; ++ds) {
+#pragma unroll
+                for (int i = 0; i < 8; ++i) {
+                    const int row_off = (i >> 1) & 1;
+                    const int row = warp_row + base_row + row_off * 8;
+                    const int col = base_col + (i & 1) + ((i & 4) ? 8 : 0) + ds * 16;
+                    const int q_row = q0 + row;
+                    if (q_row < n_q && col < kFlashD) {
+                        const float inv = (l_i[row_off] == 0.0f) ? 0.0f : 1.0f / l_i[row_off];
+                        o_ptr[q_head + static_cast<long long>(q_row) * kFlashD + col] =
+                            __float2half_rn(o_frag[ds].x[i] * inv);
+                    }
+                }
+            }
+#else
+            (void)Qs;
+            (void)Ks0;
+            (void)Vs0;
+            (void)Ks1;
+            (void)Vs1;
+            (void)Ps;
+            (void)scale;
+            (void)q_ptr;
+            (void)k_ptr;
+            (void)v_ptr;
+            (void)o_ptr;
+            (void)n_q;
+            (void)n_k;
+            (void)q_head;
+            (void)kv_head;
+#endif
+        }
+
+        int flash_d64_smem_bytes() {
+            return (kFlashBr * kFlashD + 2 * kFlashBc * kFlashD + 2 * kFlashBc * kFlashD) *
+                   static_cast<int>(sizeof(__half));
+        }
+
     } // namespace
 
     void attention(const void* q, const void* k, const void* v, const void* mask, void* o,
@@ -472,6 +734,20 @@ namespace lfs::core::nn::kernels {
         }
         const bool is_half = dtype == DataType::Float16;
         dim3 grid((n_q + kBr - 1) / kBr, batch * heads);
+
+        if (is_half && d == 64 && !has_mask && n_k > 0) {
+            const int smem = flash_d64_smem_bytes();
+            auto* fn = flash_attn_d64_kernel;
+            LFS_CUDA_CHECK(cudaFuncSetAttribute(reinterpret_cast<const void*>(fn),
+                                                cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                                smem));
+            fn<<<grid, 128, smem, stream>>>(
+                static_cast<const __half*>(q), static_cast<const __half*>(k),
+                static_cast<const __half*>(v), static_cast<__half*>(o), batch, heads, n_q, n_k,
+                scale);
+            LFS_CUDA_LAUNCH_CHECK(stream, "nn.attention.flash_d64");
+            return;
+        }
 
         if (is_half && (d % 16) == 0 && d <= 64 && n_k > 0) {
             constexpr int Br = 64;

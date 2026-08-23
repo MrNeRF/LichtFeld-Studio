@@ -12,10 +12,19 @@ namespace lfs::core::nn::kernels {
     // Activation integers match lfs::core::nn::Activation.
     // Coord/resize integers match CoordTransform / ResizeMode.
 
+    // trans_c stores C as [N, M] (column-major / NCHW) instead of [M, N].
+    // Bias is always along N (added to every M row of a given column).
     void gemm(const void* a, const void* b, void* c, int m, int n, int k,
               long long stride_a, long long stride_b, long long stride_c, int batch,
               bool trans_a, bool trans_b, const void* bias, int activation,
-              DataType dtype, cudaStream_t stream);
+              DataType dtype, cudaStream_t stream, bool trans_c = false);
+
+    // Implicit GEMM conv: A is gathered from NCHW input (never materialised).
+    // Output is NCHW. Weight is OIHW. Bias, if non-null, is [C_out].
+    void conv2d_implicit(const void* input, const void* weight, const void* bias, void* output,
+                         int n, int cin, int h, int w, int cout, int kh, int kw, int out_h,
+                         int out_w, int stride_h, int stride_w, int pad_h, int pad_w, int dil_h,
+                         int dil_w, int pad_mode, DataType dtype, cudaStream_t stream);
 
     void layer_norm(const void* x, const void* weight, const void* bias, void* y,
                     int rows, int cols, float eps, DataType dtype, cudaStream_t stream);

@@ -4,6 +4,7 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "core/nn/activation_arena.hpp"
 #include "core/nn/ops.hpp"
 #include "core/nn/weight_file.hpp"
 #include "core/tensor.hpp"
@@ -77,6 +78,8 @@ namespace lfs::core::nn::models {
 
         std::unordered_map<std::string, Tensor> weights_;
         Tensor workspace_;
+        ActivationArena arena_;
+        bool weights_on_stream_ = false;
         Device device_ = Device::CUDA;
         DataType compute_ = DataType::Float16;
     };

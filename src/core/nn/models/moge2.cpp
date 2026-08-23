@@ -6,6 +6,7 @@
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
 #include "core/source_site.hpp"
+#include "internal/cuda_stream_context.hpp"
 #include "nn_nvtx.hpp"
 
 #include <algorithm>
@@ -367,7 +368,22 @@ namespace lfs::core::nn::models {
         const float aspect = static_cast<float>(img_w) / static_cast<float>(std::max(img_h, 1));
 
         NvtxRange forward_nvtx("moge2/forward");
-        StageProfile profile(image.stream());
+        const cudaStream_t fwd_stream = image.stream();
+        lfs::core::CUDAStreamGuard stream_guard(fwd_stream);
+        if (!weights_on_stream_) {
+            for (auto& [name, tensor] : weights_) {
+                (void)name;
+                tensor.set_stream(fwd_stream);
+            }
+            weights_on_stream_ = true;
+        }
+        ActivationArenaGuard arena_guard(arena_);
+        arena_.begin(fwd_stream);
+        struct ArenaCloser {
+            ActivationArena& arena;
+            ~ArenaCloser() { arena.end(); }
+        } arena_closer{arena_};
+        StageProfile profile(fwd_stream);
 
         Tensor img;
         {

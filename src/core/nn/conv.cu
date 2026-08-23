@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/assert.hpp"
 #include "core/cuda_error.hpp"
 #include "nn_device.cuh"
 #include "nn_kernels.hpp"
@@ -10,6 +11,7 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <float.h>
+#include <mma.h>
 
 namespace lfs::core::nn::kernels {
     namespace {
@@ -170,6 +172,309 @@ namespace lfs::core::nn::kernels {
             return std::min(max_blocks, (total + block - 1) / block);
         }
 
+        __device__ __forceinline__ __half load_im2col_nchw(const __half* X, int ni, int cin,
+                                                           int h, int w, int m_idx, int k_idx,
+                                                           int out_w, int pad_h, int pad_w,
+                                                           int pad_mode, int spatial, int kdim) {
+            if (m_idx >= spatial || k_idx >= kdim) {
+                return __float2half(0.0f);
+            }
+            const int ow = m_idx % out_w;
+            const int oh = m_idx / out_w;
+            const int kw = k_idx % 3;
+            const int kh = (k_idx / 3) % 3;
+            const int ic = k_idx / 9;
+            int ih = oh - pad_h + kh;
+            int iw = ow - pad_w + kw;
+            if (pad_mode == 1) {
+                ih = ih < 0 ? 0 : (ih >= h ? h - 1 : ih);
+                iw = iw < 0 ? 0 : (iw >= w ? w - 1 : iw);
+            }
+            if (static_cast<unsigned>(ih) >= static_cast<unsigned>(h) ||
+                static_cast<unsigned>(iw) >= static_cast<unsigned>(w) ||
+                static_cast<unsigned>(ic) >= static_cast<unsigned>(cin)) {
+                return __float2half(0.0f);
+            }
+            const long long in_i =
+                ((static_cast<long long>(ni) * cin + ic) * h + ih) * w + iw;
+            return X[in_i];
+        }
+
+        __device__ __forceinline__ __half load_nchw_pad(const __half* X, int ni, int cin, int h,
+                                                        int w, int ic, int ih, int iw, int pad_mode) {
+            if (pad_mode == 1) {
+                ih = ih < 0 ? 0 : (ih >= h ? h - 1 : ih);
+                iw = iw < 0 ? 0 : (iw >= w ? w - 1 : iw);
+            }
+            if (static_cast<unsigned>(ih) >= static_cast<unsigned>(h) ||
+                static_cast<unsigned>(iw) >= static_cast<unsigned>(w) ||
+                static_cast<unsigned>(ic) >= static_cast<unsigned>(cin)) {
+                return __float2half(0.0f);
+            }
+            return X[((static_cast<long long>(ni) * cin + ic) * h + ih) * w + iw];
+        }
+
+        // 128x64 implicit 3x3. Contiguous row tiles keep a 3x130x32 halo in smem
+        // so each IC chunk is loaded once and reused across the 9 spatial offsets.
+        __global__ void __launch_bounds__(256, 2)
+            hgemm_implicit_3x3_halo_kernel(const __half* __restrict__ X, const __half* __restrict__ W,
+                                           __half* __restrict__ Y, const __half* __restrict__ bias,
+                                           int n, int cin, int h, int w, int cout, int out_h,
+                                           int out_w, int pad_h, int pad_w, int pad_mode) {
+            constexpr int BM = 128;
+            constexpr int BN = 64;
+            constexpr int BK = 32;
+            const int ni = static_cast<int>(blockIdx.z);
+            if (ni >= n) {
+                return;
+            }
+            const int spatial = out_h * out_w;
+            const int kdim = cin * 9;
+            const int tid = static_cast<int>(threadIdx.x);
+            const int n_tw = (out_w + BM - 1) / BM;
+            const int tile = static_cast<int>(blockIdx.y);
+            const int oh0 = tile / n_tw;
+            const int tw = tile % n_tw;
+            const int ow0 = tw * BM;
+            const int block_col = static_cast<int>(blockIdx.x) * BN;
+            if (oh0 >= out_h) {
+                return;
+            }
+            Y += static_cast<long long>(ni) * cout * spatial;
+            const int tile_m = out_w - ow0 < BM ? out_w - ow0 : BM;
+
+#if __CUDA_ARCH__ >= 700
+            using namespace nvcuda::wmma;
+            constexpr int WM = 16;
+            constexpr int WN = 16;
+            constexpr int WK = 16;
+            const int warp_id = tid / 32;
+            const int warp_m = warp_id / 2;
+            const int warp_n = warp_id % 2;
+
+            __shared__ __half Bs[BN][BK];
+            __shared__ __half Xs[3][BM + 2][BK];
+
+            fragment<matrix_a, WM, WN, WK, __half, row_major> a_frag[2];
+            fragment<matrix_b, WM, WN, WK, __half, col_major> b_frag[2];
+            fragment<accumulator, WM, WN, WK, float> c_frag[2][2];
+#pragma unroll
+            for (int i = 0; i < 2; ++i) {
+#pragma unroll
+                for (int j = 0; j < 2; ++j) {
+                    fill_fragment(c_frag[i][j], 0.0f);
+                }
+            }
+
+            {
+                for (int ic0 = 0; ic0 < cin; ic0 += BK) {
+                    for (int ic_l = 0; ic_l < BK; ++ic_l) {
+                        for (int j = tid; j < 3 * (BM + 2); j += 256) {
+                            const int rh = j / (BM + 2);
+                            const int iw_l = j % (BM + 2);
+                            Xs[rh][iw_l][ic_l] =
+                                load_nchw_pad(X, ni, cin, h, w, ic0 + ic_l, oh0 - 1 + rh,
+                                              ow0 - 1 + iw_l, pad_mode);
+                        }
+                    }
+                    __syncthreads();
+#pragma unroll
+                    for (int kh = 0; kh < 3; ++kh) {
+#pragma unroll
+                        for (int kw = 0; kw < 3; ++kw) {
+                            for (int i = tid; i < BN * BK; i += 256) {
+                                const int r = i / BK;
+                                const int c = i % BK;
+                                const int gc = block_col + r;
+                                const int ic = ic0 + c;
+                                __half v = __float2half(0.0f);
+                                if (gc < cout && ic < cin) {
+                                    v = W[static_cast<long long>(gc) * kdim + ic * 9 + kh * 3 + kw];
+                                }
+                                Bs[r][c] = v;
+                            }
+                            __syncthreads();
+                            const int am = warp_m * 32;
+                            const int bn = warp_n * 32;
+#pragma unroll
+                            for (int kk = 0; kk < BK; kk += WK) {
+                                load_matrix_sync(a_frag[0], &Xs[kh][kw + am][kk], BK);
+                                load_matrix_sync(a_frag[1], &Xs[kh][kw + am + 16][kk], BK);
+                                load_matrix_sync(b_frag[0], &Bs[bn][kk], BK);
+                                load_matrix_sync(b_frag[1], &Bs[bn + 16][kk], BK);
+                                mma_sync(c_frag[0][0], a_frag[0], b_frag[0], c_frag[0][0]);
+                                mma_sync(c_frag[0][1], a_frag[0], b_frag[1], c_frag[0][1]);
+                                mma_sync(c_frag[1][0], a_frag[1], b_frag[0], c_frag[1][0]);
+                                mma_sync(c_frag[1][1], a_frag[1], b_frag[1], c_frag[1][1]);
+                            }
+                            __syncthreads();
+                        }
+                    }
+                }
+            }
+
+            const int am = warp_m * 32;
+            const int bn = warp_n * 32;
+            const int lane = tid % 32;
+            const int base_row = lane / 4;
+            const int base_col = (lane % 4) * 2;
+#pragma unroll
+            for (int fi = 0; fi < 2; ++fi) {
+#pragma unroll
+                for (int fj = 0; fj < 2; ++fj) {
+#pragma unroll
+                    for (int i = 0; i < 8; ++i) {
+                        const int r = am + fi * 16 + base_row + ((i >> 1) & 1) * 8;
+                        const int c = bn + fj * 16 + base_col + (i & 1) + ((i & 4) ? 8 : 0);
+                        const int gc = block_col + c;
+                        if (r < tile_m && gc < cout) {
+                            const int gr = oh0 * out_w + ow0 + r;
+                            float v = c_frag[fi][fj].x[i];
+                            if (bias) {
+                                v += __half2float(bias[gc]);
+                            }
+                            Y[static_cast<long long>(gc) * spatial + gr] = __float2half_rn(v);
+                        }
+                    }
+                }
+            }
+#else
+            (void)oh0;
+            (void)ow0;
+            (void)tile_m;
+            (void)kdim;
+            (void)pad_h;
+            (void)pad_w;
+            (void)pad_mode;
+            (void)spatial;
+#endif
+        }
+
+        // Implicit 3x3 GEMM. M = OH*OW, N = Cout, K = Cin*9. NT WMMA, NCHW store.
+        template <int BM, int BN, int nthreads>
+        __global__ void __launch_bounds__(nthreads)
+            hgemm_implicit_3x3_kernel(const __half* __restrict__ X, const __half* __restrict__ W,
+                                      __half* __restrict__ Y, const __half* __restrict__ bias,
+                                      int n, int cin, int h, int w, int cout, int out_h, int out_w,
+                                      int pad_h, int pad_w, int pad_mode) {
+            const int ni = static_cast<int>(blockIdx.z);
+            if (ni >= n) {
+                return;
+            }
+            const int spatial = out_h * out_w;
+            const int kdim = cin * 9;
+            const int tid = static_cast<int>(threadIdx.x);
+            const int block_row = static_cast<int>(blockIdx.y) * BM;
+            const int block_col = static_cast<int>(blockIdx.x) * BN;
+            Y += static_cast<long long>(ni) * cout * spatial;
+
+#if __CUDA_ARCH__ >= 700
+            using namespace nvcuda::wmma;
+            constexpr int BK = 32;
+            constexpr int WM = 16;
+            constexpr int WN = 16;
+            constexpr int WK = 16;
+
+            const int warp_id = tid / 32;
+            const int warp_m = warp_id / 2;
+            const int warp_n = warp_id % 2;
+
+            __shared__ __half As[BM][BK];
+            __shared__ __half Bs[BN][BK];
+            __shared__ float Cs[BM][BN];
+
+            fragment<matrix_a, WM, WN, WK, __half, row_major> a_frag[2];
+            fragment<matrix_b, WM, WN, WK, __half, col_major> b_frag[2];
+            fragment<accumulator, WM, WN, WK, float> c_frag[2][2];
+#pragma unroll
+            for (int i = 0; i < 2; ++i) {
+#pragma unroll
+                for (int j = 0; j < 2; ++j) {
+                    fill_fragment(c_frag[i][j], 0.0f);
+                }
+            }
+
+            for (int k0 = 0; k0 < kdim; k0 += BK) {
+                for (int i = tid; i < BM * BK; i += nthreads) {
+                    const int r = i / BK;
+                    const int c = i % BK;
+                    As[r][c] = load_im2col_nchw(X, ni, cin, h, w, block_row + r, k0 + c, out_w,
+                                                pad_h, pad_w, pad_mode, spatial, kdim);
+                }
+                for (int i = tid; i < BN * BK; i += nthreads) {
+                    const int r = i / BK;
+                    const int c = i % BK;
+                    const int gc = block_col + r;
+                    const int kk = k0 + c;
+                    __half v = __float2half(0.0f);
+                    if (gc < cout && kk < kdim) {
+                        v = W[static_cast<long long>(gc) * kdim + kk];
+                    }
+                    Bs[r][c] = v;
+                }
+                __syncthreads();
+
+#pragma unroll
+                for (int kk = 0; kk < BK; kk += WK) {
+                    const int am = warp_m * 32;
+                    const int bn = warp_n * 32;
+                    load_matrix_sync(a_frag[0], &As[am][kk], BK);
+                    load_matrix_sync(a_frag[1], &As[am + 16][kk], BK);
+                    load_matrix_sync(b_frag[0], &Bs[bn][kk], BK);
+                    load_matrix_sync(b_frag[1], &Bs[bn + 16][kk], BK);
+                    mma_sync(c_frag[0][0], a_frag[0], b_frag[0], c_frag[0][0]);
+                    mma_sync(c_frag[0][1], a_frag[0], b_frag[1], c_frag[0][1]);
+                    mma_sync(c_frag[1][0], a_frag[1], b_frag[0], c_frag[1][0]);
+                    mma_sync(c_frag[1][1], a_frag[1], b_frag[1], c_frag[1][1]);
+                }
+                __syncthreads();
+            }
+
+            const int am = warp_m * 32;
+            const int bn = warp_n * 32;
+            store_matrix_sync(&Cs[am][bn], c_frag[0][0], BN, mem_row_major);
+            store_matrix_sync(&Cs[am][bn + 16], c_frag[0][1], BN, mem_row_major);
+            store_matrix_sync(&Cs[am + 16][bn], c_frag[1][0], BN, mem_row_major);
+            store_matrix_sync(&Cs[am + 16][bn + 16], c_frag[1][1], BN, mem_row_major);
+            __syncthreads();
+
+            for (int i = tid; i < BM * BN; i += nthreads) {
+                const int c = i / BM;
+                const int r = i % BM;
+                const int gr = block_row + r;
+                const int gc = block_col + c;
+                if (gr < spatial && gc < cout) {
+                    float v = Cs[r][c];
+                    if (bias) {
+                        v += __half2float(bias[gc]);
+                    }
+                    Y[static_cast<long long>(gc) * spatial + gr] = __float2half_rn(v);
+                }
+            }
+#else
+            for (int i = tid; i < BM * BN; i += nthreads) {
+                const int r = i / BN;
+                const int c = i % BN;
+                const int gr = block_row + r;
+                const int gc = block_col + c;
+                if (gr >= spatial || gc >= cout) {
+                    continue;
+                }
+                float acc = 0.0f;
+                for (int kk = 0; kk < kdim; ++kk) {
+                    const float av = __half2float(load_im2col_nchw(
+                        X, ni, cin, h, w, gr, kk, out_w, pad_h, pad_w, pad_mode, spatial, kdim));
+                    const float bv = __half2float(W[static_cast<long long>(gc) * kdim + kk]);
+                    acc += av * bv;
+                }
+                if (bias) {
+                    acc += __half2float(bias[gc]);
+                }
+                Y[static_cast<long long>(gc) * spatial + gr] = __float2half_rn(acc);
+            }
+#endif
+        }
+
     } // namespace
 
     void im2col(const void* input, void* col, int n, int c, int h, int w, int k_h, int k_w,
@@ -213,6 +518,45 @@ namespace lfs::core::nn::kernels {
             input, output, n, c, in_h, in_w, out_h, out_w, k_h, k_w, stride_h, stride_w, pad_h,
             pad_w, dtype == DataType::Float16);
         LFS_CUDA_LAUNCH_CHECK(stream, "nn.pool.max2d");
+    }
+
+    void conv2d_implicit(const void* input, const void* weight, const void* bias, void* output,
+                         int n, int cin, int h, int w, int cout, int kh, int kw, int out_h,
+                         int out_w, int stride_h, int stride_w, int pad_h, int pad_w, int dil_h,
+                         int dil_w, int pad_mode, DataType dtype, cudaStream_t stream) {
+        NvtxRange nvtx("nn.op/conv_implicit");
+        (void)stride_h;
+        (void)stride_w;
+        (void)dil_h;
+        (void)dil_w;
+        if (n <= 0 || cout <= 0 || out_h <= 0 || out_w <= 0) {
+            return;
+        }
+        LFS_ASSERT_MSG(dtype == DataType::Float16, "implicit conv requires float16");
+        LFS_ASSERT_MSG(kh == 3 && kw == 3, "implicit conv requires a 3x3 kernel");
+        const int spatial = out_h * out_w;
+        const int kdim = cin * 9;
+        auto* x = static_cast<const __half*>(input);
+        auto* wt = static_cast<const __half*>(weight);
+        auto* y = static_cast<__half*>(output);
+        auto* b = static_cast<const __half*>(bias);
+        const bool large = spatial >= 96 && kdim >= 32;
+        if (large) {
+            constexpr int BM = 128, BN = 64;
+            dim3 block(256);
+            const int n_tw = (out_w + BM - 1) / BM;
+            dim3 grid((cout + BN - 1) / BN, n_tw * out_h, n);
+            hgemm_implicit_3x3_halo_kernel<<<grid, block, 0, stream>>>(
+                x, wt, y, b, n, cin, h, w, cout, out_h, out_w, pad_h, pad_w, pad_mode);
+            LFS_CUDA_LAUNCH_CHECK(stream, "nn.conv.implicit_3x3_halo");
+            return;
+        }
+        constexpr int BM = 64, BN = 64;
+        dim3 block(128);
+        dim3 grid((cout + BN - 1) / BN, (spatial + BM - 1) / BM, n);
+        hgemm_implicit_3x3_kernel<BM, BN, 128><<<grid, block, 0, stream>>>(
+            x, wt, y, b, n, cin, h, w, cout, out_h, out_w, pad_h, pad_w, pad_mode);
+        LFS_CUDA_LAUNCH_CHECK(stream, "nn.conv.implicit_3x3_64x64");
     }
 
     void avg_pool2d(const void* input, void* output, int n, int c, int in_h, int in_w,
