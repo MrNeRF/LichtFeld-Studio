@@ -420,6 +420,47 @@ def test_scene_tree_delete_key_uses_selection_gated_confirmation_path():
     assert "requestDeleteSelectionIfAvailable" not in scene_graph
 
 
+def test_viewport_ctrl_click_toggles_nodes_without_breaking_modified_drags():
+    input_controller = (
+        PROJECT_ROOT / "src" / "visualizer" / "input" / "input_controller.cpp"
+    ).read_text(encoding="utf-8")
+
+    release_pick = input_controller.split(
+        "selectCameraByUid(pressed_camera_frustum_id,", 1
+    )[1].split(";", 1)[0]
+    assert "pressed_camera_frustum_modifiers & input::KEYMOD_CTRL" in release_pick
+
+    camera_press = input_controller.split(
+        "const bool camera_selection_modifier =", 1
+    )[1].split("last_click_time_ = now;", 1)[0]
+    assert "input::KEYMOD_CTRL | input::KEYMOD_SHIFT" in camera_press
+    assert "!camera_selection_modifier && is_double_click" in camera_press
+
+    helper = input_controller.split(
+        "void InputController::selectCameraByUid", 1
+    )[1].split("bool InputController::handleFocusSelection", 1)[0]
+    assert "toggle_selection" in helper
+    assert "sm->getSelectedNodeIds()" in helper
+    assert "sm->removeFromSelection(node->id)" in helper
+    assert "sm->addToSelection(node->id)" in helper
+    assert "sm->selectNode(node->id)" in helper
+
+    rect_release = input_controller.split(
+        "const int node_rect_modifiers = node_rect_modifiers_;", 1
+    )[1].split("// Camera click selection", 1)[0]
+    assert "node_rect_modifiers & input::KEYMOD_CTRL" in rect_release
+    assert "node_rect_modifiers & input::KEYMOD_SHIFT" in rect_release
+    normalized_rect_release = " ".join(rect_release.split())
+    assert (
+        "node_rect_modifiers & (input::KEYMOD_CTRL | input::KEYMOD_SHIFT)"
+        in normalized_rect_release
+    )
+    assert "picked_node && ctrl_held" in rect_release
+    assert "scene_manager->removeFromSelection(picked_node->id)" in rect_release
+    assert "scene_manager->addToSelection(picked_node->id)" in rect_release
+    assert "picked_node && shift_held" in rect_release
+
+
 def test_scene_tree_filter_always_reads_the_live_form_control_value():
     scene_panel = (
         PROJECT_ROOT / "src" / "visualizer" / "gui" / "scene_panel_native.cpp"
