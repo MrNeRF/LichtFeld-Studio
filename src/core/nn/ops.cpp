@@ -94,7 +94,7 @@ namespace lfs::core::nn {
     } // namespace
 
     Tensor gemm(const Tensor& a, const Tensor& b, bool trans_a, bool trans_b, const Tensor* bias,
-                Activation activation) {
+                Activation activation, const Tensor* residual, const Tensor* scale) {
         require_nn_tensor(a, "gemm", "a");
         require_nn_tensor(b, "gemm", "b");
         require_same_dtype_device(a, b, "gemm", "a", "b");
@@ -135,6 +135,29 @@ namespace lfs::core::nn {
             bias_c = &bias_store;
         }
 
+        Tensor residual_store;
+        const Tensor* residual_c = nullptr;
+        if (residual != nullptr && residual->is_valid()) {
+            require_nn_tensor(*residual, "gemm", "residual");
+            require_same_dtype_device(a_c, *residual, "gemm", "a", "residual");
+            LFS_ASSERT_MSG(residual->numel() == static_cast<std::size_t>(m) * static_cast<std::size_t>(n) *
+                                                    batch_a,
+                           "gemm residual must match the output");
+            residual_store = residual->contiguous();
+            residual_c = &residual_store;
+        }
+
+        Tensor scale_store;
+        const Tensor* scale_c = nullptr;
+        if (scale != nullptr && scale->is_valid()) {
+            require_nn_tensor(*scale, "gemm", "scale");
+            require_same_dtype_device(a_c, *scale, "gemm", "a", "scale");
+            LFS_ASSERT_MSG(scale->numel() == static_cast<std::size_t>(n),
+                           "gemm scale must have N elements");
+            scale_store = scale->contiguous();
+            scale_c = &scale_store;
+        }
+
         auto out = empty_like_shape(a_c, TensorShape(out_dims));
         pin_operands({&a_c, &b_c});
         const cudaStream_t stream = prepare_inputs_for_stream({&a_c, &b_c}, out.stream());
@@ -147,7 +170,8 @@ namespace lfs::core::nn {
 
         kernels::gemm(raw(a_c), raw(b_c), raw_mut(out), m, n, ka, stride_a, stride_b, stride_c,
                       batch, false, trans_b, bias_c ? raw(*bias_c) : nullptr,
-                      static_cast<int>(activation), a_c.dtype(), stream);
+                      static_cast<int>(activation), a_c.dtype(), stream, false,
+                      residual_c ? raw(*residual_c) : nullptr, scale_c ? raw(*scale_c) : nullptr);
         return out;
     }
 
@@ -418,10 +442,20 @@ namespace lfs::core::nn {
                                        const Conv2dParams& params, DataType dtype) {
         LFS_ASSERT_MSG(input_shape.rank() == 4 && weight_shape.rank() == 4,
                        "conv2d workspace expects 4D input and weight");
+        const int kh = static_cast<int>(weight_shape[2]);
+        const int kw = static_cast<int>(weight_shape[3]);
+        const bool pointwise = kh == 1 && kw == 1 && params.groups == 1 && params.stride_h == 1 &&
+                               params.stride_w == 1 && params.pad_h == 0 && params.pad_w == 0 &&
+                               params.dilation_h == 1 && params.dilation_w == 1;
+        const bool implicit_3x3 = kh == 3 && kw == 3 && params.groups == 1 && params.stride_h == 1 &&
+                                  params.stride_w == 1 && params.dilation_h == 1 &&
+                                  params.dilation_w == 1 && params.pad_h == 1 && params.pad_w == 1 &&
+                                  dtype == DataType::Float16;
+        if (pointwise || implicit_3x3) {
+            return 0;
+        }
         const auto hw = conv2d_output_hw(static_cast<int>(input_shape[2]),
-                                         static_cast<int>(input_shape[3]),
-                                         static_cast<int>(weight_shape[2]),
-                                         static_cast<int>(weight_shape[3]), params);
+                                         static_cast<int>(input_shape[3]), kh, kw, params);
         const std::size_t cin_g = weight_shape[1];
         const std::size_t k = cin_g * weight_shape[2] * weight_shape[3];
         const std::size_t m = input_shape[0] * static_cast<std::size_t>(hw.first) *
@@ -434,10 +468,19 @@ namespace lfs::core::nn {
                                                  const Conv2dParams& params, DataType dtype) {
         LFS_ASSERT_MSG(input_shape.rank() == 4 && weight_shape.rank() == 4,
                        "conv_transpose2d workspace expects 4D input and weight");
+        const int kh = static_cast<int>(weight_shape[2]);
+        const int kw = static_cast<int>(weight_shape[3]);
+        const bool scatter_s2 =
+            kh == 2 && kw == 2 && params.stride_h == 2 && params.stride_w == 2 && params.pad_h == 0 &&
+            params.pad_w == 0 && params.dilation_h == 1 && params.dilation_w == 1 &&
+            params.groups == 1 && params.output_pad_h == 0 && params.output_pad_w == 0 &&
+            dtype == DataType::Float16;
+        if (scatter_s2) {
+            return 0;
+        }
         const std::size_t cout_g = weight_shape[1];
         const std::size_t k = cout_g * weight_shape[2] * weight_shape[3];
         const std::size_t m = input_shape[0] * input_shape[2] * input_shape[3];
-        (void)params;
         return m * k * dtype_size(dtype);
     }
 
@@ -603,6 +646,40 @@ namespace lfs::core::nn {
             require_nn_tensor(*bias, "conv_transpose2d", "bias");
             b_s = bias->contiguous();
             b_c = &b_s;
+        }
+
+        const bool scatter_s2 =
+            kh == 2 && kw == 2 && params.stride_h == 2 && params.stride_w == 2 && params.pad_h == 0 &&
+            params.pad_w == 0 && params.dilation_h == 1 && params.dilation_w == 1 &&
+            params.groups == 1 && params.output_pad_h == 0 && params.output_pad_w == 0 &&
+            in_c.dtype() == DataType::Float16;
+        if (scatter_s2) {
+            auto out = empty_like_shape(
+                in_c, TensorShape{std::vector<std::size_t>{static_cast<std::size_t>(n),
+                                                           static_cast<std::size_t>(cout),
+                                                           static_cast<std::size_t>(out_h),
+                                                           static_cast<std::size_t>(out_w)}});
+            pin_operands({&in_c, &w_c});
+            const cudaStream_t stream = prepare_inputs_for_stream({&in_c, &w_c}, out.stream());
+            out.set_stream(stream);
+            auto in_g = in_c.permute({0, 2, 3, 1})
+                            .contiguous()
+                            .reshape(TensorShape{std::vector<std::size_t>{
+                                static_cast<std::size_t>(n) * static_cast<std::size_t>(hin) *
+                                    static_cast<std::size_t>(win),
+                                static_cast<std::size_t>(cin)}});
+            auto w_g = w_c.reshape(TensorShape{std::vector<std::size_t>{
+                static_cast<std::size_t>(cin), static_cast<std::size_t>(cout) * 4}});
+            in_g.set_stream(stream);
+            w_g.set_stream(stream);
+            const int m = n * hin * win;
+            const int kcol = cout * 4;
+            kernels::gemm(raw(in_g), raw(w_g), raw_mut(out), m, kcol, cin,
+                          static_cast<long long>(m) * cin, static_cast<long long>(cin) * kcol,
+                          static_cast<long long>(n) * cout * out_h * out_w, 1, false, false,
+                          b_c ? raw(*b_c) : nullptr, 0, in_c.dtype(), stream, false, nullptr,
+                          nullptr, hin, win);
+            return out;
         }
 
         const std::size_t bytes =

@@ -18,12 +18,16 @@ namespace lfs::core::nn {
     public:
         void begin(cudaStream_t stream);
         void end();
+        [[nodiscard]] std::size_t mark() const { return used_; }
+        void rewind(std::size_t to);
 
         // Returns a pointer from the committed buffer, or nullptr while
         // recording (caller must fall back to the pool).
         void* try_alloc(std::size_t bytes);
 
         [[nodiscard]] std::shared_ptr<void> owner() const { return owner_; }
+        [[nodiscard]] std::size_t high_water() const { return high_water_; }
+        [[nodiscard]] std::size_t capacity() const { return cap_; }
 
         static ActivationArena* current() noexcept;
         static void bind(ActivationArena* arena) noexcept;

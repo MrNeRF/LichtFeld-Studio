@@ -7,11 +7,14 @@
 #include "core/cuda_error.hpp"
 #include "core/source_site.hpp"
 #include "internal/cuda_stream_context.hpp"
+#include "internal/memory_pool.hpp"
 #include "nn_nvtx.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <format>
 #include <utility>
 #include <vector>
@@ -32,10 +35,34 @@ namespace lfs::core::nn::models {
             return TensorShape(std::vector<std::size_t>(dims));
         }
 
+        void configure_nn_mempool() {
+#if CUDART_VERSION >= 11020
+            int device = 0;
+            LFS_CUDA_CHECK(cudaGetDevice(&device));
+            cudaMemPool_t pool = nullptr;
+            LFS_CUDA_CHECK(cudaDeviceGetDefaultMemPool(&pool, device));
+            std::uint64_t zero = 0;
+            LFS_CUDA_CHECK(cudaMemPoolSetAttribute(pool, cudaMemPoolAttrReleaseThreshold, &zero));
+#endif
+        }
+
         // Tensor::cat's middle-dim CUDA path always launches a float kernel, so
         // fp16 concatenations overrun the output. For N=1 the two layouts we
         // need (sequence and NCHW-channel) are contiguous, so a pair of
         // device copies is enough and dtype-correct.
+        void recapture(Tensor& slot, const Tensor& src) {
+            if (!slot.is_valid() || slot.dtype() != src.dtype() || slot.device() != src.device() ||
+                slot.numel() != src.numel()) {
+                slot = src.clone();
+                return;
+            }
+            slot.set_stream(src.stream());
+            if (src.bytes() > 0) {
+                LFS_CUDA_CHECK(cudaMemcpyAsync(slot.data_ptr(), src.data_ptr(), src.bytes(),
+                                               cudaMemcpyDeviceToDevice, src.stream()));
+            }
+        }
+
         Tensor concat_contiguous(const Tensor& a, const Tensor& b) {
             LFS_ASSERT_MSG(a.is_valid() && b.is_valid(), "concat requires valid tensors");
             LFS_ASSERT_MSG(a.dtype() == b.dtype() && a.device() == b.device(),
@@ -152,6 +179,7 @@ namespace lfs::core::nn::models {
         model.device_ = device;
         model.compute_ = dtype;
         model.weights_ = std::move(*loaded);
+        configure_nn_mempool();
         for (auto& [name, tensor] : model.weights_) {
             if (name.rfind("onnx::MatMul_", 0) == 0 && tensor.ndim() == 2) {
                 tensor = tensor.t().contiguous();
@@ -184,6 +212,17 @@ namespace lfs::core::nn::models {
         return model;
     }
 
+    std::size_t Moge2::weights_bytes() const {
+        std::size_t bytes = 0;
+        for (const auto& [name, tensor] : weights_) {
+            (void)name;
+            if (tensor.is_valid()) {
+                bytes += tensor.bytes();
+            }
+        }
+        return bytes;
+    }
+
     const Tensor& Moge2::w(std::string_view name) const {
         const auto it = weights_.find(std::string(name));
         LFS_ASSERT_MSG(it != weights_.end(),
@@ -192,6 +231,9 @@ namespace lfs::core::nn::models {
     }
 
     Tensor Moge2::ensure_workspace(std::size_t bytes, const Tensor& like) {
+        if (bytes == 0) {
+            return like;
+        }
         if (workspace_.is_valid() && workspace_.bytes() >= bytes &&
             workspace_.dtype() == like.dtype() && workspace_.device() == like.device()) {
             workspace_.set_stream(like.stream());
@@ -282,8 +324,9 @@ namespace lfs::core::nn::models {
         Tensor y;
         {
             NvtxRange nvtx("moge2/proj");
-            auto proj = gemm_nn(attn, matmul_name(index, "proj"), block_name(index, "attn.proj.bias"));
-            y = residual_scale(x, proj, w(block_name(index, "ls1.gamma")));
+            y = gemm(attn, w(matmul_name(index, "proj")), false, true,
+                     &w(block_name(index, "attn.proj.bias")), Activation::None, &x,
+                     &w(block_name(index, "ls1.gamma")));
         }
         {
             NvtxRange nvtx("moge2/mlp");
@@ -291,8 +334,9 @@ namespace lfs::core::nn::models {
                                  w(block_name(index, "norm2.bias")), kLnEps);
             auto h = gemm(n2, w(matmul_name(index, "1")), false, true,
                           &w(block_name(index, "mlp.fc1.bias")), Activation::GeluErf);
-            h = gemm_nn(h, matmul_name(index, "2"), block_name(index, "mlp.fc2.bias"));
-            return residual_scale(y, h, w(block_name(index, "ls2.gamma")));
+            return gemm(h, w(matmul_name(index, "2")), false, true,
+                        &w(block_name(index, "mlp.fc2.bias")), Activation::None, &y,
+                        &w(block_name(index, "ls2.gamma")));
         }
     }
 
@@ -381,8 +425,15 @@ namespace lfs::core::nn::models {
         arena_.begin(fwd_stream);
         struct ArenaCloser {
             ActivationArena& arena;
-            ~ArenaCloser() { arena.end(); }
-        } arena_closer{arena_};
+            bool& trimmed;
+            ~ArenaCloser() {
+                arena.end();
+                if (!trimmed && arena.capacity() > 0) {
+                    configure_nn_mempool();
+                    trimmed = true;
+                }
+            }
+        } arena_closer{arena_, mempool_trimmed_};
         StageProfile profile(fwd_stream);
 
         Tensor img;
@@ -418,7 +469,9 @@ namespace lfs::core::nn::models {
                          .contiguous();
         }
         if (taps) {
+            ActivationArena::bind(nullptr);
             taps->patch_embed = tokens.to(DataType::Float32);
+            ActivationArena::bind(&arena_);
         }
 
         Tensor x;
@@ -444,7 +497,9 @@ namespace lfs::core::nn::models {
             x = vit_block(x, i);
             block_out[static_cast<std::size_t>(i)] = x;
             if (taps) {
+                ActivationArena::bind(nullptr);
                 taps->blocks[static_cast<std::size_t>(i)] = x.to(DataType::Float32);
+                ActivationArena::bind(&arena_);
             }
         }
 
@@ -478,7 +533,19 @@ namespace lfs::core::nn::models {
                                     "encoder.output_projections.1.bias"));
         }
         if (taps) {
+            ActivationArena::bind(nullptr);
             taps->encoder_feat = feat.to(DataType::Float32);
+            ActivationArena::bind(&arena_);
+        }
+        block_out = {};
+        {
+            ActivationArena::bind(nullptr);
+            recapture(feat_hold_, feat);
+            recapture(cls_hold_, cls_tok);
+            feat = feat_hold_;
+            cls_tok = cls_hold_;
+            ActivationArena::bind(&arena_);
+            arena_.rewind(0);
         }
 
         std::array<Tensor, 5> pyramid{};
@@ -520,7 +587,9 @@ namespace lfs::core::nn::models {
                 }
                 neck_out[static_cast<std::size_t>(i)] = neck_x;
                 if (taps) {
+                    ActivationArena::bind(nullptr);
                     taps->neck[static_cast<std::size_t>(i)] = neck_x.to(DataType::Float32);
+                    ActivationArena::bind(&arena_);
                 }
                 if (i < 3) {
                     neck_x = conv_transpose2x(neck_x,
@@ -536,6 +605,17 @@ namespace lfs::core::nn::models {
                 }
             }
         }
+
+        const std::size_t after_neck = arena_.mark();
+        int persist_i = 0;
+        auto persist_and_rewind = [&](Tensor t) {
+            ActivationArena::bind(nullptr);
+            Tensor& slot = head_hold_[persist_i++];
+            recapture(slot, t);
+            ActivationArena::bind(&arena_);
+            arena_.rewind(after_neck);
+            return slot;
+        };
 
         auto run_head = [&](const char* prefix, int out_ch, Tensor* tap) {
             Tensor hx;
@@ -569,7 +649,9 @@ namespace lfs::core::nn::models {
                          std::format("{}.output_blocks.4.bias", prefix));
             (void)out_ch;
             if (tap) {
+                ActivationArena::bind(nullptr);
                 *tap = hx.to(DataType::Float32);
+                ActivationArena::bind(&arena_);
             }
             return hx;
         };
@@ -580,17 +662,20 @@ namespace lfs::core::nn::models {
         {
             NvtxRange nvtx("moge2/points_head");
             profile.mark("points_head");
-            points_nchw = run_head("points_head", 3, taps ? &taps->points_head : nullptr);
+            points_nchw = persist_and_rewind(
+                run_head("points_head", 3, taps ? &taps->points_head : nullptr));
         }
         {
             NvtxRange nvtx("moge2/normal_head");
             profile.mark("normal_head");
-            normal_nchw = run_head("normal_head", 3, taps ? &taps->normal_head : nullptr);
+            normal_nchw = persist_and_rewind(
+                run_head("normal_head", 3, taps ? &taps->normal_head : nullptr));
         }
         {
             NvtxRange nvtx("moge2/mask_head");
             profile.mark("mask_head");
-            mask_nchw = run_head("mask_head", 1, taps ? &taps->mask_head : nullptr);
+            mask_nchw = persist_and_rewind(
+                run_head("mask_head", 1, taps ? &taps->mask_head : nullptr));
         }
 
         Tensor points;
@@ -638,6 +723,20 @@ namespace lfs::core::nn::models {
 
         profile.mark("end");
         profile.dump();
+        if (profile.enabled()) {
+            std::size_t free_b = 0;
+            std::size_t total_b = 0;
+            LFS_CUDA_CHECK(cudaMemGetInfo(&free_b, &total_b));
+            const std::size_t used = total_b >= free_b ? total_b - free_b : 0;
+            std::fprintf(stderr,
+                         "[nn.profile] vram used=%.2f MiB  weights=%.2f MiB  arena=%.2f MiB  "
+                         "workspace=%.2f MiB  arena_hw=%.2f MiB\n",
+                         static_cast<double>(used) / (1024.0 * 1024.0),
+                         static_cast<double>(weights_bytes()) / (1024.0 * 1024.0),
+                         static_cast<double>(arena_.capacity()) / (1024.0 * 1024.0),
+                         static_cast<double>(workspace_bytes()) / (1024.0 * 1024.0),
+                         static_cast<double>(arena_.high_water()) / (1024.0 * 1024.0));
+        }
         return Moge2Outputs{
             .points = std::move(points),
             .normal = std::move(normal),

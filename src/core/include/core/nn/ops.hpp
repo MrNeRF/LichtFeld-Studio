@@ -64,10 +64,14 @@ namespace lfs::core::nn {
     // A, B, C are fp32 or fp16 (fp16 uses tensor cores with fp32 accumulate).
     // Leading dimensions of A/B collapse into a GEMM batch. trans_b defaults
     // to true so C = A @ Bᵀ matches linear (weight stored as [N, K]).
+    // residual, if given, must match the [..., M, N] output and is added after
+    // (acc [+ bias] [+ activation]) * scale. scale, if given, has N elements.
     [[nodiscard]] LFS_CORE_API Tensor gemm(const Tensor& a, const Tensor& b,
                                            bool trans_a = false, bool trans_b = true,
                                            const Tensor* bias = nullptr,
-                                           Activation activation = Activation::None);
+                                           Activation activation = Activation::None,
+                                           const Tensor* residual = nullptr,
+                                           const Tensor* scale = nullptr);
 
     // y = x @ Wᵀ [+ bias] [+ activation]. x is [..., K], W is [N, K], bias [N].
     [[nodiscard]] LFS_CORE_API Tensor linear(const Tensor& input, const Tensor& weight,

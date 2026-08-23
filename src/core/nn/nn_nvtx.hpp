@@ -67,8 +67,14 @@ namespace lfs::core::nn {
                 return;
             }
             LFS_CUDA_CHECK(cudaEventSynchronize(events_.back()));
-            std::fprintf(stderr, "[nn.profile] stages (GPU ms)  driver_allocs=%llu\n",
-                         static_cast<unsigned long long>(allocs));
+            std::size_t free_b = 0;
+            std::size_t total_b = 0;
+            LFS_CUDA_CHECK(cudaMemGetInfo(&free_b, &total_b));
+            const std::size_t used = total_b >= free_b ? total_b - free_b : 0;
+            std::fprintf(stderr,
+                         "[nn.profile] stages (GPU ms)  driver_allocs=%llu  cuda_used=%.2f MiB\n",
+                         static_cast<unsigned long long>(allocs),
+                         static_cast<double>(used) / (1024.0 * 1024.0));
             float total = 0.0f;
             for (std::size_t i = 0; i + 1 < events_.size(); ++i) {
                 float ms = 0.0f;

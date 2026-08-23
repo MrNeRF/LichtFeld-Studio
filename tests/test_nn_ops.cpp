@@ -569,6 +569,27 @@ TEST_F(NnOpsTest, UvGridMatchesCpuFormula) {
     EXPECT_TRUE(all_close(got, ref, kF32Rtol, kF32Atol));
 }
 
+TEST_F(NnOpsTest, ConvTranspose2dFp16Scatter) {
+    std::vector<float> in(1 * 2 * 3 * 3, 1.0f);
+    std::vector<float> wt(2 * 3 * 2 * 2, 0.25f);
+    auto In = upload(in, {1, 2, 3, 3}, lfs::core::DataType::Float16);
+    auto W = upload(wt, {2, 3, 2, 2}, lfs::core::DataType::Float16);
+    lfs::core::nn::Conv2dParams p;
+    p.stride_h = 2;
+    p.stride_w = 2;
+    auto Out = lfs::core::nn::conv_transpose2d(In, W, nullptr, p);
+    EXPECT_EQ(Out.shape()[1], 3u);
+    const auto got = host_f32(Out);
+    const float expected = 0.5f;
+    int mismatches = 0;
+    for (float v : got) {
+        if (std::abs(v - expected) > 2e-3f) {
+            ++mismatches;
+        }
+    }
+    EXPECT_EQ(mismatches, 0);
+}
+
 TEST_F(NnOpsTest, ConvTranspose2dBasic) {
     std::vector<float> in(1 * 2 * 3 * 3, 1.0f);
     std::vector<float> wt(2 * 3 * 2 * 2, 0.25f);

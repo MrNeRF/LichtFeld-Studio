@@ -460,31 +460,15 @@ namespace lfs::core::nn::kernels {
             return qkv + p + s;
         }
 
-        constexpr int kFlashBr = 64;
+        constexpr int kFlashBr = 128;
+        constexpr int kFlashTile = 64;
         constexpr int kFlashBc = 64;
         constexpr int kFlashD = 64;
+        constexpr int kFlashLd = 72;
 
-        __device__ __forceinline__ void cp_async16(void* smem_addr, const void* glob_addr) {
-#if __CUDA_ARCH__ >= 800
-            const unsigned smem = __cvta_generic_to_shared(smem_addr);
-            asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n" ::"r"(smem), "l"(glob_addr));
-#else
-            *reinterpret_cast<uint4*>(smem_addr) = *reinterpret_cast<const uint4*>(glob_addr);
-#endif
-        }
-
-        __device__ __forceinline__ void cp_async_commit() {
-#if __CUDA_ARCH__ >= 800
-            asm volatile("cp.async.commit_group;\n");
-#endif
-        }
-
-        __device__ __forceinline__ void cp_async_wait0() {
-#if __CUDA_ARCH__ >= 800
-            asm volatile("cp.async.wait_group 0;\n");
-#endif
-        }
-
+        // K/V tiles live at leading-dimension 72 (64 useful + 8 pad). The pad
+        // is the load_matrix_sync-compatible form of an 8-half xor swizzle:
+        // 8 consecutive rows at a fixed column hit distinct smem banks.
         __device__ __forceinline__ void load_kv_tile(__half* Ks, __half* Vs, const __half* K,
                                                      const __half* V, int k0, int n_k,
                                                      long long kv_head, int tid) {
@@ -494,19 +478,21 @@ namespace lfs::core::nn::kernels {
                 const int row = off / kFlashD;
                 const int col = off % kFlashD;
                 const int k_idx = k0 + row;
+                const int sm = row * kFlashLd + col;
                 if (k_idx < n_k) {
                     const long long base = kv_head + static_cast<long long>(k_idx) * kFlashD + col;
-                    cp_async16(Ks + off, K + base);
-                    cp_async16(Vs + off, V + base);
+                    device::cp_async16(Ks + sm, K + base);
+                    device::cp_async16(Vs + sm, V + base);
                 } else {
-                    *reinterpret_cast<uint4*>(Ks + off) = uint4{0, 0, 0, 0};
-                    *reinterpret_cast<uint4*>(Vs + off) = uint4{0, 0, 0, 0};
+                    *reinterpret_cast<uint4*>(Ks + sm) = uint4{0, 0, 0, 0};
+                    *reinterpret_cast<uint4*>(Vs + sm) = uint4{0, 0, 0, 0};
                 }
             }
         }
 
-        // Flash attention for d=64: Q in WMMA fragments, K/V streamed with
-        // cp.async double-buffer, O fragment-resident, fused 1/sqrt(d).
+        // Flash attention for d=64: two 64-row Q tiles per block (Br=128),
+        // Q/O fragment-resident, K/V cp.async double-buffered with xor-swizzle,
+        // P kept in A fragments for the PV mma (no BrxBc overlay on the inner ds loop).
         __global__ void __launch_bounds__(128, 2)
             flash_attn_d64_kernel(const __half* __restrict__ q_ptr, const __half* __restrict__ k_ptr,
                                   const __half* __restrict__ v_ptr, __half* __restrict__ o_ptr,
@@ -522,28 +508,16 @@ namespace lfs::core::nn::kernels {
 
             extern __shared__ __align__(16) char raw[];
             auto* Qs = reinterpret_cast<__half*>(raw);
-            auto* Ks0 = Qs + kFlashBr * kFlashD;
-            auto* Vs0 = Ks0 + kFlashBc * kFlashD;
-            auto* Ks1 = Vs0 + kFlashBc * kFlashD;
-            auto* Vs1 = Ks1 + kFlashBc * kFlashD;
+            auto* Ks0 = Qs + kFlashTile * kFlashD;
+            auto* Vs0 = Ks0 + kFlashBc * kFlashLd;
+            auto* Ks1 = Vs0 + kFlashBc * kFlashLd;
+            auto* Vs1 = Ks1 + kFlashBc * kFlashLd;
             auto* Ps = Qs;
 
             const long long q_head =
                 (static_cast<long long>(b) * heads + h) * static_cast<long long>(n_q) * kFlashD;
             const long long kv_head =
                 (static_cast<long long>(b) * heads + h) * static_cast<long long>(n_k) * kFlashD;
-
-            for (int i = tid; i < kFlashBr * kFlashD; i += 128) {
-                const int r = i / kFlashD;
-                const int c = i % kFlashD;
-                const int q_row = q0 + r;
-                float val = 0.0f;
-                if (q_row < n_q) {
-                    val = __half2float(q_ptr[q_head + static_cast<long long>(q_row) * kFlashD + c]);
-                }
-                Qs[i] = __float2half_rn(val * scale);
-            }
-            __syncthreads();
 
 #if __CUDA_ARCH__ >= 700
             using namespace nvcuda::wmma;
@@ -552,25 +526,39 @@ namespace lfs::core::nn::kernels {
             const int warp_row = warp * 16;
             const int base_row = lane / 4;
             const int base_col = (lane % 4) * 2;
-            fragment<matrix_a, 16, 16, 16, __half, row_major> q_frag[4];
+            fragment<matrix_a, 16, 16, 16, __half, row_major> q_frag[2][4];
+            fragment<accumulator, 16, 16, 16, float> o_frag[2][4];
+            float m_i[2][2] = {{-FLT_MAX, -FLT_MAX}, {-FLT_MAX, -FLT_MAX}};
+            float l_i[2][2] = {{0.0f, 0.0f}, {0.0f, 0.0f}};
+
 #pragma unroll
-            for (int ds = 0; ds < 4; ++ds) {
-                load_matrix_sync(q_frag[ds], Qs + warp_row * kFlashD + ds * 16, kFlashD);
-            }
-            fragment<accumulator, 16, 16, 16, float> o_frag[4];
+            for (int tile = 0; tile < 2; ++tile) {
+                const int q_base = q0 + tile * kFlashTile;
+                for (int i = tid; i < kFlashTile * kFlashD; i += 128) {
+                    const int r = i / kFlashD;
+                    const int c = i % kFlashD;
+                    const int q_row = q_base + r;
+                    float val = 0.0f;
+                    if (q_row < n_q) {
+                        val = __half2float(
+                            q_ptr[q_head + static_cast<long long>(q_row) * kFlashD + c]);
+                    }
+                    Qs[i] = __float2half_rn(val * scale);
+                }
+                __syncthreads();
 #pragma unroll
-            for (int ds = 0; ds < 4; ++ds) {
-                fill_fragment(o_frag[ds], 0.0f);
+                for (int ds = 0; ds < 4; ++ds) {
+                    load_matrix_sync(q_frag[tile][ds], Qs + warp_row * kFlashD + ds * 16, kFlashD);
+                    fill_fragment(o_frag[tile][ds], 0.0f);
+                }
+                __syncthreads();
             }
-            float m_i[2] = {-FLT_MAX, -FLT_MAX};
-            float l_i[2] = {0.0f, 0.0f};
-            __syncthreads();
 
             auto* Kcur = Ks0;
             auto* Vcur = Vs0;
             load_kv_tile(Kcur, Vcur, k_ptr, v_ptr, 0, n_k, kv_head, tid);
-            cp_async_commit();
-            cp_async_wait0();
+            device::cp_async_commit();
+            device::cp_async_wait0();
             __syncthreads();
 
             for (int k0 = 0; k0 < n_k; k0 += kFlashBc) {
@@ -579,104 +567,114 @@ namespace lfs::core::nn::kernels {
                 auto* Voth = (Vcur == Vs0) ? Vs1 : Vs0;
                 if (next < n_k) {
                     load_kv_tile(Koth, Voth, k_ptr, v_ptr, next, n_k, kv_head, tid);
-                    cp_async_commit();
+                    device::cp_async_commit();
                 }
 
-                fragment<matrix_b, 16, 16, 16, __half, col_major> k_frag;
-                fragment<accumulator, 16, 16, 16, float> s_frag[4];
 #pragma unroll
-                for (int ns = 0; ns < 4; ++ns) {
-                    fill_fragment(s_frag[ns], 0.0f);
-#pragma unroll
-                    for (int ds = 0; ds < 4; ++ds) {
-                        load_matrix_sync(k_frag, Kcur + ns * 16 * kFlashD + ds * 16, kFlashD);
-                        mma_sync(s_frag[ns], q_frag[ds], k_frag, s_frag[ns]);
-                    }
-                }
-
-                float row_max[2] = {-FLT_MAX, -FLT_MAX};
-#pragma unroll
-                for (int ns = 0; ns < 4; ++ns) {
-#pragma unroll
-                    for (int i = 0; i < 8; ++i) {
-                        const int col = base_col + (i & 1) + ((i & 4) ? 8 : 0) + ns * 16;
-                        const int row_off = (i >> 1) & 1;
-                        const int k_idx = k0 + col;
-                        float s = s_frag[ns].x[i];
-                        if (k_idx >= n_k) {
-                            s = -FLT_MAX;
-                        }
-                        s_frag[ns].x[i] = s;
-                        row_max[row_off] = fmaxf(row_max[row_off], s);
-                    }
-                }
-#pragma unroll
-                for (int r = 0; r < 2; ++r) {
-                    row_max[r] = fmaxf(row_max[r], __shfl_xor_sync(0xffffffffu, row_max[r], 1));
-                    row_max[r] = fmaxf(row_max[r], __shfl_xor_sync(0xffffffffu, row_max[r], 2));
-                }
-
-                float alpha[2];
-                float m_new[2];
-#pragma unroll
-                for (int r = 0; r < 2; ++r) {
-                    m_new[r] = fmaxf(m_i[r], row_max[r]);
-                    alpha[r] = (m_i[r] == -FLT_MAX) ? 0.0f : expf(m_i[r] - m_new[r]);
-                }
-#pragma unroll
-                for (int ds = 0; ds < 4; ++ds) {
-#pragma unroll
-                    for (int i = 0; i < 8; ++i) {
-                        o_frag[ds].x[i] *= alpha[(i >> 1) & 1];
-                    }
-                }
-
-                float l_add[2] = {0.0f, 0.0f};
-#pragma unroll
-                for (int ns = 0; ns < 4; ++ns) {
-#pragma unroll
-                    for (int i = 0; i < 8; ++i) {
-                        const int col = base_col + (i & 1) + ((i & 4) ? 8 : 0) + ns * 16;
-                        const int row_off = (i >> 1) & 1;
-                        const int row = warp_row + base_row + row_off * 8;
-                        const float s = s_frag[ns].x[i];
-                        const float p = (s == -FLT_MAX) ? 0.0f : expf(s - m_new[row_off]);
-                        s_frag[ns].x[i] = p;
-                        l_add[row_off] += p;
-                        if (row < kFlashBr) {
-                            Ps[row * kFlashBc + col] = __float2half_rn(p);
-                        }
-                    }
-                }
-#pragma unroll
-                for (int r = 0; r < 2; ++r) {
-                    l_add[r] += __shfl_xor_sync(0xffffffffu, l_add[r], 1);
-                    l_add[r] += __shfl_xor_sync(0xffffffffu, l_add[r], 2);
-                    l_i[r] = l_i[r] * alpha[r] + l_add[r];
-                    m_i[r] = m_new[r];
-                }
-                __syncthreads();
-
-                fragment<matrix_a, 16, 16, 16, __half, row_major> p_frag;
-                fragment<matrix_b, 16, 16, 16, __half, row_major> v_frag;
-                fragment<accumulator, 16, 16, 16, float> pv_frag;
-#pragma unroll
-                for (int ds = 0; ds < 4; ++ds) {
-                    fill_fragment(pv_frag, 0.0f);
+                for (int tile = 0; tile < 2; ++tile) {
+                    fragment<matrix_b, 16, 16, 16, __half, col_major> k_frag;
+                    fragment<accumulator, 16, 16, 16, float> s_frag[4];
 #pragma unroll
                     for (int ns = 0; ns < 4; ++ns) {
-                        load_matrix_sync(p_frag, Ps + warp_row * kFlashBc + ns * 16, kFlashBc);
-                        load_matrix_sync(v_frag, Vcur + ns * 16 * kFlashD + ds * 16, kFlashD);
-                        mma_sync(pv_frag, p_frag, v_frag, pv_frag);
+                        fill_fragment(s_frag[ns], 0.0f);
+#pragma unroll
+                        for (int ds = 0; ds < 4; ++ds) {
+                            load_matrix_sync(k_frag, Kcur + ns * 16 * kFlashLd + ds * 16,
+                                             kFlashLd);
+                            mma_sync(s_frag[ns], q_frag[tile][ds], k_frag, s_frag[ns]);
+                        }
+                    }
+
+                    float row_max[2] = {-FLT_MAX, -FLT_MAX};
+#pragma unroll
+                    for (int ns = 0; ns < 4; ++ns) {
+#pragma unroll
+                        for (int i = 0; i < 8; ++i) {
+                            const int col = base_col + (i & 1) + ((i & 4) ? 8 : 0) + ns * 16;
+                            const int row_off = (i >> 1) & 1;
+                            const int k_idx = k0 + col;
+                            float s = s_frag[ns].x[i];
+                            if (k_idx >= n_k) {
+                                s = -FLT_MAX;
+                            }
+                            s_frag[ns].x[i] = s;
+                            row_max[row_off] = fmaxf(row_max[row_off], s);
+                        }
                     }
 #pragma unroll
-                    for (int i = 0; i < 8; ++i) {
-                        o_frag[ds].x[i] += pv_frag.x[i];
+                    for (int r = 0; r < 2; ++r) {
+                        row_max[r] = fmaxf(row_max[r], __shfl_xor_sync(0xffffffffu, row_max[r], 1));
+                        row_max[r] = fmaxf(row_max[r], __shfl_xor_sync(0xffffffffu, row_max[r], 2));
                     }
+
+                    float alpha[2];
+                    float m_new[2];
+#pragma unroll
+                    for (int r = 0; r < 2; ++r) {
+                        m_new[r] = fmaxf(m_i[tile][r], row_max[r]);
+                        alpha[r] = (m_i[tile][r] == -FLT_MAX) ? 0.0f : expf(m_i[tile][r] - m_new[r]);
+                    }
+#pragma unroll
+                    for (int ds = 0; ds < 4; ++ds) {
+#pragma unroll
+                        for (int i = 0; i < 8; ++i) {
+                            o_frag[tile][ds].x[i] *= alpha[(i >> 1) & 1];
+                        }
+                    }
+
+                    float l_add[2] = {0.0f, 0.0f};
+#pragma unroll
+                    for (int ns = 0; ns < 4; ++ns) {
+#pragma unroll
+                        for (int i = 0; i < 8; ++i) {
+                            const int col = base_col + (i & 1) + ((i & 4) ? 8 : 0) + ns * 16;
+                            const int row_off = (i >> 1) & 1;
+                            const int row = warp_row + base_row + row_off * 8;
+                            const float s = s_frag[ns].x[i];
+                            const float p = (s == -FLT_MAX) ? 0.0f : expf(s - m_new[row_off]);
+                            s_frag[ns].x[i] = p;
+                            l_add[row_off] += p;
+                            if (row < kFlashTile) {
+                                Ps[row * kFlashBc + col] = __float2half_rn(p);
+                            }
+                        }
+                    }
+#pragma unroll
+                    for (int r = 0; r < 2; ++r) {
+                        l_add[r] += __shfl_xor_sync(0xffffffffu, l_add[r], 1);
+                        l_add[r] += __shfl_xor_sync(0xffffffffu, l_add[r], 2);
+                        l_i[tile][r] = l_i[tile][r] * alpha[r] + l_add[r];
+                        m_i[tile][r] = m_new[r];
+                    }
+                    __syncthreads();
+
+                    fragment<matrix_a, 16, 16, 16, __half, row_major> p_frag[4];
+#pragma unroll
+                    for (int ns = 0; ns < 4; ++ns) {
+                        load_matrix_sync(p_frag[ns], Ps + warp_row * kFlashBc + ns * 16, kFlashBc);
+                    }
+
+                    fragment<matrix_b, 16, 16, 16, __half, row_major> v_frag;
+                    fragment<accumulator, 16, 16, 16, float> pv_frag;
+#pragma unroll
+                    for (int ds = 0; ds < 4; ++ds) {
+                        fill_fragment(pv_frag, 0.0f);
+#pragma unroll
+                        for (int ns = 0; ns < 4; ++ns) {
+                            load_matrix_sync(v_frag, Vcur + ns * 16 * kFlashLd + ds * 16,
+                                             kFlashLd);
+                            mma_sync(pv_frag, p_frag[ns], v_frag, pv_frag);
+                        }
+#pragma unroll
+                        for (int i = 0; i < 8; ++i) {
+                            o_frag[tile][ds].x[i] += pv_frag.x[i];
+                        }
+                    }
+                    __syncthreads();
                 }
 
                 if (next < n_k) {
-                    cp_async_wait0();
+                    device::cp_async_wait0();
                 }
                 __syncthreads();
                 Kcur = Koth;
@@ -684,17 +682,22 @@ namespace lfs::core::nn::kernels {
             }
 
 #pragma unroll
-            for (int ds = 0; ds < 4; ++ds) {
+            for (int tile = 0; tile < 2; ++tile) {
+                const int q_base = q0 + tile * kFlashTile;
 #pragma unroll
-                for (int i = 0; i < 8; ++i) {
-                    const int row_off = (i >> 1) & 1;
-                    const int row = warp_row + base_row + row_off * 8;
-                    const int col = base_col + (i & 1) + ((i & 4) ? 8 : 0) + ds * 16;
-                    const int q_row = q0 + row;
-                    if (q_row < n_q && col < kFlashD) {
-                        const float inv = (l_i[row_off] == 0.0f) ? 0.0f : 1.0f / l_i[row_off];
-                        o_ptr[q_head + static_cast<long long>(q_row) * kFlashD + col] =
-                            __float2half_rn(o_frag[ds].x[i] * inv);
+                for (int ds = 0; ds < 4; ++ds) {
+#pragma unroll
+                    for (int i = 0; i < 8; ++i) {
+                        const int row_off = (i >> 1) & 1;
+                        const int row = warp_row + base_row + row_off * 8;
+                        const int col = base_col + (i & 1) + ((i & 4) ? 8 : 0) + ds * 16;
+                        const int q_row = q_base + row;
+                        if (q_row < n_q && col < kFlashD) {
+                            const float inv =
+                                (l_i[tile][row_off] == 0.0f) ? 0.0f : 1.0f / l_i[tile][row_off];
+                            o_ptr[q_head + static_cast<long long>(q_row) * kFlashD + col] =
+                                __float2half_rn(o_frag[tile][ds].x[i] * inv);
+                        }
                     }
                 }
             }
@@ -714,11 +717,12 @@ namespace lfs::core::nn::kernels {
             (void)n_k;
             (void)q_head;
             (void)kv_head;
+            (void)tid;
 #endif
         }
 
         int flash_d64_smem_bytes() {
-            return (kFlashBr * kFlashD + 2 * kFlashBc * kFlashD + 2 * kFlashBc * kFlashD) *
+            return (kFlashTile * kFlashD + 2 * kFlashBc * kFlashLd + 2 * kFlashBc * kFlashLd) *
                    static_cast<int>(sizeof(__half));
         }
 
@@ -733,9 +737,9 @@ namespace lfs::core::nn::kernels {
             return;
         }
         const bool is_half = dtype == DataType::Float16;
-        dim3 grid((n_q + kBr - 1) / kBr, batch * heads);
 
         if (is_half && d == 64 && !has_mask && n_k > 0) {
+            dim3 grid((n_q + kFlashBr - 1) / kFlashBr, batch * heads);
             const int smem = flash_d64_smem_bytes();
             auto* fn = flash_attn_d64_kernel;
             LFS_CUDA_CHECK(cudaFuncSetAttribute(reinterpret_cast<const void*>(fn),
@@ -748,6 +752,8 @@ namespace lfs::core::nn::kernels {
             LFS_CUDA_LAUNCH_CHECK(stream, "nn.attention.flash_d64");
             return;
         }
+
+        dim3 grid((n_q + kBr - 1) / kBr, batch * heads);
 
         if (is_half && (d % 16) == 0 && d <= 64 && n_k > 0) {
             constexpr int Br = 64;

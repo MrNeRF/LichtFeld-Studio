@@ -248,3 +248,53 @@ TEST(Moge2Test, FullModelParityIsOptIn) {
     std::cout << "steady-state driver allocs=" << driver_allocs << "\n";
     EXPECT_EQ(driver_allocs, 0u);
 }
+
+TEST(Moge2Test, DeviceFootprintStaysUnderBudget) {
+    const char* weights = std::getenv("LFS_MOGE2_WEIGHTS");
+    if (weights == nullptr || weights[0] == '\0') {
+        GTEST_SKIP() << "set LFS_MOGE2_WEIGHTS to run the VRAM budget check";
+    }
+    int devices = 0;
+    ASSERT_EQ(cudaGetDeviceCount(&devices), cudaSuccess);
+    ASSERT_GT(devices, 0);
+
+    const char* home = std::getenv("HOME");
+    const std::string weights16 = (home && home[0])
+                                      ? std::string(home) + "/.lichtfeld/onnx/moge-2-vitb-normal.lfw"
+                                      : "";
+    const char* path = weights;
+    if (!weights16.empty()) {
+        std::ifstream probe(weights16, std::ios::binary);
+        if (probe.good()) {
+            path = weights16.c_str();
+        }
+    }
+
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    std::size_t free0 = 0;
+    std::size_t total = 0;
+    ASSERT_EQ(cudaMemGetInfo(&free0, &total), cudaSuccess);
+
+    auto model = lfs::core::nn::models::Moge2::load(path, lfs::core::Device::CUDA,
+                                                    lfs::core::DataType::Float16);
+    ASSERT_TRUE(model.has_value()) << std::string(model.error().detail());
+    auto image = make_test_image(518, 518, lfs::core::DataType::Float32);
+    auto ran = model->forward(image, 1800);
+    ASSERT_TRUE(ran.has_value()) << std::string(ran.error().detail());
+    auto again = model->forward(image, 1800);
+    ASSERT_TRUE(again.has_value()) << std::string(again.error().detail());
+    (void)again->normal.to(lfs::core::Device::CPU);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    std::size_t free1 = 0;
+    ASSERT_EQ(cudaMemGetInfo(&free1, &total), cudaSuccess);
+    const std::size_t used = free0 > free1 ? free0 - free1 : 0;
+    const std::size_t footprint =
+        model->weights_bytes() + model->arena_bytes() + model->workspace_bytes();
+    std::cout << "vram delta=" << used << " footprint=" << footprint
+              << " weights=" << model->weights_bytes() << " arena=" << model->arena_bytes()
+              << " workspace=" << model->workspace_bytes() << "\n";
+    constexpr std::size_t kBudget = (12ull * 1024ull * 1024ull * 1024ull) / 10ull;
+    EXPECT_LE(footprint, kBudget);
+    EXPECT_LE(used, kBudget);
+}

@@ -8,6 +8,7 @@
 #include "nn_nvtx.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <float.h>
@@ -214,16 +215,18 @@ namespace lfs::core::nn::kernels {
             return X[((static_cast<long long>(ni) * cin + ic) * h + ih) * w + iw];
         }
 
-        // 128x64 implicit 3x3. Contiguous row tiles keep a 3x130x32 halo in smem
+        // 128xBN implicit 3x3. Contiguous row tiles keep a 3x130x32 halo in smem
         // so each IC chunk is loaded once and reused across the 9 spatial offsets.
+        // BN=128 halves halo refetches on wide (Cout>=128) layers.
+        template <int BN>
         __global__ void __launch_bounds__(256, 2)
             hgemm_implicit_3x3_halo_kernel(const __half* __restrict__ X, const __half* __restrict__ W,
                                            __half* __restrict__ Y, const __half* __restrict__ bias,
                                            int n, int cin, int h, int w, int cout, int out_h,
                                            int out_w, int pad_h, int pad_w, int pad_mode) {
             constexpr int BM = 128;
-            constexpr int BN = 64;
             constexpr int BK = 32;
+            constexpr int kNFrags = BN / 16;
             const int ni = static_cast<int>(blockIdx.z);
             if (ni >= n) {
                 return;
@@ -252,76 +255,114 @@ namespace lfs::core::nn::kernels {
             const int warp_m = warp_id / 2;
             const int warp_n = warp_id % 2;
 
-            __shared__ __half Bs[BN][BK];
-            __shared__ __half Xs[3][BM + 2][BK];
+            __shared__ __align__(16) __half Bs[BN][BK];
+            __shared__ __align__(16) __half Xs[3][BM + 2][BK];
 
             fragment<matrix_a, WM, WN, WK, __half, row_major> a_frag[2];
             fragment<matrix_b, WM, WN, WK, __half, col_major> b_frag[2];
-            fragment<accumulator, WM, WN, WK, float> c_frag[2][2];
+            fragment<accumulator, WM, WN, WK, float> c_frag[2][kNFrags / 2];
 #pragma unroll
             for (int i = 0; i < 2; ++i) {
 #pragma unroll
-                for (int j = 0; j < 2; ++j) {
+                for (int j = 0; j < kNFrags / 2; ++j) {
                     fill_fragment(c_frag[i][j], 0.0f);
                 }
             }
 
-            {
-                for (int ic0 = 0; ic0 < cin; ic0 += BK) {
-                    for (int ic_l = 0; ic_l < BK; ++ic_l) {
-                        for (int j = tid; j < 3 * (BM + 2); j += 256) {
-                            const int rh = j / (BM + 2);
-                            const int iw_l = j % (BM + 2);
-                            Xs[rh][iw_l][ic_l] =
-                                load_nchw_pad(X, ni, cin, h, w, ic0 + ic_l, oh0 - 1 + rh,
-                                              ow0 - 1 + iw_l, pad_mode);
+            for (int ic0 = 0; ic0 < cin; ic0 += BK) {
+                for (int i = tid; i < 3 * 2 * BK; i += 256) {
+                    const int ic_l = i % BK;
+                    const int edge = (i / BK) % 2;
+                    const int rh = i / (BK * 2);
+                    const int iw_l = edge ? (BM + 1) : 0;
+                    Xs[rh][iw_l][ic_l] = load_nchw_pad(X, ni, cin, h, w, ic0 + ic_l,
+                                                       oh0 - 1 + rh, ow0 - 1 + iw_l, pad_mode);
+                }
+                constexpr int nvec = BM / 8;
+                for (int i = tid; i < 3 * BK * nvec; i += 256) {
+                    const int vec = i % nvec;
+                    const int ic_l = (i / nvec) % BK;
+                    const int rh = i / (nvec * BK);
+                    const int iw0 = vec * 8;
+                    const int ic = ic0 + ic_l;
+                    int yh = oh0 - 1 + rh;
+                    int xw = ow0 + iw0;
+                    if (pad_mode == 1) {
+                        yh = yh < 0 ? 0 : (yh >= h ? h - 1 : yh);
+                    }
+                    if (static_cast<unsigned>(ic) < static_cast<unsigned>(cin) &&
+                        static_cast<unsigned>(yh) < static_cast<unsigned>(h) &&
+                        static_cast<unsigned>(xw) < static_cast<unsigned>(w) && xw + 7 < w) {
+                        const __half* src =
+                            X + ((static_cast<long long>(ni) * cin + ic) * h + yh) * w + xw;
+                        if ((reinterpret_cast<uintptr_t>(src) & 15u) == 0) {
+                            const uint4 packed = *reinterpret_cast<const uint4*>(src);
+                            const auto* hv = reinterpret_cast<const __half*>(&packed);
+#pragma unroll
+                            for (int t = 0; t < 8; ++t) {
+                                Xs[rh][1 + iw0 + t][ic_l] = hv[t];
+                            }
+                        } else {
+#pragma unroll
+                            for (int t = 0; t < 8; ++t) {
+                                Xs[rh][1 + iw0 + t][ic_l] = src[t];
+                            }
+                        }
+                    } else {
+#pragma unroll
+                        for (int t = 0; t < 8; ++t) {
+                            Xs[rh][1 + iw0 + t][ic_l] = load_nchw_pad(
+                                X, ni, cin, h, w, ic, oh0 - 1 + rh, ow0 + iw0 + t, pad_mode);
                         }
                     }
-                    __syncthreads();
+                }
+                __syncthreads();
 #pragma unroll
-                    for (int kh = 0; kh < 3; ++kh) {
+                for (int kh = 0; kh < 3; ++kh) {
 #pragma unroll
-                        for (int kw = 0; kw < 3; ++kw) {
-                            for (int i = tid; i < BN * BK; i += 256) {
-                                const int r = i / BK;
-                                const int c = i % BK;
-                                const int gc = block_col + r;
-                                const int ic = ic0 + c;
-                                __half v = __float2half(0.0f);
-                                if (gc < cout && ic < cin) {
-                                    v = W[static_cast<long long>(gc) * kdim + ic * 9 + kh * 3 + kw];
-                                }
-                                Bs[r][c] = v;
+                    for (int kw = 0; kw < 3; ++kw) {
+                        for (int i = tid; i < BN * BK; i += 256) {
+                            const int r = i / BK;
+                            const int c = i % BK;
+                            const int gc = block_col + r;
+                            const int ic = ic0 + c;
+                            __half v = __float2half(0.0f);
+                            if (gc < cout && ic < cin) {
+                                v = W[static_cast<long long>(gc) * kdim + ic * 9 + kh * 3 + kw];
                             }
-                            __syncthreads();
-                            const int am = warp_m * 32;
-                            const int bn = warp_n * 32;
-#pragma unroll
-                            for (int kk = 0; kk < BK; kk += WK) {
-                                load_matrix_sync(a_frag[0], &Xs[kh][kw + am][kk], BK);
-                                load_matrix_sync(a_frag[1], &Xs[kh][kw + am + 16][kk], BK);
-                                load_matrix_sync(b_frag[0], &Bs[bn][kk], BK);
-                                load_matrix_sync(b_frag[1], &Bs[bn + 16][kk], BK);
-                                mma_sync(c_frag[0][0], a_frag[0], b_frag[0], c_frag[0][0]);
-                                mma_sync(c_frag[0][1], a_frag[0], b_frag[1], c_frag[0][1]);
-                                mma_sync(c_frag[1][0], a_frag[1], b_frag[0], c_frag[1][0]);
-                                mma_sync(c_frag[1][1], a_frag[1], b_frag[1], c_frag[1][1]);
-                            }
-                            __syncthreads();
+                            Bs[r][c] = v;
                         }
+                        __syncthreads();
+                        const int am = warp_m * 32;
+                        const int bn = warp_n * (BN / 2);
+#pragma unroll
+                        for (int kk = 0; kk < BK; kk += WK) {
+                            load_matrix_sync(a_frag[0], &Xs[kh][kw + am][kk], BK);
+                            load_matrix_sync(a_frag[1], &Xs[kh][kw + am + 16][kk], BK);
+#pragma unroll
+                            for (int fj = 0; fj < kNFrags / 2; fj += 2) {
+                                load_matrix_sync(b_frag[0], &Bs[bn + fj * 16][kk], BK);
+                                load_matrix_sync(b_frag[1], &Bs[bn + fj * 16 + 16][kk], BK);
+                                mma_sync(c_frag[0][fj], a_frag[0], b_frag[0], c_frag[0][fj]);
+                                mma_sync(c_frag[0][fj + 1], a_frag[0], b_frag[1], c_frag[0][fj + 1]);
+                                mma_sync(c_frag[1][fj], a_frag[1], b_frag[0], c_frag[1][fj]);
+                                mma_sync(c_frag[1][fj + 1], a_frag[1], b_frag[1], c_frag[1][fj + 1]);
+                            }
+                        }
+                        __syncthreads();
                     }
                 }
             }
 
             const int am = warp_m * 32;
-            const int bn = warp_n * 32;
+            const int bn = warp_n * (BN / 2);
             const int lane = tid % 32;
             const int base_row = lane / 4;
             const int base_col = (lane % 4) * 2;
 #pragma unroll
             for (int fi = 0; fi < 2; ++fi) {
 #pragma unroll
-                for (int fj = 0; fj < 2; ++fj) {
+                for (int fj = 0; fj < kNFrags / 2; ++fj) {
 #pragma unroll
                     for (int i = 0; i < 8; ++i) {
                         const int r = am + fi * 16 + base_row + ((i >> 1) & 1) * 8;
@@ -347,6 +388,7 @@ namespace lfs::core::nn::kernels {
             (void)pad_w;
             (void)pad_mode;
             (void)spatial;
+            (void)kNFrags;
 #endif
         }
 
@@ -542,13 +584,22 @@ namespace lfs::core::nn::kernels {
         auto* b = static_cast<const __half*>(bias);
         const bool large = spatial >= 96 && kdim >= 32;
         if (large) {
-            constexpr int BM = 128, BN = 64;
+            constexpr int BM = 128;
             dim3 block(256);
             const int n_tw = (out_w + BM - 1) / BM;
-            dim3 grid((cout + BN - 1) / BN, n_tw * out_h, n);
-            hgemm_implicit_3x3_halo_kernel<<<grid, block, 0, stream>>>(
-                x, wt, y, b, n, cin, h, w, cout, out_h, out_w, pad_h, pad_w, pad_mode);
-            LFS_CUDA_LAUNCH_CHECK(stream, "nn.conv.implicit_3x3_halo");
+            if (cout >= 128) {
+                constexpr int BN = 128;
+                dim3 grid((cout + BN - 1) / BN, n_tw * out_h, n);
+                hgemm_implicit_3x3_halo_kernel<BN><<<grid, block, 0, stream>>>(
+                    x, wt, y, b, n, cin, h, w, cout, out_h, out_w, pad_h, pad_w, pad_mode);
+                LFS_CUDA_LAUNCH_CHECK(stream, "nn.conv.implicit_3x3_halo128");
+            } else {
+                constexpr int BN = 64;
+                dim3 grid((cout + BN - 1) / BN, n_tw * out_h, n);
+                hgemm_implicit_3x3_halo_kernel<BN><<<grid, block, 0, stream>>>(
+                    x, wt, y, b, n, cin, h, w, cout, out_h, out_w, pad_h, pad_w, pad_mode);
+                LFS_CUDA_LAUNCH_CHECK(stream, "nn.conv.implicit_3x3_halo");
+            }
             return;
         }
         constexpr int BM = 64, BN = 64;

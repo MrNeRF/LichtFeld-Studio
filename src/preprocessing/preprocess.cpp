@@ -4,6 +4,7 @@
 
 #include "preprocessing/preprocess.hpp"
 
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/nn/models/moge2.hpp"
 #include "core/path_utils.hpp"
@@ -771,13 +772,18 @@ namespace {
 
         HeadMaps run(const Image& image, int64_t num_tokens) {
             auto chw = hwc_to_nchw(image);
-            auto input = lfs::core::Tensor::from_vector(
-                chw,
-                lfs::core::TensorShape(std::vector<std::size_t>{
-                    1, 3, static_cast<std::size_t>(image.height),
-                    static_cast<std::size_t>(image.width)}),
-                lfs::core::Device::CUDA);
-            auto result = model_.forward(input, num_tokens);
+            const auto shape = lfs::core::TensorShape(std::vector<std::size_t>{
+                1, 3, static_cast<std::size_t>(image.height),
+                static_cast<std::size_t>(image.width)});
+            if (!input_.is_valid() || input_.dtype() != lfs::core::DataType::Float32 ||
+                input_.ndim() != 4 || input_.shape()[2] != static_cast<std::size_t>(image.height) ||
+                input_.shape()[3] != static_cast<std::size_t>(image.width)) {
+                input_ = lfs::core::Tensor::empty(shape, lfs::core::Device::CUDA,
+                                                  lfs::core::DataType::Float32);
+            }
+            LFS_CUDA_CHECK(cudaMemcpyAsync(input_.data_ptr(), chw.data(), input_.bytes(),
+                                           cudaMemcpyHostToDevice, input_.stream()));
+            auto result = model_.forward(input_, num_tokens);
             if (!result)
                 throw std::runtime_error("Native MoGe-2 forward failed: " +
                                          std::string(result.error().detail()));
@@ -790,6 +796,7 @@ namespace {
 
     private:
         lfs::core::nn::models::Moge2 model_;
+        lfs::core::Tensor input_;
     };
 
     void ensure_native_weights(const fs::path& lfw_path, const fs::path& onnx_path) {

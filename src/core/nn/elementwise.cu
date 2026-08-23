@@ -7,6 +7,7 @@
 #include "nn_nvtx.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 
@@ -204,10 +205,27 @@ namespace lfs::core::nn::kernels {
                 }
                 return acc;
             }
-            const float v00 = at(y0, x0);
-            const float v01 = at(y0, x1);
-            const float v10 = at(y1, x0);
-            const float v11 = at(y1, x1);
+            auto at_pair = [&](int yy, int xx0, int xx1, float& a, float& b) {
+                yy = yy < 0 ? 0 : (yy >= h ? h - 1 : yy);
+                xx0 = xx0 < 0 ? 0 : (xx0 >= w ? w - 1 : xx0);
+                xx1 = xx1 < 0 ? 0 : (xx1 >= w ? w - 1 : xx1);
+                const long long row =
+                    ((static_cast<long long>(ni) * c + ch) * h + yy) * w;
+                if (is_half && xx1 == xx0 + 1) {
+                    const auto* ptr = static_cast<const __half*>(input) + row + xx0;
+                    if ((reinterpret_cast<uintptr_t>(ptr) & 3u) == 0) {
+                        const auto hv = *reinterpret_cast<const __half2*>(ptr);
+                        a = __half2float(hv.x);
+                        b = __half2float(hv.y);
+                        return;
+                    }
+                }
+                a = device::ld_strided(input, row + xx0, is_half);
+                b = device::ld_strided(input, row + xx1, is_half);
+            };
+            float v00, v01, v10, v11;
+            at_pair(y0, x0, x1, v00, v01);
+            at_pair(y1, x0, x1, v10, v11);
             const float v0 = v00 * (1.0f - wx) + v01 * wx;
             const float v1 = v10 * (1.0f - wx) + v11 * wx;
             return v0 * (1.0f - wy) + v1 * wy;

@@ -54,6 +54,11 @@ namespace lfs::core::nn::models {
 
         [[nodiscard]] DataType compute_dtype() const { return compute_; }
         [[nodiscard]] Device device() const { return device_; }
+        [[nodiscard]] std::size_t weights_bytes() const;
+        [[nodiscard]] std::size_t arena_bytes() const { return arena_.capacity(); }
+        [[nodiscard]] std::size_t workspace_bytes() const {
+            return workspace_.is_valid() ? workspace_.bytes() : 0;
+        }
 
         static void token_grid(int image_h, int image_w, std::int64_t num_tokens, int& token_h,
                                int& token_w);
@@ -78,8 +83,12 @@ namespace lfs::core::nn::models {
 
         std::unordered_map<std::string, Tensor> weights_;
         Tensor workspace_;
+        Tensor feat_hold_;
+        Tensor cls_hold_;
+        Tensor head_hold_[3];
         ActivationArena arena_;
         bool weights_on_stream_ = false;
+        bool mempool_trimmed_ = false;
         Device device_ = Device::CUDA;
         DataType compute_ = DataType::Float16;
     };

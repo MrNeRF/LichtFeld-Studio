@@ -3,6 +3,8 @@
 
 #include "core/nn/weight_file.hpp"
 
+#include "core/cuda_error.hpp"
+
 #include <cstring>
 #include <format>
 
@@ -170,16 +172,33 @@ namespace lfs::core::nn {
         if (found == nullptr) {
             return io_error(lfs::ErrorCode::NotFound, std::format("tensor {} is not in the file", name));
         }
-        auto cpu = Tensor::empty(found->shape, Device::CPU, found->dtype, false);
+        const DataType dest_dtype = cast ? *cast : found->dtype;
+        const void* src = mapped_.data() + payload_offset_ + found->offset;
+        if (device == Device::CPU) {
+            auto cpu = Tensor::empty(found->shape, Device::CPU, found->dtype, false);
+            if (found->length > 0) {
+                std::memcpy(cpu.data_ptr(), src, static_cast<std::size_t>(found->length));
+            }
+            if (dest_dtype != cpu.dtype()) {
+                return cpu.to(dest_dtype);
+            }
+            return cpu;
+        }
+        if (dest_dtype == found->dtype) {
+            auto gpu = Tensor::empty(found->shape, Device::CUDA, dest_dtype);
+            if (found->length > 0) {
+                LFS_CUDA_CHECK(cudaMemcpyAsync(gpu.data_ptr(), src,
+                                               static_cast<std::size_t>(found->length),
+                                               cudaMemcpyHostToDevice, gpu.stream()));
+            }
+            return gpu;
+        }
+        auto tmp = Tensor::empty(found->shape, Device::CUDA, found->dtype);
         if (found->length > 0) {
-            std::memcpy(cpu.data_ptr(), mapped_.data() + payload_offset_ + found->offset,
-                        static_cast<std::size_t>(found->length));
+            LFS_CUDA_CHECK(cudaMemcpyAsync(tmp.data_ptr(), src, static_cast<std::size_t>(found->length),
+                                           cudaMemcpyHostToDevice, tmp.stream()));
         }
-        Tensor placed = device == Device::CPU ? std::move(cpu) : cpu.to(device);
-        if (cast && *cast != placed.dtype()) {
-            placed = placed.to(*cast);
-        }
-        return placed;
+        return tmp.to(dest_dtype);
     }
 
     lfs::Result<std::unordered_map<std::string, Tensor>>
@@ -192,6 +211,9 @@ namespace lfs::core::nn {
                 return std::move(tensor.error());
             }
             out.emplace(name, std::move(*tensor));
+        }
+        if (device == Device::CUDA) {
+            LFS_CUDA_CHECK(cudaDeviceSynchronize());
         }
         return out;
     }

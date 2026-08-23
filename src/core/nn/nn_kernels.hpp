@@ -14,10 +14,16 @@ namespace lfs::core::nn::kernels {
 
     // trans_c stores C as [N, M] (column-major / NCHW) instead of [M, N].
     // Bias is always along N (added to every M row of a given column).
+    // residual, if non-null, is [M, N] row-major added after scale.
+    // scale, if non-null, is [N] multiplied after bias/activation.
+    // scatter_h > 0 selects a 2x2 stride-2 conv-transpose store: M = Nimg*H*W,
+    // N = Cout*4, C is NCHW [Cout, 2H, 2W].
     void gemm(const void* a, const void* b, void* c, int m, int n, int k,
               long long stride_a, long long stride_b, long long stride_c, int batch,
               bool trans_a, bool trans_b, const void* bias, int activation,
-              DataType dtype, cudaStream_t stream, bool trans_c = false);
+              DataType dtype, cudaStream_t stream, bool trans_c = false,
+              const void* residual = nullptr, const void* scale = nullptr,
+              int scatter_h = 0, int scatter_w = 0);
 
     // Implicit GEMM conv: A is gathered from NCHW input (never materialised).
     // Output is NCHW. Weight is OIHW. Bias, if non-null, is [C_out].

@@ -87,4 +87,31 @@ namespace lfs::core::nn::device {
         return (static_cast<float>(dst) + 0.5f) * scale - 0.5f;
     }
 
+    __device__ __forceinline__ void cp_async16(void* smem_addr, const void* glob_addr) {
+#if __CUDA_ARCH__ >= 800
+        const unsigned smem = __cvta_generic_to_shared(smem_addr);
+        asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n" ::"r"(smem), "l"(glob_addr));
+#else
+        *reinterpret_cast<uint4*>(smem_addr) = *reinterpret_cast<const uint4*>(glob_addr);
+#endif
+    }
+
+    __device__ __forceinline__ void cp_async_commit() {
+#if __CUDA_ARCH__ >= 800
+        asm volatile("cp.async.commit_group;\n");
+#endif
+    }
+
+    __device__ __forceinline__ void cp_async_wait0() {
+#if __CUDA_ARCH__ >= 800
+        asm volatile("cp.async.wait_group 0;\n");
+#endif
+    }
+
+    // 8-half (16-byte) xor swizzle. Consecutive rows at a fixed 16-byte
+    // column hit distinct smem banks (32 banks x 4 bytes).
+    __device__ __forceinline__ int xor_swizzle_col(const int row, const int col) {
+        return col ^ ((row & 7) << 3);
+    }
+
 } // namespace lfs::core::nn::device
