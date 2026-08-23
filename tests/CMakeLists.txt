@@ -436,6 +436,8 @@ set(TEST_FILES
     test_tensor_storage_version.cpp
     test_modal_registry_regression.cpp
     test_tensor_nn_ops.cpp
+    test_nn_ops.cpp
+    bench_nn_ops.cpp
     test_ppisp_controller.cpp
     test_ppisp_regularization.cpp
     test_ppisp_sidecar.cpp
