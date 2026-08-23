@@ -36,7 +36,7 @@ namespace lfs::test::licht {
         "init_opacity init_scaling max_cap eval_steps save_steps enable_eval "
         "enable_save_eval_images strategy mip_filter use_bilateral_grid bilateral_grid_X "
         "bilateral_grid_Y bilateral_grid_W bilateral_grid_lr tv_loss_weight use_ppisp ppisp_lr "
-        "ppisp_reg_weight ppisp_warmup_steps ppisp_freeze_from_sidecar ppisp_reference_uuid "
+        "ppisp_reg_weight ppisp_warmup_steps ppisp_exposure_from_exif ppisp_freeze_from_sidecar ppisp_reference_uuid "
         "ppisp_use_controller ppisp_freeze_gaussians_on_distill ppisp_controller_activation_step "
         "ppisp_controller_lr prune_opacity reset_every gut undistort steps_scaler "
         "sh_degree_interval random init_num_pts init_extent enable_sparsity sparsify_steps init_rho "

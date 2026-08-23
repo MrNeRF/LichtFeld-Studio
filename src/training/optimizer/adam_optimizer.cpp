@@ -185,9 +185,91 @@ namespace lfs::training {
             return;
         }
         last_step_zeroed_gradients_ = false;
-        for (const auto type : all_param_types()) {
-            step_param(type, iteration);
+
+        fast_lfs::optimizer::JointContiguousBatchEntry entries[5];
+        int n_entries = 0;
+        cudaStream_t batch_stream = nullptr;
+        const ParamType contiguous[] = {
+            ParamType::Means, ParamType::Sh0, ParamType::Scaling,
+            ParamType::Rotation, ParamType::Opacity};
+
+        auto prepare_contiguous = [&](ParamType type) {
+            auto& param = get_param(type);
+            if (!param.is_valid() || param.numel() == 0) {
+                return;
+            }
+            const auto name = param_name(type);
+            if (!states_.contains(name)) {
+                init_state(type, false);
+            }
+            auto& state = states_[name];
+            if (!state.grad.is_valid() || state.grad.numel() == 0 ||
+                !state.exp_avg.is_valid() || state.exp_avg.numel() == 0 ||
+                !state.is_joint() || !state.joint_bounds.is_valid()) {
+                return;
+            }
+            auto& param_live = get_param(type);
+            const size_t param_size = param_live.shape()[0];
+            if (param_size != state.size) {
+                throw std::runtime_error("Optimizer state desync: " + name);
+            }
+            state.step_count++;
+            const double bias_correction1_rcp =
+                1.0 / (1.0 - std::pow(config_.beta1, state.step_count));
+            const double bias_correction2_sqrt_rcp =
+                1.0 / std::sqrt(1.0 - std::pow(config_.beta2, state.step_count));
+            const float param_lr = static_cast<float>(get_param_lr(type));
+            cudaStream_t execution_stream = state.grad.stream();
+            if (execution_stream == nullptr) {
+                execution_stream = param_live.stream();
+            }
+            if (execution_stream == nullptr) {
+                execution_stream = state.exp_avg.stream();
+            }
+            if (batch_stream == nullptr) {
+                batch_stream = execution_stream;
+            }
+            lfs::core::waitForCUDAStream(batch_stream, param_live.stream());
+            lfs::core::waitForCUDAStream(batch_stream, state.exp_avg.stream());
+            lfs::core::waitForCUDAStream(batch_stream, state.joint_bounds.stream());
+            lfs::core::waitForCUDAStream(batch_stream, state.grad.stream());
+            const size_t feature_dim = param_live.numel() / param_size;
+            auto& e = entries[n_entries++];
+            e.param = param_live.ptr<float>();
+            e.packed = state.exp_avg.ptr<uint8_t>();
+            e.bounds = state.joint_bounds.ptr<float>();
+            e.grad = state.grad.ptr<float>();
+            e.n_prims = static_cast<int>(state.size);
+            e.n_attr = static_cast<int>(feature_dim);
+            e.lr = param_lr;
+            e.bias_correction1_rcp = static_cast<float>(bias_correction1_rcp);
+            e.bias_correction2_sqrt_rcp = static_cast<float>(bias_correction2_sqrt_rcp);
+            param_live.set_stream(batch_stream);
+            state.exp_avg.set_stream(batch_stream);
+            state.joint_bounds.set_stream(batch_stream);
+            state.grad.set_stream(batch_stream);
+        };
+
+        for (const auto type : contiguous) {
+            prepare_contiguous(type);
         }
+        if (n_entries > 0) {
+            if (frozen_mask_.is_valid()) {
+                lfs::core::waitForCUDAStream(batch_stream, frozen_mask_.stream());
+            }
+            if (crop_damping_mask_.is_valid()) {
+                crop_damping_mask_.sync_to_stream(batch_stream);
+            }
+            fast_lfs::optimizer::adam_step_joint_contiguous_batched(
+                entries, n_entries,
+                frozen_mask_ptr(), frozen_mask_size(), frozen_lr_scale_,
+                crop_damping_mask_ptr(), crop_damping_mask_size(), cropbox_lr_scale_,
+                static_cast<float>(config_.beta1),
+                static_cast<float>(config_.beta2),
+                static_cast<float>(config_.eps),
+                batch_stream);
+        }
+        step_param(ParamType::ShN, iteration);
     }
 
     size_t AdamOptimizer::compute_state_growth(ParamType type, size_t n_new) const {
@@ -470,6 +552,25 @@ namespace lfs::training {
             throw std::runtime_error("ensure_grad: " + name + " param invalid");
         }
 
+        if (type == ParamType::ShN) {
+            const auto layout_rest =
+                static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest());
+            const size_t float_layout = lfs::core::sh_swizzled_float_count(
+                static_cast<size_t>(splat_data_.size()), layout_rest);
+            const size_t alloc_cap =
+                state.capacity > float_layout ? state.capacity : float_layout;
+            const auto gshape = lfs::core::TensorShape({float_layout});
+            state.grad = (alloc_cap > float_layout)
+                             ? lfs::core::Tensor::zeros_direct(gshape, alloc_cap)
+                             : lfs::core::Tensor::zeros(gshape, param.device());
+            state.grad.set_name("adam." + name + ".grad");
+            if (state.size == 0) {
+                state.size = float_layout;
+            }
+            state.capacity = std::max(state.capacity, alloc_cap);
+            return;
+        }
+
         const size_t param_size = param.shape()[0];
         const size_t alloc_cap = state.capacity > param_size ? state.capacity : param_size;
         state.grad = (alloc_cap > param_size)
@@ -503,29 +604,11 @@ namespace lfs::training {
 
         state.step_count++;
 
-        // Skip higher-degree SH during warmup
-        if (type == ParamType::ShN && iteration <= SH_WARMUP_ITERATIONS) {
-            return;
-        }
-
-        // unfused path (GUT/gsplat) must not see q16 shN as float — dequant
-        // in-place so param_size matches float-layout state.size before the guard.
-        // Re-bind param after dequant (storage is replaced).
-        if (type == ParamType::ShN && splat_data_.shN_value_quantized()) {
-            LOG_ERROR("Unfused Adam step with q16 shN; dequantising to fp32 "
-                      "(gsplat/GUT path cannot step value codes; prefer FastGS)");
-            (void)sh_value::ensure_shN_fp32_for_mutation(splat_data_);
-        }
         auto& param_live = get_param(type);
 
         const double bias_correction1_rcp = 1.0 / (1.0 - std::pow(config_.beta1, state.step_count));
         const double bias_correction2_sqrt_rcp = 1.0 / std::sqrt(1.0 - std::pow(config_.beta2, state.step_count));
         const float param_lr = static_cast<float>(get_param_lr(type));
-
-        const size_t param_size = param_live.shape()[0];
-        if (param_size != state.size) {
-            throw std::runtime_error("Optimizer state desync: " + name);
-        }
 
         cudaStream_t execution_stream = state.grad.stream();
         if (execution_stream == nullptr) {
@@ -546,17 +629,82 @@ namespace lfs::training {
             crop_damping_mask_.sync_to_stream(execution_stream);
         }
 
-        // The joint (u,log_s) codec uses a non-fused step for contiguous
-        // params. shN joint remains fused-only (swizzle + SH value quant single-writer).
+        // Contiguous params use adam_step_joint_contiguous_raw. shN uses the
+        // standalone joint kernel that shares apply_shN_grads_packed_joint with FastGS.
         if (state.is_joint()) {
             if (type == ParamType::ShN) {
-                throw std::runtime_error(
-                    "AdamOptimizer::step_param: joint-codec shN requires fused FastGS "
-                    "backward (non-fused joint swizzle step not implemented). "
-                    "GUT/gsplat SH training must be rejected by Trainer::initialize");
+                if (!state.joint_bounds.is_valid()) {
+                    throw std::runtime_error("AdamOptimizer::step_param: joint state missing bounds");
+                }
+                const auto layout_rest =
+                    static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest());
+                const auto active_rest =
+                    static_cast<uint32_t>(splat_data_.active_sh_coeffs_rest());
+                const size_t n_live = static_cast<size_t>(splat_data_.size());
+                const size_t float_layout =
+                    lfs::core::sh_swizzled_float_count(n_live, layout_rest);
+                if (state.size != float_layout) {
+                    throw std::runtime_error("Optimizer state desync: shN");
+                }
+                const int sh_layout_slots = static_cast<int>(
+                    lfs::core::sh_float4_slots_for_rest(layout_rest));
+                const int active_sh_bases = static_cast<int>(active_rest + 1u);
+
+                float* param_ptr = nullptr;
+                float* sh_value_bounds = nullptr;
+                int sh_value_bits = 0;
+                int sh_value_n_cells = 0;
+                if (splat_data_.shN_value_quantized() &&
+                    splat_data_.shN_value_bounds().is_valid()) {
+                    const auto q16 = lfs::core::resolve_q16_bind_ptrs(splat_data_);
+                    param_ptr = const_cast<float*>(q16.codes);
+                    sh_value_bounds = const_cast<float*>(q16.bounds);
+                    sh_value_bits = 16;
+                    sh_value_n_cells = static_cast<int>(q16.n_cells_per_prim);
+                } else if (splat_data_.shN_ieee_f16()) {
+                    param_ptr = static_cast<float*>(
+                        lfs::core::resolve_exportable_device_ptr(param_live));
+                    sh_value_bits = 16;
+                } else {
+                    param_ptr = static_cast<float*>(
+                        lfs::core::resolve_exportable_device_ptr(param_live));
+                }
+
+                fast_lfs::optimizer::adam_step_shN_joint_from_grad(
+                    param_ptr,
+                    state.exp_avg.ptr<uint8_t>(),
+                    state.joint_bounds.ptr<float>(),
+                    sh_value_bounds,
+                    state.grad.ptr<float>(),
+                    frozen_mask_ptr(),
+                    frozen_mask_size(),
+                    frozen_lr_scale_,
+                    crop_damping_mask_ptr(),
+                    crop_damping_mask_size(),
+                    cropbox_lr_scale_,
+                    static_cast<int>(n_live),
+                    sh_layout_slots,
+                    active_sh_bases,
+                    sh_value_bits,
+                    sh_value_n_cells,
+                    param_lr * static_cast<float>(bias_correction1_rcp),
+                    static_cast<float>(config_.beta1),
+                    static_cast<float>(config_.beta2),
+                    static_cast<float>(config_.eps),
+                    static_cast<float>(bias_correction2_sqrt_rcp),
+                    execution_stream);
+                param_live.set_stream(execution_stream);
+                state.exp_avg.set_stream(execution_stream);
+                state.joint_bounds.set_stream(execution_stream);
+                state.grad.set_stream(execution_stream);
+                return;
             }
             if (!state.joint_bounds.is_valid()) {
                 throw std::runtime_error("AdamOptimizer::step_param: joint state missing bounds");
+            }
+            const size_t param_size = param_live.shape()[0];
+            if (param_size != state.size) {
+                throw std::runtime_error("Optimizer state desync: " + name);
             }
             const size_t feature_dim = param_live.numel() / param_size;
             fast_lfs::optimizer::adam_step_joint_contiguous_raw(

@@ -532,7 +532,7 @@ namespace lfs::vis::input {
                 (version < 22 && def.action == Action::TOGGLE_MCP_BINDING) ||
                 (version < 23 && def.action == Action::TOGGLE_GRID) ||
                 (version < 25 &&
-                  (def.action == Action::SELECT_ALL_SCENE_NODES ||
+                 (def.action == Action::SELECT_ALL_SCENE_NODES ||
                   def.action == Action::TOGGLE_SCENE_SELECTION_VISIBILITY ||
                   def.action == Action::TOGGLE_SCENE_SELECTION_TRAINING));
             if (!should_add) {

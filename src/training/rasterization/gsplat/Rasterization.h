@@ -46,7 +46,7 @@ namespace gsplat_lfs {
         const int32_t* tile_offsets, // [C, tile_height, tile_width]
         const int32_t* flatten_ids,  // [n_isects]
         // outputs (pre-allocated)
-        float* renders,    // [C, image_height, image_width, CDIM]
+        float* renders,    // [C, CDIM, image_height, image_width]
         float* alphas,     // [C, image_height, image_width, 1]
         int32_t* last_ids, // [C, image_height, image_width]
         cudaStream_t stream = nullptr);
@@ -90,7 +90,7 @@ namespace gsplat_lfs {
         const float* render_alphas, // [C, image_height, image_width, 1]
         const int32_t* last_ids,    // [C, image_height, image_width]
         // gradients of outputs
-        const float* v_render_colors, // [C, image_height, image_width, CDIM]
+        const float* v_render_colors, // [C, CDIM, image_height, image_width]
         const float* v_render_alphas, // [C, image_height, image_width, 1]
         // gradient outputs (pre-allocated, atomic accumulation)
         float* v_means,                       // [N, 3]

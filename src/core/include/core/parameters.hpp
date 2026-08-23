@@ -198,6 +198,7 @@ namespace lfs::core {
 
             // PPISP (Physically-Plausible ISP) parameters
             bool use_ppisp = false;
+            bool ppisp_exposure_from_exif = true;
             float ppisp_lr = 2e-3f;
             float ppisp_reg_weight = 0.001f;
             int ppisp_warmup_steps = 500;

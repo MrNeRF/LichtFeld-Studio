@@ -55,6 +55,7 @@ set(CORE_SOURCES
         device_fault.cpp
         error.cpp
         error_bus.cpp
+        exif.cpp
         error_envelope.cpp
         error_latch.cpp
         error_reporter.cpp

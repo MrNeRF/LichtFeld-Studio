@@ -490,6 +490,9 @@ namespace lfs::training {
             } else {
                 r_output = fast_rasterize(*cam, splatData_mutable, background, _params.optimization.mip_filter);
             }
+            if (appearance_ && r_output.image.is_valid()) {
+                r_output.image = appearance_(r_output.image, *cam);
+            }
             r_output.image = r_output.image.clamp(0.0f, 1.0f);
 
             float psnr = 0.0f;
@@ -545,12 +548,10 @@ namespace lfs::training {
             }
         }
 
-        // Wait for all images to be saved before computing final timing
+        // Wait for queued eval PNGs before returning so callers can read them
+        // without racing the BatchImageSaver workers.
         if (_params.optimization.enable_save_eval_images) {
-            const auto pending = lfs::core::image_io::BatchImageSaver::pending_count_if_initialized();
-            if (pending > 0) {
-                lfs::core::image_io::wait_for_pending_saves();
-            }
+            lfs::core::image_io::wait_for_pending_saves();
         }
 
         const auto end_time = std::chrono::steady_clock::now();

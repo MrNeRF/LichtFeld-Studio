@@ -373,6 +373,35 @@ TEST(ArgumentParserTest, TrainingDefaultsApplyMaxWidthCap) {
     EXPECT_EQ((*parsed)->optimization.morton_reorder_interval, 5000u);
 }
 
+TEST(ArgumentParserTest, NoPpispExifExposureDisablesSeed) {
+    const auto data_path = make_test_path("lfs_arg_parser_ppisp_exif_data");
+    const auto output_path = make_test_path("lfs_arg_parser_ppisp_exif_output");
+
+    const char* default_argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str()};
+    auto default_parsed =
+        lfs::core::args::parse_args_and_params(static_cast<int>(std::size(default_argv)), default_argv);
+    ASSERT_TRUE(default_parsed.has_value()) << default_parsed.error();
+    EXPECT_TRUE((*default_parsed)->optimization.ppisp_exposure_from_exif);
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--no-ppisp-exif-exposure"};
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_FALSE((*parsed)->optimization.ppisp_exposure_from_exif);
+}
+
 TEST(ArgumentParserTest, MortonReorderIntervalFlag) {
     const auto data_path = make_test_path("lfs_arg_parser_morton_data");
     const auto output_path = make_test_path("lfs_arg_parser_morton_output");
