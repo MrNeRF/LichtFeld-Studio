@@ -760,6 +760,7 @@ namespace lfs::vis::gui {
         click_anchor_id_ = core::NULL_NODE;
         rename_node_id_ = core::NULL_NODE;
         rename_buffer_.clear();
+        rename_conflict_modal_pending_ = false;
         context_menu_node_id_ = core::NULL_NODE;
         drag_source_id_ = core::NULL_NODE;
         drop_into_group_id_ = core::NULL_NODE;
@@ -1078,6 +1079,7 @@ namespace lfs::vis::gui {
         if (rename_node_id_ != core::NULL_NODE && !node_snapshots_.contains(rename_node_id_)) {
             rename_node_id_ = core::NULL_NODE;
             rename_buffer_.clear();
+            rename_conflict_modal_pending_ = false;
         }
         if (context_menu_node_id_ != core::NULL_NODE && !node_snapshots_.contains(context_menu_node_id_))
             context_menu_node_id_ = core::NULL_NODE;
@@ -1395,9 +1397,9 @@ namespace lfs::vis::gui {
                                                ? std::format("{} / {}",
                                                              row.training_enabled_count,
                                                              row.training_total_count)
-                                               : row.training_enabled
-                                                     ? tr(string_keys::Scene::DISABLE_FOR_TRAINING)
-                                                     : tr(string_keys::Scene::ENABLE_FOR_TRAINING);
+                                           : row.training_enabled
+                                               ? tr(string_keys::Scene::DISABLE_FOR_TRAINING)
+                                               : tr(string_keys::Scene::ENABLE_FOR_TRAINING);
         setCachedAttribute(slot.training_toggle_icon, "title", training_title);
         setCachedClass(slot.training_toggle_icon, "training-disabled", !row.training_enabled);
         setCachedClass(slot.training_toggle_icon, "training-mixed", row.training_mixed);
@@ -1613,7 +1615,7 @@ namespace lfs::vis::gui {
     }
 
     void SceneGraphElement::confirmRename() {
-        if (rename_node_id_ == core::NULL_NODE)
+        if (rename_node_id_ == core::NULL_NODE || rename_conflict_modal_pending_)
             return;
         captureRenameBuffer();
         auto* scene_manager = services().sceneOrNull();
@@ -1633,9 +1635,40 @@ namespace lfs::vis::gui {
         if (next_name != it->second.name) {
             const core::NodeId existing_id = scene->getNodeIdByName(next_name);
             if (existing_id != core::NULL_NODE && existing_id != rename_node_id_) {
-                rename_focus_pending_ = true;
-                markStateDirty();
-                syncVisibleRows(true);
+                LOG_WARN("Scene node rename rejected: name '{}' is already in use", next_name);
+                auto* gui = services().guiOrNull();
+                if (!gui)
+                    return;
+
+                const core::NodeId rename_node_id = rename_node_id_;
+                const std::string rename_button = tr(string_keys::Scene::RENAME);
+                rename_conflict_modal_pending_ = true;
+
+                lfs::core::ModalRequest request;
+                request.title = tr(string_keys::Scene::RENAME_CONFLICT_TITLE);
+                request.style = lfs::core::ModalStyle::Warning;
+                request.width_dp = 440;
+                request.body_rml = encode(LOCF(string_keys::Scene::RENAME_CONFLICT_MESSAGE, next_name));
+                request.buttons = {
+                    {tr(string_keys::Common::CANCEL), "secondary"},
+                    {rename_button, "primary"},
+                };
+                request.on_result = [this, rename_node_id, rename_button](
+                                        const lfs::core::ModalResult& result) {
+                    rename_conflict_modal_pending_ = false;
+                    if (result.button_label == rename_button && rename_node_id_ == rename_node_id) {
+                        rename_focus_pending_ = true;
+                        markStateDirty();
+                        syncVisibleRows(true);
+                    } else {
+                        cancelRename();
+                    }
+                };
+                request.on_cancel = [this] {
+                    rename_conflict_modal_pending_ = false;
+                    cancelRename();
+                };
+                gui->enqueueModal(std::move(request));
                 return;
             }
             cmd::RenameNodeById{.node_id = static_cast<int32_t>(rename_node_id_), .new_name = next_name}.emit();
@@ -1643,6 +1676,7 @@ namespace lfs::vis::gui {
 
         rename_node_id_ = core::NULL_NODE;
         rename_buffer_.clear();
+        rename_conflict_modal_pending_ = false;
         markStateDirty();
         syncVisibleRows(true);
     }
@@ -1652,6 +1686,7 @@ namespace lfs::vis::gui {
             return;
         rename_node_id_ = core::NULL_NODE;
         rename_buffer_.clear();
+        rename_conflict_modal_pending_ = false;
         markStateDirty();
     }
 

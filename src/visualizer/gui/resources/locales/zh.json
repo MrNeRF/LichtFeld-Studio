@@ -624,6 +624,8 @@
     "export": "导出...",
     "delete": "删除",
     "rename": "重命名",
+    "rename_conflict_title": "名称已被使用",
+    "rename_conflict_message": "另一个场景元素已命名为“{}”。选择“重命名”继续编辑，或选择“取消”保留当前名称。",
     "duplicate": "复制",
     "save_to_disk": "保存到磁盘",
     "save_asset": "保存资产",

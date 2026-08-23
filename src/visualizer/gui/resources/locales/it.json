@@ -624,6 +624,8 @@
     "export": "Esporta...",
     "delete": "Elimina",
     "rename": "Rinomina",
+    "rename_conflict_title": "Nome già in uso",
+    "rename_conflict_message": "Un altro elemento della scena si chiama già '{}'. Scegli Rinomina per continuare la modifica oppure Annulla per mantenere il nome attuale.",
     "duplicate": "Duplica",
     "save_to_disk": "Salva su disco",
     "save_asset": "Salva risorsa",

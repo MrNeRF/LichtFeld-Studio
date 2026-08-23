@@ -624,6 +624,8 @@
     "export": "Exportar...",
     "delete": "Eliminar",
     "rename": "Renombrar",
+    "rename_conflict_title": "El nombre ya está en uso",
+    "rename_conflict_message": "Otro elemento de la escena ya se llama '{}'. Elige Renombrar para seguir editando o Cancelar para conservar el nombre actual.",
     "duplicate": "Duplicar",
     "save_to_disk": "Guardar en Disco",
     "save_asset": "Guardar Activo",

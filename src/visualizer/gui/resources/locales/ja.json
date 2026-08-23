@@ -624,6 +624,8 @@
     "export": "エクスポート...",
     "delete": "削除",
     "rename": "名前を変更",
+    "rename_conflict_title": "名前は既に使用されています",
+    "rename_conflict_message": "別のシーン要素に既に '{}' という名前が付いています。編集を続けるには「名前を変更」、現在の名前を維持するには「キャンセル」を選択してください。",
     "duplicate": "複製",
     "save_to_disk": "ディスクに保存",
     "save_asset": "アセットを保存",

@@ -624,6 +624,8 @@
     "export": "내보내기...",
     "delete": "삭제",
     "rename": "이름 변경",
+    "rename_conflict_title": "이미 사용 중인 이름",
+    "rename_conflict_message": "다른 장면 요소의 이름이 이미 '{}'입니다. 편집을 계속하려면 이름 바꾸기를, 현재 이름을 유지하려면 취소를 선택하세요.",
     "duplicate": "복제",
     "save_to_disk": "디스크에 저장",
     "save_asset": "에셋 저장",

@@ -624,6 +624,8 @@
     "export": "Exporteren...",
     "delete": "Verwijderen",
     "rename": "Hernoemen",
+    "rename_conflict_title": "Naam is al in gebruik",
+    "rename_conflict_message": "Een ander scène-element heet al '{}'. Kies Hernoemen om verder te bewerken of Annuleren om de huidige naam te behouden.",
     "duplicate": "Dupliceren",
     "save_to_disk": "Opslaan naar schijf",
     "save_asset": "Asset opslaan",

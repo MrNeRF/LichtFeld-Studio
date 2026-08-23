@@ -625,6 +625,8 @@
     "export": "Exporter...",
     "delete": "Supprimer",
     "rename": "Renommer",
+    "rename_conflict_title": "Nom déjà utilisé",
+    "rename_conflict_message": "Un autre élément de la scène porte déjà le nom '{}'. Choisissez Renommer pour continuer la modification ou Annuler pour conserver le nom actuel.",
     "duplicate": "Dupliquer",
     "save_to_disk": "Enregistrer sur le disque",
     "save_asset": "Enregistrer l'actif",

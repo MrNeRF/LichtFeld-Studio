@@ -221,6 +221,8 @@ namespace lichtfeld::Strings {
         inline constexpr const char* SHOW_SELECTED = "scene.show_selected";
         inline constexpr const char* HIDE_SELECTED = "scene.hide_selected";
         inline constexpr const char* RENAME = "scene.rename";
+        inline constexpr const char* RENAME_CONFLICT_TITLE = "scene.rename_conflict_title";
+        inline constexpr const char* RENAME_CONFLICT_MESSAGE = "scene.rename_conflict_message";
         inline constexpr const char* DUPLICATE_ITEM = "scene.duplicate";
         inline constexpr const char* GO_TO_CAMERA_VIEW = "scene.go_to_camera_view";
         inline constexpr const char* GO_TO_IMAGE = "scene.go_to_image";

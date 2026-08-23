@@ -624,6 +624,8 @@
     "export": "Export...",
     "delete": "Delete",
     "rename": "Rename",
+    "rename_conflict_title": "Name already in use",
+    "rename_conflict_message": "Another scene element is already named '{}'. Choose Rename to continue editing or Cancel to keep the current name.",
     "duplicate": "Duplicate",
     "save_to_disk": "Save to Disk",
     "save_asset": "Save Asset",

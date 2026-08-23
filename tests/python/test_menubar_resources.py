@@ -461,6 +461,30 @@ def test_viewport_ctrl_click_toggles_nodes_without_breaking_modified_drags():
     assert "picked_node && shift_held" in rect_release
 
 
+def test_scene_tree_duplicate_rename_opens_a_retry_or_cancel_modal():
+    scene_graph = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "elements"
+        / "scene_graph_element.cpp"
+    ).read_text(encoding="utf-8")
+
+    confirm_rename = scene_graph.split(
+        "void SceneGraphElement::confirmRename()", 1
+    )[1].split("void SceneGraphElement::cancelRename()", 1)[0]
+    assert "rename_conflict_modal_pending_" in confirm_rename
+    assert "RENAME_CONFLICT_TITLE" in confirm_rename
+    assert "RENAME_CONFLICT_MESSAGE" in confirm_rename
+    assert "Scene node rename rejected" in confirm_rename
+    assert "gui->enqueueModal(std::move(request))" in confirm_rename
+    assert "result.button_label == rename_button" in confirm_rename
+    assert "rename_focus_pending_ = true" in confirm_rename
+    assert "cancelRename()" in confirm_rename
+
+
 def test_scene_tree_filter_always_reads_the_live_form_control_value():
     scene_panel = (
         PROJECT_ROOT / "src" / "visualizer" / "gui" / "scene_panel_native.cpp"

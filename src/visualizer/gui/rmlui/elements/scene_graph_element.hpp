@@ -249,6 +249,7 @@ namespace lfs::vis::gui {
         bool camera_preview_navigation_active_ = false;
         core::NodeId rename_node_id_ = core::NULL_NODE;
         std::string rename_buffer_;
+        bool rename_conflict_modal_pending_ = false;
         RenameInputListener rename_input_listener_;
         DragListener drag_listener_;
         core::NodeId context_menu_node_id_ = core::NULL_NODE;

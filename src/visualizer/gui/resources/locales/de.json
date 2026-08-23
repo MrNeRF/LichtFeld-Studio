@@ -624,6 +624,8 @@
     "export": "Exportieren...",
     "delete": "Löschen",
     "rename": "Umbenennen",
+    "rename_conflict_title": "Name bereits vergeben",
+    "rename_conflict_message": "Ein anderes Szenenelement heißt bereits '{}'. Wählen Sie Umbenennen, um die Bearbeitung fortzusetzen, oder Abbrechen, um den aktuellen Namen beizubehalten.",
     "duplicate": "Duplizieren",
     "save_to_disk": "Auf Datenträger speichern",
     "save_asset": "Asset speichern",

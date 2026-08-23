@@ -624,6 +624,8 @@
     "export": "Eksportuj...",
     "delete": "Usuń",
     "rename": "Zmień Nazwę",
+    "rename_conflict_title": "Nazwa jest już używana",
+    "rename_conflict_message": "Inny element sceny ma już nazwę '{}'. Wybierz Zmień nazwę, aby kontynuować edycję, lub Anuluj, aby zachować obecną nazwę.",
     "duplicate": "Duplikuj",
     "save_to_disk": "Zapisz na dysk",
     "save_asset": "Zapisz zasób",
