@@ -314,7 +314,7 @@ namespace lfs::vis::project {
         template <typename Owner, typename Member>
         JsonField<Owner> required_field(
             const std::string_view name,
-            Member Owner::*member) {
+            Member Owner::* member) {
             return {
                 .name = name,
                 .write = [member](const Owner& source) { return Json(source.*member); },
@@ -333,7 +333,7 @@ namespace lfs::vis::project {
         template <typename Owner, typename Member>
         JsonField<Owner> optional_field(
             const std::string_view name,
-            Member Owner::*member) {
+            Member Owner::* member) {
             return {
                 .name = name,
                 .write = [member](const Owner& source) { return Json(source.*member); },
@@ -351,7 +351,7 @@ namespace lfs::vis::project {
         template <typename Owner>
         JsonField<Owner> vec3_field(
             const std::string_view name,
-            glm::vec3 Owner::*member) {
+            glm::vec3 Owner::* member) {
             return {
                 .name = name,
                 .write = [member](const Owner& source) { return vec3_json(source.*member); },
@@ -375,7 +375,7 @@ namespace lfs::vis::project {
                   typename AfterAssign = std::nullptr_t>
         JsonField<Owner> enum_field(
             const std::string_view name,
-            Enum Owner::*member,
+            Enum Owner::* member,
             const int minimum,
             const int maximum,
             const std::string_view invalid_detail,
@@ -467,7 +467,7 @@ namespace lfs::vis::project {
         template <typename Owner, std::size_t Size>
         JsonField<Owner> array_field(
             const std::string_view name,
-            std::array<float, Size> Owner::*member) {
+            std::array<float, Size> Owner::* member) {
             return custom_field<Owner>(
                 name,
                 [member](const Owner& source) {
@@ -503,7 +503,7 @@ namespace lfs::vis::project {
         template <typename Owner>
         JsonField<Owner> nullable_positive_float_field(
             const std::string_view name,
-            std::optional<float> Owner::*member) {
+            std::optional<float> Owner::* member) {
             return custom_field<Owner>(
                 name,
                 [member](const Owner& source) {
@@ -1588,7 +1588,7 @@ namespace lfs::vis::project {
             using Panel = gui::PanelProjectState;
             const auto nullable_float = [](
                                             const std::string_view name,
-                                            float Panel::*member) {
+                                            float Panel::* member) {
                 return custom_field<Panel>(
                     name,
                     [member](const Panel& panel) {
@@ -3530,26 +3530,30 @@ namespace lfs::vis::project {
                                 renderSettingsFromProjectJson(
                                     *render_json,
                                     rendering->getSettings())) {
-                            const float near_plane =
-                                std::max(0.0f,
-                                         -settings
-                                              ->depth_filter_max.z);
-                            const float far_plane =
-                                std::max(near_plane + 0.01f,
-                                         -settings
-                                              ->depth_filter_min.z);
-                            const float half_width =
-                                std::max(
-                                    std::abs(settings
-                                                 ->depth_filter_min.x),
-                                    std::abs(settings
-                                                 ->depth_filter_max.x));
-                            selection_tool
-                                ->setDepthFilterRange(
-                                    settings
-                                        ->depth_filter_enabled,
-                                    near_plane, far_plane,
-                                    half_width);
+                            // Disabled constructor-default boxes are not in near/far encoding.
+                            if (settings
+                                    ->depth_filter_enabled) {
+                                const float near_plane =
+                                    std::max(0.0f,
+                                             -settings
+                                                  ->depth_filter_max.z);
+                                const float far_plane =
+                                    std::max(near_plane + 0.01f,
+                                             -settings
+                                                  ->depth_filter_min.z);
+                                const float half_width =
+                                    std::max(
+                                        std::abs(settings
+                                                     ->depth_filter_min.x),
+                                        std::abs(settings
+                                                     ->depth_filter_max.x));
+                                selection_tool
+                                    ->setDepthFilterRange(
+                                        settings
+                                            ->depth_filter_enabled,
+                                        near_plane, far_plane,
+                                        half_width);
+                            }
                             auto restored =
                                 rendering->getSettings();
                             restored.crop_filter_for_selection =
