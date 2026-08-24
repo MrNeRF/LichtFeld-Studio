@@ -14,7 +14,6 @@
 #include "io/error.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/loaders/loader_utils.hpp"
-#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <format>

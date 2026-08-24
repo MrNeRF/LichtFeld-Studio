@@ -375,7 +375,7 @@
     "tooltip.means_noise_weight": "Exploration noise multiplier for MRNF position updates",
     "tooltip.bounds_percentile": "Percentile used for MRNF bounds computation",
     "tooltip.use_error_map": "Weight MRNF refinement by the per-pixel SSIM error map",
-    "tooltip.use_edge_map": "Weight MRNF refinement by Sobel edges in ground-truth images",
+    "tooltip.use_edge_map": "Weight MRNF refinement by Canny edges in ground-truth images",
     "tooltip.use_far_field": "MRNF の遠方スプリット、シード、減衰緩和、成長上限、スプラットごとのステップを有効化",
     "tooltip.far_scene_min_fraction": "遠方機能を有効にする deep-far スプラットの最小割合（0 = 常時有効）",
     "tooltip.growth_ratio_rank": "Rank MRNF growth by visibility-normalized error (err/vis^p) instead of raw window error",

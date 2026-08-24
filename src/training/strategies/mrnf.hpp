@@ -35,8 +35,8 @@ class MRNFStrategyTest_ExploreSplitsAreDisjointAndRespectMaxCap_Test;
 class MRNFStrategyTest_FarGrowthCapConstrainsOutsideAllocations_Test;
 class MRNFStrategyTest_FarDecayScaleAppliesOnlyToFarUnfrozenRows_Test;
 class MRNFStrategyTest_SeedFromViewInsertsRequestedRows_Test;
-class MRNFStrategyTest_SumModeFoldIsBitIdentical_Test;
-class MRNFStrategyTest_ThresholdModeMatchesCurrentSelection_Test;
+class MRNFStrategyTest_DensificationInfoShapeIsTwoRows_Test;
+class MRNFStrategyTest_ZeroVisibilityProducesNoGrowth_Test;
 class MRNFStrategyTest_PerSplatMeanStepScalesWithExtentAndClamps_Test;
 class MRNFStrategyTest_CadenceScaledMatchesRefineEvery_Test;
 class MRNFStrategyTest_FarStarvationFactorFromSyntheticPopulations_Test;
@@ -100,7 +100,6 @@ namespace lfs::training {
         void reserve_optimizer_capacity(size_t capacity) override;
         void set_optimization_params(const lfs::core::param::OptimizationParameters& params) override;
         void set_training_dataset(std::shared_ptr<CameraDataset> views) override;
-        void set_image_loader(lfs::io::PipelinedImageLoader* loader) override { _image_loader = loader; }
 
     private:
         friend class ::MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
@@ -123,8 +122,8 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_FarGrowthCapConstrainsOutsideAllocations_Test;
         friend class ::MRNFStrategyTest_FarDecayScaleAppliesOnlyToFarUnfrozenRows_Test;
         friend class ::MRNFStrategyTest_SeedFromViewInsertsRequestedRows_Test;
-        friend class ::MRNFStrategyTest_SumModeFoldIsBitIdentical_Test;
-        friend class ::MRNFStrategyTest_ThresholdModeMatchesCurrentSelection_Test;
+        friend class ::MRNFStrategyTest_DensificationInfoShapeIsTwoRows_Test;
+        friend class ::MRNFStrategyTest_ZeroVisibilityProducesNoGrowth_Test;
         friend class ::MRNFStrategyTest_PerSplatMeanStepScalesWithExtentAndClamps_Test;
         friend class ::MRNFStrategyTest_CadenceScaledMatchesRefineEvery_Test;
         friend class ::MRNFStrategyTest_FarStarvationFactorFromSyntheticPopulations_Test;
@@ -167,7 +166,6 @@ namespace lfs::training {
         [[nodiscard]] float cfg_ratio_pow() const;
         [[nodiscard]] int cfg_fill_target_iter() const;
         [[nodiscard]] int cfg_seed_dose() const;
-        [[nodiscard]] bool cfg_seed_far_on() const;
         [[nodiscard]] bool far_field_requested() const;
         [[nodiscard]] bool far_operators_active() const;
         void refresh_camera_hull();
@@ -228,7 +226,6 @@ namespace lfs::training {
         std::unique_ptr<const lfs::core::param::OptimizationParameters> _params;
 
         std::shared_ptr<CameraDataset> _views;
-        lfs::io::PipelinedImageLoader* _image_loader = nullptr;
 
         lfs::core::Tensor _refine_weight_max;
         lfs::core::Tensor _refine_ratio_max;

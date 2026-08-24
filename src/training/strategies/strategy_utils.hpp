@@ -184,8 +184,8 @@ namespace lfs::training {
 
     /**
      * grow densification_info / 1D score buffers without full realloc
-     * when reserved capacity allows. densification_info is [n_rows,N] (2 for
-     * MCMC/IGS+/MRNF-sum, 3 for MRNF-max): when n or n_rows changes we must
+     * when reserved capacity allows. densification_info is [n_rows,N] (2 rows
+     * for every strategy): when n or n_rows changes we must
      * reallocate (row offsets depend on N); when shape already matches, reuse.
      * For 1D scores: append_zeros into reserved capacity when possible.
      */
@@ -193,7 +193,6 @@ namespace lfs::training {
         lfs::core::Tensor& densification_info,
         size_t n,
         lfs::core::Device device,
-        size_t reserve_cols = 0,
         size_t n_rows = 2);
 
     void ensure_score_buffer_inplace(

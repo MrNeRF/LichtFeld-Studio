@@ -230,11 +230,11 @@ namespace lfs::core {
             bool use_error_map = true;
             bool use_edge_map = true;
             bool use_far_field = true;
-            float far_scene_min_fraction = 0.01f; // 0 forces far features on
-            bool growth_ratio_rank = false;       // rank growth by err/vis^growth_ratio_pow
+            float far_scene_min_fraction = 0.01f; // min deep-far splat fraction that activates far-field (0 = always on); mrnf_defaults() overrides to 0.0
+            bool growth_ratio_rank = false;       // rank growth by err/vis^growth_ratio_pow; mrnf_defaults() overrides to true
             float growth_ratio_pow = 0.75f;
-            size_t fill_pacing_iter = 0; // pace cap fill until this iteration (0 = off)
-            size_t far_seed_dose = 0;    // far seeds per refine window (0 = starvation default)
+            size_t fill_pacing_iter = 0; // pace cap fill until this iteration (0 = off); mrnf_defaults() overrides to 15000
+            size_t far_seed_dose = 0;    // far seeds per refine window (0 = starvation default); mrnf_defaults() overrides to 2000
             // Config-file / C++ only (no registry, GUI, locale, or CLI).
             bool explore_starvation_weighting = true;
 

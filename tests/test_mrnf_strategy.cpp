@@ -17,8 +17,8 @@ class MRNFStrategyTest_DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate_
 class MRNFStrategyTest_LineBoundsUseFiniteSceneScaleForMeanLearningRate_Test;
 class CropDampingStrategyTest_MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale_Test;
 class MRNFStrategyTest_FarDecayScaleAppliesOnlyToFarUnfrozenRows_Test;
-class MRNFStrategyTest_SumModeFoldIsBitIdentical_Test;
-class MRNFStrategyTest_ThresholdModeMatchesCurrentSelection_Test;
+class MRNFStrategyTest_DensificationInfoShapeIsTwoRows_Test;
+class MRNFStrategyTest_ZeroVisibilityProducesNoGrowth_Test;
 class MRNFStrategyTest_CadenceScaledMatchesRefineEvery_Test;
 class MRNFStrategyTest_FarStarvationFactorFromSyntheticPopulations_Test;
 class MRNFStrategyTest_CensusGateActivatesAndSuppressesFarFeatures_Test;
@@ -1296,7 +1296,7 @@ TEST(MRNFStrategyTest, FarDecayScaleAppliesOnlyToFarUnfrozenRows) {
     }
 }
 
-TEST(MRNFStrategyTest, SumModeFoldIsBitIdentical) {
+TEST(MRNFStrategyTest, DensificationInfoShapeIsTwoRows) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
     auto opt_params = vanilla_mrnf_params();
@@ -1309,7 +1309,7 @@ TEST(MRNFStrategyTest, SumModeFoldIsBitIdentical) {
     EXPECT_EQ(splat_data._densification_info.shape()[1], splat_data.size());
 }
 
-TEST(MRNFStrategyTest, ThresholdModeMatchesCurrentSelection) {
+TEST(MRNFStrategyTest, ZeroVisibilityProducesNoGrowth) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
     auto opt_params = vanilla_mrnf_params();

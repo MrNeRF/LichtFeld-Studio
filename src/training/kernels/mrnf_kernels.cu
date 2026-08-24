@@ -1033,7 +1033,7 @@ namespace lfs::training::mrnf_strategy {
         }
         const float denom = fmaxf(median_vis, 1.19209290e-07f);
         const float starved = fminf(fmaxf(1.0f - vis_i / denom, 0.0f), 1.0f);
-        const float term = (kStarvGamma == 1.0f) ? starved : powf(starved, kStarvGamma);
+        const float term = powf(starved, kStarvGamma);
         weights[idx] *= (kStarvEps + term);
     }
 

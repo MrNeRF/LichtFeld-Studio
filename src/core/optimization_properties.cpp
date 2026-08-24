@@ -515,7 +515,7 @@ namespace lfs::core::param {
             .all_strategies()
             .bool_prop(&OptimizationParameters::use_edge_map,
                        "use_edge_map", "Edge Map", d.use_edge_map,
-                       "Weight MRNF refine signal by Sobel edge map on GT images")
+                       "Weight MRNF refine signal by Canny edge map on GT images")
             .locale("training.advanced.use_edge_map")
             .tooltip("training.tooltip.use_edge_map")
             .flags(PROP_ADVANCED)
@@ -528,7 +528,6 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.use_far_field")
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
-            .all_strategies()
             .float_prop(&OptimizationParameters::far_scene_min_fraction,
                         "far_scene_min_fraction", "Far Scene Min Fraction", d.far_scene_min_fraction, 0.0f, 1.0f,
                         "Minimum deep-far splat fraction that activates far-field features (0 = always on)")

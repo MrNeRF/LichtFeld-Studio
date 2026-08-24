@@ -555,8 +555,7 @@ namespace lfs::training {
         std::expected<lfs::core::Tensor, std::string> compute_opacity_reg_loss(
             lfs::core::SplatData& splatData,
             AdamOptimizer& optimizer,
-            const lfs::core::param::OptimizationParameters& opt_params,
-            float weight_override = -1.0f);
+            const lfs::core::param::OptimizationParameters& opt_params);
 
         // Sparsity optimization - returns GPU tensor (no CPU sync)
         std::expected<std::pair<lfs::core::Tensor, SparsityLossContext>, std::string> compute_sparsity_loss_forward(

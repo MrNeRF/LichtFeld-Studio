@@ -512,7 +512,6 @@ namespace lfs::training {
         lfs::core::Tensor& densification_info,
         const size_t n,
         const lfs::core::Device device,
-        const size_t /*reserve_cols*/,
         const size_t n_rows) {
         using namespace lfs::core;
         // densification_info is row-major [n_rows, N]: row k starts at offset k*N.

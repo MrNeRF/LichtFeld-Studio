@@ -56,7 +56,6 @@
 #include "rasterization/gsplat/Ops.h"
 #include "rasterization/gsplat_rasterizer.hpp"
 #include "strategies/mcmc.hpp"
-#include "strategies/mrnf.hpp"
 #include "strategies/strategy_factory.hpp"
 #include "strategies/strategy_utils.hpp"
 #include "training/kernels/camera_loss_heatmap.cuh"
@@ -1910,12 +1909,8 @@ namespace lfs::training {
     std::expected<lfs::core::Tensor, std::string> Trainer::compute_opacity_reg_loss(
         lfs::core::SplatData& splatData,
         AdamOptimizer& optimizer,
-        const lfs::core::param::OptimizationParameters& opt_params,
-        const float weight_override) {
-        // Round 22 experiment (Rule O): weight_override >= 0 carries the effective
-        // (churn-coupled) weight; the default keeps today's behavior exactly.
-        const float weight = weight_override >= 0.0f ? weight_override : opt_params.opacity_reg;
-        lfs::training::losses::OpacityRegularization::Params params{.weight = weight};
+        const lfs::core::param::OptimizationParameters& opt_params) {
+        lfs::training::losses::OpacityRegularization::Params params{.weight = opt_params.opacity_reg};
         return lfs::training::losses::OpacityRegularization::forward(splatData.opacity_raw(), optimizer.get_grad(ParamType::Opacity), params);
     }
 
@@ -5982,9 +5977,7 @@ namespace lfs::training {
                     auto& model = strategy_->get_model();
                     if (run_fastgs_gaussian_backward) {
                         fused_extra_gradients.scale_reg_weight = params_.optimization.scale_reg;
-                        // Round 22 experiment (Rule O): churn-coupled dose factor
-                        // multiplies the configured opacity_reg here (gradient AND
-                        // fused loss accumulation share this weight).
+                        // Fused path shares the configured opacity_reg weight between gradient and loss accumulation.
                         fused_extra_gradients.opacity_reg_weight =
                             params_.optimization.opacity_reg;
                         if (normal_supervision_started) {
@@ -7253,8 +7246,7 @@ namespace lfs::training {
                             loss_tensor_gpu = loss_tensor_gpu + fused_opacity_reg_loss_gpu;
                         } else {
                             auto opacity_loss_result = compute_opacity_reg_loss(
-                                strategy_->get_model(), strategy_->get_optimizer(), params_.optimization,
-                                params_.optimization.opacity_reg);
+                                strategy_->get_model(), strategy_->get_optimizer(), params_.optimization);
                             if (!opacity_loss_result) {
                                 return lfs::from_legacy_expected<StepDisposition>(
                                            std::unexpected(opacity_loss_result.error()),

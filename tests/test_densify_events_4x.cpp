@@ -295,9 +295,9 @@ TEST(DensifyEvents4x, ScoreBufferAppendZerosInPlace) {
 TEST(DensifyEvents4x, DensificationInfoReusesMatchingShape) {
     Tensor info = Tensor::zeros({2, 32}, Device::CUDA);
     float* p0 = info.ptr<float>();
-    ensure_densification_info_shape_inplace(info, 32, Device::CUDA, 0);
+    ensure_densification_info_shape_inplace(info, 32, Device::CUDA);
     EXPECT_EQ(info.ptr<float>(), p0); // same storage
-    ensure_densification_info_shape_inplace(info, 40, Device::CUDA, 0);
+    ensure_densification_info_shape_inplace(info, 40, Device::CUDA);
     EXPECT_EQ(info.shape()[1], 40u);
     EXPECT_NE(info.ptr<float>(), p0); // reallocated for new N
 }

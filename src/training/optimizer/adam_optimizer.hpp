@@ -142,11 +142,6 @@ namespace lfs::training {
                                      float r_max);
         void set_mean_step_far_mask(const bool* mask, int n);
         [[nodiscard]] bool per_splat_mean_step() const noexcept { return per_splat_mean_step_; }
-        [[nodiscard]] float mean_step_median_extent() const noexcept {
-            return mean_step_median_extent_;
-        }
-        [[nodiscard]] float mean_step_r_min() const noexcept { return mean_step_r_min_; }
-        [[nodiscard]] float mean_step_r_max() const noexcept { return mean_step_r_max_; }
         [[nodiscard]] const bool* mean_step_far_mask() const noexcept {
             return mean_step_far_mask_;
         }

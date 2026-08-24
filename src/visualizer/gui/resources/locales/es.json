@@ -375,7 +375,7 @@
     "tooltip.means_noise_weight": "Exploration noise multiplier for MRNF position updates",
     "tooltip.bounds_percentile": "Percentile used for MRNF bounds computation",
     "tooltip.use_error_map": "Weight MRNF refinement by the per-pixel SSIM error map",
-    "tooltip.use_edge_map": "Weight MRNF refinement by Sobel edges in ground-truth images",
+    "tooltip.use_edge_map": "Weight MRNF refinement by Canny edges in ground-truth images",
     "tooltip.use_far_field": "Activa splits, semillas, alivio de decaimiento, tope de crecimiento y pasos por splat de campo lejano MRNF",
     "tooltip.far_scene_min_fraction": "Fracción mínima de splats deep-far que activa las funciones de campo lejano (0 = siempre activo)",
     "tooltip.growth_ratio_rank": "Rank MRNF growth by visibility-normalized error (err/vis^p) instead of raw window error",

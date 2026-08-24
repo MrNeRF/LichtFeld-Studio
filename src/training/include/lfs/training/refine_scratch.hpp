@@ -54,16 +54,6 @@ namespace lfs::training {
             cub = Tensor::empty({new_cap}, device, DataType::UInt8);
             cub_bytes = new_cap;
         }
-
-        void release() noexcept {
-            keys = {};
-            indices = {};
-            keys_sorted = {};
-            indices_sorted = {};
-            cub = {};
-            n_capacity = 0;
-            cub_bytes = 0;
-        }
     };
 
     // Grow-only positive-median workspace; omitting scratch keeps the malloc path.
@@ -106,17 +96,6 @@ namespace lfs::training {
                 sort_temp = Tensor::empty({new_cap}, device, DataType::UInt8);
                 sort_temp_bytes = new_cap;
             }
-        }
-
-        void release() noexcept {
-            selected = {};
-            sorted = {};
-            count = {};
-            select_temp = {};
-            sort_temp = {};
-            n_capacity = 0;
-            select_temp_bytes = 0;
-            sort_temp_bytes = 0;
         }
     };
 

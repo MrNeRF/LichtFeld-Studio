@@ -12,10 +12,8 @@
 #include "core/sh_value_quant.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "edge_rasterizer.hpp"
-#include "io/pipelined_image_loader.hpp"
 #include "kernels/densification_kernels.hpp"
 #include "kernels/image_kernels.hpp"
-#include "kernels/mcmc_kernels.hpp"
 #include "kernels/mrnf_kernels.hpp"
 #include "lfs/training/mean_step_scale.cuh"
 #include "lfs/training/morton_reorder.hpp"
@@ -503,17 +501,6 @@ namespace lfs::training {
             splat_data.reconcile_deleted_mask();
         }
 
-        struct CannyWorkspace {
-            lfs::core::Tensor nms_output;
-        };
-
-        [[nodiscard]] CannyWorkspace create_canny_workspace(const int height, const int width) {
-            const auto dev = lfs::core::Device::CUDA;
-            const auto dt = lfs::core::DataType::Float32;
-            return {
-                lfs::core::Tensor::zeros({static_cast<size_t>(height), static_cast<size_t>(width)}, dev, dt)};
-        }
-
         void ensure_canny_workspace(lfs::core::Tensor& nms_output, const int height, const int width) {
             if (!nms_output.is_valid() ||
                 nms_output.ndim() != 2 ||
@@ -523,32 +510,6 @@ namespace lfs::training {
                     {static_cast<size_t>(height), static_cast<size_t>(width)},
                     lfs::core::Device::CUDA,
                     lfs::core::DataType::Float32);
-            }
-        }
-
-        void apply_canny_filter(const lfs::core::Tensor& input_data, CannyWorkspace& ws) {
-            assert(input_data.dtype() == lfs::core::DataType::Float32 ||
-                   input_data.dtype() == lfs::core::DataType::UInt8);
-            assert(input_data.device() == lfs::core::Device::CUDA);
-            assert(input_data.ndim() == 3);
-            assert(input_data.shape()[0] >= 3);
-
-            const int width = static_cast<int>(input_data.shape()[2]);
-            const int height = static_cast<int>(input_data.shape()[1]);
-
-            auto input_contig = input_data.contiguous();
-            if (input_contig.dtype() == lfs::core::DataType::UInt8) {
-                kernels::launch_fused_canny_edge_filter_chw(
-                    input_contig.ptr<uint8_t>(),
-                    ws.nms_output.ptr<float>(),
-                    height,
-                    width);
-            } else {
-                kernels::launch_fused_canny_edge_filter_chw(
-                    input_contig.ptr<float>(),
-                    ws.nms_output.ptr<float>(),
-                    height,
-                    width);
             }
         }
 
@@ -806,7 +767,6 @@ namespace lfs::training {
             _splat_data->_densification_info,
             n,
             _splat_data->means().device(),
-            _params && _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0,
             densification_row_count());
     }
 
@@ -848,7 +808,7 @@ namespace lfs::training {
     }
 
     bool MRNF::should_accumulate_explore_sample(int iter) const {
-        return far_field_requested() && kExploreSplits > 0 && far_operators_active() &&
+        return far_field_requested() && far_operators_active() &&
                should_accumulate_view_sample(iter);
     }
 
@@ -984,7 +944,7 @@ namespace lfs::training {
     }
 
     bool MRNF::should_cache_seed_view(int iter) const {
-        if (!far_field_requested() || kExploreSeeds <= 0) {
+        if (!far_field_requested()) {
             return false;
         }
         const int next_iter = iter + 1;
@@ -1357,7 +1317,7 @@ namespace lfs::training {
         }
 
         const bool growing = iter < effective_grow_until_iter();
-        const bool seed_far = growing && far_field_requested() && kExploreSeeds > 0;
+        const bool seed_far = growing && far_field_requested();
         int reserved_seeds = seed_far ? starved_cadence_count(kExploreSeeds) : 0;
         if (seed_far && cfg_seed_dose() > 0)
             reserved_seeds = std::max(reserved_seeds, cfg_seed_dose());
@@ -1431,10 +1391,6 @@ namespace lfs::training {
 
     int MRNF::cfg_seed_dose() const {
         return _params ? static_cast<int>(_params->far_seed_dose) : 0;
-    }
-
-    bool MRNF::cfg_seed_far_on() const {
-        return cfg_seed_dose() > 0;
     }
 
     bool MRNF::far_field_requested() const {
@@ -1543,8 +1499,7 @@ namespace lfs::training {
         _logged_degenerate_hull = false;
 
         constexpr float kDeepFarRadiusOrbits = 8.0f;
-        const float far_scene_min_fraction =
-            _params ? _params->far_scene_min_fraction : 0.01f;
+        const float far_scene_min_fraction = _params->far_scene_min_fraction;
         const size_t n_now = _splat_data ? static_cast<size_t>(_splat_data->size()) : 0;
         _scene_has_far_field = false;
         if (n_now > 0) {
@@ -1629,7 +1584,7 @@ namespace lfs::training {
         }
         const float denom = std::max(median_vis, std::numeric_limits<float>::epsilon());
         const float starved = std::clamp(1.0f - vis_i / denom, 0.0f, 1.0f);
-        const float term = (kStarvGamma == 1.0f) ? starved : std::pow(starved, kStarvGamma);
+        const float term = std::pow(starved, kStarvGamma);
         return kStarvEps + term;
     }
 
@@ -2059,7 +2014,7 @@ namespace lfs::training {
         }
         Tensor explore_inds;
         if (iter < effective_grow_until_iter() && far_field_requested() &&
-            kExploreSplits > 0 && far_operators_active()) {
+            far_operators_active()) {
             const int growth_count = (growth_inds.is_valid() ? static_cast<int>(growth_inds.numel()) : 0);
             const int remaining_budget = std::max(0, budget - actual_replace - growth_count);
             int n_explore = std::min(starved_cadence_count(kExploreSplits), remaining_budget);
@@ -2501,7 +2456,7 @@ namespace lfs::training {
         const float train_t = static_cast<float>(iter) / static_cast<float>(_params->iterations);
         const auto frozen_mask = make_frozen_mask(*_splat_data, n, _splat_data->means().device());
         const bool scale_far = far_field_requested() &&
-                               _camera_hull_valid && kFarDecayScale != 1.0f;
+                               _camera_hull_valid;
         if (scale_far) {
             refresh_far_field_mask(n);
         }
@@ -2847,7 +2802,7 @@ namespace lfs::training {
 
     void MRNF::seed_from_view(int iter, const RenderOutput& render_output) {
         using namespace lfs::core;
-        if (!far_field_requested() || kExploreSeeds <= 0 ||
+        if (!far_field_requested() ||
             iter >= effective_grow_until_iter() ||
             !_camera_hull_valid || !_bounds_valid) {
             return;
@@ -3038,7 +2993,8 @@ namespace lfs::training {
             if (a_p > 0.5f) {
                 const float depth_acc = d_ptr[i];
                 d_lo = (a_p > 1e-6f) ? (depth_acc / a_p) : depth_acc;
-            } else if (cfg_seed_far_on() && _orbit_radius > 0.0f) {
+            } else if (cfg_seed_dose() > 0 && _orbit_radius > 0.0f) {
+                // far seeding active: raise the transparent-pixel depth floor to the far shell
                 d_lo = std::max(d_lo, kFarMaskOrbits * _orbit_radius);
             }
             if (!(d_lo > 0.0f) || !(d_hi > d_lo) || !std::isfinite(d_lo) ||

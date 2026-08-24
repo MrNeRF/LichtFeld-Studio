@@ -58,12 +58,17 @@ namespace lfs::training::mrnf_strategy {
      * opac = sigmoid(raw_opac) - opacity_decay * (1 - train_t)
      * scale = exp(log_scale) * (1 - scale_decay * (1 - train_t))
      *
+     * Far-mask rows multiply both decay rates by far_decay_scale before applying.
+     *
      * @param raw_opacities [N] — raw opacities (modified in-place)
      * @param log_scales [N, 3] — log scales (modified in-place)
      * @param frozen_mask [N] — optional mask of rows that must not be modified
      * @param frozen_mask_size — number of entries in frozen_mask
+     * @param far_mask [N] — optional mask of far-field rows
+     * @param far_mask_size — number of entries in far_mask
      * @param opacity_decay — opacity decay rate
      * @param scale_decay — scale decay rate
+     * @param far_decay_scale — multiplier applied to opacity/scale decay for far-mask rows
      * @param train_t — current training progress [0, 1]
      * @param N — number of splats
      * @param stream — CUDA stream
@@ -139,7 +144,7 @@ namespace lfs::training::mrnf_strategy {
         size_t N,
         void* stream = nullptr);
 
-    // Baked per-splat exploration starvation weights (Round 23).
+    // Baked per-splat exploration starvation weights.
     inline constexpr float kStarvEps = 0.0026f;
     inline constexpr float kStarvGamma = 1.72f;
     inline constexpr float kExploreStarvDose = 2.38f;
@@ -147,7 +152,8 @@ namespace lfs::training::mrnf_strategy {
     /**
      * fold densification_info into vis_count (add row0) and refine_weight_max
      * (max of row1), then zero n_rows rows. When ratio_max is non-null, also
-     * keep the per-window max of err/max(vis, tiny) per element.
+     * keep the per-window max of vis >= 0.05 ? err/pow(vis, ratio_pow) : 0
+     * (plain err/vis when ratio_pow == 0).
      */
     void launch_fold_densification_and_zero(
         float* vis_count,
@@ -223,8 +229,8 @@ namespace lfs::training::mrnf_strategy {
         float* out_depth,
         void* stream = nullptr);
 
-    // Median of `n` values via one CUB radix-sort (sorted[n/2], matching
-    // the existing positive-median convention). out_median is host-side.
+    // Median of all `n` values via one CUB radix-sort (sorted[n/2]).
+    // Does not compact to positives. out_median is host-side.
     void launch_sorted_median(
         const float* values,
         size_t n,

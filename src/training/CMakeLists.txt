@@ -36,7 +36,6 @@ set(LFS_TRAINING_KERNEL_SOURCES
     kernels/roi_weight_map.cu
     kernels/image_kernels.cu
     kernels/mask_preprocess.cu
-    kernels/errmap_kernels.cu
     components/sparsity_optimizer_kernels.cu
 )
 

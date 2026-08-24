@@ -713,8 +713,7 @@ namespace lfs::training {
         {
             const size_t n = static_cast<size_t>(_splat_data->size());
             ensure_densification_info_shape_inplace(
-                _splat_data->_densification_info, n, _splat_data->means().device(),
-                _params && _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0);
+                _splat_data->_densification_info, n, _splat_data->means().device());
             ensure_error_score_shape();
 
             const auto& accum = _splat_data->_densification_info;
@@ -771,8 +770,7 @@ namespace lfs::training {
             ensure_densification_info_shape_inplace(
                 _splat_data->_densification_info,
                 static_cast<size_t>(_splat_data->size()),
-                _splat_data->means().device(),
-                _params && _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0);
+                _splat_data->means().device());
             _splat_data->_densification_info.zero_();
             ensure_error_score_shape();
             _error_score_max.zero_();

@@ -3,14 +3,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "photometric_loss.hpp"
-#include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "lfs/kernels/l1_loss.cuh"
 #include "lfs/kernels/loss_tensor_contract.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include <cstdint>
 #include <format>
-#include <mutex>
 
 namespace lfs::training::losses {
     namespace {
