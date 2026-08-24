@@ -128,6 +128,7 @@ class SelectionControlsController:
         self._frustum_half_width = _DEFAULT_FRUSTUM_HALF_WIDTH
         self._last_state_key = None
         self._last_state_items = None
+        self._depth_echo_holdoff = 0
         self._depth_text_bufs = {
             "selection_depth_near_str": None,
             "selection_depth_far_str": None,
@@ -214,7 +215,13 @@ class SelectionControlsController:
             self._last_state_items = None
             return ",".join(dirty_reasons) if dirty else None
 
+        previous_depth = (self._depth_near, self._depth_far)
         self._refresh_state()
+        # RmlUi range inputs echo stale values when attributes update in the same frame.
+        if (self._depth_near, self._depth_far) != previous_depth:
+            self._depth_echo_holdoff = 2
+        else:
+            self._depth_echo_holdoff = max(0, self._depth_echo_holdoff - 1)
         self._sync_depth_text_bufs()
         state_items = self._state_items()
         state_key = self._state_key(state_items)
@@ -232,6 +239,7 @@ class SelectionControlsController:
         self._visible = False
         self._last_state_key = None
         self._last_state_items = None
+        self._depth_echo_holdoff = 0
         self._editing_depth_text.clear()
         self._escape_revert.clear()
 
@@ -362,7 +370,7 @@ class SelectionControlsController:
             return False
 
     def _set_depth_near(self, value):
-        if not self._visible or self._last_state_key is None:
+        if not self._visible or self._last_state_key is None or self._depth_echo_holdoff > 0:
             return
         self._refresh_depth_state()
         near = _clamp(_parse_float(value, self._depth_near), _DEPTH_MIN, _DEPTH_MAX - _DEPTH_GAP)
@@ -370,7 +378,7 @@ class SelectionControlsController:
         self._apply_depth_range(self._depth_enabled, near, far)
 
     def _set_depth_far(self, value):
-        if not self._visible or self._last_state_key is None:
+        if not self._visible or self._last_state_key is None or self._depth_echo_holdoff > 0:
             return
         self._refresh_depth_state()
         far = _clamp(_parse_float(value, self._depth_far), self._depth_near + _DEPTH_GAP, _DEPTH_MAX)
