@@ -55,6 +55,7 @@
 #include <system_error>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -1051,6 +1052,19 @@ namespace {
         plan.images = collect_images(plan.images_dir, !flat_layout);
         if (plan.images.empty())
             throw std::runtime_error("No images found under " + path_to_string(plan.images_dir));
+
+        if (!params.image_paths.empty()) {
+            std::unordered_set<std::string> requested;
+            requested.reserve(params.image_paths.size());
+            for (const auto& path : params.image_paths)
+                requested.insert(path_to_string(fs::weakly_canonical(path)));
+            std::erase_if(plan.images, [&requested](const fs::path& path) {
+                return !requested.contains(path_to_string(fs::weakly_canonical(path)));
+            });
+            if (plan.images.empty())
+                throw std::runtime_error("None of the requested image_paths are under " +
+                                         path_to_string(plan.images_dir));
+        }
 
         plan.jobs.reserve(plan.images.size());
         for (const auto& image_path : plan.images) {
