@@ -132,6 +132,7 @@ target_include_directories(lichtfeld_format_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/include
     ${CMAKE_SOURCE_DIR}/src/io/include
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/rendering/include
     ${CMAKE_SOURCE_DIR}/tests
     ${CMAKE_BINARY_DIR}/include
 )
