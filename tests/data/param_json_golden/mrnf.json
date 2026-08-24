@@ -49,7 +49,7 @@
   "normal_auto_generate": true,
   "normal_consistency_weight": 0.0010000000474974513,
   "normal_end_fraction": 1.0,
-  "normal_flatten_weight": 0.125,
+  "normal_flatten_weight": 0.0,
   "normal_loss_space": "auto",
   "normal_loss_weight": 0.004999999888241291,
   "normal_start_fraction": 0.07999999821186066,
