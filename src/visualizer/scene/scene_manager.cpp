@@ -4706,6 +4706,9 @@ namespace lfs::vis {
         if (!hasGaussianClipboard() || gaussian_clipboard_->size() == 0)
             return {};
 
+        const auto history_options = sceneGraphCaptureOptions(false, false);
+        auto history_before = op::SceneGraphPatchEntry::captureState(*this, {}, history_options);
+
         const auto& src = *gaussian_clipboard_;
         auto data = std::make_unique<lfs::core::SplatData>(
             src.get_max_sh_degree(),
@@ -4763,6 +4766,7 @@ namespace lfs::vis {
         }
 
         LOG_INFO("Pasted {} Gaussians as '{}'", count, name);
+        pushSceneGraphHistoryEntry(*this, "Paste", std::move(history_before), {name}, history_options);
         return {name};
     }
 
@@ -4833,6 +4837,9 @@ namespace lfs::vis {
         if (!hasClipboard()) {
             return pasted_names;
         }
+
+        const auto history_options = sceneGraphCaptureOptions(false, false);
+        auto history_before = op::SceneGraphPatchEntry::captureState(*this, {}, history_options);
 
         pasted_names.reserve(clipboard_.size());
         core::Scene::Transaction txn(scene_);
@@ -4948,6 +4955,9 @@ namespace lfs::vis {
         }
 
         LOG_DEBUG("Pasted {} nodes", pasted_names.size());
+        if (!pasted_names.empty()) {
+            pushSceneGraphHistoryEntry(*this, "Paste", std::move(history_before), pasted_names, history_options);
+        }
         return pasted_names;
     }
 
