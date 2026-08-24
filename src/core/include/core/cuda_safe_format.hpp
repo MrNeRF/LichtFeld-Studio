@@ -46,6 +46,12 @@ namespace lfs::core::detail {
     // CUDA-parsed diagnostics use only default "{}" fields. Keep this
     // formatter scalar-only so nvcc never has to lower std::format or a helper
     // that returns formatting state as an aggregate.
+    //
+    // Do not #include <format> or call std::format from a .cu/.cuh TU, or from
+    // any header such a TU includes: nvcc's EDG frontend cannot parse MSVC's
+    // <format> (VS2022 host, CUDA 12.8), even though CUDA TUs compile as C++20.
+    // Host-only .cpp TUs may use std::format freely; see logger.hpp's
+    // __CUDACC__ split. Use format_cuda_safe here instead.
     template <typename T>
         requires std::is_unsigned_v<T>
     void append_cuda_safe_unsigned(std::string& output,
