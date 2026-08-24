@@ -12,8 +12,8 @@
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
-#include <format>
 #include <limits>
+#include <string>
 #include <thrust/copy.h>
 #include <thrust/count.h>
 #include <thrust/device_ptr.h>
@@ -41,6 +41,25 @@ namespace lfs::training::mrnf_strategy {
                 return w > 0.0f;
             }
         };
+
+        [[nodiscard]] std::string size_pair_message(
+            const char* message,
+            const char* lhs_name,
+            size_t lhs_value,
+            const char* rhs_name,
+            size_t rhs_value) {
+            std::string result(message);
+            result += " (";
+            result += lhs_name;
+            result += "=";
+            result += std::to_string(lhs_value);
+            result += ", ";
+            result += rhs_name;
+            result += "=";
+            result += std::to_string(rhs_value);
+            result += ")";
+            return result;
+        }
 
     } // namespace
 
@@ -407,10 +426,11 @@ namespace lfs::training::mrnf_strategy {
         fill_pos_inf_kernel<<<blocks, threads, 0, s>>>(d_sel, N);
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.median_extent_fill_inf");
 
+        const positive_weight positive_pred;
         auto select_op = [&](void* workspace, size_t& workspace_bytes) {
             return cub::DeviceSelect::If(
                 workspace, workspace_bytes, d_ext, d_sel, d_count,
-                n_int, positive_weight{}, s);
+                n_int, positive_pred, s);
         };
         size_t select_bytes = 0;
         LFS_CUDA_CHECK_MSG(select_op(nullptr, select_bytes), "MRNF median-extent select size");
@@ -526,13 +546,14 @@ namespace lfs::training::mrnf_strategy {
         if (compact_sparse) {
             if (known_nnz > 0) {
                 LFS_ASSERT_MSG(known_nnz <= N,
-                               std::format("Gumbel known_nnz must be <= N (known_nnz={}, N={})",
-                                           known_nnz, N));
+                               size_pair_message("Gumbel known_nnz must be <= N",
+                                                 "known_nnz", known_nnz, "N", N));
                 active_count = known_nnz;
             } else {
+                const positive_weight positive_pred;
                 active_count = static_cast<size_t>(
                     thrust::count_if(thrust::cuda::par.on(s), weights_ptr, weights_ptr + N,
-                                     positive_weight{}));
+                                     positive_pred));
             }
         }
 
@@ -552,9 +573,9 @@ namespace lfs::training::mrnf_strategy {
         if (scratch) {
             scratch->ensure_n(N, lfs::core::Device::CUDA);
             LFS_ASSERT_MSG(scratch->n_capacity >= sort_count,
-                           std::format("Gumbel scratch n_capacity must be >= sort_count "
-                                       "(cap={}, sort_count={})",
-                                       scratch->n_capacity, sort_count));
+                           size_pair_message("Gumbel scratch n_capacity must be >= sort_count",
+                                             "cap", scratch->n_capacity,
+                                             "sort_count", sort_count));
             LFS_ASSERT_MSG(scratch->keys.is_valid() && scratch->keys.ptr<float>() != nullptr,
                            "Gumbel scratch keys buffer must be a non-null CUDA f32 tensor");
             LFS_ASSERT_MSG(scratch->indices.is_valid() && scratch->indices.ptr<int64_t>() != nullptr,
@@ -592,13 +613,14 @@ namespace lfs::training::mrnf_strategy {
         if (compact_active) {
             auto indices_ptr = thrust::device_pointer_cast(d_indices);
             auto counting_begin = thrust::make_counting_iterator<int64_t>(0);
+            const positive_weight positive_pred;
             thrust::copy_if(
                 thrust::cuda::par.on(s),
                 counting_begin,
                 counting_begin + static_cast<std::ptrdiff_t>(N),
                 weights_ptr,
                 indices_ptr,
-                positive_weight{});
+                positive_pred);
             gumbel_key_for_indices_kernel<<<blocks, threads, 0, s>>>(
                 weights, d_indices, d_keys, sort_count, seed);
             LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.gumbel_keys_indices");
@@ -629,9 +651,9 @@ namespace lfs::training::mrnf_strategy {
             LFS_ASSERT_MSG(workspace_bytes == 0 ||
                                (scratch->cub.is_valid() && scratch->cub_bytes >= workspace_bytes &&
                                 scratch->cub.data_ptr() != nullptr),
-                           std::format("Gumbel CUB workspace must cover queried bytes "
-                                       "(have={}, need={})",
-                                       scratch->cub_bytes, workspace_bytes));
+                           size_pair_message("Gumbel CUB workspace must cover queried bytes",
+                                             "have", scratch->cub_bytes,
+                                             "need", workspace_bytes));
             LFS_CUDA_CHECK_MSG(
                 sort_pairs(workspace_bytes == 0 ? nullptr : scratch->cub.data_ptr(),
                            workspace_bytes),
