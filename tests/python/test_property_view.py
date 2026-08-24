@@ -1006,7 +1006,7 @@ def test_training_rml_mounts_every_run_with_writable_records():
     assert 'data-checked="row.checked"' in rml
     assert 'data-value="row.value"' in rml
     assert 'data-if="item.prop_id == row.id"' in rml
-    assert 'data-event-change="pv_value_change(row.id, row.checked)"' in rml
+    assert 'data-event-click="pv_value_change(row.id, !row.checked)"' in rml
     assert 'data-event-change="pv_value_change(row.id, ev.value)"' in rml
     assert 'data-pv-input="1"' in rml
     assert 'data-attr-data-pv-id="row.id"' in rml

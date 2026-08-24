@@ -750,10 +750,12 @@ class SectionBinding:
         if row is None:
             return False
         if row["kind"] == "checkbox":
-            if isinstance(value, str):
-                value = value.strip().lower() in {"1", "true", "yes", "on"}
-            else:
-                value = bool(value)
+            # Only the click binding produces booleans. String payloads are
+            # creation-time change echoes from the row template's data-if'd
+            # select element carrying this row's id; committing them corrupts
+            # the parameter (e.g. normal_auto_generate flipped off at startup).
+            if not isinstance(value, bool):
+                return False
         elif row["kind"] == "select":
             try:
                 value = int(value)

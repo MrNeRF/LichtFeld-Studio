@@ -123,7 +123,7 @@
                data-event-blur="pv_blur(row.id, row.text)"
                data-event-escapecancel="pv_escape(row.id)" />
         <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
-               data-event-change="pv_value_change(row.id, row.checked)" />
+               data-event-click="pv_value_change(row.id, !row.checked)" />
         <select data-if="row.kind == 'select'" data-value="row.value"
                 data-event-change="pv_value_change(row.id, ev.value)">
           <option data-for="item : pv_basic_struct_options" data-if="item.prop_id == row.id" data-attr-value="item.value"
@@ -157,7 +157,7 @@
            data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
-               data-event-change="pv_value_change(row.id, row.checked)" />
+               data-event-click="pv_value_change(row.id, !row.checked)" />
         <select data-if="row.kind == 'select'" data-value="row.value"
                 data-event-change="pv_value_change(row.id, ev.value)">
           <option data-for="item : pv_basic_live_start_options" data-if="item.prop_id == row.id" data-attr-value="item.value"
@@ -187,13 +187,13 @@
            data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
-               data-event-change="pv_value_change(row.id, row.checked)" />
+               data-event-click="pv_value_change(row.id, !row.checked)" />
       </div>
       <div class="setting-row" data-for="row : pv_basic_normal_weights_rows" data-if="dep_normal_loss &amp;&amp; row.kind == 'checkbox'"
            data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
-               data-event-change="pv_value_change(row.id, row.checked)" />
+               data-event-click="pv_value_change(row.id, !row.checked)" />
       </div>
       <div class="setting-row" data-for="row : pv_basic_normal_weights_rows" data-if="dep_normal_loss &amp;&amp; row.kind == 'number'"
            data-attr-data-tooltip="row.tooltip_key">
@@ -219,7 +219,7 @@
              data-attr-data-tooltip="row.tooltip_key">
           <span class="prop-label">{{row.label}}</span>
           <input type="checkbox" data-checked="row.checked"
-                 data-event-change="pv_value_change(row.id, row.checked)" />
+                 data-event-click="pv_value_change(row.id, !row.checked)" />
         </div>
         <div class="setting-row" data-for="row : pv_mask_threshold_rows" data-if="dep_mask_threshold"
              data-attr-data-tooltip="row.tooltip_key">
@@ -236,7 +236,7 @@
              data-attr-data-tooltip="row.tooltip_key">
           <span class="prop-label">{{row.label}}</span>
           <input type="checkbox" data-checked="row.checked"
-                 data-event-change="pv_value_change(row.id, row.checked)" />
+                 data-event-click="pv_value_change(row.id, !row.checked)" />
         </div>
         <div class="mask-settings-divider" data-if="dep_mask_segment"></div>
         <div data-if="dep_mask_segment">
@@ -257,26 +257,26 @@
            data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
-               data-event-change="pv_value_change(row.id, row.checked)" />
+               data-event-click="pv_value_change(row.id, !row.checked)" />
       </div>
       <div class="setting-row" data-for="row : pv_basic_gut_rows"
            data-attr-data-tooltip="row.tooltip_key" data-class-disabled-overlay="gut_disabled">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
-               data-event-change="pv_value_change(row.id, row.checked)" />
+               data-event-click="pv_value_change(row.id, !row.checked)" />
       </div>
       <div class="setting-row" data-for="row : pv_basic_after_gut_rows"
            data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
-               data-event-change="pv_value_change(row.id, row.checked)" />
+               data-event-click="pv_value_change(row.id, !row.checked)" />
       </div>
       <div data-if="dep_ppisp">
         <div class="setting-row" data-for="row : pv_ppisp_freeze_rows"
              data-attr-data-tooltip="row.tooltip_key">
           <span class="prop-label">{{row.label}}</span>
           <input type="checkbox" data-checked="row.checked"
-                 data-event-change="pv_value_change(row.id, row.checked)" />
+                 data-event-click="pv_value_change(row.id, !row.checked)" />
         </div>
         <div data-if="dep_ppisp_frozen_sidecar &amp;&amp; !pv_search_active">
           <div class="setting-row" data-tooltip="training.tooltip.ppisp_sidecar_path">
@@ -293,7 +293,7 @@
              data-attr-data-tooltip="row.tooltip_key">
           <span class="prop-label">{{row.label}}</span>
           <input type="checkbox" data-checked="row.checked"
-                 data-event-change="pv_value_change(row.id, row.checked)" />
+                 data-event-click="pv_value_change(row.id, !row.checked)" />
         </div>
         <div data-if="dep_ppisp_controller">
           <div class="setting-row" data-tooltip="training.tooltip.ppisp_activation_step" data-if="!pv_search_active">
@@ -312,7 +312,7 @@
                    data-event-blur="pv_blur(row.id, row.text)"
                    data-event-escapecancel="pv_escape(row.id)" />
             <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
-                   data-event-change="pv_value_change(row.id, row.checked)" />
+                   data-event-click="pv_value_change(row.id, !row.checked)" />
             <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, -1)">-</button>
             <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
           </div>
@@ -398,7 +398,7 @@
                data-attr-data-tooltip="row.tooltip_key">
             <span class="prop-label">{{row.label}}</span>
             <input type="checkbox" data-checked="row.checked"
-                   data-event-change="pv_value_change(row.id, row.checked)" />
+                   data-event-click="pv_value_change(row.id, !row.checked)" />
           </div>
           <div class="setting-row" data-if="dep_eval &amp;&amp; !pv_search_active" data-tooltip="training.tooltip.test_every">
             <span class="prop-label">{{label_test_every}}</span>
@@ -484,7 +484,7 @@
                    data-event-blur="pv_blur(row.id, row.text)"
                    data-event-escapecancel="pv_escape(row.id)" />
             <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
-                   data-event-change="pv_value_change(row.id, row.checked)" />
+                   data-event-click="pv_value_change(row.id, !row.checked)" />
             <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, -1)">-</button>
             <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
           </div>
@@ -561,7 +561,7 @@
                    data-event-blur="pv_blur(row.id, row.text)"
                    data-event-escapecancel="pv_escape(row.id)" />
             <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
-                   data-event-change="pv_value_change(row.id, row.checked)" />
+                   data-event-click="pv_value_change(row.id, !row.checked)" />
             <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, -1)">-</button>
             <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
           </div>
@@ -653,7 +653,7 @@
                    data-event-blur="pv_blur(row.id, row.text)"
                    data-event-escapecancel="pv_escape(row.id)" />
             <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
-                   data-event-change="pv_value_change(row.id, row.checked)" />
+                   data-event-click="pv_value_change(row.id, !row.checked)" />
             <select data-if="row.kind == 'select'" data-value="row.value"
                     data-event-change="pv_value_change(row.id, ev.value)">
               <option data-for="item : pv_advanced_registry_options" data-if="item.prop_id == row.id"
