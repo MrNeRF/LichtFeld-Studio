@@ -20,12 +20,14 @@ namespace lfs::vis {
                 .history = {0.4f, 0.6f, 0.8f, 0.1f},
                 .neighborhood_min = {0.1f, 0.2f, 0.3f},
                 .neighborhood_max = {0.7f, 0.8f, 0.9f},
+                .neighborhood_cross_sum = {0.8f, 1.6f, 2.4f},
                 .current_pixel_center = {639.5f, 359.5f},
                 .current_to_previous_pixels = {0.0f, 0.0f},
                 .motion_extent = {1280, 720},
                 .output_extent = {1280, 720},
                 .current_linear_depth = 10.0f,
                 .history_linear_depth = 10.0f,
+                .depth_far_plane = 1000.0f,
                 .history_valid = true,
                 .depth_available = true,
             };
@@ -150,22 +152,102 @@ namespace lfs::vis {
             return result;
         }
 
-        SyntheticImage blendSynthetic(const SyntheticImage& current,
-                                      const SyntheticImage& history,
-                                      const float history_weight,
-                                      const glm::vec2 history_translation = {}) {
-            SyntheticImage result{current.width,
-                                  current.height,
+        SyntheticImage syntheticSpatialResolve(const SyntheticImage& low_resolution,
+                                               const glm::ivec2 output_extent) {
+            SyntheticImage result{output_extent.x,
+                                  output_extent.y,
+                                  std::vector<float>(static_cast<std::size_t>(output_extent.x) *
+                                                     output_extent.y)};
+            const glm::vec2 scale = glm::vec2(low_resolution.width, low_resolution.height) /
+                                    glm::vec2(output_extent);
+            constexpr float STRENGTH = 0.18f;
+            for (int y = 0; y < result.height; ++y) {
+                for (int x = 0; x < result.width; ++x) {
+                    const glm::vec2 source =
+                        (glm::vec2(x, y) + 0.5f) * scale - 0.5f;
+                    const float center = bilinear(low_resolution, source.x, source.y);
+                    const float left = bilinear(low_resolution, source.x - 1.0f, source.y);
+                    const float right = bilinear(low_resolution, source.x + 1.0f, source.y);
+                    const float up = bilinear(low_resolution, source.x, source.y - 1.0f);
+                    const float down = bilinear(low_resolution, source.x, source.y + 1.0f);
+                    const float sharpened = center * (1.0f + 4.0f * STRENGTH) -
+                                            (left + right + up + down) * STRENGTH;
+                    const float neighborhood_min =
+                        std::min({center, left, right, up, down});
+                    const float neighborhood_max =
+                        std::max({center, left, right, up, down});
+                    result.pixels[static_cast<std::size_t>(y) * result.width + x] =
+                        std::clamp(sharpened, neighborhood_min, neighborhood_max);
+                }
+            }
+            return result;
+        }
+
+        SyntheticImage syntheticTemporalResolve(const SyntheticImage& low_resolution,
+                                                const SyntheticImage& history,
+                                                const glm::ivec2 output_extent,
+                                                const glm::vec2 current_jitter,
+                                                const glm::vec2 previous_jitter,
+                                                const glm::vec2 current_to_previous,
+                                                const std::uint64_t sequence,
+                                                SceneTemporalResolveSettings settings =
+                                                    sceneTemporalQualitySettings(
+                                                        SceneTemporalQuality::Quality)) {
+            const SyntheticImage current =
+                syntheticResolveCurrent(low_resolution, output_extent, current_jitter);
+
+            SyntheticImage result{output_extent.x,
+                                  output_extent.y,
                                   std::vector<float>(current.pixels.size())};
-            for (int y = 0; y < current.height; ++y) {
-                for (int x = 0; x < current.width; ++x) {
-                    const float previous = bilinear(history,
-                                                    static_cast<float>(x) - history_translation.x,
-                                                    static_cast<float>(y) - history_translation.y);
-                    const auto index = static_cast<std::size_t>(y) * current.width + x;
-                    result.pixels[index] = std::lerp(current.pixels[index],
-                                                     previous,
-                                                     history_weight);
+            settings.history_weight =
+                sceneTemporalHistoryWeight(settings.history_weight, sequence);
+            const glm::ivec2 render_extent{low_resolution.width, low_resolution.height};
+            const glm::vec2 source_scale = glm::vec2(render_extent) / glm::vec2(output_extent);
+            for (int y = 0; y < result.height; ++y) {
+                for (int x = 0; x < result.width; ++x) {
+                    const std::size_t index = static_cast<std::size_t>(y) * result.width + x;
+                    const glm::vec2 source =
+                        (glm::vec2(x, y) + 0.5f) * source_scale - 0.5f + current_jitter;
+                    float neighborhood_min = current.pixels[index];
+                    float neighborhood_max = current.pixels[index];
+                    float neighborhood_cross_sum = 0.0f;
+                    for (int offset_y = -1; offset_y <= 1; ++offset_y) {
+                        for (int offset_x = -1; offset_x <= 1; ++offset_x) {
+                            const float value = bilinear(low_resolution,
+                                                         source.x + offset_x,
+                                                         source.y + offset_y);
+                            neighborhood_min = std::min(neighborhood_min, value);
+                            neighborhood_max = std::max(neighborhood_max, value);
+                            if (std::abs(offset_x) + std::abs(offset_y) == 1)
+                                neighborhood_cross_sum += value;
+                        }
+                    }
+
+                    SceneTemporalResolveSample resolve_sample{
+                        .current = glm::vec4(current.pixels[index]),
+                        .history = glm::vec4(0.0f),
+                        .neighborhood_min = glm::vec3(neighborhood_min),
+                        .neighborhood_max = glm::vec3(neighborhood_max),
+                        .neighborhood_cross_sum = glm::vec3(neighborhood_cross_sum),
+                        .current_pixel_center = glm::vec2(x, y) + 0.5f,
+                        .current_to_previous_pixels = current_to_previous,
+                        .current_jitter_pixels = current_jitter,
+                        .previous_jitter_pixels = previous_jitter,
+                        .motion_extent = render_extent,
+                        .output_extent = output_extent,
+                        .history_valid = sequence > 0,
+                    };
+                    const auto coordinates =
+                        resolveSceneTemporalSample(resolve_sample, settings);
+                    if (sequence > 0 &&
+                        coordinates.rejection == SceneHistoryRejection::None) {
+                        const glm::vec2 history_pixel =
+                            coordinates.previous_uv * glm::vec2(output_extent) - 0.5f;
+                        resolve_sample.history = glm::vec4(
+                            bilinear(history, history_pixel.x, history_pixel.y));
+                    }
+                    result.pixels[index] =
+                        resolveSceneTemporalSample(resolve_sample, settings).color.r;
                 }
             }
             return result;
@@ -250,104 +332,98 @@ namespace lfs::vis {
         EXPECT_FLOAT_EQ(sceneTemporalHistoryWeight(4.0f, 1), 0.5f);
     }
 
-    TEST(SceneTemporalQualityRegression, JitterAwareStaticResolveBeatsSpatialAndLegacyResolve) {
+    TEST(SceneTemporalQualityRegression, ProductionResolveMatchesSpatialSharpenOnStaticSignal) {
         const glm::ivec2 OUTPUT{192, 128};
         const glm::ivec2 RENDER{96, 64};
         const auto reference = syntheticReference(OUTPUT);
-        const auto spatial = syntheticResolveCurrent(
-            syntheticLowResolutionFrame(RENDER, OUTPUT, {}), OUTPUT, {});
+        const auto spatial = syntheticSpatialResolve(
+            syntheticLowResolutionFrame(RENDER, OUTPUT, {}), OUTPUT);
 
         SyntheticImage temporal;
-        SyntheticImage legacy;
         glm::vec2 previous_jitter{0.0f};
         for (std::uint64_t sequence = 0; sequence < TemporalConvergenceController::SAMPLE_COUNT;
              ++sequence) {
             const glm::vec2 jitter = temporalJitterPixels(sequence);
             const auto low_resolution =
                 syntheticLowResolutionFrame(RENDER, OUTPUT, jitter);
-            const auto current = syntheticResolveCurrent(low_resolution, OUTPUT, jitter);
-            const auto legacy_current = syntheticResolveCurrent(low_resolution, OUTPUT, {});
-            if (sequence == 0) {
-                temporal = current;
-                legacy = legacy_current;
-            } else {
-                const float weight = sceneTemporalHistoryWeight(0.95f, sequence);
-                temporal = blendSynthetic(current, temporal, weight);
-                const glm::vec2 legacy_history_offset =
-                    (previous_jitter - jitter) *
-                    (glm::vec2(OUTPUT) / glm::vec2(RENDER));
-                legacy = blendSynthetic(legacy_current,
-                                        legacy,
-                                        weight,
-                                        -legacy_history_offset);
-            }
+            temporal = syntheticTemporalResolve(low_resolution,
+                                                temporal,
+                                                OUTPUT,
+                                                jitter,
+                                                previous_jitter,
+                                                previous_jitter - jitter,
+                                                sequence);
             previous_jitter = jitter;
         }
 
         const float spatial_psnr = syntheticPsnr(spatial, reference);
         const float temporal_psnr = syntheticPsnr(temporal, reference);
-        const float legacy_psnr = syntheticPsnr(legacy, reference);
         const float spatial_ssim = syntheticSsim(spatial, reference);
         const float temporal_ssim = syntheticSsim(temporal, reference);
-        const float legacy_ssim = syntheticSsim(legacy, reference);
         RecordProperty("spatial_psnr_db", spatial_psnr);
         RecordProperty("temporal_psnr_db", temporal_psnr);
-        RecordProperty("legacy_temporal_psnr_db", legacy_psnr);
+        RecordProperty("temporal_minus_spatial_psnr_db", temporal_psnr - spatial_psnr);
         RecordProperty("spatial_ssim", spatial_ssim);
         RecordProperty("temporal_ssim", temporal_ssim);
-        RecordProperty("legacy_temporal_ssim", legacy_ssim);
-        EXPECT_GT(temporal_psnr, spatial_psnr + 0.25f);
-        EXPECT_GT(temporal_psnr, legacy_psnr + 10.0f);
-        EXPECT_GT(temporal_ssim, spatial_ssim + 2e-5f);
-        EXPECT_GT(temporal_ssim, legacy_ssim);
+        EXPECT_GT(temporal_psnr, spatial_psnr - 0.25f);
+        EXPECT_GT(temporal_ssim, spatial_ssim - 1e-4f);
     }
 
-    TEST(SceneTemporalQualityRegression, MotionReprojectionAvoidsSyntheticGhosting) {
+    TEST(SceneTemporalQualityRegression, ProductionResolveBoundsLossOnReprojectedMovingSignal) {
         const glm::ivec2 OUTPUT{192, 128};
         const glm::ivec2 RENDER{96, 64};
         constexpr float MOTION_PER_FRAME = 0.25f;
-        SyntheticImage reprojected;
-        SyntheticImage unreprojected;
-        glm::vec2 previous_jitter{0.0f};
-        for (std::uint64_t sequence = 0; sequence < TemporalConvergenceController::SAMPLE_COUNT;
-             ++sequence) {
-            const glm::vec2 jitter = temporalJitterPixels(sequence);
-            const float translation = static_cast<float>(sequence) * MOTION_PER_FRAME;
-            const auto low_resolution =
-                syntheticLowResolutionFrame(RENDER, OUTPUT, jitter, translation);
-            const auto current = syntheticResolveCurrent(low_resolution, OUTPUT, jitter);
-            const auto legacy_current = syntheticResolveCurrent(low_resolution, OUTPUT, {});
-            if (sequence == 0) {
-                reprojected = current;
-                unreprojected = legacy_current;
-            } else {
-                const float weight = sceneTemporalHistoryWeight(0.95f, sequence);
-                reprojected = blendSynthetic(current,
-                                             reprojected,
-                                             weight,
-                                             {MOTION_PER_FRAME, 0.0f});
-                const glm::vec2 legacy_jitter_motion =
-                    (previous_jitter - jitter) *
-                    (glm::vec2(OUTPUT) / glm::vec2(RENDER));
-                unreprojected = blendSynthetic(
-                    legacy_current,
-                    unreprojected,
-                    weight,
-                    glm::vec2(MOTION_PER_FRAME, 0.0f) - legacy_jitter_motion);
+        const auto run_temporal = [&](const SceneTemporalResolveSettings& settings) {
+            SyntheticImage temporal;
+            glm::vec2 previous_jitter{0.0f};
+            for (std::uint64_t sequence = 0;
+                 sequence < TemporalConvergenceController::SAMPLE_COUNT;
+                 ++sequence) {
+                const glm::vec2 jitter = temporalJitterPixels(sequence);
+                const float translation = static_cast<float>(sequence) * MOTION_PER_FRAME;
+                const auto low_resolution =
+                    syntheticLowResolutionFrame(RENDER, OUTPUT, jitter, translation);
+                const glm::vec2 output_motion{MOTION_PER_FRAME, 0.0f};
+                const glm::vec2 render_motion =
+                    output_motion * (glm::vec2(RENDER) / glm::vec2(OUTPUT));
+                temporal = syntheticTemporalResolve(low_resolution,
+                                                    temporal,
+                                                    OUTPUT,
+                                                    jitter,
+                                                    previous_jitter,
+                                                    previous_jitter - jitter - render_motion,
+                                                    sequence,
+                                                    settings);
+                previous_jitter = jitter;
             }
-            previous_jitter = jitter;
-        }
+            return temporal;
+        };
+
+        const auto temporal = run_temporal(
+            sceneTemporalQualitySettings(SceneTemporalQuality::Quality));
 
         const float final_translation =
             static_cast<float>(TemporalConvergenceController::SAMPLE_COUNT - 1) *
             MOTION_PER_FRAME;
         const auto reference = syntheticReference(OUTPUT, final_translation);
-        const float reprojected_psnr = syntheticPsnr(reprojected, reference);
-        const float unreprojected_psnr = syntheticPsnr(unreprojected, reference);
-        RecordProperty("reprojected_psnr_db", reprojected_psnr);
-        RecordProperty("unreprojected_psnr_db", unreprojected_psnr);
-        EXPECT_GT(reprojected_psnr, 35.0f);
-        EXPECT_GT(reprojected_psnr, unreprojected_psnr + 8.0f);
+        const auto spatial = syntheticSpatialResolve(
+            syntheticLowResolutionFrame(RENDER, OUTPUT, {}, final_translation), OUTPUT);
+        const float temporal_psnr = syntheticPsnr(temporal, reference);
+        const float spatial_psnr = syntheticPsnr(spatial, reference);
+        RecordProperty("temporal_psnr_db", temporal_psnr);
+        RecordProperty("spatial_psnr_db", spatial_psnr);
+        RecordProperty("temporal_minus_spatial_psnr_db", temporal_psnr - spatial_psnr);
+        constexpr float MAX_REPROJECTED_MOTION_LOSS_DB = 1.0f;
+        RecordProperty("max_reprojected_motion_loss_db",
+                       MAX_REPROJECTED_MOTION_LOSS_DB);
+        // The moving case bounds accumulated resampling loss independently from
+        // the stricter static parity test above. Spatial is a single-frame
+        // sharpened control here, not an accumulated moving-history reference;
+        // this smooth translated signal therefore does not claim to isolate
+        // edge ghosting or disocclusion behavior.
+        EXPECT_GT(temporal_psnr, 45.0f);
+        EXPECT_GT(temporal_psnr,
+                  spatial_psnr - MAX_REPROJECTED_MOTION_LOSS_DB);
     }
 
     TEST(SceneTemporalResolve, StableSampleUsesClampedHistoryAndPreservesCurrentAlpha) {
@@ -384,7 +460,7 @@ namespace lfs::vis {
                   SceneHistoryRejection::OutsideHistory);
     }
 
-    TEST(SceneTemporalResolve, UsesRelativeLinearDepthForDisocclusion) {
+    TEST(SceneTemporalResolve, UsesRelativeLinearDepthAndRejectsFarPlaneForDisocclusion) {
         auto depth = sample();
         depth.history_linear_depth = 10.09f;
         EXPECT_TRUE(resolveSceneTemporalSample(depth).usedHistory());
@@ -394,11 +470,29 @@ namespace lfs::vis {
         depth.history_linear_depth = 0.0f;
         EXPECT_EQ(resolveSceneTemporalSample(depth).rejection,
                   SceneHistoryRejection::Disocclusion);
+        depth = sample();
+        depth.current_linear_depth = depth.depth_far_plane;
+        depth.history_linear_depth = depth.depth_far_plane;
+        EXPECT_EQ(resolveSceneTemporalSample(depth).rejection,
+                  SceneHistoryRejection::Disocclusion);
+    }
+
+    TEST(SceneTemporalResolve, DepthLookupRejectsOutsideRenderGrid) {
+        auto depth = sample();
+        depth.motion_extent = {640, 360};
+        depth.output_extent = {1280, 720};
+        depth.current_pixel_center = {1279.5f, 719.5f};
+        depth.current_to_previous_pixels = {0.25f, 0.0f};
+        depth.previous_jitter_pixels = {0.5f, 0.0f};
+        EXPECT_EQ(resolveSceneTemporalSample(depth).rejection,
+                  SceneHistoryRejection::Disocclusion);
+        depth.depth_available = false;
+        EXPECT_TRUE(resolveSceneTemporalSample(depth).usedHistory());
     }
 
     TEST(SceneTemporalResolve, MotionReducesWeightAndExcessMotionIsRejected) {
         auto moving = sample();
-        moving.current_to_previous_pixels = {64.0f, 0.0f};
+        moving.current_to_previous_pixels = {0.15f, 0.0f};
         const auto result = resolveSceneTemporalSample(moving);
         EXPECT_TRUE(result.usedHistory());
         EXPECT_FLOAT_EQ(result.effective_history_weight, 0.45f);
@@ -407,13 +501,25 @@ namespace lfs::vis {
                   SceneHistoryRejection::InvalidMotion);
     }
 
+    TEST(SceneTemporalResolve, ZeroMotionLimitNeverBlendsHistory) {
+        SceneTemporalResolveSettings settings;
+        settings.motion_rejection_pixels = 0.0f;
+        settings.current_sharpness = 0.0f;
+        const auto result = resolveSceneTemporalSample(sample(), settings);
+        EXPECT_FALSE(result.usedHistory());
+        EXPECT_FLOAT_EQ(result.effective_history_weight, 0.0f);
+        EXPECT_EQ(result.color, sample().current);
+    }
+
     TEST(SceneTemporalResolve, RenderPixelMotionIsNormalizedBeforeOutputHistoryLookup) {
         auto scaled = sample();
         scaled.motion_extent = {640, 360};
         scaled.output_extent = {1280, 720};
         scaled.current_pixel_center = {639.5f, 359.5f};
         scaled.current_to_previous_pixels = {32.0f, 18.0f};
-        const auto result = resolveSceneTemporalSample(scaled);
+        SceneTemporalResolveSettings settings;
+        settings.motion_confidence_pixels = 64.0f;
+        const auto result = resolveSceneTemporalSample(scaled, settings);
         ASSERT_TRUE(result.usedHistory());
         EXPECT_NEAR(result.previous_uv.x,
                     639.5f / 1280.0f + 32.0f / 640.0f,

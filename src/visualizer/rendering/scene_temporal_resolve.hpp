@@ -33,6 +33,8 @@ namespace lfs::vis {
         float depth_relative_threshold = 0.01f;
         float depth_absolute_threshold = 1e-4f;
         float motion_rejection_pixels = 128.0f;
+        float motion_confidence_pixels = 0.30f;
+        float current_sharpness = 0.10f;
     };
 
     [[nodiscard]] LFS_VIS_API SceneTemporalResolveSettings sceneTemporalQualitySettings(
@@ -52,6 +54,7 @@ namespace lfs::vis {
         glm::vec4 history{0.0f};
         glm::vec3 neighborhood_min{0.0f};
         glm::vec3 neighborhood_max{1.0f};
+        glm::vec3 neighborhood_cross_sum{0.0f};
         glm::vec2 current_pixel_center{0.0f};
         glm::vec2 current_to_previous_pixels{0.0f};
         glm::vec2 current_jitter_pixels{0.0f};
@@ -60,6 +63,7 @@ namespace lfs::vis {
         glm::ivec2 output_extent{0, 0};
         float current_linear_depth = 0.0f;
         float history_linear_depth = 0.0f;
+        float depth_far_plane = 0.0f;
         bool history_valid = false;
         bool depth_available = false;
     };

@@ -4264,6 +4264,8 @@ namespace lfs::vis::gui {
                         .current_allocation_extent = allocation_extent,
                         .history_weight = temporal_frame->resolve_settings.history_weight,
                         .motion_rejection_pixels = temporal_frame->resolve_settings.motion_rejection_pixels,
+                        .motion_confidence_pixels = temporal_frame->resolve_settings.motion_confidence_pixels,
+                        .current_sharpness = temporal_frame->resolve_settings.current_sharpness,
                         .current_depth = {
                             .enabled = true,
                             .view = TemporalViewId::Main,
@@ -4343,6 +4345,8 @@ namespace lfs::vis::gui {
                             .current_allocation_extent = allocation_extent,
                             .history_weight = panel.temporal_settings.history_weight,
                             .motion_rejection_pixels = panel.temporal_settings.motion_rejection_pixels,
+                            .motion_confidence_pixels = panel.temporal_settings.motion_confidence_pixels,
+                            .current_sharpness = panel.temporal_settings.current_sharpness,
                             .current_depth = {
                                 .enabled = true,
                                 .view = view,

@@ -82,6 +82,20 @@ namespace lfs::vis {
             result.rejection = SceneHistoryRejection::InvalidCurrent;
             return result;
         }
+        if (!finite(sample.neighborhood_min) || !finite(sample.neighborhood_max) ||
+            !finite(sample.neighborhood_cross_sum)) {
+            result.rejection = SceneHistoryRejection::InvalidCurrent;
+            return result;
+        }
+        const glm::vec3 lower = glm::min(sample.neighborhood_min, sample.neighborhood_max);
+        const glm::vec3 upper = glm::max(sample.neighborhood_min, sample.neighborhood_max);
+        const float current_sharpness = std::clamp(settings.current_sharpness, 0.0f, 0.25f);
+        const glm::vec3 reconstructed_current = glm::clamp(
+            glm::vec3(sample.current) * (1.0f + 4.0f * current_sharpness) -
+                sample.neighborhood_cross_sum * current_sharpness,
+            lower,
+            upper);
+        result.color = glm::vec4(reconstructed_current, sample.current.a);
         if (!sample.history_valid) {
             result.rejection = SceneHistoryRejection::NoHistory;
             return result;
@@ -116,9 +130,22 @@ namespace lfs::vis {
         }
 
         if (sample.depth_available) {
+            const glm::vec2 render_minimum_uv = 0.5f / render_extent;
+            const glm::vec2 render_maximum_uv = 1.0f - render_minimum_uv;
+            if (result.previous_render_uv.x < render_minimum_uv.x ||
+                result.previous_render_uv.y < render_minimum_uv.y ||
+                result.previous_render_uv.x > render_maximum_uv.x ||
+                result.previous_render_uv.y > render_maximum_uv.y) {
+                result.rejection = SceneHistoryRejection::Disocclusion;
+                return result;
+            }
             if (!std::isfinite(sample.current_linear_depth) ||
                 !std::isfinite(sample.history_linear_depth) ||
-                sample.current_linear_depth <= 0.0f || sample.history_linear_depth <= 0.0f) {
+                !std::isfinite(sample.depth_far_plane) ||
+                sample.current_linear_depth <= 0.0f || sample.history_linear_depth <= 0.0f ||
+                sample.depth_far_plane <= 0.0f ||
+                sample.current_linear_depth >= sample.depth_far_plane ||
+                sample.history_linear_depth >= sample.depth_far_plane) {
                 result.rejection = SceneHistoryRejection::Disocclusion;
                 return result;
             }
@@ -132,22 +159,24 @@ namespace lfs::vis {
             }
         }
 
-        if (!finite(sample.history) || !finite(sample.neighborhood_min) ||
-            !finite(sample.neighborhood_max)) {
+        if (!finite(sample.history)) {
             result.rejection = SceneHistoryRejection::InvalidHistory;
             return result;
         }
-        const glm::vec3 lower = glm::min(sample.neighborhood_min, sample.neighborhood_max);
-        const glm::vec3 upper = glm::max(sample.neighborhood_min, sample.neighborhood_max);
         const glm::vec3 clamped_history = glm::clamp(glm::vec3(sample.history), lower, upper);
         const float configured_weight = std::clamp(settings.history_weight, 0.0f, 1.0f);
-        const float motion_confidence = motion_limit > 0.0f
-                                            ? std::clamp(1.0f - motion_length / motion_limit,
-                                                         0.0f,
-                                                         1.0f)
-                                            : 1.0f;
+        const glm::vec2 jitter_motion =
+            sample.previous_jitter_pixels - sample.current_jitter_pixels;
+        const float geometric_motion_length =
+            glm::length(sample.current_to_previous_pixels - jitter_motion);
+        const float confidence_span = std::max(0.0f, settings.motion_confidence_pixels);
+        const float motion_confidence =
+            motion_limit > 0.0f && confidence_span > 0.0f &&
+                    std::isfinite(geometric_motion_length)
+                ? std::clamp(1.0f - geometric_motion_length / confidence_span, 0.0f, 1.0f)
+                : 0.0f;
         result.effective_history_weight = configured_weight * motion_confidence;
-        result.color = glm::vec4(glm::mix(glm::vec3(sample.current),
+        result.color = glm::vec4(glm::mix(reconstructed_current,
                                           clamped_history,
                                           result.effective_history_weight),
                                  sample.current.a);

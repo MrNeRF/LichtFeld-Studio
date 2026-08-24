@@ -67,6 +67,8 @@ namespace lfs::vis {
         bool history_valid = false;
         float history_weight = 0.9f;
         float motion_rejection_pixels = 128.0f;
+        float motion_confidence_pixels = 0.30f;
+        float current_sharpness = 0.10f;
         VulkanSceneDepthHistoryParams current_depth;
         float depth_relative_threshold = 0.01f;
         float depth_absolute_threshold = 1e-4f;

@@ -29,8 +29,9 @@ namespace lfs::vis {
             glm::vec4 current_uv{1.0f};
             glm::vec4 depth_control{0.0f};
             glm::vec4 jitter_pixels{0.0f};
+            glm::vec4 reconstruction{0.0f};
         };
-        static_assert(sizeof(ResolvePush) == 80);
+        static_assert(sizeof(ResolvePush) == 96);
 
         constexpr std::size_t viewIndex(const TemporalViewId view) {
             return static_cast<std::size_t>(view);
@@ -59,8 +60,8 @@ namespace lfs::vis {
         VkDevice device = VK_NULL_HANDLE;
         VmaAllocator allocator = VK_NULL_HANDLE;
         VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
-        VkSampler sampler = VK_NULL_HANDLE;
-        VkSampler depth_sampler = VK_NULL_HANDLE;
+        VkSampler linear_sampler = VK_NULL_HANDLE;
+        VkSampler nearest_sampler = VK_NULL_HANDLE;
         VkDescriptorSetLayout descriptor_layout = VK_NULL_HANDLE;
         VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
@@ -136,21 +137,22 @@ namespace lfs::vis {
                 vkDestroyPipelineLayout(device, pipeline_layout, nullptr);
             if (descriptor_layout != VK_NULL_HANDLE)
                 vkDestroyDescriptorSetLayout(device, descriptor_layout, nullptr);
-            if (sampler != VK_NULL_HANDLE)
-                vkDestroySampler(device, sampler, nullptr);
-            if (depth_sampler != VK_NULL_HANDLE)
-                vkDestroySampler(device, depth_sampler, nullptr);
+            if (linear_sampler != VK_NULL_HANDLE)
+                vkDestroySampler(device, linear_sampler, nullptr);
+            if (nearest_sampler != VK_NULL_HANDLE)
+                vkDestroySampler(device, nearest_sampler, nullptr);
             pipeline = VK_NULL_HANDLE;
             pipeline_layout = VK_NULL_HANDLE;
             descriptor_layout = VK_NULL_HANDLE;
-            sampler = VK_NULL_HANDLE;
-            depth_sampler = VK_NULL_HANDLE;
+            linear_sampler = VK_NULL_HANDLE;
+            nearest_sampler = VK_NULL_HANDLE;
         }
 
         [[nodiscard]] bool createStaticResources() {
             if (pipeline != VK_NULL_HANDLE)
                 return true;
-            if (sampler != VK_NULL_HANDLE || descriptor_layout != VK_NULL_HANDLE ||
+            if (linear_sampler != VK_NULL_HANDLE || nearest_sampler != VK_NULL_HANDLE ||
+                descriptor_layout != VK_NULL_HANDLE ||
                 pipeline_layout != VK_NULL_HANDLE)
                 destroyStaticResources();
 
@@ -162,9 +164,9 @@ namespace lfs::vis {
             sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
             sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
             sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-            if (!vk_try_bool(vkCreateSampler(device, &sampler_info, nullptr, &sampler),
-                             "vkCreateSampler(scene_temporal)",
-                             "Scene temporal sampler creation failed"))
+            if (!vk_try_bool(vkCreateSampler(device, &sampler_info, nullptr, &linear_sampler),
+                             "vkCreateSampler(scene_temporal.linear)",
+                             "Scene temporal linear sampler creation failed"))
                 return false;
 
             sampler_info.magFilter = VK_FILTER_NEAREST;
@@ -172,9 +174,9 @@ namespace lfs::vis {
             if (!vk_try_bool(vkCreateSampler(device,
                                              &sampler_info,
                                              nullptr,
-                                             &depth_sampler),
-                             "vkCreateSampler(scene_temporal.depth)",
-                             "Scene temporal depth sampler creation failed")) {
+                                             &nearest_sampler),
+                             "vkCreateSampler(scene_temporal.nearest)",
+                             "Scene temporal nearest sampler creation failed")) {
                 destroyStaticResources();
                 return false;
             }
@@ -402,19 +404,22 @@ namespace lfs::vis {
                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                              VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 
-            VkDescriptorImageInfo current_info{sampler,
+            VkDescriptorImageInfo current_info{linear_sampler,
                                                params.current_color_view,
                                                params.current_color_layout};
-            VkDescriptorImageInfo history_info{sampler,
+            VkDescriptorImageInfo history_info{linear_sampler,
                                                resource.has_history ? history.view
                                                                     : params.current_color_view,
                                                resource.has_history ? VK_IMAGE_LAYOUT_GENERAL
                                                                     : params.current_color_layout};
-            VkDescriptorImageInfo motion_info{sampler, params.motion_view, params.motion_layout};
+            // Motion vectors describe one rasterized surface sample. Linear filtering
+            // across primitive/disocclusion edges invents velocities and causes ghosting.
+            VkDescriptorImageInfo motion_info{
+                nearest_sampler, params.motion_view, params.motion_layout};
             VkDescriptorImageInfo current_depth_info{
-                depth_sampler, current_depth_view, current_depth_layout};
+                nearest_sampler, current_depth_view, current_depth_layout};
             VkDescriptorImageInfo history_depth_info{
-                depth_sampler, history_depth_view, history_depth_layout};
+                nearest_sampler, history_depth_view, history_depth_layout};
             VkDescriptorImageInfo output_info{VK_NULL_HANDLE, output.view, VK_IMAGE_LAYOUT_GENERAL};
             std::array<VkDescriptorImageInfo*, 6> infos{&current_info,
                                                         &history_info,
@@ -446,8 +451,9 @@ namespace lfs::vis {
                     depth_rejection ? 1.0f : 0.0f,
                     std::max(0.0f, params.depth_relative_threshold),
                     std::max(0.0f, params.depth_absolute_threshold),
-                    0.0f},
+                    depth_rejection ? params.current_depth.depth.far_plane : 0.0f},
                 .jitter_pixels = glm::vec4(current_jitter_pixels, previous_jitter_pixels),
+                .reconstruction = {std::clamp(params.current_sharpness, 0.0f, 0.25f), std::max(0.0f, params.motion_confidence_pixels), 0.0f, 0.0f},
             };
             vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
             context->vkCmdPushDescriptorSet()(command_buffer,
