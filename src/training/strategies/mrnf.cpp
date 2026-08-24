@@ -1509,21 +1509,27 @@ namespace lfs::training {
         const size_t n_now = _splat_data ? static_cast<size_t>(_splat_data->size()) : 0;
         _scene_has_far_field = false;
         if (n_now > 0) {
-            if (!_far_field_mask.is_valid() || _far_field_mask.numel() != n_now) {
-                _far_field_mask = lfs::core::Tensor::zeros_bool({n_now}, lfs::core::Device::CUDA);
+            if (far_scene_min_fraction <= 0.0f) {
+                _scene_has_far_field = (n_now > 0);
+                LOG_INFO("MRNF: deep-far census unconditional at threshold 0 (n={}, far features {})",
+                         n_now, _scene_has_far_field ? "active" : "inert");
+            } else {
+                if (!_far_field_mask.is_valid() || _far_field_mask.numel() != n_now) {
+                    _far_field_mask = lfs::core::Tensor::zeros_bool({n_now}, lfs::core::Device::CUDA);
+                }
+                mrnf_strategy::launch_far_field_mask(
+                    _splat_data->means().ptr<float>(),
+                    _cam_centroid[0], _cam_centroid[1], _cam_centroid[2],
+                    kDeepFarRadiusOrbits * _orbit_radius,
+                    _far_field_mask.ptr<bool>(), n_now);
+                const float far_frac =
+                    static_cast<float>(_far_field_mask.to(lfs::core::DataType::Int32).sum().item<int>()) /
+                    static_cast<float>(n_now);
+                _scene_has_far_field = far_frac >= far_scene_min_fraction;
+                LOG_INFO("MRNF: deep-far fraction {:.4f} at {}x orbit (threshold {:.2f}, far features {})",
+                         far_frac, kDeepFarRadiusOrbits, far_scene_min_fraction,
+                         _scene_has_far_field ? "active" : "inert");
             }
-            mrnf_strategy::launch_far_field_mask(
-                _splat_data->means().ptr<float>(),
-                _cam_centroid[0], _cam_centroid[1], _cam_centroid[2],
-                kDeepFarRadiusOrbits * _orbit_radius,
-                _far_field_mask.ptr<bool>(), n_now);
-            const float far_frac =
-                static_cast<float>(_far_field_mask.to(lfs::core::DataType::Int32).sum().item<int>()) /
-                static_cast<float>(n_now);
-            _scene_has_far_field = far_frac >= far_scene_min_fraction;
-            LOG_INFO("MRNF: deep-far fraction {:.4f} at {}x orbit (threshold {:.2f}, far features {})",
-                     far_frac, kDeepFarRadiusOrbits, far_scene_min_fraction,
-                     _scene_has_far_field ? "active" : "inert");
 
             if (!far_operators_active()) {
                 _camera_hull_valid = false;

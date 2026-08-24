@@ -437,6 +437,49 @@ TEST(ArgumentParserTest, MortonReorderIntervalFlag) {
     EXPECT_EQ((*parsed_1000)->optimization.morton_reorder_interval, 1000u);
 }
 
+TEST(ArgumentParserTest, MrnfKnobFlagsParseAndPopulateExplicitOverrides) {
+    const auto data_path = make_test_path("lfs_arg_parser_mrnf_knobs_data");
+    const auto output_path = make_test_path("lfs_arg_parser_mrnf_knobs_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--no-growth-ratio-rank",
+        "--growth-ratio-pow",
+        "0.5",
+        "--fill-pacing-iter",
+        "12000",
+        "--far-seed-dose",
+        "500"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    EXPECT_FALSE((*parsed)->optimization.growth_ratio_rank);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.growth_ratio_pow, 0.5f);
+    EXPECT_EQ((*parsed)->optimization.fill_pacing_iter, 12000u);
+    EXPECT_EQ((*parsed)->optimization.far_seed_dose, 500u);
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("growth_ratio_rank"));
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("growth_ratio_pow"));
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("fill_pacing_iter"));
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("far_seed_dose"));
+
+    lfs::core::param::TrainingParameters restored;
+    restored.optimization.growth_ratio_rank = true;
+    restored.optimization.growth_ratio_pow = 0.75f;
+    restored.optimization.fill_pacing_iter = 15'000;
+    restored.optimization.far_seed_dose = 2'000;
+    apply_explicit_training_overrides(restored, (*parsed)->overrides);
+    EXPECT_FALSE(restored.optimization.growth_ratio_rank);
+    EXPECT_FLOAT_EQ(restored.optimization.growth_ratio_pow, 0.5f);
+    EXPECT_EQ(restored.optimization.fill_pacing_iter, 12000u);
+    EXPECT_EQ(restored.optimization.far_seed_dose, 500u);
+}
+
 TEST(ArgumentParserTest, SafeModeIsProcessLocalAndNotATrainingConfigurationOption) {
     const auto data_path = make_test_path("lfs_arg_parser_safe_mode_data");
     const auto output_path = make_test_path("lfs_arg_parser_safe_mode_output");

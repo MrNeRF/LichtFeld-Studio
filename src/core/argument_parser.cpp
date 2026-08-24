@@ -52,6 +52,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--no-error-map", "use_error_map", Bool, true},
             OptimizationCliBinding{"--no-edge-map", "use_edge_map", Bool, true},
             OptimizationCliBinding{"--no-far-field", "use_far_field", Bool, true},
+            OptimizationCliBinding{"--no-growth-ratio-rank", "growth_ratio_rank", Bool, true},
             OptimizationCliBinding{"--bg-mode", "bg_mode", Enum, false,
                                    "; values: solidcolor, modulation, image, random", "solid_color", "solidcolor"},
             OptimizationCliBinding{"--random", "random", Bool},
@@ -85,6 +86,9 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--gut", "gut", Bool},
             OptimizationCliBinding{"--eval", "enable_eval", Bool},
             OptimizationCliBinding{"--far-scene-min-fraction", "far_scene_min_fraction", Float},
+            OptimizationCliBinding{"--growth-ratio-pow", "growth_ratio_pow", Float},
+            OptimizationCliBinding{"--fill-pacing-iter", "fill_pacing_iter", Integer},
+            OptimizationCliBinding{"--far-seed-dose", "far_seed_dose", Integer},
             OptimizationCliBinding{"--headless", "headless", Bool},
             OptimizationCliBinding{"--undistort", "undistort", Bool},
         };
@@ -445,7 +449,11 @@ namespace {
             ::args::Flag no_error_map(training_group, "no_error_map", lfs::core::args::optimization_cli_help("--no-error-map"), {"no-error-map"});
             ::args::Flag no_edge_map(training_group, "no_edge_map", lfs::core::args::optimization_cli_help("--no-edge-map"), {"no-edge-map"});
             ::args::Flag no_far_field(training_group, "no_far_field", lfs::core::args::optimization_cli_help("--no-far-field"), {"no-far-field"});
+            ::args::Flag no_growth_ratio_rank(training_group, "no_growth_ratio_rank", lfs::core::args::optimization_cli_help("--no-growth-ratio-rank"), {"no-growth-ratio-rank"});
             ::args::ValueFlag<float> far_scene_min_fraction(training_group, "fraction", lfs::core::args::optimization_cli_help("--far-scene-min-fraction"), {"far-scene-min-fraction"});
+            ::args::ValueFlag<float> growth_ratio_pow(training_group, "growth_ratio_pow", lfs::core::args::optimization_cli_help("--growth-ratio-pow"), {"growth-ratio-pow"});
+            ::args::ValueFlag<int> fill_pacing_iter(training_group, "fill_pacing_iter", lfs::core::args::optimization_cli_help("--fill-pacing-iter"), {"fill-pacing-iter"});
+            ::args::ValueFlag<int> far_seed_dose(training_group, "far_seed_dose", lfs::core::args::optimization_cli_help("--far-seed-dose"), {"far-seed-dose"});
             ::args::ValueFlag<std::string> bg_mode(training_group, "mode", lfs::core::args::optimization_cli_help("--bg-mode"), {"bg-mode"});
             ::args::ValueFlag<std::string> bg_color(training_group, "color", "solidcolor background color as #RRGGBB or (R,G,B) with 0-255 channels (default: #000000)", {"bg-color"});
             ::args::ValueFlag<std::string> bg_image_path(training_group, "path", "Background image path (required when --bg-mode image)", {"bg-image-path"});
@@ -1107,7 +1115,11 @@ namespace {
                                         no_error_map_flag = bool(no_error_map),
                                         no_edge_map_flag = bool(no_edge_map),
                                         no_far_field_flag = bool(no_far_field),
+                                        no_growth_ratio_rank_flag = bool(no_growth_ratio_rank),
                                         far_scene_min_fraction_val = cli_option_present({"--far-scene-min-fraction"}) ? std::optional<float>(::args::get(far_scene_min_fraction)) : std::optional<float>(),
+                                        growth_ratio_pow_val = cli_option_present({"--growth-ratio-pow"}) ? std::optional<float>(::args::get(growth_ratio_pow)) : std::optional<float>(),
+                                        fill_pacing_iter_val = cli_option_present({"--fill-pacing-iter"}) ? std::optional<int>(::args::get(fill_pacing_iter)) : std::optional<int>(),
+                                        far_seed_dose_val = cli_option_present({"--far-seed-dose"}) ? std::optional<int>(::args::get(far_seed_dose)) : std::optional<int>(),
                                         eval_steps_val = cli_option_present({"--eval-steps"}) ? std::optional<std::vector<int>>(::args::get(eval_steps)) : std::optional<std::vector<int>>(),
                                         freeze_lr_scale_val = cli_option_present({"--freeze-lr-scale"}) ? std::optional<float>(::args::get(freeze_lr_scale)) : std::optional<float>(),
                                         exclude_export_flag = bool(exclude_export),
@@ -1249,7 +1261,12 @@ namespace {
                     opt.use_edge_map = false;
                 if (no_far_field_flag)
                     opt.use_far_field = false;
+                if (no_growth_ratio_rank_flag)
+                    opt.growth_ratio_rank = false;
                 setVal(far_scene_min_fraction_val, opt.far_scene_min_fraction);
+                setVal(growth_ratio_pow_val, opt.growth_ratio_pow);
+                setVal(fill_pacing_iter_val, opt.fill_pacing_iter);
+                setVal(far_seed_dose_val, opt.far_seed_dose);
                 if (eval_steps_val && !eval_steps_val->empty()) {
                     opt.eval_steps.clear();
                     for (const int step : *eval_steps_val) {
@@ -1350,7 +1367,11 @@ namespace {
                 note_opt("use_error_map", no_error_map_flag);
                 note_opt("use_edge_map", no_edge_map_flag);
                 note_opt("use_far_field", no_far_field_flag);
+                note_opt("growth_ratio_rank", no_growth_ratio_rank_flag);
                 note_opt("far_scene_min_fraction", far_scene_min_fraction_val.has_value());
+                note_opt("growth_ratio_pow", growth_ratio_pow_val.has_value());
+                note_opt("fill_pacing_iter", fill_pacing_iter_val.has_value());
+                note_opt("far_seed_dose", far_seed_dose_val.has_value());
                 note_opt("eval_steps", eval_steps_val && !eval_steps_val->empty());
                 note_opt("mask_mode", mask_mode_val.has_value());
                 note_opt("invert_masks", invert_masks_flag);

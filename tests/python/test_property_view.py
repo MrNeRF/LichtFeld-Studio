@@ -574,6 +574,10 @@ def test_strategy_applicability_filters_auto_rows_and_search(lf):
         "use_edge_map",
         "use_far_field",
         "far_scene_min_fraction",
+        "growth_ratio_rank",
+        "growth_ratio_pow",
+        "fill_pacing_iter",
+        "far_seed_dose",
     }
     auto_mrnf_only = known_mrnf_only - {"grow_until_iter"}
     for prop_id in known_mrnf_only:
