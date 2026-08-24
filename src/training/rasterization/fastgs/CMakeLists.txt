@@ -11,6 +11,7 @@ set(FASTLFS_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/rasterization/src/backward.cu
         # optimizer
         ${CMAKE_CURRENT_SOURCE_DIR}/optimizer/src/adam_api.cu
+        ${CMAKE_CURRENT_SOURCE_DIR}/optimizer/src/adam_shN_joint.cu
 )
 
 # One unified library - renamed from fastgs_backend to fastlfs_backend
@@ -47,6 +48,10 @@ target_compile_options(fastlfs_backend PRIVATE
   # CUDA device code + MSVC host compiler flags (Windows only)
   $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:-O0 -g -lineinfo -Xcompiler=/Od -Xcompiler=/Z7>
   $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:-O3 --use_fast_math --expt-relaxed-constexpr --diag-suppress=20012,186,221 -Xcompiler=/O2 -Xcompiler=/DNDEBUG>
+
+  # CUDA device code for non-Windows (same device flags as the MSVC branch)
+  $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<NOT:$<CXX_COMPILER_ID:MSVC>>,$<CONFIG:Debug>>:-O0 -g -lineinfo>
+  $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<NOT:$<CXX_COMPILER_ID:MSVC>>,$<CONFIG:Release>>:-O3 --use_fast_math --expt-relaxed-constexpr --diag-suppress=20012,186,221>
 
   # CUDA on Windows: Pass /utf-8 to MSVC when invoked by nvcc
   $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>>:

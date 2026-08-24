@@ -3,8 +3,10 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 
+#include <filesystem>
 #include <memory>
 #include <string>
 
@@ -43,6 +45,8 @@ namespace lfs::vis {
         [[nodiscard]] bool cameraViewSnap();
         void setRememberCameraViewSnap(bool enabled);
         [[nodiscard]] bool rememberCameraViewSnap();
+        void setSceneGraphSelectionMarkers(bool enabled);
+        [[nodiscard]] bool sceneGraphSelectionMarkers();
 
         void setMcp(const McpPreferenceState& state);
         [[nodiscard]] McpPreferenceState mcp();
@@ -51,6 +55,11 @@ namespace lfs::vis {
         void clearSceneUpscaler();
         [[nodiscard]] std::string sceneUpscaler();
         [[nodiscard]] std::string sceneUpscalerPreset(const std::string& backend_id);
+
+        [[nodiscard]] lfs::Status setWorkingDirectory(const std::filesystem::path& path);
+        [[nodiscard]] std::filesystem::path workingDirectory();
+        [[nodiscard]] std::filesystem::path workingDirectoryPreference();
+        void clearWorkingDirectory();
 
     private:
         UserPreferences();
@@ -70,6 +79,8 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API bool loadCameraViewSnapPreference();
     LFS_VIS_API void setRememberCameraViewSnapPreference(bool enabled);
     [[nodiscard]] LFS_VIS_API bool rememberCameraViewSnapPreference();
+    LFS_VIS_API void saveSceneGraphSelectionMarkersPreference(bool enabled);
+    [[nodiscard]] LFS_VIS_API bool loadSceneGraphSelectionMarkersPreference();
     LFS_VIS_API void saveMcpPreferences(const McpPreferenceState& state);
     [[nodiscard]] LFS_VIS_API McpPreferenceState loadMcpPreferences();
     LFS_VIS_API void saveSceneUpscalerPreference(const std::string& backend_id,
@@ -78,5 +89,13 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API std::string loadSceneUpscalerPreference();
     [[nodiscard]] LFS_VIS_API std::string loadSceneUpscalerPresetPreference(
         const std::string& backend_id);
+
+    [[nodiscard]] LFS_VIS_API lfs::Status
+    setWorkingDirectoryPreference(const std::filesystem::path& path);
+    [[nodiscard]] LFS_VIS_API std::filesystem::path loadWorkingDirectoryPreference();
+    [[nodiscard]] LFS_VIS_API std::filesystem::path workingDirectoryPreferenceRaw();
+    LFS_VIS_API void clearWorkingDirectoryPreference();
+    [[nodiscard]] LFS_VIS_API std::filesystem::path defaultWorkingDirectory();
+    [[nodiscard]] LFS_VIS_API std::filesystem::path tempProjectDirectoryPreference();
 
 } // namespace lfs::vis

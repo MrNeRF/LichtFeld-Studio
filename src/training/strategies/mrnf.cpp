@@ -16,6 +16,7 @@
 #include "kernels/image_kernels.hpp"
 #include "kernels/mcmc_kernels.hpp"
 #include "kernels/mrnf_kernels.hpp"
+#include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/perf_bench.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
@@ -887,6 +888,14 @@ namespace lfs::training {
             _splat_data->increment_sh_degree();
         }
         publish_vram_attribution();
+    }
+
+    void MRNF::permute_gaussian_rows(const lfs::core::Tensor& perm) {
+        morton::permute_row_tensor(_refine_weight_max, perm);
+        morton::permute_row_tensor(_vis_count, perm);
+        morton::permute_row_tensor(_precomputed_edge_scores, perm);
+        morton::permute_row_tensor(_edge_score_sum, perm);
+        morton::permute_row_tensor(_free_mask, perm);
     }
 
     bool MRNF::is_refining(int iter) const {

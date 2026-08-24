@@ -7,9 +7,47 @@
 #include "optimizer_config.h"
 #include "utils.h"
 
+#include <algorithm>
 #include <cstddef>
+#include <cstring>
+#include <stdexcept>
 
 namespace fast_lfs::optimizer {
+
+    namespace {
+        constexpr int kMaxContiguousBatch = 6;
+
+        struct BatchTableCache {
+            JointContiguousBatchEntry* pinned = nullptr;
+            JointContiguousBatchEntry* device = nullptr;
+            int cap = 0;
+
+            void ensure(int n, cudaStream_t stream) {
+                if (n <= cap && pinned && device) {
+                    return;
+                }
+                JointContiguousBatchEntry* h = nullptr;
+                JointContiguousBatchEntry* d = nullptr;
+                LFS_CUDA_CHECK(cudaMallocHost(&h, sizeof(JointContiguousBatchEntry) * kMaxContiguousBatch));
+                LFS_CUDA_CHECK(cudaMalloc(&d, sizeof(JointContiguousBatchEntry) * kMaxContiguousBatch));
+                if (pinned) {
+                    (void)cudaFreeHost(pinned);
+                }
+                if (device) {
+                    (void)cudaFree(device);
+                }
+                pinned = h;
+                device = d;
+                cap = kMaxContiguousBatch;
+                (void)stream;
+            }
+        };
+
+        BatchTableCache& batch_table() {
+            static thread_local BatchTableCache cache;
+            return cache;
+        }
+    } // namespace
 
     void adam_step_joint_contiguous_raw(
         float* param,
@@ -59,6 +97,55 @@ namespace fast_lfs::optimizer {
             throw std::runtime_error("adam_step_joint_contiguous: bits must be 8 or 16");
         }
         LFS_CUDA_LAUNCH_CHECK(stream, "adam_step_joint_contiguous_raw");
+    }
+
+    void adam_step_joint_contiguous_batched(
+        const JointContiguousBatchEntry* host_entries,
+        const int n_entries,
+        const bool* frozen_mask,
+        const int frozen_mask_size,
+        const float frozen_lr_scale,
+        const bool* crop_damping_mask,
+        const int crop_damping_mask_size,
+        const float cropbox_lr_scale,
+        const float beta1,
+        const float beta2,
+        const float eps,
+        cudaStream_t stream) {
+        if (n_entries <= 0) {
+            return;
+        }
+        if (n_entries > kMaxContiguousBatch) {
+            throw std::runtime_error("adam_step_joint_contiguous_batched: too many entries");
+        }
+        int max_prims = 0;
+        for (int i = 0; i < n_entries; ++i) {
+            if (!host_entries[i].param || !host_entries[i].packed ||
+                !host_entries[i].bounds || !host_entries[i].grad) {
+                throw std::runtime_error("adam_step_joint_contiguous_batched: null entry");
+            }
+            if (host_entries[i].n_prims <= 0 || host_entries[i].n_attr <= 0) {
+                throw std::runtime_error("adam_step_joint_contiguous_batched: n_prims/n_attr");
+            }
+            max_prims = std::max(max_prims, host_entries[i].n_prims);
+        }
+        auto& cache = batch_table();
+        cache.ensure(n_entries, stream);
+        std::memcpy(cache.pinned, host_entries,
+                    sizeof(JointContiguousBatchEntry) * static_cast<size_t>(n_entries));
+        LFS_CUDA_CHECK(cudaMemcpyAsync(
+            cache.device, cache.pinned,
+            sizeof(JointContiguousBatchEntry) * static_cast<size_t>(n_entries),
+            cudaMemcpyHostToDevice, stream));
+        constexpr int kBS = 256;
+        const int n_blocks = (max_prims + kBS - 1) / kBS;
+        const dim3 grid(n_blocks, n_entries);
+        kernels::adam::adam_step_joint_contiguous_batched_cu<16><<<grid, kBS, 0, stream>>>(
+            cache.device, n_entries,
+            frozen_mask, frozen_mask_size, frozen_lr_scale,
+            crop_damping_mask, crop_damping_mask_size, cropbox_lr_scale,
+            beta1, beta2, eps);
+        LFS_CUDA_LAUNCH_CHECK(stream, "adam_step_joint_contiguous_batched");
     }
 
     void joint_encode_zero_rows_at_indices(

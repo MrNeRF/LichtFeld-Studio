@@ -9,6 +9,28 @@
     image-color: @{primary};
 }
 
+#training-search-container {
+    background-color: @{surface};
+    border-color: @{border};
+}
+
+#training-search-input {
+    color: @{text};
+}
+
+#training-search-icon {
+    image-color: @{text_dim};
+}
+
+#training-search-clear img {
+    image-color: @{text_dim};
+}
+
+#training-search-clear:hover img,
+#training-search-clear:focus-visible img {
+    image-color: @{text};
+}
+
 .training-subsection-title {
     color: @{text_dim};
     border-top-color: @{panel.primary_border_faint};

@@ -16,7 +16,7 @@ from .layouts.menus import (
     register_menu,
 )
 from .import_panels import open_dataset_import_panel, open_resume_checkpoint_panel
-from .training_confirm import _confirm_stop_training_then, _project_has_path
+from .training_confirm import _project_has_path, confirm_discard_work_then
 
 __lfs_menu_classes__ = ["FileMenu"]
 
@@ -77,33 +77,6 @@ def _open_checkpoint_import_checked(path: str) -> None:
         raise RuntimeError("checkpoint import dialog is unavailable")
 
 
-def _confirm_discard_then(title: str, callback) -> None:
-    if not lf.project_is_dirty():
-        callback()
-        return
-
-    tr = lf.ui.tr
-    continue_label = title
-
-    def _on_result(button):
-        if button == continue_label:
-            callback()
-
-    lf.ui.confirm_dialog(
-        title,
-        tr("exit_popup.unsaved_warning"),
-        [continue_label, tr("common.cancel")],
-        _on_result,
-    )
-
-
-def _confirm_switch_then(title: str, callback) -> None:
-    _confirm_discard_then(
-        title,
-        lambda: _confirm_stop_training_then(callback),
-    )
-
-
 def _offer_remove_missing_recent(path: str) -> None:
     tr = lf.ui.tr
     remove_label = tr("menu.file.remove_from_recent")
@@ -151,7 +124,7 @@ def _open_recent_project(path: str) -> None:
     if not Path(path).is_file():
         _offer_remove_missing_recent(path)
         return
-    _confirm_switch_then(
+    confirm_discard_work_then(
         lf.ui.tr("menu.file.open_project"),
         lambda stop_training: _open_recent_checked(path, stop_training),
     )
@@ -179,7 +152,7 @@ class NewProjectOperator(Operator):
     description = "Clear the scene to start a new project"
 
     def execute(self, context) -> set:
-        _confirm_switch_then(
+        confirm_discard_work_then(
             lf.ui.tr("menu.file.new_project"),
             lambda stop_training: _new_project(True, stop_training),
         )
@@ -191,7 +164,7 @@ class OpenProjectOperator(Operator):
     description = "Open a LichtFeld project"
 
     def execute(self, context) -> set:
-        _confirm_switch_then(
+        confirm_discard_work_then(
             lf.ui.tr("menu.file.open_project"),
             lambda stop_training: _open_project("", True, stop_training),
         )
@@ -411,7 +384,7 @@ def _show_project_switch_confirmation(
         callback = lambda stop_training: _open_project(
             path, True, stop_training
         )
-    _confirm_switch_then(title, callback)
+    confirm_discard_work_then(title, callback)
 
 
 def _show_stop_training_confirmation(
@@ -435,6 +408,24 @@ def _show_stop_training_confirmation(
         [yes_label, no_label],
         _on_result,
     )
+
+
+def _show_load_file_confirmation(paths, is_dataset: bool, replace: bool) -> None:
+    title = lf.ui.tr(
+        "load_dataset_popup.save_title" if is_dataset else "unsaved_work.title"
+    )
+
+    def _proceed(stop_training: bool) -> None:
+        for i, path in enumerate(paths):
+            lf.load_file(
+                path,
+                is_dataset=is_dataset,
+                discard_changes=True,
+                replace=(replace and i == 0),
+                stop_training=stop_training,
+            )
+
+    confirm_discard_work_then(title, _proceed)
 
 
 def _on_show_dataset_load_popup(path: str):
@@ -560,6 +551,9 @@ def register():
     lf.ui.on_request_exit(_show_exit_confirmation)
     lf.ui.on_project_switch_confirmation(
         _show_project_switch_confirmation
+    )
+    lf.ui.on_show_load_file_confirmation(
+        _show_load_file_confirmation
     )
     lf.ui.on_stop_training_confirmation(
         _show_stop_training_confirmation

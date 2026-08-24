@@ -171,6 +171,7 @@ namespace lfs::core {
             stop_refine = apply(stop_refine);
             reset_every = apply(reset_every);
             refine_every = apply(refine_every);
+            morton_reorder_interval = apply(morton_reorder_interval);
             sh_degree_interval = apply(sh_degree_interval);
             grow_until_iter = apply(grow_until_iter);
 
@@ -201,6 +202,18 @@ namespace lfs::core {
             const int base_iters = static_cast<int>(iterations);
             const int sparse_tail = enable_sparsity ? std::max(0, sparsify_steps) : 0;
             return base_iters + sparse_tail;
+        }
+
+        bool OptimizationParameters::normal_supervision_active(const int iter) const {
+            if (!use_normal_loss)
+                return false;
+            const float total_f = static_cast<float>(std::max(1, resolved_total_iterations()));
+            const int start_iter = static_cast<int>(normal_start_fraction * total_f);
+            if (iter < start_iter)
+                return false;
+            // 1.0 keeps supervision on through the inclusive last iteration.
+            return normal_end_fraction >= 1.0f ||
+                   static_cast<float>(iter) < normal_end_fraction * total_f;
         }
 
         int OptimizationParameters::resolved_ppisp_controller_activation_step(const int total_iterations) const {
@@ -250,6 +263,9 @@ namespace lfs::core {
                 return std::format("iterations must be within [1, {}] (got {})", MAX_ITERATION_VALUE, iterations);
             if (refine_every == 0 || refine_every > MAX_ITERATION_VALUE)
                 return std::format("refine_every must be within [1, {}] (got {})", MAX_ITERATION_VALUE, refine_every);
+            if (morton_reorder_interval > MAX_ITERATION_VALUE)
+                return std::format("morton_reorder_interval must be within [0, {}] (got {})",
+                                   MAX_ITERATION_VALUE, morton_reorder_interval);
             if (reset_every == 0 || reset_every > MAX_ITERATION_VALUE)
                 return std::format("reset_every must be within [1, {}] (got {})", MAX_ITERATION_VALUE, reset_every);
             if (sh_degree_interval == 0 || sh_degree_interval > MAX_ITERATION_VALUE)
@@ -324,6 +340,8 @@ namespace lfs::core {
                 std::pair{"scale_decay", scale_decay},
                 std::pair{"bounds_percentile", bounds_percentile},
                 std::pair{"prune_ratio", prune_ratio},
+                std::pair{"normal_start_fraction", normal_start_fraction},
+                std::pair{"normal_end_fraction", normal_end_fraction},
             };
             for (const auto& [name, value] : probability_fields) {
                 if (auto error = invalid_probability(value, name); !error.empty())
@@ -353,6 +371,10 @@ namespace lfs::core {
                 normal_loss_space != NormalLossSpace::CameraOpenGL &&
                 normal_loss_space != NormalLossSpace::World)
                 return "normal_loss_space must be 'auto', 'camera-opencv', 'camera-opengl', or 'world'";
+            if (normal_start_fraction > normal_end_fraction)
+                return std::format(
+                    "normal_start_fraction must not exceed normal_end_fraction ({} > {})",
+                    normal_start_fraction, normal_end_fraction);
             return {};
         }
 
@@ -370,6 +392,8 @@ namespace lfs::core {
             if (!valid_port(server.tcp_broadcast_connection_port))
                 return std::format("tcp_broadcast_connection_port must be -1 or within [1, 65535] (got {})",
                                    server.tcp_broadcast_connection_port);
+            if (mcp_port && (*mcp_port < 1 || *mcp_port > 65535))
+                return std::format("mcp_port must be within [1, 65535] (got {})", *mcp_port);
             if (render_path) {
                 if (render_path->width <= 0 || render_path->height <= 0 ||
                     (render_path->width % 2) != 0 || (render_path->height % 2) != 0)

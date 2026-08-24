@@ -4,19 +4,22 @@
 
 #include "preprocessing/preprocess.hpp"
 
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
+#include "core/nn/models/moge2.hpp"
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/tensor.hpp"
 #include "depth_anchor_cache.hpp"
+
 #include "io/loader.hpp"
+#include <cuda_runtime.h>
 
 #include "indicators.hpp"
 #include <OpenImageIO/imagebuf.h>
 #include <OpenImageIO/imagebufalgo.h>
 #include <OpenImageIO/imageio.h>
 #include <curl/curl.h>
-#include <onnxruntime_cxx_api.h>
 #include <openssl/evp.h>
 
 #ifdef _WIN32
@@ -58,13 +61,14 @@ namespace fs = std::filesystem;
 
 namespace {
 
-    constexpr std::string_view kDefaultModelFile = "moge-2-vitb-normal.onnx";
+    constexpr std::string_view kDefaultModelFile = "moge-2-vitb-normal.lfw";
     constexpr std::string_view kDefaultModelUrl =
-        "https://github.com/MrNeRF/LichtFeld-Studio/releases/download/model-moge2-v1/moge-2-vitb-normal.onnx";
-    constexpr std::string_view kFallbackModelUrl =
-        "https://huggingface.co/Ruicheng/moge-2-vitb-normal-onnx/resolve/main/model.onnx";
+        "https://github.com/MrNeRF/LichtFeld-Studio/releases/download/model-moge2-v1/moge-2-vitb-normal.lfw";
     constexpr std::string_view kDefaultModelSha256 =
-        "bbf14e07a30f11e69d36ab861590123f5598ababcbc8946a063eb4a966f35a21";
+        "db1fbe8dcd6ff91f6cdb0369c3a31f9f04e1a71a8114573ef189593f10de9cd9";
+
+    void remove_file_if_exists(const fs::path& path);
+    void replace_file(const fs::path& source, const fs::path& destination);
 
     bool stdout_is_tty() {
 #ifdef _WIN32
@@ -115,7 +119,7 @@ namespace {
         std::vector<float> xyz_hwc;
     };
 
-    struct OrtOutputs {
+    struct HeadMaps {
         SpatialMap mask;
         VectorMap points;
         VectorMap normals;
@@ -156,6 +160,79 @@ namespace {
 
     fs::path default_model_path() {
         return home_directory() / ".lichtfeld" / "onnx" / std::string(kDefaultModelFile);
+    }
+
+    fs::path lfw_path_for_onnx(const fs::path& onnx_path) {
+        fs::path out = onnx_path;
+        out.replace_extension(".lfw");
+        return out;
+    }
+
+    const char* backend_name(lfs::core::param::InferenceBackend) {
+        return "native";
+    }
+
+    fs::path find_nn_export_script() {
+        if (const char* env = std::getenv("LFS_NN_EXPORT"); env && env[0])
+            return fs::path(env);
+        std::error_code ec;
+        std::vector<fs::path> roots;
+#ifdef __linux__
+        const auto exe = fs::read_symlink("/proc/self/exe", ec);
+        if (!ec)
+            roots.push_back(exe.parent_path());
+#endif
+        roots.push_back(fs::current_path());
+        for (const auto& root : roots) {
+            fs::path cursor = root;
+            for (int i = 0; i < 6; ++i) {
+                const auto candidate = cursor / "tools" / "nn_export" / "export_onnx_weights.py";
+                if (fs::is_regular_file(candidate))
+                    return candidate;
+                if (!cursor.has_parent_path() || cursor.parent_path() == cursor)
+                    break;
+                cursor = cursor.parent_path();
+            }
+        }
+        return {};
+    }
+
+    fs::path find_python_for_export(const fs::path& script) {
+        if (const char* env = std::getenv("LFS_PYTHON"); env && env[0])
+            return fs::path(env);
+        if (!script.empty()) {
+            const auto vcpkg = script.parent_path().parent_path().parent_path() / "build" /
+                               "vcpkg_installed" / "x64-linux" / "tools" / "python3" / "python3";
+            if (fs::is_regular_file(vcpkg))
+                return vcpkg;
+        }
+        return "python3";
+    }
+
+    void convert_onnx_to_lfw(const fs::path& onnx_path, const fs::path& lfw_path) {
+        const auto script = find_nn_export_script();
+        if (script.empty()) {
+            throw std::runtime_error(
+                "Native inference needs " + path_to_string(lfw_path) +
+                " next to the ONNX. Could not find tools/nn_export/export_onnx_weights.py. Run:\n"
+                "  python3 tools/nn_export/export_onnx_weights.py --onnx " +
+                path_to_string(onnx_path) + " --out " + path_to_string(lfw_path) +
+                " --fp16 --moge2");
+        }
+        const auto python = find_python_for_export(script);
+        const fs::path tmp = lfw_path.string() + ".tmp";
+        const std::string cmd = path_to_string(python) + " " + path_to_string(script) +
+                                " --onnx " + path_to_string(onnx_path) + " --out " +
+                                path_to_string(tmp) + " --fp16 --moge2";
+        std::cout << "Converting ONNX weights to " << path_to_string(lfw_path) << "\n";
+        const int rc = std::system(cmd.c_str());
+        if (rc != 0 || !fs::is_regular_file(tmp)) {
+            remove_file_if_exists(tmp);
+            throw std::runtime_error(
+                "ONNX to .lfw conversion failed (status " + std::to_string(rc) +
+                "). Install the `onnx` package in that Python and run:\n  " + cmd);
+        }
+        replace_file(tmp, lfw_path);
     }
 
     fs::path legacy_model_path() {
@@ -397,17 +474,9 @@ namespace {
             }
         }
 
-        std::cout << "Downloading MoGe-2 ViT-B normal model (MIT license, (c) Microsoft) to "
+        std::cout << "Downloading MoGe-2 ViT-B normal model weights (MIT license, (c) Microsoft) to "
                   << path_to_string(path) << "\n";
-        try {
-            download_verified_file(kDefaultModelUrl, path, kDefaultModelSha256);
-        } catch (const DownloadIntegrityError&) {
-            throw;
-        } catch (const std::exception& e) {
-            std::cerr << "Primary download failed (" << e.what() << "); retrying from "
-                      << kFallbackModelUrl << "\n";
-            download_verified_file(kFallbackModelUrl, path, kDefaultModelSha256);
-        }
+        download_verified_file(kDefaultModelUrl, path, kDefaultModelSha256);
         require_sha256(path, kDefaultModelSha256, "Cached model");
         return path;
     }
@@ -586,6 +655,10 @@ namespace {
                              const fs::path& image_path,
                              const fs::path& images_dir) {
         fs::path rel = image_path.lexically_relative(images_dir);
+        const auto generic = rel.generic_string();
+        if (rel.empty() || generic == "." || generic == ".." || generic.starts_with("../")) {
+            rel = image_path.filename();
+        }
         rel.replace_extension(".png");
         return dataset_root / std::string(folder) / rel;
     }
@@ -631,228 +704,100 @@ namespace {
         output->close();
     }
 
-    std::vector<std::string> get_input_names(Ort::Session& session) {
-        Ort::AllocatorWithDefaultOptions allocator;
-        std::vector<std::string> names;
-        const auto count = session.GetInputCount();
-        names.reserve(count);
-        for (std::size_t i = 0; i < count; ++i) {
-            auto name = session.GetInputNameAllocated(i, allocator);
-            names.emplace_back(name.get());
-        }
-        return names;
-    }
-
-    std::vector<std::string> get_output_names(Ort::Session& session) {
-        Ort::AllocatorWithDefaultOptions allocator;
-        std::vector<std::string> names;
-        const auto count = session.GetOutputCount();
-        names.reserve(count);
-        for (std::size_t i = 0; i < count; ++i) {
-            auto name = session.GetOutputNameAllocated(i, allocator);
-            names.emplace_back(name.get());
-        }
-        return names;
-    }
-
-    std::vector<int64_t> tensor_shape(const Ort::Value& value) {
-        return value.GetTensorTypeAndShapeInfo().GetShape();
-    }
-
-    std::size_t tensor_element_count(const Ort::Value& value) {
-        return value.GetTensorTypeAndShapeInfo().GetElementCount();
-    }
-
-    SpatialMap extract_mask(const Ort::Value& value, int fallback_width, int fallback_height) {
-        const auto shape = tensor_shape(value);
-        const auto count = tensor_element_count(value);
-        const float* data = value.GetTensorData<float>();
-
+    VectorMap tensor_to_vector3(const lfs::core::Tensor& tensor, int fallback_width,
+                                int fallback_height) {
+        auto cpu = tensor.to(lfs::core::DataType::Float32)
+                       .to(lfs::core::Device::CPU)
+                       .contiguous();
+        const auto shape = cpu.shape();
         int width = fallback_width;
         int height = fallback_height;
-
-        if (shape.size() == 2) {
-            height = static_cast<int>(shape[0]);
-            width = static_cast<int>(shape[1]);
-        } else if (shape.size() == 3) {
-            height = static_cast<int>(shape[shape.size() - 2]);
-            width = static_cast<int>(shape[shape.size() - 1]);
-        } else if (shape.size() == 4) {
-            if (shape[3] == 1) {
-                height = static_cast<int>(shape[1]);
-                width = static_cast<int>(shape[2]);
-            } else if (shape[1] == 1) {
-                height = static_cast<int>(shape[2]);
-                width = static_cast<int>(shape[3]);
-            }
-        }
-
-        const std::size_t expected = static_cast<std::size_t>(width) * height;
-        if (count < expected)
-            throw std::runtime_error("Mask output has fewer elements than expected");
-
-        SpatialMap mask;
-        mask.width = width;
-        mask.height = height;
-        mask.values.assign(data, data + expected);
-        return mask;
-    }
-
-    VectorMap extract_vector3(const Ort::Value& value,
-                              int fallback_width,
-                              int fallback_height,
-                              std::string_view label) {
-        const auto shape = tensor_shape(value);
-        const auto count = tensor_element_count(value);
-        const float* data = value.GetTensorData<float>();
-
-        int width = fallback_width;
-        int height = fallback_height;
-        bool chw = false;
-
-        if (shape.size() == 3 && shape[2] == 3) {
-            height = static_cast<int>(shape[0]);
-            width = static_cast<int>(shape[1]);
-        } else if (shape.size() == 4 && shape[3] == 3) {
+        if (shape.rank() == 4 && shape[3] == 3) {
             height = static_cast<int>(shape[1]);
             width = static_cast<int>(shape[2]);
-        } else if (shape.size() == 4 && shape[1] == 3) {
-            chw = true;
+        } else if (shape.rank() == 3 && shape[2] == 3) {
+            height = static_cast<int>(shape[0]);
+            width = static_cast<int>(shape[1]);
+        }
+        auto values = cpu.to_vector();
+        const std::size_t pixels = static_cast<std::size_t>(width) * height;
+        if (values.size() < pixels * 3)
+            throw std::runtime_error("Native normal/points tensor is smaller than expected");
+        values.resize(pixels * 3);
+        return VectorMap{.width = width, .height = height, .xyz_hwc = std::move(values)};
+    }
+
+    SpatialMap tensor_to_mask(const lfs::core::Tensor& tensor, int fallback_width,
+                              int fallback_height) {
+        auto cpu = tensor.to(lfs::core::DataType::Float32)
+                       .to(lfs::core::Device::CPU)
+                       .contiguous();
+        const auto shape = cpu.shape();
+        int width = fallback_width;
+        int height = fallback_height;
+        if (shape.rank() == 3) {
+            height = static_cast<int>(shape[shape.rank() - 2]);
+            width = static_cast<int>(shape[shape.rank() - 1]);
+        } else if (shape.rank() == 2) {
+            height = static_cast<int>(shape[0]);
+            width = static_cast<int>(shape[1]);
+        } else if (shape.rank() == 4) {
             height = static_cast<int>(shape[2]);
             width = static_cast<int>(shape[3]);
         }
-
-        const std::size_t pixels = static_cast<std::size_t>(width) * height;
-        if (count < pixels * 3)
-            throw std::runtime_error(std::string(label) + " output has fewer elements than expected");
-
-        VectorMap out;
-        out.width = width;
-        out.height = height;
-        out.xyz_hwc.resize(pixels * 3);
-
-        if (!chw) {
-            std::copy(data, data + pixels * 3, out.xyz_hwc.begin());
-        } else {
-            for (std::size_t i = 0; i < pixels; ++i) {
-                out.xyz_hwc[i * 3 + 0] = data[i];
-                out.xyz_hwc[i * 3 + 1] = data[pixels + i];
-                out.xyz_hwc[i * 3 + 2] = data[2 * pixels + i];
-            }
-        }
-        return out;
+        auto values = cpu.to_vector();
+        const std::size_t expected = static_cast<std::size_t>(width) * height;
+        if (values.size() < expected)
+            throw std::runtime_error("Native mask tensor is smaller than expected");
+        values.resize(expected);
+        return SpatialMap{.width = width, .height = height, .values = std::move(values)};
     }
 
-    Ort::SessionOptions make_session_options(int thread_count, bool use_cuda) {
-        Ort::SessionOptions session_options;
-        session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-        session_options.SetIntraOpNumThreads(thread_count);
-        if (use_cuda) {
-            OrtCUDAProviderOptions cuda_options{};
-            cuda_options.cudnn_conv_algo_search = OrtCudnnConvAlgoSearchHeuristic;
-            cuda_options.do_copy_in_default_stream = 1;
-            session_options.AppendExecutionProvider_CUDA(cuda_options);
-        }
-        return session_options;
-    }
-
-    class MogeOnnxSession {
+    class NativeMogeSession {
     public:
-        MogeOnnxSession(const fs::path& model_path, int thread_count, bool force_cpu)
-            : env_(ORT_LOGGING_LEVEL_WARNING, "LichtFeld-Studio-preprocess") {
-#ifdef _WIN32
-            const auto model_string = model_path.wstring();
-#else
-            const auto model_string = path_to_string(model_path);
-#endif
-            bool use_cuda = !force_cpu;
-            while (!session_) {
-                try {
-                    const auto session_options = make_session_options(thread_count, use_cuda);
-                    session_ = std::make_unique<Ort::Session>(env_, model_string.c_str(), session_options);
-                } catch (const Ort::Exception& e) {
-                    if (!use_cuda)
-                        throw;
-                    std::cerr << "CUDA execution provider unavailable, falling back to CPU: " << e.what() << "\n";
-                    use_cuda = false;
-                }
-            }
-            provider_ = use_cuda ? "CUDA" : "CPU";
-            input_names_ = get_input_names(*session_);
-            output_names_ = get_output_names(*session_);
-
-            bool has_image = false;
-            for (const auto& name : input_names_)
-                has_image = has_image || name == "image";
-            if (!has_image)
-                throw std::runtime_error("ONNX model has no 'image' input");
+        explicit NativeMogeSession(const fs::path& lfw_path) {
+            auto loaded = lfs::core::nn::models::Moge2::load(lfw_path, lfs::core::Device::CUDA);
+            if (!loaded)
+                throw std::runtime_error("Failed to load native MoGe-2 weights from " +
+                                         path_to_string(lfw_path) + ": " +
+                                         std::string(loaded.error().detail()));
+            model_ = std::move(*loaded);
         }
 
-        OrtOutputs run(const Image& image, int64_t num_tokens) {
-            std::vector<float> chw = hwc_to_nchw(image);
-            std::array<int64_t, 4> image_shape = {1, 3, image.height, image.width};
-            std::vector<int64_t> scalar_shape;
-            Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-
-            std::vector<Ort::Value> input_values;
-            input_values.reserve(input_names_.size());
-            for (const auto& name : input_names_) {
-                if (name == "image") {
-                    input_values.emplace_back(Ort::Value::CreateTensor<float>(
-                        memory_info, chw.data(), chw.size(), image_shape.data(), image_shape.size()));
-                } else if (name == "num_tokens") {
-                    input_values.emplace_back(Ort::Value::CreateTensor<int64_t>(
-                        memory_info, &num_tokens, 1, nullptr, scalar_shape.size()));
-                } else {
-                    throw std::runtime_error("Unsupported ONNX input: " + name);
-                }
+        HeadMaps run(const Image& image, int64_t num_tokens) {
+            auto chw = hwc_to_nchw(image);
+            const auto shape = lfs::core::TensorShape(std::vector<std::size_t>{
+                1, 3, static_cast<std::size_t>(image.height),
+                static_cast<std::size_t>(image.width)});
+            if (!input_.is_valid() || input_.dtype() != lfs::core::DataType::Float32 ||
+                input_.ndim() != 4 || input_.shape()[2] != static_cast<std::size_t>(image.height) ||
+                input_.shape()[3] != static_cast<std::size_t>(image.width)) {
+                input_ = lfs::core::Tensor::empty(shape, lfs::core::Device::CUDA,
+                                                  lfs::core::DataType::Float32);
             }
-
-            std::vector<const char*> input_name_ptrs;
-            input_name_ptrs.reserve(input_names_.size());
-            for (const auto& name : input_names_)
-                input_name_ptrs.push_back(name.c_str());
-
-            std::vector<const char*> output_name_ptrs;
-            output_name_ptrs.reserve(output_names_.size());
-            for (const auto& name : output_names_)
-                output_name_ptrs.push_back(name.c_str());
-
-            Ort::RunOptions run_options;
-            auto outputs = session_->Run(run_options,
-                                         input_name_ptrs.data(),
-                                         input_values.data(),
-                                         input_values.size(),
-                                         output_name_ptrs.data(),
-                                         output_name_ptrs.size());
-
-            std::unordered_map<std::string, std::size_t> output_index;
-            for (std::size_t i = 0; i < output_names_.size(); ++i)
-                output_index.emplace(output_names_[i], i);
-
-            auto get_output = [&](std::string_view name) -> const Ort::Value& {
-                const auto it = output_index.find(std::string(name));
-                if (it == output_index.end())
-                    throw std::runtime_error("ONNX model did not produce '" + std::string(name) + "'");
-                return outputs[it->second];
-            };
-
-            return OrtOutputs{
-                .mask = extract_mask(get_output("mask"), image.width, image.height),
-                .points = extract_vector3(get_output("points"), image.width, image.height, "points"),
-                .normals = extract_vector3(get_output("normal"), image.width, image.height, "normal"),
+            LFS_CUDA_CHECK(cudaMemcpyAsync(input_.data_ptr(), chw.data(), input_.bytes(),
+                                           cudaMemcpyHostToDevice, input_.stream()));
+            auto result = model_.forward(input_, num_tokens);
+            if (!result)
+                throw std::runtime_error("Native MoGe-2 forward failed: " +
+                                         std::string(result.error().detail()));
+            return HeadMaps{
+                .mask = tensor_to_mask(result->mask, image.width, image.height),
+                .points = tensor_to_vector3(result->points, image.width, image.height),
+                .normals = tensor_to_vector3(result->normal, image.width, image.height),
             };
         }
-
-        std::string_view provider() const { return provider_; }
 
     private:
-        Ort::Env env_;
-        std::unique_ptr<Ort::Session> session_;
-        std::vector<std::string> input_names_;
-        std::vector<std::string> output_names_;
-        std::string_view provider_;
+        lfs::core::nn::models::Moge2 model_;
+        lfs::core::Tensor input_;
     };
+
+    void ensure_native_weights(const fs::path& lfw_path, const fs::path& onnx_path) {
+        if (fs::is_regular_file(lfw_path))
+            return;
+        convert_onnx_to_lfw(onnx_path, lfw_path);
+    }
 
     template <typename PixelT>
     std::vector<PixelT> build_depth_png(const SpatialMap& mask,
@@ -1131,15 +1076,30 @@ namespace {
         std::cout << "Images: " << plan.images.size() << " under " << path_to_string(plan.images_dir) << "\n";
         std::cout << "Threads: " << resolve_thread_count(params.threads) << "\n";
         std::cout << "PNG compression: " << params.png_compression << "\n";
+        std::cout << "Inference backend: " << backend_name(params.inference_backend) << "\n";
     }
 
     void process_dataset(const lfs::core::param::PreprocessParameters& params,
                          const fs::path& model_path,
-                         const PreprocessPlan& plan) {
-        print_plan_summary(params, plan, &model_path);
+                         const PreprocessPlan& plan,
+                         const lfs::preprocessing::PreprocessProgressCallback& progress) {
+        if (!progress)
+            print_plan_summary(params, plan, &model_path);
 
-        MogeOnnxSession session(model_path, resolve_thread_count(params.threads), params.force_cpu);
-        std::cout << "Execution provider: " << session.provider() << "\n";
+        int cuda_devices = 0;
+        if (cudaGetDeviceCount(&cuda_devices) != cudaSuccess || cuda_devices <= 0) {
+            throw std::runtime_error("Native MoGe-2 inference requires a CUDA device");
+        }
+
+        const fs::path lfw_path = lfw_path_for_onnx(model_path);
+        ensure_native_weights(lfw_path, model_path);
+        NativeMogeSession native_session(lfw_path);
+        if (!progress)
+            std::cout << "Weights: " << path_to_string(lfw_path) << "\n";
+
+        const auto run_inference = [&](const Image& image, int64_t num_tokens) {
+            return native_session.run(image, num_tokens);
+        };
 
         const auto load_job = [&params](const PreprocessJob& job) {
             LoadedImage loaded{.original = load_image_rgb(job.image_path)};
@@ -1151,7 +1111,7 @@ namespace {
         std::deque<std::future<void>> writes;
 
         std::optional<PreprocessProgressBar> bar;
-        if (stdout_is_tty() && !plan.jobs.empty())
+        if (!progress && stdout_is_tty() && !plan.jobs.empty())
             bar.emplace(plan.jobs.size());
 
         std::deque<std::future<LoadedImage>> pending_loads;
@@ -1166,19 +1126,25 @@ namespace {
 
         for (std::size_t i = 0; i < plan.jobs.size(); ++i) {
             const PreprocessJob& job = plan.jobs[i];
-            if (!bar)
-                std::cout << "[" << (i + 1) << "/" << plan.jobs.size() << "] " << path_to_string(job.image_path) << "\n";
+            if (!bar && !progress) {
+                std::cout << "[" << (i + 1) << "/" << plan.jobs.size() << "] "
+                          << path_to_string(job.image_path) << "\n";
+            }
 
             const LoadedImage loaded = pending_loads.front().get();
             pending_loads.pop_front();
             top_up_loads();
 
             const auto inference_start = std::chrono::steady_clock::now();
-            auto outputs = std::make_shared<const OrtOutputs>(session.run(loaded.inference, params.num_tokens));
+            auto outputs = std::make_shared<const HeadMaps>(run_inference(loaded.inference, params.num_tokens));
             const double inference_ms =
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - inference_start).count();
             if (bar)
                 bar->report(i + 1, job.image_path.filename().string(), inference_ms);
+            else if (!progress)
+                std::cout << "  inference " << inference_ms << " ms\n";
+            if (progress)
+                progress(i + 1, plan.jobs.size(), job.image_path.filename().string());
 
             while (!writes.empty() && writes.front().wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
                 writes.front().get();
@@ -1222,30 +1188,35 @@ namespace {
 
         if (bar)
             bar->complete();
-        std::cout << "Done. processed=" << plan.jobs.size() << " skipped=" << plan.skipped << "\n";
+        if (!progress)
+            std::cout << "Done. processed=" << plan.jobs.size() << " skipped=" << plan.skipped << "\n";
     }
 
-} // namespace
-
-namespace lfs::preprocessing {
-
-    int run_preprocess(const lfs::core::param::PreprocessParameters& params) {
+    lfs::preprocessing::PreprocessRunResult execute_preprocess(
+        const lfs::core::param::PreprocessParameters& params,
+        const lfs::preprocessing::PreprocessProgressCallback& progress) {
+        lfs::preprocessing::PreprocessRunResult result;
         try {
             if (params.download_only) {
                 fs::path model_path = params.model_path;
                 if (model_path.empty())
                     model_path = ensure_default_model(params.no_download);
-                std::cout << "Cached model: " << path_to_string(model_path) << "\n";
-                return 0;
+                if (!progress)
+                    std::cout << "Cached model: " << path_to_string(model_path) << "\n";
+                return result;
             }
 
             const PreprocessPlan plan = build_preprocess_plan(params);
+            result.skipped = plan.skipped;
             if (plan.jobs.empty()) {
-                print_plan_summary(params, plan, nullptr);
-                std::cout << "No outputs need preprocessing; model inference skipped.\n";
+                if (!progress) {
+                    print_plan_summary(params, plan, nullptr);
+                    std::cout << "No outputs need preprocessing; model inference skipped.\n";
+                }
                 precompute_depth_anchors(params);
-                std::cout << "Done. processed=0 skipped=" << plan.skipped << "\n";
-                return 0;
+                if (!progress)
+                    std::cout << "Done. processed=0 skipped=" << plan.skipped << "\n";
+                return result;
             }
 
             fs::path model_path = params.model_path;
@@ -1255,13 +1226,33 @@ namespace lfs::preprocessing {
             if (!fs::is_regular_file(model_path))
                 throw std::runtime_error("Model file does not exist: " + path_to_string(model_path));
 
-            process_dataset(params, model_path, plan);
+            process_dataset(params, model_path, plan, progress);
+            result.processed = plan.jobs.size();
             precompute_depth_anchors(params);
-            return 0;
+            return result;
         } catch (const std::exception& e) {
-            std::cerr << "preprocess: " << e.what() << "\n";
+            result.ok = false;
+            result.error = e.what();
+            return result;
+        }
+    }
+
+} // namespace
+
+namespace lfs::preprocessing {
+
+    PreprocessRunResult run_preprocess_ex(const lfs::core::param::PreprocessParameters& params,
+                                          const PreprocessProgressCallback& progress) {
+        return execute_preprocess(params, progress);
+    }
+
+    int run_preprocess(const lfs::core::param::PreprocessParameters& params) {
+        const auto result = run_preprocess_ex(params, {});
+        if (!result.ok) {
+            std::cerr << "preprocess: " << result.error << "\n";
             return 1;
         }
+        return 0;
     }
 
 } // namespace lfs::preprocessing

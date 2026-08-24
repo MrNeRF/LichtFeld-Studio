@@ -102,6 +102,9 @@ ACTION_NAMES = (
     "TOGGLE_MCP_SERVER",
     "TOGGLE_MCP_BINDING",
     "TOGGLE_GRID",
+    "SELECT_ALL_SCENE_NODES",
+    "TOGGLE_SCENE_SELECTION_VISIBILITY",
+    "TOGGLE_SCENE_SELECTION_TRAINING",
 )
 
 
@@ -253,6 +256,13 @@ def _install_lf_stub(monkeypatch):
         get_current_language=lambda: state.language[0],
         request_redraw=lambda: None,
         get_mcp_preferences=lambda: dict(state.mcp_preferences),
+        get_working_directory=lambda: "/home/tester/.lichtfeld",
+        get_working_directory_preference=lambda: "",
+        get_default_working_directory=lambda: "/home/tester/.lichtfeld",
+        get_temp_project_directory=lambda: "/home/tester/.lichtfeld/tmp",
+        set_working_directory=lambda path: "",
+        clear_working_directory=lambda: None,
+        open_folder_dialog=lambda title, start: "",
         get_mcp_status=lambda: dict(state.mcp_status),
         take_preferences_section_request=lambda: "",
         themes=lambda: [],
@@ -261,6 +271,8 @@ def _install_lf_stub(monkeypatch):
         get_ui_scale_preference=lambda: 0.0,
         remember_camera_navigation=lambda: False,
         remember_camera_view_snap=lambda: False,
+        scene_graph_selection_markers=lambda: False,
+        set_scene_graph_selection_markers=lambda _enabled: None,
         get_scene_reconstruction_options=lambda: [
             {
                 "id": "native",

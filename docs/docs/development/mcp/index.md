@@ -46,7 +46,7 @@ Then narrow further:
 | `scene_*` | Load datasets, checkpoints, scene nodes, exports |
 | `training_*` | Training state, loss, and training control |
 | `runtime_*` | Normalized job and event tracking |
-| `ui_tool_*`, `ui_menu_*`, `ui_panel_*`, `ui_operator_*` | Drive the registered GUI surface |
+| `ui_tool_*`, `ui_menu_*`, `ui_panel_*`, `ui_operator_*`, `ui_modal_*` | Drive the registered GUI surface, including confirm dialogs |
 | `operator_*` | Introspect and invoke registered GUI operators, including modal flows |
 | `selection_*` | Screen-space Gaussian selection |
 | `transform_*` | Node transform inspection and edits |

@@ -41,6 +41,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--strategy", "strategy", String, false, "; legacy aliases: mnrf, lfs"},
             OptimizationCliBinding{"--sh-degree", "sh_degree", Integer},
             OptimizationCliBinding{"--sh-degree-interval", "sh_degree_interval", Integer},
+            OptimizationCliBinding{"--morton-reorder-interval", "morton_reorder_interval", Integer},
             OptimizationCliBinding{"--max-cap", "max_cap", Integer},
             OptimizationCliBinding{"--min-opacity", "min_opacity", Float},
             OptimizationCliBinding{"--cropbox-lr-scale", "cropbox_lr_scale", Float},
@@ -61,9 +62,12 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--depth-loss-weight", "depth_loss_weight", Float},
             OptimizationCliBinding{"--depth-loss-mode", "depth_loss_mode", String},
             OptimizationCliBinding{"--use-normal-loss", "use_normal_loss", Bool},
+            OptimizationCliBinding{"--no-normal-auto-generate", "normal_auto_generate", Bool, true},
             OptimizationCliBinding{"--normal-loss-weight", "normal_loss_weight", Float},
             OptimizationCliBinding{"--normal-consistency-weight", "normal_consistency_weight", Float},
             OptimizationCliBinding{"--normal-flatten-weight", "normal_flatten_weight", Float},
+            OptimizationCliBinding{"--normal-start-fraction", "normal_start_fraction", Float},
+            OptimizationCliBinding{"--normal-end-fraction", "normal_end_fraction", Float},
             OptimizationCliBinding{"--normal-loss-space", "normal_loss_space", Enum},
             OptimizationCliBinding{"--enable-sparsity", "enable_sparsity", Bool},
             OptimizationCliBinding{"--sparsify-steps", "sparsify_steps", Integer},
@@ -72,6 +76,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--enable-mip", "mip_filter", Bool},
             OptimizationCliBinding{"--bilateral-grid", "use_bilateral_grid", Bool},
             OptimizationCliBinding{"--ppisp", "ppisp", Bool},
+            OptimizationCliBinding{"--no-ppisp-exif-exposure", "ppisp_exposure_from_exif", Bool, true},
             OptimizationCliBinding{"--ppisp-controller", "ppisp_use_controller", Bool},
             OptimizationCliBinding{"--ppisp-freeze", "ppisp_freeze_from_sidecar", Bool},
             OptimizationCliBinding{"--gut", "gut", Bool},
@@ -427,6 +432,7 @@ namespace {
             ::args::ValueFlag<std::string> strategy(training_group, "strategy", lfs::core::args::optimization_cli_help("--strategy"), {"strategy"});
             ::args::ValueFlag<int> sh_degree(training_group, "sh_degree", lfs::core::args::optimization_cli_help("--sh-degree"), {"sh-degree"});
             ::args::ValueFlag<int> sh_degree_interval(training_group, "sh_degree_interval", lfs::core::args::optimization_cli_help("--sh-degree-interval"), {"sh-degree-interval"});
+            ::args::ValueFlag<int> morton_reorder_interval(training_group, "morton_reorder_interval", lfs::core::args::optimization_cli_help("--morton-reorder-interval"), {"morton-reorder-interval"});
             ::args::ValueFlag<int> max_cap(training_group, "max_cap", lfs::core::args::optimization_cli_help("--max-cap"), {"max-cap"});
             ::args::ValueFlag<float> min_opacity(training_group, "min_opacity", lfs::core::args::optimization_cli_help("--min-opacity"), {"min-opacity"});
             ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--cropbox-lr-scale"), {"cropbox-lr-scale"});
@@ -496,9 +502,12 @@ namespace {
             ::args::ValueFlag<float> depth_loss_weight(mask_group, "depth_loss_weight", lfs::core::args::optimization_cli_help("--depth-loss-weight"), {"depth-loss-weight"});
             ::args::ValueFlag<std::string> depth_loss_mode(mask_group, "depth_loss_mode", lfs::core::args::optimization_cli_help("--depth-loss-mode"), {"depth-loss-mode"});
             ::args::Flag use_normal_loss(mask_group, "use_normal_loss", lfs::core::args::optimization_cli_help("--use-normal-loss"), {"use-normal-loss"});
+            ::args::Flag no_normal_auto_generate(mask_group, "no_normal_auto_generate", lfs::core::args::optimization_cli_help("--no-normal-auto-generate"), {"no-normal-auto-generate"});
             ::args::ValueFlag<float> normal_loss_weight(mask_group, "normal_loss_weight", lfs::core::args::optimization_cli_help("--normal-loss-weight"), {"normal-loss-weight"});
             ::args::ValueFlag<float> normal_consistency_weight(mask_group, "normal_consistency_weight", lfs::core::args::optimization_cli_help("--normal-consistency-weight"), {"normal-consistency-weight"});
             ::args::ValueFlag<float> normal_flatten_weight(mask_group, "normal_flatten_weight", lfs::core::args::optimization_cli_help("--normal-flatten-weight"), {"normal-flatten-weight"});
+            ::args::ValueFlag<float> normal_start_fraction(mask_group, "normal_start_fraction", lfs::core::args::optimization_cli_help("--normal-start-fraction"), {"normal-start-fraction"});
+            ::args::ValueFlag<float> normal_end_fraction(mask_group, "normal_end_fraction", lfs::core::args::optimization_cli_help("--normal-end-fraction"), {"normal-end-fraction"});
             ::args::ValueFlag<std::string> normal_loss_space(mask_group, "normal_loss_space", lfs::core::args::optimization_cli_help("--normal-loss-space"), {"normal-loss-space"});
 
             // =============================================================================
@@ -519,6 +528,7 @@ namespace {
             ::args::Flag enable_mip(rendering_group, "enable_mip", lfs::core::args::optimization_cli_help("--enable-mip"), {"enable-mip"});
             ::args::Flag use_bilateral_grid(rendering_group, "bilateral_grid", lfs::core::args::optimization_cli_help("--bilateral-grid"), {"bilateral-grid"});
             ::args::Flag use_ppisp(rendering_group, "ppisp", lfs::core::args::optimization_cli_help("--ppisp"), {"ppisp"});
+            ::args::Flag no_ppisp_exif_exposure(rendering_group, "no_ppisp_exif_exposure", lfs::core::args::optimization_cli_help("--no-ppisp-exif-exposure"), {"no-ppisp-exif-exposure"});
             ::args::Flag ppisp_controller(rendering_group, "ppisp_controller", lfs::core::args::optimization_cli_help("--ppisp-controller"), {"ppisp-controller"});
             ::args::Flag ppisp_freeze_from_sidecar(rendering_group, "ppisp_freeze", lfs::core::args::optimization_cli_help("--ppisp-freeze"), {"ppisp-freeze"});
             ::args::ValueFlag<std::string> ppisp_sidecar_path(rendering_group, "path", "Path to PPISP sidecar (.ppisp) used for frozen PPISP training", {"ppisp-sidecar"});
@@ -558,6 +568,7 @@ namespace {
 #endif
             ::args::Flag debug_python(ui_group, "debug_python", "Start debugpy listener on port 5678 for plugin debugging", {"debug-python"});
             ::args::ValueFlag<int> debug_python_port(ui_group, "port", "Port for debugpy listener (default: 5678)", {"debug-python-port"});
+            ::args::ValueFlag<int> mcp_port(ui_group, "port", "Override the MCP server port for this launch (does not change the saved preference)", {"mcp-port"});
 
             // =============================================================================
             // PERF / PROFILING
@@ -913,12 +924,25 @@ namespace {
                     return std::unexpected("ERROR: --min-track-length must be 0 or greater");
                 }
             }
+            if (mcp_port) {
+                const int port = ::args::get(mcp_port);
+                if (port < 1 || port > 65535) {
+                    return std::unexpected("ERROR: --mcp-port must be between 1 and 65535");
+                }
+            }
 
             // Validate sh_degree (0-3)
             if (sh_degree) {
                 int degree = ::args::get(sh_degree);
                 if (degree < 0 || degree > 3) {
                     return std::unexpected("ERROR: --sh-degree must be 0, 1, 2, or 3");
+                }
+            }
+
+            if (morton_reorder_interval) {
+                const int interval = ::args::get(morton_reorder_interval);
+                if (interval < 0) {
+                    return std::unexpected("ERROR: --morton-reorder-interval must be >= 0 (0 disables)");
                 }
             }
 
@@ -1003,6 +1027,7 @@ namespace {
                                         test_every_val = cli_option_present({"--test-every"}) ? std::optional<int>(::args::get(test_every)) : std::optional<int>(),
                                         steps_scaler_val = cli_option_present({"--steps-scaler"}) ? std::optional<float>(::args::get(steps_scaler)) : std::optional<float>(),
                                         sh_degree_interval_val = cli_option_present({"--sh-degree-interval"}) ? std::optional<int>(::args::get(sh_degree_interval)) : std::optional<int>(),
+                                        morton_reorder_interval_val = cli_option_present({"--morton-reorder-interval"}) ? std::optional<int>(::args::get(morton_reorder_interval)) : std::optional<int>(),
                                         sh_degree_val = cli_option_present({"--sh-degree"}) ? std::optional<int>(::args::get(sh_degree)) : std::optional<int>(),
                                         min_opacity_val = cli_option_present({"--min-opacity"}) ? std::optional<float>(::args::get(min_opacity)) : std::optional<float>(),
                                         cropbox_lr_scale_val = cli_option_present({"--cropbox-lr-scale"}) ? std::optional<float>(::args::get(cropbox_lr_scale)) : std::optional<float>(),
@@ -1028,6 +1053,8 @@ namespace {
                                         normal_loss_weight_val = cli_option_present({"--normal-loss-weight"}) ? std::optional<float>(::args::get(normal_loss_weight)) : std::optional<float>(),
                                         normal_consistency_weight_val = cli_option_present({"--normal-consistency-weight"}) ? std::optional<float>(::args::get(normal_consistency_weight)) : std::optional<float>(),
                                         normal_flatten_weight_val = cli_option_present({"--normal-flatten-weight"}) ? std::optional<float>(::args::get(normal_flatten_weight)) : std::optional<float>(),
+                                        normal_start_fraction_val = cli_option_present({"--normal-start-fraction"}) ? std::optional<float>(::args::get(normal_start_fraction)) : std::optional<float>(),
+                                        normal_end_fraction_val = cli_option_present({"--normal-end-fraction"}) ? std::optional<float>(::args::get(normal_end_fraction)) : std::optional<float>(),
                                         normal_loss_space_val = cli_option_present({"--normal-loss-space"}) ? std::optional<std::string>(::args::get(normal_loss_space)) : std::optional<std::string>(),
                                         // Python scripts
                                         python_scripts_val = cli_option_present({"--python-script"}) ? std::optional<std::vector<std::string>>(::args::get(python_scripts)) : std::optional<std::vector<std::string>>(),
@@ -1036,6 +1063,7 @@ namespace {
                                         enable_mip_flag = bool(enable_mip),
                                         use_bilateral_grid_flag = bool(use_bilateral_grid),
                                         use_ppisp_flag = bool(use_ppisp),
+                                        no_ppisp_exif_exposure_flag = bool(no_ppisp_exif_exposure),
                                         ppisp_controller_flag = bool(ppisp_controller),
                                         ppisp_freeze_from_sidecar_flag = bool(ppisp_freeze_from_sidecar),
                                         ppisp_sidecar_path_val = cli_option_present({"--ppisp-sidecar"}) ? std::optional<std::string>(::args::get(ppisp_sidecar_path)) : std::optional<std::string>(),
@@ -1053,6 +1081,7 @@ namespace {
 #endif
                                         debug_python_flag = bool(debug_python),
                                         debug_python_port_val = cli_option_present({"--debug-python-port"}) ? std::optional<int>(::args::get(debug_python_port)) : std::optional<int>(),
+                                        mcp_port_val = cli_option_present({"--mcp-port"}) ? std::optional<int>(::args::get(mcp_port)) : std::optional<int>(),
                                         no_save_eval_images_flag = bool(no_save_eval_images),
                                         bg_mode_val = parsed_bg_mode,
                                         bg_color_val = parsed_bg_color,
@@ -1065,6 +1094,7 @@ namespace {
                                         no_alpha_as_mask_flag = bool(no_alpha_as_mask),
                                         use_depth_loss_flag = bool(use_depth_loss),
                                         use_normal_loss_flag = bool(use_normal_loss),
+                                        no_normal_auto_generate_flag = bool(no_normal_auto_generate),
                                         no_error_map_flag = bool(no_error_map),
                                         no_edge_map_flag = bool(no_edge_map),
                                         freeze_lr_scale_val = cli_option_present({"--freeze-lr-scale"}) ? std::optional<float>(::args::get(freeze_lr_scale)) : std::optional<float>(),
@@ -1111,6 +1141,9 @@ namespace {
                 setVal(test_every_val, ds.test_every);
                 setVal(steps_scaler_val, opt.steps_scaler);
                 setVal(sh_degree_interval_val, opt.sh_degree_interval);
+                if (morton_reorder_interval_val) {
+                    opt.morton_reorder_interval = static_cast<size_t>(*morton_reorder_interval_val);
+                }
                 setVal(sh_degree_val, opt.sh_degree);
                 setVal(min_opacity_val, opt.min_opacity);
                 setVal(cropbox_lr_scale_val, opt.cropbox_lr_scale);
@@ -1144,6 +1177,8 @@ namespace {
                 setFlag(enable_mip_flag, opt.mip_filter);
                 setFlag(use_bilateral_grid_flag, opt.use_bilateral_grid);
                 setFlag(use_ppisp_flag, opt.use_ppisp);
+                if (no_ppisp_exif_exposure_flag)
+                    opt.ppisp_exposure_from_exif = false;
                 setFlag(ppisp_controller_flag, opt.ppisp_use_controller);
                 setFlag(ppisp_freeze_from_sidecar_flag, opt.ppisp_freeze_from_sidecar);
                 if (ppisp_sidecar_path_val) {
@@ -1163,6 +1198,7 @@ namespace {
                 setFlag(no_splash_flag, opt.no_splash);
                 setFlag(debug_python_flag, opt.debug_python);
                 setVal(debug_python_port_val, opt.debug_python_port);
+                setVal(mcp_port_val, params.mcp_port);
                 if (no_save_eval_images_flag)
                     opt.enable_save_eval_images = false;
                 if (bg_mode_val) {
@@ -1198,9 +1234,13 @@ namespace {
                     opt.depth_loss_mode = *depth_loss_mode_val;
                 }
                 setFlag(use_normal_loss_flag, opt.use_normal_loss);
+                if (no_normal_auto_generate_flag)
+                    opt.normal_auto_generate = false;
                 setVal(normal_loss_weight_val, opt.normal_loss_weight);
                 setVal(normal_consistency_weight_val, opt.normal_consistency_weight);
                 setVal(normal_flatten_weight_val, opt.normal_flatten_weight);
+                setVal(normal_start_fraction_val, opt.normal_start_fraction);
+                setVal(normal_end_fraction_val, opt.normal_end_fraction);
                 if (normal_loss_space_val) {
                     if (const auto parsed = lfs::core::param::normal_loss_space_from_string(*normal_loss_space_val)) {
                         opt.normal_loss_space = *parsed;
@@ -1350,7 +1390,7 @@ namespace {
         "  Metadata: --no-provenance strips identifying metadata; a minimal build stamp is always embedded\n"
         "\n";
 
-    constexpr const char* PREPROCESS_HELP_HEADER = "LichtFeld Studio - Generate dataset depth and normal maps with MoGe-2 ONNX\n";
+    constexpr const char* PREPROCESS_HELP_HEADER = "LichtFeld Studio - Generate dataset depth and normal maps with MoGe-2\n";
     constexpr const char* PREPROCESS_HELP_FOOTER =
         "\n"
         "EXAMPLES:\n"
@@ -1366,6 +1406,12 @@ namespace {
         "  Use --overwrite to recreate existing outputs.\n"
         "  PNG compression defaults to level 1; use 0 for fastest/largest files.\n"
         "  The auto-downloaded default model is SHA-256 verified before use.\n"
+        "\n"
+        "INFERENCE:\n"
+        "  Native in-tree MoGe-2 (CUDA). If only the ONNX is present, preprocess converts\n"
+        "  it once with tools/nn_export/export_onnx_weights.py (fp16) into a sibling .lfw.\n"
+        "  If conversion is not possible, it prints the command to run by hand.\n"
+        "  --inference-backend accepts native (default; auto is an alias).\n"
         "\n";
 
     std::optional<lfs::core::param::OutputFormat> parseFormat(const std::string& str) {
@@ -1645,12 +1691,18 @@ namespace {
                                                                            {"both", param::PreprocessOutputMode::Both}});
         ::args::ValueFlag<std::string> images(parser, "folder", "Images subfolder (default: images)", {"images"});
         ::args::ValueFlag<std::string> model(parser, "path", "Local ONNX model path; skips default cache download", {"model"});
+        ::args::MapFlag<std::string, param::InferenceBackend> backend(
+            parser, "backend",
+            "Inference backend: native (default; auto is an alias)",
+            {"inference-backend"},
+            std::unordered_map<std::string, param::InferenceBackend>{
+                {"auto", param::InferenceBackend::Native},
+                {"native", param::InferenceBackend::Native}});
         ::args::ValueFlag<int> max_side(parser, "pixels", "Inference longest side, rounded to /14 (default: 518; 0 disables resize)", {"max-side"});
         ::args::ValueFlag<std::int64_t> num_tokens(parser, "tokens", "MoGe dynamic-token input when present (default: 1800)", {"num-tokens"});
-        ::args::ValueFlag<int> threads(parser, "count", "ONNX Runtime CPU threads (default: all available cores)", {"threads"});
+        ::args::ValueFlag<int> threads(parser, "count", "Host worker threads for image load/encode (default: all available cores)", {"threads"});
         ::args::ValueFlag<int> png_compression(parser, "level", "PNG compression level 0-9 (default: 1; 0 is fastest/largest)", {"png-compression"});
         ::args::ValueFlag<int> bit_depth(parser, "bits", "Output PNG bit depth, 8 or 16 (default: 16; 8-bit depth priors quantize visibly)", {"bit-depth"});
-        ::args::Flag cpu(parser, "cpu", "Force CPU inference even if CUDA is available", {"cpu"});
         ::args::Flag overwrite(parser, "overwrite", "Overwrite existing depth/normal files", {'y', "overwrite"});
         ::args::Flag no_download(parser, "no-download", "Fail if the default model is not already cached", {"no-download"});
         ::args::Flag download_only(parser, "download-only", "Download/verify the default model and exit", {"download-only"});
@@ -1678,6 +1730,9 @@ namespace {
         if (model) {
             params.model_path = lfs::core::utf8_to_path(::args::get(model));
         }
+        if (backend) {
+            params.inference_backend = ::args::get(backend);
+        }
         if (mode) {
             params.mode = ::args::get(mode);
         }
@@ -1696,7 +1751,6 @@ namespace {
         if (bit_depth) {
             params.bit_depth = ::args::get(bit_depth);
         }
-        params.force_cpu = cpu;
         params.overwrite = overwrite;
         params.no_download = no_download;
         params.download_only = download_only;

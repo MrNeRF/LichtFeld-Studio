@@ -12,7 +12,12 @@ from . import rml_widgets as w
 from . import property_view
 from .property_view import parse_number as _parse_num
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
-from .training_confirm import _project_has_path
+from .training_confirm import (
+    _invoke_project_save_as,
+    _project_has_path,
+    _schedule_once_project_bound,
+    confirm_discard_work_then,
+)
 from .types import Panel
 from .ui import RuntimeState, PanelStateBinding
 
@@ -157,7 +162,7 @@ class TrainingPanel(Panel):
     space = lf.ui.PanelSpace.MAIN_PANEL_TAB
     order = 20
     template = "rmlui/training.rml"
-    height_mode = lf.ui.PanelHeightMode.CONTENT
+    height_mode = lf.ui.PanelHeightMode.FILL
     update_policy = "dirty"
 
     def __init__(self):
@@ -192,7 +197,6 @@ class TrainingPanel(Panel):
         self._step_repeat_last = 0.0
         self._text_bufs = {}
         self._last_project_saved_visible = False
-        self._save_as_start_generation = 0
         self._last_loss_signature = None
         self._psnr_graph_el = None
         self._last_psnr_signature = None
@@ -304,10 +308,6 @@ class TrainingPanel(Panel):
         )
         model.bind_func("label_reset", lambda: tr("training_panel.reset"))
         model.bind_func("label_clear", lambda: tr("training_panel.clear"))
-        model.bind_func(
-            "pv_search_placeholder",
-            lambda: tr("training.search.placeholder"),
-        )
         model.bind_func("label_pause", lambda: tr("training_panel.pause"))
         model.bind_func("label_resume", lambda: tr("training_panel.resume"))
         model.bind_func("label_stop", lambda: tr("training_panel.stop"))
@@ -592,8 +592,11 @@ class TrainingPanel(Panel):
             "dep_eval", lambda: p() is not None and p().has_params() and p().enable_eval
         )
         model.bind_func(
-            "show_progress",
-            lambda: RuntimeState.max_iterations.value > 0 and _iteration() > 0,
+            "show_training_telemetry",
+            lambda: (
+                _state() in ("running", "paused", "stopping", "completed", "stopped")
+                or _iteration() > 0
+            ),
         )
         model.bind_func("has_dataset", lambda: d() is not None and d().has_params())
         model.bind_func(
@@ -1292,7 +1295,7 @@ class TrainingPanel(Panel):
                 self._last_iteration = it
                 self._handle.dirty("status_iteration")
                 self._handle.dirty("progress_text")
-                self._handle.dirty("show_progress")
+                self._handle.dirty("show_training_telemetry")
                 dirty = True
             if state == "stopping":
                 self._handle.dirty("status_mode")
@@ -2146,7 +2149,7 @@ class TrainingPanel(Panel):
         elif action == "stop":
             lf.stop_training()
         elif action == "reset":
-            lf.reset_training()
+            self._action_reset()
         elif action == "clear":
             lf.new_project()
         elif action == "switch_edit":
@@ -2195,6 +2198,13 @@ class TrainingPanel(Panel):
                 if params.enable_eval:
                     self._sync_eval_steps_with_save_steps(params)
                 self._refresh_save_steps_model(params)
+
+    def _action_reset(self):
+        confirm_discard_work_then(
+            tr("training_panel.reset"),
+            lambda stop_training: lf.reset_training(),
+            ask_stop_training=False,
+        )
 
     def _action_start(self):
         params = lf.optimization_params()
@@ -2265,38 +2275,14 @@ class TrainingPanel(Panel):
     def _project_is_bound(self):
         return _project_has_path()
 
-    def _invoke_project_save_as(self):
-        save_as = getattr(lf, "project_save_as", None)
-        if not callable(save_as):
-            return False
-        try:
-            return save_as("", wait=True)
-        except TypeError:
-            return save_as("")
-
     def _save_as_then_start(self):
-        accepted = self._invoke_project_save_as()
+        accepted = _invoke_project_save_as()
         if accepted is False:
             return
         if self._project_is_bound():
             self._start_after_consent()
             return
-        self._schedule_start_once_project_bound()
-
-    def _schedule_start_once_project_bound(self):
-        scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
-        if not callable(scheduler):
-            return
-        self._save_as_start_generation += 1
-        generation = self._save_as_start_generation
-
-        def _on_ui():
-            if self._save_as_start_generation != generation:
-                return
-            if self._project_is_bound():
-                self._start_after_consent()
-
-        scheduler(_on_ui)
+        _schedule_once_project_bound(self._start_after_consent)
 
     def _should_offer_pc_save(self):
         scene = lf.get_scene()

@@ -719,6 +719,70 @@ namespace fast_lfs::rasterization::kernels {
         return param4[slot];
     }
 
+    // Per-cell shN gradient: fused path reconstructs from dL/dcolor and the SH basis.
+    template <int ACTIVE_SH_BASES>
+    struct ShNGradFromColor {
+        float3 grad_color;
+        float bx, by, bz, bxx, byy, bzz, bxy, bxz, byz;
+        bool compute;
+
+        __device__ __forceinline__ ShNGradFromColor(
+            const float3 mean3d,
+            const float3 cam_position,
+            const float3 gc,
+            const bool compute_sh_grads)
+            : grad_color(gc),
+              bx(0.0f),
+              by(0.0f),
+              bz(0.0f),
+              bxx(0.0f),
+              byy(0.0f),
+              bzz(0.0f),
+              bxy(0.0f),
+              bxz(0.0f),
+              byz(0.0f),
+              compute(compute_sh_grads) {
+            if (compute_sh_grads) {
+                const float3 direction = safe_normalize(mean3d - cam_position);
+                bx = direction.x;
+                by = direction.y;
+                bz = direction.z;
+                bxx = bx * bx;
+                byy = by * by;
+                bzz = bz * bz;
+                bxy = bx * by;
+                bxz = bx * bz;
+                byz = by * bz;
+            }
+        }
+
+        __device__ __forceinline__ float4 operator()(
+            const uint /*primitive_idx*/,
+            const uint k,
+            const uint /*slot*/,
+            const bool active_slot) const {
+            if (!compute || !active_slot)
+                return make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+            return shN_slot_grad_from_basis<ACTIVE_SH_BASES>(
+                k, bx, by, bz, bxx, byy, bzz, bxy, bxz, byz, grad_color);
+        }
+    };
+
+    // Per-cell shN gradient: standalone path loads the already-swizzled fp32 grad buffer.
+    struct ShNGradFromSwizzle {
+        const float4* __restrict__ grad4;
+
+        __device__ __forceinline__ float4 operator()(
+            const uint /*primitive_idx*/,
+            const uint /*k*/,
+            const uint slot,
+            const bool active_slot) const {
+            if (!active_slot || grad4 == nullptr)
+                return make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+            return grad4[slot];
+        }
+    };
+
     // Joint 8-bit shN Adam (swizzled float cells × 2 B). ALL threads must call when joint.
     // Walks ALL layout slots (not only active SH) so inactive bands re-encode under new
     // bounds and stay true-zero when their codes represent (u,log_s)=(0,0).
@@ -731,15 +795,16 @@ namespace fast_lfs::rasterization::kernels {
     // without storing the 48-cell (u, log_s, pval) workspace. Pass 2 recomputes the
     // same per-cell Adam from still-original packed moments (and q16 values) and
     // encodes. Slot / cell order is unchanged.
-    template <int ACTIVE_SH_BASES>
+    //
+    // GradSource(primitive_idx, k, slot, active_slot) -> float4 cell grads. The fused
+    // path reconstructs from color; the standalone path loads a swizzled buffer.
+    // blockIdx.x is the 256-splat joint-bounds row (256 threads per block).
+    template <int ACTIVE_SH_BASES, typename GradSource>
     __device__ inline void apply_shN_grads_packed_joint(
         const FusedAdamSettings& fused_adam,
         const uint primitive_idx,
         const uint sh_layout_slots,
-        const float3 mean3d,
-        const float3 cam_position,
-        const float3 grad_color,
-        const bool compute_sh_grads) {
+        GradSource grad_source) {
         using C = lfs::training::joint_adam::DeviceCodec<8>;
         using VC = lfs::training::sh_value::DeviceCodec16;
         constexpr float kInf = 1e30f;
@@ -796,20 +861,6 @@ namespace fast_lfs::rasterization::kernels {
 
         constexpr uint N_SLOTS = (ACTIVE_SH_BASES > 9) ? 12u : (ACTIVE_SH_BASES > 4) ? 6u
                                                                                      : 3u;
-        float bx = 0.0f, by = 0.0f, bz = 0.0f;
-        float bxx = 0.0f, byy = 0.0f, bzz = 0.0f, bxy = 0.0f, bxz = 0.0f, byz = 0.0f;
-        if (compute_sh_grads) {
-            const float3 direction = safe_normalize(mean3d - cam_position);
-            bx = direction.x;
-            by = direction.y;
-            bz = direction.z;
-            bxx = bx * bx;
-            byy = by * by;
-            bzz = bz * bz;
-            bxy = bx * by;
-            bxz = bx * bz;
-            byz = by * bz;
-        }
 
         if (touch) {
 #pragma unroll
@@ -818,10 +869,7 @@ namespace fast_lfs::rasterization::kernels {
                     break;
                 const uint slot = shAt(primitive_idx, k, sh_layout_slots);
                 const bool active_slot = k < N_SLOTS;
-                const float4 gk = (compute_sh_grads && active_slot)
-                                      ? shN_slot_grad_from_basis<ACTIVE_SH_BASES>(
-                                            k, bx, by, bz, bxx, byy, bzz, bxy, bxz, byz, grad_color)
-                                      : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+                const float4 gk = grad_source(primitive_idx, k, slot, active_slot);
                 float4 pc = load_shN_param_slot(value_q16, value_f16, param_u16, param_h, param4,
                                                 primitive_idx, k, slot, n_value_cells, old_vmm);
 #pragma unroll
@@ -911,10 +959,7 @@ namespace fast_lfs::rasterization::kernels {
                     break;
                 const uint slot = shAt(primitive_idx, k, sh_layout_slots);
                 const bool active_slot = k < N_SLOTS;
-                const float4 gk = (compute_sh_grads && active_slot)
-                                      ? shN_slot_grad_from_basis<ACTIVE_SH_BASES>(
-                                            k, bx, by, bz, bxx, byy, bzz, bxy, bxz, byz, grad_color)
-                                      : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+                const float4 gk = grad_source(primitive_idx, k, slot, active_slot);
                 float4 pc = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
                 if (value_q16) {
                     pc = load_shN_param_slot(true, false, param_u16, param_h, param4,
@@ -965,7 +1010,8 @@ namespace fast_lfs::rasterization::kernels {
         if (p.joint_bits == 8) {
             apply_shN_grads_packed_joint<ACTIVE_SH_BASES>(
                 fused_adam, primitive_idx, sh_layout_slots,
-                mean3d, cam_position, grad_color, compute_sh_grads);
+                ShNGradFromColor<ACTIVE_SH_BASES>(
+                    mean3d, cam_position, grad_color, compute_sh_grads));
         }
         // Non-joint state is unsupported (joint is the only codec).
     }
@@ -1217,6 +1263,50 @@ namespace fast_lfs::rasterization::kernels {
             min(grid_height, static_cast<uint>(y_max)));
     }
 
+    // Per-row (or per-column) ellipse walk used by both the count path and
+    // create_instances emit. Float math is verbatim on both sides so the
+    // kFastGSForwardStatusInstanceWriteMismatch check cannot fire from a
+    // count/emit divergence. scan_along_x: walk tile rows, span in x.
+    __device__ __forceinline__ uint2 ellipse_touched_tile_span(
+        const float3& conic,
+        const float radius_sq,
+        const float2 mean2d_shifted,
+        const bool scan_along_x,
+        const uint scan_index,
+        const uint cross_min,
+        const uint cross_max) {
+        if (scan_along_x) {
+            const float y0 = static_cast<float>(scan_index * config::tile_height) - mean2d_shifted.y;
+            const float y1 = y0 + static_cast<float>(config::tile_height);
+            const float2 bound = ellipse_range_bound(conic, radius_sq, y0, y1);
+            const uint lo = floor_tile_clamped(bound.x + mean2d_shifted.x, cross_min, cross_max, config::tile_width);
+            const uint hi = ceil_tile_clamped(bound.y + mean2d_shifted.x, cross_min, cross_max, config::tile_width);
+            return make_uint2(lo, hi);
+        }
+        const float3 conic_transposed = make_float3(conic.z, conic.y, conic.x);
+        const float x0 = static_cast<float>(scan_index * config::tile_width) - mean2d_shifted.x;
+        const float x1 = x0 + static_cast<float>(config::tile_width);
+        const float2 bound = ellipse_range_bound(conic_transposed, radius_sq, x0, x1);
+        const uint lo = floor_tile_clamped(bound.x + mean2d_shifted.y, cross_min, cross_max, config::tile_height);
+        const uint hi = ceil_tile_clamped(bound.y + mean2d_shifted.y, cross_min, cross_max, config::tile_height);
+        return make_uint2(lo, hi);
+    }
+
+    __device__ __forceinline__ uint tile_span_count(const uint2 span) {
+        return span.y >= span.x ? span.y - span.x : 0u;
+    }
+
+    __device__ __forceinline__ uint warp_exclusive_scan_uint(uint val) {
+        uint inclusive = val;
+#pragma unroll
+        for (int offset = 1; offset < 32; offset <<= 1) {
+            const uint n = __shfl_up_sync(0xffffffffu, inclusive, offset);
+            if ((threadIdx.x & 31) >= static_cast<unsigned>(offset))
+                inclusive += n;
+        }
+        return inclusive - val;
+    }
+
     __device__ inline uint compute_exact_n_touched_tiles(
         const float2& mean2d,
         const float3& conic,
@@ -1235,30 +1325,18 @@ namespace fast_lfs::rasterization::kernels {
 
         const uint screen_bounds_width = screen_bounds.y - screen_bounds.x;
         const uint screen_bounds_height = screen_bounds.w - screen_bounds.z;
+        const bool scan_along_x = screen_bounds_height <= screen_bounds_width;
+        const uint scan0 = scan_along_x ? screen_bounds.z : screen_bounds.x;
+        const uint scan1 = scan_along_x ? screen_bounds.w : screen_bounds.y;
+        const uint cross0 = scan_along_x ? screen_bounds.x : screen_bounds.z;
+        const uint cross1 = scan_along_x ? screen_bounds.y : screen_bounds.w;
 
         uint n_touched_tiles = 0;
-
-        if (screen_bounds_height <= screen_bounds_width) {
-            for (uint tile_y = screen_bounds.z; tile_y < screen_bounds.w; tile_y++) {
-                const float y0 = static_cast<float>(tile_y * config::tile_height) - mean2d_shifted.y;
-                const float y1 = y0 + static_cast<float>(config::tile_height);
-                const float2 bound = ellipse_range_bound(conic, radius_sq, y0, y1);
-                const uint min_x = floor_tile_clamped(bound.x + mean2d_shifted.x, screen_bounds.x, screen_bounds.y, config::tile_width);
-                const uint max_x = ceil_tile_clamped(bound.y + mean2d_shifted.x, screen_bounds.x, screen_bounds.y, config::tile_width);
-                n_touched_tiles += max_x >= min_x ? max_x - min_x : 0;
-            }
-        } else {
-            const float3 conic_transposed = make_float3(conic.z, conic.y, conic.x);
-            for (uint tile_x = screen_bounds.x; tile_x < screen_bounds.y; tile_x++) {
-                const float x0 = static_cast<float>(tile_x * config::tile_width) - mean2d_shifted.x;
-                const float x1 = x0 + static_cast<float>(config::tile_width);
-                const float2 bound = ellipse_range_bound(conic_transposed, radius_sq, x0, x1);
-                const uint min_y = floor_tile_clamped(bound.x + mean2d_shifted.y, screen_bounds.z, screen_bounds.w, config::tile_height);
-                const uint max_y = ceil_tile_clamped(bound.y + mean2d_shifted.y, screen_bounds.z, screen_bounds.w, config::tile_height);
-                n_touched_tiles += max_y >= min_y ? max_y - min_y : 0;
-            }
+        for (uint scan_index = scan0; scan_index < scan1; scan_index++) {
+            const uint2 span = ellipse_touched_tile_span(
+                conic, radius_sq, mean2d_shifted, scan_along_x, scan_index, cross0, cross1);
+            n_touched_tiles += tile_span_count(span);
         }
-
         return n_touched_tiles;
     }
 

@@ -99,6 +99,22 @@ body.floating-panel {
     margin-left: auto;
 }
 
+.preferences-path-control {
+    display: flex;
+    flex: 1 1 360dp;
+    align-items: center;
+    gap: 6dp;
+    margin-left: auto;
+    min-width: 220dp;
+}
+
+.preferences-path-input {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 160dp;
+    margin-left: 0;
+}
+
 .preferences-port-input {
     flex: 1 1 auto;
     width: auto;
@@ -165,6 +181,14 @@ body.floating-panel {
 
 .preferences-checkbox-row input {
     margin-left: auto;
+}
+
+.preferences-interface-option {
+    margin-top: 10dp;
+}
+
+.preferences-scene-graph-section {
+    margin-top: 14dp;
 }
 
 .preferences-actions {

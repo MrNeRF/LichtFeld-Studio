@@ -294,11 +294,19 @@ namespace lfs::io {
                         auto [img_w, img_h, img_c] = get_image_info_cached();
                         auto [normal_w, normal_h, normal_c] = lfs::core::get_image_info(normal_path);
                         if (img_w != normal_w || img_h != normal_h) {
-                            return make_error(ErrorCode::NORMAL_SIZE_MISMATCH,
-                                              std::format("Normal map '{}' is {}x{} but image '{}' is {}x{}",
-                                                          lfs::core::path_to_utf8(normal_path.filename()), normal_w, normal_h,
-                                                          info._image_name, img_w, img_h),
-                                              normal_path);
+                            if (options.normal_auto_generate) {
+                                LOG_WARN("Normal map '{}' is {}x{} but image '{}' is {}x{}; "
+                                         "ignoring it so auto-generate can overwrite that file",
+                                         lfs::core::path_to_utf8(normal_path.filename()),
+                                         normal_w, normal_h, info._image_name, img_w, img_h);
+                                normal_path.clear();
+                            } else {
+                                return make_error(ErrorCode::NORMAL_SIZE_MISMATCH,
+                                                  std::format("Normal map '{}' is {}x{} but image '{}' is {}x{}",
+                                                              lfs::core::path_to_utf8(normal_path.filename()), normal_w, normal_h,
+                                                              info._image_name, img_w, img_h),
+                                                  normal_path);
+                            }
                         }
                     }
 

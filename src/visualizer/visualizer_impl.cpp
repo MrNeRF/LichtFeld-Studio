@@ -23,6 +23,7 @@
 #include "gui/panels/windows_console_utils.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/utils/native_file_dialog.hpp"
+#include "io/project_chapters.hpp"
 #include "ipc/render_settings_convert.hpp"
 #include "ipc/view_context.hpp"
 #include "operation/undo_entry.hpp"
@@ -290,6 +291,7 @@ namespace lfs::vis {
 
         // Create data loading service
         data_loader_ = std::make_unique<DataLoadingService>(scene_manager_.get());
+        data_loader_->setViewer(this);
 
         // Create parameter manager (lazy-loads JSON files on first use)
         parameter_manager_ = std::make_unique<ParameterManager>();
@@ -1859,6 +1861,7 @@ namespace lfs::vis {
         if (!input_controller_) {
             input_controller_ = std::make_unique<InputController>(
                 window_manager_->getWindow(), viewport_);
+            input_controller_->setViewer(this);
             input_controller_->initialize();
             window_manager_->setInputController(input_controller_.get());
             python::set_keymap_bindings(&input_controller_->getBindings());
@@ -2782,9 +2785,9 @@ namespace lfs::vis {
         }
     }
 
-    bool VisualizerImpl::deferDatasetLoadForTraining(
+    bool VisualizerImpl::deferLoadFileForTraining(
         const lfs::core::events::cmd::LoadFile& cmd) {
-        if (!cmd.is_dataset || !cmd.stop_training) {
+        if (!cmd.stop_training) {
             return false;
         }
         if (pending_training_action_ ==
@@ -2793,14 +2796,115 @@ namespace lfs::vis {
                 PendingTrainingAction::CloseDiscard) {
             return true;
         }
-        if (!shouldDeferProjectSwitchForTraining()) {
+        const bool already_queued =
+            pending_training_action_ ==
+            PendingTrainingAction::LoadDataset;
+        if (!already_queued &&
+            !shouldDeferProjectSwitchForTraining()) {
             return false;
         }
-        pending_load_file_ = cmd;
-        pending_load_file_->stop_training = false;
+        auto queued = cmd;
+        queued.stop_training = false;
+        pending_load_files_.push_back(std::move(queued));
+        if (already_queued) {
+            return true;
+        }
         pending_training_action_ =
             PendingTrainingAction::LoadDataset;
         requestStopThenPendingAction();
+        return true;
+    }
+
+    bool VisualizerImpl::loadFileWouldReplaceScene(
+        const bool is_dataset,
+        const bool replace) const {
+        if (is_dataset || replace) {
+            return true;
+        }
+        return scene_manager_ &&
+               scene_manager_->getContentType() ==
+                   SceneManager::ContentType::Dataset;
+    }
+
+    bool VisualizerImpl::resetUntitledSessionForReplaceLoad() {
+        if (!project_lifecycle_) {
+            return true;
+        }
+        if (project_lifecycle_->isBlankUntitledSession()) {
+            return true;
+        }
+        if (gui_manager_) {
+            gui_manager_->asyncTasks().cancelImport();
+        }
+        std::optional<lfs::io::project::ParameterManagerSnapshot>
+            parameter_snapshot;
+        bool parameters_dirty = false;
+        if (auto* const param_mgr = getParameterManager();
+            param_mgr && param_mgr->ensureLoaded()) {
+            parameters_dirty = param_mgr->isDirty();
+            if (auto captured =
+                    param_mgr->capturePendingProjectState();
+                captured) {
+                parameter_snapshot = std::move(*captured);
+            }
+        }
+        lfs::core::param::TrainingParameters loader_params;
+        if (data_loader_) {
+            loader_params = data_loader_->getParameters();
+        }
+        if (auto created = project_lifecycle_->newProject(
+                ProjectSwitchDisposition::DiscardChanges);
+            !created) {
+            LOG_ERROR(
+                "Replace-load session reset failed: {}",
+                lfs::format_for_developer(created.error()));
+            return false;
+        }
+        if (auto* const param_mgr = getParameterManager();
+            param_mgr && parameter_snapshot) {
+            param_mgr->installValidatedPendingProjectState(
+                *parameter_snapshot);
+            if (parameters_dirty) {
+                param_mgr->markDirty();
+            }
+        }
+        if (data_loader_) {
+            data_loader_->setParameters(loader_params);
+        }
+        return true;
+    }
+
+    bool VisualizerImpl::loadFileWipeWouldNeedConfirmation(
+        const bool is_dataset,
+        const bool replace,
+        const bool discard_changes) {
+        if (discard_changes) {
+            return false;
+        }
+        if (!loadFileWouldReplaceScene(is_dataset, replace)) {
+            return false;
+        }
+        const bool dirty =
+            project_lifecycle_ &&
+            project_lifecycle_->hasDirtyProject();
+        const bool training =
+            trainer_manager_ &&
+            (trainer_manager_->isTrainingActive() ||
+             trainer_manager_->isCompletionPending());
+        return dirty || training;
+    }
+
+    bool VisualizerImpl::preflightLoadFileWipe(
+        const lfs::core::events::cmd::LoadFile& cmd) {
+        if (!loadFileWipeWouldNeedConfirmation(
+                cmd.is_dataset, cmd.replace, cmd.discard_changes)) {
+            return false;
+        }
+        lfs::core::events::cmd::ShowLoadFileConfirmation{
+            .paths = {cmd.path},
+            .is_dataset = cmd.is_dataset,
+            .replace = cmd.replace}
+            .emit();
         return true;
     }
 
@@ -3029,7 +3133,7 @@ namespace lfs::vis {
         pending_open_path_.clear();
         pending_open_disposition_ =
             ProjectSwitchDisposition::RequireClean;
-        pending_load_file_.reset();
+        pending_load_files_.clear();
         gui_session_restore_.clear();
         pending_project_tools_restore_.reset();
         hydration_terminal_restore_ticket_.reset();
@@ -3656,13 +3760,12 @@ namespace lfs::vis {
             break;
         }
         case PendingTrainingAction::LoadDataset: {
-            auto command =
+            auto commands =
                 std::exchange(
-                    pending_load_file_,
-                    std::nullopt);
-            if (command) {
-                command->stop_training = false;
-                command->emit();
+                    pending_load_files_, {});
+            for (auto& command : commands) {
+                command.stop_training = false;
+                command.emit();
             }
             break;
         }

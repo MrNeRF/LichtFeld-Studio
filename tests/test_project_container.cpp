@@ -3433,7 +3433,7 @@ namespace {
     TEST(ProjectRecoveryScratch, PathResolutionUsesSessionUuid) {
         TemporaryDirectory temporary;
         const auto uuid = lfs::core::generate_uuid_v4();
-        const auto dir = temporary.path / "recovery";
+        const auto dir = temporary.path / "tmp";
         const auto path = scratch_autosave_path(dir, uuid);
         EXPECT_EQ(path.parent_path(), dir);
         EXPECT_EQ(
@@ -3448,7 +3448,7 @@ namespace {
 
     TEST(ProjectRecoveryScratch, ScanFindsScratchCandidate) {
         TemporaryDirectory temporary;
-        const auto dir = temporary.path / "recovery";
+        const auto dir = temporary.path / "tmp";
         fs::create_directories(dir);
         const auto uuid = lfs::core::generate_uuid_v4();
         const auto path = scratch_autosave_path(dir, uuid);
@@ -3471,7 +3471,7 @@ namespace {
 
     TEST(ProjectRecoveryScratch, RemoveDeletesUnlockedScratch) {
         TemporaryDirectory temporary;
-        const auto dir = temporary.path / "recovery";
+        const auto dir = temporary.path / "tmp";
         fs::create_directories(dir);
         const auto uuid = lfs::core::generate_uuid_v4();
         const auto path = scratch_autosave_path(dir, uuid);
@@ -3487,7 +3487,7 @@ namespace {
 
     TEST(ProjectRecoveryScratch, SweepSkipsLiveLockedScratch) {
         TemporaryDirectory temporary;
-        const auto dir = temporary.path / "recovery";
+        const auto dir = temporary.path / "tmp";
         fs::create_directories(dir);
         const auto uuid = lfs::core::generate_uuid_v4();
         const auto path = scratch_autosave_path(dir, uuid);
@@ -3506,7 +3506,7 @@ namespace {
 
     TEST(ProjectRecoveryScratch, SweepRemovesEmptyUnlockedScratch) {
         TemporaryDirectory temporary;
-        const auto dir = temporary.path / "recovery";
+        const auto dir = temporary.path / "tmp";
         fs::create_directories(dir);
         const auto uuid = lfs::core::generate_uuid_v4();
         const auto path = scratch_autosave_path(dir, uuid);

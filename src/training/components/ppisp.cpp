@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace lfs::training {
@@ -197,6 +198,41 @@ namespace lfs::training {
         LOG_DEBUG("PPISP: {} cameras, {} frames, lr={:.2e}", num_cameras_, num_frames_, config_.lr);
     }
 
+    void PPISP::seed_exposure(const std::vector<std::pair<int, float>>& uid_ev) {
+        assert(finalized_ && "Must call finalize() before seed_exposure()");
+        if (uid_ev.empty() || num_frames_ <= 0) {
+            return;
+        }
+
+        double sum = 0.0;
+        int n = 0;
+        for (const auto& [uid, ev] : uid_ev) {
+            if (!std::isfinite(ev) || !is_known_frame(uid)) {
+                continue;
+            }
+            sum += static_cast<double>(ev);
+            ++n;
+        }
+        if (n == 0) {
+            return;
+        }
+        const float mean = static_cast<float>(sum / static_cast<double>(n));
+
+        auto host = exposure_params_.cpu();
+        float* const ptr = host.ptr<float>();
+        for (const auto& [uid, ev] : uid_ev) {
+            if (!std::isfinite(ev)) {
+                continue;
+            }
+            const auto it = uid_to_frame_idx_.find(uid);
+            if (it == uid_to_frame_idx_.end()) {
+                continue;
+            }
+            ptr[it->second] = std::clamp(0.5f * (ev - mean), -16.0f, 16.0f); // PPISP_MIN/MAX_EXPOSURE_EV
+        }
+        exposure_params_.copy_from(host);
+    }
+
     bool PPISP::is_known_frame(int uid) const { return uid_to_frame_idx_.find(uid) != uid_to_frame_idx_.end(); }
 
     bool PPISP::is_known_camera(int camera_id) const {
@@ -254,6 +290,9 @@ namespace lfs::training {
         crf_exp_avg_sq_ = lfs::core::Tensor::zeros({crf_size}, lfs::core::Device::CUDA);
         crf_grad_ = lfs::core::Tensor::zeros({crf_size}, lfs::core::Device::CUDA);
 
+        override_exposure_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+        override_color_ = lfs::core::Tensor::zeros({8}, lfs::core::Device::CUDA);
+
         // Scratch buffers for backward_with_controller_params
         ctrl_bwd_exposure_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
         ctrl_bwd_color_ = lfs::core::Tensor::zeros({8}, lfs::core::Device::CUDA);
@@ -290,11 +329,9 @@ namespace lfs::training {
         // clang-format on
     }
 
-    lfs::core::Tensor PPISP::apply(const lfs::core::Tensor& rgb, int camera_id, int uid, const PPISPRegion& region) {
-        assert(finalized_ && "Must call finalize() before apply()");
-        const int camera_idx = translate_camera(camera_id);
-        const int frame_idx = translate_frame(uid);
-
+    lfs::core::Tensor PPISP::apply_forward(const lfs::core::Tensor& rgb, int camera_idx, int frame_idx,
+                                           const float* exposure, const float* color, int num_frames,
+                                           const PPISPRegion& region) {
         const auto& shape = rgb.shape();
         assert(shape.rank() == 3 && shape[0] == 3 && "Expected CHW layout with 3 channels");
 
@@ -305,12 +342,30 @@ namespace lfs::training {
 
         auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA);
 
-        kernels::launch_ppisp_forward_chw_region(exposure_params_.ptr<float>(), vignetting_params_.ptr<float>(),
-                                                 color_params_.ptr<float>(), crf_params_.ptr<float>(),
-                                                 rgb.ptr<float>(), output.ptr<float>(), h, w, region.y_offset, full_h,
-                                                 num_cameras_, num_frames_, camera_idx, frame_idx, nullptr);
+        kernels::launch_ppisp_forward_chw_region(exposure, vignetting_params_.ptr<float>(), color,
+                                                 crf_params_.ptr<float>(), rgb.ptr<float>(), output.ptr<float>(), h, w,
+                                                 region.y_offset, full_h, num_cameras_, num_frames, camera_idx,
+                                                 frame_idx, nullptr);
 
         return output;
+    }
+
+    lfs::core::Tensor PPISP::apply(const lfs::core::Tensor& rgb, int camera_id, int uid, const PPISPRegion& region) {
+        assert(finalized_ && "Must call finalize() before apply()");
+        const int camera_idx = translate_camera(camera_id);
+        const int frame_idx = translate_frame(uid);
+        return apply_forward(rgb, camera_idx, frame_idx, exposure_params_.ptr<float>(), color_params_.ptr<float>(),
+                             num_frames_, region);
+    }
+
+    lfs::core::Tensor PPISP::apply_with_exposure(const lfs::core::Tensor& rgb, int camera_id, float exposure_ev,
+                                                 const PPISPRegion& region) {
+        assert(finalized_ && "Must call finalize() before apply_with_exposure()");
+        const int camera_idx = translate_camera(camera_id);
+        const float clamped = std::clamp(exposure_ev, -16.0f, 16.0f); // PPISP_MIN/MAX_EXPOSURE_EV
+        override_exposure_.fill_(clamped);
+        return apply_forward(rgb, camera_idx, 0, override_exposure_.ptr<float>(), override_color_.ptr<float>(), 1,
+                             region);
     }
 
     lfs::core::Tensor PPISP::apply_with_controller_params(const lfs::core::Tensor& rgb,

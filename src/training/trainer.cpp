@@ -20,6 +20,7 @@
 #include "core/cuda_error_typed.hpp"
 #include "core/environment.hpp"
 #include "core/events.hpp"
+#include "core/exif.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -42,10 +43,12 @@
 #include "lfs/kernels/ssim.cuh"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
+#include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/perf_bench.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/vram_ledger.hpp"
 #include "losses/losses.hpp"
+#include "normal_auto_generate.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "python/runner.hpp"
 #include "rasterization/fast_rasterizer.hpp"
@@ -72,6 +75,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <utility>
 
 #include <algorithm>
 #include <atomic>
@@ -418,10 +422,6 @@ namespace lfs::training {
 
         constexpr float kDepthLossFinalScale = 0.02f;
         constexpr float kDepthLossGradientTermWeight = 1.0f;
-        // Normal supervision starts once the geometry has roughly formed
-        // (2DGS enables its normal term at ~23% of training): rotating fat,
-        // mispositioned Gaussians early only fights densification.
-        constexpr float kNormalSupervisionStartFraction = 0.2f;
 
         [[nodiscard]] kernels::DepthPriorType depth_prior_from_mode(const std::string_view mode) {
             if (mode == "ssi-disparity") {
@@ -1198,6 +1198,9 @@ namespace lfs::training {
         bilateral_grid_.reset();
         ppisp_.reset();
         ppisp_controller_pool_.reset();
+        ppisp_exif_exposure_mean_.reset();
+        eval_ppisp_applied_.store(0);
+        eval_ppisp_exif_.store(0);
         sparsity_optimizer_.reset();
         evaluator_.reset();
 
@@ -1321,6 +1324,36 @@ namespace lfs::training {
             LOG_INFO("PPISP initialized: {} cameras (physical), {} frames, lr={:.2e}, warmup={}, reg_weight={:.2e}",
                      ppisp_->num_cameras(), ppisp_->num_frames(), params_.optimization.ppisp_lr,
                      config.warmup_steps, reg_weight);
+
+            const bool resume = params_.resume_checkpoint.has_value() || params_.resume_project.has_value();
+            if (params_.optimization.ppisp_exposure_from_exif && !resume) {
+                std::vector<std::pair<int, float>> uid_ev;
+                for (const auto& cam : train_dataset_->get_cameras()) {
+                    if (!cam || !ppisp_->is_known_frame(cam->uid())) {
+                        continue;
+                    }
+                    const auto ev = lfs::core::exif_exposure_ev_for_training_image(
+                        cam->image_path(), params_.dataset.data_path);
+                    if (ev) {
+                        uid_ev.emplace_back(cam->uid(), static_cast<float>(*ev));
+                    }
+                }
+                const int n = static_cast<int>(uid_ev.size());
+                const int m = ppisp_->num_frames();
+                if (n == 0) {
+                    LOG_DEBUG("PPISP exposure EXIF seed skipped: no tags in {} frames", m);
+                } else {
+                    double sum = 0.0;
+                    for (const auto& item : uid_ev) {
+                        sum += static_cast<double>(item.second);
+                    }
+                    const double mean = sum / static_cast<double>(n);
+                    ppisp_exif_exposure_mean_ = static_cast<float>(mean);
+                    ppisp_->seed_exposure(uid_ev);
+                    LOG_INFO("PPISP exposure seeded from EXIF for {} of {} frames (mean {:.2f} EV)",
+                             n, m, mean);
+                }
+            }
 
             if (auto result = apply_ppisp_sidecar_if_configured(); !result) {
                 return result;
@@ -1924,6 +1957,27 @@ namespace lfs::training {
 
         sparsity_optimizer_.reset();
         return {};
+    }
+
+    bool Trainer::morton_reorder_due(const int iter) const {
+        return morton::should_reorder(
+            iter,
+            params_.optimization.morton_reorder_interval,
+            params_.optimization.stop_refine);
+    }
+
+    void Trainer::maybe_morton_reorder(const int iter) {
+        if (!morton_reorder_due(iter) || !strategy_) {
+            return;
+        }
+        auto& model = strategy_->get_model();
+        const auto result = morton::apply_morton_reorder(model, &strategy_->get_optimizer());
+        if (!result.applied) {
+            return;
+        }
+        cropbox_damping_cache_valid_ = false;
+        strategy_->permute_gaussian_rows(result.permutation);
+        install_cropbox_step_damping(model, strategy_->get_optimizer());
     }
 
     void Trainer::install_cropbox_step_damping(
@@ -2708,12 +2762,6 @@ namespace lfs::training {
         if (const auto validation_error = params.validate(); !validation_error.empty()) {
             return std::unexpected("Invalid training parameters: " + validation_error);
         }
-        if (params.optimization.gut && params.optimization.sh_degree > 0) {
-            return std::unexpected(
-                "GUT/gsplat training with sh_degree > 0 is unsupported: the unfused "
-                "optimizer cannot update joint-codec SH-rest values. Use sh_degree=0 "
-                "or select the FastGS training path.");
-        }
 
         // Thread-safe initialization using mutex
         std::lock_guard<std::mutex> lock(init_mutex_);
@@ -3005,6 +3053,11 @@ namespace lfs::training {
 
             // Initialize the evaluator - it handles all metrics internally
             evaluator_ = std::make_unique<lfs::training::MetricsEvaluator>(params_);
+            if (params_.optimization.use_ppisp && ppisp_ && ppisp_->isFinalized()) {
+                evaluator_->set_appearance([this](const lfs::core::Tensor& rgb, const lfs::core::Camera& cam) {
+                    return applyPPISPForEval(rgb, cam);
+                });
+            }
             LOG_DEBUG("Metrics evaluator initialized");
 
             // Resume from checkpoint if provided
@@ -3377,6 +3430,9 @@ namespace lfs::training {
         bilateral_grid_.reset();
         ppisp_.reset();
         ppisp_controller_pool_.reset();
+        ppisp_exif_exposure_mean_.reset();
+        eval_ppisp_applied_.store(0);
+        eval_ppisp_exif_.store(0);
         sparsity_optimizer_.reset();
         evaluator_.reset();
         progress_.reset();
@@ -5761,6 +5817,7 @@ namespace lfs::training {
                 bool fastgs_strategy_hooks_at_start = false;
                 const bool refining_this_step =
                     strategy_ && strategy_->is_refining(iter);
+                const bool morton_due = morton_reorder_due(iter);
                 if (fastgs_path && !in_sparsification) {
                     current_phase = StepPhase::RefinementCommit;
                     LFS_VRAM_SCOPE("train.strategy.fastgs_pre_step");
@@ -5777,7 +5834,8 @@ namespace lfs::training {
                     // blocks. See trainer.cpp step() lock below; both must be gated.
                     std::unique_lock<std::shared_mutex> lock(render_mutex_, std::defer_lock);
                     const bool refining = refining_this_step;
-                    if (refining) {
+                    const bool need_exclusive = refining || morton_due;
+                    if (need_exclusive) {
                         lock.lock();
                     }
                     // One-lock complete: exclusive render_mutex_ already bars new
@@ -5785,7 +5843,7 @@ namespace lfs::training {
                     // any rebuild that started before exclusive cannot re-enter
                     // (or finish late) across float-workspace swap + trim.
                     std::unique_lock<std::mutex> combined_model_lock;
-                    if (refining && scene_) {
+                    if (need_exclusive && scene_) {
                         combined_model_lock = scene_->acquireCombinedModelExclusive();
                     }
                     // Drain in-flight reader events immediately before post_backward's
@@ -5816,7 +5874,7 @@ namespace lfs::training {
                         }
                         DensifyBarrierGuard(const DensifyBarrierGuard&) = delete;
                         DensifyBarrierGuard& operator=(const DensifyBarrierGuard&) = delete;
-                    } densify_barrier(this, refining);
+                    } densify_barrier(this, need_exclusive);
                     // Nested LiveModelMutationGuard inside ensure/commit must no-op.
                     struct RefiningMutationMark {
                         explicit RefiningMutationMark(bool on) {
@@ -5831,10 +5889,11 @@ namespace lfs::training {
                             }
                         }
                         bool on_ = false;
-                    } refining_mutation_mark(refining);
+                    } refining_mutation_mark(need_exclusive);
                     auto& model = strategy_->get_model();
                     const size_t model_size_before = static_cast<size_t>(model.size());
                     strategy_->post_backward(iter, r_output);
+                    maybe_morton_reorder(iter);
                     install_cropbox_step_damping(model, strategy_->get_optimizer());
                     fastgs_strategy_hooks_at_start = true;
 
@@ -5887,11 +5946,7 @@ namespace lfs::training {
                     install_cropbox_step_damping(strategy_->get_model(), strategy_->get_optimizer());
                 }
 
-                const int normal_start_iter = static_cast<int>(
-                    kNormalSupervisionStartFraction *
-                    static_cast<float>(std::max(1, params_.optimization.resolved_total_iterations())));
-                const bool normal_supervision_started =
-                    params_.optimization.use_normal_loss && iter >= normal_start_iter;
+                const bool normal_supervision_started = normal_supervision_active(iter);
 
                 FastGSFusedExtraGradients fused_extra_gradients;
                 lfs::core::Tensor fused_scale_reg_loss_gpu;
@@ -6616,7 +6671,7 @@ namespace lfs::training {
                         }
 
                         if (run_fastgs_gaussian_backward &&
-                            params_.optimization.use_normal_loss &&
+                            normal_supervision_started &&
                             params_.optimization.normal_loss_weight > 0.0f &&
                             output.normal.is_valid() &&
                             output.normal.numel() > 0 &&
@@ -6792,7 +6847,7 @@ namespace lfs::training {
                         }
 
                         if (run_fastgs_gaussian_backward &&
-                            params_.optimization.use_normal_loss &&
+                            normal_supervision_started &&
                             params_.optimization.normal_consistency_weight > 0.0f &&
                             output.normal.is_valid() &&
                             output.normal.numel() > 0 &&
@@ -7309,7 +7364,10 @@ namespace lfs::training {
                         std::unique_lock<std::shared_mutex> lock(render_mutex_, std::defer_lock);
                         std::unique_lock<std::shared_mutex> model_write_lock(model_access_mutex_, std::defer_lock);
                         const bool refining = strategy_->is_refining(iter);
-                        if (refining) {
+                        const bool morton_here =
+                            morton_due && !fastgs_strategy_hooks_at_start && !in_sparsification;
+                        const bool need_exclusive = refining || morton_here;
+                        if (need_exclusive) {
                             lock.lock();
                         } else {
                             // Non-refining in-place writes: hold the model-access lock
@@ -7320,7 +7378,7 @@ namespace lfs::training {
                         }
                         // One-lock complete: see fastgs post_backward block above.
                         std::unique_lock<std::mutex> combined_model_lock;
-                        if (refining && scene_) {
+                        if (need_exclusive && scene_) {
                             combined_model_lock = scene_->acquireCombinedModelExclusive();
                         }
                         // Drain in-flight reader events immediately before the optimizer
@@ -7352,7 +7410,8 @@ namespace lfs::training {
                             DensifyBarrierGuard& operator=(const DensifyBarrierGuard&) = delete;
                         } densify_barrier(
                             this,
-                            refining && !in_sparsification && !fastgs_strategy_hooks_at_start);
+                            (refining || morton_here) && !in_sparsification &&
+                                !fastgs_strategy_hooks_at_start);
                         LFS_VRAM_SCOPE("train.optimizer.strategy_step");
                         LOG_VRAM_DIFF("train.optimizer.strategy_step");
                         auto& model = strategy_->get_model();
@@ -7378,6 +7437,7 @@ namespace lfs::training {
                             ++mutation_epoch_;
                             persistent_commit = true;
                             strategy_->post_backward(iter, r_output);
+                            maybe_morton_reorder(iter);
                         }
                         if (!fastgs_path) {
                             install_cropbox_step_damping(model, strategy_->get_optimizer());
@@ -7456,10 +7516,18 @@ namespace lfs::training {
                     // Clean evaluation - let the evaluator handle everything
                     if (evaluator_->is_enabled() && evaluator_->should_evaluate(iter)) {
                         evaluator_->print_evaluation_header(iter);
+                        eval_ppisp_applied_.store(0);
+                        eval_ppisp_exif_.store(0);
                         auto metrics = evaluator_->evaluate(iter,
                                                             strategy_->get_model(),
                                                             val_dataset_,
                                                             background_);
+                        if (evaluator_->has_appearance()) {
+                            const int n = eval_ppisp_applied_.load();
+                            const int k = eval_ppisp_exif_.load();
+                            LOG_INFO("Eval: PPISP applied to {} held-out frames ({} with EXIF exposure, {} at mean exposure)",
+                                     n, k, n - k);
+                        }
                         LOG_INFO("{}", metrics.to_string());
                         // B2: retain only the current active shape after evaluation.
                         photometric_loss_.arena().shrink_to_required();
@@ -7870,6 +7938,7 @@ namespace lfs::training {
                 params_.optimization.use_normal_loss &&
                 params_.optimization.normal_loss_weight > 0.0f;
             if (aux_pipeline_config.load_normals) {
+                ensure_training_normal_maps(params_, train_dataset_->get_cameras());
                 normal_prior_flip_yz_ = false;
                 normal_prior_world_space_ = false;
                 normal_prior_srgb_ = false;
@@ -7941,6 +8010,14 @@ namespace lfs::training {
                                 normal_prior_world_rotation_);
                     }
                 }
+            }
+            if (evaluator_) {
+                evaluator_->set_normal_prior_decode({
+                    .srgb = normal_prior_srgb_,
+                    .flip_yz = normal_prior_flip_yz_,
+                    .world_space = normal_prior_world_space_,
+                    .world_rotation = normal_prior_world_rotation_,
+                });
             }
             if (params_.optimization.mask_mode != lfs::core::param::MaskMode::None) {
                 aux_pipeline_config.invert_masks = params_.optimization.invert_masks;
@@ -8215,6 +8292,20 @@ namespace lfs::training {
             : user_stopped
                 ? lfs::io::project::TrainingFinishReason::UserStopped
                 : lfs::io::project::TrainingFinishReason::Completed;
+        // A save-project-at-iter capture that needed replan is re-queued for
+        // the next post-step. When the target is the final iteration there is
+        // no next post-step; drain here (layout is stable) before the terminal save.
+        {
+            bool drain_requested_project_snapshot = false;
+            {
+                std::lock_guard lock(project_snapshot_mutex_);
+                drain_requested_project_snapshot = requested_project_path_.has_value();
+            }
+            if (drain_requested_project_snapshot) {
+                consume_requested_project_snapshot(terminal_iteration);
+                finish_project_writer();
+            }
+        }
         TrainerProjectSavePolicy terminal_save_policy;
         std::optional<std::filesystem::path> terminal_project_path;
         {
@@ -8494,6 +8585,58 @@ namespace lfs::training {
                 "Project snapshot did not publish the requested destination");
         }
         return path;
+    }
+
+    lfs::core::Tensor Trainer::applyPPISPForEval(const lfs::core::Tensor& rgb,
+                                                 const lfs::core::Camera& cam) const {
+        eval_ppisp_applied_.fetch_add(1, std::memory_order_relaxed);
+
+        const auto params = getParams();
+        if (!ppisp_ || !params.optimization.use_ppisp || !ppisp_->isFinalized() ||
+            rgb.shape().rank() != 3) {
+            return rgb;
+        }
+
+        auto rgb_chw = rgb.device() == lfs::core::Device::CUDA ? rgb : rgb.cuda();
+        if (rgb_chw.shape()[0] != 3 && rgb_chw.shape()[2] == 3) {
+            rgb_chw = rgb_chw.permute({2, 0, 1}).contiguous();
+        } else if (!rgb_chw.is_contiguous()) {
+            rgb_chw = rgb_chw.contiguous();
+        }
+
+        auto* const pool = controller_pool_for_save(get_current_iteration());
+        if (pool && params.optimization.ppisp_use_controller) {
+            const bool is_training_camera = ppisp_->is_known_frame(cam.uid());
+            const int camera_idx =
+                is_training_camera ? ppisp_->camera_index(ppisp_->camera_for_frame(cam.uid())) : 0;
+            const int controller_idx =
+                (camera_idx >= 0 && camera_idx < pool->num_cameras()) ? camera_idx : 0;
+            std::lock_guard<std::mutex> controller_lock(pool->predict_mutex());
+            const auto controller_params = pool->predict(controller_idx, rgb_chw.unsqueeze(0), 1.0f);
+            return ppisp_->apply_with_controller_params(rgb_chw, controller_params, controller_idx);
+        }
+
+        int camera_id = cam.camera_id();
+        if (!ppisp_->is_known_camera(camera_id)) {
+            camera_id = ppisp_->any_camera_id();
+        }
+
+        if (ppisp_->is_known_frame(cam.uid())) {
+            return ppisp_->apply(rgb_chw, camera_id, cam.uid());
+        }
+
+        float exposure = 0.0f;
+        if (ppisp_exif_exposure_mean_) {
+            const auto ev = lfs::core::exif_exposure_ev_for_training_image(
+                cam.image_path(), params.dataset.data_path);
+            if (ev) {
+                exposure = std::clamp(0.5f * (static_cast<float>(*ev) - *ppisp_exif_exposure_mean_),
+                                      -16.0f, 16.0f);
+                eval_ppisp_exif_.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+
+        return ppisp_->apply_with_exposure(rgb_chw, camera_id, exposure);
     }
 
     lfs::core::Tensor Trainer::applyPPISPForViewport(const lfs::core::Tensor& rgb, const int camera_uid,

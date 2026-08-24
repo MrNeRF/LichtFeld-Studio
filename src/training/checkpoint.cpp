@@ -18,6 +18,7 @@
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -292,8 +293,13 @@ namespace lfs::training {
             };
         } catch (const std::exception& error) {
             // LFS-CENSUS-OK(empty-catch): normalize the exception into a typed checkpoint error.
+            const bool layout_changed =
+                std::string_view(error.what()).find("layout changed") !=
+                std::string_view::npos;
             return checkpoint_stream_error(
-                lfs::ErrorCode::Internal,
+                layout_changed
+                    ? lfs::ErrorCode::FailedPrecondition
+                    : lfs::ErrorCode::Internal,
                 std::string("Serialize checkpoint failed: ") +
                     error.what(),
                 LFS_SOURCE_SITE_CURRENT());

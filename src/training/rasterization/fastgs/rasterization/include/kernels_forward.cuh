@@ -290,6 +290,112 @@ namespace fast_lfs::rasterization::kernels::forward {
         }
     }
 
+    __device__ __forceinline__ void emit_ellipse_tile_span(
+        const uint2 span,
+        const uint scan_index,
+        const bool along_x,
+        const uint grid_width,
+        const uint depth_key,
+        const uint depth_bits,
+        const uint primitive_idx,
+        uint& write_at,
+        const uint write_end,
+        InstanceKey* __restrict__ instance_keys,
+        uint* __restrict__ instance_primitive_indices) {
+        for (uint t = span.x; t < span.y && write_at < write_end; t++) {
+            const uint tile_key = along_x ? (scan_index * grid_width + t) : (t * grid_width + scan_index);
+            instance_keys[write_at] = make_instance_key(tile_key, depth_key, depth_bits);
+            instance_primitive_indices[write_at] = primitive_idx;
+            write_at++;
+        }
+    }
+
+    // Long-tail primitives: 32 lanes cooperate over rows of one source lane
+    // at a time. Isolated so the serial emit path does not inherit its
+    // register footprint.
+    __device__ __noinline__ void create_instances_coop_warp(
+        const bool active,
+        const uint n_scan,
+        const uint scan0,
+        const uint cross0,
+        const uint cross1,
+        const uint write_offset_end,
+        const uint current_write_offset,
+        const uint primitive_idx,
+        const uint depth_key,
+        const bool scan_along_x,
+        const float2 mean2d_shifted,
+        const float3 conic,
+        const float radius_sq,
+        const uint grid_width,
+        const uint depth_bits,
+        const uint4 diagnostic_bounds,
+        InstanceKey* __restrict__ instance_keys,
+        uint* __restrict__ instance_primitive_indices,
+        FastGSForwardStatus* __restrict__ status) {
+        const uint lane = threadIdx.x & 31u;
+        for (int src = 0; src < 32; ++src) {
+            const bool src_active = __shfl_sync(0xffffffffu, static_cast<unsigned>(active), src) != 0u;
+            const uint src_n_scan = __shfl_sync(0xffffffffu, n_scan, src);
+            if (!src_active || src_n_scan == 0u)
+                continue;
+            const uint src_scan0 = __shfl_sync(0xffffffffu, scan0, src);
+            const uint src_cross0 = __shfl_sync(0xffffffffu, cross0, src);
+            const uint src_cross1 = __shfl_sync(0xffffffffu, cross1, src);
+            const uint src_write_end = __shfl_sync(0xffffffffu, write_offset_end, src);
+            const uint src_write = __shfl_sync(0xffffffffu, current_write_offset, src);
+            const uint src_prim = __shfl_sync(0xffffffffu, primitive_idx, src);
+            const uint src_dkey = __shfl_sync(0xffffffffu, depth_key, src);
+            const bool src_along_x = __shfl_sync(0xffffffffu, static_cast<unsigned>(scan_along_x), src) != 0u;
+            const float2 src_mean = make_float2(
+                __shfl_sync(0xffffffffu, mean2d_shifted.x, src),
+                __shfl_sync(0xffffffffu, mean2d_shifted.y, src));
+            const float3 src_conic = make_float3(
+                __shfl_sync(0xffffffffu, conic.x, src),
+                __shfl_sync(0xffffffffu, conic.y, src),
+                __shfl_sync(0xffffffffu, conic.z, src));
+            const float src_radius_sq = __shfl_sync(0xffffffffu, radius_sq, src);
+
+            uint emitted_unclamped = 0u;
+            for (uint row0 = 0; row0 < src_n_scan; row0 += 32u) {
+                const uint row = row0 + lane;
+                uint2 span = make_uint2(0, 0);
+                uint cnt = 0u;
+                const uint scan_index = src_scan0 + row;
+                if (row < src_n_scan) {
+                    span = ellipse_touched_tile_span(
+                        src_conic, src_radius_sq, src_mean, src_along_x, scan_index, src_cross0, src_cross1);
+                    cnt = tile_span_count(span);
+                }
+                const uint excl = warp_exclusive_scan_uint(cnt);
+                uint write_at = src_write + emitted_unclamped + excl;
+                if (row < src_n_scan) {
+                    emit_ellipse_tile_span(
+                        span, scan_index, src_along_x, grid_width, src_dkey, depth_bits, src_prim,
+                        write_at, src_write_end, instance_keys, instance_primitive_indices);
+                }
+                emitted_unclamped += lfs::core::warp_ops::warp_reduce_sum(cnt);
+            }
+
+            if (lane == static_cast<uint>(src)) {
+                const uint actual = src_write + emitted_unclamped > src_write_end
+                                        ? src_write_end
+                                        : src_write + emitted_unclamped;
+                if (actual != src_write_end) {
+                    report_forward_status(
+                        status,
+                        kFastGSForwardStatusInstanceWriteMismatch,
+                        src_prim,
+                        0,
+                        actual,
+                        diagnostic_bounds,
+                        src_write_end,
+                        actual);
+                }
+            }
+        }
+    }
+
     // based on https://github.com/r4dl/StopThePop-Rasterization/blob/d8cad09919ff49b11be3d693d1e71fa792f559bb/cuda_rasterizer/stopthepop/stopthepop_common.cuh#L325
     __global__ void create_instances_cu(
         const std::uint64_t* __restrict__ primitive_n_touched_tiles,
@@ -349,52 +455,43 @@ namespace fast_lfs::rasterization::kernels::forward {
         if (current_write_offset > max_instances) {
             current_write_offset = max_instances;
         }
-        if (active) {
-            const uint screen_bounds_width = static_cast<uint>(screen_bounds.y - screen_bounds.x);
-            const uint screen_bounds_height = static_cast<uint>(screen_bounds.w - screen_bounds.z);
 
-            if (screen_bounds_height <= screen_bounds_width) {
-                for (uint tile_y = screen_bounds.z; tile_y < screen_bounds.w; tile_y++) {
-                    const float y0 = static_cast<float>(tile_y * config::tile_height) - mean2d_shifted.y;
-                    const float y1 = y0 + static_cast<float>(config::tile_height);
-                    const float2 bound = ellipse_range_bound(conic, radius_sq, y0, y1);
-                    const uint min_x = floor_tile_clamped(bound.x + mean2d_shifted.x, screen_bounds.x, screen_bounds.y, config::tile_width);
-                    const uint max_x = ceil_tile_clamped(bound.y + mean2d_shifted.x, screen_bounds.x, screen_bounds.y, config::tile_width);
-                    for (uint tile_x = min_x; tile_x < max_x && current_write_offset < write_offset_end; tile_x++) {
-                        const uint tile_key = tile_y * grid_width + tile_x;
-                        instance_keys[current_write_offset] = make_instance_key(tile_key, depth_key, depth_bits);
-                        instance_primitive_indices[current_write_offset] = primitive_idx;
-                        current_write_offset++;
-                    }
+        const uint screen_bounds_width = static_cast<uint>(screen_bounds.y - screen_bounds.x);
+        const uint screen_bounds_height = static_cast<uint>(screen_bounds.w - screen_bounds.z);
+        const bool scan_along_x = screen_bounds_height <= screen_bounds_width;
+        const uint scan0 = scan_along_x ? static_cast<uint>(screen_bounds.z) : static_cast<uint>(screen_bounds.x);
+        const uint scan1 = scan_along_x ? static_cast<uint>(screen_bounds.w) : static_cast<uint>(screen_bounds.y);
+        const uint cross0 = scan_along_x ? static_cast<uint>(screen_bounds.x) : static_cast<uint>(screen_bounds.z);
+        const uint cross1 = scan_along_x ? static_cast<uint>(screen_bounds.y) : static_cast<uint>(screen_bounds.w);
+        const uint n_scan = active && scan1 >= scan0 ? scan1 - scan0 : 0u;
+        const uint max_scan = lfs::core::warp_ops::warp_reduce_max(n_scan);
+
+        if (max_scan < 32u) {
+            if (active) {
+                for (uint scan_index = scan0; scan_index < scan1 && current_write_offset < write_offset_end; scan_index++) {
+                    const uint2 span = ellipse_touched_tile_span(
+                        conic, radius_sq, mean2d_shifted, scan_along_x, scan_index, cross0, cross1);
+                    emit_ellipse_tile_span(
+                        span, scan_index, scan_along_x, grid_width, depth_key, depth_bits, primitive_idx,
+                        current_write_offset, write_offset_end, instance_keys, instance_primitive_indices);
                 }
-            } else {
-                const float3 conic_transposed = make_float3(conic.z, conic.y, conic.x);
-                for (uint tile_x = screen_bounds.x; tile_x < screen_bounds.y; tile_x++) {
-                    const float x0 = static_cast<float>(tile_x * config::tile_width) - mean2d_shifted.x;
-                    const float x1 = x0 + static_cast<float>(config::tile_width);
-                    const float2 bound = ellipse_range_bound(conic_transposed, radius_sq, x0, x1);
-                    const uint min_y = floor_tile_clamped(bound.x + mean2d_shifted.y, screen_bounds.z, screen_bounds.w, config::tile_height);
-                    const uint max_y = ceil_tile_clamped(bound.y + mean2d_shifted.y, screen_bounds.z, screen_bounds.w, config::tile_height);
-                    for (uint tile_y = min_y; tile_y < max_y && current_write_offset < write_offset_end; tile_y++) {
-                        const uint tile_key = tile_y * grid_width + tile_x;
-                        instance_keys[current_write_offset] = make_instance_key(tile_key, depth_key, depth_bits);
-                        instance_primitive_indices[current_write_offset] = primitive_idx;
-                        current_write_offset++;
-                    }
+                if (current_write_offset != write_offset_end) {
+                    report_forward_status(
+                        status,
+                        kFastGSForwardStatusInstanceWriteMismatch,
+                        primitive_idx,
+                        0,
+                        current_write_offset,
+                        diagnostic_bounds,
+                        write_offset_end,
+                        current_write_offset);
                 }
             }
-
-            if (current_write_offset != write_offset_end) {
-                report_forward_status(
-                    status,
-                    kFastGSForwardStatusInstanceWriteMismatch,
-                    primitive_idx,
-                    0,
-                    current_write_offset,
-                    diagnostic_bounds,
-                    write_offset_end,
-                    current_write_offset);
-            }
+        } else {
+            create_instances_coop_warp(
+                active, n_scan, scan0, cross0, cross1, write_offset_end, current_write_offset,
+                primitive_idx, depth_key, scan_along_x, mean2d_shifted, conic, radius_sq,
+                grid_width, depth_bits, diagnostic_bounds, instance_keys, instance_primitive_indices, status);
         }
     }
 

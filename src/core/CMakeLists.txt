@@ -8,6 +8,9 @@
 # Tensor CUDA kernels (STATIC, linked privately)
 add_subdirectory(tensor)
 
+# Neural inference kernels (STATIC, linked privately)
+add_subdirectory(nn)
+
 # Core CUDA library (STATIC, linked privately)
 add_subdirectory(cuda)
 
@@ -43,6 +46,10 @@ set(TENSOR_SOURCES
         tensor/tensor_nn_ops.cpp
         tensor/pinned_memory_allocator.cpp
         tensor/tensor_exports.cu
+        nn/ops.cpp
+        nn/weight_file.cpp
+        nn/activation_arena.cpp
+        nn/models/moge2.cpp
 )
 
 # Core module sources
@@ -55,6 +62,7 @@ set(CORE_SOURCES
         device_fault.cpp
         error.cpp
         error_bus.cpp
+        exif.cpp
         error_envelope.cpp
         error_latch.cpp
         error_reporter.cpp
@@ -109,6 +117,7 @@ target_include_directories(lfs_core
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/src/io/include
         ${CMAKE_CURRENT_SOURCE_DIR}/tensor  # For internal/ headers
+        ${CMAKE_CURRENT_SOURCE_DIR}/nn
 )
 target_include_directories(lfs_core SYSTEM PRIVATE
     ${CMAKE_SOURCE_DIR}/external
@@ -130,6 +139,7 @@ target_link_libraries(lfs_core
     PRIVATE
         lfs_core_cuda
         lfs_tensor_kernels
+        lfs_nn_kernels
         taywee::args
         lfs_oiio
         OpenMeshCore

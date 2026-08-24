@@ -139,6 +139,8 @@ namespace lfs::core {
             size_t refine_every = 100;
             size_t start_refine = 500;
             size_t stop_refine = 25'000;
+            // 0 disables. Applied until stop_refine, at the densify-safe mutation point.
+            size_t morton_reorder_interval = 5'000;
             int sh_degree = 3;
             float opacity_reg = 0.01f;
             float scale_reg = 0.01f;
@@ -173,9 +175,12 @@ namespace lfs::core {
 
             // Normal supervision
             bool use_normal_loss = false;            // Use dataset normal maps when available
+            bool normal_auto_generate = true;        // Generate missing/mismatched maps from images/ with MoGe-2
             float normal_loss_weight = 0.05f;        // Prior normal supervision weight
             float normal_consistency_weight = 0.05f; // Depth-normal consistency weight
             float normal_flatten_weight = 1.0f;      // L1 on the smallest scale axis while normal supervision is active
+            float normal_start_fraction = 0.2f;      // Start normal supervision at floor(fraction * total iterations)
+            float normal_end_fraction = 1.0f;        // Active while iter < end_fraction * total; 1.0 means until the end
             NormalLossSpace normal_loss_space = NormalLossSpace::Auto;
 
             // Mip filter (anti-aliasing)
@@ -196,6 +201,7 @@ namespace lfs::core {
 
             // PPISP (Physically-Plausible ISP) parameters
             bool use_ppisp = false;
+            bool ppisp_exposure_from_exif = true;
             float ppisp_lr = 2e-3f;
             float ppisp_reg_weight = 0.001f;
             int ppisp_warmup_steps = 500;
@@ -247,6 +253,7 @@ namespace lfs::core {
             void apply_step_scaling();
             void remove_step_scaling();
             [[nodiscard]] int resolved_total_iterations() const;
+            [[nodiscard]] bool normal_supervision_active(int iter) const;
             [[nodiscard]] int resolved_ppisp_controller_activation_step(int total_iterations) const;
 
             nlohmann::json to_json() const;
@@ -331,6 +338,7 @@ namespace lfs::core {
             bool reset_preferences = false;
             bool reset_layout = false;
             bool reset_all_settings = false;
+            std::optional<int> mcp_port = std::nullopt;
 
             // Viewer mode: splat files to load (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume)
             std::vector<std::filesystem::path> view_paths;
@@ -436,20 +444,26 @@ namespace lfs::core {
                                           Normals,
                                           Both };
 
+        // Native in-tree MoGe-2 is the only runtime. The CLI still accepts
+        // --inference-backend native (and auto as an alias).
+        enum class InferenceBackend { Native };
+
         struct LFS_CORE_API PreprocessParameters {
             std::filesystem::path dataset_path;
             std::string images_folder = "images";
             std::filesystem::path model_path;
             PreprocessOutputMode mode = PreprocessOutputMode::Both;
+            InferenceBackend inference_backend = InferenceBackend::Native;
             int max_side = 518;
             std::int64_t num_tokens = 1800;
             int threads = 0;
             int png_compression = 1;
             int bit_depth = 16;
-            bool force_cpu = false;
             bool overwrite = false;
             bool no_download = false;
             bool download_only = false;
+            std::vector<std::filesystem::path> image_paths; // Empty = scan images_folder
+            std::string normals_folder = "normals";
         };
 
         // Modern C++23 functions returning expected values

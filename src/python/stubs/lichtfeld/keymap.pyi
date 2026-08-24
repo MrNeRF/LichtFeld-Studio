@@ -165,6 +165,12 @@ class Action(enum.Enum):
 
     TOGGLE_GRID = 81
 
+    SELECT_ALL_SCENE_NODES = 82
+
+    TOGGLE_SCENE_SELECTION_VISIBILITY = 83
+
+    TOGGLE_SCENE_SELECTION_TRAINING = 84
+
 class ToolMode(enum.Enum):
     GLOBAL = 0
 

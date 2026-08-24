@@ -132,6 +132,7 @@ target_include_directories(lichtfeld_format_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/include
     ${CMAKE_SOURCE_DIR}/src/io/include
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/rendering/include
     ${CMAKE_SOURCE_DIR}/tests
     ${CMAKE_BINARY_DIR}/include
 )
@@ -271,6 +272,7 @@ set(TEST_FILES
     test_joint_adam_codec.cpp
     test_sh_value_codec.cpp
     test_sh_value_storage.cpp
+    test_morton_reorder.cpp
     test_transform_bake_q16.cpp
     test_splat_data_clone.cpp
     test_tensor_reduction.cpp
@@ -306,6 +308,7 @@ set(TEST_FILES
     test_compact_splats_peak.cpp
     test_adam_capacity_invariant.cpp
     test_dual_rep_optimizer.cpp
+    test_gut_shN_joint_adam.cpp
     test_sparsity_optimizer.cpp
     test_mcmc_tensor_ops.cpp
     test_training_cropbox_mask.cpp
@@ -353,6 +356,7 @@ set(TEST_FILES
     test_crash_handler.cpp
     test_gpu_teardown_order.cpp
     test_logger.cpp
+    test_exif.cpp
     test_system_info.cpp
     test_parameter_manager.cpp
     test_mcp_protocol.cpp
@@ -426,6 +430,8 @@ set(TEST_FILES
     test_operator_registry_props.cpp
     test_fastgs_analytical_gradients.cpp
     test_normal_prior_decode.cpp
+    test_normal_auto_generate.cpp
+    test_metrics_evaluator.cpp
     test_background_image.cpp
     test_nvcodec_jpeg2k_16bit.cpp
     test_compressed_blob_tier.cpp
@@ -440,12 +446,17 @@ set(TEST_FILES
     test_tensor_storage_version.cpp
     test_modal_registry_regression.cpp
     test_tensor_nn_ops.cpp
+    test_nn_ops.cpp
+    test_moge2.cpp
+    bench_nn_ops.cpp
     test_ppisp_controller.cpp
     test_ppisp_regularization.cpp
     test_ppisp_sidecar.cpp
     test_ppisp_checkpoint_roundtrip.cpp
     test_ppisp_cuda_vs_torch.cpp
     test_ppisp_banded_region.cpp
+    test_ppisp_exposure_seed.cpp
+    test_metrics_evaluator_appearance.cpp
     test_export_env_composite.cpp
     test_undistort.cpp
     test_viewport_region_utils.cpp
@@ -1003,6 +1014,15 @@ add_custom_target(run_full_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Running fast and slow tests (excluding nightly)"
 )
+
+foreach(TEST_TARGET lichtfeld_tests)
+    add_custom_command(TARGET ${TEST_TARGET} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${TEST_TARGET}>/resources/viewer"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+            "${PROJECT_SOURCE_DIR}/src/visualizer/gui/resources/viewer"
+            "$<TARGET_FILE_DIR:${TEST_TARGET}>/resources/viewer"
+    )
+endforeach()
 
 # Platform-specific settings
 if(WIN32)

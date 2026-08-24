@@ -11,6 +11,7 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "edge_rasterizer.hpp"
 #include "gsplat_rasterizer.hpp"
+#include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
 
@@ -792,6 +793,12 @@ namespace lfs::training {
 
             lfs::core::CudaMemoryPool::instance().trim_cached_memory();
         }
+    }
+
+    void ImprovedGSPlus::permute_gaussian_rows(const lfs::core::Tensor& perm) {
+        morton::permute_row_tensor(_precomputed_scores, perm);
+        morton::permute_row_tensor(_error_score_max, perm);
+        morton::permute_row_tensor(_free_mask, perm);
     }
 
     bool ImprovedGSPlus::is_refining(int iter) const {

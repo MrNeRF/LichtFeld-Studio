@@ -59,7 +59,15 @@ def preferences_panel_module(monkeypatch):
             scene_upscaler_preset="native",
         ),
         scene_reconstruction_presets={"native": "native", "spatial": "quality"},
+        working_directory="",
     )
+
+    def set_working_directory(path):
+        state.working_directory = str(path)
+        return ""
+
+    def clear_working_directory():
+        state.working_directory = ""
 
     def set_mcp_preferences(enabled, expose_network, port, request_logging):
         config = {
@@ -97,6 +105,13 @@ def preferences_panel_module(monkeypatch):
         get_mcp_preferences=lambda: dict(state.mcp_preferences),
         set_mcp_preferences=set_mcp_preferences,
         get_mcp_status=lambda: dict(state.mcp_status),
+        get_working_directory=lambda: state.working_directory or "/home/tester/.lichtfeld",
+        get_working_directory_preference=lambda: state.working_directory,
+        get_default_working_directory=lambda: "/home/tester/.lichtfeld",
+        get_temp_project_directory=lambda: (state.working_directory or "/home/tester/.lichtfeld") + "/tmp",
+        set_working_directory=set_working_directory,
+        clear_working_directory=clear_working_directory,
+        open_folder_dialog=lambda title, start: "",
         set_panel_enabled=lambda panel_id, enabled: state.panel_enabled_calls.append(
             (panel_id, bool(enabled))
         ),
@@ -234,6 +249,15 @@ def preferences_panel_module(monkeypatch):
             DELETE_SELECTED=SimpleNamespace(name="DELETE_SELECTED", value=73),
             BRUSH_RESIZE=SimpleNamespace(name="BRUSH_RESIZE", value=74),
             DELETE_NODE=SimpleNamespace(name="DELETE_NODE", value=75),
+            SELECT_ALL_SCENE_NODES=SimpleNamespace(
+                name="SELECT_ALL_SCENE_NODES", value=82
+            ),
+            TOGGLE_SCENE_SELECTION_VISIBILITY=SimpleNamespace(
+                name="TOGGLE_SCENE_SELECTION_VISIBILITY", value=83
+            ),
+            TOGGLE_SCENE_SELECTION_TRAINING=SimpleNamespace(
+                name="TOGGLE_SCENE_SELECTION_TRAINING", value=84
+            ),
         ),
         get_available_profiles=lambda: ["Default"],
         get_current_profile=lambda: "Default",
@@ -619,7 +643,7 @@ def test_safe_mode_disables_preferences_and_status_bar_mcp_controls():
     preferences = (resources / "preferences.rml").read_text(encoding="utf-8")
     status_bar = (resources / "statusbar.rml").read_text(encoding="utf-8")
 
-    assert preferences.count('data-attrif-disabled="mcp_safe_mode"') == 7
+    assert preferences.count('data-attrif-disabled="mcp_safe_mode"') == 8
     assert preferences.count('data-class-disabled="mcp_safe_mode"') == 2
     assert (
         '<button id="mcp-toggle" data-class-is-on="mcp_server_enabled" '

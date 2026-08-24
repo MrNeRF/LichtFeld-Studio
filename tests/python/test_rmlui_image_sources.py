@@ -29,6 +29,7 @@ def _install_lf_stub(monkeypatch):
         tr=lambda key: key,
         open_url=lambda _url: None,
         get_ui_scale=lambda: 1.0,
+        set_panel_enabled=lambda _panel_id, _enabled: None,
     )
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 
@@ -69,6 +70,21 @@ def test_preview_url_percent_encodes_image_paths(panel_modules, tmp_path):
     assert "%26" in preview_url
     assert "%28" in preview_url
     assert "%29" in preview_url
+
+
+def test_first_preview_request_survives_lazy_panel_creation(panel_modules, tmp_path):
+    image_preview, _ = panel_modules
+    image_preview._instance = None
+    image_preview._pending_open = None
+    image_path = tmp_path / "first.jpg"
+
+    image_preview.open_image_preview([image_path], [None], 0, [17])
+
+    assert image_preview._pending_open is not None
+    panel = image_preview.ImagePreviewPanel()
+    assert image_preview._pending_open is None
+    assert panel._image_paths == [image_path.resolve()]
+    assert panel._camera_uids == [17]
 
 
 class _ElementStub:

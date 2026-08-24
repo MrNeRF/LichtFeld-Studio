@@ -266,6 +266,11 @@ namespace {
         params.sh_degree_interval = 0;
         EXPECT_NE(params.validate().find("sh_degree_interval"), std::string::npos);
         params = {};
+        params.morton_reorder_interval = 0;
+        EXPECT_TRUE(params.validate().empty());
+        params.morton_reorder_interval = 5000;
+        EXPECT_TRUE(params.validate().empty());
+        params = {};
         params.start_refine = 10;
         params.stop_refine = 9;
         EXPECT_NE(params.validate().find("start_refine"), std::string::npos);

@@ -27,6 +27,7 @@ set(LFS_TRAINING_KERNEL_SOURCES
     kernels/mcmc_kernels.cu
     kernels/mrnf_kernels.cu
     kernels/densification_kernels.cu
+    kernels/morton_reorder_kernels.cu
     kernels/sh_value_quant_kernels.cu
     kernels/grad_alpha.cu
     kernels/depth_loss.cu
@@ -85,6 +86,7 @@ set(TRAINING_NEW_SOURCES
     optimizer/adam_optimizer.cpp
     sh_value_codec.cpp
     sh_value_storage.cpp
+    morton_reorder.cpp
     live_model_mutation_guard.cpp
     optimizer/scheduler.cpp
     losses/regularization.cpp
@@ -113,6 +115,7 @@ set(TRAINING_NEW_SOURCES
         progress.cpp
         training_cropbox_mask.cpp
         trainer.cpp
+        normal_auto_generate.cpp
         vram_ledger.cpp
         perf_bench.cpp
     training_setup.cpp
@@ -155,6 +158,7 @@ target_link_libraries(lfs_training
 	edge_compute_backend    # For igs+ edge score rasterization
     PRIVATE
         lfs_depth_anchor        # Shared depth-anchor fit + sidecar cache
+        lfs_preprocessing       # MoGe-2 normal auto-generate
         lfs_python_utils
 )
 

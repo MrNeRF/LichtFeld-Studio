@@ -209,7 +209,6 @@ add_library(lfs_io STATIC
         formats/sogs.cpp
         formats/html.hpp
         formats/html.cpp
-        formats/html_viewer_resources.hpp
         formats/rad.hpp
         formats/rad.cpp
         ply_to_rad_lod.cpp
@@ -281,6 +280,7 @@ target_include_directories(lfs_io
         $<INSTALL_INTERFACE:include>
         PRIVATE
         ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/src/rendering/include
         ${CMAKE_SOURCE_DIR}/external/spz
 )
 target_include_directories(lfs_io SYSTEM PRIVATE
@@ -397,6 +397,11 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_definitions(lfs_io PRIVATE HAS_AVX2_SUPPORT)
     endif ()
 endif ()
+
+if(LFS_DEV_IMPORT_SOURCE_RESOURCES AND NOT BUILD_PORTABLE)
+    target_compile_definitions(lfs_io PRIVATE
+        LFS_DEV_VIEWER_SOURCE_DIR="${PROJECT_SOURCE_DIR}/src/visualizer/gui/resources/viewer")
+endif()
 
 if(NOT BUILD_PORTABLE)
     install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/io

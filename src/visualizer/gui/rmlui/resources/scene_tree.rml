@@ -21,7 +21,6 @@
         <div id="scene-chip-row" class="scene-chip-row">
             <span id="summary-model-chip" class="scene-chip scene-chip--accent"></span>
             <span id="summary-node-chip" class="scene-chip"></span>
-            <span id="summary-selection-chip" class="scene-chip"></span>
             <span id="summary-filter-chip" class="scene-chip"></span>
         </div>
     </div>
@@ -41,6 +40,19 @@
         </div>
 
         <scene-graph id="tree-container" tab-index="auto"></scene-graph>
+
+        <div id="selection-action-bar" class="selection-action-bar">
+            <span id="selection-action-count" class="selection-action-count"></span>
+            <button id="selection-clear" class="selection-action-button" type="button"
+                    data-tooltip="scene.clear_selection"><img id="selection-clear-icon" /></button>
+            <span class="selection-action-spacer"></span>
+            <button id="selection-visibility" class="selection-action-button" type="button"
+                    data-tooltip="scene.hide_selected"><img id="selection-visibility-icon" /></button>
+            <button id="selection-training" class="selection-action-button" type="button"
+                    data-tooltip="scene.disable_for_training"><img id="selection-training-icon" /></button>
+            <button id="selection-delete" class="selection-action-button selection-action-delete" type="button"
+                    data-tooltip="scene.delete"><img id="selection-delete-icon" /></button>
+        </div>
     </div>
 
     <div id="history-container">

@@ -327,7 +327,7 @@ def clear_scene() -> None:
 def switch_to_edit_mode() -> None:
     """Switch from training to edit mode"""
 
-def load_file(path: str, is_dataset: bool = False, output_path: str = '', init_path: str = '', centralize_dataset: str = 'off', max_width: int | None = None, apply_auto_crop: bool = False, min_track_length: int | None = None, stop_training: bool = False) -> None:
+def load_file(path: str, is_dataset: bool = False, output_path: str = '', init_path: str = '', centralize_dataset: str = 'off', max_width: int | None = None, apply_auto_crop: bool = False, min_track_length: int | None = None, stop_training: bool = False, discard_changes: bool = False, replace: bool = False) -> None:
     """Load a file (PLY, checkpoint) or dataset into the scene."""
 
 def load_config_file(path: str) -> None:
@@ -2103,6 +2103,13 @@ class OptimizationParams:
     def ppisp(self, arg: bool, /) -> None: ...
 
     @property
+    def ppisp_exposure_from_exif(self) -> bool:
+        """Seed per-frame PPISP exposure from image EXIF"""
+
+    @ppisp_exposure_from_exif.setter
+    def ppisp_exposure_from_exif(self, arg: bool, /) -> None: ...
+
+    @property
     def ppisp_use_controller(self) -> bool:
         """Enable PPISP controller for novel view synthesis"""
 
@@ -2226,6 +2233,15 @@ class OptimizationParams:
     def use_normal_loss(self, arg: bool, /) -> None: ...
 
     @property
+    def normal_auto_generate(self) -> bool:
+        """
+        Generate missing or size-mismatched maps with MoGe-2 from the full-resolution images/ folder so they work at every training resolution
+        """
+
+    @normal_auto_generate.setter
+    def normal_auto_generate(self, arg: bool, /) -> None: ...
+
+    @property
     def normal_loss_weight(self) -> float:
         """Weight for prior normal supervision"""
 
@@ -2245,6 +2261,22 @@ class OptimizationParams:
 
     @normal_flatten_weight.setter
     def normal_flatten_weight(self, arg: float, /) -> None: ...
+
+    @property
+    def normal_start_fraction(self) -> float:
+        """Fraction of total iterations at which normal supervision starts"""
+
+    @normal_start_fraction.setter
+    def normal_start_fraction(self, arg: float, /) -> None: ...
+
+    @property
+    def normal_end_fraction(self) -> float:
+        """
+        Fraction of total iterations at which normal supervision stops; 1.0 keeps it on until the end
+        """
+
+    @normal_end_fraction.setter
+    def normal_end_fraction(self, arg: float, /) -> None: ...
 
     @property
     def normal_loss_space(self) -> str:

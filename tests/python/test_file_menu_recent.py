@@ -80,7 +80,15 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     lf_stub.confirm_dialogs = confirm_dialogs
     lf_stub.message_dialogs = message_dialogs
     lf_stub.warning_messages = warnings
-    lf_stub.load_file = lambda *_args, **_kwargs: None
+    loaded = []
+
+    def load_file(*args, **kwargs):
+        loaded.append((args, kwargs))
+
+    lf_stub.load_file = load_file
+    lf_stub.load_file_calls = loaded
+    lf_stub.project_save = lambda *args, **kwargs: True
+    lf_stub.project_save_as = lambda *args, **kwargs: True
     lf_stub.load_config_file = lambda *_args, **_kwargs: None
     lf_stub.is_dataset_path = lambda _path: True
     lf_stub.read_checkpoint_header = lambda _path: object()
@@ -451,4 +459,78 @@ def test_stop_training_confirmation_yes_retries_with_stop_flag(monkeypatch):
     open_callback("tr:common.yes")
     assert file_menu.lf.project_open_calls == [("/tmp/other.licht", False)]
     assert file_menu.lf.project_open_stop_training == [True]
+
+
+def test_new_project_dirty_offers_save_continue_cancel(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    file_menu.lf.project_is_dirty = lambda: True
+    file_menu.lf.project_has_path = lambda: True
+
+    file_menu.NewProjectOperator().execute(None)
+
+    assert file_menu.lf.new_project_calls == []
+    assert len(file_menu.lf.confirm_dialogs) == 1
+    title, message, buttons, callback = file_menu.lf.confirm_dialogs[0]
+    assert title == "tr:menu.file.new_project"
+    assert message == "tr:exit_popup.unsaved_warning"
+    assert buttons == [
+        "tr:common.save",
+        "tr:unsaved_work.continue_without_saving",
+        "tr:common.cancel",
+    ]
+
+    callback("tr:common.cancel")
+    assert file_menu.lf.new_project_calls == []
+
+    callback("tr:unsaved_work.continue_without_saving")
+    assert file_menu.lf.new_project_calls == [(True, False)]
+
+
+def test_load_file_confirmation_title_for_splat_and_dataset(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    file_menu.lf.project_is_dirty = lambda: True
+    file_menu.lf.project_has_path = lambda: True
+
+    file_menu._show_load_file_confirmation(["/tmp/a.ply"], False, False)
+    splat_title, _splat_message, _splat_buttons, _splat_cb = (
+        file_menu.lf.confirm_dialogs[0]
+    )
+    assert splat_title == "tr:unsaved_work.title"
+
+    file_menu._show_load_file_confirmation(["/tmp/dataset"], True, False)
+    dataset_title, _dataset_message, _dataset_buttons, _dataset_cb = (
+        file_menu.lf.confirm_dialogs[1]
+    )
+    assert dataset_title == "tr:load_dataset_popup.save_title"
+
+
+def test_load_file_confirmation_reissues_in_order_with_replace_on_first(
+    monkeypatch,
+):
+    file_menu = _load_file_menu(monkeypatch)
+
+    file_menu._show_load_file_confirmation(
+        ["/tmp/a.ply", "/tmp/b.ply"], False, True
+    )
+
+    assert file_menu.lf.load_file_calls == [
+        (
+            ("/tmp/a.ply",),
+            {
+                "is_dataset": False,
+                "discard_changes": True,
+                "replace": True,
+                "stop_training": False,
+            },
+        ),
+        (
+            ("/tmp/b.ply",),
+            {
+                "is_dataset": False,
+                "discard_changes": True,
+                "replace": False,
+                "stop_training": False,
+            },
+        ),
+    ]
 

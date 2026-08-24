@@ -29,6 +29,32 @@ namespace gsplat_lfs {
             size_t sort_capacity = 0;
             cudaEvent_t sort_reuse_event = nullptr;
             bool sort_reuse_event_recorded = false;
+            int64_t* h_n_isects_pinned = nullptr;
+            bool h_n_isects_is_pinned = false;
+            cudaEvent_t n_isects_ready_event = nullptr;
+            size_t cub_sort_ws_bytes = 0;
+            int64_t cub_sort_n = 0;
+            uint32_t cub_sort_end_bit = 0;
+            size_t pending_isect_capacity = 0;
+
+            IntersectBufferCache() {
+#if CUDART_VERSION >= 11020
+                void* ptr = nullptr;
+                if (cudaMallocHost(&ptr, sizeof(int64_t)) == cudaSuccess) {
+                    h_n_isects_pinned = static_cast<int64_t*>(ptr);
+                    h_n_isects_is_pinned = true;
+                    *h_n_isects_pinned = 0;
+                }
+#endif
+                if (!h_n_isects_pinned) {
+                    h_n_isects_pinned = new int64_t(0);
+                    h_n_isects_is_pinned = false;
+                }
+                if (cudaEventCreateWithFlags(&n_isects_ready_event, cudaEventDisableTiming) !=
+                    cudaSuccess) {
+                    n_isects_ready_event = nullptr;
+                }
+            }
 
             static size_t pair_bytes(const size_t count) {
                 return checked_bytes(
@@ -73,6 +99,20 @@ namespace gsplat_lfs {
                 }
             }
 
+            static size_t grow_cap(size_t current, size_t needed) {
+                if (needed <= current) {
+                    return current;
+                }
+                size_t grown = current * 2;
+                if (grown < needed * 2) {
+                    grown = needed * 2;
+                }
+                if (grown < needed) {
+                    grown = needed;
+                }
+                return grown;
+            }
+
             void ensure_isect_buffers(size_t n_isects, cudaStream_t stream) {
                 if (n_isects == 0) {
                     return;
@@ -81,12 +121,14 @@ namespace gsplat_lfs {
                     isect_pair.bind_stream(stream);
                     return;
                 }
-                const size_t new_cap = n_isects;
+                const size_t new_cap = grow_cap(isect_capacity, n_isects);
                 DirectDeviceBuffer replacement(
                     pair_bytes(new_cap), stream,
                     "rasterizer.gsplat.intersection_id_value_pair");
                 isect_pair = std::move(replacement);
                 isect_capacity = new_cap;
+                cub_sort_ws_bytes = 0;
+                cub_sort_n = 0;
             }
 
             void ensure_sort_buffers(size_t n_isects, cudaStream_t stream) {
@@ -101,12 +143,14 @@ namespace gsplat_lfs {
                         "gsplat sort-cache stream handoff");
                 }
                 if (n_isects > sort_capacity) {
-                    const size_t new_cap = n_isects;
+                    const size_t new_cap = grow_cap(sort_capacity, n_isects);
                     DirectDeviceBuffer replacement(
                         pair_bytes(new_cap), stream,
                         "rasterizer.gsplat.sorted_intersection_id_value_pair");
                     sort_pair = std::move(replacement);
                     sort_capacity = new_cap;
+                    cub_sort_ws_bytes = 0;
+                    cub_sort_n = 0;
                 } else {
                     sort_pair.bind_stream(stream);
                 }
@@ -140,6 +184,10 @@ namespace gsplat_lfs {
                 cum_tiles_capacity = 0;
                 isect_capacity = 0;
                 sort_capacity = 0;
+                cub_sort_ws_bytes = 0;
+                cub_sort_n = 0;
+                cub_sort_end_bit = 0;
+                pending_isect_capacity = 0;
                 cudaEvent_t event = std::exchange(sort_reuse_event, nullptr);
                 sort_reuse_event_recorded = false;
                 if (event) {
@@ -151,7 +199,8 @@ namespace gsplat_lfs {
                             lfs::core::CudaFailureDisposition::LogOnlyNoLatch);
                     }
                 }
-                // Drop pooled gsplat temporaries so thread exit returns VRAM.
+                // Pinned n_isects slot + event stay for the TLS lifetime so a
+                // mid-process release does not break a later forward on this thread.
                 const bool cub_released = release_gsplat_cub_workspace();
                 const bool color_grad_released = release_gsplat_color_grad_workspace();
                 return !cum_tiles && !isect_pair && !sort_pair &&
@@ -161,6 +210,18 @@ namespace gsplat_lfs {
 
             ~IntersectBufferCache() {
                 release();
+                cudaEvent_t count_event = std::exchange(n_isects_ready_event, nullptr);
+                if (count_event) {
+                    (void)cudaEventDestroy(count_event);
+                }
+                if (h_n_isects_pinned) {
+                    if (h_n_isects_is_pinned) {
+                        (void)cudaFreeHost(h_n_isects_pinned);
+                    } else {
+                        delete h_n_isects_pinned;
+                    }
+                    h_n_isects_pinned = nullptr;
+                }
             }
         };
 
@@ -187,14 +248,15 @@ namespace gsplat_lfs {
         uint32_t tile_height,
         bool sort,
         int32_t* tiles_per_gauss_out,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        int32_t* isect_offsets) {
         bool packed = (camera_ids != nullptr && gaussian_ids != nullptr);
         const uint64_t dense_elements = static_cast<uint64_t>(C) * static_cast<uint64_t>(N);
         LFS_ASSERT_MSG(
             packed || dense_elements <= std::numeric_limits<uint32_t>::max(),
             "gsplat dense intersection input exceeds uint32 range");
         uint32_t n_elements = packed ? 0 : static_cast<uint32_t>(dense_elements);
-        uint32_t nnz = packed ? 0 : 0; // TODO: For packed mode
+        uint32_t nnz = 0;
 
         const uint64_t tile_count = static_cast<uint64_t>(tile_width) * tile_height;
         LFS_ASSERT_MSG(tile_count > 0 && tile_count <= std::numeric_limits<uint32_t>::max(),
@@ -209,98 +271,150 @@ namespace gsplat_lfs {
         result.isect_ids = nullptr;
         result.flatten_ids = nullptr;
         result.n_isects = 0;
+        result.n_sort = 0;
 
         if (n_elements == 0 && nnz == 0) {
             return result;
         }
 
-        // First pass: compute tiles_per_gauss
         launch_intersect_tile_kernel(
             means2d, radii, depths,
-            nullptr, nullptr, // camera_ids, gaussian_ids (dense)
+            nullptr, nullptr,
             C, N, nnz, packed,
             tile_size, tile_width, tile_height,
-            nullptr, // cum_tiles_per_gauss
+            nullptr,
             tiles_per_gauss_out,
-            nullptr, nullptr, // isect_ids, flatten_ids
+            nullptr, nullptr,
             stream);
 
-        // GPU-based inclusive scan using CUB (replaces slow CPU cumsum)
         auto& cache = get_cache();
         cache.ensure_cum_tiles(n_elements, stream);
         int64_t* d_cum_tiles = cache.cum_tiles.as<int64_t>();
-
-        // Compute cumulative sum on GPU with int32→int64 promotion
         compute_cumsum_gpu(tiles_per_gauss_out, d_cum_tiles, n_elements, stream);
 
-        // Get total intersection count (single 8-byte copy instead of full array)
-        int64_t n_isects;
-        LFS_CUDA_CHECK_MSG(
-            cudaMemcpyAsync(&n_isects, d_cum_tiles + n_elements - 1, sizeof(int64_t),
-                            cudaMemcpyDeviceToHost, stream),
-            "gsplat intersection-count readback");
-        LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "gsplat intersection-count stream sync");
-        LFS_ASSERT_MSG(
-            n_isects >= 0 && n_isects <= std::numeric_limits<int32_t>::max(),
-            std::format("gsplat intersection count {} exceeds int32 range", n_isects));
-        result.n_isects = static_cast<int32_t>(n_isects);
+        LFS_ASSERT_MSG(cache.h_n_isects_pinned != nullptr,
+                       "gsplat intersection cache missing pinned n_isects slot");
 
-        if (n_isects == 0) {
+        const int64_t sentinel_key =
+            (static_cast<int64_t>(C - 1) << (32 + tile_n_bits)) |
+            (static_cast<int64_t>(n_tiles) << 32);
+
+        auto drain_count = [&]() {
+            if (cache.n_isects_ready_event) {
+                LFS_CUDA_CHECK_MSG(
+                    cudaEventSynchronize(cache.n_isects_ready_event),
+                    "gsplat n_isects event wait");
+            } else {
+                LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream),
+                                   "gsplat intersection-count stream sync");
+            }
+            const int64_t n = *cache.h_n_isects_pinned;
+            LFS_ASSERT_MSG(
+                n >= 0 && n <= std::numeric_limits<int32_t>::max(),
+                std::format("gsplat intersection count {} exceeds int32 range", n));
+            return n;
+        };
+
+        auto schedule_proactive_grow = [&](const int64_t n) {
+            if (n > 0 && n * 5 > static_cast<int64_t>(cache.isect_capacity) * 4) {
+                const size_t want = static_cast<size_t>(n) * 2;
+                if (want > cache.isect_capacity) {
+                    cache.pending_isect_capacity = want;
+                }
+            }
+        };
+
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyAsync(cache.h_n_isects_pinned, d_cum_tiles + n_elements - 1,
+                            sizeof(int64_t), cudaMemcpyDeviceToHost, stream),
+            "gsplat intersection-count readback");
+        if (cache.n_isects_ready_event) {
+            LFS_CUDA_CHECK_MSG(
+                cudaEventRecord(cache.n_isects_ready_event, stream),
+                "gsplat n_isects event record");
+        }
+
+        if (cache.pending_isect_capacity > cache.isect_capacity) {
+            cache.ensure_isect_buffers(cache.pending_isect_capacity, stream);
+        }
+        cache.pending_isect_capacity = 0;
+
+        auto fill_and_sort_capacity = [&](const size_t cap) {
+            cache.ensure_isect_buffers(cap, stream);
+            cache.ensure_sort_buffers(cache.isect_capacity, stream);
+            const size_t sort_n = cache.isect_capacity;
+            launch_fill_isect_sentinels_kernel(
+                cache.isect_ids(), cache.flatten_ids(),
+                static_cast<int64_t>(sort_n), sentinel_key, stream);
+            launch_intersect_tile_kernel(
+                means2d, radii, depths,
+                nullptr, nullptr,
+                C, N, nnz, packed,
+                tile_size, tile_width, tile_height,
+                d_cum_tiles,
+                nullptr,
+                cache.isect_ids(), cache.flatten_ids(),
+                stream, static_cast<int64_t>(sort_n));
+
+            int64_t* keys_out = cache.isect_ids();
+            int32_t* vals_out = cache.flatten_ids();
+            if (sort && sort_n > 0) {
+                try {
+                    radix_sort_double_buffer(
+                        static_cast<int64_t>(sort_n), tile_n_bits, cam_n_bits,
+                        cache.isect_ids(), cache.flatten_ids(),
+                        cache.sorted_isect_ids(), cache.sorted_flatten_ids(),
+                        &keys_out, &vals_out,
+                        cache.cub_sort_ws_bytes, cache.cub_sort_n, cache.cub_sort_end_bit,
+                        stream);
+                } catch (...) {
+                    cache.record_sort_use(stream);
+                    throw;
+                }
+                cache.record_sort_use(stream);
+            }
+            result.isect_ids = keys_out;
+            result.flatten_ids = vals_out;
+            result.n_sort = static_cast<int32_t>(sort_n);
+        };
+
+        auto launch_offsets = [&]() {
+            if (!isect_offsets) {
+                return;
+            }
+            intersect_offset(
+                result.isect_ids, result.n_sort,
+                C, tile_width, tile_height,
+                isect_offsets, stream);
+        };
+
+        if (cache.isect_capacity == 0) {
+            const int64_t n_isects = drain_count();
+            result.n_isects = static_cast<int32_t>(n_isects);
+            if (n_isects == 0) {
+                launch_offsets();
+                return result;
+            }
+            fill_and_sort_capacity(static_cast<size_t>(n_isects));
+            launch_offsets();
+            schedule_proactive_grow(n_isects);
             return result;
         }
 
-        // Grow-only high-water buffers: ownership stays in the TLS cache.
-        // Callers must NOT cudaFree the returned pointers (release is a no-op).
-        cache.ensure_isect_buffers(static_cast<size_t>(n_isects), stream);
-        int64_t* const isect_ids_ptr = cache.isect_ids();
-        int32_t* const flatten_ids_ptr = cache.flatten_ids();
-
-        // Second pass: compute isect_ids and flatten_ids
-        launch_intersect_tile_kernel(
-            means2d, radii, depths,
-            nullptr, nullptr, // camera_ids, gaussian_ids (dense)
-            C, N, nnz, packed,
-            tile_size, tile_width, tile_height,
-            d_cum_tiles,
-            nullptr, // tiles_per_gauss (not needed in second pass)
-            isect_ids_ptr, flatten_ids_ptr,
-            stream);
-
-        // Sort by isect_ids if requested
-        if (sort && n_isects > 0) {
-            cache.ensure_sort_buffers(static_cast<size_t>(n_isects), stream);
-
-            try {
-                radix_sort_double_buffer(
-                    n_isects, tile_n_bits, cam_n_bits,
-                    isect_ids_ptr, flatten_ids_ptr,
-                    cache.sorted_isect_ids(), cache.sorted_flatten_ids(),
-                    stream);
-
-                // Copy sorted results back (sort may have used either buffer)
-                LFS_CUDA_CHECK_MSG(
-                    cudaMemcpyAsync(
-                        isect_ids_ptr, cache.sorted_isect_ids(),
-                        checked_bytes(static_cast<size_t>(n_isects), sizeof(int64_t),
-                                      "gsplat sorted intersection output"),
-                        cudaMemcpyDeviceToDevice, stream),
-                    "gsplat sorted intersection output copy");
-                LFS_CUDA_CHECK_MSG(
-                    cudaMemcpyAsync(
-                        flatten_ids_ptr, cache.sorted_flatten_ids(),
-                        checked_bytes(static_cast<size_t>(n_isects), sizeof(int32_t),
-                                      "gsplat sorted flatten output"),
-                        cudaMemcpyDeviceToDevice, stream),
-                    "gsplat sorted flatten output copy");
-            } catch (...) {
-                cache.record_sort_use(stream);
-                throw;
-            }
-            cache.record_sort_use(stream);
+        fill_and_sort_capacity(cache.isect_capacity);
+        launch_offsets();
+        // Count event was recorded before fill; fill/sort/offsets are already
+        // queued so this wait does not drain the GPU.
+        const int64_t n_isects = drain_count();
+        result.n_isects = static_cast<int32_t>(n_isects);
+        if (n_isects > static_cast<int64_t>(result.n_sort)) {
+            LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream),
+                               "gsplat intersection overflow drain");
+            fill_and_sort_capacity(static_cast<size_t>(n_isects));
+            launch_offsets();
+        } else {
+            schedule_proactive_grow(n_isects);
         }
-
-        result.isect_ids = isect_ids_ptr;
-        result.flatten_ids = flatten_ids_ptr;
 
         return result;
     }
@@ -313,16 +427,19 @@ namespace gsplat_lfs {
         uint32_t tile_height,
         int32_t* isect_offsets,
         cudaStream_t stream) {
-        if (n_isects == 0) {
+        const uint32_t n_keys = n_isects < 0 ? 0u : static_cast<uint32_t>(n_isects);
+        if (n_keys == 0) {
             LFS_CUDA_CHECK_MSG(
                 cudaMemsetAsync(isect_offsets, 0,
-                                C * tile_height * tile_width * sizeof(int32_t), stream),
+                                (static_cast<size_t>(C) * tile_height * tile_width + 1u) *
+                                    sizeof(int32_t),
+                                stream),
                 "gsplat empty intersection-offset output");
             return;
         }
 
         launch_intersect_offset_kernel(
-            isect_ids, n_isects,
+            isect_ids, n_keys,
             C, tile_width, tile_height,
             isect_offsets, stream);
     }

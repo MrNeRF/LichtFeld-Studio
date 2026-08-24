@@ -14,6 +14,7 @@ This project builds upon and is inspired by the following:
 | Project | Description | License |
 |---------|-------------|---------|
 | [SuperSplat](https://github.com/playcanvas/supersplat) | PlayCanvas Gaussian Splat editor | MIT |
+| [PlayCanvas Engine](https://github.com/playcanvas/engine) | WebGL/WebGPU engine; the exported HTML viewer bundles a trimmed supersplat-viewer build plus a vendored, adapted `TranslateGizmo` (`src/visualizer/gui/resources/viewer/gizmo.js`) | MIT |
 | [SplatShop](https://github.com/m-schuetz/Splatshop) | Gaussian Splat editing tool | MIT |
 | [splat-transform](https://github.com/playcanvas/splat-transform) | Transformation utilities for splats | MIT |
 | [spz](https://github.com/nianticlabs/spz) | Niantic's compressed splat format (vendored at affd0ec) | MIT |
@@ -62,7 +63,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 ## ML Inference & Models
 | Project | Description | License |
 |---------|-------------|---------|
-| [ONNX Runtime](https://github.com/microsoft/onnxruntime) | Cross-platform ML inference engine (preprocess CLI) | MIT |
+
 | [MoGe-2](https://github.com/microsoft/MoGe) | Monocular geometry estimation, depth/normal maps. Code and [model weights](https://huggingface.co/Ruicheng/moge-2-vitb-normal) © Microsoft, MIT; DINOv2 backbone components © Meta AI, Apache-2.0. Model downloaded at first use of `preprocess`, redistributed with attribution via GitHub release assets | MIT / Apache-2.0 |
 
 ## Video Encoding

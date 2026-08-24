@@ -3530,26 +3530,30 @@ namespace lfs::vis::project {
                                 renderSettingsFromProjectJson(
                                     *render_json,
                                     rendering->getSettings())) {
-                            const float near_plane =
-                                std::max(0.0f,
-                                         -settings
-                                              ->depth_filter_max.z);
-                            const float far_plane =
-                                std::max(near_plane + 0.01f,
-                                         -settings
-                                              ->depth_filter_min.z);
-                            const float half_width =
-                                std::max(
-                                    std::abs(settings
-                                                 ->depth_filter_min.x),
-                                    std::abs(settings
-                                                 ->depth_filter_max.x));
-                            selection_tool
-                                ->setDepthFilterRange(
-                                    settings
-                                        ->depth_filter_enabled,
-                                    near_plane, far_plane,
-                                    half_width);
+                            // Disabled constructor-default boxes are not in near/far encoding.
+                            if (settings
+                                    ->depth_filter_enabled) {
+                                const float near_plane =
+                                    std::max(0.0f,
+                                             -settings
+                                                  ->depth_filter_max.z);
+                                const float far_plane =
+                                    std::max(near_plane + 0.01f,
+                                             -settings
+                                                  ->depth_filter_min.z);
+                                const float half_width =
+                                    std::max(
+                                        std::abs(settings
+                                                     ->depth_filter_min.x),
+                                        std::abs(settings
+                                                     ->depth_filter_max.x));
+                                selection_tool
+                                    ->setDepthFilterRange(
+                                        settings
+                                            ->depth_filter_enabled,
+                                        near_plane, far_plane,
+                                        half_width);
+                            }
                             auto restored =
                                 rendering->getSettings();
                             restored.crop_filter_for_selection =
