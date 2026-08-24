@@ -392,6 +392,8 @@ namespace lfs::core {
             if (!valid_port(server.tcp_broadcast_connection_port))
                 return std::format("tcp_broadcast_connection_port must be -1 or within [1, 65535] (got {})",
                                    server.tcp_broadcast_connection_port);
+            if (mcp_port && (*mcp_port < 1 || *mcp_port > 65535))
+                return std::format("mcp_port must be within [1, 65535] (got {})", *mcp_port);
             if (render_path) {
                 if (render_path->width <= 0 || render_path->height <= 0 ||
                     (render_path->width % 2) != 0 || (render_path->height % 2) != 0)
