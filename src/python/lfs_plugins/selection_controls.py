@@ -362,7 +362,7 @@ class SelectionControlsController:
             return False
 
     def _set_depth_near(self, value):
-        if not self._visible:
+        if not self._visible or self._last_state_key is None:
             return
         self._refresh_depth_state()
         near = _clamp(_parse_float(value, self._depth_near), _DEPTH_MIN, _DEPTH_MAX - _DEPTH_GAP)
@@ -370,7 +370,7 @@ class SelectionControlsController:
         self._apply_depth_range(self._depth_enabled, near, far)
 
     def _set_depth_far(self, value):
-        if not self._visible:
+        if not self._visible or self._last_state_key is None:
             return
         self._refresh_depth_state()
         far = _clamp(_parse_float(value, self._depth_far), self._depth_near + _DEPTH_GAP, _DEPTH_MAX)
