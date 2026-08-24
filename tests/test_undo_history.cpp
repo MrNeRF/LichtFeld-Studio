@@ -1639,6 +1639,49 @@ TEST_F(UndoHistoryTest, NodeCopyPasteWithoutDeletionsKeepsAllRows) {
     EXPECT_FALSE(pasted_node->model->has_deleted_mask());
 }
 
+TEST_F(UndoHistoryTest, PasteNodesCreatesUndoableSceneGraphEntry) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(3));
+    scene_manager->selectNode("model");
+    EXPECT_TRUE(scene_manager->copySelectedNodes());
+
+    const auto pasted = scene_manager->pasteNodes();
+    ASSERT_EQ(pasted.size(), 1u);
+    EXPECT_NE(scene_manager->getScene().getNode(pasted.front()), nullptr);
+
+    auto undo_result = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(undo_result.success) << undo_result.error;
+    EXPECT_EQ(scene_manager->getScene().getNode(pasted.front()), nullptr);
+
+    auto redo_result = lfs::vis::op::undoHistory().redo();
+    ASSERT_TRUE(redo_result.success) << redo_result.error;
+    EXPECT_NE(scene_manager->getScene().getNode(pasted.front()), nullptr);
+}
+
+TEST_F(UndoHistoryTest, PasteGaussiansCreatesUndoableSceneGraphEntry) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(3));
+    scene_manager->getScene().setSelectionMask(
+        std::make_shared<Tensor>(make_uint8_mask({1, 1, 0})));
+
+    EXPECT_TRUE(scene_manager->copySelectedGaussians());
+    const auto pasted = scene_manager->pasteGaussians();
+    ASSERT_EQ(pasted.size(), 1u);
+    EXPECT_NE(scene_manager->getScene().getNode(pasted.front()), nullptr);
+
+    auto undo_result = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(undo_result.success) << undo_result.error;
+    EXPECT_EQ(scene_manager->getScene().getNode(pasted.front()), nullptr);
+}
+
 TEST_F(UndoHistoryTest, NodeCopyWithAllRowsDeletedProducesNoClipboard) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();

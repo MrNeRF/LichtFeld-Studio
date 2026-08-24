@@ -1154,6 +1154,7 @@ namespace lfs::app {
             constexpr auto graphics_backend = lfs::vis::GraphicsBackend::Vulkan;
             mcp::McpHttpServer mcp_http({.enable_resources = true});
             const auto mcp_preferences = vis::loadMcpPreferences();
+            const auto mcp_port_override = params->mcp_port;
             const auto startup_project =
                 params->project_path
                     ? params->project_path
@@ -1252,14 +1253,15 @@ namespace lfs::app {
 
             mcp::setActiveMcpHttpServer(&mcp_http);
             vis::setRuntimeServiceControls({
-                .toggle_mcp_enabled = [safe_mode] {
+                .toggle_mcp_enabled = [safe_mode, mcp_port_override] {
                     if (safe_mode)
                         return false;
                     const auto status = mcp::activeMcpHttpStatus();
+                    const auto mcp_preferences = vis::loadMcpPreferences();
                     const mcp::McpHttpConfig config{
                         .enabled = !status.enabled,
                         .expose_network = status.expose_network,
-                        .port = status.port,
+                        .port = mcp_port_override.value_or(mcp_preferences.port),
                         .request_logging = status.request_logging,
                     };
                     if (!mcp::applyActiveMcpHttpConfig(config))
@@ -1267,18 +1269,19 @@ namespace lfs::app {
                     vis::saveMcpPreferences({
                         .enabled = config.enabled,
                         .expose_network = config.expose_network,
-                        .port = config.port,
+                        .port = mcp_preferences.port,
                         .request_logging = config.request_logging,
                     });
                     return true; },
-                .toggle_mcp_binding = [safe_mode] {
+                .toggle_mcp_binding = [safe_mode, mcp_port_override] {
                     if (safe_mode)
                         return false;
                     const auto status = mcp::activeMcpHttpStatus();
+                    const auto mcp_preferences = vis::loadMcpPreferences();
                     const mcp::McpHttpConfig config{
                         .enabled = status.enabled,
                         .expose_network = !status.expose_network,
-                        .port = status.port,
+                        .port = mcp_port_override.value_or(mcp_preferences.port),
                         .request_logging = status.request_logging,
                     };
                     if (!mcp::applyActiveMcpHttpConfig(config))
@@ -1286,7 +1289,7 @@ namespace lfs::app {
                     vis::saveMcpPreferences({
                         .enabled = config.enabled,
                         .expose_network = config.expose_network,
-                        .port = config.port,
+                        .port = mcp_preferences.port,
                         .request_logging = config.request_logging,
                     });
                     return true; },
@@ -1299,7 +1302,7 @@ namespace lfs::app {
             if (!mcp_http.start({
                     .enabled = mcp_preferences.enabled,
                     .expose_network = mcp_preferences.expose_network,
-                    .port = mcp_preferences.port,
+                    .port = mcp_port_override.value_or(mcp_preferences.port),
                     .request_logging = mcp_preferences.request_logging,
                 }))
                 LOG_ERROR("Failed to start MCP HTTP server");

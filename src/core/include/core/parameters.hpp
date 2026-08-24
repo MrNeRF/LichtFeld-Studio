@@ -338,6 +338,7 @@ namespace lfs::core {
             bool reset_preferences = false;
             bool reset_layout = false;
             bool reset_all_settings = false;
+            std::optional<int> mcp_port = std::nullopt;
 
             // Viewer mode: splat files to load (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume)
             std::vector<std::filesystem::path> view_paths;
