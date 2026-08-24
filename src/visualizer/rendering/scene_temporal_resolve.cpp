@@ -51,7 +51,11 @@ namespace lfs::vis {
                                         const bool flip_y) noexcept {
         if (!finite(jitter_ndc) || render_extent.x <= 0 || render_extent.y <= 0)
             return {};
-        glm::vec2 result = jitter_ndc * 0.5f * glm::vec2(render_extent);
+        // Projection jitter is expressed in OpenGL NDC (+Y up); temporal
+        // sampling addresses the current image from its top-left (+Y down).
+        glm::vec2 result{
+            jitter_ndc.x * 0.5f * static_cast<float>(render_extent.x),
+            -jitter_ndc.y * 0.5f * static_cast<float>(render_extent.y)};
         if (flip_y)
             result.y = -result.y;
         return result;

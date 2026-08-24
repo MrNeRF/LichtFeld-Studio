@@ -61,7 +61,8 @@ namespace lfs::vis {
     } // namespace
 
     bool validTemporalFrameInput(const TemporalFrameInput& input) noexcept {
-        return finiteFrameView(input.view, input.jitter, input.render_scale);
+        return input.output_extent.x > 0 && input.output_extent.y > 0 &&
+               finiteFrameView(input.view, input.jitter, input.render_scale);
     }
 
     glm::vec2 temporalJitterPixels(const std::uint64_t sequence) {
@@ -69,14 +70,25 @@ namespace lfs::vis {
         return {halton(sample, 2) - 0.5f, halton(sample, 3) - 0.5f};
     }
 
-    glm::vec2 temporalJitterNdc(const std::uint64_t sequence,
+    glm::vec2 temporalJitterNdc(const glm::vec2 jitter_pixels,
                                 const glm::ivec2 render_size) {
         if (render_size.x <= 0 || render_size.y <= 0) {
             return {0.0f, 0.0f};
         }
-        const glm::vec2 pixel = temporalJitterPixels(sequence);
-        return {2.0f * pixel.x / static_cast<float>(render_size.x),
-                2.0f * pixel.y / static_cast<float>(render_size.y)};
+        if (!std::isfinite(jitter_pixels.x) || !std::isfinite(jitter_pixels.y)) {
+            return {0.0f, 0.0f};
+        }
+        // FrameView intrinsics use top-left image coordinates (+Y down), while
+        // projection matrices use OpenGL NDC (+Y up). Keep the conversion at
+        // this boundary so the jitter applied by the raster and the matrices
+        // consumed by motion reprojection describe the same sample position.
+        return {2.0f * jitter_pixels.x / static_cast<float>(render_size.x),
+                -2.0f * jitter_pixels.y / static_cast<float>(render_size.y)};
+    }
+
+    glm::vec2 temporalJitterNdc(const std::uint64_t sequence,
+                                const glm::ivec2 render_size) {
+        return temporalJitterNdc(temporalJitterPixels(sequence), render_size);
     }
 
     void TemporalConvergenceController::prepare(const bool enabled, const bool restart) {
@@ -85,21 +97,22 @@ namespace lfs::vis {
             sequence_ = 0;
             remaining_ = 0;
         } else if (restart) {
-            sequence_ = 0;
             remaining_ = SAMPLE_COUNT;
         }
     }
 
     glm::vec2 TemporalConvergenceController::jitter() const {
-        return enabled_ && remaining_ > 0 ? temporalJitterPixels(sequence_) : glm::vec2(0.0f);
+        return enabled_ ? temporalJitterPixels(sequence_) : glm::vec2(0.0f);
     }
 
     bool TemporalConvergenceController::completeSuccessfulFrame() {
-        if (!enabled_ || remaining_ == 0) {
+        if (!enabled_) {
             return false;
         }
         ++sequence_;
-        --remaining_;
+        if (remaining_ > 0) {
+            --remaining_;
+        }
         return remaining_ > 0;
     }
 
@@ -216,6 +229,8 @@ namespace lfs::vis {
             result.reset_reasons |= TemporalResetReason::CameraCut;
         if (input.view.size != previous.view.size)
             result.reset_reasons |= TemporalResetReason::RenderSize;
+        if (input.output_extent != previous.output_extent)
+            result.reset_reasons |= TemporalResetReason::OutputExtent;
         if (different(input.render_scale, previous.render_scale))
             result.reset_reasons |= TemporalResetReason::RenderScale;
         if (projectionChanged(input.view, previous.view))

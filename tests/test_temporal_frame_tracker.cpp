@@ -12,6 +12,7 @@ namespace lfs::vis {
         TemporalFrameInput frameInput() {
             TemporalFrameInput input;
             input.view.size = {1280, 720};
+            input.output_extent = {1920, 1080};
             input.scene_generation = 4;
             input.backend_key = 2;
             return input;
@@ -56,8 +57,37 @@ namespace lfs::vis {
 
         const auto ndc = temporalJitterNdc(0, {100, 50});
         EXPECT_FLOAT_EQ(ndc.x, 0.0f);
-        EXPECT_NEAR(ndc.y, -1.0f / 150.0f, 1e-6f);
+        EXPECT_NEAR(ndc.y, 1.0f / 150.0f, 1e-6f);
         EXPECT_EQ(temporalJitterNdc(3, {0, 50}), glm::vec2(0.0f));
+        EXPECT_EQ(temporalJitterNdc(glm::vec2(std::numeric_limits<float>::infinity(), 0.0f),
+                                    {100, 50}),
+                  glm::vec2(0.0f));
+    }
+
+    TEST(TemporalFrameTracker, PixelJitterMatchesTopLeftProjectionCoordinates) {
+        constexpr glm::ivec2 extent{1280, 720};
+        constexpr glm::vec2 jitter_pixels{0.25f, -0.375f};
+        const glm::mat4 projection = lfs::rendering::createProjectionMatrixFromFocal(
+            extent,
+            lfs::rendering::DEFAULT_FOCAL_LENGTH_MM,
+            false,
+            lfs::rendering::DEFAULT_ORTHO_SCALE);
+        const glm::vec4 point(0.2f, -0.1f, -4.0f, 1.0f);
+        const glm::vec4 base_clip = projection * point;
+        const glm::vec4 jittered_clip =
+            applySceneProjectionJitter(projection, temporalJitterNdc(jitter_pixels, extent)) *
+            point;
+        const auto to_top_left_pixel = [extent](const glm::vec4& clip) {
+            const glm::vec2 ndc = glm::vec2(clip) / clip.w;
+            return glm::vec2{
+                (ndc.x * 0.5f + 0.5f) * static_cast<float>(extent.x),
+                (0.5f - ndc.y * 0.5f) * static_cast<float>(extent.y)};
+        };
+
+        const glm::vec2 observed_jitter =
+            to_top_left_pixel(jittered_clip) - to_top_left_pixel(base_clip);
+        EXPECT_NEAR(observed_jitter.x, jitter_pixels.x, 1e-4f);
+        EXPECT_NEAR(observed_jitter.y, jitter_pixels.y, 1e-4f);
     }
 
     TEST(TemporalFrameTracker, ConvergenceIsFiniteAndOnlyRestartsForNewSourceWork) {
@@ -77,8 +107,15 @@ namespace lfs::vis {
         }
         EXPECT_EQ(follow_ups, TemporalConvergenceController::SAMPLE_COUNT - 1);
         EXPECT_EQ(convergence.remaining(), 0u);
-        EXPECT_EQ(convergence.jitter(), glm::vec2(0.0f));
+        EXPECT_EQ(convergence.jitter(), temporalJitterPixels(
+                                            TemporalConvergenceController::SAMPLE_COUNT));
         EXPECT_FALSE(convergence.completeSuccessfulFrame());
+
+        const auto steady_sequence = convergence.sequence();
+        convergence.prepare(true, true);
+        EXPECT_EQ(convergence.sequence(), steady_sequence);
+        EXPECT_EQ(convergence.remaining(), TemporalConvergenceController::SAMPLE_COUNT);
+        EXPECT_EQ(convergence.jitter(), temporalJitterPixels(steady_sequence));
 
         convergence.prepare(false, true);
         EXPECT_FALSE(convergence.enabled());
@@ -207,12 +244,14 @@ namespace lfs::vis {
         auto input = frameInput();
         tracker.commit(TemporalViewId::Main, input);
         input.view.size = {960, 540};
+        input.output_extent = {1440, 810};
         input.render_scale = 0.75f;
         input.view.focal_length_mm = 50.0f;
         const auto changed = tracker.prepare(TemporalViewId::Main, input);
         EXPECT_TRUE(hasTemporalResetReason(changed.reset_reasons, TemporalResetReason::RenderSize));
         EXPECT_TRUE(hasTemporalResetReason(changed.reset_reasons, TemporalResetReason::RenderScale));
         EXPECT_TRUE(hasTemporalResetReason(changed.reset_reasons, TemporalResetReason::Projection));
+        EXPECT_TRUE(hasTemporalResetReason(changed.reset_reasons, TemporalResetReason::OutputExtent));
     }
 
     TEST(TemporalFrameTracker, SceneAndBackendChangesResetHistory) {

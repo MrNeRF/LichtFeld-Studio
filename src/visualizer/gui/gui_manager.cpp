@@ -4204,23 +4204,15 @@ namespace lfs::vis::gui {
             // params.split_view.enabled).
             rendering_manager->bindViewportInteropParams(params, frame_slot, export_locked);
 
-            const float temporal_render_scale = temporal_frame &&
-                                                        std::isfinite(temporal_frame->input.render_scale) &&
-                                                        temporal_frame->input.render_scale > 0.0f
-                                                    ? temporal_frame->input.render_scale
-                                                    : 1.0f;
-            const glm::ivec2 output_extent{
-                std::max(1, static_cast<int>(std::lround(
-                                static_cast<float>(params.scene_image_size.x) /
-                                temporal_render_scale))),
-                std::max(1, static_cast<int>(std::lround(
-                                static_cast<float>(params.scene_image_size.y) /
-                                temporal_render_scale)))};
+            const glm::ivec2 output_extent = temporal_frame
+                                                 ? temporal_frame->input.output_extent
+                                                 : glm::ivec2(0);
             const bool temporal_inputs_match =
                 temporal_frame.has_value() && !params.split_view.enabled &&
                 params.external_scene_image_view != VK_NULL_HANDLE &&
                 params.depth_blit.external_image_view != VK_NULL_HANDLE &&
                 params.scene_image_size.x > 0 && params.scene_image_size.y > 0 &&
+                output_extent.x > 0 && output_extent.y > 0 &&
                 temporal_frame->input.view.size == params.scene_image_size;
             if (temporal_inputs_match) {
                 const bool jitter_enabled = !temporal_frame->input.view.orthographic;
@@ -4299,16 +4291,10 @@ namespace lfs::vis::gui {
                         panel.temporal_input->view.size != panel.image_size) {
                         return std::nullopt;
                     }
-                    const float render_scale =
-                        std::isfinite(panel.temporal_input->render_scale) &&
-                                panel.temporal_input->render_scale > 0.0f
-                            ? panel.temporal_input->render_scale
-                            : 1.0f;
-                    const glm::ivec2 output_extent{
-                        std::max(1, static_cast<int>(std::lround(
-                                        static_cast<float>(panel.image_size.x) / render_scale))),
-                        std::max(1, static_cast<int>(std::lround(
-                                        static_cast<float>(panel.image_size.y) / render_scale)))};
+                    const glm::ivec2 output_extent = panel.temporal_input->output_extent;
+                    if (output_extent.x <= 0 || output_extent.y <= 0) {
+                        return std::nullopt;
+                    }
                     const glm::ivec2 allocation_extent =
                         panel.allocation_size.x >= panel.image_size.x &&
                                 panel.allocation_size.y >= panel.image_size.y

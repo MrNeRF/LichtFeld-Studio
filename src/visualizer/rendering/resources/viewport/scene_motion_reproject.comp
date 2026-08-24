@@ -48,7 +48,9 @@ void main() {
     }
 
     vec2 extent = vec2(params.render_info.xy);
-    vec2 current_ndc = 2.0 * (vec2(pixel) + vec2(0.5)) / extent - 1.0;
+    vec2 current_ndc = vec2(
+        2.0 * (float(pixel.x) + 0.5) / extent.x - 1.0,
+        1.0 - 2.0 * (float(pixel.y) + 0.5) / extent.y);
     vec4 world = params.inverse_current_view_projection * vec4(current_ndc, depth, 1.0);
     if (isnan(world.w) || isinf(world.w) || abs(world.w) <= 1e-7) {
         imageStore(u_motion, pixel, vec4(0.0));
@@ -64,7 +66,9 @@ void main() {
     }
 
     vec2 previous_ndc = previous_clip.xy / previous_clip.w;
-    vec2 motion_pixels = (previous_ndc - current_ndc) * 0.5 * extent;
+    vec2 motion_pixels = vec2(
+        (previous_ndc.x - current_ndc.x) * 0.5 * extent.x,
+        (current_ndc.y - previous_ndc.y) * 0.5 * extent.y);
     if (params.render_info.z != 0) {
         motion_pixels.y = -motion_pixels.y;
     }

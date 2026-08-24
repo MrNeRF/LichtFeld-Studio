@@ -42,6 +42,7 @@ namespace lfs::vis {
             request.temporal.render_extent = {640, 360};
             request.temporal.output_extent = {1280, 720};
             request.temporal.frame.view.size = request.temporal.render_extent;
+            request.temporal.frame.output_extent = request.temporal.output_extent;
             request.motion.enabled = true;
             request.motion.depth_view = reinterpret_cast<VkImageView>(1);
             request.motion.depth = makeSceneDepthContract(true,
@@ -227,11 +228,18 @@ namespace lfs::vis {
 
     TEST(SceneTemporalResolve, ConvertsNdcJitterToMotionImagePixels) {
         EXPECT_EQ(sceneTemporalJitterPixels({0.25f, -0.5f}, {640, 360}, false),
-                  glm::vec2(80.0f, -90.0f));
-        EXPECT_EQ(sceneTemporalJitterPixels({0.25f, -0.5f}, {640, 360}, true),
                   glm::vec2(80.0f, 90.0f));
+        EXPECT_EQ(sceneTemporalJitterPixels({0.25f, -0.5f}, {640, 360}, true),
+                  glm::vec2(80.0f, -90.0f));
         EXPECT_EQ(sceneTemporalJitterPixels({0.25f, -0.5f}, {0, 360}, false),
                   glm::vec2(0.0f));
+
+        constexpr glm::ivec2 extent{640, 360};
+        constexpr glm::vec2 applied_pixels{0.25f, -0.375f};
+        const glm::vec2 round_trip = sceneTemporalJitterPixels(
+            temporalJitterNdc(applied_pixels, extent), extent, false);
+        EXPECT_NEAR(round_trip.x, applied_pixels.x, 1e-6f);
+        EXPECT_NEAR(round_trip.y, applied_pixels.y, 1e-6f);
     }
 
     TEST(SceneTemporalResolve, WarmupUsesUniformSamplesWithoutExceedingPresetWeight) {
@@ -525,6 +533,9 @@ namespace lfs::vis {
         auto request = pipelineRequest();
         EXPECT_TRUE(validVulkanSceneTemporalPipelineRequest(request));
         request.resolve.output_extent.x += 1;
+        EXPECT_FALSE(validVulkanSceneTemporalPipelineRequest(request));
+        request = pipelineRequest();
+        request.temporal.frame.output_extent.x -= 1;
         EXPECT_FALSE(validVulkanSceneTemporalPipelineRequest(request));
         request = pipelineRequest();
         request.resolve.view = TemporalViewId::SplitLeft;

@@ -34,6 +34,7 @@ namespace lfs::vis {
         Requested = 1u << 10u,
         RuntimeUnavailable = 1u << 11u,
         ResolveFailure = 1u << 12u,
+        OutputExtent = 1u << 13u,
     };
 
     [[nodiscard]] constexpr TemporalResetReason operator|(const TemporalResetReason lhs,
@@ -60,6 +61,7 @@ namespace lfs::vis {
 
     struct TemporalFrameInput {
         lfs::rendering::FrameView view;
+        glm::ivec2 output_extent{0, 0};
         glm::vec2 jitter{0.0f};
         float render_scale = 1.0f;
         std::uint64_t scene_generation = 0;
@@ -71,6 +73,8 @@ namespace lfs::vis {
         const TemporalFrameInput& input) noexcept;
 
     [[nodiscard]] LFS_VIS_API glm::vec2 temporalJitterPixels(std::uint64_t sequence);
+    [[nodiscard]] LFS_VIS_API glm::vec2 temporalJitterNdc(glm::vec2 jitter_pixels,
+                                                          glm::ivec2 render_size);
     [[nodiscard]] LFS_VIS_API glm::vec2 temporalJitterNdc(std::uint64_t sequence,
                                                           glm::ivec2 render_size);
 

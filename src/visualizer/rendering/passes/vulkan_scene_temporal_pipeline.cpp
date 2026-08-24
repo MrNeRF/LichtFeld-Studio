@@ -51,6 +51,7 @@ namespace lfs::vis {
                    !request.motion.enabled && !request.resolve.enabled;
         if (!plan.valid() || !validTemporalViewId(request.temporal.view) ||
             request.temporal.frame.view.size != request.temporal.render_extent ||
+            request.temporal.frame.output_extent != request.temporal.output_extent ||
             !sameExtents(request) || !sameView(request) || !sameDepthSource(request))
             return false;
         if (!request.temporal.requirements.depth || !request.temporal.requirements.motion ||

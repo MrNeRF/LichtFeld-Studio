@@ -38,9 +38,9 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API SceneTemporalResolveSettings sceneTemporalQualitySettings(
         SceneTemporalQuality quality) noexcept;
 
-    // TemporalFrameInput stores projection jitter in NDC. Resolve and motion
-    // operate in render-pixel coordinates, with Y following the image/motion
-    // storage convention selected by flip_y.
+    // TemporalFrameInput stores projection jitter in OpenGL NDC (+Y up).
+    // Resolve and motion operate in top-left image pixels (+Y down), followed
+    // by the optional storage-orientation flip selected by flip_y.
     [[nodiscard]] LFS_VIS_API glm::vec2 sceneTemporalJitterPixels(
         glm::vec2 jitter_ndc, glm::ivec2 render_extent, bool flip_y) noexcept;
 

@@ -47,7 +47,9 @@ namespace lfs::vis {
         }
 
         const glm::vec2 extent(params.render_extent);
-        const glm::vec2 current_ndc = 2.0f * pixel_center / extent - 1.0f;
+        const glm::vec2 current_ndc{
+            2.0f * pixel_center.x / extent.x - 1.0f,
+            1.0f - 2.0f * pixel_center.y / extent.y};
         glm::vec4 world = params.inverse_current_view_projection *
                           glm::vec4(current_ndc, ndc_depth, 1.0f);
         if (!std::isfinite(world.w) || std::abs(world.w) <= MIN_ABS_W) {
@@ -61,7 +63,9 @@ namespace lfs::vis {
             return std::nullopt;
         }
         const glm::vec2 previous_ndc = glm::vec2(previous_clip) / previous_clip.w;
-        glm::vec2 motion_pixels = (previous_ndc - current_ndc) * 0.5f * extent;
+        glm::vec2 motion_pixels{
+            (previous_ndc.x - current_ndc.x) * 0.5f * extent.x,
+            (current_ndc.y - previous_ndc.y) * 0.5f * extent.y};
         if (params.flip_y) {
             motion_pixels.y = -motion_pixels.y;
         }

@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 #include <limits>
+#include <rendering/coordinate_conventions.hpp>
 
 namespace lfs::vis {
 
@@ -32,7 +33,53 @@ namespace lfs::vis {
         params.previous_view_projection[3][1] = 0.2f;
         const auto flipped = reprojectSceneMotionPixels(params, {100.0f, 50.0f}, 0.5f);
         ASSERT_TRUE(flipped.has_value());
-        EXPECT_NEAR(flipped->y, -10.0f, 1e-5f);
+        EXPECT_NEAR(flipped->y, 10.0f, 1e-5f);
+    }
+
+    TEST(SceneMotionReprojection, PerspectiveCameraMotionUsesTopLeftImageCoordinates) {
+        constexpr glm::ivec2 extent{640, 360};
+        constexpr float focal_length_mm = 35.0f;
+        constexpr float near_plane = 0.1f;
+        constexpr float far_plane = 100.0f;
+        const glm::mat3 rotation(1.0f);
+        const glm::vec3 current_position(0.1f, -0.2f, 0.3f);
+        const glm::vec3 previous_position(-0.2f, 0.4f, 0.1f);
+        const glm::vec3 world_point(0.3f, 0.2f, -4.0f);
+
+        const glm::mat4 projection = lfs::rendering::createProjectionMatrixFromFocal(
+            extent, focal_length_mm, false, lfs::rendering::DEFAULT_ORTHO_SCALE,
+            near_plane, far_plane);
+        const glm::mat4 current_view = lfs::rendering::makeViewMatrix(
+            rotation, current_position);
+        const glm::mat4 previous_view = lfs::rendering::makeViewMatrix(
+            rotation, previous_position);
+        const glm::vec4 current_clip = projection * current_view * glm::vec4(world_point, 1.0f);
+        ASSERT_GT(std::abs(current_clip.w), 1e-6f);
+        const float ndc_depth = current_clip.z / current_clip.w;
+
+        const auto current_pixel = lfs::rendering::projectWorldPoint(
+            rotation, current_position, extent, world_point, focal_length_mm);
+        const auto previous_pixel = lfs::rendering::projectWorldPoint(
+            rotation, previous_position, extent, world_point, focal_length_mm);
+        ASSERT_TRUE(current_pixel.has_value());
+        ASSERT_TRUE(previous_pixel.has_value());
+
+        const SceneMotionReprojectionParams params{
+            .inverse_current_view_projection = glm::inverse(projection * current_view),
+            .previous_view_projection = projection * previous_view,
+            .render_extent = extent,
+        };
+        const auto motion = reprojectSceneMotionPixels(params, *current_pixel, ndc_depth);
+        ASSERT_TRUE(motion.has_value());
+        const glm::vec2 expected = *previous_pixel - *current_pixel;
+        // The matrix unprojection and direct pinhole projection intentionally
+        // use independent float paths. Keep their agreement well below one
+        // thousandth of a pixel without requiring bit-identical evaluation.
+        constexpr float PIXEL_TOLERANCE = 1e-3f;
+        EXPECT_NEAR(motion->x, expected.x, PIXEL_TOLERANCE);
+        EXPECT_NEAR(motion->y, expected.y, PIXEL_TOLERANCE);
+        EXPECT_GT(motion->x, 0.0f);
+        EXPECT_GT(motion->y, 0.0f);
     }
 
     TEST(SceneMotionReprojection, RejectsMalformedInputsAndHomogeneousCoordinates) {

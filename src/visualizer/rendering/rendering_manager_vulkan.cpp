@@ -1908,6 +1908,7 @@ namespace lfs::vis {
             lfs::rendering::isVkSplatBackend(frame_settings.raster_backend);
         temporal_convergence_.prepare(
             temporal_eligible, (frame_dirty & temporal_source_dirty) != 0);
+        const glm::vec2 applied_temporal_jitter_pixels = temporal_convergence_.jitter();
         if ((frame_dirty & (DirtyFlag::SPLATS | DirtyFlag::MESH)) != 0) {
             if (++temporal_scene_revision_ == 0)
                 ++temporal_scene_revision_;
@@ -2144,7 +2145,7 @@ namespace lfs::vis {
             .hovered_gaussian_id = viewport_overlay_service_.hoveredGaussianId(),
             .selection_flash_intensity = getSelectionFlashIntensity(),
             .view_panels = {},
-            .scene_jitter_pixels = temporal_convergence_.jitter()};
+            .scene_jitter_pixels = applied_temporal_jitter_pixels};
 
         const auto complete_temporal_convergence_frame = [this]() {
             if (temporal_convergence_.completeSuccessfulFrame())
@@ -2497,10 +2498,11 @@ namespace lfs::vis {
                                                                ? std::optional<TemporalFrameInput>{
                                                                      {.view = frame_ctx.makeFrameView(
                                                                           source_viewport, panel_size),
+                                                                      .output_extent = panel_size,
                                                                       .jitter = request.frame_view.orthographic
                                                                                     ? glm::vec2(0.0f)
                                                                                     : temporalJitterNdc(
-                                                                                          temporal_convergence_.sequence(),
+                                                                                          applied_temporal_jitter_pixels,
                                                                                           panel_size),
                                                                       .render_scale = scale,
                                                                       .scene_generation = panel_scene_generation,
@@ -3153,8 +3155,10 @@ namespace lfs::vis {
                 }
             }
         } else if (splitViewUsesIndependentPanels(frame_settings.split_view_mode)) {
-            if (const auto layouts = split_view_service_.panelLayouts(frame_settings, render_size.x);
-                layouts && render_size.x > 1) {
+            const auto layouts = split_view_service_.panelLayouts(frame_settings, render_size.x);
+            const auto output_layouts =
+                split_view_service_.panelLayouts(frame_settings, current_size.x);
+            if (layouts && output_layouts && render_size.x > 1 && current_size.x > 1) {
                 auto left = render_panel_image(
                     context.viewport,
                     {std::max((*layouts)[0].width, 1), render_size.y},
@@ -3172,6 +3176,14 @@ namespace lfs::vis {
                     nullptr,
                     VksplatViewportRenderer::OutputSlot::SplitRight);
                 if (left && right) {
+                    if (left->temporal_input) {
+                        left->temporal_input->output_extent = {
+                            std::max((*output_layouts)[0].width, 1), current_size.y};
+                    }
+                    if (right->temporal_input) {
+                        right->temporal_input->output_extent = {
+                            std::max((*output_layouts)[1].width, 1), current_size.y};
+                    }
                     pending_split_view.enabled = true;
                     pending_split_view.split_position = frame_settings.split_position;
                     pending_split_view.background = frame_settings.background_color;
@@ -3226,6 +3238,10 @@ namespace lfs::vis {
                         nullptr,
                         VksplatViewportRenderer::OutputSlot::SplitRight);
                     if (left && right) {
+                        if (left->temporal_input)
+                            left->temporal_input->output_extent = current_size;
+                        if (right->temporal_input)
+                            right->temporal_input->output_extent = current_size;
                         pending_split_view.enabled = true;
                         pending_split_view.split_position = frame_settings.split_position;
                         pending_split_view.background = frame_settings.background_color;
@@ -3785,10 +3801,11 @@ namespace lfs::vis {
                                         mesh_frame.temporal = VulkanMeshFrame::TemporalFrame{
                                             .input = {
                                                 .view = frame_ctx.makeFrameView(),
+                                                .output_extent = current_size,
                                                 .jitter = request.frame_view.orthographic
                                                               ? glm::vec2(0.0f)
                                                               : temporalJitterNdc(
-                                                                    temporal_convergence_.sequence(), render_size),
+                                                                    applied_temporal_jitter_pixels, render_size),
                                                 .render_scale = scale,
                                                 .scene_generation = scene_generation,
                                                 .backend_key = static_cast<std::uint64_t>(quality) + 1,

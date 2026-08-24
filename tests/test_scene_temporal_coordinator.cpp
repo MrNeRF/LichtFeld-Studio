@@ -22,6 +22,7 @@ namespace lfs::vis {
                 .output_extent = {1920, 1080},
             };
             request.frame.view.size = request.render_extent;
+            request.frame.output_extent = request.output_extent;
             request.frame.render_scale = 2.0f / 3.0f;
             request.frame.scene_generation = 7;
             request.frame.backend_key = 42;
