@@ -7939,6 +7939,11 @@ namespace lfs::training {
                 params_.optimization.normal_loss_weight > 0.0f;
             if (aux_pipeline_config.load_normals) {
                 ensure_training_normal_maps(params_, train_dataset_->get_cameras());
+                if (val_dataset_) {
+                    // Maps generated above cover every image; val cameras were
+                    // loaded before generation, so associate them too for eval.
+                    ensure_training_normal_maps(params_, val_dataset_->get_cameras());
+                }
                 normal_prior_flip_yz_ = false;
                 normal_prior_world_space_ = false;
                 normal_prior_srgb_ = false;
