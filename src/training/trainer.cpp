@@ -8292,6 +8292,20 @@ namespace lfs::training {
             : user_stopped
                 ? lfs::io::project::TrainingFinishReason::UserStopped
                 : lfs::io::project::TrainingFinishReason::Completed;
+        // A save-project-at-iter capture that needed replan is re-queued for
+        // the next post-step. When the target is the final iteration there is
+        // no next post-step; drain here (layout is stable) before the terminal save.
+        {
+            bool drain_requested_project_snapshot = false;
+            {
+                std::lock_guard lock(project_snapshot_mutex_);
+                drain_requested_project_snapshot = requested_project_path_.has_value();
+            }
+            if (drain_requested_project_snapshot) {
+                consume_requested_project_snapshot(terminal_iteration);
+                finish_project_writer();
+            }
+        }
         TrainerProjectSavePolicy terminal_save_policy;
         std::optional<std::filesystem::path> terminal_project_path;
         {

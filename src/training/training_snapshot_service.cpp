@@ -2189,9 +2189,22 @@ namespace lfs::training {
                         request
                             .sparsity_optimizer);
                 if (!serialized) {
+                    const auto& error =
+                        serialized.error();
+                    // serialize_checkpoint() maps layout-change
+                    // exceptions to a Result; restore the type.
+                    if (error.code() ==
+                            lfs::ErrorCode::
+                                FailedPrecondition ||
+                        error.detail().find(
+                            "layout changed") !=
+                            std::string_view::npos) {
+                        throw SnapshotReplanRequired(
+                            std::string(error.detail()));
+                    }
                     throw std::runtime_error(
                         lfs::format_for_developer(
-                            serialized.error()));
+                            error));
                 }
                 if (serialized->bytes !=
                         prepared.impl_
