@@ -71,6 +71,12 @@ or ownership contracts are not equivalent to the Vulkan temporal path. A split
 result is presented only when both panel resolves succeed; otherwise both
 panels fall back together.
 
+When the selected backend leaves Temporal, the viewport first retires submitted
+frames and then releases the per-view color and depth history allocations. The
+immutable compute-pipeline state remains available for a later Temporal
+selection, avoiding persistent history VRAM without paying full pipeline
+creation cost on every backend switch.
+
 ## Persistence and safe mode
 
 The selected backend and the last valid preset for each backend are user-global
@@ -117,22 +123,27 @@ response transfer. The reported viewport FPS is derived from the in-application
 camera-to-post-render median latency. This scope still covers GUI scheduling and
 command recording and is not an isolated GPU timestamp.
 
-The quality pass performs a smaller number of full-resolution captures. It
-reports aggregate PSNR and global RGB SSIM against matching Native frames, and
-reports PNG capture latency separately rather than presenting it as renderer
-FPS. `--frames` controls the performance sample count and `--quality-frames`
-controls the sparse image-comparison count.
+The quality pass performs a smaller number of full-resolution captures. For
+each pose it waits until `render.reconstruction.status` reports
+`convergence_remaining == 0`, then crops the reconstructed viewport from the
+presented window. This prevents the benchmark from reading a pre-reconstruction
+raster input or an intermediate convergence frame. It reports aggregate PSNR
+and global RGB SSIM against matching Native frames, and reports PNG capture
+latency separately rather than presenting it as renderer FPS. `--frames`
+controls the performance sample count and `--quality-frames` controls the sparse
+image-comparison count.
 
 Results are written to `build/scene-reconstruction-benchmark.json` by default.
-Schema version 3 records the global phase boundary, round order, raw performance
-samples, per-round summaries, aggregate statistics, phase-specific effective
-backend state, and explicit fallback information. The original camera, backend,
-and preset are restored when the run completes or fails. Progress and per-phase
-ETA are printed while the benchmark runs. The JSON report is replaced atomically
-after every completed case, so partial measurements remain available if a later
-case or state restoration fails. The deterministic CPU quality regressions in
-the test suite remain the smaller algorithm-level guard; this benchmark validates
-the actual renderer with the scene selected by the developer.
+Schema version 4 records the global phase boundary, round order, raw performance
+samples, per-round summaries, aggregate statistics, the presented-viewport
+capture source, convergence policy, phase-specific effective backend state, and
+explicit fallback information. The original camera, backend, and preset are
+restored when the run completes or fails. Progress and per-phase ETA are printed
+while the benchmark runs. The JSON report is replaced atomically after every
+completed case, so partial measurements remain available if a later case or
+state restoration fails. The deterministic CPU quality regressions in the test
+suite remain the smaller algorithm-level guard; this benchmark validates the
+actual renderer with the scene selected by the developer.
 
 The benchmark also performs a preflight before changing the camera or renderer.
 It requires a visible, non-empty Gaussian scene and records the active projection,
@@ -155,7 +166,7 @@ with that backend skipped.
 | `--performance-rounds COUNT` | Rotated/reversed performance rounds used to reduce order bias. Cannot exceed `--frames`. Default: `3`. |
 | `--orbit-degrees DEGREES` | Total span of the deterministic camera orbit. Default: `8`. |
 | `--backends IDS` | Optional comma-separated backend IDs, for example `native,spatial,temporal`. Native is always included as the quality reference. |
-| `--timeout SECONDS` | Timeout for each MCP HTTP request. Default: `60`. |
+| `--timeout SECONDS` | Timeout for each MCP HTTP request and for convergence at each quality pose. Default: `60`. |
 | `--output PATH` | Atomic JSON report path. Default: `build/scene-reconstruction-benchmark.json`. |
 
 Useful invocations:

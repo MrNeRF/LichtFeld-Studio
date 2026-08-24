@@ -2089,10 +2089,27 @@ namespace lfs::vis {
                    validVulkanSceneTemporalPipelineRequest(*params.temporal);
         }
 
+        void releaseTemporalHistory() {
+            if (!temporal_pipeline_initialized)
+                return;
+            if (temporal_pipeline.resourceStats().history_images == 0)
+                return;
+            if (context != nullptr && !context->waitForSubmittedFrames()) {
+                temporal_pipeline.resetAll(TemporalResetReason::HistoryDisabled);
+                LOG_WARN("Scene temporal resources could not be released after leaving Temporal: {}",
+                         context->lastError());
+                return;
+            }
+            temporal_pipeline.releaseHistory();
+        }
+
         [[nodiscard]] bool recordPreRenderWork(const VkCommandBuffer command_buffer,
                                                const VulkanViewportPassParams& params) {
             if (!hasPreRenderWork(params)) {
-                temporal_pipeline.resetAll(TemporalResetReason::InvalidInput);
+                if (params.scene_upscaler == SceneUpscalerBackend::Temporal)
+                    temporal_pipeline.resetAll(TemporalResetReason::InvalidInput);
+                else
+                    releaseTemporalHistory();
                 updateSceneUpscalerSelection(params.scene_upscaler, false);
                 return false;
             }
@@ -2162,6 +2179,8 @@ namespace lfs::vis {
         }
 
         void prepare(const VulkanViewportPassParams& params) {
+            if (params.scene_upscaler != SceneUpscalerBackend::Temporal)
+                releaseTemporalHistory();
             if (params.scene_upscaler == SceneUpscalerBackend::Native) {
                 scene_spatial_pipeline_failed = false;
             } else if (params.scene_upscaler == SceneUpscalerBackend::Spatial) {
@@ -2234,9 +2253,6 @@ namespace lfs::vis {
                 return false;
             }();
             if (runtime_available.has_value()) {
-                if (scene_upscaler_selection.requested == SceneUpscalerBackend::Temporal) {
-                    temporal_pipeline.resetAll(TemporalResetReason::Backend);
-                }
                 updateSceneUpscalerSelection(params.scene_upscaler, *runtime_available);
             }
         }

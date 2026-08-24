@@ -883,7 +883,7 @@ namespace lfs::vis {
             viewport_.camera.setPivot(target);
 
             if (rendering_manager_)
-                rendering_manager_->markCameraPoseChanged();
+                rendering_manager_->markCameraCut();
         });
         callback_cleanup_.add([] { vis::set_set_view_callback(nullptr); });
 
@@ -906,7 +906,7 @@ namespace lfs::vis {
             vp.setViewMatrix(*rotation, eye);
             vp.camera.setPivot(target);
 
-            rendering_manager_->markCameraPoseChanged();
+            rendering_manager_->markCameraCut();
         });
         callback_cleanup_.add([] { vis::set_set_view_for_panel_callback(nullptr); });
 

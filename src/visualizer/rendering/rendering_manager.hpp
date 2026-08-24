@@ -242,6 +242,10 @@ namespace lfs::vis {
         void markDirty();
         void markDirty(DirtyMask flags);
         void markCameraPoseChanged();
+        // Marks a discontinuous camera jump. Unlike interactive camera motion,
+        // the next successfully published temporal frame must not reproject
+        // history across this boundary.
+        void markCameraCut();
 
         [[nodiscard]] bool pollDirtyState();
 
@@ -391,6 +395,9 @@ namespace lfs::vis {
         float getAverageFPS() const { return framerate_controller_.getAverageFPS(); }
         float getPresentedAverageFPS() const {
             return presented_framerate_controller_.getAverageFPS();
+        }
+        [[nodiscard]] std::uint32_t temporalConvergenceRemaining() const {
+            return temporal_convergence_.remaining();
         }
         // Measurement only — does not affect scene render pacing/limiting.
         void notePresentedFrame() { presented_framerate_controller_.beginFrame(); }
@@ -792,6 +799,8 @@ namespace lfs::vis {
         std::uint64_t viewport_projection_generation_ = 1;
         std::uint64_t temporal_scene_revision_ = 1;
         TemporalConvergenceController temporal_convergence_;
+        std::atomic<std::uint64_t> temporal_camera_cut_generation_{0};
+        std::uint64_t consumed_temporal_camera_cut_generation_ = 0;
         bool scene_reconstruction_request_logged_ = false;
         std::string last_scene_reconstruction_backend_;
         std::string last_scene_reconstruction_preset_;

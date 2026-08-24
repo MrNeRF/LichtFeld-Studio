@@ -23,7 +23,7 @@ if(BUILD_LOCALIZATION_TESTS)
         USES_TERMINAL
     )
     message(STATUS "Registered headless localization contract tests (no LibTorch)")
-    if(NOT BUILD_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_FORMAT_TESTS)
+    if(NOT BUILD_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_TEMPORAL_CPU_TESTS)
         return()
     endif()
 endif()
@@ -76,9 +76,63 @@ if(BUILD_UNICODE_TEST_ONLY)
     )
 
     message(STATUS "Building standalone Unicode path test (no CUDA)")
-    if(NOT BUILD_TESTS)
+    if(NOT BUILD_TESTS AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_TEMPORAL_CPU_TESTS)
         return()  # Skip LibTorch-dependent tests when only Unicode coverage was requested.
     endif()
+endif()
+
+# =============================================================================
+# Standalone temporal reconstruction contracts (CPU execution only)
+# =============================================================================
+if(BUILD_TEMPORAL_CPU_TESTS)
+    add_executable(lichtfeld_temporal_cpu_tests
+        test_scene_motion_contract.cpp
+        test_scene_temporal_coordinator.cpp
+        test_scene_temporal_plan.cpp
+        test_scene_temporal_resolve.cpp
+        test_temporal_frame_tracker.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/scene_temporal_coordinator.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/scene_temporal_plan.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/scene_temporal_resolve.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/temporal_frame_tracker.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/passes/vulkan_scene_temporal_pipeline_contract.cpp
+    )
+    target_include_directories(lichtfeld_temporal_cpu_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/core/include
+        ${CMAKE_SOURCE_DIR}/src/rendering/include
+        ${CMAKE_SOURCE_DIR}/src/visualizer
+        ${CMAKE_SOURCE_DIR}/src/visualizer/include
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_BINARY_DIR}/include
+        ${Vulkan_INCLUDE_DIRS}
+    )
+    target_compile_definitions(lichtfeld_temporal_cpu_tests PRIVATE
+        LFS_VIS_EXPORTS
+    )
+    target_link_libraries(lichtfeld_temporal_cpu_tests PRIVATE
+        GTest::gtest_main
+        glm::glm
+    )
+    set_target_properties(lichtfeld_temporal_cpu_tests PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+    )
+    if(COMMAND lfs_enable_fast_cxx_compile)
+        lfs_enable_fast_cxx_compile(lichtfeld_temporal_cpu_tests)
+    endif()
+    add_test(NAME lichtfeld.temporal.cpu
+        COMMAND $<TARGET_FILE:lichtfeld_temporal_cpu_tests> --gtest_color=no
+    )
+    set_tests_properties(lichtfeld.temporal.cpu PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "fast;cpu;temporal"
+        TIMEOUT 120
+    )
+endif()
+
+if(NOT BUILD_FORMAT_TESTS AND NOT BUILD_TESTS)
+    message(STATUS "Building standalone temporal reconstruction CPU tests")
+    return()
 endif()
 
 # MSVC resolves every object reference before /OPT:REF, while GNU ld can discard
@@ -203,8 +257,8 @@ set_tests_properties(lichtfeld_format_tests PROPERTIES
 )
 
 if(NOT BUILD_TESTS)
-    message(STATUS "Building CPU-only format tests (no CUDA); full suite disabled")
-    return()  # lichtfeld_format_tests is defined above; the rest needs CUDA/Torch
+    message(STATUS "Building standalone CPU-only tests; full LibTorch/CUDA suite disabled")
+    return()
 endif()
 
 # Reuse nanobind headers for Python UI regression tests
@@ -818,6 +872,32 @@ set_tests_properties(lichtfeld.fast PROPERTIES
     LABELS "fast;gpu"
     TIMEOUT 60
 )
+
+if(NOT BUILD_TEMPORAL_CPU_TESTS)
+    string(CONCAT LFS_TEMPORAL_CPU_TEST_FILTER
+        "TemporalFrameTracker.*:"
+        "SceneTemporalPlan.*:"
+        "SceneHistoryContract.*:"
+        "SceneHistoryTracker.*:"
+        "SceneTemporalCoordinator.*:"
+        "SceneMotionReprojection.*:"
+        "VulkanSceneMotionContract.*:"
+        "SceneTemporalResolve.*:"
+        "SceneTemporalQualityRegression.*:"
+        "VulkanSceneTemporalResolveContract.*:"
+        "VulkanSceneTemporalPipelineContract.*"
+    )
+    add_test(NAME lichtfeld.temporal.cpu
+        COMMAND $<TARGET_FILE:lichtfeld_tests>
+            "--gtest_filter=${LFS_TEMPORAL_CPU_TEST_FILTER}"
+            --gtest_color=no
+    )
+    set_tests_properties(lichtfeld.temporal.cpu PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "fast;cpu"
+        TIMEOUT 120
+    )
+endif()
 
 add_test(NAME lichtfeld.slow
     COMMAND $<TARGET_FILE:lichtfeld_tests>

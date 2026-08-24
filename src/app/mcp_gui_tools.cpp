@@ -361,13 +361,10 @@ namespace lfs::app {
             if (!rendering_manager)
                 return std::unexpected("Viewport capture is not initialized");
 
-            if (auto image = rendering_manager->captureViewportImage(); image && image->is_valid())
-                return mcp::encode_render_tensor_to_base64(*image, width, height);
-
-            // Mesh-only and environment-only scenes are drawn by GPU passes that composite
-            // straight into the window, so no render path publishes an offscreen image to
-            // read back. The viewport is on screen regardless, so crop it out of the
-            // composited window instead of reporting nothing to capture.
+            // Capture the presented viewport for every live GUI backend. Reading the
+            // renderer's internal image here would bypass Spatial/Temporal presentation
+            // and make quality measurements compare pre-reconstruction inputs instead of
+            // the image the user actually sees.
             return capture_viewport_from_window(viewer_impl, *rendering_manager, width, height);
         }
 
@@ -958,6 +955,7 @@ namespace lfs::app {
                 {"fallback", std::string(vis::sceneUpscalerFallbackId(selection.fallback))},
                 {"fell_back", selection.fellBack()},
                 {"preset", settings ? settings->scene_upscaler_preset : std::string{}},
+                {"convergence_remaining", rendering_manager.temporalConvergenceRemaining()},
                 {"scene_fps", rendering_manager.getAverageFPS()},
                 {"presented_fps", rendering_manager.getPresentedAverageFPS()},
             };
@@ -2921,7 +2919,7 @@ namespace lfs::app {
         registry.register_tool(
             McpTool{
                 .name = "render.reconstruction.status",
-                .description = "Read requested and effective viewport scene reconstruction state plus live frame-rate observations",
+                .description = "Read requested/effective viewport reconstruction, fallback, convergence, and live frame-rate state",
                 .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
             [viewer_impl](const json&) -> json {
                 return post_and_wait(viewer_impl, [viewer_impl]() -> json {

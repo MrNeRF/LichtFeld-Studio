@@ -410,6 +410,40 @@ def sample_viewport_frame(client: McpClient, view: dict[str, Any]) -> dict[str, 
     return payload
 
 
+def wait_for_convergence(
+    client: McpClient,
+    case: BenchmarkCase,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    deadline = time.perf_counter() + timeout_seconds
+    while True:
+        payload = client.call_tool("render.reconstruction.status")
+        remaining = payload.get("convergence_remaining")
+        if (
+            not payload.get("success")
+            or isinstance(remaining, bool)
+            or not isinstance(remaining, int)
+            or remaining < 0
+        ):
+            raise BenchmarkError(
+                "render.reconstruction.status returned no valid convergence counter: "
+                f"{payload}"
+            )
+        if payload.get("fell_back") or payload.get("effective") != case.backend:
+            raise BenchmarkError(
+                f"{case.key} fell back while waiting for convergence: "
+                f"effective={payload.get('effective')} fallback={payload.get('fallback')}"
+            )
+        if remaining == 0:
+            return payload
+        if time.perf_counter() >= deadline:
+            raise BenchmarkError(
+                f"{case.key} did not converge within {timeout_seconds:.1f}s "
+                f"({remaining} frame(s) remaining)"
+            )
+        time.sleep(0.01)
+
+
 def restore_state(
     client: McpClient,
     original_settings: dict[str, Any],
@@ -485,7 +519,7 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
     ordered_cases = [native_case] + [case for case in cases if case != native_case]
     results: list[dict[str, Any]] = []
     report: dict[str, Any] = {
-        "schema_version": 3,
+        "schema_version": 4,
         "complete": False,
         "width": args.width,
         "height": args.height,
@@ -507,7 +541,9 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "warmup_frames": args.warmup_frames,
             "complete": False,
             "timing_scope": "end_to_end_mcp_render_readback_png_http",
-            "reference": "native_full_resolution_live_viewport",
+            "reference": "native_full_resolution_presented_viewport",
+            "capture_source": "presented_viewport_crop",
+            "convergence": "wait_for_zero_remaining_frames_at_each_capture_pose",
         },
         "restoration": {"attempted": False, "success": False},
         "cases": results,
@@ -700,6 +736,7 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
                         f"effective={final_status.get('effective')} "
                         f"fallback={final_status.get('fallback')}"
                     )
+                final_status = wait_for_convergence(client, case, args.timeout)
                 capture_start = time.perf_counter()
                 image = capture(client, args.width, args.height)
                 capture_ms.append((time.perf_counter() - capture_start) * 1000.0)
@@ -811,7 +848,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 The performance phase completes for every case before any PNG capture begins.
 --frames is the total measured frame count per case, divided across the requested
-rounds; it is not multiplied by --performance-rounds.""",
+rounds; it is not multiplied by --performance-rounds. Quality capture waits for
+the reported reconstruction convergence counter to reach zero at every pose.""",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
@@ -870,7 +908,7 @@ rounds; it is not multiplied by --performance-rounds.""",
         "--timeout",
         type=float,
         default=60.0,
-        help="Timeout in seconds for each MCP HTTP request (default: %(default)s)",
+        help="MCP request and per-pose convergence timeout in seconds (default: %(default)s)",
     )
     parser.add_argument(
         "--output",

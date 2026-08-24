@@ -103,6 +103,9 @@ namespace lfs::vis {
                                   const VulkanSceneTemporalResolveParams& params);
         void reset(TemporalViewId view);
         void resetAll();
+        // Retain immutable pipeline state while freeing all per-view color and
+        // depth history allocations after submitted users have retired.
+        void releaseHistory();
         void shutdown();
 
         [[nodiscard]] VkImageView outputView(TemporalViewId view) const;

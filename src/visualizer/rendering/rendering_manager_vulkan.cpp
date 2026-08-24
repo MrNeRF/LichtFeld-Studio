@@ -1919,7 +1919,11 @@ namespace lfs::vis {
             (frame_dirty & temporal_source_dirty) != 0,
             allow_temporal_settle);
         const glm::vec2 applied_temporal_jitter_pixels = temporal_convergence_.jitter();
-        if ((frame_dirty & (DirtyFlag::SPLATS | DirtyFlag::MESH)) != 0) {
+        const std::uint64_t temporal_camera_cut_generation =
+            temporal_camera_cut_generation_.load(std::memory_order_acquire);
+        const bool temporal_camera_cut =
+            temporal_camera_cut_generation != consumed_temporal_camera_cut_generation_;
+        if ((frame_dirty & (DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::BACKGROUND)) != 0) {
             if (++temporal_scene_revision_ == 0)
                 ++temporal_scene_revision_;
         }
@@ -2161,10 +2165,12 @@ namespace lfs::vis {
             .view_panels = {},
             .scene_jitter_pixels = applied_temporal_jitter_pixels};
 
-        const auto complete_temporal_convergence_frame = [this]() {
-            if (temporal_convergence_.completeSuccessfulFrame())
-                requestTemporalFollowUp();
-        };
+        const auto complete_temporal_convergence_frame =
+            [this, temporal_camera_cut_generation]() {
+                consumed_temporal_camera_cut_generation_ = temporal_camera_cut_generation;
+                if (temporal_convergence_.completeSuccessfulFrame())
+                    requestTemporalFollowUp();
+            };
 
         std::shared_ptr<lfs::core::Tensor> rendered_image;
         lfs::rendering::FrameMetadata rendered_metadata{};
@@ -2522,7 +2528,7 @@ namespace lfs::vis {
                                                                       .scene_generation = panel_scene_generation,
                                                                       .backend_key =
                                                                           static_cast<std::uint64_t>(temporal_quality) + 1,
-                                                                      .camera_cut = false}}
+                                                                      .camera_cut = temporal_camera_cut}}
                                                                : std::nullopt,
                                          .flip_y = result->flip_y,
                                          .size = result->size,
@@ -3823,7 +3829,7 @@ namespace lfs::vis {
                                                 .render_scale = scale,
                                                 .scene_generation = scene_generation,
                                                 .backend_key = static_cast<std::uint64_t>(quality) + 1,
-                                                .camera_cut = false,
+                                                .camera_cut = temporal_camera_cut,
                                             },
                                             .resolve_settings = sceneTemporalQualitySettings(quality),
                                         };

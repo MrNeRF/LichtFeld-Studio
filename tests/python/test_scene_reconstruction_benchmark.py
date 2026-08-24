@@ -128,6 +128,36 @@ def test_sample_viewport_frame_requires_positive_in_app_latency():
             Client({"success": True, "frame_latency_ms": 0.0}), view
         )
 
+    class ConvergenceClient:
+        def __init__(self, remaining):
+            self.remaining = iter(remaining)
+
+        def call_tool(self, name, arguments=None):
+            assert name == "render.reconstruction.status"
+            assert arguments is None
+            return {
+                "success": True,
+                "requested": "temporal",
+                "effective": "temporal",
+                "fallback": "none",
+                "fell_back": False,
+                "convergence_remaining": next(self.remaining),
+            }
+
+    converged = MODULE.wait_for_convergence(
+        ConvergenceClient([2, 1, 0]),
+        MODULE.BenchmarkCase("temporal", "quality", 0.75),
+        1.0,
+    )
+    assert converged["convergence_remaining"] == 0
+
+    with pytest.raises(MODULE.BenchmarkError, match="no valid convergence counter"):
+        MODULE.wait_for_convergence(
+            ConvergenceClient([True]),
+            MODULE.BenchmarkCase("temporal", "quality", 0.75),
+            1.0,
+        )
+
 
 def test_quality_summary_keeps_exact_matches_valid_json_values():
     exact = MODULE.summarize_quality([float("inf"), float("inf")], [1.0, 1.0])
@@ -438,6 +468,16 @@ def test_completed_report_survives_final_restoration_failure(monkeypatch, tmp_pa
                     "frame_latency_ms": 10.0,
                     "timing_scope": "camera_mutation_to_post_render_without_readback",
                 }
+            if name == "render.reconstruction.status":
+                self.events.append("status")
+                return {
+                    "success": True,
+                    "requested": self.backend,
+                    "effective": self.backend,
+                    "fallback": "none",
+                    "fell_back": False,
+                    "convergence_remaining": 0,
+                }
             raise AssertionError(f"unexpected tool: {name}")
 
     monkeypatch.setattr(MODULE, "McpClient", FakeClient)
@@ -467,7 +507,7 @@ def test_completed_report_survives_final_restoration_failure(monkeypatch, tmp_pa
     )
 
     assert report["complete"] is True
-    assert report["schema_version"] == 3
+    assert report["schema_version"] == 4
     assert report["performance"]["timing_scope"] == (
         "camera_mutation_to_post_render_without_readback"
     )
@@ -480,7 +520,14 @@ def test_completed_report_survives_final_restoration_failure(monkeypatch, tmp_pa
         ["native:native", "spatial:quality"],
         ["spatial:quality", "native:native"],
     ]
-    assert FakeClient.latest.events.index("capture") == 10
+    first_capture = FakeClient.latest.events.index("capture")
+    assert FakeClient.latest.events[first_capture - 1] == "status"
+    assert all(
+        event == "status"
+        for index, event in enumerate(FakeClient.latest.events)
+        if index + 1 < len(FakeClient.latest.events)
+        and FakeClient.latest.events[index + 1] == "capture"
+    )
     assert all(
         case["performance"]["viewport_fps_from_median"] == pytest.approx(100.0)
         for case in report["cases"]

@@ -67,6 +67,8 @@ namespace lfs::vis {
         void reset(TemporalViewId view,
                    TemporalResetReason reason = TemporalResetReason::HistoryDisabled);
         void resetAll(TemporalResetReason reason = TemporalResetReason::HistoryDisabled);
+        void releaseHistory(
+            TemporalResetReason reason = TemporalResetReason::HistoryDisabled);
         void shutdown();
 
         [[nodiscard]] VkImageView outputView(TemporalViewId view) const;

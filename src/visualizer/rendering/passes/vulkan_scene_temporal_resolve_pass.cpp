@@ -130,6 +130,13 @@ namespace lfs::vis {
             destroyStaticResources();
         }
 
+        void releaseHistory() {
+            for (std::size_t index = 0; index < views.size(); ++index)
+                resetView(static_cast<TemporalViewId>(index));
+            depth_history.shutdown();
+            depth_history_initialized = false;
+        }
+
         void destroyStaticResources() {
             if (pipeline != VK_NULL_HANDLE)
                 vkDestroyPipeline(device, pipeline, nullptr);
@@ -531,6 +538,11 @@ namespace lfs::vis {
             return;
         for (std::size_t index = 0; index < static_cast<std::size_t>(TemporalViewId::Count); ++index)
             impl_->invalidateView(static_cast<TemporalViewId>(index));
+    }
+
+    void VulkanSceneTemporalResolvePass::releaseHistory() {
+        if (impl_)
+            impl_->releaseHistory();
     }
 
     void VulkanSceneTemporalResolvePass::shutdown() {

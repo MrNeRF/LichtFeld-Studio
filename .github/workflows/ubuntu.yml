@@ -44,6 +44,10 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
+      - name: Install uv
+        if: matrix.build_type == 'Release'
+        uses: astral-sh/setup-uv@v5
+
       - name: Free disk space
         run: |
           apt-get clean
@@ -131,6 +135,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
             -DBUILD_FORMAT_TESTS=ON \
+            -DBUILD_TEMPORAL_CPU_TESTS=${{ matrix.build_type == 'Release' && 'ON' || 'OFF' }} \
             -DBUILD_PYTHON_STUBS=OFF \
             -DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF \
             -DLFS_DEV_IMPORT_SOURCE_RESOURCES=OFF \
@@ -153,6 +158,17 @@ jobs:
         run: |
           cmake --build build --target lichtfeld_format_tests -j $(nproc)
           ctest --test-dir build --output-on-failure -R '^lichtfeld_format_tests$'
+
+      - name: Run scene reconstruction CPU tests
+        if: matrix.build_type == 'Release'
+        run: |
+          cmake --build build --target lichtfeld_temporal_cpu_tests -j $(nproc)
+          ctest --test-dir build --output-on-failure --no-tests=error -R '^lichtfeld\.temporal\.cpu$'
+
+      - name: Run scene reconstruction benchmark tests
+        if: matrix.build_type == 'Release'
+        run: |
+          uv run --python 3.12 --no-project --with numpy --with pillow --with pytest python -m pytest -q tests/python/test_scene_reconstruction_benchmark.py
 
   # .clang-tidy is for local/IDE use only here; CI needs compile_commands.json in a later phase.
   error-debt-gate:
