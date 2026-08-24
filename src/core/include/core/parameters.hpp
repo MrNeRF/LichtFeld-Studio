@@ -174,13 +174,13 @@ namespace lfs::core {
             std::string depth_loss_mode = "ssi"; // ssi (auto prior), ssi-disparity, or ssi-depth
 
             // Normal supervision
-            bool use_normal_loss = false;            // Use dataset normal maps when available
-            bool normal_auto_generate = true;        // Generate missing/mismatched maps from images/ with MoGe-2
-            float normal_loss_weight = 0.05f;        // Prior normal supervision weight
-            float normal_consistency_weight = 0.05f; // Depth-normal consistency weight
-            float normal_flatten_weight = 1.0f;      // L1 on the smallest scale axis while normal supervision is active
-            float normal_start_fraction = 0.2f;      // Start normal supervision at floor(fraction * total iterations)
-            float normal_end_fraction = 1.0f;        // Active while iter < end_fraction * total; 1.0 means until the end
+            bool use_normal_loss = false;             // Use dataset normal maps when available
+            bool normal_auto_generate = true;         // Generate missing/mismatched maps from images/ with MoGe-2
+            float normal_loss_weight = 0.005f;        // Prior normal supervision weight (sweep: free geometry; raise to ~0.1 when geometry is the product)
+            float normal_consistency_weight = 0.001f; // Depth-normal consistency weight
+            float normal_flatten_weight = 0.125f;     // L1 on the smallest scale axis while normal supervision is active
+            float normal_start_fraction = 0.08f;      // Start normal supervision at floor(fraction * total iterations)
+            float normal_end_fraction = 1.0f;         // Active while iter < end_fraction * total; 1.0 means until the end
             NormalLossSpace normal_loss_space = NormalLossSpace::Auto;
 
             // Mip filter (anti-aliasing)

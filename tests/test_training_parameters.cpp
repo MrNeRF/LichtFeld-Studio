@@ -382,7 +382,7 @@ namespace {
 
     TEST_F(TrainingParametersTest, NormalSupervisionScheduleRoundTripAndValidation) {
         auto params = OptimizationParameters::mrnf_defaults();
-        EXPECT_FLOAT_EQ(params.normal_start_fraction, 0.2f);
+        EXPECT_FLOAT_EQ(params.normal_start_fraction, 0.08f);
         EXPECT_FLOAT_EQ(params.normal_end_fraction, 1.0f);
         EXPECT_TRUE(params.validate().empty());
 
@@ -401,7 +401,7 @@ namespace {
         missing.erase("normal_start_fraction");
         missing.erase("normal_end_fraction");
         const auto defaults = OptimizationParameters::from_json(missing);
-        EXPECT_FLOAT_EQ(defaults.normal_start_fraction, 0.2f);
+        EXPECT_FLOAT_EQ(defaults.normal_start_fraction, 0.08f);
         EXPECT_FLOAT_EQ(defaults.normal_end_fraction, 1.0f);
 
         params.normal_start_fraction = 0.8f;
