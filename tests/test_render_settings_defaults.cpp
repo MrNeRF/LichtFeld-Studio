@@ -85,6 +85,28 @@ TEST(RenderSettingsProxy, SceneReconstructionFieldsRoundTrip) {
     EXPECT_FLOAT_EQ(roundtrip.scene_upscaler_scale, 0.5f);
 }
 
+TEST(RenderSettingsProxy, SceneReconstructionUpdateIntentPreservesExplicitFieldMask) {
+    lfs::vis::RenderSettingsUpdateIntent observed;
+    bool called = false;
+    lfs::vis::set_render_settings_callbacks(
+        []() -> std::optional<lfs::vis::RenderSettingsProxy> { return std::nullopt; },
+        [&](const lfs::vis::RenderSettingsProxy&,
+            const lfs::vis::RenderSettingsUpdateIntent intent) {
+            observed = intent;
+            called = true;
+        });
+
+    lfs::vis::update_render_settings(
+        {},
+        {.scene_upscaler_explicit = true,
+         .scene_upscaler_preset_explicit = false});
+    lfs::vis::set_render_settings_callbacks(nullptr, nullptr);
+
+    EXPECT_TRUE(called);
+    EXPECT_TRUE(observed.scene_upscaler_explicit);
+    EXPECT_FALSE(observed.scene_upscaler_preset_explicit);
+}
+
 TEST(RenderSettingsProxy, DepthViewSplitOffsetAndLodFieldsRoundTrip) {
     lfs::vis::RenderSettings settings;
     settings.depth_view = true;

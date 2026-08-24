@@ -82,7 +82,7 @@ namespace lfs::vis {
     public:
         static constexpr std::uint32_t SAMPLE_COUNT = 8;
 
-        void prepare(bool enabled, bool restart);
+        void prepare(bool enabled, bool restart, bool allow_settle = true);
         [[nodiscard]] glm::vec2 jitter() const;
         [[nodiscard]] bool completeSuccessfulFrame();
         [[nodiscard]] std::uint64_t sequence() const { return sequence_; }

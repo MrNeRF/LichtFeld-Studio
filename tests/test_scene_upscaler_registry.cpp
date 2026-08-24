@@ -47,6 +47,30 @@ namespace lfs::vis {
                         0.67f);
     }
 
+    TEST(SceneUpscalerRegistry, BackendOnlyUpdateRestoresRememberedPresetEvenWhenIdsOverlap) {
+        const auto remembered = resolveSceneUpscalerPresetUpdate(
+            SceneUpscalerBackend::Temporal, std::nullopt, "performance");
+        ASSERT_TRUE(remembered.has_value());
+        EXPECT_EQ(remembered->id, "performance");
+
+        const auto explicitly_requested = resolveSceneUpscalerPresetUpdate(
+            SceneUpscalerBackend::Temporal,
+            std::optional<std::string_view>{"balanced"},
+            "performance");
+        ASSERT_TRUE(explicitly_requested.has_value());
+        EXPECT_EQ(explicitly_requested->id, "balanced");
+
+        EXPECT_FALSE(resolveSceneUpscalerPresetUpdate(
+                         SceneUpscalerBackend::Temporal,
+                         std::optional<std::string_view>{"native"},
+                         "performance")
+                         .has_value());
+        EXPECT_EQ(resolveSceneUpscalerPresetUpdate(
+                      SceneUpscalerBackend::Temporal, std::nullopt, "invalid")
+                      ->id,
+                  "quality");
+    }
+
     TEST(SceneUpscalerRegistry, ReportsRequestedEffectiveAndFallbackSeparately) {
         const auto spatial = resolveSceneUpscalerSelection(SceneUpscalerBackend::Spatial, true);
         EXPECT_EQ(spatial.requested, SceneUpscalerBackend::Spatial);

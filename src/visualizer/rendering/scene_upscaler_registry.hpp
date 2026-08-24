@@ -59,6 +59,10 @@ namespace lfs::vis {
         SceneUpscalerBackend backend, std::string_view preset_id);
     [[nodiscard]] LFS_VIS_API SceneUpscalerPreset defaultSceneUpscalerPreset(
         SceneUpscalerBackend backend);
+    [[nodiscard]] LFS_VIS_API std::optional<SceneUpscalerPreset> resolveSceneUpscalerPresetUpdate(
+        SceneUpscalerBackend backend,
+        std::optional<std::string_view> explicit_preset_id,
+        std::string_view remembered_preset_id);
     [[nodiscard]] LFS_VIS_API SceneUpscalerSelection resolveSceneUpscalerSelection(
         SceneUpscalerBackend requested, bool runtime_available);
     [[nodiscard]] LFS_VIS_API std::string_view sceneUpscalerFallbackId(

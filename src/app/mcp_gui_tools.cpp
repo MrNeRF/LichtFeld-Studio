@@ -1012,24 +1012,26 @@ namespace lfs::app {
             };
             const auto set_scene_reconstruction = [&args, &touched](vis::RenderSettingsProxy& settings)
                 -> std::expected<void, std::string> {
+                const bool backend_explicit = args.contains("scene_upscaler");
+                const bool preset_explicit = args.contains("scene_upscaler_preset");
+                if (!backend_explicit && !preset_explicit)
+                    return {};
+
                 const std::string backend_id = args.value("scene_upscaler", settings.scene_upscaler);
                 const auto backend = vis::sceneUpscalerBackendFromId(backend_id);
                 if (!backend) {
                     return std::unexpected("Field 'scene_upscaler' must name a registered scene reconstruction backend");
                 }
-                std::string preset_id = args.value("scene_upscaler_preset", settings.scene_upscaler_preset);
-                if (!args.contains("scene_upscaler_preset") &&
-                    !vis::sceneUpscalerPreset(*backend, preset_id)) {
-                    preset_id = std::string(vis::defaultSceneUpscalerPreset(*backend).id);
-                }
-                if (!vis::sceneUpscalerPreset(*backend, preset_id)) {
-                    return std::unexpected("Field 'scene_upscaler_preset' is not valid for the selected scene reconstruction backend");
-                }
-                if (args.contains("scene_upscaler"))
+                if (backend_explicit)
                     settings.scene_upscaler = backend_id;
-                if (args.contains("scene_upscaler_preset"))
+                if (preset_explicit) {
+                    const std::string preset_id = args["scene_upscaler_preset"].get<std::string>();
+                    if (!vis::sceneUpscalerPreset(*backend, preset_id)) {
+                        return std::unexpected("Field 'scene_upscaler_preset' is not valid for the selected scene reconstruction backend");
+                    }
                     settings.scene_upscaler_preset = preset_id;
-                touched = touched || args.contains("scene_upscaler") || args.contains("scene_upscaler_preset");
+                }
+                touched = true;
                 return {};
             };
 
@@ -3041,7 +3043,10 @@ namespace lfs::app {
                     if (auto result = apply_render_settings_patch(args, *settings); !result)
                         return json{{"error", result.error()}};
 
-                    vis::update_render_settings(*settings);
+                    vis::update_render_settings(
+                        *settings,
+                        {.scene_upscaler_explicit = args.contains("scene_upscaler"),
+                         .scene_upscaler_preset_explicit = args.contains("scene_upscaler_preset")});
 
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     auto* const rendering_manager = viewer_impl->getRenderingManager();

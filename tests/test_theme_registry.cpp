@@ -246,6 +246,11 @@ TEST(ThemePreferencesContract, SceneReconstructionRoundTripsAndValidatesPerBacke
     EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "spatial");
     EXPECT_EQ(lfs::vis::loadSceneUpscalerPresetPreference("spatial"), "performance");
 
+    lfs::vis::saveSceneUpscalerPreference("temporal", "balanced");
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "temporal");
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerPresetPreference("temporal"), "balanced");
+    EXPECT_EQ(lfs::vis::loadSceneUpscalerPresetPreference("spatial"), "performance");
+
     lfs::vis::saveSceneUpscalerPreference("unknown", "unknown");
     EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "native");
     EXPECT_EQ(lfs::vis::loadSceneUpscalerPresetPreference("native"), "native");

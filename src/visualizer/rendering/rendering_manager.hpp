@@ -78,6 +78,11 @@ namespace lfs::vis {
     struct SceneRenderState;
     class TrainerManager;
 
+    enum class SceneUpscalerPresetUpdate : std::uint8_t {
+        UseRequested,
+        RestoreRememberedForBackend,
+    };
+
     class LFS_VIS_API RenderingManager {
     public:
         struct RenderContext {
@@ -256,7 +261,10 @@ namespace lfs::vis {
 
         // Settings management
         void updateSettings(const RenderSettings& settings);
-        void updateSettings(const RenderSettings& settings, DirtyMask dirty_flags);
+        void updateSettings(
+            const RenderSettings& settings,
+            DirtyMask dirty_flags,
+            SceneUpscalerPresetUpdate preset_update = SceneUpscalerPresetUpdate::UseRequested);
         RenderSettings getSettings() const;
         // The presentation pass reports its actual runtime choice after pipeline
         // preparation. Rendering uses this feedback on the next frame so a failed

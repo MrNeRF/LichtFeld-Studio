@@ -112,6 +112,17 @@ namespace lfs::vis {
                                : presets.front();
     }
 
+    std::optional<SceneUpscalerPreset> resolveSceneUpscalerPresetUpdate(
+        const SceneUpscalerBackend backend,
+        const std::optional<std::string_view> explicit_preset_id,
+        const std::string_view remembered_preset_id) {
+        if (explicit_preset_id) {
+            return sceneUpscalerPreset(backend, *explicit_preset_id);
+        }
+        return sceneUpscalerPreset(backend, remembered_preset_id)
+            .value_or(defaultSceneUpscalerPreset(backend));
+    }
+
     SceneUpscalerSelection resolveSceneUpscalerSelection(
         const SceneUpscalerBackend requested,
         const bool runtime_available) {

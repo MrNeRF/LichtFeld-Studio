@@ -91,10 +91,18 @@ namespace lfs::vis {
         return temporalJitterNdc(temporalJitterPixels(sequence), render_size);
     }
 
-    void TemporalConvergenceController::prepare(const bool enabled, const bool restart) {
+    void TemporalConvergenceController::prepare(const bool enabled,
+                                                const bool restart,
+                                                const bool allow_settle) {
         enabled_ = enabled;
         if (!enabled_) {
             sequence_ = 0;
+            remaining_ = 0;
+        } else if (!allow_settle) {
+            // Volatile sources such as live training previews and streamed LOD
+            // transitions invalidate history again before a settle burst can
+            // become useful. Keep the continuous jitter sequence, but do not
+            // enqueue follow-up renders that would only contend for the GPU.
             remaining_ = 0;
         } else if (restart) {
             remaining_ = SAMPLE_COUNT;

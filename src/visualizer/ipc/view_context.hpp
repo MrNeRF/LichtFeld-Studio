@@ -158,11 +158,19 @@ namespace lfs::vis {
         float lod_cone_outer_degrees = DEFAULT_LOD_CONE_OUTER_DEGREES;
     };
 
+    struct RenderSettingsUpdateIntent {
+        bool scene_upscaler_explicit = false;
+        bool scene_upscaler_preset_explicit = false;
+    };
+
     using GetRenderSettingsCallback = std::function<std::optional<RenderSettingsProxy>()>;
-    using SetRenderSettingsCallback = std::function<void(const RenderSettingsProxy&)>;
+    using SetRenderSettingsCallback =
+        std::function<void(const RenderSettingsProxy&, RenderSettingsUpdateIntent)>;
 
     LFS_VIS_API void set_render_settings_callbacks(GetRenderSettingsCallback get_cb, SetRenderSettingsCallback set_cb);
     [[nodiscard]] LFS_VIS_API std::optional<RenderSettingsProxy> get_render_settings();
-    LFS_VIS_API void update_render_settings(const RenderSettingsProxy& settings);
+    LFS_VIS_API void update_render_settings(
+        const RenderSettingsProxy& settings,
+        RenderSettingsUpdateIntent intent = {});
 
 } // namespace lfs::vis

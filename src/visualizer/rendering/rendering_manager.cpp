@@ -447,17 +447,25 @@ namespace lfs::vis {
     }
 
     void RenderingManager::updateSettings(const RenderSettings& new_settings,
-                                          const DirtyMask dirty_flags) {
+                                          const DirtyMask dirty_flags,
+                                          const SceneUpscalerPresetUpdate preset_update) {
         RenderSettings sanitized_settings = new_settings;
         const auto backend = sceneUpscalerBackendFromId(sanitized_settings.scene_upscaler)
                                  .value_or(SceneUpscalerBackend::Native);
-        if (!sceneUpscalerPreset(backend, sanitized_settings.scene_upscaler_preset)) {
-            sanitized_settings.scene_upscaler_preset = loadSceneUpscalerPresetPreference(
-                std::string(sceneUpscalerBackendId(backend)));
+        const std::string backend_id(sceneUpscalerBackendId(backend));
+        if (preset_update == SceneUpscalerPresetUpdate::RestoreRememberedForBackend) {
+            const auto restored = resolveSceneUpscalerPresetUpdate(
+                                      backend,
+                                      std::nullopt,
+                                      loadSceneUpscalerPresetPreference(backend_id))
+                                      .value_or(defaultSceneUpscalerPreset(backend));
+            sanitized_settings.scene_upscaler_preset = std::string(restored.id);
+        } else if (!sceneUpscalerPreset(backend, sanitized_settings.scene_upscaler_preset)) {
+            sanitized_settings.scene_upscaler_preset = loadSceneUpscalerPresetPreference(backend_id);
         }
         const auto preset = sceneUpscalerPreset(backend, sanitized_settings.scene_upscaler_preset)
                                 .value_or(defaultSceneUpscalerPreset(backend));
-        sanitized_settings.scene_upscaler = std::string(sceneUpscalerBackendId(backend));
+        sanitized_settings.scene_upscaler = backend_id;
         sanitized_settings.scene_upscaler_preset = std::string(preset.id);
         sanitized_settings.scene_upscaler_scale = preset.input_scale;
         bool clear_metrics = false;

@@ -1848,12 +1848,12 @@ namespace lfs::vis {
         } // !render_lock_contended model-change tracking
 
         const bool synchronize_vksplat_input_upload = is_training;
-        if (const DirtyMask training_dirty = frame_lifecycle_service_.handleTrainingRefresh(
-                is_training,
-                framerate_controller_.getSettings().training_frame_refresh_time_sec);
-            training_dirty) {
-            markDirty(training_dirty);
-        }
+        // Keep this cadence dirty separate until the frame consumes the atomic
+        // dirty mask. Its provenance determines whether a temporal settle burst
+        // can produce useful history or would only race the next training tick.
+        const DirtyMask training_refresh_dirty = frame_lifecycle_service_.handleTrainingRefresh(
+            is_training,
+            framerate_controller_.getSettings().training_frame_refresh_time_sec);
 
         const bool has_cached_gpu_only_frame = [&]() {
             if (vulkan_viewport_image_size_.x <= 0 || vulkan_viewport_image_size_.y <= 0) {
@@ -1888,15 +1888,19 @@ namespace lfs::vis {
         }
 
         DirtyMask frame_dirty = dirty_mask_.exchange(0);
-        if (lod_controller_ && lod_controller_->hasReadyResults()) {
-            frame_dirty |= DirtyFlag::CAMERA;
-        }
-        if (lod_controller_ && lod_controller_->transitionActive()) {
-            frame_dirty |= DirtyFlag::CAMERA;
-        }
         constexpr DirtyMask temporal_source_dirty =
             DirtyFlag::CAMERA | DirtyFlag::SPLATS | DirtyFlag::MESH |
             DirtyFlag::VIEWPORT | DirtyFlag::BACKGROUND | DirtyFlag::SPLIT_VIEW;
+        const DirtyMask independently_dirty_temporal_sources = frame_dirty & temporal_source_dirty;
+        frame_dirty |= training_refresh_dirty;
+        const bool lod_results_ready = lod_controller_ && lod_controller_->hasReadyResults();
+        const bool lod_transition_active = lod_controller_ && lod_controller_->transitionActive();
+        if (lod_results_ready) {
+            frame_dirty |= DirtyFlag::CAMERA;
+        }
+        if (lod_transition_active) {
+            frame_dirty |= DirtyFlag::CAMERA;
+        }
         const bool temporal_split_supported =
             !split_view_service_.isActive(frame_settings) ||
             splitViewUsesIndependentPanels(frame_settings.split_view_mode) ||
@@ -1906,8 +1910,14 @@ namespace lfs::vis {
             !frame_settings.equirectangular && !frame_settings.apply_appearance_correction &&
             temporal_split_supported &&
             lfs::rendering::isVkSplatBackend(frame_settings.raster_backend);
+        const bool training_refresh_only =
+            training_refresh_dirty != 0 && independently_dirty_temporal_sources == 0;
+        const bool allow_temporal_settle =
+            !training_refresh_only && !lod_results_ready && !lod_transition_active;
         temporal_convergence_.prepare(
-            temporal_eligible, (frame_dirty & temporal_source_dirty) != 0);
+            temporal_eligible,
+            (frame_dirty & temporal_source_dirty) != 0,
+            allow_temporal_settle);
         const glm::vec2 applied_temporal_jitter_pixels = temporal_convergence_.jitter();
         if ((frame_dirty & (DirtyFlag::SPLATS | DirtyFlag::MESH)) != 0) {
             if (++temporal_scene_revision_ == 0)
@@ -1932,8 +1942,12 @@ namespace lfs::vis {
         // Step-boundary contention during densify: retain last splat image, re-queue
         // dirty so the next cadence tick retries after the exclusive lock drops.
         if (render_lock_contended && has_cached_viewport_output) {
-            if (frame_dirty != 0) {
-                dirty_mask_.fetch_or(frame_dirty, std::memory_order_relaxed);
+            DirtyMask retry_dirty = frame_dirty;
+            if (training_refresh_only) {
+                retry_dirty &= ~training_refresh_dirty;
+            }
+            if (retry_dirty != 0) {
+                dirty_mask_.fetch_or(retry_dirty, std::memory_order_relaxed);
             }
             LOG_PERF("renderVulkanFrame: step-boundary lock contended (retaining cached splat)");
             render_lock.reset();

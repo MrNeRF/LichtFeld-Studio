@@ -4933,7 +4933,10 @@ namespace lfs::python {
                     return false;
                 settings->scene_upscaler = backend_id;
                 settings->scene_upscaler_preset = preset_id;
-                vis::update_render_settings(*settings);
+                vis::update_render_settings(
+                    *settings,
+                    {.scene_upscaler_explicit = true,
+                     .scene_upscaler_preset_explicit = true});
                 return true;
             },
             nb::arg("backend_id"), nb::arg("preset_id"),

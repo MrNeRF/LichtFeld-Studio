@@ -122,6 +122,24 @@ namespace lfs::vis {
         EXPECT_EQ(convergence.sequence(), 0u);
     }
 
+    TEST(TemporalFrameTracker, VolatileRefreshAdvancesJitterWithoutSchedulingSettleFrames) {
+        TemporalConvergenceController convergence;
+        convergence.prepare(true, true, false);
+
+        EXPECT_TRUE(convergence.enabled());
+        EXPECT_EQ(convergence.remaining(), 0u);
+        EXPECT_EQ(convergence.jitter(), temporalJitterPixels(0));
+        EXPECT_FALSE(convergence.completeSuccessfulFrame());
+        EXPECT_EQ(convergence.sequence(), 1u);
+        EXPECT_EQ(convergence.jitter(), temporalJitterPixels(1));
+
+        convergence.prepare(true, false, true);
+        EXPECT_EQ(convergence.remaining(), 0u);
+        convergence.prepare(true, true, true);
+        EXPECT_EQ(convergence.remaining(), TemporalConvergenceController::SAMPLE_COUNT);
+        EXPECT_EQ(convergence.sequence(), 1u);
+    }
+
     TEST(TemporalFrameTracker, JitterOffsetsOnlyTheSuppliedSceneProjection) {
         const glm::mat4 projection(1.0f);
         const glm::vec4 point(0.2f, -0.1f, 0.5f, 1.0f);
