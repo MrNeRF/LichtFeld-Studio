@@ -1199,10 +1199,16 @@ namespace lfs::training {
 
     void MRNF::permute_gaussian_rows(const lfs::core::Tensor& perm) {
         morton::permute_row_tensor(_refine_weight_max, perm);
+        morton::permute_row_tensor(_refine_ratio_max, perm);
         morton::permute_row_tensor(_vis_count, perm);
         morton::permute_row_tensor(_precomputed_edge_scores, perm);
         morton::permute_row_tensor(_edge_score_sum, perm);
+        morton::permute_row_tensor(_explore_score_sum, perm);
         morton::permute_row_tensor(_free_mask, perm);
+        morton::permute_row_tensor(_far_field_mask, perm);
+        if (_far_growth.outside_mask.is_valid()) {
+            _far_growth.outside_mask = _far_field_mask;
+        }
     }
 
     bool MRNF::is_refining(int iter) const {
@@ -3439,7 +3445,16 @@ namespace lfs::training {
         std::swap(_explore_radii, source._explore_radii);
         std::swap(_explore_sample_count, source._explore_sample_count);
         std::swap(_explore_last_sample_iter, source._explore_last_sample_iter);
+        std::swap(_cached_seed_image, source._cached_seed_image);
+        std::swap(_cached_seed_target, source._cached_seed_target);
+        std::swap(_cached_seed_alpha, source._cached_seed_alpha);
+        std::swap(_cached_seed_depth, source._cached_seed_depth);
+        std::swap(_cached_seed_camera, source._cached_seed_camera);
+        std::swap(_cached_seed_width, source._cached_seed_width);
+        std::swap(_cached_seed_height, source._cached_seed_height);
+        std::swap(_cached_seed_valid, source._cached_seed_valid);
         std::swap(_free_mask, source._free_mask);
+        std::swap(_far_growth, source._far_growth);
         std::swap(_far_field_mask, source._far_field_mask);
         std::swap(_cam_centroid, source._cam_centroid);
         std::swap(_orbit_radius, source._orbit_radius);
@@ -3449,6 +3464,7 @@ namespace lfs::training {
         std::swap(_initial_sfm_point_count, source._initial_sfm_point_count);
         std::swap(_far_starvation, source._far_starvation);
         std::swap(_logged_far_starvation, source._logged_far_starvation);
+        std::swap(_growth_window_count, source._growth_window_count);
         std::swap(_bounds, source._bounds);
         std::swap(_bounds_valid, source._bounds_valid);
         std::swap(_refine_windows_since_bounds, source._refine_windows_since_bounds);

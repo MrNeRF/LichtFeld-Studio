@@ -480,6 +480,10 @@ EXPECTED_ADVANCED_IDS = (
     "use_edge_map",
     "use_far_field",
     "far_scene_min_fraction",
+    "growth_ratio_rank",
+    "growth_ratio_pow",
+    "fill_pacing_iter",
+    "far_seed_dose",
     "ppisp_lr",
     "ppisp_reg_weight",
     "ppisp_warmup_steps",
@@ -513,7 +517,7 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(rendered) == len(set(rendered)) == 75
+    assert len(rendered) == len(set(rendered)) == 79
     assert set(rendered) == (
         set(property_view.MIGRATED_PROP_IDS) | set(EXPECTED_ADVANCED_IDS)
     ) - set(property_view.BESPOKE_OR_HIDDEN)
