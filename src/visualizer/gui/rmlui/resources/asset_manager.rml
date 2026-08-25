@@ -80,7 +80,7 @@
             </div>
 
             <div class="asset-gallery-header-actions">
-              <button class="asset-button asset-button--icon asset-view-button asset-refresh-clean-button" data-event-click="refresh_and_clean" data-tooltip="asset_manager.tooltip.refresh_and_clean"><img src="../icon/sequencer/rotate-cw.png" /></button>
+              <button class="asset-button asset-button--icon asset-view-button asset-refresh-clean-button" data-event-click="refresh_catalog" data-tooltip="asset_manager.tooltip.refresh"><img src="../icon/sequencer/rotate-cw.png" /></button>
             </div>
           </div>
         </div>

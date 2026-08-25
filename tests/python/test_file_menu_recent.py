@@ -278,6 +278,19 @@ def test_open_project_with_confirmation_handles_dirty_project(monkeypatch):
     assert file_menu.lf.project_open_calls == [(path, True)]
 
 
+def test_asset_manager_open_can_keep_panel_open(monkeypatch):
+    path = "/tmp/catalog-project.licht"
+    file_menu = _load_file_menu(monkeypatch)
+
+    file_menu.open_project_with_confirmation(
+        path,
+        keep_asset_manager_open=True,
+    )
+
+    assert file_menu.lf.project_open_calls == [(path, True)]
+    assert file_menu.lf.project_open_keep_asset_manager == [True]
+
+
 def test_open_project_with_confirmation_reports_open_error(monkeypatch):
     path = "/tmp/broken-catalog-project.licht"
     file_menu = _load_file_menu(monkeypatch)

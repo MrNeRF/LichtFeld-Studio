@@ -128,6 +128,10 @@ class AssetManagerPanel(Panel):
         self._watch_scan_active = False
         self._watch_scan_refresh_pending = False
         self._drag_payload_token: Optional[int] = None
+        self._last_project_write_generation: Optional[int] = None
+        self._project_write_was_running = False
+        self._last_project_write_path = ""
+        self._thumbnail_sources_by_asset: Dict[str, str] = {}
 
     def capture_chrome(self) -> Dict[str, Any]:
         return {
@@ -273,7 +277,7 @@ class AssetManagerPanel(Panel):
             ("on_import_project", self.on_import_project),
             ("set_view_mode", self.set_view_mode),
             ("cycle_sort_mode", self.cycle_sort_mode),
-            ("refresh_and_clean", self.refresh_and_clean),
+            ("refresh_catalog", self.refresh_catalog),
             ("on_locate_file", self.on_locate_file),
             ("on_sidebar_resize_start", self.on_sidebar_resize_start),
             ("on_bottom_panel_resize_start", self.on_bottom_panel_resize_start),
@@ -287,8 +291,17 @@ class AssetManagerPanel(Panel):
 
     def set_search_query(self, value: str) -> None:
         self._search_query = str(value or "")
+        visible_ids = {
+            str(asset.get("id") or asset.get("project_uuid") or "")
+            for asset in self._filtered_assets()
+        }
+        self._selected_asset_ids.intersection_update(visible_ids)
+        if self._selection_cursor_id not in visible_ids:
+            self._selection_cursor_id = next(iter(self._selected_asset_ids), None)
+        self._update_selection_type()
         self._reset_scroll()
         self._refresh_records(assets=True, folders=True)
+        self._dirty_selection()
 
     def get_sort_label(self) -> str:
         key = (
@@ -414,7 +427,7 @@ class AssetManagerPanel(Panel):
         key = {
             "AVAILABLE": "asset_manager.status.available",
             "MISSING": "asset_manager.status.missing",
-            "IDENTITY_MISMATCH": "asset_manager.status.type_changed",
+            "IDENTITY_MISMATCH": "asset_manager.status.identity_mismatch",
         }.get(status, "asset_manager.status.unverified")
         return tr(key)
 
@@ -428,15 +441,35 @@ class AssetManagerPanel(Panel):
         if not asset.get("has_preview") or not asset.get("exists"):
             return "none"
         path = quote(str(asset.get("path") or ""), safe=_RML_PATH_SAFE_CHARS)
-        revision = quote(str(asset.get("commit_uuid") or ""), safe="-._~")
+        revision_value = asset.get("commit_uuid") or "-".join(
+            str(asset.get(field) or 0)
+            for field in ("generation", "saved_at_unix_ns", "file_size_bytes")
+        )
+        revision = quote(str(revision_value), safe="-._~")
         return f"image(preview://kind=licht&thumb=256&rev={revision}&path={path})"
 
     def _format_asset_for_ui(self, asset: Dict[str, Any]) -> Dict[str, Any]:
         folder_name = self._folder_name(asset.get("folder_id"))
+        asset_id = str(asset.get("id") or asset.get("project_uuid") or "")
+        thumbnail_decorator = self._thumbnail_decorator(asset)
+        thumbnail_source = (
+            thumbnail_decorator[6:-1]
+            if thumbnail_decorator.startswith("image(")
+            else ""
+        )
+        previous_source = self._thumbnail_sources_by_asset.get(asset_id, "")
+        if previous_source and previous_source != thumbnail_source:
+            release_texture = getattr(lf.ui, "release_rml_texture", None)
+            if callable(release_texture):
+                release_texture(previous_source)
+        if thumbnail_source:
+            self._thumbnail_sources_by_asset[asset_id] = thumbnail_source
+        else:
+            self._thumbnail_sources_by_asset.pop(asset_id, None)
         return {
             **asset,
             "display_name": self._get_asset_display_name(asset),
-            "id": str(asset.get("id") or asset.get("project_uuid") or ""),
+            "id": asset_id,
             "folder_name": folder_name,
             "size_label": self._format_size(asset.get("file_size_bytes", 0)),
             "saved_label": self._format_unix_ns(asset.get("saved_at_unix_ns", 0)),
@@ -444,8 +477,17 @@ class AssetManagerPanel(Panel):
             "is_selected": str(asset.get("id") or asset.get("project_uuid"))
             in self._selected_asset_ids,
             "can_load": self._project_available(asset),
-            "thumbnail_decorator": self._thumbnail_decorator(asset),
+            "thumbnail_decorator": thumbnail_decorator,
         }
+
+    def _release_obsolete_thumbnail_sources(self) -> None:
+        live_ids = set(self._asset_index_assets())
+        stale_ids = set(self._thumbnail_sources_by_asset).difference(live_ids)
+        release_texture = getattr(lf.ui, "release_rml_texture", None)
+        for asset_id in stale_ids:
+            source = self._thumbnail_sources_by_asset.pop(asset_id)
+            if callable(release_texture):
+                release_texture(source)
 
     def _filtered_assets(self, folder_id: Optional[str] = None) -> List[Dict[str, Any]]:
         folder_id = self._selected_folder_id if folder_id is None else folder_id
@@ -619,6 +661,8 @@ class AssetManagerPanel(Panel):
         if not self._asset_index or not name.strip():
             return None
         folder = self._asset_index.create_folder(name.strip())
+        if folder is None:
+            return None
         self._selected_folder_id = folder.id
         self._selected_asset_ids.clear()
         self._selection_cursor_id = None
@@ -774,7 +818,10 @@ class AssetManagerPanel(Panel):
         self._dirty_selection()
         from .file_menu import open_project_with_confirmation
 
-        open_project_with_confirmation(str(asset.get("path") or ""))
+        open_project_with_confirmation(
+            str(asset.get("path") or ""),
+            keep_asset_manager_open=True,
+        )
 
     def on_remove_asset(self, _handle, _ev, args):
         asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
@@ -915,6 +962,8 @@ class AssetManagerPanel(Panel):
             if not value:
                 return
             folder = self._asset_index.create_folder(value)
+            if folder is None:
+                return
             self._asset_index.update_asset(asset_id, folder_id=folder.id)
             self.refresh_catalog(scan_watched=False)
 
@@ -991,48 +1040,34 @@ class AssetManagerPanel(Panel):
 
     def on_delete_folder(self, _handle, _ev, args):
         folder_id = self._resolve_event_value(args, _ev, "data-folder-id")
-        if folder_id and folder_id != "default" and self._asset_index:
-            if self._asset_index.delete_folder(folder_id):
+        folder = self._asset_index_folders().get(folder_id)
+        if not folder_id or folder_id == "default" or not self._asset_index or not folder:
+            return
+        project_count = sum(
+            asset.get("folder_id") == folder_id
+            for asset in self._asset_index_assets().values()
+        )
+        delete_label = tr("asset_manager.action.delete_folder")
+
+        def delete_confirmed(button: str) -> None:
+            if button != delete_label:
+                return
+            if self._asset_index and self._asset_index.delete_folder(folder_id):
                 self._selected_folder_id = SCOPE_ALL
                 self._selected_asset_ids.clear()
                 self._selection_cursor_id = None
                 self.refresh_catalog(scan_watched=False)
 
-    def clean_missing(self, _handle=None, _ev=None, _args=None):
-        if not self._asset_index:
-            return
-        missing = [
-            asset_id
-            for asset_id, asset in self._asset_index_assets().items()
-            if not asset.get("exists", False)
-        ]
-        removed = self._asset_index.delete_assets(missing) if missing else 0
-        if removed:
-            self._selected_asset_ids.difference_update(missing)
-            if self._selection_cursor_id in missing:
-                self._selection_cursor_id = None
-            self.refresh_catalog(scan_watched=False)
-
-    def refresh_and_clean(self, _handle=None, _ev=None, _args=None):
-        if not self._asset_index:
-            return
-        self._asset_index.verify_projects()
-        missing = [
-            asset_id
-            for asset_id, asset in self._asset_index_assets().items()
-            if not asset.get("exists", False)
-        ]
-        if missing:
-            self._asset_index.delete_assets(missing)
-            self._selected_asset_ids.difference_update(missing)
-            if self._selection_cursor_id in missing:
-                self._selection_cursor_id = None
-        self._repair_selection()
-        self._refresh_records(assets=True, folders=True)
-        if self._handle:
-            self._handle.dirty_all()
-        self._request_model_update()
-        self._scan_watched_projects()
+        lf.ui.confirm_dialog(
+            tr("asset_manager.dialog.delete_folder"),
+            tr(
+                "asset_manager.dialog.delete_folder_message",
+                name=str(folder.get("name") or ""),
+                count=project_count,
+            ),
+            [tr("common.cancel"), delete_label],
+            delete_confirmed,
+        )
 
     def refresh_catalog(
         self,
@@ -1109,6 +1144,7 @@ class AssetManagerPanel(Panel):
             self._handle.dirty("folders")
             self._handle.dirty("all_assets_count")
         if assets:
+            self._release_obsolete_thumbnail_sources()
             self._handle.update_record_list("assets", self.get_filtered_assets())
             self._handle.dirty("assets")
             for field in (
@@ -1409,7 +1445,9 @@ class AssetManagerPanel(Panel):
         rows = self._filtered_assets()
         ids = [str(asset.get("id") or asset.get("project_uuid") or "") for asset in rows]
         cursor_index = ids.index(self._selection_cursor_id) if self._selection_cursor_id in ids else 0
-        selected = set(self._selected_asset_ids)
+        selected = self._selected_asset_ids.intersection(ids)
+        if not selected:
+            return False
         if self._asset_index.delete_assets(list(selected)) <= 0:
             return False
         self._selected_asset_ids.clear()
@@ -1440,7 +1478,11 @@ class AssetManagerPanel(Panel):
             return
         if key == KI_RETURN:
             asset_id = self._selection_cursor_id or self.get_selected_asset_id()
-            if asset_id:
+            visible_ids = {
+                str(asset.get("id") or asset.get("project_uuid") or "")
+                for asset in self._filtered_assets()
+            }
+            if asset_id in visible_ids:
                 self._load_asset(asset_id)
                 self._stop_event(event)
             return
@@ -1449,10 +1491,13 @@ class AssetManagerPanel(Panel):
                 self._stop_event(event)
             return
         if 2 <= key <= 37 and not self._event_multi_select(event):
+            character = str((key - 2) % 10) if key <= 11 else chr(ord("a") + key - 12)
+            self.set_search_query(self._search_query + character)
             search = self._doc.get_element_by_id("asset-search-input") if self._doc else None
             focus = getattr(search, "focus", None)
             if callable(focus):
                 focus()
+            self._stop_event(event)
 
     def _sync_asset_selection_dom(self, container=None, selected_element=None) -> None:
         root = container or self._doc
@@ -1579,6 +1624,51 @@ class AssetManagerPanel(Panel):
         self._is_floating = is_floating
         return changed
 
+    def _refresh_after_project_write(self) -> bool:
+        poll_write = getattr(lf, "project_poll_write", None)
+        if not callable(poll_write) or not self._asset_index:
+            return False
+        try:
+            poll = poll_write()
+            if not isinstance(poll, dict) or "generation" not in poll:
+                return False
+            generation = int(poll.get("generation") or 0)
+            running = bool(poll.get("running"))
+            path = str(poll.get("path") or "")
+            error = str(poll.get("error") or "")
+        except Exception:
+            self._log_warn("Failed to poll .licht project save state")
+            return False
+
+        previous_generation = self._last_project_write_generation
+        completed = (
+            previous_generation is not None
+            and not running
+            and not error
+            and (
+                self._project_write_was_running
+                or generation != previous_generation
+                or path != self._last_project_write_path
+            )
+        )
+        self._last_project_write_generation = generation
+        self._project_write_was_running = running
+        self._last_project_write_path = path
+        if not completed or not path:
+            return False
+
+        find_by_path = getattr(self._asset_index, "find_asset_by_path", None)
+        project = find_by_path(path) if callable(find_by_path) else None
+        if project is None:
+            return False
+        verify_asset = getattr(self._asset_index, "verify_asset", None)
+        if not callable(verify_asset) or verify_asset(project.id) is None:
+            return False
+        self._refresh_records(assets=True, folders=True)
+        if self._handle:
+            self._handle.dirty_all()
+        return True
+
     def on_mount(self, doc):
         super().on_mount(doc)
         self._doc = doc
@@ -1592,10 +1682,11 @@ class AssetManagerPanel(Panel):
         self._refresh_records(assets=True, folders=True)
         if self._handle:
             self._handle.dirty_all()
+        self._refresh_after_project_write()
         self._scan_watched_projects()
 
     def on_update(self, doc):
-        changed = False
+        changed = self._refresh_after_project_write()
         if self._sync_panel_space_state():
             self._dirty_fields("is_floating")
             changed = True
@@ -1614,6 +1705,11 @@ class AssetManagerPanel(Panel):
             if callable(cancel_drag):
                 cancel_drag(self._drag_payload_token)
             self._drag_payload_token = None
+        release_texture = getattr(lf.ui, "release_rml_texture", None)
+        if callable(release_texture):
+            for source in self._thumbnail_sources_by_asset.values():
+                release_texture(source)
+        self._thumbnail_sources_by_asset.clear()
         self._unsubscribe_reactive_state()
         try:
             doc.remove_data_model("asset_manager")

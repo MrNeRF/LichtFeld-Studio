@@ -30,6 +30,7 @@ def _install_lf_stub(monkeypatch):
         drag_begins=[],
         drag_ends=[],
         drag_cancels=[],
+        released_textures=[],
         dialog_path="",
         project_dirty=False,
     )
@@ -53,7 +54,11 @@ def _install_lf_stub(monkeypatch):
         ),
         PanelHeightMode=SimpleNamespace(FILL="FILL", CONTENT="CONTENT"),
         PanelOption=SimpleNamespace(DEFAULT_CLOSED="DEFAULT_CLOSED"),
-        tr=lambda key: key,
+        tr=lambda key: (
+            'Delete "{name}" with {count} projects?'
+            if key == "asset_manager.dialog.delete_folder_message"
+            else key
+        ),
         get_current_language=lambda: "en",
         get_mouse_screen_pos=lambda: (120.0, 220.0),
         show_context_menu=show_context_menu,
@@ -73,14 +78,15 @@ def _install_lf_stub(monkeypatch):
         begin_drag_payload=begin_drag_payload,
         end_drag_payload=lambda token: state.drag_ends.append(token),
         cancel_drag_payload=lambda token: state.drag_cancels.append(token),
+        release_rml_texture=lambda source: state.released_textures.append(source) or True,
     )
     lf_stub.log = SimpleNamespace(info=lambda _msg: None, warn=lambda _msg: None, error=lambda _msg: None)
     lf_stub.project_is_dirty = lambda: state.project_dirty
     lf_stub.project_has_path = lambda: False
     lf_stub.is_training_active = lambda: False
     lf_stub.project_open = (
-        lambda path, discard_changes=False, stop_training=False: state.opened.append(
-            (path, discard_changes, stop_training)
+        lambda path, discard_changes=False, stop_training=False, keep_asset_manager_open=False: state.opened.append(
+            (path, discard_changes, stop_training, keep_asset_manager_open)
         )
     )
     lf_stub.is_dataset_path = lambda _path: True
@@ -275,7 +281,7 @@ def test_rml_and_panel_have_no_scene_or_disk_thumbnail_model():
     assert 'data-style-decorator="asset.thumbnail_decorator"' in rml
 
 
-def test_results_header_uses_icon_views_and_one_combined_refresh_action():
+def test_results_header_uses_icon_views_and_nondestructive_refresh_action():
     root = Path(__file__).resolve().parents[2]
     rml = (root / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
     rcss = (root / "src/visualizer/gui/rmlui/resources/asset_manager.rcss").read_text()
@@ -284,8 +290,8 @@ def test_results_header_uses_icon_views_and_one_combined_refresh_action():
     assert "{{list_label}}" not in rml
     assert "asset-icon-grid" in rml
     assert "asset-icon-list" in rml
-    assert rml.count('data-event-click="refresh_and_clean"') == 1
-    assert 'data-event-click="refresh_catalog"' not in rml
+    assert 'data-event-click="refresh_and_clean"' not in rml
+    assert rml.count('data-event-click="refresh_catalog"') == 1
     assert 'data-event-click="clean_missing"' not in rml
     assert "asset-list-secondary" not in rml
     assert "display_subtitle" not in rml
@@ -452,7 +458,7 @@ def test_open_project_verifies_then_uses_project_lifecycle(panel_module):
     panel._load_asset(asset["id"])
 
     assert panel_module.lf._test_state.opened == [
-        (asset["path"], True, False)
+        (asset["path"], True, False, True)
     ]
     assert panel.get_selected_asset_id() == asset["id"]
 
@@ -486,7 +492,7 @@ def test_open_project_confirms_before_discarding_unsaved_changes(panel_module):
     assert state.opened == []
 
     callback("unsaved_work.continue_without_saving")
-    assert state.opened == [(asset["path"], True, False)]
+    assert state.opened == [(asset["path"], True, False, True)]
 
 
 def test_import_registers_only_selected_licht_project(panel_module):
@@ -664,6 +670,40 @@ def test_keyboard_navigation_enter_delete_and_typeahead(panel_module, monkeypatc
 
     panel._on_asset_results_keydown(_Event(scroll, params={"key_identifier": "12"}))
     assert search.focused is True
+    assert panel.get_search_query() == "a"
+
+
+def test_filter_clamps_hidden_selection_for_enter_and_delete(panel_module, monkeypatch):
+    alpha = _project(name="Alpha", path="/tmp/alpha.licht")
+    beta = _project(
+        "44444444-4444-4444-8444-444444444444",
+        name="Beta",
+        path="/tmp/beta.licht",
+    )
+    deleted = []
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    panel._asset_index = _index(
+        assets={alpha["id"]: alpha, beta["id"]: beta},
+        delete_assets=lambda ids: deleted.extend(ids) or len(ids),
+    )
+    panel._selected_asset_ids = {alpha["id"]}
+    panel._selection_cursor_id = alpha["id"]
+
+    panel.set_search_query("beta")
+
+    assert panel._selected_asset_ids == set()
+    assert panel._selection_cursor_id is None
+    panel._selected_asset_ids = {alpha["id"]}
+    panel._selection_cursor_id = alpha["id"]
+    assert panel._delete_selected_assets() is False
+    opened = []
+    monkeypatch.setattr(panel, "_load_asset", opened.append)
+    panel._on_asset_results_keydown(
+        _Event(params={"key_identifier": str(panel_module.KI_RETURN)})
+    )
+    assert deleted == []
+    assert opened == []
 
 
 def test_gallery_keyboard_navigation_uses_visual_columns(panel_module):
@@ -688,7 +728,7 @@ def test_gallery_keyboard_navigation_uses_visual_columns(panel_module):
     assert panel.get_selected_asset_id() == list(assets)[1]
 
 
-def test_refresh_and_clean_verifies_deletes_then_scans(panel_module, monkeypatch):
+def test_toolbar_refresh_verifies_without_deleting_then_scans(panel_module, monkeypatch):
     missing = _project(exists=False, available=False, status="MISSING")
     present = _project(
         "44444444-4444-4444-8444-444444444444",
@@ -702,25 +742,100 @@ def test_refresh_and_clean_verifies_deletes_then_scans(panel_module, monkeypatch
         calls.append("verify")
         return 1, 2
 
-    def delete_assets(asset_ids):
-        calls.append(("delete", list(asset_ids)))
-        for asset_id in asset_ids:
-            assets.pop(asset_id, None)
-        return len(asset_ids)
-
     panel = panel_module.AssetManagerPanel()
     panel._handle = _Handle()
     panel._asset_index = _index(
         assets=assets,
         verify_projects=verify_projects,
-        delete_assets=delete_assets,
     )
     monkeypatch.setattr(panel, "_scan_watched_projects", lambda: calls.append("scan"))
 
-    panel.refresh_and_clean()
+    panel.refresh_catalog()
 
-    assert calls == ["verify", ("delete", [missing["id"]]), "scan"]
-    assert set(assets) == {present["id"]}
+    assert calls == ["verify", "scan"]
+    assert set(assets) == {missing["id"], present["id"]}
+
+
+def test_delete_folder_requires_confirmation_with_project_count(panel_module):
+    first = _project(folder_id="projects")
+    second = _project(
+        "44444444-4444-4444-8444-444444444444",
+        folder_id="projects",
+    )
+    deleted = []
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(
+        assets={first["id"]: first, second["id"]: second},
+        folders={"projects": {"id": "projects", "name": "Work"}},
+        delete_folder=lambda folder_id: deleted.append(folder_id) or True,
+        verify_projects=lambda: (0, 0),
+    )
+    panel.refresh_catalog = lambda **_kwargs: None
+
+    panel.on_delete_folder(None, None, ["projects"])
+
+    assert deleted == []
+    title, message, buttons, callback = panel_module.lf._test_state.confirm_dialogs[-1]
+    assert title == "asset_manager.dialog.delete_folder"
+    assert message == 'Delete "Work" with 2 projects?'
+    assert buttons[-1] == "asset_manager.action.delete_folder"
+    callback("common.cancel")
+    assert deleted == []
+    callback("asset_manager.action.delete_folder")
+    assert deleted == ["projects"]
+
+
+def test_identity_mismatch_has_distinct_status(panel_module):
+    panel = panel_module.AssetManagerPanel()
+
+    assert panel._project_status_label({"status": "IDENTITY_MISMATCH"}) == (
+        "asset_manager.status.identity_mismatch"
+    )
+
+
+def test_thumbnail_revision_falls_back_and_releases_stale_source(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index()
+    asset = _project(commit_uuid="", generation=4)
+
+    first = panel._format_asset_for_ui(asset)["thumbnail_decorator"]
+    asset["generation"] = 5
+    second = panel._format_asset_for_ui(asset)["thumbnail_decorator"]
+
+    assert "rev=4-" in first
+    assert "rev=5-" in second
+    assert first != second
+    assert panel_module.lf._test_state.released_textures == [first[6:-1]]
+
+
+def test_completed_project_save_reverifies_catalog_thumbnail(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    asset = _project(commit_uuid="old", generation=4)
+    project = SimpleNamespace(id=asset["id"])
+    verified = []
+
+    def verify_asset(asset_id):
+        verified.append(asset_id)
+        asset["commit_uuid"] = "new"
+        asset["generation"] = 5
+        return project
+
+    panel._asset_index = _index(
+        assets={asset["id"]: asset},
+        find_asset_by_path=lambda path: project if path == asset["path"] else None,
+        verify_asset=verify_asset,
+    )
+    polls = [
+        {"running": False, "generation": 4, "path": asset["path"], "error": ""},
+        {"running": False, "generation": 5, "path": asset["path"], "error": ""},
+    ]
+    panel_module.lf.project_poll_write = lambda: polls.pop(0)
+
+    assert panel._refresh_after_project_write() is False
+    assert panel._refresh_after_project_write() is True
+    assert verified == [asset["id"]]
+    assert "rev=new" in panel._handle.records["assets"][0]["thumbnail_decorator"]
 
 
 def test_drag_available_project_publishes_typed_payload(panel_module):

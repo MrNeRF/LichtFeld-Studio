@@ -107,13 +107,22 @@ def _open_project(
     return lf.project_open(path, discard_changes)
 
 
-def open_project_with_confirmation(path: str) -> None:
+def open_project_with_confirmation(
+    path: str,
+    *,
+    keep_asset_manager_open: bool = False,
+) -> None:
     """Open a known project path through the standard project-switch flow."""
     title = lf.ui.tr("menu.file.open_project")
 
     def _open_checked(stop_training: bool) -> None:
         try:
-            _open_project(path, True, stop_training)
+            _open_project(
+                path,
+                True,
+                stop_training,
+                keep_asset_manager_open=keep_asset_manager_open,
+            )
         except Exception as exc:
             message = str(exc).strip() or title
             lf.ui.message_dialog(title, message, "error")
