@@ -369,9 +369,9 @@ namespace lfs::vis {
             bool submitted = false;
             bool wait_ready = false;
             if (r == VK_SUCCESS) {
-                r = vkQueueSubmit(graphics_queue, 1, &submit, fence);
+                r = lfs::rendering::vk_queue_submit_synced(graphics_queue, 1, &submit, fence);
                 if (r != VK_SUCCESS) {
-                    failed_expression = "vkQueueSubmit(graphics_queue, 1, &submit, fence)";
+                    failed_expression = "lfs::rendering::vk_queue_submit_synced(graphics_queue, 1, &submit, fence)";
                     failed_context = std::format(
                         "Mesh one-shot submission failed (queue={:#x}, command_buffer={:#x}, command_buffer_count=1, wait_semaphore_count=0, signal_semaphore_count=0, fence={:#x})",
                         vkHandleValue(graphics_queue),

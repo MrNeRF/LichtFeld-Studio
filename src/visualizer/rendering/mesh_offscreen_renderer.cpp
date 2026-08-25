@@ -6,6 +6,7 @@
 
 #include "passes/vulkan_mesh_pass.hpp"
 #include "rendering/vulkan_result.hpp"
+#include "rendering/vulkan_wait.hpp"
 #include "window/vulkan_context.hpp"
 
 #include <cstddef>
@@ -495,10 +496,10 @@ namespace lfs::vis {
             submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
             submit_info.commandBufferCount = 1;
             submit_info.pCommandBuffers = &command_buffer;
-            result = vkQueueSubmit(graphics_queue, 1, &submit_info, fence);
+            result = lfs::rendering::vk_queue_submit_synced(graphics_queue, 1, &submit_info, fence);
             if (result != VK_SUCCESS) {
                 restoreTrackedLayouts();
-                return vkUnexpected("vkQueueSubmit(mesh offscreen)", result);
+                return vkUnexpected("lfs::rendering::vk_queue_submit_synced(mesh offscreen)", result);
             }
             submission_in_flight = true;
 

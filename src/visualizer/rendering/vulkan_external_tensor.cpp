@@ -5,14 +5,16 @@
 #include "vulkan_external_tensor.hpp"
 
 #include "core/cuda_error.hpp"
+#include "core/exportable_storage.hpp"
 #include "core/services.hpp"
+#include "core/shareable_allocation_limit.hpp"
 #include "window/window_manager.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cuda_runtime.h>
 #include <format>
 #include <limits>
-#include <optional>
 
 namespace lfs::vis {
 
@@ -35,16 +37,15 @@ namespace lfs::vis {
     VulkanExternalTensorStorage::VulkanExternalTensorStorage(
         VulkanContext& context,
         VulkanContext::ExternalBuffer buffer,
-        lfs::rendering::CudaVulkanBufferInterop interop,
         const std::size_t bytes,
         std::string debug_label,
-        std::shared_ptr<void> extra_owner)
+        std::shared_ptr<void> extra_owner,
+        const void* cuda_ptr)
         : context_(&context),
           buffer_(buffer),
-          interop_(std::move(interop)),
           bytes_(bytes),
           extra_owner_(std::move(extra_owner)) {
-        registered_cuda_base_ = interop_.devicePointer();
+        registered_cuda_base_ = cuda_ptr;
         if (registered_cuda_base_ != nullptr) {
             lfs::core::register_cuda_address_range(
                 registered_cuda_base_, bytes_, std::move(debug_label));
@@ -83,7 +84,6 @@ namespace lfs::vis {
         if (registered_cuda_base_ != nullptr) {
             lfs::core::unregister_cuda_address_range(registered_cuda_base_);
         }
-        interop_.reset();
         if (context_) {
             context_->destroyExternalBuffer(buffer_);
         }
@@ -111,6 +111,22 @@ namespace lfs::vis {
         return 0;
     }
 
+    VkDeviceAddress VulkanExternalTensorStorage::vkDeviceAddress() const {
+        if (parent_) {
+            const VkDeviceAddress parent_addr = parent_->vkDeviceAddress();
+            if (parent_addr == 0) {
+                return 0;
+            }
+            std::size_t rel = offset_;
+            if (live_control_ &&
+                static_cast<std::size_t>(live_region_) < lfs::core::SplatExportableStorage::Count) {
+                rel = live_control_->region_offsets[live_region_];
+            }
+            return parent_addr + static_cast<VkDeviceAddress>(rel);
+        }
+        return buffer_.device_address;
+    }
+
     std::size_t VulkanExternalTensorStorage::bytes() const {
         if (live_control_ &&
             static_cast<std::size_t>(live_region_) < lfs::core::SplatExportableStorage::Count) {
@@ -119,14 +135,22 @@ namespace lfs::vis {
         return bytes_;
     }
 
+    bool VulkanExternalTensorStorage::bindNewExportableChunks(const lfs::core::ExportableBlock& block) {
+        if (parent_) {
+            return parent_->bindNewExportableChunks(block);
+        }
+        if (!context_) {
+            return false;
+        }
+        return context_->bindNewChunks(buffer_, block);
+    }
+
     std::expected<lfs::core::Tensor, std::string> makeVulkanExternalTensor(
         VulkanContext& context,
         lfs::core::TensorShape shape,
         const lfs::core::DataType dtype,
         const std::size_t capacity,
-        const char* const debug_name,
-        const cudaStream_t stream,
-        const bool zero_fill) {
+        const char* const debug_name) {
         if (!context.externalMemoryInteropEnabled()) {
             return std::unexpected("Vulkan external tensor allocation requires CUDA/Vulkan external-memory interop");
         }
@@ -152,123 +176,84 @@ namespace lfs::vis {
         }
         const std::size_t total_elements = cap_rows * row_elements;
         const std::size_t bytes = total_elements * element_bytes;
-        std::optional<lfs::rendering::CudaVulkanUploadStream> owned_zero_fill_stream;
-        cudaStream_t operation_stream = stream;
-        if (zero_fill && operation_stream == nullptr) {
-            owned_zero_fill_stream.emplace();
-            if (!owned_zero_fill_stream->init()) {
-                return std::unexpected(std::format(
-                    "Vulkan external tensor could not create the required non-default zero-fill stream (name='{}', requested_stream={:#x}, bytes={}, error={})",
-                    debug_name ? debug_name : "<unnamed>",
-                    reinterpret_cast<std::uintptr_t>(stream),
-                    bytes,
-                    owned_zero_fill_stream->lastError()));
-            }
-            operation_stream = owned_zero_fill_stream->stream();
+
+        int device = 0;
+        if (const cudaError_t err = cudaGetDevice(&device); err != cudaSuccess) {
+            return std::unexpected(std::format(
+                "Vulkan external tensor '{}' cudaGetDevice failed: {} ({})",
+                debug_name ? debug_name : "<unnamed>",
+                cudaGetErrorName(err),
+                cudaGetErrorString(err)));
         }
 
-        VulkanContext::ExternalBuffer buffer{};
+        auto block_result = lfs::core::allocateExportableDeviceBlock(
+            bytes, device, /*track_splat_bytes=*/false, bytes);
+        if (!block_result) {
+            return std::unexpected(std::format("Vulkan external tensor '{}' allocation failed: {}",
+                                               debug_name ? debug_name : "<unnamed>",
+                                               block_result.error()));
+        }
+        auto block = std::move(*block_result);
+
+        VulkanContext::ExternalBuffer imported{};
         constexpr VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                              VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                              VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-        if (!context.createExternalBuffer(static_cast<VkDeviceSize>(bytes),
-                                          usage,
-                                          buffer,
-                                          "vulkan.external_tensor.buffer",
-                                          debug_name ? debug_name : "unnamed")) {
+        if (!context.importExportableBlock(*block,
+                                           usage,
+                                           imported,
+                                           "vulkan.external_tensor.buffer",
+                                           debug_name ? debug_name : "unnamed")) {
             return std::unexpected(std::format("Vulkan external tensor '{}' allocation failed: {}",
                                                debug_name ? debug_name : "<unnamed>",
                                                context.lastError()));
         }
         context.setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
-                                    buffer.buffer,
+                                    imported.buffer,
                                     "interop.tensor.{}[{}]",
                                     debug_name ? debug_name : "unnamed",
                                     bytes);
-        context.setDebugObjectNamef(VK_OBJECT_TYPE_DEVICE_MEMORY,
-                                    buffer.memory,
-                                    "interop.tensor.{}[{}].memory",
-                                    debug_name ? debug_name : "unnamed",
-                                    buffer.allocation_size);
-        if (buffer.size != bytes || buffer.allocation_size < buffer.size) {
+        if (imported.size < static_cast<VkDeviceSize>(bytes) ||
+            imported.allocation_size < imported.size) {
             const std::string error = std::format(
                 "Vulkan external tensor allocation size disagrees with the CUDA-visible payload (name='{}', requested_bytes={}, vulkan_visible_size={}, vulkan_allocation_size={})",
                 debug_name ? debug_name : "<unnamed>",
                 bytes,
-                buffer.size,
-                buffer.allocation_size);
-            context.destroyExternalBuffer(buffer);
+                imported.size,
+                imported.allocation_size);
+            context.destroyExternalBuffer(imported);
             return std::unexpected(error);
         }
 
-        const auto native = context.releaseExternalBufferNativeHandle(buffer);
-        if (!VulkanContext::externalNativeHandleValid(native)) {
-            context.destroyExternalBuffer(buffer);
-            return std::unexpected(std::format("Vulkan external tensor '{}' returned an invalid native handle",
-                                               debug_name ? debug_name : "<unnamed>"));
-        }
-
-        lfs::rendering::CudaVulkanBufferInterop interop;
-        const lfs::rendering::CudaVulkanExternalBufferImport import{
-            .memory_handle = native,
-            .allocation_size = static_cast<std::size_t>(buffer.allocation_size),
-            .size = static_cast<std::size_t>(buffer.size),
-            .dedicated_allocation = context.externalMemoryDedicatedAllocationEnabled(),
-        };
-        if (!interop.init(import)) {
-            const std::string error = interop.lastError();
-            context.destroyExternalBuffer(buffer);
-            return std::unexpected(std::format("Vulkan external tensor '{}' CUDA import failed: {}",
-                                               debug_name ? debug_name : "<unnamed>",
-                                               error));
-        }
-
-        void* const cuda_ptr = interop.devicePointer();
+        void* const cuda_ptr = block->device_ptr;
         if (!cuda_ptr) {
-            interop.reset();
-            context.destroyExternalBuffer(buffer);
+            context.destroyExternalBuffer(imported);
             return std::unexpected(std::format("Vulkan external tensor '{}' mapped to a null CUDA pointer",
                                                debug_name ? debug_name : "<unnamed>"));
         }
 
-        if (zero_fill) {
-            if (const cudaError_t status = cudaMemsetAsync(cuda_ptr, 0, bytes, operation_stream);
-                status != cudaSuccess) {
-                interop.reset();
-                context.destroyExternalBuffer(buffer);
-                return std::unexpected(std::format("Vulkan external tensor '{}' zero-fill failed: {} ({})",
-                                                   debug_name ? debug_name : "<unnamed>",
-                                                   cudaGetErrorName(status),
-                                                   cudaGetErrorString(status)));
-            }
-            if (owned_zero_fill_stream && !owned_zero_fill_stream->synchronize()) {
-                interop.reset();
-                context.destroyExternalBuffer(buffer);
-                return std::unexpected(std::format(
-                    "Vulkan external tensor '{}' zero-fill stream synchronization failed: {}",
-                    debug_name ? debug_name : "<unnamed>",
-                    owned_zero_fill_stream->lastError()));
-            }
-        }
-
         auto owner = std::make_shared<VulkanExternalTensorStorage>(
-            context, buffer, std::move(interop), bytes,
-            debug_name ? debug_name : "<unnamed>");
-        auto tensor = lfs::core::Tensor::from_external_owner(
+            context,
+            imported,
+            bytes,
+            debug_name ? debug_name : "<unnamed>",
+            std::shared_ptr<void>(block),
+            cuda_ptr);
+        return lfs::core::Tensor::from_external_owner(
             cuda_ptr,
             std::move(shape),
             lfs::core::Device::CUDA,
             dtype,
             owner,
             cap_rows,
-            stream,
+            nullptr,
             "vulkan_external_buffer");
-        return tensor;
     }
 
     std::expected<lfs::core::SplatTensorAllocator, std::string>
     makeSplatExportableInteropAllocator(VulkanContext& context,
-                                        const lfs::core::SplatExportableStorage& storage) {
+                                        const lfs::core::SplatExportableStorage& storage,
+                                        std::shared_ptr<VulkanExternalTensorStorage>* parent_keep) {
         if (!context.externalMemoryInteropEnabled()) {
             return std::unexpected(
                 "Vulkan external-memory interop is not enabled; cannot import exportable block");
@@ -276,11 +261,11 @@ namespace lfs::vis {
         if (!storage.valid()) {
             return std::unexpected("SplatExportableStorage is empty; nothing to import");
         }
-        if (storage.block->device_ptr == nullptr || storage.block->size == 0) {
+        if (storage.block->device_ptr == nullptr || storage.block->reserved_bytes == 0) {
             return std::unexpected(std::format(
-                "SplatExportableStorage block must expose non-null CUDA storage (device_pointer={:#x}, block_bytes={})",
+                "SplatExportableStorage block must expose non-null CUDA storage (device_pointer={:#x}, reserved_bytes={})",
                 reinterpret_cast<std::uintptr_t>(storage.block->device_ptr),
-                storage.block->size));
+                storage.block->reserved_bytes));
         }
         for (std::size_t i = 0; i < lfs::core::SplatExportableStorage::Count; ++i) {
             const std::size_t offset = storage.region_offsets[i];
@@ -288,53 +273,53 @@ namespace lfs::vis {
             // Degree-0 layouts leave ShN/ShNBounds empty; nothing binds an empty region.
             if (bytes == 0)
                 continue;
-            if (offset > storage.block->size || bytes > storage.block->size - offset) {
+            if (offset > storage.block->reserved_bytes ||
+                bytes > storage.block->reserved_bytes - offset) {
                 return std::unexpected(std::format(
-                    "SplatExportableStorage region must fit inside the exported Vulkan/CUDA block (region={}, offset={}, bytes={}, block_bytes={})",
+                    "SplatExportableStorage region must fit inside the reserved Vulkan/CUDA block (region={}, offset={}, bytes={}, reserved_bytes={})",
                     i,
                     offset,
                     bytes,
-                    storage.block->size));
+                    storage.block->reserved_bytes));
             }
         }
 
-        VulkanContext::ExternalBuffer imported{};
-        constexpr VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                             VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                             VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-        if (!context.importExternalBuffer(storage.block->handle.native,
-                                          static_cast<VkDeviceSize>(storage.block->size),
-                                          static_cast<VkDeviceSize>(storage.block->handle.size),
-                                          usage,
-                                          imported,
-                                          "vulkan.external_tensor.alias",
-                                          "exportable_splat_block")) {
-            return std::unexpected(std::format(
-                "Vulkan import of CUDA-exported splat block failed: {}",
-                context.lastError()));
+        std::shared_ptr<VulkanExternalTensorStorage> parent;
+        if (parent_keep && *parent_keep) {
+            parent = *parent_keep;
+            if (!parent->bindNewExportableChunks(*storage.block)) {
+                return std::unexpected(std::format(
+                    "Vulkan bind of new exportable chunks failed: {}",
+                    context.lastError()));
+            }
+        } else {
+            VulkanContext::ExternalBuffer imported{};
+            constexpr VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+            if (!context.importExportableBlock(*storage.block,
+                                               usage,
+                                               imported,
+                                               "vulkan.external_tensor.alias",
+                                               "exportable_splat_block")) {
+                return std::unexpected(std::format(
+                    "Vulkan import of CUDA-exported splat block failed: {}",
+                    context.lastError()));
+            }
+
+            parent = std::make_shared<VulkanExternalTensorStorage>(
+                context,
+                imported,
+                static_cast<std::size_t>(storage.block->reserved_bytes),
+                "exportable_splat_block",
+                std::shared_ptr<void>(storage.block));
+            if (parent_keep) {
+                *parent_keep = parent;
+            }
         }
 
-        // The CUDA-side block is already mapped, so the Vulkan ownership object
-        // needs no second CUDA import. Tensor::from_external_owner below receives
-        // the existing CUDA region pointer; this parent owns only the imported
-        // Vulkan buffer and anchors the ExportableBlock lifetime.
-        lfs::rendering::CudaVulkanBufferInterop noop_interop;
-
-        // Wrap the imported buffer; extra_owner keeps the CUDA-side ExportableBlock
-        // alive so cuMemUnmap/Release fires AFTER vkFreeMemory.
-        auto parent = std::make_shared<VulkanExternalTensorStorage>(
-            context,
-            imported,
-            std::move(noop_interop),
-            static_cast<std::size_t>(storage.block->size),
-            "exportable_splat_block",
-            std::shared_ptr<void>(storage.block));
-
-        // Live control block: offsets/bytes update on grow(). Capturing them by
-        // value was stale — any Tensor allocated from a pre-grow interop
-        // allocator (or a holder that survived rebind) would bake stale region
-        // bases. Sub-views still pin the Vulkan import at construction; physical
-        // grow always re-imports (new allocator) before further use.
+        // Live control block: offsets are constant; bytes/generation update on
+        // grow(). Sub-views pin the stable VkBuffer; bindNewChunks appends.
         auto ctrl = storage.control();
         if (!ctrl) {
             return std::unexpected(
@@ -342,11 +327,8 @@ namespace lfs::vis {
                 "interop snapshot allocator");
         }
 
-        // Live-control sub-views: offset/bytes re-resolve on every vkOffset()/
-        // bytes() so a capacity grow cannot leave the viewer binding a pre-grow
-        // region while CUDA readers already use live control.
-        // Physical grow still rebuilds the interop parent (new Vk import);
-        // these sub-views cover same-block generation bumps and rebindSplatData.
+        // Live-control sub-views: bytes() re-resolves on every query. Offsets
+        // stay put; the parent VkBuffer is reused across growth.
         std::array<std::shared_ptr<VulkanExternalTensorStorage>,
                    lfs::core::SplatExportableStorage::Count>
             sub_views;
@@ -489,11 +471,21 @@ namespace lfs::vis {
                          const lfs::core::DataType dtype,
                          const std::string_view name) -> lfs::core::Tensor {
             const std::string debug_name{name};
+            if (keepFloatShNInPooledCuda(debug_name, dtype)) {
+                auto pooled = lfs::core::Tensor::zeros_direct(
+                    std::move(shape), capacity, lfs::core::Device::CUDA, dtype);
+                pooled.set_name(debug_name);
+                return pooled;
+            }
             auto tensor = makeVulkanExternalTensor(
-                *context, std::move(shape), dtype, capacity, debug_name.c_str(), nullptr, false);
+                *context, std::move(shape), dtype, capacity, debug_name.c_str());
             if (!tensor) {
-                throw lfs::core::TensorError(std::format(
-                    "Vulkan-external splat tensor allocation failed for '{}': {}", debug_name, tensor.error()));
+                const auto message = std::format(
+                    "Vulkan-external splat tensor allocation failed for '{}': {}", debug_name, tensor.error());
+                if (lfs::core::is_shareable_allocation_limit_message(tensor.error())) {
+                    throw lfs::core::ShareableAllocationLimitError(message);
+                }
+                throw lfs::core::TensorError(message);
             }
             tensor->set_name(debug_name);
             return std::move(*tensor);

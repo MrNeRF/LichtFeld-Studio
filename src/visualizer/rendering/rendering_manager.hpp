@@ -123,6 +123,7 @@ namespace lfs::vis {
         // Initialize rendering resources
         void initialize();
         bool isInitialized() const { return initialized_; }
+        void releaseSceneModelResources();
 
         // Main render function
         VulkanFrameResult renderVulkanFrame(const RenderContext& context);
@@ -736,7 +737,6 @@ namespace lfs::vis {
             std::string error,
             std::chrono::steady_clock::time_point now);
         void gtComparisonImageWorkerLoop(std::stop_token stop_token);
-        void releaseSceneModelResources();
         void releaseSceneRenderResources();
         void setupEventHandlers();
         void handleToggleSplitView();

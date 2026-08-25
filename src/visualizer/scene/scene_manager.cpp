@@ -11,6 +11,7 @@
 #include "core/parameter_manager.hpp"
 #include "core/path_utils.hpp"
 #include "core/services.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/splat_data_transform.hpp"
 #include "geometry/bounding_box.hpp"
 #include "geometry/euclidean_transform.hpp"
@@ -740,7 +741,8 @@ namespace lfs::vis {
                 .max_width = 0,
                 .images_folder = "images",
                 .validate_only = false,
-                .splat_tensor_allocator = splat_allocator};
+                .splat_tensor_allocator = splat_allocator,
+                .shN_q16 = lfs::core::sh_value_quant::enabled()};
 
             LOG_TRACE("Loading splat file with loader");
             auto load_result = loader->load(path, options);
@@ -996,7 +998,8 @@ namespace lfs::vis {
                 .max_width = 0,
                 .images_folder = "images",
                 .validate_only = false,
-                .splat_tensor_allocator = splat_allocator};
+                .splat_tensor_allocator = splat_allocator,
+                .shN_q16 = lfs::core::sh_value_quant::enabled()};
 
             auto load_result = loader->load(path, options);
             if (!load_result) {

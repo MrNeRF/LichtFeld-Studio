@@ -44,7 +44,7 @@ namespace lfs::training::sh_value {
                static_cast<std::size_t>(kBlockSize);
     }
 
-    /// Host codec (mirrors device math in sh_value_codec.cuh).
+    /// Host codec (mirrors device math in core/sh_value_codec.cuh).
     struct Codec16 {
         static constexpr float kQMaxV = kQMax;
         static constexpr float kInvQMaxV = kInvQMax;

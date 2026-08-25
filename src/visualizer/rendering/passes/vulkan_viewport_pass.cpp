@@ -1013,11 +1013,11 @@ namespace lfs::vis {
                         __FILE__,
                         __LINE__);
                 } else {
-                    result = vkQueueSubmit(graphics_queue, 1, &submit, fence);
+                    result = lfs::rendering::vk_queue_submit_synced(graphics_queue, 1, &submit, fence);
                 }
                 if (error.empty() && result != VK_SUCCESS) {
                     error = formatVkCheckFailure(
-                        "vkQueueSubmit(graphics_queue, 1, &submit, fence)",
+                        "lfs::rendering::vk_queue_submit_synced(graphics_queue, 1, &submit, fence)",
                         result,
                         std::format("One-shot graphics submission failed (queue={:#x}, command_buffer={:#x}, command_buffer_count=1, wait_semaphore_count=0, signal_semaphore_count=0, fence={:#x})",
                                     vkHandleValue(graphics_queue),

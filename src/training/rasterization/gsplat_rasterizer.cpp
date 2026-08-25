@@ -9,10 +9,10 @@
 #include "core/cuda_error.hpp"
 #include "core/error.hpp"
 #include "core/logger.hpp"
+#include "core/sh_value_quant_kernels.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "gsplat/Ops.h"
-#include "lfs/training/sh_value_quant_kernels.hpp"
 #include "training/kernels/grad_alpha.hpp"
 #include <algorithm>
 #include <array>
@@ -222,7 +222,7 @@ namespace lfs::training {
                     }
                     shN_dequant_temp = dequant;
                     const auto q16 = lfs::core::resolve_q16_bind_ptrs(gaussian_model);
-                    lfs::training::sh_value::decode_shN_u16_to_float4(
+                    lfs::core::sh_value_quant::decode_shN_u16_to_float4(
                         reinterpret_cast<const std::uint16_t*>(q16.codes),
                         q16.bounds,
                         shN_dequant_temp.ptr<float>(),

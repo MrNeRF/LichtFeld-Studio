@@ -8,6 +8,7 @@
 #include <expected>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace lfs::core {
 
@@ -17,15 +18,11 @@ namespace lfs::core {
     using ExportNativeHandle = int;
 #endif
 
-    // Ownership contract: `native` is the CUDA-side OPAQUE_FD
-    // WIN32 shareable handle for the *current* committed physical. Exactly one
-    // live export exists per block. growExportableDeviceBlock() closes the old
-    // fd (release_physical) and installs a fresh export into both OwnedAllocation
-    // and this handle atomically before returning. Vulkan import must destroy any
-    // prior VkDeviceMemory import, then dup and import the current handle.native
-    // (which the importer never owns or closes), and re-import after every
-    // successful grow because handle.size changed.
-    // Closing handle.native is solely the exportable block's job on release/teardown.
+    // CUDA-side OPAQUE_FD / WIN32 shareable handle for one committed physical
+    // chunk. The exporter owns `native` for the lifetime of the chunk; Vulkan
+    // dups (POSIX) / imports (Win32) and never closes this handle. Chunks are
+    // released only at block teardown, after every Vulkan import of the block
+    // has been destroyed.
     struct ExportHandle {
         ExportNativeHandle native = ExportNativeHandle{};
         std::size_t size = 0;
@@ -36,43 +33,67 @@ namespace lfs::core {
             return native >= 0;
 #endif
         }
+        [[nodiscard]] bool operator==(const ExportHandle& other) const noexcept {
+            return native == other.native && size == other.size;
+        }
     };
 
-    // Owns a CUDA VMM allocation backed by a single mapped chunk that is
-    // exportable to Vulkan via VK_KHR_external_memory_{fd,win32}.
-    //
-    // A large virtual address range is reserved up front (reserve_bytes) while
-    // only `size` physical memory is committed. growExportableDeviceBlock()
-    // commits more physical under the SAME virtual address, so device_ptr never
-    // changes across growth — consumers holding the base pointer (e.g. the
-    // training arena) stay valid and never see a use-after-free. Growth swaps
-    // the exported OS handle, so the Vulkan side must re-import after a grow.
+    struct ExportableChunk {
+        std::size_t offset = 0;
+        std::size_t bytes = 0;
+        ExportHandle handle{};
+    };
+
+    // One CUDA VMM virtual reservation with physical memory committed as
+    // shareable chunks. `device_ptr` is stable for the lifetime of the block.
+    // Growth appends chunks; existing chunks are never unmapped, copied, or
+    // re-exported. Importers bind chunks they have not bound yet.
     //
     // Destruction (via shared_ptr deleter) runs:
-    //   recordDeallocation -> cuMemUnmap -> cuMemRelease -> cuMemAddressFree
-    //   -> close(fd) / CloseHandle
+    //   recordDeallocation -> unmap each chunk -> cuMemRelease each chunk
+    //   -> close each fd/HANDLE -> cuMemAddressFree
     struct ExportableBlock {
         void* device_ptr = nullptr;
-        std::size_t size = 0;
-        ExportHandle handle{};
-        std::shared_ptr<void> state; // opaque OwnedAllocation, mutated by growExportableDeviceBlock
+        std::size_t reserved_bytes = 0;
+        std::size_t committed_bytes = 0;
+        std::vector<ExportableChunk> chunks;
+        std::shared_ptr<void> state; // opaque OwnedAllocation
+
+        [[nodiscard]] std::size_t committedPrefixBytes() const noexcept;
     };
 
-    // Allocates a block committing `size` physical bytes, reserving a virtual
-    // range of max(reserve_bytes, size) for in-place growth (reserve is free).
+    [[nodiscard]] inline std::size_t ExportableBlock::committedPrefixBytes() const noexcept {
+        std::size_t prefix = 0;
+        for (const auto& chunk : chunks) {
+            if (chunk.offset > prefix) {
+                break;
+            }
+            if (chunk.offset + chunk.bytes > prefix) {
+                prefix = chunk.offset + chunk.bytes;
+            }
+        }
+        return prefix;
+    }
+
+    // CUDA VMM allocation granularity for `device` (2 MiB on current NVIDIA).
+    [[nodiscard]] std::size_t exportable_allocation_granularity(int device = 0);
+
+    // Allocates a block reserving max(reserve_bytes, size) virtual bytes and
+    // committing [0, size) as shareable chunks. `size` must be non-zero.
     [[nodiscard]] std::expected<std::shared_ptr<ExportableBlock>, std::string>
     allocateExportableDeviceBlock(std::size_t size, int device = 0, bool track_splat_bytes = true,
                                   std::size_t reserve_bytes = 0);
 
-    // Grows committed physical to >= new_size under the block's stable virtual
-    // address. Returns true if the block grew (handle/size changed, callers must
-    // re-import into Vulkan), false if it already satisfied new_size. device_ptr
-    // is unchanged on success. Must not run while the GPU is using the block.
-    //
-    // Ordering: any Vulkan import of the current export handle must be destroyed
-    // before this call (release_physical unmaps + cuMemRelease + closes the old
-    // fd). Holding a live VkDeviceMemory over that teardown can trigger
-    // "NVRM: VM: invalid mmap context".
+    // Commits the granularity-aligned cover of [offset, offset+bytes) minus
+    // ranges that are already committed. Holes are allowed. Existing chunks are
+    // untouched.
+    [[nodiscard]] std::expected<void, std::string>
+    commitExportableDeviceRange(const std::shared_ptr<ExportableBlock>& block, std::size_t offset,
+                                std::size_t bytes);
+
+    // Commits [committedPrefixBytes, new_size) as new chunk(s). Returns true if
+    // any new physical was committed, false if the prefix already covered
+    // new_size. device_ptr is unchanged. Importers bind newly appended chunks.
     [[nodiscard]] std::expected<bool, std::string>
     growExportableDeviceBlock(const std::shared_ptr<ExportableBlock>& block, std::size_t new_size);
 

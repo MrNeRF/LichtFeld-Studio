@@ -452,7 +452,7 @@ namespace lfs::vis::gui {
             bool submitted = false;
             bool wait_ready = false;
             if (submit_status == VK_SUCCESS) {
-                submit_status = vkQueueSubmit(graphics_queue, 1, &submit_info, submit_fence);
+                submit_status = lfs::rendering::vk_queue_submit_synced(graphics_queue, 1, &submit_info, submit_fence);
                 if (submit_status == VK_SUCCESS) {
                     submitted = true;
                 }
@@ -879,7 +879,7 @@ namespace lfs::vis::gui {
             submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
             submit_info.commandBufferCount = 1;
             submit_info.pCommandBuffers = &command_buffer;
-            const VkResult submit_status = vkQueueSubmit(graphics_queue, 1, &submit_info, fence);
+            const VkResult submit_status = lfs::rendering::vk_queue_submit_synced(graphics_queue, 1, &submit_info, fence);
             if (submit_status != VK_SUCCESS) {
                 LOG_ERROR("Failed to submit Vulkan UI texture upload: {}",
                           static_cast<int>(submit_status));

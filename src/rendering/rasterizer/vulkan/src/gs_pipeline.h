@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <exception>
 #include <functional>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -245,6 +246,7 @@ protected:
         uint32_t maxGroupsX;
         uint32_t maxGroupsY;
         uint32_t maxGroupsZ;
+        VkDeviceSize maxStorageBufferRange = std::numeric_limits<VkDeviceSize>::max();
     } deviceInfo;
 
     // Compute pipeline. Storage-buffer bindings are pushed via

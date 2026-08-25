@@ -6,6 +6,7 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "core/exportable_storage.hpp"
 #include "gpu_object_census.hpp"
 #include "renderer_terminal_state.hpp"
 #include "rendering/vulkan_result.hpp"
@@ -121,12 +122,16 @@ namespace lfs::vis {
         struct ExternalBuffer {
             VkBuffer buffer = VK_NULL_HANDLE;
             VkDeviceMemory memory = VK_NULL_HANDLE;
+            std::vector<VkDeviceMemory> memories;
+            std::size_t bound_chunks = 0;
+            VkDeviceAddress device_address = 0;
             VkDeviceSize size = 0;
             VkDeviceSize allocation_size = 0;
             std::string diagnostic_scope;
             std::string diagnostic_label;
             ExternalNativeHandle native_handle = kInvalidExternalNativeHandle;
             bool census_counted = false;
+            bool sparse = false;
         };
 
         struct ExternalSemaphore {
@@ -310,13 +315,7 @@ namespace lfs::vis {
                                                std::string_view diagnostic_label = {});
         void destroyExternalImage(ExternalImage& image);
         [[nodiscard]] ExternalNativeHandle releaseExternalImageNativeHandle(ExternalImage& image) const;
-        [[nodiscard]] bool createExternalBuffer(VkDeviceSize size,
-                                                VkBufferUsageFlags usage,
-                                                ExternalBuffer& out,
-                                                std::string_view diagnostic_scope = "vulkan.external.buffer",
-                                                std::string_view diagnostic_label = {});
         void destroyExternalBuffer(ExternalBuffer& buffer);
-        [[nodiscard]] ExternalNativeHandle releaseExternalBufferNativeHandle(ExternalBuffer& buffer) const;
         // Import a foreign-allocated external memory handle (e.g. from CUDA's
         // cuMemExportToShareableHandle) into Vulkan. The exporter retains ownership
         // of the handle; this method dup()'s on Linux and the imported VkDeviceMemory
@@ -331,6 +330,15 @@ namespace lfs::vis {
                                                 ExternalBuffer& out,
                                                 std::string_view diagnostic_scope = "vulkan.external.imported_buffer",
                                                 std::string_view diagnostic_label = {});
+        [[nodiscard]] bool importExportableBlock(const lfs::core::ExportableBlock& block,
+                                                 VkBufferUsageFlags usage,
+                                                 ExternalBuffer& out,
+                                                 std::string_view diagnostic_scope = "vulkan.external.imported_block",
+                                                 std::string_view diagnostic_label = {});
+        [[nodiscard]] bool bindNewChunks(ExternalBuffer& imported,
+                                         const lfs::core::ExportableBlock& block);
+        [[nodiscard]] bool sparseBindingEnabled() const { return sparse_binding_enabled_; }
+        [[nodiscard]] bool bufferDeviceAddressEnabled() const { return buffer_device_address_enabled_; }
         [[nodiscard]] bool createExternalTimelineSemaphore(
             std::uint64_t initial_value,
             ExternalSemaphore& out,
@@ -557,6 +565,9 @@ namespace lfs::vis {
         bool external_memory_interop_enabled_ = false;
         bool external_semaphore_interop_enabled_ = false;
         bool external_memory_dedicated_allocation_enabled_ = false;
+        bool sparse_binding_enabled_ = false;
+        bool buffer_device_address_enabled_ = false;
+        std::mutex graphics_queue_mutex_;
         bool swapchain_maintenance1_enabled_ = false;
         bool swapchain_present_scaling_enabled_ = false;
         bool has_push_descriptor_ = false;

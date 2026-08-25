@@ -6,8 +6,10 @@
 
 #include "core/cuda_error.hpp"
 #include "core/environment.hpp"
+#include "core/exportable_storage.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/shareable_allocation_limit.hpp"
 #include "core/user_paths.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "rendering/vulkan_wait.hpp"
@@ -660,6 +662,7 @@ namespace lfs::vis {
     void VulkanContext::shutdown() {
         // AMB-B3: latch before any device wait so concurrent UI waits observe Shutdown.
         context_shutdown_started_.store(true, std::memory_order_release);
+        lfs::rendering::set_graphics_queue_external_sync(nullptr, VK_NULL_HANDLE, VK_NULL_HANDLE);
         if (device_ != VK_NULL_HANDLE) {
             // Shutdown is the one place where a whole-device wait is intentional:
             // all swapchain, UI, and external interop resources are about to be destroyed.
@@ -1634,7 +1637,7 @@ namespace lfs::vis {
                  swapchain_extent_.width,
                  swapchain_extent_.height);
         // Counter retained until next prepareFrame reset so mid-frame readers still see it.
-        result = vkQueueSubmit(graphics_queue_, 1, &submit_info, frame_fence);
+        result = lfs::rendering::vk_queue_submit_synced(graphics_queue_, 1, &submit_info, frame_fence);
         if (result == VK_SUCCESS) {
             const std::lock_guard lock(timeline_value_tracker_mutex_);
             for (const auto& wait : frame_timeline_waits_) {
@@ -1680,7 +1683,7 @@ namespace lfs::vis {
                 active_image_index_,
                 vkHandleValue(render_finished)));
         }
-        result = vkQueuePresentKHR(present_queue_, &present_info);
+        result = lfs::rendering::vk_queue_present_synced(present_queue_, &present_info);
 
         frame_active_ = false;
         frame_index_ = (frame_index_ + 1) % kFramesInFlight;
@@ -2701,6 +2704,7 @@ namespace lfs::vis {
         features12.pNext = &features13;
         features12.timelineSemaphore = VK_TRUE;
         features12.shaderFloat16 = supported_features12.shaderFloat16;
+        features12.bufferDeviceAddress = supported_features12.bufferDeviceAddress;
 
         // Optional feature structs are prepended to the Vulkan 1.2 chain.
         void* enabled_chain_head = features12.pNext;
@@ -2761,10 +2765,23 @@ namespace lfs::vis {
         VkPhysicalDeviceFeatures2 features2{};
         features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         features2.pNext = &features12;
+        uint32_t queue_family_count = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &queue_family_count, nullptr);
+        std::vector<VkQueueFamilyProperties> queue_family_props(queue_family_count);
+        if (queue_family_count > 0) {
+            vkGetPhysicalDeviceQueueFamilyProperties(
+                physical_device_, &queue_family_count, queue_family_props.data());
+        }
+        const bool graphics_queue_sparse =
+            graphics_queue_family_ < queue_family_count &&
+            (queue_family_props[graphics_queue_family_].queueFlags & VK_QUEUE_SPARSE_BINDING_BIT) != 0;
+        const bool sparse_binding_supported = supported_features2.features.sparseBinding == VK_TRUE;
         features2.features.shaderInt16 = supported_features2.features.shaderInt16;
         features2.features.shaderInt64 = supported_features2.features.shaderInt64;
         features2.features.fillModeNonSolid = supported_features2.features.fillModeNonSolid;
         features2.features.wideLines = supported_features2.features.wideLines;
+        features2.features.sparseBinding =
+            (sparse_binding_supported && graphics_queue_sparse) ? VK_TRUE : VK_FALSE;
 
         VkDeviceCreateInfo create_info{};
         create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -2840,6 +2857,28 @@ namespace lfs::vis {
         external_memory_interop_enabled_ = enable_external_memory;
         external_semaphore_interop_enabled_ = enable_external_semaphore;
         external_memory_dedicated_allocation_enabled_ = enable_dedicated_allocation;
+        sparse_binding_enabled_ = features2.features.sparseBinding == VK_TRUE;
+        buffer_device_address_enabled_ = features12.bufferDeviceAddress == VK_TRUE;
+        lfs::rendering::set_graphics_queue_external_sync(
+            &graphics_queue_mutex_, graphics_queue_, present_queue_);
+
+        VkPhysicalDeviceMaintenance3Properties maint3{};
+        maint3.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES;
+        VkPhysicalDeviceProperties2 maint_props{};
+        maint_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        maint_props.pNext = &maint3;
+        vkGetPhysicalDeviceProperties2(physical_device_, &maint_props);
+        if (maint3.maxMemoryAllocationSize > 0) {
+            lfs::core::set_shareable_device_allocation_limit(
+                static_cast<std::size_t>(maint3.maxMemoryAllocationSize));
+        }
+        LOG_INFO("Vulkan sparseBinding: feature={} graphics_queue_sparse={} enabled={} "
+                 "bufferDeviceAddress={} maxMemoryAllocationSize={:#x}",
+                 sparse_binding_supported,
+                 graphics_queue_sparse,
+                 sparse_binding_enabled_,
+                 buffer_device_address_enabled_,
+                 static_cast<unsigned long long>(maint3.maxMemoryAllocationSize));
         swapchain_maintenance1_enabled_ = enable_swapchain_maintenance1;
         has_push_descriptor_ = enable_push_descriptor;
         has_conditional_rendering_ = enable_conditional_rendering;
@@ -2858,6 +2897,12 @@ namespace lfs::vis {
         }
         LOG_INFO("Vulkan external memory interop enabled{}",
                  external_memory_dedicated_allocation_enabled_ ? " with dedicated allocations" : "");
+        if (lfs::core::shareable_allocation_limited()) {
+            LOG_INFO("Vulkan external memory interop shareable ceiling: {} bytes ({})",
+                     lfs::core::max_shareable_allocation_bytes(),
+                     lfs::core::shareable_allocation_limit_from_env() ? "env override"
+                                                                      : "platform default");
+        }
         LOG_INFO("Vulkan external timeline semaphore interop enabled");
         LOG_INFO("Vulkan optional features: push_descriptor={} host_image_copy={} swapchain_maintenance1={} fill_mode_non_solid={} wide_lines={}",
                  has_push_descriptor_,
@@ -3234,6 +3279,11 @@ namespace lfs::vis {
         VkMemoryRequirements memory_requirements{};
         vkGetImageMemoryRequirements(device_, out.image, &memory_requirements);
         out.allocation_size = memory_requirements.size;
+        if (const auto violation = lfs::core::shareable_allocation_violation(
+                static_cast<std::size_t>(memory_requirements.size), "external Vulkan image")) {
+            destroyExternalImage(out);
+            return fail(*violation);
+        }
 
         VkMemoryDedicatedAllocateInfo dedicated_info{};
         dedicated_info.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
@@ -3367,145 +3417,6 @@ namespace lfs::vis {
         return handle;
     }
 
-    bool VulkanContext::createExternalBuffer(const VkDeviceSize size,
-                                             const VkBufferUsageFlags usage,
-                                             ExternalBuffer& out,
-                                             const std::string_view diagnostic_scope,
-                                             const std::string_view diagnostic_label) {
-        out = {};
-
-        if (!device_ || !physical_device_) {
-            return fail("Cannot create external Vulkan buffer before device initialization");
-        }
-        if (size == 0) {
-            return fail("External Vulkan buffer requires a non-zero size");
-        }
-
-        VkExternalMemoryBufferCreateInfo external_buffer_info{};
-        external_buffer_info.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO;
-        external_buffer_info.handleTypes = kExternalMemoryHandleType;
-
-        VkBufferCreateInfo buffer_info{};
-        buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        buffer_info.pNext = &external_buffer_info;
-        buffer_info.size = size;
-        buffer_info.usage = usage |
-                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                            VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                            VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-        // External buffers are CUDA-written and Vulkan-read; with a dedicated async-
-        // compute queue, the read may happen on a different family than the implicit
-        // graphics submit lane. CONCURRENT avoids the need for ownership-transfer
-        // barriers on every cross-API handoff. See createExternalImage for the same
-        // reasoning.
-        std::array<uint32_t, 2> external_buffer_families{
-            graphics_queue_family_,
-            has_dedicated_compute_queue_ ? compute_queue_family_ : graphics_queue_family_};
-        if (has_dedicated_compute_queue_) {
-            buffer_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
-            buffer_info.queueFamilyIndexCount = static_cast<uint32_t>(external_buffer_families.size());
-            buffer_info.pQueueFamilyIndices = external_buffer_families.data();
-        } else {
-            buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        }
-
-        VkResult result = vkCreateBuffer(device_, &buffer_info, nullptr, &out.buffer);
-        if (result != VK_SUCCESS) {
-            out = {};
-            return fail(std::format("vkCreateBuffer(external) failed: {}", vkResultToString(result)));
-        }
-        setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
-                            out.buffer,
-                            "interop.external.buffer[{}]",
-                            size);
-
-        VkMemoryRequirements memory_requirements{};
-        vkGetBufferMemoryRequirements(device_, out.buffer, &memory_requirements);
-        out.size = size;
-        out.allocation_size = memory_requirements.size;
-        out.diagnostic_scope = diagnostic_scope.empty() ? "vulkan.external.buffer" : std::string(diagnostic_scope);
-        out.diagnostic_label = makeAllocationDiagnosticLabel(diagnostic_label);
-
-        // Mirror createExternalImage: when dedicated allocation is enabled the CUDA side
-        // is told the import is dedicated (cudaExternalMemoryDedicated), so the Vulkan
-        // allocation must actually be dedicated to this buffer or the two disagree.
-        VkMemoryDedicatedAllocateInfo dedicated_info{};
-        dedicated_info.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
-        dedicated_info.buffer = out.buffer;
-
-        VkExportMemoryAllocateInfo export_info{};
-        export_info.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO;
-        export_info.handleTypes = kExternalMemoryHandleType;
-        if (external_memory_dedicated_allocation_enabled_) {
-            export_info.pNext = &dedicated_info;
-        }
-
-        VkMemoryAllocateInfo allocate_info{};
-        allocate_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocate_info.pNext = &export_info;
-        allocate_info.allocationSize = memory_requirements.size;
-        allocate_info.memoryTypeIndex =
-            findMemoryType(memory_requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        if (allocate_info.memoryTypeIndex == std::numeric_limits<uint32_t>::max()) {
-            destroyExternalBuffer(out);
-            return fail("Could not find Vulkan device-local memory for external buffer");
-        }
-
-        result = vkAllocateMemory(device_, &allocate_info, nullptr, &out.memory);
-        if (result != VK_SUCCESS) {
-            destroyExternalBuffer(out);
-            return fail(std::format("vkAllocateMemory(external buffer) failed: {}", vkResultToString(result)));
-        }
-        setDebugObjectNamef(VK_OBJECT_TYPE_DEVICE_MEMORY,
-                            out.memory,
-                            "interop.external.buffer[{}].memory",
-                            out.allocation_size);
-        recordCurrentVulkanBytes(out.diagnostic_scope, out.diagnostic_label, static_cast<std::size_t>(out.allocation_size));
-
-        result = vkBindBufferMemory(device_, out.buffer, out.memory, 0);
-        if (result != VK_SUCCESS) {
-            destroyExternalBuffer(out);
-            return fail(std::format("vkBindBufferMemory(external buffer) failed: {}", vkResultToString(result)));
-        }
-
-#ifdef _WIN32
-        auto get_memory_handle = reinterpret_cast<PFN_vkGetMemoryWin32HandleKHR>(
-            vkGetDeviceProcAddr(device_, "vkGetMemoryWin32HandleKHR"));
-        if (get_memory_handle == nullptr) {
-            destroyExternalBuffer(out);
-            return fail("vkGetMemoryWin32HandleKHR is unavailable");
-        }
-        VkMemoryGetWin32HandleInfoKHR handle_info{};
-        handle_info.sType = VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR;
-        handle_info.memory = out.memory;
-        handle_info.handleType = kExternalMemoryHandleType;
-        HANDLE native_handle = nullptr;
-        result = get_memory_handle(device_, &handle_info, &native_handle);
-        out.native_handle = native_handle;
-#else
-        auto get_memory_fd = reinterpret_cast<PFN_vkGetMemoryFdKHR>(
-            vkGetDeviceProcAddr(device_, "vkGetMemoryFdKHR"));
-        if (get_memory_fd == nullptr) {
-            destroyExternalBuffer(out);
-            return fail("vkGetMemoryFdKHR is unavailable");
-        }
-        VkMemoryGetFdInfoKHR fd_info{};
-        fd_info.sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR;
-        fd_info.memory = out.memory;
-        fd_info.handleType = kExternalMemoryHandleType;
-        int native_handle = -1;
-        result = get_memory_fd(device_, &fd_info, &native_handle);
-        out.native_handle = native_handle;
-#endif
-        if (result != VK_SUCCESS) {
-            destroyExternalBuffer(out);
-            return fail(std::format("Exporting external buffer memory handle failed: {}", vkResultToString(result)));
-        }
-        gpu_object_census_.onCreate(GpuObjectKind::ExternalBuffer, out.diagnostic_scope);
-        out.census_counted = true;
-        return true;
-    }
-
     bool VulkanContext::importExternalBuffer(ExternalNativeHandle handle,
                                              const VkDeviceSize buffer_size,
                                              const VkDeviceSize exported_allocation_size,
@@ -3520,6 +3431,10 @@ namespace lfs::vis {
         }
         if (buffer_size == 0 || exported_allocation_size == 0) {
             return fail("Imported external Vulkan buffer requires non-zero buffer and allocation sizes");
+        }
+        if (const auto violation = lfs::core::shareable_allocation_violation(
+                static_cast<std::size_t>(exported_allocation_size), "imported Vulkan buffer")) {
+            return fail(*violation);
         }
         if (buffer_size > exported_allocation_size) {
             return fail(std::format(
@@ -3543,7 +3458,7 @@ namespace lfs::vis {
                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                             VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-        // Same concurrent-queue rationale as createExternalBuffer.
+        // Same concurrent-queue rationale as createExternalImage.
         std::array<uint32_t, 2> external_buffer_families{
             graphics_queue_family_,
             has_dedicated_compute_queue_ ? compute_queue_family_ : graphics_queue_family_};
@@ -3713,8 +3628,270 @@ namespace lfs::vis {
         return true;
     }
 
+    bool VulkanContext::importExportableBlock(const lfs::core::ExportableBlock& block,
+                                              const VkBufferUsageFlags usage,
+                                              ExternalBuffer& out,
+                                              const std::string_view diagnostic_scope,
+                                              const std::string_view diagnostic_label) {
+        out = {};
+        if (!device_ || !physical_device_) {
+            return fail("Cannot import exportable block before device initialization");
+        }
+        if (block.device_ptr == nullptr || block.reserved_bytes == 0) {
+            return fail("Imported exportable block requires a reserved CUDA VA range");
+        }
+        if (block.chunks.empty()) {
+            return fail("Imported exportable block has no committed chunks");
+        }
+
+        if (!sparse_binding_enabled_) {
+            if (block.chunks.size() != 1 || block.chunks[0].offset != 0 ||
+                block.chunks[0].bytes < block.reserved_bytes) {
+                const auto violation = lfs::core::shareable_allocation_violation(
+                    block.committed_bytes, "imported Vulkan buffer");
+                return fail(violation.value_or(
+                    "sparseBinding is required to import a multi-chunk or partially-committed "
+                    "exportable CUDA block"));
+            }
+            return importExternalBuffer(block.chunks[0].handle.native,
+                                        static_cast<VkDeviceSize>(block.reserved_bytes),
+                                        static_cast<VkDeviceSize>(block.chunks[0].bytes),
+                                        usage,
+                                        out,
+                                        diagnostic_scope,
+                                        diagnostic_label);
+        }
+
+        VkExternalMemoryBufferCreateInfo external_buffer_info{};
+        external_buffer_info.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO;
+        external_buffer_info.handleTypes = kExternalMemoryHandleType;
+
+        VkBufferCreateInfo buffer_info{};
+        buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        buffer_info.pNext = &external_buffer_info;
+        buffer_info.flags = VK_BUFFER_CREATE_SPARSE_BINDING_BIT;
+        buffer_info.size = static_cast<VkDeviceSize>(block.reserved_bytes);
+        buffer_info.usage = usage | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                            VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        if (buffer_device_address_enabled_) {
+            buffer_info.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+        }
+        std::array<uint32_t, 2> external_buffer_families{
+            graphics_queue_family_,
+            has_dedicated_compute_queue_ ? compute_queue_family_ : graphics_queue_family_};
+        if (has_dedicated_compute_queue_) {
+            buffer_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
+            buffer_info.queueFamilyIndexCount = static_cast<uint32_t>(external_buffer_families.size());
+            buffer_info.pQueueFamilyIndices = external_buffer_families.data();
+        } else {
+            buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        }
+
+        VkResult result = vkCreateBuffer(device_, &buffer_info, nullptr, &out.buffer);
+        if (result != VK_SUCCESS) {
+            out = {};
+            return fail(std::format("vkCreateBuffer(sparse import) failed: {}", vkResultToString(result)));
+        }
+        out.size = static_cast<VkDeviceSize>(block.reserved_bytes);
+        out.sparse = true;
+        out.diagnostic_scope =
+            diagnostic_scope.empty() ? "vulkan.external.imported_block" : std::string(diagnostic_scope);
+        out.diagnostic_label = makeAllocationDiagnosticLabel(diagnostic_label);
+        setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
+                            out.buffer,
+                            "interop.imported.sparse[{}]",
+                            block.reserved_bytes);
+
+        if (!bindNewChunks(out, block)) {
+            destroyExternalBuffer(out);
+            return false;
+        }
+        gpu_object_census_.onCreate(GpuObjectKind::ExternalBuffer, out.diagnostic_scope);
+        out.census_counted = true;
+        LOG_DEBUG("Imported exportable block: reserved={} MiB committed={} MiB chunks={} sparse=1 bda={}",
+                  block.reserved_bytes >> 20,
+                  block.committed_bytes >> 20,
+                  block.chunks.size(),
+                  buffer_device_address_enabled_);
+        return true;
+    }
+
+    bool VulkanContext::bindNewChunks(ExternalBuffer& imported, const lfs::core::ExportableBlock& block) {
+        if (!device_ || imported.buffer == VK_NULL_HANDLE) {
+            return fail("bindNewChunks requires an imported VkBuffer");
+        }
+        if (imported.bound_chunks > block.chunks.size()) {
+            return fail("bindNewChunks: bound_chunks exceeds CUDA chunk count");
+        }
+        if (imported.bound_chunks == block.chunks.size()) {
+            return true;
+        }
+
+        VkMemoryRequirements memory_requirements{};
+        vkGetBufferMemoryRequirements(device_, imported.buffer, &memory_requirements);
+        assert(memory_requirements.alignment == 0 ||
+               (memory_requirements.alignment & (memory_requirements.alignment - 1)) == 0);
+
+        const std::size_t first_new = imported.bound_chunks;
+        std::vector<VkDeviceMemory> new_memories;
+        new_memories.reserve(block.chunks.size() - first_new);
+        std::vector<VkSparseMemoryBind> binds;
+        binds.reserve(block.chunks.size() - first_new);
+
+        const auto rollback_new = [&]() {
+            for (VkDeviceMemory memory : new_memories) {
+                if (memory != VK_NULL_HANDLE) {
+                    vkFreeMemory(device_, memory, nullptr);
+                }
+            }
+            new_memories.clear();
+        };
+
+        for (std::size_t i = first_new; i < block.chunks.size(); ++i) {
+            const auto& chunk = block.chunks[i];
+            assert(chunk.bytes > 0);
+            assert(memory_requirements.alignment == 0 ||
+                   chunk.offset % memory_requirements.alignment == 0);
+            assert(memory_requirements.alignment == 0 ||
+                   chunk.bytes % memory_requirements.alignment == 0);
+            if (!chunk.handle.valid()) {
+                rollback_new();
+                return fail("bindNewChunks: chunk export handle is invalid");
+            }
+
+#ifdef _WIN32
+            VkImportMemoryWin32HandleInfoKHR import_info{};
+            import_info.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR;
+            import_info.handleType = kExternalMemoryHandleType;
+            import_info.handle = chunk.handle.native;
+#else
+            const int dup_fd = ::dup(chunk.handle.native);
+            if (dup_fd < 0) {
+                rollback_new();
+                return fail("dup() of exportable chunk fd failed for Vulkan import");
+            }
+            VkImportMemoryFdInfoKHR import_info{};
+            import_info.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR;
+            import_info.handleType = kExternalMemoryHandleType;
+            import_info.fd = dup_fd;
+#endif
+
+            VkMemoryAllocateFlagsInfo alloc_flags{};
+            alloc_flags.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
+            if (buffer_device_address_enabled_) {
+                alloc_flags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+                alloc_flags.pNext = &import_info;
+            }
+
+            VkMemoryAllocateInfo allocate_info{};
+            allocate_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            allocate_info.pNext = buffer_device_address_enabled_ ? static_cast<void*>(&alloc_flags)
+                                                                 : static_cast<void*>(&import_info);
+            allocate_info.allocationSize = static_cast<VkDeviceSize>(chunk.bytes);
+            allocate_info.memoryTypeIndex =
+                findMemoryType(memory_requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            if (allocate_info.memoryTypeIndex == std::numeric_limits<uint32_t>::max()) {
+#ifndef _WIN32
+                ::close(dup_fd);
+#endif
+                rollback_new();
+                return fail("Could not find a compatible Vulkan device-local memory type for sparse chunk");
+            }
+
+            VkDeviceMemory memory = VK_NULL_HANDLE;
+            VkResult result;
+#ifndef _WIN32
+            const std::string scope_label = imported.diagnostic_scope.empty()
+                                                ? std::string("cuda_opaque_fd_import")
+                                                : imported.diagnostic_scope;
+            const CudaOpaqueFdImportScopeGuard import_scope(scope_label.c_str());
+#endif
+            result = vkAllocateMemory(device_, &allocate_info, nullptr, &memory);
+            if (result != VK_SUCCESS) {
+#ifndef _WIN32
+                ::close(dup_fd);
+#endif
+                rollback_new();
+                return fail(std::format("vkAllocateMemory(sparse chunk) failed: {}", vkResultToString(result)));
+            }
+            setDebugObjectNamef(VK_OBJECT_TYPE_DEVICE_MEMORY,
+                                memory,
+                                "interop.imported.sparse.chunk[{}+{}]",
+                                chunk.offset,
+                                chunk.bytes);
+            new_memories.push_back(memory);
+
+            VkSparseMemoryBind bind{};
+            bind.resourceOffset = static_cast<VkDeviceSize>(chunk.offset);
+            bind.size = static_cast<VkDeviceSize>(chunk.bytes);
+            bind.memory = memory;
+            bind.memoryOffset = 0;
+            binds.push_back(bind);
+        }
+
+        VkSparseBufferMemoryBindInfo buffer_bind{};
+        buffer_bind.buffer = imported.buffer;
+        buffer_bind.bindCount = static_cast<uint32_t>(binds.size());
+        buffer_bind.pBinds = binds.data();
+
+        VkBindSparseInfo bind_info{};
+        bind_info.sType = VK_STRUCTURE_TYPE_BIND_SPARSE_INFO;
+        bind_info.bufferBindCount = 1;
+        bind_info.pBufferBinds = &buffer_bind;
+
+        VkFenceCreateInfo fence_info{};
+        fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        VkFence fence = VK_NULL_HANDLE;
+        VkResult result = vkCreateFence(device_, &fence_info, nullptr, &fence);
+        if (result != VK_SUCCESS) {
+            rollback_new();
+            return fail(std::format("vkCreateFence(sparse bind) failed: {}", vkResultToString(result)));
+        }
+
+        result = lfs::rendering::vk_queue_bind_sparse_synced(graphics_queue_, 1, &bind_info, fence);
+        if (result != VK_SUCCESS) {
+            vkDestroyFence(device_, fence, nullptr);
+            rollback_new();
+            return fail(std::format("vkQueueBindSparse failed: {}", vkResultToString(result)));
+        }
+        auto outcome = lfs::rendering::wait_fence_bounded(
+            device_, fence, std::stop_token{}, lfs::rendering::VulkanWaitPolicy{},
+            makeWaitContext("vulkan.context.sparse_bind_fence"));
+        const bool bind_ready = outcome.has_value() && *outcome == lfs::rendering::WaitOutcome::Ready;
+        if (bind_ready) {
+            vkDestroyFence(device_, fence, nullptr);
+        }
+        if (!mapWaitOutcome(std::move(outcome), "sparse bind fence wait")) {
+            // The bind is queued: its fence and chunk memories stay alive with the queue.
+            imported.memories.insert(imported.memories.end(), new_memories.begin(), new_memories.end());
+            return false;
+        }
+
+        imported.memories.insert(imported.memories.end(), new_memories.begin(), new_memories.end());
+        imported.bound_chunks = block.chunks.size();
+        imported.allocation_size = static_cast<VkDeviceSize>(block.committed_bytes);
+        if (!imported.diagnostic_scope.empty() && !imported.diagnostic_label.empty()) {
+            recordCurrentVulkanBytes(imported.diagnostic_scope,
+                                     imported.diagnostic_label,
+                                     static_cast<std::size_t>(imported.allocation_size));
+        }
+
+        if (buffer_device_address_enabled_ && imported.device_address == 0) {
+            VkBufferDeviceAddressInfo address_info{};
+            address_info.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+            address_info.buffer = imported.buffer;
+            imported.device_address = vkGetBufferDeviceAddress(device_, &address_info);
+        }
+
+        LOG_INFO("Exportable Vulkan chunks bound: bound={} committed={} MiB (no re-import)",
+                 imported.bound_chunks,
+                 block.committed_bytes >> 20);
+        return true;
+    }
+
     void VulkanContext::destroyExternalBuffer(ExternalBuffer& buffer) {
-        const bool was_live = buffer.buffer != VK_NULL_HANDLE || buffer.memory != VK_NULL_HANDLE;
+        const bool was_live = buffer.buffer != VK_NULL_HANDLE || buffer.memory != VK_NULL_HANDLE ||
+                              !buffer.memories.empty();
         const bool census_counted = buffer.census_counted;
         const std::string scope = buffer.diagnostic_scope;
         if (!buffer.diagnostic_scope.empty() && !buffer.diagnostic_label.empty()) {
@@ -3727,18 +3904,17 @@ namespace lfs::vis {
             if (buffer.memory != VK_NULL_HANDLE) {
                 vkFreeMemory(device_, buffer.memory, nullptr);
             }
+            for (VkDeviceMemory memory : buffer.memories) {
+                if (memory != VK_NULL_HANDLE) {
+                    vkFreeMemory(device_, memory, nullptr);
+                }
+            }
         }
         closeExternalNativeHandle(buffer.native_handle);
         if (was_live && census_counted) {
             gpu_object_census_.onDestroy(GpuObjectKind::ExternalBuffer, scope);
         }
         buffer = {};
-    }
-
-    VulkanContext::ExternalNativeHandle VulkanContext::releaseExternalBufferNativeHandle(ExternalBuffer& buffer) const {
-        const ExternalNativeHandle handle = buffer.native_handle;
-        buffer.native_handle = kInvalidExternalNativeHandle;
-        return handle;
     }
 
     bool VulkanContext::createExternalTimelineSemaphore(const std::uint64_t initial_value,
@@ -4197,7 +4373,7 @@ namespace lfs::vis {
                             "immediate.transition[{}].fence",
                             pending_immediate_submits_.size());
 
-        result = vkQueueSubmit(graphics_queue_, 1, &submit_info, submit_fence);
+        result = lfs::rendering::vk_queue_submit_synced(graphics_queue_, 1, &submit_info, submit_fence);
         if (result != VK_SUCCESS) {
             vkDestroyFence(device_, submit_fence, nullptr);
             vkFreeCommandBuffers(device_, immediate_command_pool_, 1, &command_buffer);

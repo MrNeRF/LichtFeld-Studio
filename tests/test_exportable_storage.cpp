@@ -7,6 +7,7 @@
 #include "core/parameters.hpp"
 #include "core/point_cloud.hpp"
 #include "core/sh_value_quant.hpp"
+#include "core/shareable_allocation_limit.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
@@ -18,10 +19,14 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
+#include <optional>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -34,6 +39,10 @@ namespace {
         if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
             GTEST_SKIP() << "CUDA device unavailable";
         }
+    }
+
+    std::size_t align_up_for_test(std::size_t value, std::size_t alignment) {
+        return ((value + alignment - 1) / alignment) * alignment;
     }
 
     void fill_device_pattern(void* device_ptr, std::size_t floats, float base) {
@@ -170,12 +179,16 @@ TEST(SplatExportableStorageTest, CreateTracksLiveCapacityNotMaxCap) {
     ASSERT_TRUE(storage.valid());
     EXPECT_EQ(storage.capacity(), kLive);
     EXPECT_EQ(storage.reservedCapacity(), kMaxCap);
-    EXPECT_GE(storage.block->size, live_bytes);
-    // Committed physical must track live N, not max_cap.
-    EXPECT_LT(storage.block->size, max_bytes / 4);
+    EXPECT_GE(storage.block->reserved_bytes, max_bytes);
+    std::size_t live_region_bytes = 0;
+    for (std::size_t b : storage.region_bytes) {
+        live_region_bytes += b;
+    }
+    EXPECT_GE(storage.block->committed_bytes, live_region_bytes);
+    EXPECT_LT(storage.block->committed_bytes, max_bytes / 4);
 
     const auto snap = lfs::diagnostics::VramProfiler::instance().snapshot();
-    EXPECT_EQ(snap.process.exportable_splat_bytes, storage.block->size);
+    EXPECT_EQ(snap.process.exportable_splat_bytes, storage.block->committed_bytes);
     EXPECT_LT(snap.process.exportable_splat_bytes, max_bytes / 4);
 }
 
@@ -208,7 +221,7 @@ TEST(SplatExportableStorageTest, GrowPreservesDataAndTracksBytes) {
     auto storage = std::move(*storage_result);
     ASSERT_TRUE(storage.valid());
     const void* const stable_ptr = storage.block->device_ptr;
-    const std::size_t bytes_before = storage.block->size;
+    const std::size_t bytes_before = storage.block->committed_bytes;
     const auto gen_before = storage.generation();
 
     // Write a known pattern into the means region (first kInitial * 3 floats).
@@ -229,11 +242,18 @@ TEST(SplatExportableStorageTest, GrowPreservesDataAndTracksBytes) {
     EXPECT_EQ(storage.capacity(), kGrown);
     EXPECT_EQ(storage.block->device_ptr, stable_ptr) << "device_ptr must stay stable across grow";
     EXPECT_GT(storage.generation(), gen_before);
-    EXPECT_GE(storage.block->size, bytes_before);
+    EXPECT_GE(storage.block->committed_bytes, bytes_before);
+    EXPECT_EQ(storage.region_offsets[SplatExportableStorage::Scaling],
+              static_cast<std::size_t>(static_cast<const char*>(scaling_ptr) -
+                                       static_cast<const char*>(storage.block->device_ptr)));
 
     const auto snap = lfs::diagnostics::VramProfiler::instance().snapshot();
-    EXPECT_EQ(snap.process.exportable_splat_bytes, storage.block->size);
-    EXPECT_GE(snap.process.exportable_splat_bytes, SplatExportableStorage::layoutBytes(kGrown, kShDegree));
+    EXPECT_EQ(snap.process.exportable_splat_bytes, storage.block->committed_bytes);
+    std::size_t live_region_bytes = 0;
+    for (std::size_t b : storage.region_bytes) {
+        live_region_bytes += b;
+    }
+    EXPECT_GE(snap.process.exportable_splat_bytes, live_region_bytes);
 
     expect_device_pattern(storage.block->device_ptr, kMeansFloats, 10.0f);
     void* scaling_after =
@@ -246,47 +266,34 @@ TEST(SplatExportableStorageTest, GrowPreservesDataAndTracksBytes) {
     EXPECT_FALSE(*grew_again);
 }
 
-TEST(SplatExportableStorageTest, MidRelocateFailureRestoresPreviousLayout) {
+TEST(SplatExportableStorageTest, GrowBeyondReserveFailsCleanly) {
     require_cuda();
 
     constexpr std::size_t kInitial = 128;
-    constexpr std::size_t kGrown = 512;
+    constexpr std::size_t kReserve = 256;
     constexpr int kShDegree = 3;
-    constexpr unsigned char kPattern = 0x5a;
 
-    auto storage_result =
-        SplatExportableStorage::create(kInitial, kShDegree, 0, kGrown * 2);
+    auto storage_result = SplatExportableStorage::create(kInitial, kShDegree, 0, kReserve);
     ASSERT_TRUE(storage_result.has_value()) << storage_result.error();
     auto storage = std::move(*storage_result);
-
-    const std::size_t old_total = SplatExportableStorage::layoutBytes(kInitial, kShDegree);
     const auto old_offsets = storage.region_offsets;
     const auto old_bytes = storage.region_bytes;
     const auto old_generation = storage.generation();
-    ASSERT_EQ(cudaMemset(storage.block->device_ptr, kPattern, old_total), cudaSuccess);
-    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    const auto old_committed = storage.block->committed_bytes;
 
-    set_splat_exportable_relocate_failure_for_testing(SplatExportableStorage::Rotation);
-    const auto grew = storage.grow(kGrown);
-    set_splat_exportable_relocate_failure_for_testing(std::nullopt);
+    fill_device_pattern(storage.block->device_ptr, kInitial * 3, 7.0f);
 
+    const auto grew = storage.grow(kReserve + 1);
     ASSERT_FALSE(grew.has_value());
-    EXPECT_NE(grew.error().find("injected region"), std::string::npos) << grew.error();
-    EXPECT_NE(grew.error().find("previous layout restored"), std::string::npos) << grew.error();
+    EXPECT_NE(grew.error().find("exceeds reserved"), std::string::npos) << grew.error();
     EXPECT_TRUE(storage.valid());
     EXPECT_FALSE(storage.poisoned());
     EXPECT_EQ(storage.capacity(), kInitial);
     EXPECT_EQ(storage.generation(), old_generation);
     EXPECT_EQ(storage.region_offsets, old_offsets);
     EXPECT_EQ(storage.region_bytes, old_bytes);
-
-    std::vector<unsigned char> restored(old_total);
-    ASSERT_EQ(cudaMemcpy(restored.data(), storage.block->device_ptr, old_total,
-                         cudaMemcpyDeviceToHost),
-              cudaSuccess);
-    EXPECT_TRUE(std::all_of(restored.begin(), restored.end(), [](const unsigned char value) {
-        return value == kPattern;
-    }));
+    EXPECT_EQ(storage.block->committed_bytes, old_committed);
+    expect_device_pattern(storage.block->device_ptr, kInitial * 3, 7.0f);
 }
 
 TEST(SplatExportableStorageTest, TensorViewsValidAfterGrowViaRebind) {
@@ -426,7 +433,7 @@ TEST(SplatExportableStorageTest, ManyGrowCyclesCudaMemGetInfoPlateaus) {
         EXPECT_EQ(storage.capacity(), cap);
         const auto snap = cuda_mem_snapshot();
         free_at_plateau = snap.free_bytes;
-        block_at_plateau = storage.block->size;
+        block_at_plateau = storage.block->committed_bytes;
     }
 
     // Further grows to the same capacity are no-ops; free VRAM must not keep dropping.
@@ -434,7 +441,7 @@ TEST(SplatExportableStorageTest, ManyGrowCyclesCudaMemGetInfoPlateaus) {
         auto grew = storage.grow(steps.back());
         ASSERT_TRUE(grew.has_value()) << grew.error();
         EXPECT_FALSE(*grew) << "idempotent grow must not re-commit physical";
-        EXPECT_EQ(storage.block->size, block_at_plateau);
+        EXPECT_EQ(storage.block->committed_bytes, block_at_plateau);
         const auto snap = cuda_mem_snapshot();
         // free may jitter slightly; it must not systematically fall.
         EXPECT_GE(snap.free_bytes + kVramSlackBytes, free_at_plateau)
@@ -447,7 +454,7 @@ TEST(SplatExportableStorageTest, ManyGrowCyclesCudaMemGetInfoPlateaus) {
     // Destroy storage: free VRAM must return near pre-allocation baseline of a probe.
     // Measure residual after destroy vs a fresh identical allocation's delta.
     const auto before_destroy = cuda_mem_snapshot();
-    const std::size_t committed = storage.block->size;
+    const std::size_t committed = storage.block->committed_bytes;
     storage = SplatExportableStorage{}; // dtor teardown
     const auto after_destroy = cuda_mem_snapshot();
     EXPECT_GE(after_destroy.free_bytes + kVramSlackBytes, before_destroy.free_bytes + committed)
@@ -521,8 +528,8 @@ TEST(SplatExportableStorageTest, GrowKeepsStableVaWhileImportersHoldBlock) {
     // Simulated Vulkan import lifetime anchor (same type as extra_owner_).
     std::shared_ptr<void> importer_hold = storage.block;
     const void* const va = storage.block->device_ptr;
-    const auto old_handle = storage.block->handle.native;
-    const std::size_t old_size = storage.block->size;
+    const auto chunks_before = storage.block->chunks;
+    const std::size_t old_size = storage.block->committed_bytes;
 
     auto grew = storage.grow(1024);
     if (!grew) {
@@ -530,15 +537,14 @@ TEST(SplatExportableStorageTest, GrowKeepsStableVaWhileImportersHoldBlock) {
     }
     ASSERT_TRUE(*grew);
     EXPECT_EQ(storage.block->device_ptr, va);
-    EXPECT_GE(storage.block->size, old_size);
-    // Export handle is re-exported on physical growth (Vulkan must re-import).
-#ifdef _WIN32
-    EXPECT_NE(storage.block->handle.native, old_handle);
-#else
-    // POSIX fd may be recycled to the same integer after close+export; size
-    // and generation are the reliable signals.
+    EXPECT_GE(storage.block->committed_bytes, old_size);
+    ASSERT_GE(storage.block->chunks.size(), chunks_before.size());
+    for (std::size_t i = 0; i < chunks_before.size(); ++i) {
+        EXPECT_EQ(storage.block->chunks[i].offset, chunks_before[i].offset);
+        EXPECT_EQ(storage.block->chunks[i].bytes, chunks_before[i].bytes);
+        EXPECT_EQ(storage.block->chunks[i].handle, chunks_before[i].handle);
+    }
     EXPECT_GT(storage.generation(), 1u);
-#endif
     EXPECT_EQ(importer_hold.get(), storage.block.get());
     EXPECT_EQ(static_cast<ExportableBlock*>(importer_hold.get())->device_ptr, va);
 
@@ -669,13 +675,12 @@ TEST(SplatExportableStorageTest, RebindGrowRebindPreservesAllRegionPatterns) {
     const auto gen_before = storage.generation();
     const std::size_t scaling_off_before = storage.region_offsets[SplatExportableStorage::Scaling];
 
-    // grow relocates non-means regions to new offsets.
     auto grew = storage.grow(kGrown);
     ASSERT_TRUE(grew.has_value()) << grew.error();
     ASSERT_TRUE(*grew);
     EXPECT_GT(storage.generation(), gen_before);
-    EXPECT_NE(storage.region_offsets[SplatExportableStorage::Scaling], scaling_off_before)
-        << "grow must relocate scaling (capacity-dependent pack)";
+    EXPECT_EQ(storage.region_offsets[SplatExportableStorage::Scaling], scaling_off_before)
+        << "region offsets are constant across grow";
 
     // Patterns intact at NEW offsets inside the block (grow did its job).
     expect_device_pattern(
@@ -1096,11 +1101,7 @@ TEST(SplatExportableStorageTest, ForcedGrowFailureLeavesModelUntouched) {
     EXPECT_EQ(static_cast<std::size_t>(model.size()), size_before);
 }
 
-// storage-layer contract: growExportableDeviceBlock must only run after
-// external importers (Vulkan VkDeviceMemory) are detached. Protocol mirror of
-// TrainerManager::growExportableForDensify / shared-scratch commit path —
-// drop the simulated import hold BEFORE grow, then grow keeps VA stable.
-TEST(ExportableStorageTest, GrowAfterImporterDetachKeepsStableVa) {
+TEST(ExportableStorageTest, GrowWhileImporterHoldsBlockKeepsStableVa) {
     require_cuda();
 
     auto block_result = allocateExportableDeviceBlock(1 << 20, 0, false, 8 << 20);
@@ -1110,21 +1111,25 @@ TEST(ExportableStorageTest, GrowAfterImporterDetachKeepsStableVa) {
     auto block = std::move(*block_result);
     ASSERT_NE(block, nullptr);
     const void* const va = block->device_ptr;
-    const std::size_t old_size = block->size;
+    const std::size_t old_size = block->committed_bytes;
+    const auto chunks_before = block->chunks;
 
-    // Simulated Vulkan import lifetime (extra_owner_ / imported_buffer).
     std::shared_ptr<void> importer_hold = block;
-
-    // correct order: detach import BEFORE release_physical inside grow.
-    importer_hold.reset();
     auto grew = growExportableDeviceBlock(block, old_size * 2);
     if (!grew) {
         FAIL() << grew.error();
     }
     ASSERT_TRUE(*grew);
     EXPECT_EQ(block->device_ptr, va) << "VA must stay stable across grow";
-    EXPECT_GE(block->size, old_size * 2);
+    EXPECT_GE(block->committed_bytes, old_size * 2);
+    ASSERT_GE(block->chunks.size(), chunks_before.size());
+    for (std::size_t i = 0; i < chunks_before.size(); ++i) {
+        EXPECT_EQ(block->chunks[i].handle, chunks_before[i].handle);
+        EXPECT_EQ(block->chunks[i].offset, chunks_before[i].offset);
+        EXPECT_EQ(block->chunks[i].bytes, chunks_before[i].bytes);
+    }
 
+    importer_hold.reset();
     block.reset();
     void* probe = nullptr;
     ASSERT_EQ(cudaMalloc(&probe, 4096), cudaSuccess);
@@ -1215,16 +1220,12 @@ TEST(SplatExportableStorageTest, ResolveUsesLivePointerAfterGrow) {
     ASSERT_TRUE(*grew);
     EXPECT_GT(storage.generation(), gen_before);
 
-    // Baked storage_ptr is stale (pre-grow region base). Live resolve must differ
-    // for regions that relocate (ShN is not at offset 0).
     void* const shN_live = resolve_exportable_device_ptr(shN);
     void* const bounds_live = resolve_exportable_device_ptr(bounds);
     EXPECT_EQ(shN_live, storage.live_region_ptr(SplatExportableStorage::ShN));
     EXPECT_EQ(bounds_live, storage.live_region_ptr(SplatExportableStorage::ShNBounds));
-    // Means is at offset 0 and stays put; ShN relocates when capacity grows.
-    EXPECT_NE(shN_live, shN_before)
-        << "ShN region must relocate on grow; resolve must not return baked ptr";
-    EXPECT_NE(bounds_live, bounds_before);
+    EXPECT_EQ(shN_live, shN_before) << "region offsets are constant across grow";
+    EXPECT_EQ(bounds_live, bounds_before);
 
     // Fresh allocator views match live control.
     auto alloc2 = storage.make_allocator();
@@ -1296,7 +1297,7 @@ TEST(SplatExportableStorageTest, Q16BindPtrsSurviveGrowUnderHeldView) {
     void* const live_bounds = resolve_exportable_device_ptr(held_bounds);
     EXPECT_EQ(live_codes, storage.live_region_ptr(SplatExportableStorage::ShN));
     EXPECT_EQ(live_bounds, storage.live_region_ptr(SplatExportableStorage::ShNBounds));
-    EXPECT_NE(live_codes, baked_codes);
+    EXPECT_EQ(live_codes, baked_codes);
 
     // After rebind, model views are generation-fresh and resolve_q16 agrees.
     ASSERT_TRUE(storage.rebindSplatData(model, storage.make_allocator()).has_value());
@@ -1376,4 +1377,313 @@ TEST(SplatExportableStorageTest, MigrateQ16Sh1DirectAllocationsAppliesDegree) {
     EXPECT_EQ(model.means_raw().external_storage_kind(), "splat.exportable");
     EXPECT_EQ(static_cast<std::size_t>(model.shN_raw().capacity()),
               sh_value_quant::sh_value_u16_count(kCap, rest));
+}
+
+namespace {
+
+    class ScopedShareableAllocLimit {
+    public:
+        explicit ScopedShareableAllocLimit(const char* value) {
+            if (const char* previous = std::getenv(kShareableAllocLimitEnvName)) {
+                previous_ = previous;
+            }
+            set(value);
+            reset_shareable_allocation_limit_for_tests();
+        }
+
+        ~ScopedShareableAllocLimit() {
+            set(previous_ ? previous_->c_str() : nullptr);
+            reset_shareable_allocation_limit_for_tests();
+        }
+
+        ScopedShareableAllocLimit(const ScopedShareableAllocLimit&) = delete;
+        ScopedShareableAllocLimit& operator=(const ScopedShareableAllocLimit&) = delete;
+
+    private:
+        static void set(const char* value) {
+#ifdef _WIN32
+            (void)_putenv_s(kShareableAllocLimitEnvName, value ? value : "");
+#else
+            if (value) {
+                (void)setenv(kShareableAllocLimitEnvName, value, 1);
+            } else {
+                (void)unsetenv(kShareableAllocLimitEnvName);
+            }
+#endif
+        }
+
+        std::optional<std::string> previous_;
+    };
+
+    class ScopedShareableChunkBytes {
+    public:
+        explicit ScopedShareableChunkBytes(const char* value) {
+            if (const char* previous = std::getenv(kShareableChunkBytesEnvName)) {
+                previous_ = previous;
+            }
+            set(value);
+            reset_shareable_allocation_limit_for_tests();
+        }
+
+        ~ScopedShareableChunkBytes() {
+            set(previous_ ? previous_->c_str() : nullptr);
+            reset_shareable_allocation_limit_for_tests();
+        }
+
+        ScopedShareableChunkBytes(const ScopedShareableChunkBytes&) = delete;
+        ScopedShareableChunkBytes& operator=(const ScopedShareableChunkBytes&) = delete;
+
+    private:
+        static void set(const char* value) {
+#ifdef _WIN32
+            (void)_putenv_s(kShareableChunkBytesEnvName, value ? value : "");
+#else
+            if (value) {
+                (void)setenv(kShareableChunkBytesEnvName, value, 1);
+            } else {
+                (void)unsetenv(kShareableChunkBytesEnvName);
+            }
+#endif
+        }
+
+        std::optional<std::string> previous_;
+    };
+
+} // namespace
+
+TEST(ExportableStorageTest, AllocateSplitsIntoShareableChunks) {
+    require_cuda();
+    ScopedShareableAllocLimit limit("16777216"); // 16 MiB chunks
+
+    size_t free_before = 0;
+    size_t total = 0;
+    ASSERT_EQ(cudaMemGetInfo(&free_before, &total), cudaSuccess);
+
+    constexpr std::size_t kBytes = 100ull << 20;
+    auto block_result = allocateExportableDeviceBlock(kBytes, 0, false, 160ull << 20);
+    ASSERT_TRUE(block_result.has_value()) << block_result.error();
+    auto block = std::move(*block_result);
+    ASSERT_NE(block->device_ptr, nullptr);
+    EXPECT_GE(block->committedPrefixBytes(), kBytes);
+    ASSERT_FALSE(block->chunks.empty());
+    std::size_t covered = 0;
+    for (const auto& chunk : block->chunks) {
+        EXPECT_LE(chunk.bytes, 16777216u);
+        EXPECT_EQ(chunk.offset, covered);
+        covered += chunk.bytes;
+        EXPECT_TRUE(chunk.handle.valid());
+    }
+    EXPECT_GE(covered, kBytes);
+
+    std::vector<std::uint8_t> host(kBytes);
+    for (std::size_t i = 0; i < kBytes; ++i) {
+        host[i] = static_cast<std::uint8_t>(i * 17u);
+    }
+    ASSERT_EQ(cudaMemcpy(block->device_ptr, host.data(), kBytes, cudaMemcpyHostToDevice), cudaSuccess);
+    std::vector<std::uint8_t> back(kBytes);
+    ASSERT_EQ(cudaMemcpy(back.data(), block->device_ptr, kBytes, cudaMemcpyDeviceToHost), cudaSuccess);
+    EXPECT_EQ(back, host);
+
+    const auto chunks_before = block->chunks;
+    auto grew = growExportableDeviceBlock(block, 150ull << 20);
+    ASSERT_TRUE(grew.has_value()) << grew.error();
+    ASSERT_TRUE(*grew);
+    EXPECT_GE(block->committedPrefixBytes(), 150ull << 20);
+    ASSERT_GE(block->chunks.size(), chunks_before.size());
+    for (std::size_t i = 0; i < chunks_before.size(); ++i) {
+        EXPECT_EQ(block->chunks[i].offset, chunks_before[i].offset);
+        EXPECT_EQ(block->chunks[i].bytes, chunks_before[i].bytes);
+        EXPECT_EQ(block->chunks[i].handle, chunks_before[i].handle);
+    }
+    ASSERT_EQ(cudaMemcpy(back.data(), block->device_ptr, kBytes, cudaMemcpyDeviceToHost), cudaSuccess);
+    EXPECT_EQ(back, host);
+
+    const std::size_t gran = exportable_allocation_granularity(0);
+    const std::size_t hole_off = align_up_for_test(block->committedPrefixBytes() + gran, gran);
+    ASSERT_TRUE(commitExportableDeviceRange(block, hole_off, gran).has_value());
+    EXPECT_LT(block->committedPrefixBytes(), hole_off);
+    EXPECT_GE(block->committed_bytes, block->committedPrefixBytes() + gran);
+
+    block.reset();
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    size_t free_after = 0;
+    ASSERT_EQ(cudaMemGetInfo(&free_after, &total), cudaSuccess);
+    EXPECT_GE(free_after + gran, free_before);
+}
+
+TEST(ExportableStorageTest, GrowAppendsChunksUnderSmallLimit) {
+    require_cuda();
+    ScopedShareableAllocLimit limit("4194304"); // 4 MiB chunks
+
+    auto block_result = allocateExportableDeviceBlock(1ull << 20, 0, false, 16ull << 20);
+    ASSERT_TRUE(block_result.has_value()) << block_result.error();
+    auto block = std::move(*block_result);
+    const auto chunks_before = block->chunks;
+
+    auto grew = growExportableDeviceBlock(block, 8ull << 20);
+    ASSERT_TRUE(grew.has_value()) << grew.error();
+    ASSERT_TRUE(*grew);
+    EXPECT_GE(block->committedPrefixBytes(), 8ull << 20);
+    ASSERT_GT(block->chunks.size(), chunks_before.size());
+    for (const auto& chunk : block->chunks) {
+        EXPECT_LE(chunk.bytes, 4ull << 20);
+    }
+}
+
+TEST(SplatExportableStorageTest, ReservedLayoutOffsetsStayPutAcrossGrow) {
+    require_cuda();
+
+    constexpr std::size_t kInitial = 1000;
+    constexpr std::size_t kReserve = 200000;
+    constexpr std::size_t kGrown = 5000;
+    constexpr int kShDegree = 3;
+    const std::size_t gran = exportable_allocation_granularity(0);
+
+    auto storage_result = SplatExportableStorage::create(kInitial, kShDegree, 0, kReserve);
+    ASSERT_TRUE(storage_result.has_value()) << storage_result.error();
+    auto storage = std::move(*storage_result);
+    const auto offsets_before = storage.region_offsets;
+    for (std::size_t i = 0; i < SplatExportableStorage::Count; ++i) {
+        EXPECT_EQ(storage.region_offsets[i] % gran, 0u) << "region " << i;
+    }
+
+    std::array<std::vector<float>, SplatExportableStorage::ShN> patterns{};
+    for (std::size_t i = 0; i < SplatExportableStorage::ShN; ++i) {
+        const std::size_t floats = storage.region_bytes[i] / sizeof(float);
+        if (floats == 0) {
+            continue;
+        }
+        patterns[i].resize(floats);
+        for (std::size_t j = 0; j < floats; ++j) {
+            patterns[i][j] = static_cast<float>(i * 1000 + j);
+        }
+        ASSERT_EQ(cudaMemcpy(static_cast<char*>(storage.block->device_ptr) + storage.region_offsets[i],
+                             patterns[i].data(),
+                             patterns[i].size() * sizeof(float),
+                             cudaMemcpyHostToDevice),
+                  cudaSuccess);
+    }
+
+    auto means_view = storage.make_allocator()(
+        TensorShape({kInitial, 3}), kInitial, DataType::Float32, "SplatData.means");
+    void* const means_ptr_before = means_view.storage_ptr();
+
+    const auto gen_before = storage.generation();
+    auto grew = storage.grow(kGrown);
+    ASSERT_TRUE(grew.has_value()) << grew.error();
+    ASSERT_TRUE(*grew);
+    EXPECT_EQ(storage.capacity(), kGrown);
+    EXPECT_EQ(storage.region_offsets, offsets_before);
+    EXPECT_GT(storage.generation(), gen_before);
+    EXPECT_GT(storage.region_bytes[SplatExportableStorage::Means], patterns[0].size() * sizeof(float));
+
+    for (std::size_t i = 0; i < SplatExportableStorage::ShN; ++i) {
+        if (patterns[i].empty()) {
+            continue;
+        }
+        std::vector<float> back(patterns[i].size());
+        ASSERT_EQ(cudaMemcpy(back.data(),
+                             static_cast<char*>(storage.block->device_ptr) + storage.region_offsets[i],
+                             back.size() * sizeof(float),
+                             cudaMemcpyDeviceToHost),
+                  cudaSuccess);
+        EXPECT_EQ(back, patterns[i]) << "region " << i;
+    }
+
+    std::vector<float> opacity_slack(kGrown - kInitial);
+    ASSERT_EQ(cudaMemcpy(opacity_slack.data(),
+                         static_cast<char*>(storage.block->device_ptr) +
+                             storage.region_offsets[SplatExportableStorage::Opacity] +
+                             kInitial * sizeof(float),
+                         opacity_slack.size() * sizeof(float),
+                         cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    for (float v : opacity_slack) {
+        EXPECT_EQ(v, -std::numeric_limits<float>::infinity());
+    }
+    std::vector<float> rotation_slack((kGrown - kInitial) * 4);
+    ASSERT_EQ(cudaMemcpy(rotation_slack.data(),
+                         static_cast<char*>(storage.block->device_ptr) +
+                             storage.region_offsets[SplatExportableStorage::Rotation] +
+                             kInitial * 4 * sizeof(float),
+                         rotation_slack.size() * sizeof(float),
+                         cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    for (std::size_t i = 0; i < kGrown - kInitial; ++i) {
+        EXPECT_FLOAT_EQ(rotation_slack[i * 4 + 0], 1.0f);
+        EXPECT_FLOAT_EQ(rotation_slack[i * 4 + 1], 0.0f);
+        EXPECT_FLOAT_EQ(rotation_slack[i * 4 + 2], 0.0f);
+        EXPECT_FLOAT_EQ(rotation_slack[i * 4 + 3], 0.0f);
+    }
+
+    auto means_after = storage.make_allocator()(
+        TensorShape({kInitial, 3}), kGrown, DataType::Float32, "SplatData.means");
+    EXPECT_EQ(means_after.storage_ptr(), means_ptr_before);
+
+    auto over = storage.grow(kReserve + 1);
+    ASSERT_FALSE(over.has_value());
+    EXPECT_EQ(storage.capacity(), kGrown);
+}
+
+// Block half of makeVulkanExternalTensor (allocateExportableDeviceBlock with
+// reserve==size and track=false). No Vulkan context fixture, so import is not
+// exercised here.
+TEST(ExportableStorageTest, MakeVulkanExternalTensorShapedBlockSplitsChunksAndIsZeroFilled) {
+    require_cuda();
+    ScopedShareableChunkBytes limit("16777216");
+
+    constexpr std::size_t kBytes = 100ull << 20;
+    const std::size_t chunk_limit = shareable_chunk_bytes(0);
+    ASSERT_LE(chunk_limit, 16777216u);
+    ASSERT_LT(chunk_limit, kBytes);
+
+    auto block_result = allocateExportableDeviceBlock(kBytes, 0, false, kBytes);
+    ASSERT_TRUE(block_result.has_value()) << block_result.error();
+    auto block = std::move(*block_result);
+    ASSERT_NE(block->device_ptr, nullptr);
+    EXPECT_GE(block->committedPrefixBytes(), kBytes);
+    EXPECT_GE(block->committed_bytes, kBytes);
+    EXPECT_GE(block->reserved_bytes, kBytes);
+    ASSERT_FALSE(block->chunks.empty());
+    EXPECT_GE(block->chunks.size(), (kBytes + chunk_limit - 1) / chunk_limit);
+    for (const auto& chunk : block->chunks) {
+        EXPECT_GT(chunk.bytes, 0u);
+        EXPECT_LE(chunk.bytes, chunk_limit);
+        EXPECT_TRUE(chunk.handle.valid());
+    }
+
+    std::vector<std::uint8_t> zeros(kBytes, 0xFF);
+    ASSERT_EQ(cudaMemcpy(zeros.data(), block->device_ptr, kBytes, cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    EXPECT_TRUE(std::all_of(zeros.begin(), zeros.end(), [](const std::uint8_t b) {
+        return b == 0;
+    }));
+
+    auto tensor = Tensor::from_external_owner(
+        block->device_ptr,
+        TensorShape({kBytes}),
+        Device::CUDA,
+        DataType::UInt8,
+        std::shared_ptr<void>(block),
+        kBytes,
+        nullptr,
+        "vulkan_external_buffer");
+    EXPECT_EQ(tensor.bytes(), kBytes);
+    EXPECT_EQ(tensor.external_storage_kind(), "vulkan_external_buffer");
+
+    const std::size_t boundary = block->chunks.front().bytes;
+    ASSERT_LT(boundary, kBytes);
+    std::vector<std::uint8_t> pattern(kBytes);
+    for (std::size_t i = 0; i < kBytes; ++i) {
+        pattern[i] = static_cast<std::uint8_t>(i * 17u);
+    }
+    ASSERT_EQ(cudaMemcpy(block->device_ptr, pattern.data(), kBytes, cudaMemcpyHostToDevice),
+              cudaSuccess);
+    std::vector<std::uint8_t> back(kBytes);
+    ASSERT_EQ(cudaMemcpy(back.data(), block->device_ptr, kBytes, cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    EXPECT_EQ(back, pattern);
+    EXPECT_EQ(back[boundary - 1], pattern[boundary - 1]);
+    EXPECT_EQ(back[boundary], pattern[boundary]);
+    EXPECT_EQ(back[boundary + 1], pattern[boundary + 1]);
 }
