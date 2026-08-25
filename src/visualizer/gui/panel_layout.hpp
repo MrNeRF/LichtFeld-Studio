@@ -22,6 +22,11 @@ namespace lfs::vis::gui {
         bool has_focus = false;
     };
 
+    struct DockHorizontalLayout {
+        float x = 0.0f;
+        float width = 0.0f;
+    };
+
     enum class CursorRequest : uint8_t { None,
                                          ResizeEW,
                                          ResizeNS };
@@ -116,6 +121,8 @@ namespace lfs::vis::gui {
         ViewportLayout computeViewportLayout(bool show_main_panel, bool ui_hidden,
                                              bool python_console_visible,
                                              const ScreenState& screen) const;
+        DockHorizontalLayout computeBottomDockHorizontalLayout(
+            bool show_main_panel, bool ui_hidden, const ScreenState& screen) const;
 
         bool isResizingPanel() const {
             return python_console_resizing_ || python_console_hovering_edge_ ||
@@ -164,8 +171,6 @@ namespace lfs::vis::gui {
         float computeViewportWidth(bool show_main_panel, bool ui_hidden,
                                    bool python_console_visible,
                                    const ScreenState& screen) const;
-        float computeBottomDockWidth(bool show_main_panel, bool ui_hidden,
-                                     const ScreenState& screen) const;
         float computeBottomDockReservedHeight(bool show_main_panel, bool ui_hidden,
                                               const ScreenState& screen) const;
         float computeLeftDockReservedWidth(bool show_main_panel, bool ui_hidden,

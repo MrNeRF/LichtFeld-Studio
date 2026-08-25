@@ -5301,10 +5301,10 @@ namespace lfs::vis::gui {
         }
 
         const float bottom_dock_h = std::max(panel_layout_.getBottomDockHeight(), 0.0f);
-        const float bottom_dock_w = show_main_panel_ && !ui_hidden_
-                                        ? std::max(0.0f, screen.work_size.x -
-                                                             panel_layout_.getRightPanelWidth())
-                                        : screen.work_size.x;
+        const auto bottom_dock_layout = panel_layout_.computeBottomDockHorizontalLayout(
+            show_main_panel_, ui_hidden_, screen);
+        const float bottom_dock_x = bottom_dock_layout.x;
+        const float bottom_dock_w = bottom_dock_layout.width;
         const float bottom_dock_y =
             screen.work_pos.y + screen.work_size.y - bottom_dock_h;
         const float bottom_dock_edge_grab_h =
@@ -5313,12 +5313,12 @@ namespace lfs::vis::gui {
         const bool pointer_over_bottom_dock =
             panel_layout_.isBottomDockVisible() &&
             pointInRect(panel_input.mouse_x, panel_input.mouse_y,
-                        glm::vec2{screen.work_pos.x, bottom_dock_y},
+                        glm::vec2{bottom_dock_x, bottom_dock_y},
                         glm::vec2{bottom_dock_w, bottom_dock_h});
         const bool pointer_over_bottom_dock_edge =
             panel_layout_.isBottomDockVisible() &&
-            panel_input.mouse_x >= screen.work_pos.x &&
-            panel_input.mouse_x < screen.work_pos.x + bottom_dock_w &&
+            panel_input.mouse_x >= bottom_dock_x &&
+            panel_input.mouse_x < bottom_dock_x + bottom_dock_w &&
             panel_input.mouse_y >= bottom_dock_y - bottom_dock_edge_grab_h &&
             panel_input.mouse_y <= bottom_dock_y + bottom_dock_edge_grab_h;
         const bool pointer_targets_bottom_dock =
