@@ -78,6 +78,11 @@ namespace lfs::vis::gui {
                                  : 0.0f;
     }
 
+    void PanelLayoutManager::setLeftDockWidth(const float width) {
+        if (std::isfinite(width) && width > 0.0f)
+            left_dock_width_ = width;
+    }
+
     bool PanelLayoutManager::syncActiveTab(const std::vector<PanelSummary>& main_tabs,
                                            std::string& focus_panel_name) {
         const std::string prev_tab = active_tab_id_;

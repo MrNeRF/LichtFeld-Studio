@@ -3178,11 +3178,24 @@ namespace lfs::vis {
             return;
         auto retained = prepared->chapters;
         const auto ticket = prepared->ticket;
+        // Asset Manager project drops keep the source panel open, so retain
+        // its live width instead of replacing it with the target project's.
+        const bool keep_asset_manager_open = std::exchange(
+            keep_asset_manager_open_after_restore_, false);
+        const std::optional<float> asset_manager_width =
+            keep_asset_manager_open && gui_manager_
+                ? std::make_optional(
+                      gui_manager_->panelLayout()
+                          .getLeftDockWidth())
+                : std::nullopt;
         project::applyGuiSession(
             *this, *prepared, camera_bookmarks_);
-        if (std::exchange(
-                keep_asset_manager_open_after_restore_,
-                false)) {
+        if (keep_asset_manager_open) {
+            if (asset_manager_width && gui_manager_) {
+                gui_manager_->panelLayout()
+                    .setLeftDockWidth(
+                        *asset_manager_width);
+            }
             auto& panels =
                 gui::PanelRegistry::instance();
             panels.set_panel_enabled(

@@ -141,6 +141,7 @@ namespace lfs::vis::gui {
         bool isBottomDockVisible() const { return bottom_dock_visible_; }
         float bottomDockTopY() const { return bottom_dock_top_y_; }
         float getLeftDockWidth() const { return left_dock_width_; }
+        void setLeftDockWidth(float width);
         bool isLeftDockVisible() const { return left_dock_visible_; }
         bool isShowSequencer() const { return show_sequencer_; }
         void setShowSequencer(bool v) { show_sequencer_ = v; }
