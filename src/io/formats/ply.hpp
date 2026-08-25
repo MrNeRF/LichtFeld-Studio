@@ -30,6 +30,10 @@ namespace lfs::io {
     lfs::Result<LoadOutcome<SplatData>> load_ply(const std::filesystem::path& filepath,
                                                  const LoadOptions& options = {});
 
+    // Override the streamed q16 encode band (primitives). Must be a multiple of
+    // 256, or 0 to restore the default (1 << 20). Tests only.
+    void set_ply_q16_band_prims_for_tests(std::size_t band_prims);
+
     // Load PLY as simple point cloud (xyz + optional colors and normals)
     std::expected<lfs::core::PointCloud, std::string> load_ply_point_cloud(const std::filesystem::path& filepath,
                                                                            const LoadOptions& options);

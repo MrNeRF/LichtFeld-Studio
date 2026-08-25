@@ -157,7 +157,7 @@ float4 unpack_shn_slot_f16(uint2 packed) {
                   f16tof32(packed.y & 0xFFFFu), f16tof32(packed.y >> 16));
 }
 
-// Pad-dropped q16 value codec (matches lfs/training/sh_value_codec.cuh).
+// Pad-dropped q16 value codec (matches core/sh_value_codec.cuh).
 // Linear quant over float2 (min,max) per 256-splat block; all cells of a splat
 // share that block's bounds.
 static const float SH_Q16_INV_QMAX = 1.0 / 65535.0;

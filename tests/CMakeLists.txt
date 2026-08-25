@@ -239,6 +239,7 @@ set(TEST_FILES
     test_cuda_error.cpp
     test_exportable_storage.cpp
     test_shareable_allocation_limit.cpp
+    test_ply_q16_streamed_encode.cpp
     test_vram_leak_regression.cpp
     test_cuda_error_typed.cpp
     test_cuda_launch_check.cpp

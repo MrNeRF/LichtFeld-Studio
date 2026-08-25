@@ -8,6 +8,9 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
+#include "core/sh_value_quant.hpp"
+#include "core/sh_value_quant_kernels.hpp"
+#include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "io/error.hpp"
@@ -20,6 +23,7 @@
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1675,6 +1679,119 @@ namespace lfs::io {
         };
     }
 
+    namespace {
+        constexpr std::size_t kDefaultPlyQ16BandPrims = std::size_t{1} << 20;
+        std::atomic<std::size_t> g_ply_q16_band_prims{kDefaultPlyQ16BandPrims};
+
+        [[nodiscard]] std::size_t ply_q16_band_prims() {
+            return g_ply_q16_band_prims.load(std::memory_order_relaxed);
+        }
+
+        [[noreturn]] void throw_cuda_ply(const cudaError_t status, const std::string_view what) {
+            throw_ply_error(
+                lfs::ErrorCode::ResourceExhausted,
+                std::format("PLY q16 encode failed ({}): {} ({})",
+                            what, cudaGetErrorName(status), cudaGetErrorString(status)),
+                {},
+                lfs::NativeError{
+                    .domain = lfs::ErrorDomain::CUDA,
+                    .code = static_cast<std::int64_t>(status),
+                    .name = cudaGetErrorName(status)});
+        }
+
+        struct CudaStreamOwner {
+            cudaStream_t stream = nullptr;
+
+            CudaStreamOwner() {
+                const cudaError_t status =
+                    cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+                if (status != cudaSuccess) {
+                    stream = nullptr;
+                    throw_cuda_ply(status, "cudaStreamCreateWithFlags");
+                }
+            }
+
+            ~CudaStreamOwner() {
+                if (stream) {
+                    (void)cudaStreamDestroy(stream);
+                }
+            }
+
+            CudaStreamOwner(const CudaStreamOwner&) = delete;
+            CudaStreamOwner& operator=(const CudaStreamOwner&) = delete;
+        };
+
+        void encode_host_shN_to_q16(const HostBuffer& host_shN,
+                                    Tensor& codes,
+                                    Tensor& bounds,
+                                    const size_t n_prims,
+                                    const std::uint32_t rest) {
+            if (n_prims == 0 || rest == 0) {
+                return;
+            }
+
+            const size_t band_prims = ply_q16_band_prims();
+            LFS_ASSERT_MSG(band_prims >= 256 && (band_prims % 256u) == 0,
+                           "PLY q16 band must be a multiple of 256");
+            const size_t staging_prims = std::min(band_prims, n_prims);
+            const size_t staging_floats =
+                lfs::core::sh_swizzled_float_count(staging_prims, rest);
+            CudaStreamOwner encode_stream;
+            const cudaStream_t stream = encode_stream.stream;
+            Tensor staging = Tensor::empty(
+                TensorShape({staging_floats}), Device::CUDA, DataType::Float32, false);
+            staging.set_name("ply.shN_q16_staging");
+
+            auto* const codes_u16 = static_cast<std::uint16_t*>(
+                lfs::core::resolve_exportable_device_ptr(codes));
+            auto* const bounds_f = static_cast<float*>(
+                lfs::core::resolve_exportable_device_ptr(bounds));
+            if (!codes_u16 || !bounds_f || staging.ptr<float>() == nullptr) {
+                throw_ply_error(lfs::ErrorCode::Internal,
+                                "PLY q16 encode missing device pointers");
+            }
+
+            for (size_t p0 = 0; p0 < n_prims; p0 += band_prims) {
+                const size_t n_band = std::min(band_prims, n_prims - p0);
+                const size_t src_off = lfs::core::sh_swizzled_float_count(p0, rest);
+                const size_t src_n = lfs::core::sh_swizzled_float_count(n_band, rest);
+                LFS_ASSERT_MSG(src_off + src_n <= host_shN.count,
+                               "PLY q16 band exceeds host shN staging");
+                const cudaError_t copy_status = cudaMemcpyAsync(
+                    staging.ptr<float>(),
+                    host_shN.ptr + src_off,
+                    src_n * sizeof(float),
+                    cudaMemcpyHostToDevice,
+                    stream);
+                if (copy_status != cudaSuccess) {
+                    throw_cuda_ply(copy_status, "cudaMemcpyAsync shN band");
+                }
+                lfs::core::sh_value_quant::encode_shN_float4_to_u16(
+                    staging.ptr<float>(),
+                    codes_u16 + lfs::core::sh_value_quant::sh_value_u16_count(p0, rest),
+                    bounds_f + lfs::core::sh_value_quant::n_bounds_for_prims(p0) * 2,
+                    n_band,
+                    rest,
+                    stream);
+            }
+
+            const cudaError_t sync_status = cudaStreamSynchronize(stream);
+            if (sync_status != cudaSuccess) {
+                throw_cuda_ply(sync_status, "cudaStreamSynchronize q16 encode");
+            }
+        }
+    } // namespace
+
+    void set_ply_q16_band_prims_for_tests(const std::size_t band_prims) {
+        if (band_prims == 0) {
+            g_ply_q16_band_prims.store(kDefaultPlyQ16BandPrims, std::memory_order_relaxed);
+            return;
+        }
+        LFS_ASSERT_MSG((band_prims % 256u) == 0,
+                       "PLY q16 test band must be a multiple of 256");
+        g_ply_q16_band_prims.store(band_prims, std::memory_order_relaxed);
+    }
+
     // Main function - returns SplatData
     [[nodiscard]] lfs::Result<LoadOutcome<SplatData>>
     load_ply(const std::filesystem::path& filepath, const LoadOptions& options) {
@@ -1965,6 +2082,12 @@ namespace lfs::io {
 
             LOG_DEBUG("Creating Tensor objects and uploading to CUDA");
 
+            const bool encode_shN_q16 =
+                options.shN_q16 &&
+                static_cast<bool>(options.splat_tensor_allocator) &&
+                layout_rest > 0 &&
+                host.shN_swizzled.count > 0;
+
             Tensor means = allocate_float_tensor(
                 host_span(host.means), {N, 3}, options, "SplatData.means");
             Tensor sh0 = allocate_float_tensor(
@@ -1972,12 +2095,31 @@ namespace lfs::io {
                 {N, static_cast<size_t>(sh0_dim1), static_cast<size_t>(sh0_dim2)},
                 options,
                 "SplatData.sh0");
-            Tensor shN = allocate_float_tensor(
-                host_span(host.shN_swizzled),
-                {host.shN_swizzled.count},
-                options,
-                "SplatData.shN",
-                host.shN_swizzled.count);
+            Tensor shN;
+            Tensor shN_bounds;
+            if (encode_shN_q16) {
+                const size_t cap = means.is_valid() ? std::max(means.capacity(), N) : N;
+                const size_t cells =
+                    lfs::core::sh_value_quant::sh_value_u16_count(cap, layout_rest);
+                const size_t bounds_n =
+                    lfs::core::sh_value_quant::n_bounds_for_prims(cap) * 2;
+                shN = options.splat_tensor_allocator(
+                    TensorShape({cells}), cells, DataType::Float16, "SplatData.shN");
+                shN.set_name("SplatData.shN");
+                shN_bounds = options.splat_tensor_allocator(
+                    TensorShape({bounds_n}),
+                    bounds_n,
+                    DataType::Float32,
+                    "SplatData.shN_value_bounds");
+                shN_bounds.set_name("SplatData.shN_value_bounds");
+            } else {
+                shN = allocate_float_tensor(
+                    host_span(host.shN_swizzled),
+                    {host.shN_swizzled.count},
+                    options,
+                    "SplatData.shN",
+                    host.shN_swizzled.count);
+            }
             Tensor scaling = allocate_float_tensor(
                 host_span(host.scaling), {N, 3}, options, "SplatData.scaling");
             Tensor rotation = allocate_float_tensor(
@@ -1988,11 +2130,17 @@ namespace lfs::io {
             CudaUploadBatch uploads(lfs::core::getCurrentCUDAStream());
             uploads.enqueue(means, host_span(host.means), "SplatData.means");
             uploads.enqueue(sh0, host_span(host.sh0), "SplatData.sh0");
-            uploads.enqueue(shN, host_span(host.shN_swizzled), "SplatData.shN");
+            if (!encode_shN_q16) {
+                uploads.enqueue(shN, host_span(host.shN_swizzled), "SplatData.shN");
+            }
             uploads.enqueue(scaling, host_span(host.scaling), "SplatData.scaling");
             uploads.enqueue(rotation, host_span(host.rotation), "SplatData.rotation");
             uploads.enqueue(opacity, host_span(host.opacity), "SplatData.opacity");
             uploads.wait();
+            if (encode_shN_q16) {
+                encode_host_shN_to_q16(
+                    host.shN_swizzled, shN, shN_bounds, N, layout_rest);
+            }
             const auto upload_complete_at = std::chrono::steady_clock::now();
 
             // Calculate SH degree
@@ -2009,6 +2157,9 @@ namespace lfs::io {
                 std::move(opacity),
                 ply_constants::SCENE_SCALE_FACTOR,
                 SplatData::ShNLayout::Swizzled);
+            if (encode_shN_q16) {
+                splat_data.set_active_sh_degree(sh_degree, std::move(shN_bounds));
+            }
 
             splat_data.set_tensor_allocator(options.splat_tensor_allocator);
 
