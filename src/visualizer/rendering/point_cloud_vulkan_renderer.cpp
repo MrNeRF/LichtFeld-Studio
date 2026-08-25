@@ -1183,6 +1183,18 @@ namespace lfs::vis {
             if (device == VK_NULL_HANDLE) {
                 return;
             }
+            // Viewport scene descriptors sample these output views. Retire that
+            // compositor work before vkDestroyImageView (VUID-01026).
+            if (context != nullptr) {
+                if (!context->waitForSubmittedFrames()) {
+                    LOG_WARN("Point-cloud renderer teardown could not wait for submitted frames: {}",
+                             context->lastError());
+                    if (!context->deviceWaitIdle()) {
+                        LOG_WARN("Point-cloud renderer teardown could not idle device: {}",
+                                 context->lastError());
+                    }
+                }
+            }
             // C3: bounded teardown drain. Non-Ready retains fence + command pool
             // (AMB-4 / AMB-C5 — quarantine never authorizes free of in-flight work).
             bool command_resources_ready = true;

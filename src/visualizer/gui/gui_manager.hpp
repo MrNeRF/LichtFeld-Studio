@@ -99,6 +99,9 @@ namespace lfs::vis {
             // Lifecycle
             void init();
             void shutdown();
+            // Drop viewport-pass GPU objects (descriptor sets that sample external
+            // scene image views) while the Vulkan context is still alive.
+            void shutdownVulkanViewportPass();
             void render();
             void updateInteractiveTransitions();
             [[nodiscard]] bool isInteractiveTransitionSettling() const;

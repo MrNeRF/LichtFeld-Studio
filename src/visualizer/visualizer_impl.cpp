@@ -333,6 +333,12 @@ namespace lfs::vis {
         // while shutting down. Destroy it before invalidating the service
         // locator or releasing any of the components it observes.
         project_lifecycle_.reset();
+        // Viewport scene descriptor sets sample externally-owned image views
+        // (point-cloud / VkSplat / interop). Release those sets before the
+        // views are destroyed below.
+        if (gui_manager_) {
+            gui_manager_->shutdownVulkanViewportPass();
+        }
         if (rendering_manager_) {
             rendering_manager_->releaseSceneModelResources();
         }

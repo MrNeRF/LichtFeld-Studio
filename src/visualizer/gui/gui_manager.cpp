@@ -4007,8 +4007,12 @@ namespace lfs::vis::gui {
         // static destruction happens after VulkanContext::shutdown().
         IconCache::instance().clear();
         setVulkanUiTextureContext(nullptr);
-        vulkan_viewport_pass_.reset();
+        shutdownVulkanViewportPass();
         vulkan_gui_ = false;
+    }
+
+    void GuiManager::shutdownVulkanViewportPass() {
+        vulkan_viewport_pass_.reset();
     }
 
     void GuiManager::registerNativePanels() {

@@ -2673,9 +2673,19 @@ namespace lfs::vis {
 
         void reset() {
             if (device != VK_NULL_HANDLE) {
-                if (context != nullptr && !context->waitForSubmittedFrames()) {
-                    LOG_WARN("Vulkan viewport pass shutdown could not wait for submitted frames: {}",
-                             context->lastError());
+                if (context != nullptr) {
+                    if (!context->waitForSubmittedFrames()) {
+                        LOG_WARN("Vulkan viewport pass shutdown could not wait for submitted frames: {}",
+                                 context->lastError());
+                        if (!context->deviceWaitIdle()) {
+                            LOG_WARN("Vulkan viewport pass shutdown could not idle device: {}",
+                                     context->lastError());
+                        }
+                    }
+                    if (!context->waitForImmediateSubmits()) {
+                        LOG_WARN("Vulkan viewport pass shutdown could not drain immediate submits: {}",
+                                 context->lastError());
+                    }
                 }
                 scene_image_uploader.shutdown();
                 mesh_pass.shutdown();
