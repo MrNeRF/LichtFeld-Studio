@@ -3854,11 +3854,17 @@ namespace lfs::vis {
             rollback_new();
             return fail(std::format("vkQueueBindSparse failed: {}", vkResultToString(result)));
         }
-        result = vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX);
-        vkDestroyFence(device_, fence, nullptr);
-        if (result != VK_SUCCESS) {
-            rollback_new();
-            return fail(std::format("vkWaitForFences(sparse bind) failed: {}", vkResultToString(result)));
+        auto outcome = lfs::rendering::wait_fence_bounded(
+            device_, fence, std::stop_token{}, lfs::rendering::VulkanWaitPolicy{},
+            makeWaitContext("vulkan.context.sparse_bind_fence"));
+        const bool bind_ready = outcome.has_value() && *outcome == lfs::rendering::WaitOutcome::Ready;
+        if (bind_ready) {
+            vkDestroyFence(device_, fence, nullptr);
+        }
+        if (!mapWaitOutcome(std::move(outcome), "sparse bind fence wait")) {
+            // The bind is queued: its fence and chunk memories stay alive with the queue.
+            imported.memories.insert(imported.memories.end(), new_memories.begin(), new_memories.end());
+            return false;
         }
 
         imported.memories.insert(imported.memories.end(), new_memories.begin(), new_memories.end());
