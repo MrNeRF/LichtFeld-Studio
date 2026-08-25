@@ -11,12 +11,13 @@ import shutil
 import tempfile
 import threading
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
-from .environment import value as environment_value
+from .environment import flag as environment_flag, value as environment_value
 
 _log = logging.getLogger(__name__)
 _T = TypeVar("_T")
@@ -66,14 +67,113 @@ def _synchronized(method: Callable[..., _T]) -> Callable[..., _T]:
     return wrapper
 
 
+def _dedupe_paths(paths: List[Path]) -> List[Path]:
+    result: List[Path] = []
+    seen = set()
+    for path in paths:
+        expanded = path.expanduser()
+        try:
+            key = os.path.normcase(str(expanded.resolve()))
+        except OSError:
+            key = os.path.normcase(str(expanded))
+        if key not in seen:
+            seen.add(key)
+            result.append(expanded)
+    return result
+
+
+def _legacy_storage_paths(native_storage: Optional[Path] = None) -> List[Path]:
+    paths: List[Path] = []
+    if native_storage is not None:
+        paths.append(native_storage.parent.parent / "asset_manager")
+    paths.append(Path.home() / ".lichtfeld" / "asset_manager")
+    for variable in ("APPDATA", "LOCALAPPDATA"):
+        base = environment_value(variable)
+        if base:
+            paths.append(Path(base) / "LichtFeldStudio" / "asset_manager")
+    return _dedupe_paths(paths)
+
+
+def _path_accepts_writes(path: Path) -> bool:
+    probe_path: Optional[Path] = None
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            prefix=".lfs-write-test-", dir=path, delete=False
+        ) as probe:
+            probe.write(b"ok")
+            probe_path = Path(probe.name)
+        probe_path.unlink(missing_ok=True)
+        return True
+    except OSError as exc:
+        _log.debug("Asset Manager storage path is not writable: %s (%s)", path, exc)
+        if probe_path is not None:
+            try:
+                probe_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return False
+
+
+def _copy_existing_catalog(source: Path, target: Path) -> None:
+    source_library = source / "library.json"
+    target_library = target / "library.json"
+    if source == target or not source_library.is_file() or target_library.exists():
+        return
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_library, target_library)
+        _log.info(
+            "Copied Asset Manager catalog from %s to writable storage %s",
+            source_library,
+            target_library,
+        )
+    except OSError as exc:
+        _log.warning(
+            "Could not copy Asset Manager catalog from %s to %s: %s",
+            source_library,
+            target_library,
+            exc,
+        )
+
+
 def resolve_asset_manager_storage_path() -> Path:
     override = environment_value("LFS_ASSET_MANAGER_DIR")
     if override:
         return Path(override).expanduser()
 
-    import lichtfeld as lf
+    resolved = environment_value("LFS_RESOLVED_ASSET_LIBRARY_DIR")
+    if resolved:
+        native_storage = Path(resolved).expanduser()
+    else:
+        import lichtfeld as lf
 
-    return Path(lf.io.asset_library_dir())
+        native_storage = Path(lf.io.asset_library_dir())
+
+    if environment_flag("LFS_SAFE_MODE", False):
+        return native_storage
+
+    candidates = [native_storage]
+    appdata = environment_value("APPDATA")
+    if appdata:
+        candidates.append(Path(appdata) / "LichtFeldStudio" / "asset_manager")
+    local_appdata = environment_value("LOCALAPPDATA")
+    if local_appdata:
+        candidates.append(Path(local_appdata) / "LichtFeldStudio" / "asset_manager")
+    candidates.append(Path(tempfile.gettempdir()) / "LichtFeldStudio" / "asset_manager")
+
+    for candidate in _dedupe_paths(candidates):
+        if _path_accepts_writes(candidate):
+            if candidate != native_storage:
+                _copy_existing_catalog(native_storage, candidate)
+                _log.warning(
+                    "Asset Manager catalog path %s is not writable; using %s",
+                    native_storage,
+                    candidate,
+                )
+            return candidate
+
+    return native_storage
 
 
 def resolve_asset_manager_library_path() -> Path:
@@ -256,6 +356,17 @@ class AssetIndex:
             for project_uuid, project in self._projects.items()
         }
 
+    def _snapshot_state(
+        self,
+    ) -> Tuple[Dict[str, Folder], Dict[str, Project], Dict[str, str]]:
+        return deepcopy((self._folders, self._projects, self._project_by_path))
+
+    def _restore_state(
+        self,
+        state: Tuple[Dict[str, Folder], Dict[str, Project], Dict[str, str]],
+    ) -> None:
+        self._folders, self._projects, self._project_by_path = state
+
     def _ensure_default_folder(self) -> bool:
         folder = self._folders.get(DEFAULT_FOLDER_ID)
         if folder is None:
@@ -300,9 +411,19 @@ class AssetIndex:
                 watch_directories=watch_directories,
             )
 
-        self._folders = folders
-        normalized = self._ensure_default_folder() or normalized
-        self._projects = {}
+        if DEFAULT_FOLDER_ID not in folders:
+            folders[DEFAULT_FOLDER_ID] = Folder(
+                id=DEFAULT_FOLDER_ID,
+                name=DEFAULT_FOLDER_NAME,
+                watch_directories=[],
+            )
+            normalized = True
+        elif folders[DEFAULT_FOLDER_ID].name != DEFAULT_FOLDER_NAME:
+            folders[DEFAULT_FOLDER_ID].name = DEFAULT_FOLDER_NAME
+            normalized = True
+
+        projects: Dict[str, Project] = {}
+        project_by_path: Dict[str, str] = {}
         seen_paths = set()
         for project_uuid, value in projects_data.items():
             if not isinstance(value, dict):
@@ -326,7 +447,7 @@ class AssetIndex:
             seen_paths.add(path_key)
 
             folder_id = str(value.get("folder_id") or DEFAULT_FOLDER_ID)
-            if folder_id not in self._folders:
+            if folder_id not in folders:
                 folder_id = DEFAULT_FOLDER_ID
                 normalized = True
             project = Project(
@@ -336,14 +457,26 @@ class AssetIndex:
                 folder_id=folder_id,
             )
             self._refresh_project(project)
-            self._projects[canonical_uuid] = project
-        self._rebuild_path_lookup()
+            projects[canonical_uuid] = project
+            project_by_path[path_key] = canonical_uuid
+
+        # Do not expose a half-loaded catalog if a later row is malformed.
+        self._folders = folders
+        self._projects = projects
+        self._project_by_path = project_by_path
         return normalized
 
     def _migrate_legacy(self, data: Dict[str, Any]) -> None:
         self._initialize_empty()
 
-        legacy_folders = data.get("folders", {})
+        legacy_folders = data.get("folders")
+        legacy_assets = data.get("assets")
+        # Before #1265 the object named "projects" held folder-like records;
+        # the actual catalog entries were in "assets" and linked by project_id.
+        if not isinstance(legacy_folders, dict) and isinstance(legacy_assets, dict):
+            legacy_folders = data.get("projects", {})
+        if not isinstance(legacy_folders, dict):
+            legacy_folders = {}
         if isinstance(legacy_folders, dict):
             for folder_id, value in legacy_folders.items():
                 if not isinstance(folder_id, str) or not isinstance(value, dict):
@@ -357,13 +490,13 @@ class AssetIndex:
                 )
         self._ensure_default_folder()
 
-        legacy_projects = data.get("projects")
+        legacy_projects = legacy_assets
         if not isinstance(legacy_projects, dict):
-            legacy_projects = data.get("assets", {})
+            legacy_projects = data.get("projects")
         if not isinstance(legacy_projects, dict):
             legacy_projects = {}
 
-        candidates = []
+        candidates: List[Tuple[str, Dict[str, Any]]] = []
         for value in legacy_projects.values():
             if not isinstance(value, dict):
                 continue
@@ -371,23 +504,54 @@ class AssetIndex:
             if not raw_path:
                 continue
             path = _normalize_path(str(raw_path))
-            if is_supported_asset_path(path) and Path(path).is_file():
+            if is_supported_asset_path(path):
                 candidates.append((path, value))
 
         for path, value in sorted(candidates, key=lambda item: self._path_key(item[0])):
+            if self._path_key(path) in self._project_by_path:
+                continue
+            inspection = None
             try:
-                inspection = self._inspect_path(path)
-                if not self._inspection_is_master(inspection):
-                    continue
+                if Path(path).is_file():
+                    inspection = self._inspect_path(path)
+                    if not self._inspection_is_master(inspection):
+                        continue
+            except Exception as exc:
+                _log.warning("Preserving unreadable legacy .licht project %s: %s", path, exc)
+
+            if inspection is not None:
                 project_uuid = str(inspection.project_uuid)
                 uuid.UUID(project_uuid)
-            except Exception as exc:
-                _log.warning("Skipping unreadable legacy .licht project %s: %s", path, exc)
-                continue
+            else:
+                project_uuid = ""
+                for candidate_id in (value.get("project_uuid"), value.get("id")):
+                    try:
+                        project_uuid = str(uuid.UUID(str(candidate_id)))
+                        break
+                    except (ValueError, TypeError, AttributeError):
+                        project_uuid = ""
+                if not project_uuid:
+                    project_uuid = str(
+                        uuid.uuid5(
+                            uuid.NAMESPACE_URL,
+                            f"lichtfeld-legacy-project:{self._path_key(path)}",
+                        )
+                    )
             if project_uuid in self._projects:
-                continue
+                if inspection is not None:
+                    continue
+                project_uuid = str(
+                    uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"lichtfeld-legacy-project:{self._path_key(path)}",
+                    )
+                )
+                if project_uuid in self._projects:
+                    continue
 
-            folder_id = str(value.get("folder_id") or DEFAULT_FOLDER_ID)
+            folder_id = str(
+                value.get("folder_id") or value.get("project_id") or DEFAULT_FOLDER_ID
+            )
             if folder_id not in self._folders:
                 folder_id = DEFAULT_FOLDER_ID
             project = Project(
@@ -396,8 +560,14 @@ class AssetIndex:
                 path=path,
                 folder_id=folder_id,
             )
-            self._apply_inspection(project, inspection)
+            if inspection is not None:
+                self._apply_inspection(project, inspection)
+            elif Path(path).is_file():
+                self._clear_runtime(project, "UNREADABLE", "Legacy project needs inspection")
+            else:
+                self._clear_runtime(project, "MISSING")
             self._projects[project_uuid] = project
+            self._project_by_path[self._path_key(path)] = project_uuid
         self._rebuild_path_lookup()
 
     def _canonical_cleanup_paths(self) -> Optional[Tuple[Path, Path]]:
@@ -420,8 +590,21 @@ class AssetIndex:
         return storage / "thumbnails", legacy
 
     def _legacy_library_path(self) -> Optional[Path]:
+        if not self._uses_default_library_path or environment_value(
+            "LFS_ASSET_MANAGER_DIR"
+        ):
+            return None
         paths = self._canonical_cleanup_paths()
-        return paths[1] / "library.json" if paths is not None else None
+        candidates: List[Path] = []
+        if paths is not None:
+            candidates.append(paths[1])
+        candidates.extend(_legacy_storage_paths())
+        target_key = os.path.normcase(str(self._library_path))
+        for storage in _dedupe_paths(candidates):
+            candidate = storage / "library.json"
+            if os.path.normcase(str(candidate)) != target_key and candidate.is_file():
+                return candidate
+        return None
 
     def _cleanup_obsolete_storage(self) -> None:
         paths = self._canonical_cleanup_paths()
@@ -436,17 +619,21 @@ class AssetIndex:
             except OSError as exc:
                 _log.warning("Could not remove obsolete Asset Manager storage %s: %s", obsolete, exc)
 
-    def _refresh_backup(self) -> None:
+    def _preserve_legacy_backup(self, source_path: Path) -> None:
+        if source_path == self._library_path:
+            return
         backup = self._library_path.with_suffix(".json.bak")
         backup_temp = backup.with_suffix(backup.suffix + ".tmp")
         try:
-            shutil.copy2(self._library_path, backup_temp)
+            self._library_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_path, backup_temp)
             os.replace(backup_temp, backup)
         finally:
             backup_temp.unlink(missing_ok=True)
 
     @_synchronized
     def load(self) -> bool:
+        previous_state = self._snapshot_state()
         source_path = self._library_path
         migrating_legacy_location = False
         if not source_path.exists():
@@ -459,6 +646,8 @@ class AssetIndex:
                 saved = self.save()
                 if saved:
                     self._cleanup_obsolete_storage()
+                else:
+                    self._restore_state(previous_state)
                 return saved
 
         try:
@@ -470,13 +659,15 @@ class AssetIndex:
             is_v2 = data.get("schema_version") == SCHEMA_VERSION
             if is_v2 and not migrating_legacy_location:
                 if self._load_v2(data) and not self.save():
+                    self._restore_state(previous_state)
                     return False
                 self._cleanup_obsolete_storage()
             else:
                 self._migrate_legacy(data)
+                self._preserve_legacy_backup(source_path)
                 if not self.save():
+                    self._restore_state(previous_state)
                     return False
-                self._refresh_backup()
                 self._cleanup_obsolete_storage()
                 _log.info("Migrated Asset Manager catalog to schema v%d", SCHEMA_VERSION)
             _log.info(
@@ -486,6 +677,7 @@ class AssetIndex:
             )
             return True
         except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
+            self._restore_state(previous_state)
             _log.error("Failed to load Asset Manager library %s: %s", source_path, exc)
             return False
 
@@ -539,10 +731,13 @@ class AssetIndex:
         self._initialize_empty()
 
     @_synchronized
-    def create_folder(self, name: str) -> Folder:
+    def create_folder(self, name: str) -> Optional[Folder]:
+        previous_state = self._snapshot_state()
         folder = Folder(id=str(uuid.uuid4()), name=name, watch_directories=[])
         self._folders[folder.id] = folder
-        self.save()
+        if not self.save():
+            self._restore_state(previous_state)
+            return None
         return folder
 
     @_synchronized
@@ -550,19 +745,24 @@ class AssetIndex:
         folder = self._folders.get(folder_id)
         if folder is None:
             return None
+        previous_state = self._snapshot_state()
         if "name" in kwargs and folder_id != DEFAULT_FOLDER_ID:
             folder.name = str(kwargs["name"])
         if "watch_directories" in kwargs:
             folder.watch_directories = _normalize_watch_directories(
                 kwargs["watch_directories"]
             )
-        return folder if self.save() else None
+        if not self.save():
+            self._restore_state(previous_state)
+            return None
+        return folder
 
     @_synchronized
     def delete_folder(self, folder_id: str) -> bool:
         folder = self._folders.get(folder_id)
         if folder is None:
             return False
+        previous_state = self._snapshot_state()
         if folder_id == DEFAULT_FOLDER_ID:
             folder.watch_directories = []
         else:
@@ -573,7 +773,10 @@ class AssetIndex:
             if project.folder_id != folder_id
         }
         self._rebuild_path_lookup()
-        return self.save()
+        if self.save():
+            return True
+        self._restore_state(previous_state)
+        return False
 
     @_synchronized
     def get_watch_dirs(self, folder_id: str) -> List[str]:
@@ -597,11 +800,14 @@ class AssetIndex:
         project = self._projects.get(asset_id)
         if project is None:
             return None
+        previous_state = self._snapshot_state() if save else None
         if "name" in kwargs:
             project.name = str(kwargs["name"])
         if "folder_id" in kwargs and kwargs["folder_id"] in self._folders:
             project.folder_id = str(kwargs["folder_id"])
         if save and not self.save():
+            assert previous_state is not None
+            self._restore_state(previous_state)
             return None
         return project
 
@@ -640,6 +846,7 @@ class AssetIndex:
         adopt_existing: bool = True,
         save: bool = True,
     ) -> Tuple[Optional[Project], bool]:
+        previous_state = self._snapshot_state() if save else None
         path = _normalize_path(project_path)
         if not is_supported_asset_path(path):
             _log.warning("Asset Manager only supports .licht projects: %s", path)
@@ -678,8 +885,7 @@ class AssetIndex:
             self._project_by_path[path_key] = project_uuid
             self._apply_inspection(project, inspection)
         else:
-            stored_path_missing = not Path(project.path).is_file()
-            use_observed_path = adopt_existing or stored_path_missing or self._path_key(project.path) == path_key
+            use_observed_path = adopt_existing or self._path_key(project.path) == path_key
             if use_observed_path:
                 old_path_key = self._path_key(project.path)
                 if old_path_key != path_key:
@@ -699,6 +905,8 @@ class AssetIndex:
                 persisted_changed = True
 
         if save and persisted_changed and not self.save():
+            assert previous_state is not None
+            self._restore_state(previous_state)
             return None, False
         return project, created
 
@@ -726,11 +934,15 @@ class AssetIndex:
         conflicting_uuid = self._project_by_path.get(path_key)
         if conflicting_uuid is not None and conflicting_uuid != asset_id:
             return False
+        previous_state = self._snapshot_state()
         self._project_by_path.pop(self._path_key(project.path), None)
         project.path = path
         self._project_by_path[path_key] = asset_id
         self._apply_inspection(project, inspection)
-        return self.save()
+        if self.save():
+            return True
+        self._restore_state(previous_state)
+        return False
 
     @_synchronized
     def verify_projects(self) -> Tuple[int, int]:
