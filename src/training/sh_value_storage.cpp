@@ -47,79 +47,7 @@ namespace lfs::training::sh_value {
     } // namespace
 
     bool apply_shN_value_quant(core::SplatData& splat) {
-        if (!sh_value_quant_enabled())
-            return false;
-        auto& shN = splat.shN();
-        if (!shN.is_valid() || shN.numel() == 0)
-            return false;
-        // Already pad-dropped q16 (codes + bounds). IEEE f16 float4-swizzle is also
-        // Float16 but has no bounds — that path expands to float then re-encodes.
-        if (shN.dtype() == DataType::Float16 && splat.shN_value_quantized())
-            return false;
-
-        const auto n = static_cast<std::size_t>(splat.size());
-        const auto rest = layout_rest(splat);
-        if (n == 0 || rest == 0)
-            return false;
-
-        // Capacity must track means capacity (max_cap), not exact-N.
-        const auto cap = prim_capacity(splat);
-        const auto n_cells = core::sh_value_quant::sh_value_u16_count(n, rest);
-        const auto capacity_cells = core::sh_value_quant::sh_value_u16_count(cap, rest);
-        const auto n_bounds = core::sh_value_quant::n_bounds_for_prims(n);
-        const auto n_bounds_cap = core::sh_value_quant::n_bounds_for_prims(cap);
-
-        // Prefer the model's backing allocator (exportable / Vulkan-external) so
-        // codes + bounds land in the shared block the viewer zero-copies.
-        Tensor u16 = splat.allocate_named_param(
-            TensorShape({n_cells}),
-            std::max(n_cells, capacity_cells),
-            DataType::Float16,
-            "SplatData.shN");
-        Tensor bounds = splat.allocate_named_param(
-            TensorShape({n_bounds * 2}),
-            std::max(n_bounds, n_bounds_cap) * 2,
-            DataType::Float32,
-            "SplatData.shN_value_bounds");
-        u16.set_name("splat.shN");
-        bounds.set_name("splat.shN_value_bounds");
-
-        // Source may be fp32 or IEEE f16 float4-swizzle. Stage to float for the
-        // encode kernel.
-        Tensor float_src = shN;
-        if (float_src.dtype() == DataType::Float16) {
-            float_src = float_src.to(DataType::Float32);
-        }
-        if (float_src.device() != Device::CUDA)
-            float_src = float_src.cuda();
-        if (!float_src.is_contiguous())
-            float_src = float_src.contiguous();
-
-        // Encode on the current training stream, then sync before releasing the
-        // float source to prevent a use-after-free before the next FastGS preprocess.
-        const cudaStream_t stream = core::getCurrentCUDAStream();
-        if (u16.stream() != stream)
-            u16.set_stream(stream);
-        if (bounds.stream() != stream)
-            bounds.set_stream(stream);
-        if (float_src.stream() != stream)
-            float_src.set_stream(stream);
-
-        lfs::core::sh_value_quant::encode_shN_float4_to_u16(
-            float_src.ptr<float>(),
-            reinterpret_cast<std::uint16_t*>(
-                lfs::core::resolve_exportable_device_ptr(u16)),
-            static_cast<float*>(lfs::core::resolve_exportable_device_ptr(bounds)),
-            n,
-            rest,
-            stream);
-        sync_codec_stream(stream);
-
-        shN = std::move(u16);
-        splat.shN_value_bounds() = std::move(bounds);
-        LOG_DEBUG("SH value quant applied: N={} cap={} rest={} cells={} bounds={}",
-                  n, cap, rest, n_cells, n_bounds);
-        return true;
+        return splat.apply_shN_value_quant();
     }
 
     bool ensure_shN_fp32_for_mutation(core::SplatData& splat) {
@@ -225,7 +153,7 @@ namespace lfs::training::sh_value {
         // Single-buffer: rebuild codes+bounds into the live exportable q16 region
         // (allocate_named_param). The caller must already own the mutation guard or
         // trainer render exclusive; this helper's marker only covers nested work.
-        return apply_shN_value_quant(splat);
+        return splat.apply_shN_value_quant();
     }
 
     ShNCommitGuard::~ShNCommitGuard() noexcept {

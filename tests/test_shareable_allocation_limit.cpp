@@ -105,6 +105,12 @@ namespace {
         });
     }
 
+    [[nodiscard]] bool called_for_q16_shN(const std::vector<AllocCall>& calls) {
+        return std::any_of(calls.begin(), calls.end(), [](const AllocCall& call) {
+            return call.name == "SplatData.shN" && call.dtype == DataType::Float16;
+        });
+    }
+
     [[nodiscard]] bool called_for(const std::vector<AllocCall>& calls, const std::string_view name) {
         return std::any_of(calls.begin(), calls.end(), [&](const AllocCall& call) {
             return call.name == name;
@@ -196,7 +202,7 @@ TEST(ShareableAllocationLimitTest, ViolationMessageIncludesNumbers) {
     EXPECT_TRUE(is_shareable_allocation_limit_message(*message));
 }
 
-TEST(ShareableAllocationLimitTest, MigrateRequestsFloatShNRegardlessOfLimit) {
+TEST(ShareableAllocationLimitTest, MigrateEncodesQ16ShNUnderShareableLimit) {
     require_cuda();
     const auto ply_path = std::filesystem::path(PROJECT_ROOT_PATH) / "gd.ply";
     if (!std::filesystem::exists(ply_path)) {
@@ -219,11 +225,14 @@ TEST(ShareableAllocationLimitTest, MigrateRequestsFloatShNRegardlessOfLimit) {
     EXPECT_TRUE(called_for(calls, "SplatData.scaling"));
     EXPECT_TRUE(called_for(calls, "SplatData.rotation"));
     EXPECT_TRUE(called_for(calls, "SplatData.opacity"));
-    EXPECT_TRUE(called_for_float_shN(calls));
+    EXPECT_FALSE(called_for_float_shN(calls));
+    EXPECT_TRUE(called_for_q16_shN(calls));
+    EXPECT_TRUE(called_for(calls, "SplatData.shN_value_bounds"));
+    EXPECT_TRUE(model.shN_value_quantized());
     EXPECT_TRUE(lfs::io::splatTensorsRendererReady(model));
 }
 
-TEST(ShareableAllocationLimitTest, MigrateRequestsFloatShNWithoutLimit) {
+TEST(ShareableAllocationLimitTest, MigrateEncodesQ16ShNWithoutLimit) {
     require_cuda();
     const auto ply_path = std::filesystem::path(PROJECT_ROOT_PATH) / "gd.ply";
     if (!std::filesystem::exists(ply_path)) {
@@ -239,6 +248,9 @@ TEST(ShareableAllocationLimitTest, MigrateRequestsFloatShNWithoutLimit) {
     std::vector<AllocCall> calls;
     const auto result = lfs::io::migrateSplatTensorsToAllocator(model, recording_allocator(calls));
     ASSERT_TRUE(result.has_value()) << result.error().format();
-    EXPECT_TRUE(called_for_float_shN(calls));
+    EXPECT_FALSE(called_for_float_shN(calls));
+    EXPECT_TRUE(called_for_q16_shN(calls));
+    EXPECT_TRUE(called_for(calls, "SplatData.shN_value_bounds"));
+    EXPECT_TRUE(model.shN_value_quantized());
     EXPECT_TRUE(lfs::io::splatTensorsRendererReady(model));
 }

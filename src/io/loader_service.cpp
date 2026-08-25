@@ -5,6 +5,7 @@
 #include "io/loader_service.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "io/error.hpp"
 #include "io/formats/rad.hpp"
@@ -102,13 +103,21 @@ namespace lfs::io {
             const int active_sh = model.get_active_sh_degree();
             const float scene_scale = model.get_scene_scale();
             const bool shN_q16 = model.shN_value_quantized();
+            const bool encode_q16 = lfs::core::sh_value_quant::enabled() && !shN_q16;
             lfs::core::Tensor deleted = model.has_deleted_mask() ? model.deleted() : lfs::core::Tensor{};
 
             lfs::core::Tensor shN;
             lfs::core::Tensor shN_bounds;
             const auto& shN_src = model.shN_raw();
             if (shN_src.is_valid() && shN_src.numel() > 0) {
-                shN = copy_to_allocator(shN_src, "SplatData.shN");
+                if (encode_q16) {
+                    // Keep the source float/f16 workspace; encode into allocator
+                    // q16 after the migrate so we do not import a full-size float
+                    // rest buffer just to throw it away.
+                    shN = shN_src;
+                } else {
+                    shN = copy_to_allocator(shN_src, "SplatData.shN");
+                }
             }
             if (shN_q16) {
                 shN_bounds = copy_to_allocator(
@@ -131,6 +140,9 @@ namespace lfs::io {
             model = std::move(migrated);
             model.lod_tree = std::move(lod_tree);
             model.set_tensor_allocator(allocator);
+            if (encode_q16) {
+                (void)model.apply_shN_value_quant();
+            }
             lfs::core::Tensor::trim_memory_pool();
         } catch (const std::exception& e) {
             return make_error(ErrorCode::CORRUPTED_DATA,

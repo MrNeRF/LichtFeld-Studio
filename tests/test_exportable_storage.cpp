@@ -6,16 +6,19 @@
 #include "core/exportable_storage.hpp"
 #include "core/parameters.hpp"
 #include "core/point_cloud.hpp"
+#include "core/scene.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/shareable_allocation_limit.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "io/loader.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/training_setup.hpp"
 
 #include <cuda_runtime.h>
+#include <glm/mat4x4.hpp>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -24,6 +27,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -1788,4 +1792,164 @@ TEST(ExportableStorageTest, MakeVulkanExternalTensorShapedBlockSplitsChunksAndIs
     EXPECT_EQ(back[boundary - 1], pattern[boundary - 1]);
     EXPECT_EQ(back[boundary], pattern[boundary]);
     EXPECT_EQ(back[boundary + 1], pattern[boundary + 1]);
+}
+
+namespace {
+
+    std::unique_ptr<SplatData> make_cuda_sh_splat(const size_t n,
+                                                  const int sh_degree,
+                                                  const float shN_fill) {
+        const auto rest = static_cast<size_t>(sh_rest_coefficients_for_degree(sh_degree));
+        Tensor means = Tensor::zeros({n, size_t{3}}, Device::CUDA);
+        Tensor sh0 = Tensor::zeros({n, size_t{1}, size_t{3}}, Device::CUDA);
+        Tensor shN = rest > 0 ? Tensor::zeros({n, rest, size_t{3}}, Device::CUDA)
+                              : Tensor::zeros({0}, Device::CUDA);
+        Tensor scaling = Tensor::zeros({n, size_t{3}}, Device::CUDA);
+        Tensor rotation = Tensor::zeros({n, size_t{4}}, Device::CUDA);
+        Tensor opacity = Tensor::zeros({n, size_t{1}}, Device::CUDA);
+
+        std::vector<float> host_means(n * 3, 0.0f);
+        std::vector<float> host_rot(n * 4, 0.0f);
+        for (size_t i = 0; i < n; ++i) {
+            host_means[i * 3] = static_cast<float>(i);
+            host_rot[i * 4] = 1.0f;
+        }
+        EXPECT_EQ(cudaMemcpy(means.ptr<float>(), host_means.data(),
+                             host_means.size() * sizeof(float), cudaMemcpyHostToDevice),
+                  cudaSuccess);
+        EXPECT_EQ(cudaMemcpy(rotation.ptr<float>(), host_rot.data(),
+                             host_rot.size() * sizeof(float), cudaMemcpyHostToDevice),
+                  cudaSuccess);
+        if (rest > 0 && shN.is_valid()) {
+            shN.fill_(shN_fill);
+        }
+
+        return std::make_unique<SplatData>(sh_degree,
+                                           std::move(means),
+                                           std::move(sh0),
+                                           std::move(shN),
+                                           std::move(scaling),
+                                           std::move(rotation),
+                                           std::move(opacity),
+                                           1.0f);
+    }
+
+    void expect_exportable_q16(const SplatData& model, const size_t expected_n) {
+        EXPECT_EQ(static_cast<size_t>(model.size()), expected_n);
+        ASSERT_TRUE(model.shN_raw().is_valid());
+        EXPECT_GT(model.shN_raw().numel(), 0u);
+        EXPECT_TRUE(model.shN_value_quantized());
+        EXPECT_TRUE(model.shN_raw().has_exportable_provenance());
+        EXPECT_TRUE(model.shN_value_bounds().has_exportable_provenance());
+        EXPECT_EQ(model.shN_raw().external_storage_kind(), "splat.exportable");
+        EXPECT_EQ(model.shN_value_bounds().external_storage_kind(), "splat.exportable");
+        EXPECT_EQ(model.means_raw().external_storage_kind(), "splat.exportable");
+        EXPECT_TRUE(model.means_raw().has_exportable_provenance());
+    }
+
+} // namespace
+
+TEST(SplatExportableStorageTest, ConsolidateTwoModelsKeepsExportableQ16ShN) {
+    require_cuda();
+    sh_value_quant::set_enabled_for_testing(true);
+
+    constexpr size_t kN0 = 32;
+    constexpr size_t kN1 = 48;
+    constexpr size_t kTotal = kN0 + kN1;
+    constexpr int kShDegree = 1;
+
+    Scene scene;
+    scene.addSplat("A", make_cuda_sh_splat(kN0, kShDegree, 0.25f));
+    scene.addSplat("B", make_cuda_sh_splat(kN1, kShDegree, 0.50f));
+
+    auto storage_result = SplatExportableStorage::create(kTotal, kShDegree, 0, kTotal);
+    if (!storage_result) {
+        sh_value_quant::set_enabled_for_testing(std::nullopt);
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::make_shared<SplatExportableStorage>(std::move(*storage_result));
+    scene.setCombinedModelAllocator(storage->make_allocator());
+
+    ASSERT_EQ(scene.consolidateNodeModels(), 2u);
+    ASSERT_TRUE(scene.isConsolidated());
+
+    const auto* combined = scene.getCombinedModel();
+    ASSERT_NE(combined, nullptr);
+    expect_exportable_q16(*combined, kTotal);
+
+    sh_value_quant::set_enabled_for_testing(std::nullopt);
+}
+
+TEST(SplatExportableStorageTest, CompactConsolidatedSnapshotKeepsExportableQ16ShN) {
+    require_cuda();
+    sh_value_quant::set_enabled_for_testing(true);
+
+    constexpr size_t kN0 = 32;
+    constexpr size_t kN1 = 48;
+    constexpr size_t kTotal = kN0 + kN1;
+    constexpr int kShDegree = 1;
+
+    Scene scene;
+    scene.addSplat("A", make_cuda_sh_splat(kN0, kShDegree, 0.25f));
+    scene.addSplat("B", make_cuda_sh_splat(kN1, kShDegree, 0.50f));
+
+    auto storage_result = SplatExportableStorage::create(kTotal, kShDegree, 0, kTotal);
+    if (!storage_result) {
+        sh_value_quant::set_enabled_for_testing(std::nullopt);
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::make_shared<SplatExportableStorage>(std::move(*storage_result));
+    scene.setCombinedModelAllocator(storage->make_allocator());
+    ASSERT_EQ(scene.consolidateNodeModels(), 2u);
+
+    scene.removeNode("A");
+    auto snapshot = scene.captureConsolidatedCompaction();
+    ASSERT_TRUE(snapshot.has_value());
+
+    auto compact_storage_result = SplatExportableStorage::create(kN1, kShDegree, 0, kN1);
+    if (!compact_storage_result) {
+        sh_value_quant::set_enabled_for_testing(std::nullopt);
+        FAIL() << compact_storage_result.error();
+    }
+    auto compact_storage =
+        std::make_shared<SplatExportableStorage>(std::move(*compact_storage_result));
+    snapshot->allocator = compact_storage->make_allocator();
+
+    std::vector<Scene::ConsolidatedNodeSlot> compacted_slots;
+    auto compacted = Scene::compactConsolidatedSnapshot(*snapshot, compacted_slots);
+    ASSERT_NE(compacted, nullptr);
+    expect_exportable_q16(*compacted, kN1);
+    ASSERT_EQ(compacted_slots.size(), 1u);
+
+    sh_value_quant::set_enabled_for_testing(std::nullopt);
+}
+
+TEST(SplatExportableStorageTest, MigrateMergedModelsEncodesExportableQ16ShN) {
+    require_cuda();
+    sh_value_quant::set_enabled_for_testing(true);
+
+    constexpr size_t kN0 = 32;
+    constexpr size_t kN1 = 48;
+    constexpr size_t kTotal = kN0 + kN1;
+    constexpr int kShDegree = 1;
+
+    auto a = make_cuda_sh_splat(kN0, kShDegree, 0.25f);
+    auto b = make_cuda_sh_splat(kN1, kShDegree, 0.50f);
+    auto merged = Scene::mergeSplatsWithTransforms(
+        {{a.get(), glm::mat4{1.0f}}, {b.get(), glm::mat4{1.0f}}});
+    ASSERT_NE(merged, nullptr);
+    ASSERT_EQ(static_cast<size_t>(merged->size()), kTotal);
+    EXPECT_FALSE(merged->shN_value_quantized());
+
+    auto storage_result = SplatExportableStorage::create(kTotal, kShDegree, 0, kTotal);
+    if (!storage_result) {
+        sh_value_quant::set_enabled_for_testing(std::nullopt);
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::make_shared<SplatExportableStorage>(std::move(*storage_result));
+    const auto migrated = lfs::io::migrateSplatTensorsToAllocator(*merged, storage->make_allocator());
+    ASSERT_TRUE(migrated.has_value()) << migrated.error().format();
+    expect_exportable_q16(*merged, kTotal);
+
+    sh_value_quant::set_enabled_for_testing(std::nullopt);
 }

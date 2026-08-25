@@ -9,6 +9,7 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/splat_data_transform.hpp"
 
 #include <algorithm>
@@ -63,7 +64,19 @@ namespace lfs::core {
                    tensor_uses_vulkan_external_storage(model.scaling_raw()) &&
                    tensor_uses_vulkan_external_storage(model.rotation_raw()) &&
                    tensor_uses_vulkan_external_storage(model.opacity_raw()) &&
-                   tensor_uses_vulkan_external_storage(model.shN_raw());
+                   tensor_uses_vulkan_external_storage(model.shN_raw()) &&
+                   (!model.shN_value_quantized() ||
+                    tensor_uses_vulkan_external_storage(model.shN_value_bounds()));
+        }
+
+        void commit_combined_model_q16(SplatData& model, const SplatTensorAllocator& alloc) {
+            model.set_tensor_allocator(alloc);
+            if (!alloc || !sh_value_quant::enabled()) {
+                return;
+            }
+            if (model.apply_shN_value_quant()) {
+                Tensor::trim_memory_pool();
+            }
         }
     } // namespace
 
@@ -856,7 +869,9 @@ namespace lfs::core {
             shN_layout = lfs::core::SplatData::ShNLayout::Canonical;
         } else if (layout_rest > 0 && source->shN_raw().is_valid() && source->shN_raw().numel() > 0) {
             const size_t shN_floats = lfs::core::sh_swizzled_float_count(new_size, layout_rest);
-            if (alloc) {
+            const bool q16_float_workspace =
+                static_cast<bool>(alloc) && sh_value_quant::enabled();
+            if (alloc && !q16_float_workspace) {
                 shN = alloc(TensorShape({shN_floats}), shN_floats, DataType::Float32, "SplatData.shN");
                 shN.zero_();
             } else {
@@ -888,7 +903,7 @@ namespace lfs::core {
             source->get_scene_scale(),
             shN_layout);
         compacted->set_active_sh_degree(source->get_active_sh_degree());
-        compacted->set_tensor_allocator(snapshot.allocator);
+        commit_combined_model_q16(*compacted, snapshot.allocator);
 
         if (deleted.is_valid()) {
             compacted->deleted() = std::move(deleted);
@@ -1685,7 +1700,9 @@ namespace lfs::core {
         // shN needs zeroing: copy_contiguous leaves the swizzled block-padding lanes untouched.
         Tensor shN;
         if (shN_swizzled_floats > 0) {
-            if (alloc) {
+            const bool q16_float_workspace =
+                static_cast<bool>(alloc) && sh_value_quant::enabled();
+            if (alloc && !q16_float_workspace) {
                 shN = alloc(TensorShape({shN_swizzled_floats}),
                             shN_swizzled_floats,
                             lfs::core::DataType::Float32,
@@ -1802,7 +1819,7 @@ namespace lfs::core {
             stats.total_scene_scale / visible_nodes.size(),
             lfs::core::SplatData::ShNLayout::Swizzled);
         cached_combined_->set_active_sh_degree(stats.max_active_sh_degree);
-        cached_combined_->set_tensor_allocator(combined_model_allocator_);
+        commit_combined_model_q16(*cached_combined_, combined_model_allocator_);
 
         if (has_any_deleted) {
             cached_combined_->deleted() = std::move(deleted);

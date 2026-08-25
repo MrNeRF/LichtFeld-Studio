@@ -4,11 +4,15 @@
 
 #include "core/splat_data.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/point_cloud.hpp"
 #include "core/sh_value_quant.hpp"
+#include "core/sh_value_quant_kernels.hpp"
 #include "core/shareable_allocation_limit.hpp"
+#include "core/splat_exportable_storage.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "core/tensor_serialization_sink.hpp"
 #include "nanoflann.hpp"
@@ -16,6 +20,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cuda_runtime.h>
 #include <expected>
 #include <format>
@@ -2481,6 +2486,83 @@ namespace lfs::core {
             return std::unexpected(
                 std::format("Failed to initialize SplatData: {}", e.what()));
         }
+    }
+
+    bool SplatData::apply_shN_value_quant() {
+        if (!sh_value_quant::enabled()) {
+            return false;
+        }
+        Tensor& shN = this->shN();
+        if (!shN.is_valid() || shN.numel() == 0) {
+            return false;
+        }
+        if (shN.dtype() == DataType::Float16 && shN_value_quantized()) {
+            return false;
+        }
+
+        const auto n = static_cast<size_t>(size());
+        const auto rest = static_cast<std::uint32_t>(max_sh_coeffs_rest());
+        if (n == 0 || rest == 0) {
+            return false;
+        }
+
+        const auto cap = means().is_valid()
+                             ? std::max(means().capacity() > 0 ? means().capacity() : n, n)
+                             : n;
+        const auto n_cells = sh_value_quant::sh_value_u16_count(n, rest);
+        const auto capacity_cells = sh_value_quant::sh_value_u16_count(cap, rest);
+        const auto n_bounds = sh_value_quant::n_bounds_for_prims(n);
+        const auto n_bounds_cap = sh_value_quant::n_bounds_for_prims(cap);
+
+        Tensor u16 = allocate_named_param(
+            TensorShape({n_cells}),
+            std::max(n_cells, capacity_cells),
+            DataType::Float16,
+            "SplatData.shN");
+        Tensor bounds = allocate_named_param(
+            TensorShape({n_bounds * 2}),
+            std::max(n_bounds, n_bounds_cap) * 2,
+            DataType::Float32,
+            "SplatData.shN_value_bounds");
+        u16.set_name("splat.shN");
+        bounds.set_name("splat.shN_value_bounds");
+
+        Tensor float_src = shN;
+        if (float_src.dtype() == DataType::Float16) {
+            float_src = float_src.to(DataType::Float32);
+        }
+        if (float_src.device() != Device::CUDA) {
+            float_src = float_src.cuda();
+        }
+        if (!float_src.is_contiguous()) {
+            float_src = float_src.contiguous();
+        }
+
+        const cudaStream_t stream = getCurrentCUDAStream();
+        if (u16.stream() != stream) {
+            u16.set_stream(stream);
+        }
+        if (bounds.stream() != stream) {
+            bounds.set_stream(stream);
+        }
+        if (float_src.stream() != stream) {
+            float_src.set_stream(stream);
+        }
+
+        sh_value_quant::encode_shN_float4_to_u16(
+            float_src.ptr<float>(),
+            reinterpret_cast<std::uint16_t*>(resolve_exportable_device_ptr(u16)),
+            static_cast<float*>(resolve_exportable_device_ptr(bounds)),
+            n,
+            rest,
+            stream);
+        LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(), "sh_value quant codec device barrier");
+
+        shN = std::move(u16);
+        shN_value_bounds() = std::move(bounds);
+        LOG_DEBUG("SH value quant applied: N={} cap={} rest={} cells={} bounds={}",
+                  n, cap, rest, n_cells, n_bounds);
+        return true;
     }
 
 } // namespace lfs::core
