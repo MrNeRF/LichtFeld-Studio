@@ -22,8 +22,10 @@
 #include "rendering/rasterizer/vulkan/src/indirect_layout.h"
 #include "visualizer/rendering/vksplat_input_packer.hpp"
 
+#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
@@ -663,6 +665,65 @@ TEST(VksplatInputPackerTest, RawDeviceLayoutReportsQ16BytesAndBounds) {
     EXPECT_LT(exportable_shN, 800ull << 20);
 
     lfs::training::sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST(VksplatInputPackerTest, RawDeviceLayoutStaysAtLiveSizeAfterTwoExportableGrows) {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
+        GTEST_SKIP() << "CUDA device unavailable";
+    }
+
+    using lfs::core::SplatExportableStorage;
+    using lfs::core::TensorShape;
+    const std::size_t gran =
+        std::max<std::size_t>(lfs::core::exportable_allocation_granularity(0), 1);
+    const std::size_t kInitial = std::max<std::size_t>(gran / 24, 2048);
+    const std::size_t kLiveN = kInitial / 2;
+    const std::size_t kGen2 = kInitial * 3;
+    const std::size_t kGen3 = kInitial * 5;
+    const std::size_t kReserve = kInitial * 16;
+    constexpr int kShDegree = 0;
+
+    auto storage_result = SplatExportableStorage::create(kInitial, kShDegree, 0, kReserve);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+    auto allocator = storage.make_allocator();
+
+    Tensor means = allocator(TensorShape({kLiveN, 3}), kInitial, DataType::Float32, "SplatData.means");
+    Tensor scaling = allocator(TensorShape({kLiveN, 3}), kInitial, DataType::Float32, "SplatData.scaling");
+    Tensor rotation = allocator(TensorShape({kLiveN, 4}), kInitial, DataType::Float32, "SplatData.rotation");
+    Tensor opacity = allocator(TensorShape({kLiveN, 1}), kInitial, DataType::Float32, "SplatData.opacity");
+    Tensor sh0 = allocator(TensorShape({kLiveN, 1, 3}), kInitial, DataType::Float32, "SplatData.sh0");
+    Tensor shN;
+
+    SplatData model(/*max_sh_degree=*/kShDegree,
+                    std::move(means),
+                    std::move(sh0),
+                    std::move(shN),
+                    std::move(scaling),
+                    std::move(rotation),
+                    std::move(opacity),
+                    /*scene_scale=*/1.0f,
+                    SplatData::ShNLayout::Swizzled);
+
+    ASSERT_TRUE(storage.grow(kGen2).value_or(false));
+    ASSERT_TRUE(storage.rebindSplatData(model, allocator).has_value()) << "rebind after gen2";
+    ASSERT_TRUE(storage.grow(kGen3).value_or(false));
+    ASSERT_TRUE(storage.rebindSplatData(model, allocator).has_value()) << "rebind after gen3";
+
+    EXPECT_EQ(static_cast<std::size_t>(model.size()), kLiveN);
+    EXPECT_GE(model.means_raw().capacity(), kGen3);
+    EXPECT_EQ(storage.capacity(), kGen3);
+
+    auto layout = rawDeviceInputLayout(model);
+    ASSERT_TRUE(layout.has_value()) << layout.error();
+    EXPECT_EQ(layout->num_splats, kLiveN)
+        << "viewer layout must submit live N, not exportable capacity";
+    EXPECT_EQ(layout->xyz_bytes, kLiveN * 3 * sizeof(float));
+    EXPECT_EQ(layout->scaling_bytes, kLiveN * 3 * sizeof(float));
+    EXPECT_NE(layout->num_splats, storage.capacity());
 }
 
 TEST(VksplatInputPackerTest, RawOpacityCopyBakesDeletedMaskOnlyIntoOpacity) {

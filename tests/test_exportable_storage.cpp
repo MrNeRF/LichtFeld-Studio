@@ -539,10 +539,16 @@ TEST(SplatExportableStorageTest, GrowKeepsStableVaWhileImportersHoldBlock) {
     EXPECT_EQ(storage.block->device_ptr, va);
     EXPECT_GE(storage.block->committed_bytes, old_size);
     ASSERT_GE(storage.block->chunks.size(), chunks_before.size());
-    for (std::size_t i = 0; i < chunks_before.size(); ++i) {
-        EXPECT_EQ(storage.block->chunks[i].offset, chunks_before[i].offset);
-        EXPECT_EQ(storage.block->chunks[i].bytes, chunks_before[i].bytes);
-        EXPECT_EQ(storage.block->chunks[i].handle, chunks_before[i].handle);
+    // Identity is by offset: per-region grow may insert new slices between
+    // existing tails, so the vector prefix is not stable.
+    for (const auto& old_chunk : chunks_before) {
+        const auto it = std::find_if(
+            storage.block->chunks.begin(),
+            storage.block->chunks.end(),
+            [&](const ExportableChunk& chunk) { return chunk.offset == old_chunk.offset; });
+        ASSERT_NE(it, storage.block->chunks.end()) << "lost chunk at offset " << old_chunk.offset;
+        EXPECT_EQ(it->bytes, old_chunk.bytes);
+        EXPECT_EQ(it->handle, old_chunk.handle);
     }
     EXPECT_GT(storage.generation(), 1u);
     EXPECT_EQ(importer_hold.get(), storage.block.get());
@@ -762,6 +768,102 @@ TEST(SplatExportableStorageTest, GrowSlackRowsAreNonRenderable) {
         EXPECT_FLOAT_EQ(rotation[i * 4 + 2], 0.0f) << "slack quat y row " << i;
         EXPECT_FLOAT_EQ(rotation[i * 4 + 3], 0.0f) << "slack quat z row " << i;
     }
+}
+
+TEST(SplatExportableStorageTest, UnboundChunkIndicesSkipsBoundOffsetsNotPrefixCount) {
+    const std::vector<ExportableChunk> chunks = {
+        {.offset = 0, .bytes = 100, .handle = {}},
+        {.offset = 50, .bytes = 10, .handle = {}},
+        {.offset = 200, .bytes = 100, .handle = {}},
+    };
+    const std::vector<std::size_t> bound = {0, 200};
+    const auto unbound = unboundExportableChunkIndices(chunks, bound);
+    ASSERT_EQ(unbound.size(), 1u);
+    EXPECT_EQ(unbound[0], 1u);
+    EXPECT_EQ(chunks[unbound[0]].offset, 50u);
+    // Prefix-count bind with bound_count==2 would only see chunks[2] (offset 200).
+    EXPECT_EQ(chunks[2].offset, 200u);
+}
+
+// Packed multi-region grow commits each region's tail, so new VMM slices
+// land between existing chunks in the offset-sorted vector. A prefix-count
+// importer (bind chunks[bound_count:]) misses those insertions — that is
+// the GUI giant-sphere / tile-instance overflow: CUDA densify writes live
+// rows the viewport's sparse VkBuffer never bound.
+TEST(SplatExportableStorageTest, GrowInsertsChunksBetweenRegionsSoPrefixBindMisses) {
+    require_cuda();
+
+    const std::size_t gran = std::max<std::size_t>(exportable_allocation_granularity(0), 1);
+    // Means are 12 B/row. Start under one granule, grow past two so at least
+    // one region tail overflows into a new slice between later regions.
+    const std::size_t kInitial = std::max<std::size_t>(gran / 24, 2048);
+    const std::size_t kGen2 = kInitial * 3;
+    const std::size_t kGen3 = kInitial * 5;
+    const std::size_t kReserve = kInitial * 16;
+    constexpr int kShDegree = 3;
+
+    auto storage_result = SplatExportableStorage::create(kInitial, kShDegree, 0, kReserve);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+
+    std::vector<std::size_t> bound_offsets;
+    bound_offsets.reserve(storage.block->chunks.size());
+    for (const auto& chunk : storage.block->chunks) {
+        bound_offsets.push_back(chunk.offset);
+    }
+    ASSERT_FALSE(bound_offsets.empty());
+    const std::size_t initial_chunk_count = bound_offsets.size();
+
+    ASSERT_TRUE(storage.grow(kGen2).value_or(false));
+    ASSERT_TRUE(storage.grow(kGen3).value_or(false));
+    EXPECT_EQ(storage.capacity(), kGen3);
+
+    const auto& chunks = storage.block->chunks;
+    ASSERT_GT(chunks.size(), initial_chunk_count) << "two grows past granule must add slices";
+
+    const auto unbound = unboundExportableChunkIndices(chunks, bound_offsets);
+    ASSERT_FALSE(unbound.empty());
+
+    std::size_t max_initial_offset = 0;
+    for (const std::size_t off : bound_offsets) {
+        max_initial_offset = std::max(max_initial_offset, off);
+    }
+    bool mid_insert = false;
+    for (const std::size_t idx : unbound) {
+        if (chunks[idx].offset < max_initial_offset) {
+            mid_insert = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(mid_insert)
+        << "expected a new slice between existing region tails, not only after the last region";
+
+    // Old importer: bind chunks[initial_count:].
+    std::vector<std::size_t> prefix_new_offsets;
+    for (std::size_t i = initial_chunk_count; i < chunks.size(); ++i) {
+        prefix_new_offsets.push_back(chunks[i].offset);
+    }
+    std::size_t prefix_misses = 0;
+    for (const std::size_t idx : unbound) {
+        const std::size_t off = chunks[idx].offset;
+        if (std::find(prefix_new_offsets.begin(), prefix_new_offsets.end(), off) ==
+            prefix_new_offsets.end()) {
+            ++prefix_misses;
+        }
+    }
+    EXPECT_GT(prefix_misses, 0u)
+        << "prefix-count bind must miss at least one mid-list insertion (the GUI overflow)";
+
+    const auto after_offset_bind = unboundExportableChunkIndices(chunks, [&] {
+        std::vector<std::size_t> all = bound_offsets;
+        for (const std::size_t idx : unbound) {
+            all.push_back(chunks[idx].offset);
+        }
+        return all;
+    }());
+    EXPECT_TRUE(after_offset_bind.empty()) << "offset-set bind must cover every chunk";
 }
 
 // densify past the initial live-N commit must grow the exportable

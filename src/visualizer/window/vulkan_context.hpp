@@ -124,6 +124,10 @@ namespace lfs::vis {
             VkDeviceMemory memory = VK_NULL_HANDLE;
             std::vector<VkDeviceMemory> memories;
             std::size_t bound_chunks = 0;
+            // Offsets already sparse-bound into this VkBuffer. grow() inserts
+            // per-region tails in the middle of ExportableBlock::chunks, so a
+            // prefix count is not a bound set.
+            std::vector<std::size_t> bound_chunk_offsets;
             VkDeviceAddress device_address = 0;
             VkDeviceSize size = 0;
             VkDeviceSize allocation_size = 0;

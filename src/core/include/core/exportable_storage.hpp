@@ -46,8 +46,11 @@ namespace lfs::core {
 
     // One CUDA VMM virtual reservation with physical memory committed as
     // shareable chunks. `device_ptr` is stable for the lifetime of the block.
-    // Growth appends chunks; existing chunks are never unmapped, copied, or
-    // re-exported. Importers bind chunks they have not bound yet.
+    // Growth commits additional slices; existing chunks are never unmapped,
+    // copied, or re-exported. `chunks` is kept sorted by offset, so a
+    // per-region tail commit inserts in the middle of the vector. Importers
+    // must bind by offset (see unboundExportableChunkIndices), never by a
+    // prefix count of that vector.
     //
     // Destruction (via shared_ptr deleter) runs:
     //   recordDeallocation -> unmap each chunk -> cuMemRelease each chunk
@@ -73,6 +76,29 @@ namespace lfs::core {
             }
         }
         return prefix;
+    }
+
+    // Indices of `chunks` whose offset is not in `bound_offsets`. Grow of a
+    // packed multi-region block inserts new slices between existing region
+    // tails, so `chunks[bound_count:]` is not the unbound set.
+    [[nodiscard]] inline std::vector<std::size_t>
+    unboundExportableChunkIndices(const std::vector<ExportableChunk>& chunks,
+                                  const std::vector<std::size_t>& bound_offsets) {
+        std::vector<std::size_t> unbound;
+        unbound.reserve(chunks.size());
+        for (std::size_t i = 0; i < chunks.size(); ++i) {
+            bool bound = false;
+            for (const std::size_t offset : bound_offsets) {
+                if (offset == chunks[i].offset) {
+                    bound = true;
+                    break;
+                }
+            }
+            if (!bound) {
+                unbound.push_back(i);
+            }
+        }
+        return unbound;
     }
 
     // CUDA VMM allocation granularity for `device` (2 MiB on current NVIDIA).

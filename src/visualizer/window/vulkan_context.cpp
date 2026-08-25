@@ -3720,10 +3720,14 @@ namespace lfs::vis {
         if (!device_ || imported.buffer == VK_NULL_HANDLE) {
             return fail("bindNewChunks requires an imported VkBuffer");
         }
-        if (imported.bound_chunks > block.chunks.size()) {
-            return fail("bindNewChunks: bound_chunks exceeds CUDA chunk count");
+        if (imported.bound_chunk_offsets.size() > block.chunks.size()) {
+            return fail("bindNewChunks: bound offsets exceed CUDA chunk count");
         }
-        if (imported.bound_chunks == block.chunks.size()) {
+
+        const auto unbound =
+            lfs::core::unboundExportableChunkIndices(block.chunks, imported.bound_chunk_offsets);
+        if (unbound.empty()) {
+            imported.bound_chunks = imported.bound_chunk_offsets.size();
             return true;
         }
 
@@ -3732,11 +3736,10 @@ namespace lfs::vis {
         assert(memory_requirements.alignment == 0 ||
                (memory_requirements.alignment & (memory_requirements.alignment - 1)) == 0);
 
-        const std::size_t first_new = imported.bound_chunks;
         std::vector<VkDeviceMemory> new_memories;
-        new_memories.reserve(block.chunks.size() - first_new);
+        new_memories.reserve(unbound.size());
         std::vector<VkSparseMemoryBind> binds;
-        binds.reserve(block.chunks.size() - first_new);
+        binds.reserve(unbound.size());
 
         const auto rollback_new = [&]() {
             for (VkDeviceMemory memory : new_memories) {
@@ -3747,7 +3750,7 @@ namespace lfs::vis {
             new_memories.clear();
         };
 
-        for (std::size_t i = first_new; i < block.chunks.size(); ++i) {
+        for (const std::size_t i : unbound) {
             const auto& chunk = block.chunks[i];
             assert(chunk.bytes > 0);
             assert(memory_requirements.alignment == 0 ||
@@ -3868,7 +3871,11 @@ namespace lfs::vis {
         }
 
         imported.memories.insert(imported.memories.end(), new_memories.begin(), new_memories.end());
-        imported.bound_chunks = block.chunks.size();
+        imported.bound_chunk_offsets.reserve(imported.bound_chunk_offsets.size() + unbound.size());
+        for (const std::size_t i : unbound) {
+            imported.bound_chunk_offsets.push_back(block.chunks[i].offset);
+        }
+        imported.bound_chunks = imported.bound_chunk_offsets.size();
         imported.allocation_size = static_cast<VkDeviceSize>(block.committed_bytes);
         if (!imported.diagnostic_scope.empty() && !imported.diagnostic_label.empty()) {
             recordCurrentVulkanBytes(imported.diagnostic_scope,
