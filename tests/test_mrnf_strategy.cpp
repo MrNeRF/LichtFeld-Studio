@@ -1693,9 +1693,9 @@ TEST(MRNFStrategyTest, ExploreStarvationWeights) {
     }
 }
 
-TEST(MRNFStrategyTest, OptimizationParametersDefaultsAreFarFieldOn) {
+TEST(MRNFStrategyTest, OptimizationParametersDefaultToBackgroundImprovementsOff) {
     const param::OptimizationParameters defaults{};
-    EXPECT_TRUE(defaults.background_improvements);
+    EXPECT_FALSE(defaults.background_improvements);
     EXPECT_FLOAT_EQ(defaults.far_scene_min_fraction, 0.01f);
     EXPECT_TRUE(defaults.explore_starvation_weighting);
     EXPECT_EQ(kExploreSplits, 20);
@@ -1744,7 +1744,7 @@ TEST(MRNFStrategyTest, BackgroundImprovementsOnKeepsProfileMechanisms) {
     MRNF strategy(splat_data);
 
     auto opt_params = param::OptimizationParameters::mrnf_defaults();
-    EXPECT_TRUE(opt_params.background_improvements);
+    opt_params.background_improvements = true;
     EXPECT_TRUE(opt_params.growth_ratio_rank);
     EXPECT_EQ(opt_params.fill_pacing_iter, 15'000u);
     EXPECT_EQ(opt_params.far_seed_dose, 2'000u);

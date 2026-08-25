@@ -229,7 +229,7 @@ namespace lfs::core {
             float bounds_percentile = 0.8f;
             bool use_error_map = true;
             bool use_edge_map = true;
-            bool background_improvements = true;
+            bool background_improvements = false;
             float far_scene_min_fraction = 0.01f; // min deep-far splat fraction that activates far-field (0 = always on); mrnf_defaults() overrides to 0.0
             bool growth_ratio_rank = false;       // rank growth by err/vis^growth_ratio_pow; mrnf_defaults() overrides to true
             float growth_ratio_pow = 0.75f;

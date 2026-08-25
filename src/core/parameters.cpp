@@ -664,7 +664,7 @@ namespace lfs::core {
             p.scale_reg = 0.0f;
             p.use_error_map = true;
             p.use_edge_map = true;
-            p.background_improvements = true;
+            p.background_improvements = false;
             p.far_scene_min_fraction = 0.0f;
             p.growth_ratio_rank = true;
             p.growth_ratio_pow = 0.75f;
