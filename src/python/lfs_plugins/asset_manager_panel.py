@@ -15,12 +15,11 @@ from urllib.parse import quote
 import lichtfeld as lf
 
 from . import rml_widgets
-from .asset_watch import scan_all_watch_directories
+from .asset_watch import scan_all_asset_folders
 from .localization import localized_count
 from .rml_keys import KI_DELETE, KI_DOWN, KI_LEFT, KI_RETURN, KI_RIGHT, KI_UP
 from .types import Panel
 from .ui import RuntimeState
-from .watch_dirs_panel import open_watch_dirs_dialog
 
 _log = logging.getLogger(__name__)
 
@@ -40,6 +39,7 @@ try:
     from .asset_index import (
         AssetIndex,
         is_supported_asset_path,
+        resolve_default_asset_directory,
         resolve_asset_manager_storage_path,
     )
 
@@ -79,7 +79,8 @@ class AssetManagerPanel(Panel):
     height_mode = lf.ui.PanelHeightMode.FILL
     size = (980, 620)
     options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    update_policy = "dirty"
+    update_policy = "interval"
+    update_interval_ms = 250
 
     STORAGE_PATH: Optional[Path] = None
 
@@ -124,14 +125,15 @@ class AssetManagerPanel(Panel):
         self._is_floating = False
         self._reactive_unsubscribers: list[Callable[[], None]] = []
 
-        self._watch_scan_lock = threading.Lock()
-        self._watch_scan_active = False
-        self._watch_scan_refresh_pending = False
+        self._folder_scan_lock = threading.Lock()
+        self._folder_scan_active = False
+        self._folder_scan_refresh_pending = False
         self._drag_payload_token: Optional[int] = None
         self._last_project_write_generation: Optional[int] = None
         self._project_write_was_running = False
         self._last_project_write_path = ""
         self._thumbnail_sources_by_asset: Dict[str, str] = {}
+        self._last_default_folder_path = ""
 
     def capture_chrome(self) -> Dict[str, Any]:
         return {
@@ -164,7 +166,9 @@ class AssetManagerPanel(Panel):
             self.STORAGE_PATH = storage_path
             self.__class__.STORAGE_PATH = storage_path
             self._asset_index = AssetIndex()
-            return self._asset_index.load()
+            loaded = self._asset_index.load()
+            self._last_default_folder_path = str(resolve_default_asset_directory())
+            return loaded
         except Exception as exc:
             self._log_error("Failed to initialize Asset Manager: %s", exc)
             return False
@@ -234,6 +238,7 @@ class AssetManagerPanel(Panel):
             "selected_asset_expected_path", self.get_selected_asset_path
         )
         model.bind_func("selected_folder_name", self.get_selected_folder_name)
+        model.bind_func("selected_folder_path", self.get_selected_folder_path)
         model.bind_func(
             "selected_folder_asset_count", self.get_selected_folder_asset_count
         )
@@ -262,7 +267,6 @@ class AssetManagerPanel(Panel):
             "prop_modified_label": "asset_manager.property.modified",
             "prop_expected_path_label": "asset_manager.property.expected_path",
             "prop_assets_label": "asset_manager.property.assets",
-            "folder_pill_label": "asset_manager.type.folder",
             "locate_file_button_label": "asset_manager.action.locate_file",
             "load_button_label": "menu.file.open_project",
         }
@@ -273,7 +277,7 @@ class AssetManagerPanel(Panel):
         model.bind_record_list("assets")
         for event, handler in (
             ("toggle_folders_collapsed", self.toggle_folders_collapsed),
-            ("show_new_folder_menu", self.show_new_folder_menu),
+            ("add_asset_folder", self.add_asset_folder),
             ("on_import_project", self.on_import_project),
             ("set_view_mode", self.set_view_mode),
             ("cycle_sort_mode", self.cycle_sort_mode),
@@ -629,6 +633,10 @@ class AssetManagerPanel(Panel):
         folder = self._get_selected_folder()
         return str(folder.get("name") or "") if folder else ""
 
+    def get_selected_folder_path(self) -> str:
+        folder = self._get_selected_folder()
+        return str(folder.get("path") or "") if folder else ""
+
     def get_selected_folder_asset_count(self) -> int:
         if not self._selected_folder_id:
             return 0
@@ -657,34 +665,29 @@ class AssetManagerPanel(Panel):
         self._refresh_records(assets=True)
         self._dirty_fields("sort_label")
 
-    def _create_folder_from_name(self, name: str) -> Optional[str]:
-        if not self._asset_index or not name.strip():
+    def _add_folder_from_path(self, directory: str) -> Optional[str]:
+        if not self._asset_index or not directory.strip():
             return None
-        folder = self._asset_index.create_folder(name.strip())
+        folder = self._asset_index.add_folder(directory.strip())
         if folder is None:
             return None
         self._selected_folder_id = folder.id
         self._selected_asset_ids.clear()
         self._selection_cursor_id = None
         self._update_selection_type()
-        self.refresh_catalog(scan_watched=False)
+        self.refresh_catalog(scan_folders=False)
         return folder.id
 
-    def show_new_folder_menu(self, _handle=None, _ev=None, _args=None):
-        self._show_shared_context_menu(
-            [{"label": tr("asset_manager.action.create_new_folder"), "action": "create_folder"}],
-            lambda action: self.on_create_folder_dialog(None, None, None)
-            if action == "create_folder"
-            else None,
-        )
+    def add_asset_folder(self, _handle=None, _ev=None, _args=None):
+        self.on_add_folder(None, None, None)
 
-    def on_create_folder_dialog(self, _handle=None, _ev=None, _args=None):
-        lf.ui.input_dialog(
-            tr("asset_manager.dialog.new_folder"),
-            tr("asset_manager.dialog.enter_folder_name"),
-            "",
-            lambda name: self._create_folder_from_name(str(name or "")),
+    def on_add_folder(self, _handle=None, _ev=None, _args=None):
+        start = str(resolve_default_asset_directory())
+        directory = lf.ui.open_folder_dialog(
+            tr("asset_manager.dialog.select_folder"), start
         )
+        if directory:
+            self._add_folder_from_path(str(directory))
 
     def on_import_project(self, _handle=None, _ev=None, _args=None):
         if not self._asset_index:
@@ -698,17 +701,12 @@ class AssetManagerPanel(Panel):
         try:
             project, _created = self._asset_index.register_licht_asset(
                 path,
-                folder_id=(
-                    self._selected_folder_id
-                    if self._selected_folder_id in self._asset_index_folders()
-                    else self._default_folder_id()
-                ),
             )
             if project is not None:
                 self._selected_asset_ids = {project.id}
                 self._selection_cursor_id = project.id
                 self._update_selection_type()
-                self.refresh_catalog(scan_watched=False)
+                self.refresh_catalog(scan_folders=False)
         except Exception as exc:
             self._log_error("Failed to import .licht project %s: %s", path, exc)
 
@@ -729,6 +727,7 @@ class AssetManagerPanel(Panel):
             "show_selection_folder",
             "show_selection_multiple",
             "selected_folder_name",
+            "selected_folder_path",
             "selected_folder_asset_count",
         )
         return True
@@ -793,7 +792,7 @@ class AssetManagerPanel(Panel):
             return
         try:
             if self._asset_index.relink_asset(asset_id, path):
-                self.refresh_catalog(scan_watched=False)
+                self.refresh_catalog(scan_folders=False)
             else:
                 self._log_warn("Selected file belongs to a different .licht project")
         except Exception as exc:
@@ -810,7 +809,7 @@ class AssetManagerPanel(Panel):
             return
         asset = project.to_dict() if hasattr(project, "to_dict") else self._asset_index_assets().get(asset_id, {})
         if not self._project_available(asset):
-            self.refresh_catalog(scan_watched=False)
+            self.refresh_catalog(scan_folders=False)
             return
         self._selected_asset_ids = {asset_id}
         self._selection_cursor_id = asset_id
@@ -829,16 +828,7 @@ class AssetManagerPanel(Panel):
             self._selected_asset_ids.discard(asset_id)
             if self._selection_cursor_id == asset_id:
                 self._selection_cursor_id = None
-            self.refresh_catalog(scan_watched=False)
-
-    def _get_available_folders_for_asset(self, asset: Dict[str, Any]) -> List[Dict[str, str]]:
-        current = asset.get("folder_id")
-        rows = [
-            {"id": folder_id, "name": str(folder.get("name") or tr("asset_manager.unnamed_folder"))}
-            for folder_id, folder in self._asset_index_folders().items()
-            if folder_id != current
-        ]
-        return sorted(rows, key=lambda row: self._sort_text(row["name"]))
+            self.refresh_catalog(scan_folders=False)
 
     def _show_shared_context_menu(
         self,
@@ -865,29 +855,6 @@ class AssetManagerPanel(Panel):
             [
                 {"label": tr("asset_manager.action.rename"), "action": "rename"},
                 {
-                    "label": tr("asset_manager.action.move_to_folder"),
-                    "action": "",
-                    "separator_before": True,
-                    "is_label": True,
-                },
-                {
-                    "label": tr("asset_manager.action.new_folder"),
-                    "action": "create_folder",
-                    "is_submenu_item": True,
-                },
-            ]
-        )
-        items.extend(
-            {
-                "label": folder["name"],
-                "action": f"move_to_folder:{folder['id']}",
-                "is_submenu_item": True,
-            }
-            for folder in self._get_available_folders_for_asset(asset)
-        )
-        items.extend(
-            [
-                {
                     "label": tr("asset_manager.action.show_in_folder"),
                     "action": "show_in_folder",
                     "separator_before": True,
@@ -902,10 +869,6 @@ class AssetManagerPanel(Panel):
             self._load_asset(asset_id)
         elif action == "rename":
             self.on_rename_asset(None, None, [asset_id])
-        elif action == "create_folder":
-            self.on_create_folder_and_move(None, None, [asset_id])
-        elif action.startswith("move_to_folder:"):
-            self._move_asset_to_folder(asset_id, action.removeprefix("move_to_folder:"))
         elif action == "show_in_folder":
             self.on_show_in_folder(None, None, [asset_id])
         elif action == "remove":
@@ -929,7 +892,7 @@ class AssetManagerPanel(Panel):
             value = str(name or "").strip()
             if value and value != current_name:
                 self._asset_index.update_asset(asset_id, name=value)
-                self.refresh_catalog(scan_watched=False)
+                self.refresh_catalog(scan_folders=False)
 
         lf.ui.input_dialog(
             tr("asset_manager.dialog.rename_asset"),
@@ -946,48 +909,23 @@ class AssetManagerPanel(Panel):
             if callable(reveal):
                 reveal(str(asset.get("path") or ""))
 
-    def _move_asset_to_folder(self, asset_id: str, folder_id: str) -> None:
-        if not self._asset_index or folder_id not in self._asset_index_folders():
-            return
-        if self._asset_index.update_asset(asset_id, folder_id=folder_id):
-            self.refresh_catalog(scan_watched=False)
-
-    def on_create_folder_and_move(self, _handle, _ev, args):
-        asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
-        if not asset_id or not self._asset_index:
-            return
-
-        def create_and_move(name: Any) -> None:
-            value = str(name or "").strip()
-            if not value:
-                return
-            folder = self._asset_index.create_folder(value)
-            if folder is None:
-                return
-            self._asset_index.update_asset(asset_id, folder_id=folder.id)
-            self.refresh_catalog(scan_watched=False)
-
-        lf.ui.input_dialog(
-            tr("asset_manager.dialog.new_folder"),
-            tr("asset_manager.dialog.enter_folder_name"),
-            "",
-            create_and_move,
-        )
-
     def _folder_context_menu_items(self, folder_id: str) -> List[Dict[str, Any]]:
-        items = [
-            {"label": tr("asset_manager.action.edit_watch_dirs"), "action": "watch_dirs"}
-        ]
-        if folder_id != "default":
-            items.extend(
-                [
-                    {"label": tr("asset_manager.action.rename_folder"), "action": "rename"},
-                    {
-                        "label": tr("asset_manager.action.delete_folder"),
-                        "action": "delete",
-                        "separator_before": True,
-                    },
-                ]
+        items = [{"label": tr("asset_manager.action.show_in_folder"), "action": "show"}]
+        if folder_id == "default":
+            items.append(
+                {
+                    "label": tr("asset_manager.action.settings"),
+                    "action": "settings",
+                    "separator_before": True,
+                }
+            )
+        else:
+            items.append(
+                {
+                    "label": tr("asset_manager.action.remove_folder"),
+                    "action": "remove",
+                    "separator_before": True,
+                }
             )
         return items
 
@@ -1000,43 +938,15 @@ class AssetManagerPanel(Panel):
         )
 
     def _handle_folder_context_action(self, action: str, folder_id: str) -> None:
-        if action == "watch_dirs":
-            self.on_edit_watch_dirs(None, None, [folder_id])
-        elif action == "rename":
-            self.on_rename_folder(None, None, [folder_id])
-        elif action == "delete":
+        if action == "show":
+            folder = self._asset_index_folders().get(folder_id, {})
+            reveal = getattr(lf.ui, "reveal_in_file_manager", None)
+            if callable(reveal) and folder.get("path"):
+                reveal(str(folder["path"]))
+        elif action == "settings":
+            lf.ui.set_panel_enabled("lfs.preferences", True)
+        elif action == "remove":
             self.on_delete_folder(None, None, [folder_id])
-
-    def on_edit_watch_dirs(self, _handle, _ev, args):
-        folder_id = self._resolve_event_value(args, _ev, "data-folder-id")
-        if _ev:
-            self._stop_event(_ev)
-        if folder_id and self._asset_index:
-            open_watch_dirs_dialog(
-                self._asset_index,
-                folder_id,
-                lambda: self.refresh_catalog(scan_watched=False),
-            )
-
-    def on_rename_folder(self, _handle, _ev, args):
-        folder_id = self._resolve_event_value(args, _ev, "data-folder-id")
-        folder = self._asset_index_folders().get(folder_id)
-        if not folder or not self._asset_index or folder_id == "default":
-            return
-        current = str(folder.get("name") or "")
-
-        def rename(name: Any) -> None:
-            value = str(name or "").strip()
-            if value and value != current:
-                self._asset_index.update_folder(folder_id, name=value)
-                self.refresh_catalog(scan_watched=False)
-
-        lf.ui.input_dialog(
-            tr("asset_manager.dialog.rename_folder"),
-            tr("asset_manager.dialog.enter_new_name", name=current),
-            current,
-            rename,
-        )
 
     def on_delete_folder(self, _handle, _ev, args):
         folder_id = self._resolve_event_value(args, _ev, "data-folder-id")
@@ -1047,7 +957,7 @@ class AssetManagerPanel(Panel):
             asset.get("folder_id") == folder_id
             for asset in self._asset_index_assets().values()
         )
-        delete_label = tr("asset_manager.action.delete_folder")
+        delete_label = tr("asset_manager.action.remove_folder")
 
         def delete_confirmed(button: str) -> None:
             if button != delete_label:
@@ -1056,12 +966,12 @@ class AssetManagerPanel(Panel):
                 self._selected_folder_id = SCOPE_ALL
                 self._selected_asset_ids.clear()
                 self._selection_cursor_id = None
-                self.refresh_catalog(scan_watched=False)
+                self.refresh_catalog(scan_folders=False)
 
         lf.ui.confirm_dialog(
-            tr("asset_manager.dialog.delete_folder"),
+            tr("asset_manager.dialog.remove_folder"),
             tr(
-                "asset_manager.dialog.delete_folder_message",
+                "asset_manager.dialog.remove_folder_message",
                 name=str(folder.get("name") or ""),
                 count=project_count,
             ),
@@ -1076,8 +986,9 @@ class AssetManagerPanel(Panel):
         _args=None,
         *,
         request_update: bool = True,
-        scan_watched: bool = True,
+        scan_folders: bool = True,
     ):
+        self._sync_default_folder_path()
         if self._asset_index:
             self._asset_index.verify_projects()
         self._repair_selection()
@@ -1086,55 +997,75 @@ class AssetManagerPanel(Panel):
             self._handle.dirty_all()
         if request_update:
             self._request_model_update()
-        if scan_watched:
-            self._scan_watched_projects()
+        if scan_folders:
+            self._scan_asset_folders()
 
-    def _scan_watched_projects(self) -> None:
+    def _scan_asset_folders(self) -> None:
         if not self._asset_index:
             return
-        with self._watch_scan_lock:
-            if self._watch_scan_active:
+        with self._folder_scan_lock:
+            if self._folder_scan_active:
                 return
             if not any(
-                folder.get("watch_directories")
+                folder.get("path")
                 for folder in self._asset_index_folders().values()
             ):
                 return
-            self._watch_scan_active = True
+            self._folder_scan_active = True
         index = self._asset_index
 
         def worker() -> None:
             try:
-                result = scan_all_watch_directories(index)
+                result = scan_all_asset_folders(index)
                 _log.info(
-                    "Watched .licht scan: discovered=%d added=%d existing=%d failed=%d",
+                    "Asset folder scan: discovered=%d added=%d existing=%d failed=%d",
                     result.discovered,
                     result.added,
                     result.already_cataloged,
                     result.failed,
                 )
             except Exception:
-                _log.exception("Asset Manager watched-directory scan failed")
+                _log.exception("Asset Manager folder scan failed")
             finally:
-                with self._watch_scan_lock:
-                    self._watch_scan_active = False
-                    self._watch_scan_refresh_pending = True
+                with self._folder_scan_lock:
+                    self._folder_scan_active = False
+                    self._folder_scan_refresh_pending = True
                 scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
                 if callable(scheduler):
-                    scheduler(self._finish_watch_scan)
+                    scheduler(self._finish_folder_scan)
 
         threading.Thread(
             target=worker,
             daemon=True,
-            name="AssetManagerLichtWatchScan",
+            name="AssetManagerFolderScan",
         ).start()
 
-    def _finish_watch_scan(self) -> None:
-        with self._watch_scan_lock:
-            if not self._watch_scan_refresh_pending:
+    def _finish_folder_scan(self) -> None:
+        with self._folder_scan_lock:
+            if not self._folder_scan_refresh_pending:
                 return
-            self._watch_scan_refresh_pending = False
-        self.refresh_catalog(scan_watched=False)
+            self._folder_scan_refresh_pending = False
+        self.refresh_catalog(scan_folders=False)
+
+    def _sync_default_folder_path(self) -> bool:
+        if not self._asset_index:
+            return False
+        current = str(resolve_default_asset_directory())
+        if current == self._last_default_folder_path:
+            return False
+        setter = getattr(self._asset_index, "set_default_folder_path", None)
+        if not callable(setter):
+            self._last_default_folder_path = current
+            return False
+        if not setter(current):
+            return False
+        self._last_default_folder_path = current
+        self._repair_selection()
+        self._refresh_records(assets=True, folders=True)
+        if self._handle:
+            self._handle.dirty_all()
+        self._scan_asset_folders()
+        return True
 
     def _refresh_records(self, *, assets: bool = False, folders: bool = False) -> None:
         if not self._handle:
@@ -1342,7 +1273,7 @@ class AssetManagerPanel(Panel):
         verify_asset = getattr(self._asset_index, "verify_asset", None)
         project = verify_asset(asset_id) if callable(verify_asset) else None
         if callable(verify_asset) and project is None:
-            self.refresh_catalog(scan_watched=False)
+            self.refresh_catalog(scan_folders=False)
             return
         asset = (
             project.to_dict()
@@ -1350,7 +1281,7 @@ class AssetManagerPanel(Panel):
             else self._asset_index_assets().get(asset_id, {})
         )
         if not self._project_available(asset):
-            self.refresh_catalog(scan_watched=False)
+            self.refresh_catalog(scan_folders=False)
             return
         begin_drag = getattr(lf.ui, "begin_drag_payload", None)
         if not callable(begin_drag):
@@ -1683,15 +1614,16 @@ class AssetManagerPanel(Panel):
         if self._handle:
             self._handle.dirty_all()
         self._refresh_after_project_write()
-        self._scan_watched_projects()
+        self._scan_asset_folders()
 
     def on_update(self, doc):
-        changed = self._refresh_after_project_write()
+        changed = self._sync_default_folder_path()
+        changed = self._refresh_after_project_write() or changed
         if self._sync_panel_space_state():
             self._dirty_fields("is_floating")
             changed = True
-        if self._watch_scan_refresh_pending:
-            self._finish_watch_scan()
+        if self._folder_scan_refresh_pending:
+            self._finish_folder_scan()
             changed = True
         if self._asset_window_refresh_pending or self._sync_asset_window_viewport(doc):
             self._asset_window_refresh_pending = False

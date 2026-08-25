@@ -187,6 +187,11 @@
     "error.generic": "Le rapport n'a pas pu être envoyé. Réessayez."
   },
   "asset_manager": {
+    "action.settings": "Asset Manager Settings",
+    "action.remove_folder": "Remove Folder",
+    "dialog.select_folder": "Select Asset Folder",
+    "dialog.remove_folder": "Remove Folder",
+    "dialog.remove_folder_message": "Remove \"{name}\" and its {count} projects from the Asset Manager? Files on disk will not be deleted.",
     "toolbar.search_placeholder": "Rechercher des projets...",
     "toolbar.search_icon": "Rechercher",
     "toolbar.sort_by_name": "Trier par: Nom",
@@ -724,6 +729,11 @@
     "zoom": "Zoom"
   },
   "preferences": {
+    "asset_manager_settings": "Asset Manager Settings",
+    "asset_manager_directory": "Asset folder",
+    "asset_manager_directory_hint": "Projects in the Default folder: {path}",
+    "asset_manager_directory_description": "Each Asset Manager folder maps directly to a folder on disk.",
+    "asset_manager_directory_invalid": "This folder cannot be used by the Asset Manager.",
     "title": "Préférences",
     "language": "Langue :",
     "select_language": "Sélectionner la Langue",

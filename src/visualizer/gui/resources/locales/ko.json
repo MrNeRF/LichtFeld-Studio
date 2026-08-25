@@ -187,6 +187,11 @@
     "error.generic": "보고서를 제출할 수 없습니다. 다시 시도하세요."
   },
   "asset_manager": {
+    "action.settings": "Asset Manager Settings",
+    "action.remove_folder": "Remove Folder",
+    "dialog.select_folder": "Select Asset Folder",
+    "dialog.remove_folder": "Remove Folder",
+    "dialog.remove_folder_message": "Remove \"{name}\" and its {count} projects from the Asset Manager? Files on disk will not be deleted.",
     "toolbar.search_placeholder": "프로젝트 검색...",
     "toolbar.search_icon": "검색",
     "toolbar.sort_by_name": "정렬: 이름",
@@ -724,6 +729,11 @@
     "zoom": "줌"
   },
   "preferences": {
+    "asset_manager_settings": "Asset Manager Settings",
+    "asset_manager_directory": "Asset folder",
+    "asset_manager_directory_hint": "Projects in the Default folder: {path}",
+    "asset_manager_directory_description": "Each Asset Manager folder maps directly to a folder on disk.",
+    "asset_manager_directory_invalid": "This folder cannot be used by the Asset Manager.",
     "title": "환경설정",
     "language": "언어:",
     "select_language": "언어 선택",

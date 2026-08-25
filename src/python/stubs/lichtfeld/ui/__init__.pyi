@@ -2639,6 +2639,25 @@ def set_working_directory(path: str) -> str:
 def clear_working_directory() -> None:
     """Clear the working folder preference so the default root is used."""
 
+def get_asset_manager_directory() -> str:
+    """Get the effective Asset Manager folder (absolute)."""
+
+def get_asset_manager_directory_preference() -> str:
+    """
+    Get the raw Asset Manager folder preference. Empty means the default folder.
+    """
+
+def get_default_asset_manager_directory() -> str:
+    """Get the default Asset Manager folder under the LichtFeld user root."""
+
+def set_asset_manager_directory(path: str) -> str:
+    """
+    Set the Asset Manager folder. Returns empty on success or a user-facing error.
+    """
+
+def clear_asset_manager_directory() -> None:
+    """Clear the Asset Manager folder preference so the default is used."""
+
 def get_mcp_status() -> dict:
     """Get current MCP HTTP server runtime status"""
 

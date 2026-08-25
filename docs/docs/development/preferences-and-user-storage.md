@@ -111,6 +111,7 @@ logs/
 logs/mcp/
 plugins/
 venv/
+assets/     (default Asset Manager project folder)
 temp/
 recovery/   (legacy untitled crash files; scanned at startup if present)
 ```
@@ -121,6 +122,15 @@ The **working folder** preference (`working_directory` in
 and portable mode). An empty or absent key means the default. A custom value
 must be an absolute, writable directory; LichtFeld creates it if needed and
 rejects the change without persisting when the write probe fails.
+
+The **Asset Manager folder** preference (`asset_manager_directory`) is also in
+`config/preferences.json` and defaults to `<root>/assets` (normally
+`~/.lichtfeld/assets`). Every folder shown in the Asset Manager maps one-to-one
+to a real directory selected by the user; folder names are derived from the
+directory names. The catalog remains internal at `data/asset_library/library.json`
+and stores only these directory mappings and `.licht` project locators. Changing
+the default preserves an old directory mapping when it still contains cataloged
+projects, and removing a mapping never deletes the directory or project files.
 
 Untitled crash files and untitled training snapshots live in
 `<working folder>/tmp/<session-uuid>.licht`, not under `dataset.output_path`.

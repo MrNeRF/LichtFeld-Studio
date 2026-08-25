@@ -48,7 +48,7 @@
                 <span class="section-arrow" data-class-is-expanded="!folders_collapsed">&#x25B6;</span>
                 <span>{{folders_title}}</span>
               </div>
-              <button class="asset-button asset-button--small-icon asset-folder-menu" data-event-click="show_new_folder_menu"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 1V11M1 6H11" stroke="#d8d0c3" stroke-width="2" stroke-linecap="round"/></svg></button>
+              <button class="asset-button asset-button--small-icon asset-folder-menu" data-event-click="add_asset_folder"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 1V11M1 6H11" stroke="#d8d0c3" stroke-width="2" stroke-linecap="round"/></svg></button>
             </div>
             <div class="section-content collapsed" data-class-collapsed="!folders_expanded">
               <div data-for="folder : folders">
@@ -205,11 +205,14 @@
             <div data-if="show_selection_folder">
               <div class="asset-info-header">
                 <span class="asset-info-name">{{selected_folder_name}}</span>
-                <span class="asset-pill asset-pill-folder">{{folder_pill_label}}</span>
               </div>
 
               <div class="asset-info-section">
                 <div class="asset-info-section-title">{{folder_details_title}}</div>
+                <div class="parameter-row">
+                  <span class="parameter-label">{{prop_path_label}}</span>
+                  <span class="parameter-value asset-path-value">{{selected_folder_path}}</span>
+                </div>
                 <div class="parameter-row">
                   <span class="parameter-label">{{prop_assets_label}}</span>
                   <span class="parameter-value">{{selected_folder_asset_count}}</span>

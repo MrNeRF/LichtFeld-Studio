@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Watched-directory discovery for Asset Manager .licht projects."""
+"""Filesystem-folder discovery for Asset Manager .licht projects."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from .asset_index import is_supported_asset_path
 
@@ -29,8 +29,8 @@ _PRUNED_DIRECTORY_NAMES = frozenset(
 
 
 @dataclass(frozen=True)
-class WatchScanResult:
-    """Summary of one watched-directory scan."""
+class AssetFolderScanResult:
+    """Summary of one Asset Manager folder scan."""
 
     discovered: int = 0
     added: int = 0
@@ -43,16 +43,16 @@ def discover_licht_projects(
     directory: str,
     cancel_event: threading.Event | None = None,
 ) -> list[str]:
-    """Recursively list .licht files beneath one directory."""
+    """Recursively list .licht files beneath one Asset Manager folder."""
     root = Path(directory).expanduser()
     if not root.is_dir():
-        _log.warning("Watched directory is unavailable: %s", root)
+        _log.warning("Asset Manager folder is unavailable: %s", root)
         return []
 
     projects: list[str] = []
 
     def _on_error(exc: OSError) -> None:
-        _log.warning("Could not scan watched directory: %s", exc)
+        _log.warning("Could not scan Asset Manager folder: %s", exc)
 
     for current_root, directory_names, filenames in os.walk(
         root,
@@ -77,28 +77,20 @@ def discover_licht_projects(
                 if path.is_file():
                     projects.append(str(path.resolve()))
             except OSError as exc:
-                _log.warning("Could not inspect watched path %s: %s", path, exc)
+                _log.warning("Could not inspect Asset Manager path %s: %s", path, exc)
     return projects
 
 
-def scan_watch_directories(
+def scan_asset_folder(
     index: Any,
     folder_id: str,
-    directories: Iterable[str],
+    directory: str,
     cancel_event: threading.Event | None = None,
-) -> WatchScanResult:
-    """Discover and register .licht projects from configured directories."""
-    project_paths: list[str] = []
-    seen_paths = set()
-    for directory in directories:
-        if cancel_event is not None and cancel_event.is_set():
-            return WatchScanResult(cancelled=True)
-        for path in discover_licht_projects(directory, cancel_event):
-            key = os.path.normcase(path)
-            if key in seen_paths:
-                continue
-            seen_paths.add(key)
-            project_paths.append(path)
+) -> AssetFolderScanResult:
+    """Discover and register .licht projects from one real filesystem folder."""
+    if cancel_event is not None and cancel_event.is_set():
+        return AssetFolderScanResult(cancelled=True)
+    project_paths = discover_licht_projects(directory, cancel_event)
 
     return _register_discovered(
         index,
@@ -107,25 +99,27 @@ def scan_watch_directories(
     )
 
 
-def scan_all_watch_directories(
+def scan_all_asset_folders(
     index: Any,
     cancel_event: threading.Event | None = None,
-) -> WatchScanResult:
-    """Scan every folder, assigning new projects to the most-specific root."""
+) -> AssetFolderScanResult:
+    """Scan every real folder, assigning projects to the most-specific root."""
     roots: list[tuple[Path, str]] = []
     seen_roots = set()
     for folder_id, folder in (getattr(index, "folders", {}) or {}).items():
-        for directory in folder.get("watch_directories", []):
-            try:
-                root = Path(directory).expanduser().resolve()
-            except OSError as exc:
-                _log.warning("Could not resolve watched directory %s: %s", directory, exc)
-                continue
-            key = os.path.normcase(str(root))
-            if key in seen_roots:
-                continue
-            seen_roots.add(key)
-            roots.append((root, folder_id))
+        directory = str(folder.get("path") or "").strip()
+        if not directory:
+            continue
+        try:
+            root = Path(directory).expanduser().resolve()
+        except OSError as exc:
+            _log.warning("Could not resolve Asset Manager folder %s: %s", directory, exc)
+            continue
+        key = os.path.normcase(str(root))
+        if key in seen_roots:
+            continue
+        seen_roots.add(key)
+        roots.append((root, folder_id))
 
     roots.sort(
         key=lambda item: (
@@ -138,7 +132,7 @@ def scan_all_watch_directories(
     seen_paths = set()
     for root, folder_id in roots:
         if cancel_event is not None and cancel_event.is_set():
-            return WatchScanResult(cancelled=True)
+            return AssetFolderScanResult(cancelled=True)
         for path in discover_licht_projects(str(root), cancel_event):
             key = os.path.normcase(path)
             if key in seen_paths:
@@ -153,7 +147,7 @@ def _register_discovered(
     index: Any,
     discovered: list[tuple[str, str]],
     cancel_event: threading.Event | None = None,
-) -> WatchScanResult:
+) -> AssetFolderScanResult:
     lock = getattr(index, "_lock", None)
     if lock is None:
         return _register_discovered_locked(index, discovered, cancel_event)
@@ -165,7 +159,7 @@ def _register_discovered_locked(
     index: Any,
     discovered: list[tuple[str, str]],
     cancel_event: threading.Event | None,
-) -> WatchScanResult:
+) -> AssetFolderScanResult:
     snapshot = getattr(index, "_snapshot_state", lambda: None)()
     added = 0
     already_cataloged = 0
@@ -175,7 +169,7 @@ def _register_discovered_locked(
             restore = getattr(index, "_restore_state", None)
             if snapshot is not None and callable(restore):
                 restore(snapshot)
-            return WatchScanResult(
+            return AssetFolderScanResult(
                 discovered=len(discovered),
                 already_cataloged=already_cataloged,
                 failed=failed,
@@ -206,26 +200,26 @@ def _register_discovered_locked(
                 already_cataloged += 1
         except Exception:
             failed += 1
-            _log.warning("Failed to register watched .licht project: %s", path, exc_info=True)
+            _log.warning("Failed to register Asset Manager project: %s", path, exc_info=True)
 
     if cancel_event is not None and cancel_event.is_set():
         restore = getattr(index, "_restore_state", None)
         if snapshot is not None and callable(restore):
             restore(snapshot)
-        return WatchScanResult(
+        return AssetFolderScanResult(
             discovered=len(discovered),
             already_cataloged=already_cataloged,
             failed=failed,
             cancelled=True,
         )
     if added and not index.save():
-        _log.error("Failed to persist watched .licht project scan")
+        _log.error("Failed to persist Asset Manager folder scan")
         restore = getattr(index, "_restore_state", None)
         if snapshot is not None and callable(restore):
             restore(snapshot)
         failed += added
         added = 0
-    return WatchScanResult(
+    return AssetFolderScanResult(
         discovered=len(discovered),
         added=added,
         already_cataloged=already_cataloged,

@@ -32,6 +32,7 @@ def _install_lf_stub(monkeypatch):
         drag_cancels=[],
         released_textures=[],
         dialog_path="",
+        folder_dialog_path="",
         project_dirty=False,
     )
 
@@ -55,8 +56,8 @@ def _install_lf_stub(monkeypatch):
         PanelHeightMode=SimpleNamespace(FILL="FILL", CONTENT="CONTENT"),
         PanelOption=SimpleNamespace(DEFAULT_CLOSED="DEFAULT_CLOSED"),
         tr=lambda key: (
-            'Delete "{name}" with {count} projects?'
-            if key == "asset_manager.dialog.delete_folder_message"
+            'Remove "{name}" with {count} projects?'
+            if key == "asset_manager.dialog.remove_folder_message"
             else key
         ),
         get_current_language=lambda: "en",
@@ -70,6 +71,8 @@ def _install_lf_stub(monkeypatch):
         ),
         reveal_in_file_manager=lambda path: state.revealed.append(path) or True,
         open_project_file_dialog=lambda _start="": state.dialog_path,
+        open_folder_dialog=lambda _title, _start="": state.folder_dialog_path,
+        get_asset_manager_directory=lambda: "/home/tester/.lichtfeld/assets",
         input_dialog=lambda *_args: None,
         set_panel_enabled=lambda panel_id, enabled: state.enabled.append(
             (panel_id, enabled)
@@ -249,14 +252,21 @@ def _index(assets=None, folders=None, **methods):
     return SimpleNamespace(
         assets=assets or {},
         folders=folders
-        or {"default": {"id": "default", "name": "Default", "watch_directories": []}},
+        or {
+            "default": {
+                "id": "default",
+                "name": "assets",
+                "path": "/home/tester/.lichtfeld/assets",
+            }
+        },
         **methods,
     )
 
 
-def test_panel_contract_remains_dirty_left_dock(panel_module):
+def test_panel_contract_polls_preference_and_remains_left_dock(panel_module):
     panel_type = panel_module.AssetManagerPanel
-    assert panel_type.update_policy == "dirty"
+    assert panel_type.update_policy == "interval"
+    assert panel_type.update_interval_ms == 250
     assert panel_type.space == panel_module.lf.ui.PanelSpace.LEFT_DOCK
     assert panel_type.order == 20
 
@@ -278,6 +288,8 @@ def test_rml_and_panel_have_no_scene_or_disk_thumbnail_model():
     assert "asset-pill-licht" not in rcss
     assert "asset-card-overlay" not in rcss
     assert "col_type_label" not in source
+    assert "folder_pill_label" not in source
+    assert "asset-pill-folder" not in rml
     assert 'data-style-decorator="asset.thumbnail_decorator"' in rml
 
 
@@ -379,8 +391,8 @@ def test_dom_right_click_uses_shared_app_context_menu(panel_module):
     panel._asset_index = _index(
         assets={asset["id"]: asset},
         folders={
-            "default": {"id": "default", "name": "Default", "watch_directories": []},
-            "archive": {"id": "archive", "name": "Archive", "watch_directories": []},
+            "default": {"id": "default", "name": "assets", "path": "/tmp"},
+            "archive": {"id": "archive", "name": "Archive", "path": "/archive"},
         },
     )
     shell = _Element()
@@ -397,9 +409,6 @@ def test_dom_right_click_uses_shared_app_context_menu(panel_module):
     assert [item["action"] for item in menu["items"]] == [
         "load",
         "rename",
-        "",
-        "create_folder",
-        "move_to_folder:archive",
         "show_in_folder",
         "remove",
     ]
@@ -422,26 +431,27 @@ def test_gallery_more_button_uses_same_shared_menu(panel_module):
     assert event.stopped is True
 
 
-def test_folder_menu_keeps_watched_directory_action(panel_module, monkeypatch):
+def test_real_folder_menu_reveals_or_removes_mapping(panel_module, monkeypatch):
     panel = panel_module.AssetManagerPanel()
     panel._asset_index = _index(
-        folders={"projects": {"id": "projects", "name": "Projects", "watch_directories": []}}
+        folders={"projects": {"id": "projects", "name": "Projects", "path": "/tmp/projects"}}
     )
     calls = []
     monkeypatch.setattr(
         panel,
-        "on_edit_watch_dirs",
+        "on_delete_folder",
         lambda _handle, _event, args: calls.append(tuple(args)),
     )
 
     assert panel._show_folder_context_menu("projects") is True
     menu = panel_module.lf._test_state.context_menus[-1]
     assert [item["action"] for item in menu["items"]] == [
-        "watch_dirs",
-        "rename",
-        "delete",
+        "show",
+        "remove",
     ]
-    menu["on_action"]("watch_dirs")
+    menu["on_action"]("show")
+    assert panel_module.lf._test_state.revealed == ["/tmp/projects"]
+    menu["on_action"]("remove")
     assert calls == [("projects",)]
 
 
@@ -512,26 +522,26 @@ def test_import_registers_only_selected_licht_project(panel_module):
 
     panel.on_import_project()
 
-    assert calls == [(asset["path"], "default")]
+    assert calls == [(asset["path"], None)]
     assert panel.get_selected_asset_id() == asset["id"]
 
 
-def test_edit_watch_directories_targets_clicked_folder(panel_module, monkeypatch):
+def test_add_folder_uses_real_directory_picker(panel_module):
     panel = panel_module.AssetManagerPanel()
-    panel._asset_index = _index()
+    selected = "/tmp/assets"
+    panel_module.lf._test_state.folder_dialog_path = selected
     calls = []
-    monkeypatch.setattr(
-        panel_module,
-        "open_watch_dirs_dialog",
-        lambda index, folder_id, callback: calls.append((index, folder_id, callback)) or True,
+    panel._asset_index = _index(
+        add_folder=lambda path: calls.append(path)
+        or SimpleNamespace(id="selected-folder"),
+        verify_projects=lambda: (0, 0),
     )
-    event = _Event()
+    panel.refresh_catalog = lambda **_kwargs: None
 
-    panel.on_edit_watch_dirs(None, event, ["default"])
+    panel.on_add_folder()
 
-    assert calls[0][0] is panel._asset_index
-    assert calls[0][1] == "default"
-    assert event.stopped is True
+    assert calls == [selected]
+    assert panel._selected_folder_id == "selected-folder"
 
 
 def test_folder_counts_match_search_results(panel_module):
@@ -572,8 +582,8 @@ def test_all_assets_navigation_and_folder_scopes_filter_catalog(panel_module):
     panel._asset_index = _index(
         assets={first["id"]: first, second["id"]: second},
         folders={
-            "default": {"id": "default", "name": "Default", "watch_directories": []},
-            "archive": {"id": "archive", "name": "Archive", "watch_directories": []},
+            "default": {"id": "default", "name": "Default", "path": "/tmp/default"},
+            "archive": {"id": "archive", "name": "Archive", "path": "/tmp/archive"},
         },
     )
 
@@ -748,7 +758,7 @@ def test_toolbar_refresh_verifies_without_deleting_then_scans(panel_module, monk
         assets=assets,
         verify_projects=verify_projects,
     )
-    monkeypatch.setattr(panel, "_scan_watched_projects", lambda: calls.append("scan"))
+    monkeypatch.setattr(panel, "_scan_asset_folders", lambda: calls.append("scan"))
 
     panel.refresh_catalog()
 
@@ -776,12 +786,12 @@ def test_delete_folder_requires_confirmation_with_project_count(panel_module):
 
     assert deleted == []
     title, message, buttons, callback = panel_module.lf._test_state.confirm_dialogs[-1]
-    assert title == "asset_manager.dialog.delete_folder"
-    assert message == 'Delete "Work" with 2 projects?'
-    assert buttons[-1] == "asset_manager.action.delete_folder"
+    assert title == "asset_manager.dialog.remove_folder"
+    assert message == 'Remove "Work" with 2 projects?'
+    assert buttons[-1] == "asset_manager.action.remove_folder"
     callback("common.cancel")
     assert deleted == []
-    callback("asset_manager.action.delete_folder")
+    callback("asset_manager.action.remove_folder")
     assert deleted == ["projects"]
 
 
@@ -890,11 +900,16 @@ def test_drag_missing_project_is_rejected(panel_module, monkeypatch):
     assert panel_module.lf._test_state.drag_begins == []
 
 
-def test_default_folder_cannot_be_renamed_or_deleted_from_menu(panel_module):
+def test_default_folder_links_to_settings_instead_of_removal(panel_module):
     panel = panel_module.AssetManagerPanel()
     assert panel._folder_context_menu_items("default") == [
         {
-            "label": "asset_manager.action.edit_watch_dirs",
-            "action": "watch_dirs",
-        }
+            "label": "asset_manager.action.show_in_folder",
+            "action": "show",
+        },
+        {
+            "label": "asset_manager.action.settings",
+            "action": "settings",
+            "separator_before": True,
+        },
     ]

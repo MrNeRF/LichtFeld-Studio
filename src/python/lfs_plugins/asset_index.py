@@ -23,32 +23,22 @@ _log = logging.getLogger(__name__)
 _T = TypeVar("_T")
 _ASSET_INDEX_LOCK = threading.RLock()
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SUPPORTED_ASSET_EXTENSION = ".licht"
 DEFAULT_FOLDER_ID = "default"
-DEFAULT_FOLDER_NAME = "Default"
 
 
 def _normalize_path(path: str) -> str:
     return os.path.abspath(os.path.expanduser(path))
 
 
-def _normalize_watch_directories(paths: Any) -> List[str]:
-    if not isinstance(paths, (list, tuple)):
-        return []
-
-    normalized_paths: List[str] = []
-    seen = set()
-    for path in paths:
-        text = str(path).strip()
-        if not text:
-            continue
-        normalized = _normalize_path(text)
-        key = os.path.normcase(normalized)
-        if key not in seen:
-            seen.add(key)
-            normalized_paths.append(normalized)
-    return normalized_paths
+def _path_is_within(path: str, directory: str) -> bool:
+    try:
+        return Path(_normalize_path(path)).is_relative_to(
+            Path(_normalize_path(directory))
+        )
+    except (OSError, ValueError):
+        return False
 
 
 def _enum_name(value: Any) -> str:
@@ -180,6 +170,25 @@ def resolve_asset_manager_library_path() -> Path:
     return resolve_asset_manager_storage_path() / "library.json"
 
 
+def resolve_default_asset_directory() -> Path:
+    override = environment_value("LFS_ASSET_MANAGER_ASSETS_DIR")
+    if override:
+        return Path(override).expanduser()
+
+    try:
+        import lichtfeld as lf
+
+        getter = getattr(getattr(lf, "ui", None), "get_asset_manager_directory", None)
+        if callable(getter):
+            resolved = str(getter() or "").strip()
+            if resolved:
+                return Path(resolved).expanduser()
+    except Exception:
+        pass
+
+    return Path.home() / ".lichtfeld" / "assets"
+
+
 def is_supported_asset_path(path: str) -> bool:
     return Path(path).suffix.lower() == SUPPORTED_ASSET_EXTENSION
 
@@ -187,17 +196,23 @@ def is_supported_asset_path(path: str) -> bool:
 @dataclass
 class Folder:
     id: str
-    name: str
-    watch_directories: List[str]
+    path: str
+
+    @property
+    def name(self) -> str:
+        directory = Path(self.path)
+        return directory.name or str(directory)
 
     def to_storage_dict(self) -> Dict[str, Any]:
-        return {
-            "name": self.name,
-            "watch_directories": list(self.watch_directories),
-        }
+        return {"path": self.path}
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"id": self.id, **self.to_storage_dict()}
+        return {
+            "id": self.id,
+            "name": self.name,
+            "path": self.path,
+            "is_default": self.id == DEFAULT_FOLDER_ID,
+        }
 
 
 @dataclass
@@ -257,10 +272,30 @@ class Project:
 class AssetIndex:
     """Small JSON locator index; project metadata stays inside each .licht file."""
 
-    def __init__(self, library_path: Optional[Path] = None):
+    def __init__(
+        self,
+        library_path: Optional[Path] = None,
+        default_folder_path: Optional[Path] = None,
+    ):
         self._library_path = library_path or resolve_asset_manager_library_path()
         self._library_path.parent.mkdir(parents=True, exist_ok=True)
         self._uses_default_library_path = library_path is None
+        if default_folder_path is None:
+            default_folder_path = (
+                resolve_default_asset_directory()
+                if library_path is None
+                else self._library_path.parent
+            )
+        self._default_folder_path = _normalize_path(str(default_folder_path))
+        if not environment_flag("LFS_SAFE_MODE", False):
+            try:
+                Path(self._default_folder_path).mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                _log.warning(
+                    "Could not create the default Asset Manager folder %s: %s",
+                    self._default_folder_path,
+                    exc,
+                )
         self._lock = _ASSET_INDEX_LOCK
         self._folders: Dict[str, Folder] = {}
         self._projects: Dict[str, Project] = {}
@@ -356,6 +391,41 @@ class AssetIndex:
             for project_uuid, project in self._projects.items()
         }
 
+    def _folder_id_for_path(self, path: str) -> Optional[str]:
+        candidates = [
+            folder
+            for folder in self._folders.values()
+            if _path_is_within(path, folder.path)
+        ]
+        if not candidates:
+            return None
+        return max(
+            candidates,
+            key=lambda folder: (len(Path(folder.path).parts), folder.id),
+        ).id
+
+    def _add_folder_record(
+        self,
+        directory: str,
+        *,
+        preferred_id: Optional[str] = None,
+    ) -> Folder:
+        normalized = _normalize_path(directory)
+        key = self._path_key(normalized)
+        for folder in self._folders.values():
+            if self._path_key(folder.path) == key:
+                return folder
+        folder_id = preferred_id or str(uuid.uuid4())
+        if folder_id == DEFAULT_FOLDER_ID or folder_id in self._folders:
+            folder_id = str(
+                uuid.uuid5(uuid.NAMESPACE_URL, f"lichtfeld-asset-folder:{key}")
+            )
+            if folder_id in self._folders:
+                folder_id = str(uuid.uuid4())
+        folder = Folder(id=folder_id, path=normalized)
+        self._folders[folder.id] = folder
+        return folder
+
     def _snapshot_state(
         self,
     ) -> Tuple[Dict[str, Folder], Dict[str, Project], Dict[str, str]]:
@@ -372,12 +442,11 @@ class AssetIndex:
         if folder is None:
             self._folders[DEFAULT_FOLDER_ID] = Folder(
                 id=DEFAULT_FOLDER_ID,
-                name=DEFAULT_FOLDER_NAME,
-                watch_directories=[],
+                path=self._default_folder_path,
             )
             return True
-        if folder.name != DEFAULT_FOLDER_NAME:
-            folder.name = DEFAULT_FOLDER_NAME
+        if self._path_key(folder.path) != self._path_key(self._default_folder_path):
+            folder.path = self._default_folder_path
             return True
         return False
 
@@ -387,43 +456,46 @@ class AssetIndex:
         self._project_by_path = {}
         self._ensure_default_folder()
 
-    def _load_v2(self, data: Dict[str, Any]) -> bool:
+    def _load_v3(self, data: Dict[str, Any]) -> bool:
         folders_data = data.get("folders")
         projects_data = data.get("projects")
         if not isinstance(folders_data, dict) or not isinstance(projects_data, dict):
-            raise ValueError("Asset Manager schema v2 requires folders and projects objects")
+            raise ValueError("Asset Manager schema v3 requires folders and projects objects")
         normalized = set(data) != {"schema_version", "folders", "projects"}
 
-        folders: Dict[str, Folder] = {}
+        self._folders = {}
+        self._projects = {}
+        self._project_by_path = {}
+        stored_default_path = ""
         for folder_id, value in folders_data.items():
             if not isinstance(folder_id, str) or not isinstance(value, dict):
                 raise ValueError("Invalid Asset Manager folder record")
-            normalized = normalized or set(value) != {"name", "watch_directories"}
-            watch_directories = _normalize_watch_directories(
-                value.get("watch_directories", [])
-            )
-            normalized = normalized or watch_directories != value.get(
-                "watch_directories", []
-            )
-            folders[folder_id] = Folder(
-                id=folder_id,
-                name=str(value.get("name") or DEFAULT_FOLDER_NAME),
-                watch_directories=watch_directories,
-            )
+            normalized = normalized or set(value) != {"path"}
+            raw_path = str(value.get("path") or "").strip()
+            if not raw_path:
+                normalized = True
+                continue
+            path = _normalize_path(raw_path)
+            normalized = normalized or path != raw_path
+            if folder_id == DEFAULT_FOLDER_ID:
+                stored_default_path = path
+                continue
+            if self._path_key(path) == self._path_key(self._default_folder_path):
+                normalized = True
+                continue
+            before = len(self._folders)
+            self._add_folder_record(path, preferred_id=folder_id)
+            normalized = normalized or len(self._folders) == before
 
-        if DEFAULT_FOLDER_ID not in folders:
-            folders[DEFAULT_FOLDER_ID] = Folder(
-                id=DEFAULT_FOLDER_ID,
-                name=DEFAULT_FOLDER_NAME,
-                watch_directories=[],
-            )
-            normalized = True
-        elif folders[DEFAULT_FOLDER_ID].name != DEFAULT_FOLDER_NAME:
-            folders[DEFAULT_FOLDER_ID].name = DEFAULT_FOLDER_NAME
+        self._ensure_default_folder()
+        if (
+            stored_default_path
+            and self._path_key(stored_default_path)
+            != self._path_key(self._default_folder_path)
+        ):
+            self._add_folder_record(stored_default_path)
             normalized = True
 
-        projects: Dict[str, Project] = {}
-        project_by_path: Dict[str, str] = {}
         seen_paths = set()
         for project_uuid, value in projects_data.items():
             if not isinstance(value, dict):
@@ -446,9 +518,12 @@ class AssetIndex:
                 raise ValueError(f"Duplicate Asset Manager project path: {path}")
             seen_paths.add(path_key)
 
-            folder_id = str(value.get("folder_id") or DEFAULT_FOLDER_ID)
-            if folder_id not in folders:
-                folder_id = DEFAULT_FOLDER_ID
+            stored_folder_id = str(value.get("folder_id") or DEFAULT_FOLDER_ID)
+            folder_id = self._folder_id_for_path(path)
+            if folder_id is None:
+                folder_id = self._add_folder_record(str(Path(path).parent)).id
+                normalized = True
+            if folder_id != stored_folder_id:
                 normalized = True
             project = Project(
                 project_uuid=canonical_uuid,
@@ -457,13 +532,8 @@ class AssetIndex:
                 folder_id=folder_id,
             )
             self._refresh_project(project)
-            projects[canonical_uuid] = project
-            project_by_path[path_key] = canonical_uuid
-
-        # Do not expose a half-loaded catalog if a later row is malformed.
-        self._folders = folders
-        self._projects = projects
-        self._project_by_path = project_by_path
+            self._projects[canonical_uuid] = project
+            self._project_by_path[path_key] = canonical_uuid
         return normalized
 
     def _migrate_legacy(self, data: Dict[str, Any]) -> None:
@@ -477,18 +547,18 @@ class AssetIndex:
             legacy_folders = data.get("projects", {})
         if not isinstance(legacy_folders, dict):
             legacy_folders = {}
-        if isinstance(legacy_folders, dict):
-            for folder_id, value in legacy_folders.items():
-                if not isinstance(folder_id, str) or not isinstance(value, dict):
+        for folder_id, value in legacy_folders.items():
+            if not isinstance(folder_id, str) or not isinstance(value, dict):
+                continue
+            raw_directories = value.get("watch_directories", [])
+            if not isinstance(raw_directories, (list, tuple)):
+                raw_directories = []
+            for index, directory in enumerate(raw_directories):
+                text = str(directory or "").strip()
+                if not text:
                     continue
-                self._folders[folder_id] = Folder(
-                    id=folder_id,
-                    name=str(value.get("name") or DEFAULT_FOLDER_NAME),
-                    watch_directories=_normalize_watch_directories(
-                        value.get("watch_directories", [])
-                    ),
-                )
-        self._ensure_default_folder()
+                preferred_id = folder_id if index == 0 and folder_id != DEFAULT_FOLDER_ID else None
+                self._add_folder_record(text, preferred_id=preferred_id)
 
         legacy_projects = legacy_assets
         if not isinstance(legacy_projects, dict):
@@ -497,9 +567,15 @@ class AssetIndex:
             legacy_projects = {}
 
         candidates: List[Tuple[str, Dict[str, Any]]] = []
-        for value in legacy_projects.values():
+        strict_v2 = data.get("schema_version") == 2
+        for legacy_id, value in legacy_projects.items():
             if not isinstance(value, dict):
                 continue
+            if strict_v2:
+                canonical_id = str(uuid.UUID(str(legacy_id)))
+                if canonical_id != legacy_id:
+                    raise ValueError(f"Project UUID is not canonical: {legacy_id}")
+                value = {**value, "project_uuid": canonical_id}
             raw_path = value.get("absolute_path") or value.get("path")
             if not raw_path:
                 continue
@@ -549,11 +625,9 @@ class AssetIndex:
                 if project_uuid in self._projects:
                     continue
 
-            folder_id = str(
-                value.get("folder_id") or value.get("project_id") or DEFAULT_FOLDER_ID
-            )
-            if folder_id not in self._folders:
-                folder_id = DEFAULT_FOLDER_ID
+            folder_id = self._folder_id_for_path(path)
+            if folder_id is None:
+                folder_id = self._add_folder_record(str(Path(path).parent)).id
             project = Project(
                 project_uuid=project_uuid,
                 name=str(value.get("name") or self._inspection_name(path)),
@@ -656,9 +730,9 @@ class AssetIndex:
             if not isinstance(data, dict):
                 raise ValueError("Asset Manager catalog root must be an object")
 
-            is_v2 = data.get("schema_version") == SCHEMA_VERSION
-            if is_v2 and not migrating_legacy_location:
-                if self._load_v2(data) and not self.save():
+            is_current = data.get("schema_version") == SCHEMA_VERSION
+            if is_current and not migrating_legacy_location:
+                if self._load_v3(data) and not self.save():
                     self._restore_state(previous_state)
                     return False
                 self._cleanup_obsolete_storage()
@@ -731,27 +805,22 @@ class AssetIndex:
         self._initialize_empty()
 
     @_synchronized
-    def create_folder(self, name: str) -> Optional[Folder]:
-        previous_state = self._snapshot_state()
-        folder = Folder(id=str(uuid.uuid4()), name=name, watch_directories=[])
-        self._folders[folder.id] = folder
-        if not self.save():
-            self._restore_state(previous_state)
+    def add_folder(self, directory: str) -> Optional[Folder]:
+        path = Path(_normalize_path(directory))
+        if not path.is_dir():
             return None
-        return folder
-
-    @_synchronized
-    def update_folder(self, folder_id: str, **kwargs) -> Optional[Folder]:
-        folder = self._folders.get(folder_id)
-        if folder is None:
-            return None
+        existing = next(
+            (
+                folder
+                for folder in self._folders.values()
+                if self._path_key(folder.path) == self._path_key(str(path))
+            ),
+            None,
+        )
+        if existing is not None:
+            return existing
         previous_state = self._snapshot_state()
-        if "name" in kwargs and folder_id != DEFAULT_FOLDER_ID:
-            folder.name = str(kwargs["name"])
-        if "watch_directories" in kwargs:
-            folder.watch_directories = _normalize_watch_directories(
-                kwargs["watch_directories"]
-            )
+        folder = self._add_folder_record(str(path))
         if not self.save():
             self._restore_state(previous_state)
             return None
@@ -760,13 +829,10 @@ class AssetIndex:
     @_synchronized
     def delete_folder(self, folder_id: str) -> bool:
         folder = self._folders.get(folder_id)
-        if folder is None:
+        if folder is None or folder_id == DEFAULT_FOLDER_ID:
             return False
         previous_state = self._snapshot_state()
-        if folder_id == DEFAULT_FOLDER_ID:
-            folder.watch_directories = []
-        else:
-            del self._folders[folder_id]
+        del self._folders[folder_id]
         self._projects = {
             project_uuid: project
             for project_uuid, project in self._projects.items()
@@ -779,21 +845,63 @@ class AssetIndex:
         return False
 
     @_synchronized
-    def get_watch_dirs(self, folder_id: str) -> List[str]:
-        folder = self._folders.get(folder_id)
-        return list(folder.watch_directories) if folder is not None else []
-
-    @_synchronized
-    def set_watch_dirs(self, folder_id: str, paths: List[str]) -> bool:
-        folder = self._folders.get(folder_id)
+    def set_default_folder_path(self, directory: str) -> bool:
+        normalized = _normalize_path(directory)
+        if not environment_flag("LFS_SAFE_MODE", False):
+            try:
+                Path(normalized).mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                _log.error(
+                    "Could not create the default Asset Manager folder %s: %s",
+                    normalized,
+                    exc,
+                )
+                return False
+            if not Path(normalized).is_dir():
+                return False
+        folder = self._folders.get(DEFAULT_FOLDER_ID)
+        if folder is not None and self._path_key(folder.path) == self._path_key(normalized):
+            return True
+        previous_state = self._snapshot_state()
+        previous_default_path = self._default_folder_path
+        old_path = folder.path if folder is not None else ""
+        new_path_key = self._path_key(normalized)
+        duplicate_ids = [
+            folder_id
+            for folder_id, item in self._folders.items()
+            if folder_id != DEFAULT_FOLDER_ID
+            and self._path_key(item.path) == new_path_key
+        ]
+        for folder_id in duplicate_ids:
+            del self._folders[folder_id]
+        self._default_folder_path = normalized
         if folder is None:
-            return False
-        old_paths = folder.watch_directories
-        folder.watch_directories = _normalize_watch_directories(paths)
+            self._folders[DEFAULT_FOLDER_ID] = Folder(DEFAULT_FOLDER_ID, normalized)
+        else:
+            folder.path = normalized
+        if (
+            old_path
+            and self._path_key(old_path) != new_path_key
+            and any(
+                _path_is_within(project.path, old_path)
+                for project in self._projects.values()
+            )
+        ):
+            self._add_folder_record(old_path)
+        for project in self._projects.values():
+            resolved_folder = self._folder_id_for_path(project.path)
+            if resolved_folder is None:
+                resolved_folder = self._add_folder_record(str(Path(project.path).parent)).id
+            project.folder_id = resolved_folder
         if self.save():
             return True
-        folder.watch_directories = old_paths
+        self._default_folder_path = previous_default_path
+        self._restore_state(previous_state)
         return False
+
+    @_synchronized
+    def folder_id_for_path(self, path: str) -> Optional[str]:
+        return self._folder_id_for_path(path)
 
     @_synchronized
     def update_asset(self, asset_id: str, *, save: bool = True, **kwargs) -> Optional[Project]:
@@ -801,10 +909,14 @@ class AssetIndex:
         if project is None:
             return None
         previous_state = self._snapshot_state() if save else None
+        if "folder_id" in kwargs:
+            target = self._folders.get(str(kwargs["folder_id"]))
+            resolved_folder_id = self._folder_id_for_path(project.path)
+            if target is None or target.id != resolved_folder_id:
+                return None
+            project.folder_id = target.id
         if "name" in kwargs:
             project.name = str(kwargs["name"])
-        if "folder_id" in kwargs and kwargs["folder_id"] in self._folders:
-            project.folder_id = str(kwargs["folder_id"])
         if save and not self.save():
             assert previous_state is not None
             self._restore_state(previous_state)
@@ -854,16 +966,15 @@ class AssetIndex:
         if not Path(path).is_file():
             raise FileNotFoundError(path)
 
-        target_folder_id = folder_id or DEFAULT_FOLDER_ID
-        if target_folder_id not in self._folders:
-            _log.error("Cannot register project: folder %s does not exist", target_folder_id)
-            return None, False
-
         inspection = self._inspect_path(path)
         if not self._inspection_is_master(inspection):
             raise ValueError("Asset Manager only registers master .licht project files")
         project_uuid = str(inspection.project_uuid)
         uuid.UUID(project_uuid)
+
+        target_folder_id = self._folder_id_for_path(path)
+        if target_folder_id is None:
+            target_folder_id = self._add_folder_record(str(Path(path).parent)).id
 
         path_key = self._path_key(path)
         stale_uuid = self._project_by_path.get(path_key)
@@ -900,8 +1011,8 @@ class AssetIndex:
             if name is not None and project.name != name:
                 project.name = name
                 persisted_changed = True
-            if adopt_existing and folder_id is not None and project.folder_id != folder_id:
-                project.folder_id = folder_id
+            if adopt_existing and project.folder_id != target_folder_id:
+                project.folder_id = target_folder_id
                 persisted_changed = True
 
         if save and persisted_changed and not self.save():
@@ -935,8 +1046,12 @@ class AssetIndex:
         if conflicting_uuid is not None and conflicting_uuid != asset_id:
             return False
         previous_state = self._snapshot_state()
+        folder_id = self._folder_id_for_path(path)
+        if folder_id is None:
+            folder_id = self._add_folder_record(str(Path(path).parent)).id
         self._project_by_path.pop(self._path_key(project.path), None)
         project.path = path
+        project.folder_id = folder_id
         self._project_by_path[path_key] = asset_id
         self._apply_inspection(project, inspection)
         if self.save():

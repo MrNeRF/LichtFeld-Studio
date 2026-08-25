@@ -5091,6 +5091,54 @@ namespace lfs::python {
             "Clear the working folder preference so the default root is used.");
 
         m.def(
+            "get_asset_manager_directory",
+            []() -> std::string {
+                nb::gil_scoped_release release;
+                return lfs::core::path_to_utf8(vis::loadAssetManagerDirectoryPreference());
+            },
+            "Get the effective Asset Manager folder (absolute).");
+
+        m.def(
+            "get_asset_manager_directory_preference",
+            []() -> std::string {
+                nb::gil_scoped_release release;
+                return lfs::core::path_to_utf8(vis::assetManagerDirectoryPreferenceRaw());
+            },
+            "Get the raw Asset Manager folder preference. Empty means the default folder.");
+
+        m.def(
+            "get_default_asset_manager_directory",
+            []() -> std::string {
+                nb::gil_scoped_release release;
+                return lfs::core::path_to_utf8(vis::defaultAssetManagerDirectory());
+            },
+            "Get the default Asset Manager folder under the LichtFeld user root.");
+
+        m.def(
+            "set_asset_manager_directory",
+            [](const std::string& path) -> std::string {
+                lfs::Status result;
+                {
+                    nb::gil_scoped_release release;
+                    result = vis::setAssetManagerDirectoryPreference(
+                        lfs::core::utf8_to_path(path));
+                }
+                if (!result)
+                    return std::string(result.error().user_message());
+                return {};
+            },
+            nb::arg("path"),
+            "Set the Asset Manager folder. Returns empty on success or a user-facing error.");
+
+        m.def(
+            "clear_asset_manager_directory",
+            [] {
+                nb::gil_scoped_release release;
+                vis::clearAssetManagerDirectoryPreference();
+            },
+            "Clear the Asset Manager folder preference so the default is used.");
+
+        m.def(
             "get_mcp_status",
             [] {
                 mcp::McpHttpStatus status;

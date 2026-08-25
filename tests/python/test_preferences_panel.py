@@ -60,6 +60,7 @@ def preferences_panel_module(monkeypatch):
         ),
         scene_reconstruction_presets={"native": "native", "spatial": "quality"},
         working_directory="",
+        asset_manager_directory="",
     )
 
     def set_working_directory(path):
@@ -68,6 +69,13 @@ def preferences_panel_module(monkeypatch):
 
     def clear_working_directory():
         state.working_directory = ""
+
+    def set_asset_manager_directory(path):
+        state.asset_manager_directory = str(path)
+        return ""
+
+    def clear_asset_manager_directory():
+        state.asset_manager_directory = ""
 
     def set_mcp_preferences(enabled, expose_network, port, request_logging):
         config = {
@@ -111,6 +119,13 @@ def preferences_panel_module(monkeypatch):
         get_temp_project_directory=lambda: (state.working_directory or "/home/tester/.lichtfeld") + "/tmp",
         set_working_directory=set_working_directory,
         clear_working_directory=clear_working_directory,
+        get_asset_manager_directory=lambda: (
+            state.asset_manager_directory or "/home/tester/.lichtfeld/assets"
+        ),
+        get_asset_manager_directory_preference=lambda: state.asset_manager_directory,
+        get_default_asset_manager_directory=lambda: "/home/tester/.lichtfeld/assets",
+        set_asset_manager_directory=set_asset_manager_directory,
+        clear_asset_manager_directory=clear_asset_manager_directory,
         open_folder_dialog=lambda title, start: "",
         set_panel_enabled=lambda panel_id, enabled: state.panel_enabled_calls.append(
             (panel_id, bool(enabled))
@@ -314,6 +329,43 @@ def test_language_selection_does_not_reload_active_language(preferences_panel_mo
     panel._set_language_index("1")
 
     assert state.set_language_calls == []
+
+
+def test_asset_manager_directory_is_saved_and_can_return_to_default(
+    preferences_panel_module,
+):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._read_asset_manager_directory()
+
+    assert panel._asset_manager_directory == "/home/tester/.lichtfeld/assets"
+
+    panel._set_asset_manager_directory_draft("/mnt/projects/assets")
+    assert panel._commit_asset_manager_directory() is True
+    assert state.asset_manager_directory == "/mnt/projects/assets"
+    assert panel._applied_asset_manager_directory == "/mnt/projects/assets"
+
+    panel._on_use_default_asset_manager_directory(None, None, None)
+    assert state.asset_manager_directory == ""
+    assert panel._asset_manager_directory == "/home/tester/.lichtfeld/assets"
+
+
+def test_general_preferences_expose_asset_manager_directory_controls():
+    project_root = Path(__file__).parent.parent.parent
+    rml = (
+        project_root
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+        / "preferences.rml"
+    ).read_text(encoding="utf-8")
+
+    assert 'data-event-click="toggle_section(\'asset_manager\')"' in rml
+    assert 'data-value="asset_manager_directory"' in rml
+    assert 'data-event-click="browse_asset_manager_directory"' in rml
+    assert 'data-event-click="use_default_asset_manager_directory"' in rml
 
 
 def test_scene_reconstruction_uses_backend_specific_presets(preferences_panel_module):

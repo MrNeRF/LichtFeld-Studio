@@ -68,6 +68,9 @@ def pytest_configure(config):
     # temp dir; this baseline only guarantees nothing resolves to production.
     session_catalog = Path(tempfile.gettempdir()) / "lfs-test-asset-manager"
     os.environ.setdefault("LFS_ASSET_MANAGER_DIR", str(session_catalog))
+    os.environ.setdefault(
+        "LFS_ASSET_MANAGER_ASSETS_DIR", str(session_catalog / "assets")
+    )
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -99,6 +102,7 @@ def isolate_asset_manager_catalog(tmp_path, monkeypatch):
     """
     catalog_dir = tmp_path / "asset_library"
     monkeypatch.setenv("LFS_ASSET_MANAGER_DIR", str(catalog_dir))
+    monkeypatch.setenv("LFS_ASSET_MANAGER_ASSETS_DIR", str(tmp_path / "assets"))
     return catalog_dir
 
 

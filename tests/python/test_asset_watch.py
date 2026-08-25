@@ -1,17 +1,16 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Regression tests for .licht-only watched-directory discovery."""
+"""Regression tests for .licht discovery in real Asset Manager folders."""
 
-import os
 import threading
 from pathlib import Path
 from types import SimpleNamespace
 
-from lfs_plugins.asset_index import AssetIndex, DEFAULT_FOLDER_ID
+from lfs_plugins.asset_index import AssetIndex
 from lfs_plugins.asset_watch import (
     discover_licht_projects,
-    scan_all_watch_directories,
-    scan_watch_directories,
+    scan_all_asset_folders,
+    scan_asset_folder,
 )
 
 
@@ -29,7 +28,7 @@ def test_discovery_recurses_and_returns_only_licht_files(tmp_path: Path):
     assert discovered == [str(first.resolve()), str(second.resolve())]
 
 
-def test_scan_deduplicates_overlapping_roots_before_registration(tmp_path: Path):
+def test_scan_registers_projects_from_one_real_folder(tmp_path: Path):
     nested = tmp_path / "nested"
     nested.mkdir()
     first = tmp_path / "first.licht"
@@ -51,10 +50,10 @@ def test_scan_deduplicates_overlapping_roots_before_registration(tmp_path: Path)
             return True
 
     index = _Index()
-    result = scan_watch_directories(
+    result = scan_asset_folder(
         index,
         "projects",
-        [str(tmp_path), str(nested)],
+        str(tmp_path),
     )
 
     assert index.paths == [
@@ -67,22 +66,22 @@ def test_scan_deduplicates_overlapping_roots_before_registration(tmp_path: Path)
     assert result.failed == 0
 
 
-def test_watch_directories_are_normalized_deduplicated_and_persisted(tmp_path: Path):
-    watched = tmp_path / "watched"
-    watched.mkdir()
+def test_real_folder_mapping_is_normalized_and_persisted(tmp_path: Path):
+    default = tmp_path / "default"
+    selected = tmp_path / "selected"
+    default.mkdir()
+    selected.mkdir()
     library_path = tmp_path / "library.json"
-    index = AssetIndex(library_path=library_path)
+    index = AssetIndex(library_path=library_path, default_folder_path=default)
     index.ensure_default_catalog()
 
-    relative = os.path.relpath(watched, Path.cwd())
-    assert index.set_watch_dirs(DEFAULT_FOLDER_ID, [relative, str(watched), ""]) is True
+    folder = index.add_folder(str(selected))
+    assert folder is not None
+    assert folder.path == str(selected.resolve())
 
-    reloaded = AssetIndex(library_path=library_path)
+    reloaded = AssetIndex(library_path=library_path, default_folder_path=default)
     assert reloaded.load() is True
-    assert reloaded.get_watch_dirs(DEFAULT_FOLDER_ID) == [str(watched.resolve())]
-    assert reloaded.folders[DEFAULT_FOLDER_ID]["watch_directories"] == [
-        str(watched.resolve())
-    ]
+    assert reloaded.folders[folder.id]["path"] == str(selected.resolve())
 
 
 def test_global_scan_assigns_new_project_to_most_specific_root(tmp_path: Path):
@@ -93,8 +92,8 @@ def test_global_scan_assigns_new_project_to_most_specific_root(tmp_path: Path):
 
     class _Index:
         folders = {
-            "broad": {"watch_directories": [str(tmp_path)]},
-            "specific": {"watch_directories": [str(nested)]},
+            "broad": {"path": str(tmp_path)},
+            "specific": {"path": str(nested)},
         }
 
         def __init__(self):
@@ -108,7 +107,7 @@ def test_global_scan_assigns_new_project_to_most_specific_root(tmp_path: Path):
             return True
 
     index = _Index()
-    result = scan_all_watch_directories(index)
+    result = scan_all_asset_folders(index)
 
     assert index.paths == [(str(project), "specific", False, False)]
     assert result.discovered == 1
@@ -116,7 +115,7 @@ def test_global_scan_assigns_new_project_to_most_specific_root(tmp_path: Path):
     assert result.failed == 0
 
 
-def test_missing_watched_directory_discovers_nothing(tmp_path: Path):
+def test_missing_asset_folder_discovers_nothing(tmp_path: Path):
     assert discover_licht_projects(str(tmp_path / "missing")) == []
 
 
@@ -154,7 +153,7 @@ def test_scan_skips_inspection_for_unchanged_cataloged_path(tmp_path: Path):
         def save(self):
             raise AssertionError("unchanged catalog must not be saved")
 
-    result = scan_watch_directories(_Index(), "projects", [str(tmp_path)])
+    result = scan_asset_folder(_Index(), "projects", str(tmp_path))
 
     assert result.discovered == 1
     assert result.already_cataloged == 1
@@ -187,10 +186,10 @@ def test_cancelled_scan_rolls_back_discovered_projects(tmp_path: Path):
             raise AssertionError("cancelled scan must not save")
 
     index = _Index()
-    result = scan_watch_directories(
+    result = scan_asset_folder(
         index,
         "projects",
-        [str(tmp_path)],
+        str(tmp_path),
         cancel_event,
     )
 

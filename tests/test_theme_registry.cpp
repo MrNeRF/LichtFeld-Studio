@@ -355,6 +355,49 @@ TEST(ThemePreferencesContract, WorkingDirectoryRoundTripAndRejectsUnwritable) {
     std::filesystem::remove_all(root, error);
 }
 
+TEST(ThemePreferencesContract, AssetManagerDirectoryRoundTripAndDefaultsUnderLfsHome) {
+    const auto root =
+        std::filesystem::temp_directory_path() / "lfs_asset_manager_directory_preferences";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << lfs::format_for_developer(paths.error());
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+
+    EXPECT_TRUE(lfs::vis::assetManagerDirectoryPreferenceRaw().empty());
+    EXPECT_EQ(
+        lfs::vis::defaultAssetManagerDirectory().lexically_normal(),
+        (paths->rootDir() / "assets").lexically_normal());
+    EXPECT_EQ(
+        lfs::vis::loadAssetManagerDirectoryPreference().lexically_normal(),
+        (paths->rootDir() / "assets").lexically_normal());
+
+    const auto custom = root / "custom-assets";
+    auto set = lfs::vis::setAssetManagerDirectoryPreference(custom);
+    ASSERT_TRUE(set) << lfs::format_for_developer(set.error());
+    EXPECT_TRUE(std::filesystem::is_directory(custom));
+    EXPECT_EQ(
+        lfs::vis::assetManagerDirectoryPreferenceRaw().lexically_normal(),
+        custom.lexically_normal());
+    EXPECT_EQ(
+        lfs::vis::loadAssetManagerDirectoryPreference().lexically_normal(),
+        custom.lexically_normal());
+
+    const auto as_file = root / "not-an-asset-directory";
+    std::ofstream(as_file) << "file";
+    const auto before = lfs::vis::assetManagerDirectoryPreferenceRaw();
+    const auto rejected = lfs::vis::setAssetManagerDirectoryPreference(as_file);
+    ASSERT_FALSE(rejected);
+    EXPECT_EQ(
+        lfs::vis::assetManagerDirectoryPreferenceRaw().lexically_normal(),
+        before.lexically_normal());
+
+    lfs::vis::clearAssetManagerDirectoryPreference();
+    EXPECT_TRUE(lfs::vis::assetManagerDirectoryPreferenceRaw().empty());
+    std::filesystem::remove_all(root, error);
+}
+
 TEST(ThemePreferencesContract, SafeModeNeitherReadsNorWritesPreferences) {
     const auto root = std::filesystem::temp_directory_path() / "lfs_theme_preferences_safe_mode";
     std::error_code error;
