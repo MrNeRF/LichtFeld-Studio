@@ -42,6 +42,8 @@ class MRNFStrategyTest_CadenceScaledMatchesRefineEvery_Test;
 class MRNFStrategyTest_FarStarvationFactorFromSyntheticPopulations_Test;
 class MRNFStrategyTest_CensusGateActivatesAndSuppressesFarFeatures_Test;
 class MRNFStrategyTest_ExploreStarvationWeights_Test;
+class MRNFStrategyTest_BackgroundImprovementsOffDisablesEveryProfileMechanism_Test;
+class MRNFStrategyTest_BackgroundImprovementsOnKeepsProfileMechanisms_Test;
 
 namespace lfs::training {
 
@@ -129,6 +131,8 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_FarStarvationFactorFromSyntheticPopulations_Test;
         friend class ::MRNFStrategyTest_CensusGateActivatesAndSuppressesFarFeatures_Test;
         friend class ::MRNFStrategyTest_ExploreStarvationWeights_Test;
+        friend class ::MRNFStrategyTest_BackgroundImprovementsOffDisablesEveryProfileMechanism_Test;
+        friend class ::MRNFStrategyTest_BackgroundImprovementsOnKeepsProfileMechanisms_Test;
 
         struct FarGrowthState {
             bool active = false;
@@ -166,7 +170,7 @@ namespace lfs::training {
         [[nodiscard]] float cfg_ratio_pow() const;
         [[nodiscard]] int cfg_fill_target_iter() const;
         [[nodiscard]] int cfg_seed_dose() const;
-        [[nodiscard]] bool far_field_requested() const;
+        [[nodiscard]] bool background_improvements_enabled() const;
         [[nodiscard]] bool far_operators_active() const;
         void refresh_camera_hull();
         void refresh_far_field_mask(size_t n);

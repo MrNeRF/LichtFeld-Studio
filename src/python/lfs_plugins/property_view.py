@@ -87,6 +87,7 @@ BOOL_PROPS = (
     "ppisp_freeze_gaussians",
     "random",
     "enable_eval",
+    "background_improvements",
 )
 
 SELECT_PROPS = ("mask_mode", "bg_mode", "normal_loss_space")
@@ -126,6 +127,7 @@ def _run(
 
 BASIC_RUNS = (
     _run("basic_struct", "iterations", "max_cap"),
+    _run("basic_background", "background_improvements", visibility_condition_id="dep_mrnf"),
     _run(
         "basic_live_start",
         "use_bilateral_grid",

@@ -56,7 +56,7 @@
   "bounds_percentile": 0.8,
   "use_error_map": true,
   "use_edge_map": true,
-  "use_far_field": true,
+  "background_improvements": true,
   "far_scene_min_fraction": 0.0,
   "growth_ratio_rank": true,
   "growth_ratio_pow": 0.75,

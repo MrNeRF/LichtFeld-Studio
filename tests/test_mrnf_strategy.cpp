@@ -83,7 +83,7 @@ namespace {
     }
 
     void disable_default_far_field(param::OptimizationParameters& p) {
-        p.use_far_field = false;
+        p.background_improvements = false;
     }
 
     param::OptimizationParameters vanilla_mrnf_params() {
@@ -1061,7 +1061,7 @@ TEST(MRNFStrategyTest, ExploreSplitsAreDisjointAndRespectMaxCap) {
     MRNF strategy(splat_data);
 
     auto opt_params = vanilla_mrnf_params();
-    opt_params.use_far_field = true;
+    opt_params.background_improvements = true;
     opt_params.iterations = 10'000;
     opt_params.sh_degree_interval = 10'000;
     opt_params.max_cap = 12;
@@ -1115,7 +1115,7 @@ TEST(MRNFStrategyTest, FarGrowthCapConstrainsOutsideAllocations) {
     MRNF strategy(splat_data);
 
     auto opt_params = vanilla_mrnf_params();
-    opt_params.use_far_field = true;
+    opt_params.background_improvements = true;
     opt_params.iterations = 10'000;
     opt_params.sh_degree_interval = 10'000;
     opt_params.max_cap = 32;
@@ -1165,7 +1165,7 @@ TEST(MRNFStrategyTest, SeedFromViewInsertsRequestedRows) {
     MRNF strategy(splat_data);
 
     auto opt_params = vanilla_mrnf_params();
-    opt_params.use_far_field = true;
+    opt_params.background_improvements = true;
     opt_params.iterations = 10'000;
     opt_params.sh_degree_interval = 10'000;
     opt_params.max_cap = 32;
@@ -1268,7 +1268,7 @@ TEST(MRNFStrategyTest, FarDecayScaleAppliesOnlyToFarUnfrozenRows) {
 
     splat_data.opacity_raw().copy_(opac_orig);
     splat_data.scaling_raw().copy_(scale_orig);
-    opt_params.use_far_field = true;
+    opt_params.background_improvements = true;
     strategy.set_optimization_params(opt_params);
     install_test_camera_hull(strategy);
     ASSERT_TRUE(strategy._camera_hull_valid);
@@ -1355,7 +1355,7 @@ namespace {
         opt.max_cap = 32;
         opt.means_lr = 0.1f;
         opt.means_lr_end = 0.1f;
-        opt.use_far_field = per_splat;
+        opt.background_improvements = per_splat;
         return opt;
     }
 } // namespace
@@ -1476,7 +1476,7 @@ TEST(MRNFStrategyTest, FarStarvationFactorFromSyntheticPopulations) {
 
     auto starvation_params = [](const int max_cap, const float min_frac = 0.0f) {
         auto opt = vanilla_mrnf_params();
-        opt.use_far_field = true;
+        opt.background_improvements = true;
         opt.iterations = 1'000;
         opt.max_cap = max_cap;
         opt.refine_every = 100;
@@ -1552,10 +1552,10 @@ TEST(MRNFStrategyTest, FarStarvationFactorFromSyntheticPopulations) {
 }
 
 TEST(MRNFStrategyTest, CensusGateActivatesAndSuppressesFarFeatures) {
-    auto make_params = [](const bool use_far_field, const float min_frac,
+    auto make_params = [](const bool background_improvements, const float min_frac,
                           const bool starvation = true) {
         auto opt = vanilla_mrnf_params();
-        opt.use_far_field = use_far_field;
+        opt.background_improvements = background_improvements;
         opt.far_scene_min_fraction = min_frac;
         opt.explore_starvation_weighting = starvation;
         opt.iterations = 1'000;
@@ -1619,7 +1619,7 @@ TEST(MRNFStrategyTest, ExploreStarvationWeights) {
         std::lround(static_cast<double>(kExploreSplits) * static_cast<double>(kExploreStarvDose)));
 
     auto opt_params = vanilla_mrnf_params();
-    opt_params.use_far_field = true;
+    opt_params.background_improvements = true;
     opt_params.iterations = 1'000;
     opt_params.max_cap = 16;
     opt_params.refine_every = 100;
@@ -1679,7 +1679,7 @@ TEST(MRNFStrategyTest, ExploreStarvationWeights) {
         auto far_splat = create_mrnf_test_splat_data(10);
         MRNF far_strategy(far_splat);
         auto far_params = vanilla_mrnf_params();
-        far_params.use_far_field = true;
+        far_params.background_improvements = true;
         far_params.iterations = 1'000;
         far_params.max_cap = 60;
         far_params.refine_every = 100;
@@ -1695,7 +1695,7 @@ TEST(MRNFStrategyTest, ExploreStarvationWeights) {
 
 TEST(MRNFStrategyTest, OptimizationParametersDefaultsAreFarFieldOn) {
     const param::OptimizationParameters defaults{};
-    EXPECT_TRUE(defaults.use_far_field);
+    EXPECT_TRUE(defaults.background_improvements);
     EXPECT_FLOAT_EQ(defaults.far_scene_min_fraction, 0.01f);
     EXPECT_TRUE(defaults.explore_starvation_weighting);
     EXPECT_EQ(kExploreSplits, 20);
@@ -1711,4 +1711,57 @@ TEST(MRNFStrategyTest, OptimizationParametersDefaultsAreFarFieldOn) {
     EXPECT_FLOAT_EQ(kStarvEps, 0.0026f);
     EXPECT_FLOAT_EQ(kStarvGamma, 1.72f);
     EXPECT_FLOAT_EQ(kExploreStarvDose, 2.38f);
+}
+
+TEST(MRNFStrategyTest, BackgroundImprovementsOffDisablesEveryProfileMechanism) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+
+    auto opt_params = param::OptimizationParameters::mrnf_defaults();
+    EXPECT_TRUE(opt_params.growth_ratio_rank);
+    EXPECT_EQ(opt_params.fill_pacing_iter, 15'000u);
+    EXPECT_EQ(opt_params.far_seed_dose, 2'000u);
+    EXPECT_TRUE(opt_params.explore_starvation_weighting);
+    opt_params.background_improvements = false;
+    opt_params.iterations = 1'000;
+    opt_params.max_cap = 32;
+    strategy.initialize(opt_params);
+
+    EXPECT_FALSE(strategy.cfg_ratio_rank_on());
+    EXPECT_FLOAT_EQ(strategy.cfg_ratio_pow(), 0.0f);
+    EXPECT_EQ(strategy.cfg_fill_target_iter(), 0);
+    EXPECT_EQ(strategy.cfg_seed_dose(), 0);
+    EXPECT_FALSE(strategy.explore_starvation_weighting_enabled());
+    EXPECT_FALSE(strategy.far_operators_active());
+    EXPECT_EQ(strategy.effective_grow_until_iter(), static_cast<int>(opt_params.grow_until_iter));
+    EXPECT_FLOAT_EQ(strategy.effective_far_growth_cap(), 1.0f);
+    EXPECT_FLOAT_EQ(strategy.effective_far_decay_scale(), 1.0f);
+    EXPECT_FLOAT_EQ(strategy.effective_mean_step_ratio_max(), 1.0f);
+}
+
+TEST(MRNFStrategyTest, BackgroundImprovementsOnKeepsProfileMechanisms) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+
+    auto opt_params = param::OptimizationParameters::mrnf_defaults();
+    EXPECT_TRUE(opt_params.background_improvements);
+    EXPECT_TRUE(opt_params.growth_ratio_rank);
+    EXPECT_EQ(opt_params.fill_pacing_iter, 15'000u);
+    EXPECT_EQ(opt_params.far_seed_dose, 2'000u);
+    EXPECT_TRUE(opt_params.explore_starvation_weighting);
+    opt_params.iterations = 1'000;
+    opt_params.max_cap = 32;
+    strategy.initialize(opt_params);
+
+    EXPECT_TRUE(strategy.cfg_ratio_rank_on());
+    EXPECT_FLOAT_EQ(strategy.cfg_ratio_pow(), 0.75f);
+    EXPECT_EQ(strategy.cfg_fill_target_iter(), 15000);
+    EXPECT_EQ(strategy.cfg_seed_dose(), 2000);
+    EXPECT_TRUE(strategy.explore_starvation_weighting_enabled());
+    EXPECT_TRUE(strategy.far_operators_active());
+    EXPECT_EQ(strategy.effective_grow_until_iter(),
+              std::max(static_cast<int>(opt_params.grow_until_iter), 15000));
+    EXPECT_FLOAT_EQ(strategy.effective_far_growth_cap(), kFarGrowthCap);
+    EXPECT_FLOAT_EQ(strategy.effective_far_decay_scale(), kFarDecayScale);
+    EXPECT_FLOAT_EQ(strategy.effective_mean_step_ratio_max(), kPerSplatMeanStepRatioMax);
 }

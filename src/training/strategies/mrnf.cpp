@@ -808,7 +808,7 @@ namespace lfs::training {
     }
 
     bool MRNF::should_accumulate_explore_sample(int iter) const {
-        return far_field_requested() && far_operators_active() &&
+        return background_improvements_enabled() && far_operators_active() &&
                should_accumulate_view_sample(iter);
     }
 
@@ -944,7 +944,7 @@ namespace lfs::training {
     }
 
     bool MRNF::should_cache_seed_view(int iter) const {
-        if (!far_field_requested()) {
+        if (!background_improvements_enabled()) {
             return false;
         }
         const int next_iter = iter + 1;
@@ -1323,7 +1323,7 @@ namespace lfs::training {
         }
 
         const bool growing = iter < effective_grow_until_iter();
-        const bool seed_far = growing && far_field_requested();
+        const bool seed_far = growing && background_improvements_enabled();
         int reserved_seeds = seed_far ? starved_cadence_count(kExploreSeeds) : 0;
         if (seed_far && cfg_seed_dose() > 0)
             reserved_seeds = std::max(reserved_seeds, cfg_seed_dose());
@@ -1382,25 +1382,25 @@ namespace lfs::training {
     }
 
     bool MRNF::cfg_ratio_rank_on() const {
-        return _params && _params->growth_ratio_rank;
+        return background_improvements_enabled() && _params->growth_ratio_rank;
     }
 
     float MRNF::cfg_ratio_pow() const {
-        return (_params && _params->growth_ratio_rank) ? _params->growth_ratio_pow : 0.0f;
+        return cfg_ratio_rank_on() ? _params->growth_ratio_pow : 0.0f;
     }
 
     int MRNF::cfg_fill_target_iter() const {
-        return (_params && _params->fill_pacing_iter > 0)
+        return (background_improvements_enabled() && _params->fill_pacing_iter > 0)
                    ? static_cast<int>(_params->fill_pacing_iter)
                    : 0;
     }
 
     int MRNF::cfg_seed_dose() const {
-        return _params ? static_cast<int>(_params->far_seed_dose) : 0;
+        return background_improvements_enabled() ? static_cast<int>(_params->far_seed_dose) : 0;
     }
 
-    bool MRNF::far_field_requested() const {
-        return _params && _params->use_far_field;
+    bool MRNF::background_improvements_enabled() const {
+        return _params && _params->background_improvements;
     }
 
     bool MRNF::far_operators_active() const {
@@ -1408,7 +1408,7 @@ namespace lfs::training {
     }
 
     bool MRNF::explore_starvation_weighting_enabled() const {
-        return _params && _params->explore_starvation_weighting;
+        return background_improvements_enabled() && _params->explore_starvation_weighting;
     }
 
     void MRNF::refresh_camera_hull() {
@@ -1418,7 +1418,7 @@ namespace lfs::training {
         _cam_centroid[2] = 0.0f;
         _orbit_radius = 0.0f;
 
-        if (!far_field_requested()) {
+        if (!background_improvements_enabled()) {
             _scene_has_far_field = false;
             _far_field_mask = {};
             update_far_starvation();
@@ -1428,7 +1428,7 @@ namespace lfs::training {
         const size_t n_cam = _views ? _views->size() : 0;
         if (n_cam < 2) {
             update_far_starvation();
-            if (!_logged_degenerate_hull && far_field_requested()) {
+            if (!_logged_degenerate_hull && background_improvements_enabled()) {
                 LOG_INFO("MRNF: camera hull unavailable (need >= 2 training cameras); far-field guard is inert");
                 _logged_degenerate_hull = true;
             }
@@ -1465,7 +1465,7 @@ namespace lfs::training {
 
         if (counted < 2) {
             update_far_starvation();
-            if (!_logged_degenerate_hull && far_field_requested()) {
+            if (!_logged_degenerate_hull && background_improvements_enabled()) {
                 LOG_INFO("MRNF: camera hull unavailable (need >= 2 valid cameras); far-field guard is inert");
                 _logged_degenerate_hull = true;
             }
@@ -1489,7 +1489,7 @@ namespace lfs::training {
             32.0f * std::numeric_limits<float>::epsilon() * std::max(centroid_norm, 1.0f);
         if (!std::isfinite(radius) || radius <= radius_eps) {
             update_far_starvation();
-            if (!_logged_degenerate_hull && far_field_requested()) {
+            if (!_logged_degenerate_hull && background_improvements_enabled()) {
                 LOG_INFO("MRNF: camera hull degenerate (orbit radius {:.6g}); far-field guard is inert",
                          radius);
                 _logged_degenerate_hull = true;
@@ -1562,21 +1562,21 @@ namespace lfs::training {
     }
 
     float MRNF::effective_far_growth_cap() const {
-        if (!far_field_requested()) {
+        if (!background_improvements_enabled()) {
             return 1.0f;
         }
         return 1.0f - _far_starvation * (1.0f - kFarGrowthCap);
     }
 
     float MRNF::effective_far_decay_scale() const {
-        if (!far_field_requested()) {
+        if (!background_improvements_enabled()) {
             return 1.0f;
         }
         return 1.0f - _far_starvation * (1.0f - kFarDecayScale);
     }
 
     float MRNF::effective_mean_step_ratio_max() const {
-        if (!far_field_requested()) {
+        if (!background_improvements_enabled()) {
             return 1.0f;
         }
         return 1.0f + _far_starvation * (kPerSplatMeanStepRatioMax - 1.0f);
@@ -1667,7 +1667,7 @@ namespace lfs::training {
         if (!_optimizer) {
             return;
         }
-        if (!far_field_requested()) {
+        if (!background_improvements_enabled()) {
             _optimizer->set_mean_step_far_mask(nullptr, 0);
             return;
         }
@@ -1681,7 +1681,7 @@ namespace lfs::training {
     }
 
     void MRNF::ensure_mean_step_far_mask() {
-        if (!far_field_requested()) {
+        if (!background_improvements_enabled()) {
             publish_mean_step_far_mask();
             return;
         }
@@ -2025,7 +2025,7 @@ namespace lfs::training {
                      iter, current_active, desired_total, pacing_windows_left);
         }
         Tensor explore_inds;
-        if (iter < effective_grow_until_iter() && far_field_requested() &&
+        if (iter < effective_grow_until_iter() && background_improvements_enabled() &&
             far_operators_active()) {
             const int growth_count = (growth_inds.is_valid() ? static_cast<int>(growth_inds.numel()) : 0);
             const int remaining_budget = std::max(0, budget - actual_replace - growth_count);
@@ -2467,7 +2467,7 @@ namespace lfs::training {
 
         const float train_t = static_cast<float>(iter) / static_cast<float>(_params->iterations);
         const auto frozen_mask = make_frozen_mask(*_splat_data, n, _splat_data->means().device());
-        const bool scale_far = far_field_requested() &&
+        const bool scale_far = background_improvements_enabled() &&
                                _camera_hull_valid;
         if (scale_far) {
             refresh_far_field_mask(n);
@@ -2814,7 +2814,7 @@ namespace lfs::training {
 
     void MRNF::seed_from_view(int iter, const RenderOutput& render_output) {
         using namespace lfs::core;
-        if (!far_field_requested() ||
+        if (!background_improvements_enabled() ||
             iter >= effective_grow_until_iter() ||
             !_camera_hull_valid || !_bounds_valid) {
             return;
@@ -3191,7 +3191,7 @@ namespace lfs::training {
         if (!_optimizer || !_bounds_valid)
             return;
         _optimizer->set_param_lr(ParamType::Means, _mean_lr_unscaled * _bounds.median_size);
-        if (far_field_requested() && _median_splat_extent_valid) {
+        if (background_improvements_enabled() && _median_splat_extent_valid) {
             _optimizer->set_per_splat_mean_step(
                 true, _median_splat_extent, kPerSplatMeanStepRatioMin,
                 effective_mean_step_ratio_max());

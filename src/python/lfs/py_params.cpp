@@ -903,10 +903,10 @@ namespace lfs::python {
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.enable_eval = v; }); },
                 "Enable evaluation during training")
             .def_prop_rw(
-                "use_far_field",
-                [](PyOptimizationParams& self) { return self.params().use_far_field; },
-                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.use_far_field = v; }); },
-                "Enable MRNF far-field splits, seeds, decay relief, growth cap, and per-splat steps")
+                "background_improvements",
+                [](PyOptimizationParams& self) { return self.params().background_improvements; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.background_improvements = v; }); },
+                "Improve distant background reconstruction (MRNF): far-field seeding and splits, decay relief, growth cap, per-splat position steps, visibility-ratio growth ranking, paced capacity fill")
             .def_prop_rw(
                 "far_scene_min_fraction",
                 [](PyOptimizationParams& self) { return self.params().far_scene_min_fraction; },

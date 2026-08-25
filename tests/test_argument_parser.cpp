@@ -449,6 +449,7 @@ TEST(ArgumentParserTest, MrnfKnobFlagsParseAndPopulateExplicitOverrides) {
         "--output-path",
         output_path.c_str(),
         "--no-growth-ratio-rank",
+        "--no-background-improvements",
         "--growth-ratio-pow",
         "0.5",
         "--fill-pacing-iter",
@@ -460,21 +461,25 @@ TEST(ArgumentParserTest, MrnfKnobFlagsParseAndPopulateExplicitOverrides) {
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
     EXPECT_FALSE((*parsed)->optimization.growth_ratio_rank);
+    EXPECT_FALSE((*parsed)->optimization.background_improvements);
     EXPECT_FLOAT_EQ((*parsed)->optimization.growth_ratio_pow, 0.5f);
     EXPECT_EQ((*parsed)->optimization.fill_pacing_iter, 12000u);
     EXPECT_EQ((*parsed)->optimization.far_seed_dose, 500u);
     EXPECT_TRUE((*parsed)->overrides.has_optimization_key("growth_ratio_rank"));
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("background_improvements"));
     EXPECT_TRUE((*parsed)->overrides.has_optimization_key("growth_ratio_pow"));
     EXPECT_TRUE((*parsed)->overrides.has_optimization_key("fill_pacing_iter"));
     EXPECT_TRUE((*parsed)->overrides.has_optimization_key("far_seed_dose"));
 
     lfs::core::param::TrainingParameters restored;
     restored.optimization.growth_ratio_rank = true;
+    restored.optimization.background_improvements = true;
     restored.optimization.growth_ratio_pow = 0.75f;
     restored.optimization.fill_pacing_iter = 15'000;
     restored.optimization.far_seed_dose = 2'000;
     apply_explicit_training_overrides(restored, (*parsed)->overrides);
     EXPECT_FALSE(restored.optimization.growth_ratio_rank);
+    EXPECT_FALSE(restored.optimization.background_improvements);
     EXPECT_FLOAT_EQ(restored.optimization.growth_ratio_pow, 0.5f);
     EXPECT_EQ(restored.optimization.fill_pacing_iter, 12000u);
     EXPECT_EQ(restored.optimization.far_seed_dose, 500u);

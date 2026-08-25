@@ -51,7 +51,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--steps-scaler", "steps_scaler", Float},
             OptimizationCliBinding{"--no-error-map", "use_error_map", Bool, true},
             OptimizationCliBinding{"--no-edge-map", "use_edge_map", Bool, true},
-            OptimizationCliBinding{"--no-far-field", "use_far_field", Bool, true},
+            OptimizationCliBinding{"--no-background-improvements", "background_improvements", Bool, true},
             OptimizationCliBinding{"--no-growth-ratio-rank", "growth_ratio_rank", Bool, true},
             OptimizationCliBinding{"--bg-mode", "bg_mode", Enum, false,
                                    "; values: solidcolor, modulation, image, random", "solid_color", "solidcolor"},
@@ -448,7 +448,7 @@ namespace {
             ::args::ValueFlag<float> steps_scaler(training_group, "steps_scaler", lfs::core::args::optimization_cli_help("--steps-scaler"), {"steps-scaler"});
             ::args::Flag no_error_map(training_group, "no_error_map", lfs::core::args::optimization_cli_help("--no-error-map"), {"no-error-map"});
             ::args::Flag no_edge_map(training_group, "no_edge_map", lfs::core::args::optimization_cli_help("--no-edge-map"), {"no-edge-map"});
-            ::args::Flag no_far_field(training_group, "no_far_field", lfs::core::args::optimization_cli_help("--no-far-field"), {"no-far-field"});
+            ::args::Flag no_background_improvements(training_group, "no_background_improvements", lfs::core::args::optimization_cli_help("--no-background-improvements"), {"no-background-improvements"});
             ::args::Flag no_growth_ratio_rank(training_group, "no_growth_ratio_rank", lfs::core::args::optimization_cli_help("--no-growth-ratio-rank"), {"no-growth-ratio-rank"});
             ::args::ValueFlag<float> far_scene_min_fraction(training_group, "fraction", lfs::core::args::optimization_cli_help("--far-scene-min-fraction"), {"far-scene-min-fraction"});
             ::args::ValueFlag<float> growth_ratio_pow(training_group, "growth_ratio_pow", lfs::core::args::optimization_cli_help("--growth-ratio-pow"), {"growth-ratio-pow"});
@@ -1114,7 +1114,7 @@ namespace {
                                         no_normal_auto_generate_flag = bool(no_normal_auto_generate),
                                         no_error_map_flag = bool(no_error_map),
                                         no_edge_map_flag = bool(no_edge_map),
-                                        no_far_field_flag = bool(no_far_field),
+                                        no_background_improvements_flag = bool(no_background_improvements),
                                         no_growth_ratio_rank_flag = bool(no_growth_ratio_rank),
                                         far_scene_min_fraction_val = cli_option_present({"--far-scene-min-fraction"}) ? std::optional<float>(::args::get(far_scene_min_fraction)) : std::optional<float>(),
                                         growth_ratio_pow_val = cli_option_present({"--growth-ratio-pow"}) ? std::optional<float>(::args::get(growth_ratio_pow)) : std::optional<float>(),
@@ -1259,8 +1259,8 @@ namespace {
                     opt.use_error_map = false;
                 if (no_edge_map_flag)
                     opt.use_edge_map = false;
-                if (no_far_field_flag)
-                    opt.use_far_field = false;
+                if (no_background_improvements_flag)
+                    opt.background_improvements = false;
                 if (no_growth_ratio_rank_flag)
                     opt.growth_ratio_rank = false;
                 setVal(far_scene_min_fraction_val, opt.far_scene_min_fraction);
@@ -1366,7 +1366,7 @@ namespace {
                 note_opt("enable_sparsity", enable_sparsity_flag);
                 note_opt("use_error_map", no_error_map_flag);
                 note_opt("use_edge_map", no_edge_map_flag);
-                note_opt("use_far_field", no_far_field_flag);
+                note_opt("background_improvements", no_background_improvements_flag);
                 note_opt("growth_ratio_rank", no_growth_ratio_rank_flag);
                 note_opt("far_scene_min_fraction", far_scene_min_fraction_val.has_value());
                 note_opt("growth_ratio_pow", growth_ratio_pow_val.has_value());

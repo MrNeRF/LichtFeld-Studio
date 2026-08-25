@@ -521,12 +521,12 @@ namespace lfs::core::param {
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
             .all_strategies()
-            .bool_prop(&OptimizationParameters::use_far_field,
-                       "use_far_field", "Far Field", d.use_far_field,
-                       "Enable MRNF far-field splits, seeds, decay relief, growth cap, and per-splat steps")
-            .locale("training.advanced.use_far_field")
-            .tooltip("training.tooltip.use_far_field")
-            .flags(PROP_ADVANCED)
+            .bool_prop(&OptimizationParameters::background_improvements,
+                       "background_improvements", "Background Improvements", d.background_improvements,
+                       "Improve distant background reconstruction (MRNF): far-field seeding and splits, decay relief, growth cap, per-splat position steps, visibility-ratio growth ranking, paced capacity fill")
+            .locale("training_params.background_improvements")
+            .tooltip("training.tooltip.background_improvements")
+            .flags(PROP_NEEDS_RESTART)
             .strategies({"mrnf"})
             .float_prop(&OptimizationParameters::far_scene_min_fraction,
                         "far_scene_min_fraction", "Far Scene Min Fraction", d.far_scene_min_fraction, 0.0f, 1.0f,

@@ -2055,13 +2055,13 @@ class OptimizationParams:
     def enable_eval(self, arg: bool, /) -> None: ...
 
     @property
-    def use_far_field(self) -> bool:
+    def background_improvements(self) -> bool:
         """
-        Enable MRNF far-field splits, seeds, decay relief, growth cap, and per-splat steps
+        Improve distant background reconstruction (MRNF): far-field seeding and splits, decay relief, growth cap, per-splat position steps, visibility-ratio growth ranking, paced capacity fill
         """
 
-    @use_far_field.setter
-    def use_far_field(self, arg: bool, /) -> None: ...
+    @background_improvements.setter
+    def background_improvements(self, arg: bool, /) -> None: ...
 
     @property
     def far_scene_min_fraction(self) -> float:

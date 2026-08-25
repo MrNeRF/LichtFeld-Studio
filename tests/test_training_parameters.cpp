@@ -134,7 +134,7 @@ namespace {
             {"bounds_percentile", {"mrnf"}},
             {"use_error_map", {"mrnf"}},
             {"use_edge_map", {"mrnf"}},
-            {"use_far_field", {"mrnf"}},
+            {"background_improvements", {"mrnf"}},
             {"far_scene_min_fraction", {"mrnf"}},
             {"growth_ratio_rank", {"mrnf"}},
             {"growth_ratio_pow", {"mrnf"}},
@@ -521,12 +521,12 @@ namespace {
         EXPECT_EQ(mcmc_result->max_cap, 1'000'000);
 
         const auto mrnf_path = eval_config_path("mrnf_optimization_params.json");
-        EXPECT_EQ(frozen_config_fingerprint(mrnf_path), 0xb497e2da2f611314ULL);
+        EXPECT_EQ(frozen_config_fingerprint(mrnf_path), 0xf85ac248a9db4023ULL);
         const auto mrnf_result = lfs::core::param::read_optim_params_from_json(mrnf_path);
         ASSERT_TRUE(mrnf_result.has_value()) << mrnf_result.error();
         EXPECT_FLOAT_EQ(mrnf_result->means_lr, 2e-05f);
         EXPECT_FLOAT_EQ(mrnf_result->means_lr_end, 2e-07f);
-        EXPECT_EQ(mrnf_result->start_refine, 500u);
+        EXPECT_EQ(mrnf_result->start_refine, 0u);
         EXPECT_EQ(mrnf_result->stop_refine, 28'500u);
         EXPECT_FLOAT_EQ(mrnf_result->min_opacity, 0.0039215689f);
 
