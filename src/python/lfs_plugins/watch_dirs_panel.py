@@ -12,7 +12,7 @@ from typing import Any, Callable, Optional
 import lichtfeld as lf
 
 from . import rml_widgets
-from .asset_watch import WatchScanResult, scan_all_watch_directories
+from .asset_watch import WatchScanResult, scan_watch_directories
 from .types import Panel
 from .ui import RuntimeState
 
@@ -71,6 +71,8 @@ class WatchDirsDialogPanel(Panel):
         self._scan_done = False
         self._scan_status = ""
         self._scan_generation = 0
+        self._scan_cancel_event: Optional[threading.Event] = None
+        self._scan_thread: Optional[threading.Thread] = None
 
     def show(
         self,
@@ -81,6 +83,7 @@ class WatchDirsDialogPanel(Panel):
         folder = index.folders.get(folder_id)
         if folder is None:
             return False
+        self._cancel_active_scan()
         self._index = index
         self._folder_id = folder_id
         self._folder_name = str(folder.get("name") or "")
@@ -126,6 +129,8 @@ class WatchDirsDialogPanel(Panel):
         ]
 
     def on_unmount(self, doc):
+        self._scan_generation += 1
+        self._cancel_active_scan()
         for unsubscribe in self._reactive_unsubscribers:
             try:
                 unsubscribe()
@@ -155,6 +160,16 @@ class WatchDirsDialogPanel(Panel):
         self._scan_active = False
         self._scan_done = False
         self._scan_status = ""
+
+    def _cancel_active_scan(self) -> None:
+        if self._scan_cancel_event is not None:
+            self._scan_cancel_event.set()
+        thread = self._scan_thread
+        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+            thread.join()
+        self._scan_cancel_event = None
+        self._scan_thread = None
+        self._scan_active = False
 
     def _save_scan_label(self) -> str:
         if self._scan_active:
@@ -189,6 +204,8 @@ class WatchDirsDialogPanel(Panel):
             self._dirty_model()
 
     def _on_cancel(self, _handle=None, _ev=None, _args=None) -> None:
+        self._scan_generation += 1
+        self._cancel_active_scan()
         lf.ui.set_panel_enabled(self.id, False)
 
     def _on_save(self, _handle=None, _ev=None, _args=None) -> None:
@@ -216,33 +233,50 @@ class WatchDirsDialogPanel(Panel):
         self._scan_status = lf.ui.tr("watch_dirs.scanning")
         self._scan_generation += 1
         scan_generation = self._scan_generation
+        cancel_event = threading.Event()
+        self._scan_cancel_event = cancel_event
         self._dirty_model()
-        threading.Thread(
+        thread = threading.Thread(
             target=self._scan_worker,
             args=(
                 index,
+                folder_id,
+                directories,
                 on_catalog_changed,
                 scan_generation,
+                cancel_event,
             ),
             daemon=True,
             name="AssetManagerLichtWatchScan",
-        ).start()
+        )
+        self._scan_thread = thread
+        thread.start()
 
     def _scan_worker(
         self,
         index: Any,
+        folder_id: str,
+        directories: list[str],
         on_catalog_changed: Optional[Callable[[], None]],
         scan_generation: int,
+        cancel_event: threading.Event,
     ) -> None:
         try:
-            result = scan_all_watch_directories(index)
+            result = scan_watch_directories(
+                index,
+                folder_id,
+                directories,
+                cancel_event,
+            )
         except Exception:
             _log.error("Watched-directory scan failed", exc_info=True)
             result = WatchScanResult(failed=1)
         self._log_scan_result(result)
 
         def _finish() -> None:
-            if self._scan_generation == scan_generation:
+            if self._scan_generation == scan_generation and not result.cancelled:
+                self._scan_thread = None
+                self._scan_cancel_event = None
                 self._scan_active = False
                 self._scan_done = True
                 self._scan_status = lf.ui.tr("watch_dirs.scan_complete_summary").format(
@@ -250,8 +284,8 @@ class WatchDirsDialogPanel(Panel):
                     added=result.added,
                 )
                 self._dirty_model()
-            if on_catalog_changed is not None:
-                on_catalog_changed()
+                if on_catalog_changed is not None:
+                    on_catalog_changed()
 
         self._schedule_on_ui_thread(_finish)
 

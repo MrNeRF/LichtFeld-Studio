@@ -3,6 +3,7 @@
 """Regression tests for .licht-only watched-directory discovery."""
 
 import os
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -117,3 +118,81 @@ def test_global_scan_assigns_new_project_to_most_specific_root(tmp_path: Path):
 
 def test_missing_watched_directory_discovers_nothing(tmp_path: Path):
     assert discover_licht_projects(str(tmp_path / "missing")) == []
+
+
+def test_discovery_prunes_dataset_directories(tmp_path: Path):
+    visible = tmp_path / "visible.licht"
+    visible.write_bytes(b"visible")
+    for directory_name in (
+        "sparse",
+        "dense",
+        "masks",
+        "stereo",
+        "depth",
+        "images",
+        "__pycache__",
+    ):
+        directory = tmp_path / directory_name
+        directory.mkdir()
+        (directory / "hidden.licht").write_bytes(b"hidden")
+
+    assert discover_licht_projects(str(tmp_path)) == [str(visible.resolve())]
+
+
+def test_scan_skips_inspection_for_unchanged_cataloged_path(tmp_path: Path):
+    project = tmp_path / "project.licht"
+    project.write_bytes(b"container")
+
+    class _Index:
+        def find_asset_by_path(self, path):
+            assert path == str(project.resolve())
+            return SimpleNamespace(status="AVAILABLE")
+
+        def register_licht_asset(self, *_args, **_kwargs):
+            raise AssertionError("unchanged cataloged path must not be inspected")
+
+        def save(self):
+            raise AssertionError("unchanged catalog must not be saved")
+
+    result = scan_watch_directories(_Index(), "projects", [str(tmp_path)])
+
+    assert result.discovered == 1
+    assert result.already_cataloged == 1
+    assert result.added == 0
+
+
+def test_cancelled_scan_rolls_back_discovered_projects(tmp_path: Path):
+    first = tmp_path / "first.licht"
+    second = tmp_path / "second.licht"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    cancel_event = threading.Event()
+
+    class _Index:
+        def __init__(self):
+            self.paths = []
+
+        def _snapshot_state(self):
+            return list(self.paths)
+
+        def _restore_state(self, snapshot):
+            self.paths = snapshot
+
+        def register_licht_asset(self, path, **_kwargs):
+            self.paths.append(path)
+            cancel_event.set()
+            return SimpleNamespace(id=path), True
+
+        def save(self):
+            raise AssertionError("cancelled scan must not save")
+
+    index = _Index()
+    result = scan_watch_directories(
+        index,
+        "projects",
+        [str(tmp_path)],
+        cancel_event,
+    )
+
+    assert result.cancelled is True
+    assert index.paths == []

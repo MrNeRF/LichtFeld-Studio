@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -13,6 +14,18 @@ from typing import Any, Iterable
 from .asset_index import is_supported_asset_path
 
 _log = logging.getLogger(__name__)
+_PRUNED_DIRECTORY_NAMES = frozenset(
+    {
+        "__pycache__",
+        "dense",
+        "depth",
+        "depths",
+        "images",
+        "masks",
+        "sparse",
+        "stereo",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -23,9 +36,13 @@ class WatchScanResult:
     added: int = 0
     already_cataloged: int = 0
     failed: int = 0
+    cancelled: bool = False
 
 
-def discover_licht_projects(directory: str) -> list[str]:
+def discover_licht_projects(
+    directory: str,
+    cancel_event: threading.Event | None = None,
+) -> list[str]:
     """Recursively list .licht files beneath one directory."""
     root = Path(directory).expanduser()
     if not root.is_dir():
@@ -43,11 +60,24 @@ def discover_licht_projects(directory: str) -> list[str]:
         onerror=_on_error,
         followlinks=False,
     ):
-        directory_names.sort()
+        if cancel_event is not None and cancel_event.is_set():
+            break
+        directory_names[:] = sorted(
+            name
+            for name in directory_names
+            if name.casefold() not in _PRUNED_DIRECTORY_NAMES
+        )
         for filename in sorted(filenames):
+            if cancel_event is not None and cancel_event.is_set():
+                break
             path = Path(current_root) / filename
-            if is_supported_asset_path(str(path)) and path.is_file():
-                projects.append(str(path.resolve()))
+            if not is_supported_asset_path(str(path)):
+                continue
+            try:
+                if path.is_file():
+                    projects.append(str(path.resolve()))
+            except OSError as exc:
+                _log.warning("Could not inspect watched path %s: %s", path, exc)
     return projects
 
 
@@ -55,12 +85,15 @@ def scan_watch_directories(
     index: Any,
     folder_id: str,
     directories: Iterable[str],
+    cancel_event: threading.Event | None = None,
 ) -> WatchScanResult:
     """Discover and register .licht projects from configured directories."""
     project_paths: list[str] = []
     seen_paths = set()
     for directory in directories:
-        for path in discover_licht_projects(directory):
+        if cancel_event is not None and cancel_event.is_set():
+            return WatchScanResult(cancelled=True)
+        for path in discover_licht_projects(directory, cancel_event):
             key = os.path.normcase(path)
             if key in seen_paths:
                 continue
@@ -70,16 +103,24 @@ def scan_watch_directories(
     return _register_discovered(
         index,
         [(path, folder_id) for path in project_paths],
+        cancel_event,
     )
 
 
-def scan_all_watch_directories(index: Any) -> WatchScanResult:
+def scan_all_watch_directories(
+    index: Any,
+    cancel_event: threading.Event | None = None,
+) -> WatchScanResult:
     """Scan every folder, assigning new projects to the most-specific root."""
     roots: list[tuple[Path, str]] = []
     seen_roots = set()
     for folder_id, folder in (getattr(index, "folders", {}) or {}).items():
         for directory in folder.get("watch_directories", []):
-            root = Path(directory).expanduser().resolve()
+            try:
+                root = Path(directory).expanduser().resolve()
+            except OSError as exc:
+                _log.warning("Could not resolve watched directory %s: %s", directory, exc)
+                continue
             key = os.path.normcase(str(root))
             if key in seen_roots:
                 continue
@@ -96,25 +137,61 @@ def scan_all_watch_directories(index: Any) -> WatchScanResult:
     discovered: list[tuple[str, str]] = []
     seen_paths = set()
     for root, folder_id in roots:
-        for path in discover_licht_projects(str(root)):
+        if cancel_event is not None and cancel_event.is_set():
+            return WatchScanResult(cancelled=True)
+        for path in discover_licht_projects(str(root), cancel_event):
             key = os.path.normcase(path)
             if key in seen_paths:
                 continue
             seen_paths.add(key)
             discovered.append((path, folder_id))
 
-    return _register_discovered(index, discovered)
+    return _register_discovered(index, discovered, cancel_event)
 
 
 def _register_discovered(
     index: Any,
     discovered: list[tuple[str, str]],
+    cancel_event: threading.Event | None = None,
 ) -> WatchScanResult:
+    lock = getattr(index, "_lock", None)
+    if lock is None:
+        return _register_discovered_locked(index, discovered, cancel_event)
+    with lock:
+        return _register_discovered_locked(index, discovered, cancel_event)
+
+
+def _register_discovered_locked(
+    index: Any,
+    discovered: list[tuple[str, str]],
+    cancel_event: threading.Event | None,
+) -> WatchScanResult:
+    snapshot = getattr(index, "_snapshot_state", lambda: None)()
     added = 0
     already_cataloged = 0
     failed = 0
     for path, folder_id in discovered:
+        if cancel_event is not None and cancel_event.is_set():
+            restore = getattr(index, "_restore_state", None)
+            if snapshot is not None and callable(restore):
+                restore(snapshot)
+            return WatchScanResult(
+                discovered=len(discovered),
+                already_cataloged=already_cataloged,
+                failed=failed,
+                cancelled=True,
+            )
         try:
+            find_by_path = getattr(index, "find_asset_by_path", None)
+            if callable(find_by_path):
+                existing = find_by_path(path)
+                if existing is not None and getattr(existing, "status", "AVAILABLE") not in {
+                    "MISSING",
+                    "UNREADABLE",
+                    "UNVERIFIED",
+                }:
+                    already_cataloged += 1
+                    continue
             project, created = index.register_licht_asset(
                 path,
                 folder_id=folder_id,
@@ -131,9 +208,23 @@ def _register_discovered(
             failed += 1
             _log.warning("Failed to register watched .licht project: %s", path, exc_info=True)
 
-    if discovered and not index.save():
+    if cancel_event is not None and cancel_event.is_set():
+        restore = getattr(index, "_restore_state", None)
+        if snapshot is not None and callable(restore):
+            restore(snapshot)
+        return WatchScanResult(
+            discovered=len(discovered),
+            already_cataloged=already_cataloged,
+            failed=failed,
+            cancelled=True,
+        )
+    if added and not index.save():
         _log.error("Failed to persist watched .licht project scan")
-        failed += 1
+        restore = getattr(index, "_restore_state", None)
+        if snapshot is not None and callable(restore):
+            restore(snapshot)
+        failed += added
+        added = 0
     return WatchScanResult(
         discovered=len(discovered),
         added=added,

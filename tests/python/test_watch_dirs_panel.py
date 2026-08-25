@@ -64,6 +64,12 @@ class _ImmediateThread:
     def start(self):
         self._target(*self._args)
 
+    def is_alive(self):
+        return False
+
+    def join(self):
+        pass
+
 
 def test_dialog_loads_adds_and_removes_watch_directories(
     watch_dirs_panel_module, tmp_path
@@ -105,15 +111,17 @@ def test_save_persists_then_scans_and_refreshes(
     monkeypatch.setattr(module.threading, "Thread", _ImmediateThread)
     monkeypatch.setattr(
         module,
-        "scan_all_watch_directories",
-        lambda scan_index: scans.append(scan_index)
+        "scan_watch_directories",
+        lambda scan_index, folder_id, directories, _cancel_event: scans.append(
+            (scan_index, folder_id, directories)
+        )
         or module.WatchScanResult(discovered=1, added=1),
     )
 
     panel._on_save()
 
     assert index.saved == [("projects", [str(watched)])]
-    assert scans == [index]
+    assert scans == [(index, "projects", [str(watched)])]
     assert refreshes == [True]
     assert len(state.scheduled) == 1
     assert panel._scan_done is True
@@ -135,7 +143,7 @@ def test_saving_empty_list_clears_watch_directories_without_scan(
     panel._watch_dirs = []
     monkeypatch.setattr(
         module,
-        "scan_all_watch_directories",
+        "scan_watch_directories",
         lambda *_args: pytest.fail("empty watch list must not start a scan"),
     )
 
@@ -143,3 +151,23 @@ def test_saving_empty_list_clears_watch_directories_without_scan(
 
     assert index.saved == [("projects", [])]
     assert refreshes == [True]
+
+
+def test_cancel_stops_and_joins_active_scan(watch_dirs_panel_module):
+    module, state = watch_dirs_panel_module
+    panel = module.WatchDirsDialogPanel()
+    cancel_event = module.threading.Event()
+    joined = []
+    panel._scan_active = True
+    panel._scan_cancel_event = cancel_event
+    panel._scan_thread = SimpleNamespace(
+        is_alive=lambda: True,
+        join=lambda: joined.append(True),
+    )
+
+    panel._on_cancel()
+
+    assert cancel_event.is_set() is True
+    assert joined == [True]
+    assert panel._scan_active is False
+    assert state.enabled[-1] == ("lfs.watch_dirs_dialog", False)
