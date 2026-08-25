@@ -93,7 +93,8 @@ namespace lfs::core {
         // Captures a shared control block so post-grow offset updates are visible
         // to *new* tensors from this allocator; existing tensors must be rebuilt
         // (see rebindSplatDataToStorage).
-        // ShN is always Float16 (q16 codes); ShNBounds is Float32 float2s.
+        // ShN is Float16 q16 codes when value-quant is on; Float32 float4-swizzle
+        // when off. ShNBounds is Float32 float2s (empty region when q16 is off).
         [[nodiscard]] LFS_CORE_API SplatTensorAllocator make_allocator() const;
 
         // Rebuild SplatData parameter tensors as views into this storage at the

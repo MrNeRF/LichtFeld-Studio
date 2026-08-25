@@ -381,10 +381,18 @@ namespace lfs::vis {
             std::shared_ptr<void> owner = sub_views[region];
             std::size_t clamped = capacity;
             if (region == R::ShN) {
-                dtype = lfs::core::DataType::Float16;
-                const std::size_t max_cells = region_bytes / sizeof(std::uint16_t);
-                if (max_cells > 0) {
-                    clamped = std::min(capacity, max_cells);
+                if (lfs::core::sh_value_quant::enabled()) {
+                    dtype = lfs::core::DataType::Float16;
+                    const std::size_t max_cells = region_bytes / sizeof(std::uint16_t);
+                    if (max_cells > 0) {
+                        clamped = std::min(capacity, max_cells);
+                    }
+                } else {
+                    dtype = lfs::core::DataType::Float32;
+                    const std::size_t max_floats = region_bytes / sizeof(float);
+                    if (max_floats > 0) {
+                        clamped = std::min(capacity, max_floats);
+                    }
                 }
             } else if (region == R::ShNBounds) {
                 dtype = lfs::core::DataType::Float32;

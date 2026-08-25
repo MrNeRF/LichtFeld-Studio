@@ -76,18 +76,28 @@ namespace lfs::core {
             using R = SplatExportableStorage;
             const auto rest_coeffs =
                 static_cast<std::uint32_t>(sh_rest_coefficients_for_degree(sh_degree));
-            const std::size_t shN_u16_cells =
-                sh_value_quant::sh_value_u16_count(capacity, rest_coeffs);
-            const std::size_t bounds_float2s = sh_value_quant::n_bounds_for_prims(capacity);
-            const std::size_t bounds_bytes = bounds_float2s * 2u * kFloatBytes;
+            std::size_t shN_bytes = 0;
+            std::size_t bounds_bytes = 0;
+            if (sh_value_quant::enabled()) {
+                const std::size_t shN_u16_cells =
+                    sh_value_quant::sh_value_u16_count(capacity, rest_coeffs);
+                shN_bytes = checked_product(
+                    shN_u16_cells, kShNElementBytes, "exportable q16 shN byte count");
+                const std::size_t bounds_float2s = sh_value_quant::n_bounds_for_prims(capacity);
+                bounds_bytes = bounds_float2s * 2u * kFloatBytes;
+            } else {
+                const std::size_t shN_floats = sh_swizzled_float_count(capacity, rest_coeffs);
+                shN_bytes = checked_product(
+                    shN_floats, kFloatBytes, "exportable float shN byte count");
+            }
             return {
-                region_bytes_for(capacity, 3),    // Means {N,3}
-                region_bytes_for(capacity, 3),    // Scaling {N,3}
-                region_bytes_for(capacity, 4),    // Rotation {N,4}
-                region_bytes_for(capacity, 1),    // Opacity {N,1}
-                region_bytes_for(capacity, 3),    // Sh0 {N,1,3}
-                shN_u16_cells * kShNElementBytes, // ShN (pad-dropped q16)
-                bounds_bytes,                     // ShNBounds (float2 / 256)
+                region_bytes_for(capacity, 3), // Means {N,3}
+                region_bytes_for(capacity, 3), // Scaling {N,3}
+                region_bytes_for(capacity, 4), // Rotation {N,4}
+                region_bytes_for(capacity, 1), // Opacity {N,1}
+                region_bytes_for(capacity, 3), // Sh0 {N,1,3}
+                shN_bytes,                     // ShN (q16 codes or float4-swizzle)
+                bounds_bytes,                  // ShNBounds (float2 / 256); empty if q16 off
             };
         }
 
@@ -423,9 +433,15 @@ namespace lfs::core {
 
             std::size_t clamped = capacity;
             if (region == SplatExportableStorage::ShN) {
-                dtype = DataType::Float16;
-                const std::size_t max_cells = region_bytes / kShNElementBytes;
-                clamped = std::min(capacity, max_cells);
+                if (sh_value_quant::enabled()) {
+                    dtype = DataType::Float16;
+                    const std::size_t max_cells = region_bytes / kShNElementBytes;
+                    clamped = std::min(capacity, max_cells);
+                } else {
+                    dtype = DataType::Float32;
+                    const std::size_t max_floats = region_bytes / kFloatBytes;
+                    clamped = std::min(capacity, max_floats);
+                }
             } else if (region == SplatExportableStorage::ShNBounds) {
                 dtype = DataType::Float32;
                 const std::size_t max_floats = region_bytes / kFloatBytes;

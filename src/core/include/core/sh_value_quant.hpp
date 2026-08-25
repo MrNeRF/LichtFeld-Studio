@@ -10,8 +10,8 @@
  */
 
 #include "core/cuda/sh_layout.cuh"
+#include "core/export.hpp"
 
-#include <atomic>
 #include <cstdint>
 #include <optional>
 
@@ -44,24 +44,8 @@ namespace lfs::core::sh_value_quant {
 
     // Production: SH value quantization permanently ON.
     // Tests may force off via set_enabled_for_testing (footprint tables, etc.).
-    inline std::atomic<int>& override_flag() {
-        static std::atomic<int> g{-1};
-        return g;
-    }
-
-    inline void set_enabled_for_testing(std::optional<bool> enabled) {
-        if (!enabled.has_value()) {
-            override_flag().store(-1, std::memory_order_relaxed);
-            return;
-        }
-        override_flag().store(*enabled ? 1 : 0, std::memory_order_relaxed);
-    }
-
-    [[nodiscard]] inline bool enabled() {
-        const int o = override_flag().load(std::memory_order_relaxed);
-        if (o >= 0)
-            return o != 0;
-        return true; // production default: always ON
-    }
+    // Implemented in lfs_core so the flag is process-wide across DSOs.
+    LFS_CORE_API void set_enabled_for_testing(std::optional<bool> enabled);
+    [[nodiscard]] LFS_CORE_API bool enabled();
 
 } // namespace lfs::core::sh_value_quant

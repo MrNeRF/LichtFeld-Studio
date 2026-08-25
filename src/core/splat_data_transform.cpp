@@ -7,6 +7,7 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "core/point_cloud.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "geometry/bounding_box.hpp"
 
@@ -499,6 +500,8 @@ namespace lfs::core {
                 splat_data._densification_info.index_select(0, indices).contiguous();
         }
 
+        (void)cropped_splat.apply_shN_value_quant();
+
         LOG_DEBUG("Cropped SplatData: {} -> {} points (inverse={})", num_points, points_selected, inverse);
         return cropped_splat;
     }
@@ -590,6 +593,9 @@ namespace lfs::core {
 
         LOG_DEBUG("Randomly selecting {} points from {} total points (seed: {})",
                   num_required_splat, num_points, seed);
+        const size_t old_capacity = splat_data._means.is_valid()
+                                        ? splat_data._means.capacity()
+                                        : static_cast<size_t>(num_points);
 
         std::vector<int> all_indices(num_points);
         std::iota(all_indices.begin(), all_indices.end(), 0);
@@ -687,9 +693,38 @@ namespace lfs::core {
         } else if (shN_selected_swizzled.is_valid() && shN_selected_swizzled.numel() > 0) {
             splat_data._shN = std::move(shN_selected_swizzled);
         }
+        (void)splat_data.apply_shN_value_quant();
         splat_data._scaling = splat_data._scaling.index_select(0, indices_tensor).contiguous();
         splat_data._rotation = splat_data._rotation.index_select(0, indices_tensor).contiguous();
         splat_data._opacity = splat_data._opacity.index_select(0, indices_tensor).contiguous();
+        if (splat_data._tensor_allocator) {
+            const size_t dest_cap = std::max(static_cast<size_t>(num_required_splat), old_capacity);
+            const auto home = [&](Tensor& tensor, std::string_view name) {
+                if (!tensor.is_valid()) {
+                    return;
+                }
+                Tensor dest = splat_data.allocate_named_param(
+                    tensor.shape(), dest_cap, tensor.dtype(), name);
+                dest.copy_from(tensor);
+                tensor = std::move(dest);
+            };
+            home(splat_data._means, "SplatData.means");
+            home(splat_data._sh0, "SplatData.sh0");
+            home(splat_data._scaling, "SplatData.scaling");
+            home(splat_data._rotation, "SplatData.rotation");
+            home(splat_data._opacity, "SplatData.opacity");
+            if (!sh_value_quant::enabled() && splat_data._shN.is_valid() &&
+                splat_data._shN.dtype() == DataType::Float32) {
+                const auto rest = static_cast<uint32_t>(splat_data.max_sh_coeffs_rest());
+                Tensor dest = splat_data.allocate_named_param(
+                    splat_data._shN.shape(),
+                    sh_swizzled_float_count(dest_cap, rest),
+                    DataType::Float32,
+                    "SplatData.shN");
+                dest.copy_from(splat_data._shN);
+                splat_data._shN = std::move(dest);
+            }
+        }
         if (!splat_data._frozen_ranges.empty()) {
             splat_data.remap_frozen_ranges_after_keep(
                 static_cast<size_t>(num_points),
@@ -896,6 +931,7 @@ namespace lfs::core {
             result.lod_tree = std::make_unique<lfs::core::SplatLodTree>(*splat_data.lod_tree);
         }
 
+        (void)result.apply_shN_value_quant();
         return result;
     }
 

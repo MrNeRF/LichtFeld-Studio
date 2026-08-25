@@ -1847,6 +1847,20 @@ namespace {
         EXPECT_TRUE(model.means_raw().has_exportable_provenance());
     }
 
+    void expect_exportable_float_shN(const SplatData& model, const size_t expected_n) {
+        EXPECT_EQ(static_cast<size_t>(model.size()), expected_n);
+        ASSERT_TRUE(model.shN_raw().is_valid());
+        EXPECT_GT(model.shN_raw().numel(), 0u);
+        EXPECT_EQ(model.shN_raw().dtype(), DataType::Float32);
+        EXPECT_FALSE(model.shN_value_quantized());
+        EXPECT_TRUE(model.shN_raw().has_exportable_provenance());
+        EXPECT_EQ(model.shN_raw().external_storage_kind(), "splat.exportable");
+        EXPECT_EQ(model.means_raw().external_storage_kind(), "splat.exportable");
+        EXPECT_TRUE(model.means_raw().has_exportable_provenance());
+        ASSERT_TRUE(model.shN_canonical().is_valid());
+        EXPECT_EQ(static_cast<size_t>(model.shN_canonical().size(0)), expected_n);
+    }
+
 } // namespace
 
 TEST(SplatExportableStorageTest, ConsolidateTwoModelsKeepsExportableQ16ShN) {
@@ -1952,4 +1966,153 @@ TEST(SplatExportableStorageTest, MigrateMergedModelsEncodesExportableQ16ShN) {
     expect_exportable_q16(*merged, kTotal);
 
     sh_value_quant::set_enabled_for_testing(std::nullopt);
+}
+
+TEST(SplatExportableStorageTest, ApplyDeletedKeepsExportableQ16ModelConsistent) {
+    require_cuda();
+    sh_value_quant::set_enabled_for_testing(true);
+
+    constexpr size_t kN = 96;
+    constexpr int kShDegree = 1;
+
+    auto model = make_cuda_sh_splat(kN, kShDegree, 0.25f);
+    auto storage_result = SplatExportableStorage::create(kN, kShDegree, 0, kN * 2);
+    if (!storage_result) {
+        sh_value_quant::set_enabled_for_testing(std::nullopt);
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::make_shared<SplatExportableStorage>(std::move(*storage_result));
+    const auto migrated = lfs::io::migrateSplatTensorsToAllocator(*model, storage->make_allocator());
+    ASSERT_TRUE(migrated.has_value()) << migrated.error().format();
+    expect_exportable_q16(*model, kN);
+
+    std::vector<uint8_t> host_mask(kN, 0);
+    for (size_t i = 0; i < kN; i += 2) {
+        host_mask[i] = 1;
+    }
+    Tensor mask = Tensor::from_blob(host_mask.data(), {kN}, Device::CPU, DataType::Bool).to(Device::CUDA);
+    model->soft_delete(mask);
+    ASSERT_TRUE(model->has_deleted_mask());
+
+    const size_t removed = model->apply_deleted();
+    EXPECT_EQ(removed, kN / 2);
+    EXPECT_EQ(static_cast<size_t>(model->size()), kN / 2);
+    EXPECT_FALSE(model->has_deleted_mask());
+    EXPECT_EQ(model->sh0_raw().size(0), kN / 2);
+    EXPECT_EQ(model->scaling_raw().size(0), kN / 2);
+    EXPECT_EQ(model->rotation_raw().size(0), kN / 2);
+    EXPECT_EQ(model->opacity_raw().size(0), kN / 2);
+    expect_exportable_q16(*model, kN / 2);
+
+    const auto means_host = model->means_raw().to_vector();
+    ASSERT_EQ(means_host.size(), (kN / 2) * 3);
+    for (size_t i = 0; i < kN / 2; ++i) {
+        EXPECT_FLOAT_EQ(means_host[i * 3], static_cast<float>(2 * i + 1)) << "row " << i;
+    }
+
+    sh_value_quant::set_enabled_for_testing(std::nullopt);
+}
+
+TEST(SplatExportableStorageTest, ApplyDeletedThenMergeKeepsMaskLengthConsistent) {
+    require_cuda();
+    sh_value_quant::set_enabled_for_testing(true);
+
+    constexpr size_t kN = 64;
+    constexpr int kShDegree = 1;
+
+    auto model = make_cuda_sh_splat(kN, kShDegree, 0.25f);
+    auto storage_result = SplatExportableStorage::create(kN, kShDegree, 0, kN * 2);
+    if (!storage_result) {
+        sh_value_quant::set_enabled_for_testing(std::nullopt);
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::make_shared<SplatExportableStorage>(std::move(*storage_result));
+    const auto migrated = lfs::io::migrateSplatTensorsToAllocator(*model, storage->make_allocator());
+    ASSERT_TRUE(migrated.has_value()) << migrated.error().format();
+    expect_exportable_q16(*model, kN);
+
+    std::vector<uint8_t> host_mask(kN, 0);
+    for (size_t i = 0; i < kN / 2; ++i) {
+        host_mask[i] = 1;
+    }
+    Tensor mask = Tensor::from_blob(host_mask.data(), {kN}, Device::CPU, DataType::Bool).to(Device::CUDA);
+    model->soft_delete(mask);
+    ASSERT_TRUE(model->has_deleted_mask());
+
+    const size_t removed = model->apply_deleted();
+    EXPECT_EQ(removed, kN / 2);
+    EXPECT_EQ(static_cast<size_t>(model->size()), kN / 2);
+    EXPECT_FALSE(model->has_deleted_mask());
+    EXPECT_EQ(static_cast<size_t>(model->means_raw().size(0)), kN / 2);
+    EXPECT_EQ(static_cast<size_t>(model->sh0_raw().size(0)), kN / 2);
+    EXPECT_EQ(static_cast<size_t>(model->scaling_raw().size(0)), kN / 2);
+    EXPECT_EQ(static_cast<size_t>(model->rotation_raw().size(0)), kN / 2);
+    EXPECT_EQ(static_cast<size_t>(model->opacity_raw().size(0)), kN / 2);
+    expect_exportable_q16(*model, kN / 2);
+
+    const auto means_host = model->means_raw().to_vector();
+    ASSERT_EQ(means_host.size(), (kN / 2) * 3);
+    for (size_t i = 0; i < kN / 2; ++i) {
+        EXPECT_FLOAT_EQ(means_host[i * 3], static_cast<float>(kN / 2 + i)) << "row " << i;
+    }
+
+    auto merged = Scene::mergeSplatsWithTransforms({{model.get(), glm::mat4{1.0f}}});
+    ASSERT_NE(merged, nullptr);
+    EXPECT_EQ(static_cast<size_t>(merged->size()), kN / 2);
+    EXPECT_FALSE(merged->has_deleted_mask());
+
+    sh_value_quant::set_enabled_for_testing(std::nullopt);
+}
+
+TEST(SplatExportableStorageTest, ApplyDeletedKeepsExportableFloatShNWhenQ16Disabled) {
+    require_cuda();
+    sh_value_quant::set_enabled_for_testing(false);
+    struct QuantFlagRestorer {
+        ~QuantFlagRestorer() { sh_value_quant::set_enabled_for_testing(std::nullopt); }
+    } restore_flag;
+
+    constexpr size_t kN = 96;
+    constexpr int kShDegree = 1;
+    constexpr float kShNFill = 0.25f;
+
+    auto model = make_cuda_sh_splat(kN, kShDegree, kShNFill);
+    auto storage_result = SplatExportableStorage::create(kN, kShDegree, 0, kN * 2);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::make_shared<SplatExportableStorage>(std::move(*storage_result));
+    const auto migrated = lfs::io::migrateSplatTensorsToAllocator(*model, storage->make_allocator());
+    ASSERT_TRUE(migrated.has_value()) << migrated.error().format();
+    expect_exportable_float_shN(*model, kN);
+
+    std::vector<uint8_t> host_mask(kN, 0);
+    for (size_t i = 0; i < kN; i += 2) {
+        host_mask[i] = 1;
+    }
+    Tensor mask = Tensor::from_blob(host_mask.data(), {kN}, Device::CPU, DataType::Bool).to(Device::CUDA);
+    model->soft_delete(mask);
+    ASSERT_TRUE(model->has_deleted_mask());
+
+    const size_t removed = model->apply_deleted();
+    EXPECT_EQ(removed, kN / 2);
+    EXPECT_EQ(static_cast<size_t>(model->size()), kN / 2);
+    EXPECT_FALSE(model->has_deleted_mask());
+    EXPECT_EQ(model->sh0_raw().size(0), kN / 2);
+    EXPECT_EQ(model->scaling_raw().size(0), kN / 2);
+    EXPECT_EQ(model->rotation_raw().size(0), kN / 2);
+    EXPECT_EQ(model->opacity_raw().size(0), kN / 2);
+    expect_exportable_float_shN(*model, kN / 2);
+
+    const auto means_host = model->means_raw().to_vector();
+    ASSERT_EQ(means_host.size(), (kN / 2) * 3);
+    for (size_t i = 0; i < kN / 2; ++i) {
+        EXPECT_FLOAT_EQ(means_host[i * 3], static_cast<float>(2 * i + 1)) << "row " << i;
+    }
+
+    const auto shN_host = model->shN_canonical().to_vector();
+    const auto rest = static_cast<size_t>(sh_rest_coefficients_for_degree(kShDegree));
+    ASSERT_EQ(shN_host.size(), (kN / 2) * rest * 3);
+    for (size_t i = 0; i < shN_host.size(); ++i) {
+        EXPECT_FLOAT_EQ(shN_host[i], kShNFill) << "shN canonical element " << i;
+    }
 }

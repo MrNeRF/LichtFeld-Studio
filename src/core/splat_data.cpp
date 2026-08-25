@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cuda_runtime.h>
+#include <exception>
 #include <expected>
 #include <format>
 #include <tbb/blocked_range.h>
@@ -305,6 +306,28 @@ namespace {
         return tensor;
     }
 
+    lfs::core::Tensor home_param_tensor(const lfs::core::Tensor& gathered,
+                                        const lfs::core::Tensor& capacity_src,
+                                        const lfs::core::SplatTensorAllocator& allocator,
+                                        std::string_view name) {
+        using namespace lfs::core;
+        if (!gathered.is_valid()) {
+            return {};
+        }
+        if (!allocator) {
+            Tensor out = gathered;
+            out.set_name(std::string{name});
+            return out;
+        }
+        const size_t n = gathered.shape().rank() > 0
+                             ? static_cast<size_t>(gathered.shape()[0])
+                             : static_cast<size_t>(gathered.numel());
+        const size_t cap = std::max(n, capacity_src.is_valid() ? capacity_src.capacity() : n);
+        Tensor dest = allocate_param_tensor(gathered.shape(), cap, allocator, name);
+        dest.copy_from(gathered);
+        return dest;
+    }
+
     [[nodiscard]] uint32_t infer_swizzled_rest_coefficients(size_t n, size_t numel) {
         using namespace lfs::core;
         const size_t blocks = sh_swizzled_block_count(n);
@@ -380,7 +403,7 @@ namespace {
                           error.what());
             }
             if (t.is_valid() && t.dtype() == DataType::Float32 &&
-                t.capacity() >= capacity_floats) {
+                t.capacity() >= logical_floats) {
                 return t;
             }
         }
@@ -389,6 +412,27 @@ namespace {
                                              Device::CUDA);
         tensor.set_name(std::string{name});
         return tensor;
+    }
+
+    lfs::core::Tensor home_swizzled_shN(const lfs::core::Tensor& gathered,
+                                        size_t n,
+                                        size_t primitive_capacity,
+                                        uint32_t layout_rest,
+                                        const lfs::core::SplatTensorAllocator& allocator,
+                                        std::string_view name) {
+        using namespace lfs::core;
+        if (!gathered.is_valid()) {
+            return {};
+        }
+        if (!allocator) {
+            Tensor out = gathered;
+            out.set_name(std::string{name});
+            return out;
+        }
+        const size_t cap = std::max(n, primitive_capacity);
+        Tensor dest = allocate_swizzled_shN(n, cap, layout_rest, allocator, name);
+        dest.copy_from(gathered);
+        return dest;
     }
 
     [[nodiscard]] uint32_t canonical_rest_coefficients(const lfs::core::Tensor& canonical) {
@@ -1470,80 +1514,115 @@ namespace lfs::core {
                                            ? std::vector<int>{}
                                            : kept_indices.to_vector_int();
 
-        // Gather kept rows for each parameter directly into a destination allocated
-        // from the model's backing storage (Vulkan-external interop when set, the
-        // default device allocator otherwise). Gathering into the destination avoids
-        // the transient copy of an index_select() + re-home, and keeps the tensors in
-        // the storage the viewport renderer requires.
-        const auto gather_param = [&](const Tensor& src, std::string_view name) {
-            auto dims = src.shape().dims();
-            dims[0] = new_size;
-            Tensor out = allocate_param_tensor(TensorShape(dims), new_size,
-                                               _tensor_allocator, name);
-            src.index_select_into(out, 0, kept_indices, BoundaryMode::Assert);
-            return out;
-        };
-        auto new_means = gather_param(_means, "SplatData.means");
-        auto new_sh0 = gather_param(_sh0, "SplatData.sh0");
-        auto new_scaling = gather_param(_scaling, "SplatData.scaling");
-        auto new_rotation = gather_param(_rotation, "SplatData.rotation");
-        auto new_opacity = gather_param(_opacity, "SplatData.opacity");
+        Tensor saved_means = _means;
+        Tensor saved_sh0 = _sh0;
+        Tensor saved_scaling = _scaling;
+        Tensor saved_rotation = _rotation;
+        Tensor saved_opacity = _opacity;
+        Tensor saved_shN = _shN;
+        Tensor saved_bounds = _shN_value_bounds;
+        Tensor saved_deleted = _deleted;
+        Tensor saved_densify = _densification_info;
+        auto saved_frozen = _frozen_ranges;
 
-        // Verify new sizes are correct before committing
-        if (new_means.size(0) != new_size || new_sh0.size(0) != new_size ||
-            new_scaling.size(0) != new_size || new_rotation.size(0) != new_size ||
-            new_opacity.size(0) != new_size) {
-            LOG_ERROR("apply_deleted: post-filter size mismatch - means:{} sh0:{} scaling:{} rotation:{} opacity:{} expected:{}",
-                      new_means.size(0), new_sh0.size(0), new_scaling.size(0),
-                      new_rotation.size(0), new_opacity.size(0), new_size);
+        auto restore = [&]() {
+            _means = saved_means;
+            _sh0 = saved_sh0;
+            _scaling = saved_scaling;
+            _rotation = saved_rotation;
+            _opacity = saved_opacity;
+            _shN = saved_shN;
+            _shN_value_bounds = saved_bounds;
+            _deleted = saved_deleted;
+            _densification_info = saved_densify;
+            _frozen_ranges = saved_frozen;
+        };
+
+        try {
+            // Gather params and shN into pooled tensors first. Homing is the first
+            // overwrite of exportable regions; a throw during gather restores by
+            // handles alone.
+            const auto gather_rows = [&](const Tensor& src) {
+                return src.index_select(0, kept_indices).contiguous();
+            };
+            Tensor gathered_means = gather_rows(_means);
+            Tensor gathered_sh0 = gather_rows(_sh0);
+            Tensor gathered_scaling = gather_rows(_scaling);
+            Tensor gathered_rotation = gather_rows(_rotation);
+            Tensor gathered_opacity = gather_rows(_opacity);
+
+            if (gathered_means.size(0) != new_size || gathered_sh0.size(0) != new_size ||
+                gathered_scaling.size(0) != new_size || gathered_rotation.size(0) != new_size ||
+                gathered_opacity.size(0) != new_size) {
+                LOG_ERROR("apply_deleted: post-filter size mismatch - means:{} sh0:{} scaling:{} rotation:{} opacity:{} expected:{}",
+                          gathered_means.size(0), gathered_sh0.size(0), gathered_scaling.size(0),
+                          gathered_rotation.size(0), gathered_opacity.size(0), new_size);
+                return 0;
+            }
+
+            Tensor gathered_shN;
+            const auto layout_rest = static_cast<uint32_t>(max_sh_coeffs_rest());
+            if (_shN.is_valid() && _shN.numel() > 0 && layout_rest > 0) {
+                if (_shN.dtype() != DataType::Float32 || shN_value_quantized() || shN_ieee_f16()) {
+                    Tensor canon = shN_canonical();
+                    if (canon.device() != _means.device()) {
+                        canon = canon.to(_means.device());
+                    }
+                    Tensor kept_canon = canon.index_select(0, kept_indices).contiguous();
+                    gathered_shN = allocate_swizzled_shN(new_size, new_size, layout_rest);
+                    reorder_canonical_into_swizzled(kept_canon, gathered_shN, new_size,
+                                                    layout_rest, layout_rest);
+                } else {
+                    gathered_shN = allocate_swizzled_shN(new_size, new_size, layout_rest);
+                    shN_swizzled_gather_self(_shN.ptr<float>(), gathered_shN.ptr<float>(),
+                                             kept_indices.ptr<int>(), new_size, 0, layout_rest);
+                }
+            }
+
+            Tensor new_means = home_param_tensor(gathered_means, _means, _tensor_allocator,
+                                                 "SplatData.means");
+            Tensor new_sh0 = home_param_tensor(gathered_sh0, _sh0, _tensor_allocator,
+                                               "SplatData.sh0");
+            Tensor new_scaling = home_param_tensor(gathered_scaling, _scaling, _tensor_allocator,
+                                                   "SplatData.scaling");
+            Tensor new_rotation = home_param_tensor(gathered_rotation, _rotation, _tensor_allocator,
+                                                    "SplatData.rotation");
+            Tensor new_opacity = home_param_tensor(gathered_opacity, _opacity, _tensor_allocator,
+                                                   "SplatData.opacity");
+            if (gathered_shN.is_valid() && !sh_value_quant::enabled() && _tensor_allocator) {
+                gathered_shN = home_swizzled_shN(gathered_shN, new_size,
+                                                 _means.is_valid() ? _means.capacity() : new_size,
+                                                 layout_rest, _tensor_allocator, "SplatData.shN");
+            }
+
+            _means = std::move(new_means);
+            _sh0 = std::move(new_sh0);
+            _scaling = std::move(new_scaling);
+            _rotation = std::move(new_rotation);
+            _opacity = std::move(new_opacity);
+
+            if (gathered_shN.is_valid()) {
+                _shN_value_bounds = Tensor{};
+                _shN = std::move(gathered_shN);
+                if (sh_value_quant::enabled()) {
+                    (void)apply_shN_value_quant();
+                }
+            }
+
+            _densification_info = Tensor();
+            if (!_frozen_ranges.empty()) {
+                remap_frozen_ranges_after_keep(old_size, kept_indices_host);
+            }
+            clear_deleted();
+
+            const size_t removed = old_size - new_size;
+            LOG_INFO("apply_deleted: removed {} gaussians ({} -> {})", removed, old_size, new_size);
+            return removed;
+        } catch (const std::exception& e) {
+            restore();
+            LOG_ERROR("apply_deleted: aborted ({}); model restored", e.what());
             return 0;
         }
-
-        // Commit the changes
-        _means = std::move(new_means);
-        _sh0 = std::move(new_sh0);
-        _scaling = std::move(new_scaling);
-        _rotation = std::move(new_rotation);
-        _opacity = std::move(new_opacity);
-
-        // shN is in swizzled layout — block-aware gather of kept primitives.
-        // q16 / IEEE-f16 cannot use ptr<float>() gather; filter via canonical float.
-        const auto layout_rest = static_cast<uint32_t>(max_sh_coeffs_rest());
-        if (_shN.is_valid() && _shN.numel() > 0 && layout_rest > 0) {
-            if (_shN.dtype() != DataType::Float32 || shN_value_quantized() || shN_ieee_f16()) {
-                Tensor canon = shN_canonical();
-                if (canon.device() != _means.device()) {
-                    canon = canon.to(_means.device());
-                }
-                Tensor kept_canon = canon.index_select(0, kept_indices).contiguous();
-                // Drop q16 bounds: storage is rebuilt as float4-swizzle.
-                _shN_value_bounds = Tensor{};
-                _shN = allocate_swizzled_shN(new_size, new_size, layout_rest,
-                                             _tensor_allocator, "SplatData.shN");
-                reorder_canonical_into_swizzled(kept_canon, _shN, new_size,
-                                                layout_rest, layout_rest);
-            } else {
-                auto new_shN = allocate_swizzled_shN(new_size, new_size, layout_rest,
-                                                     _tensor_allocator, "SplatData.shN");
-                shN_swizzled_gather_self(_shN.ptr<float>(), new_shN.ptr<float>(),
-                                         kept_indices.ptr<int>(), new_size, 0, layout_rest);
-                _shN = std::move(new_shN);
-            }
-        }
-
-        // Clear densification info
-        _densification_info = Tensor();
-        if (!_frozen_ranges.empty()) {
-            remap_frozen_ranges_after_keep(old_size, kept_indices_host);
-        }
-
-        // Clear deletion mask (bumps deleted_mask_version so the viewport
-        // drops any soft-delete opacity bake for the old N).
-        clear_deleted();
-
-        const size_t removed = old_size - new_size;
-        LOG_INFO("apply_deleted: removed {} gaussians ({} -> {})", removed, old_size, new_size);
-        return removed;
     }
 
     // ========== SERIALIZATION ==========
