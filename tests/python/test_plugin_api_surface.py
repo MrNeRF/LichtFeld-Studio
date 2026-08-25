@@ -5,6 +5,7 @@
 from importlib import import_module
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+import re
 import sys
 
 import pytest
@@ -151,6 +152,67 @@ def test_plugin_stub_surface_exposes_v1_compatibility_contract():
     assert "PLUGIN_API_VERSION: str" in root_stub
     assert "API_VERSION: str" in plugins_stub
     assert "FEATURES: list = ..." in plugins_stub
+
+
+def test_plugin_api_version_matches_across_cpp_and_stub_copies(monkeypatch):
+    monkeypatch.delitem(sys.modules, "lfs_plugins.compat", raising=False)
+    from lfs_plugins.compat import PLUGIN_API_VERSION
+
+    py_plugins_text = (PROJECT_ROOT / "src" / "python" / "lfs" / "py_plugins.cpp").read_text()
+    module_text = (PROJECT_ROOT / "src" / "python" / "lfs" / "module.cpp").read_text()
+    stub_text = (PROJECT_ROOT / "src" / "python" / "stubs" / "lichtfeld" / "__init__.pyi").read_text()
+
+    py_plugins_match = re.search(r'plugins\.attr\("API_VERSION"\)\s*=\s*"([^"]+)"', py_plugins_text)
+    assert py_plugins_match, 'py_plugins.cpp: could not find plugins.attr("API_VERSION") assignment'
+    assert py_plugins_match.group(1) == PLUGIN_API_VERSION, (
+        f"py_plugins.cpp API_VERSION ({py_plugins_match.group(1)!r}) is out of sync with "
+        f"compat.PLUGIN_API_VERSION ({PLUGIN_API_VERSION!r})"
+    )
+
+    module_match = re.search(r'm\.attr\("PLUGIN_API_VERSION"\)\s*=\s*"([^"]+)"', module_text)
+    assert module_match, 'module.cpp: could not find m.attr("PLUGIN_API_VERSION") assignment'
+    assert module_match.group(1) == PLUGIN_API_VERSION, (
+        f"module.cpp PLUGIN_API_VERSION ({module_match.group(1)!r}) is out of sync with "
+        f"compat.PLUGIN_API_VERSION ({PLUGIN_API_VERSION!r})"
+    )
+
+    stub_match = re.search(r"PLUGIN_API_VERSION:\s*str\s*=\s*'([^']+)'", stub_text)
+    assert stub_match, "lichtfeld/__init__.pyi: could not find PLUGIN_API_VERSION literal"
+    assert stub_match.group(1) == PLUGIN_API_VERSION, (
+        f"stub PLUGIN_API_VERSION ({stub_match.group(1)!r}) is out of sync with "
+        f"compat.PLUGIN_API_VERSION ({PLUGIN_API_VERSION!r})"
+    )
+
+
+def test_plugin_supported_features_match_cpp_features_list(monkeypatch):
+    monkeypatch.delitem(sys.modules, "lfs_plugins.compat", raising=False)
+    from lfs_plugins.compat import SUPPORTED_PLUGIN_FEATURES
+
+    py_plugins_text = (PROJECT_ROOT / "src" / "python" / "lfs" / "py_plugins.cpp").read_text()
+    cpp_features = re.findall(r'features\.append\("([^"]+)"\);', py_plugins_text)
+    assert cpp_features, "py_plugins.cpp: could not find any features.append(...) calls"
+
+    assert len(cpp_features) == len(SUPPORTED_PLUGIN_FEATURES), (
+        f"py_plugins.cpp declares {len(cpp_features)} features, "
+        f"compat.SUPPORTED_PLUGIN_FEATURES has {len(SUPPORTED_PLUGIN_FEATURES)}"
+    )
+    assert set(cpp_features) == set(SUPPORTED_PLUGIN_FEATURES), (
+        f"py_plugins.cpp features {sorted(cpp_features)} do not match "
+        f"compat.SUPPORTED_PLUGIN_FEATURES {sorted(SUPPORTED_PLUGIN_FEATURES)}"
+    )
+
+
+def test_lichtfeld_version_matches_cmake_project_version(monkeypatch):
+    monkeypatch.delitem(sys.modules, "lfs_plugins.compat", raising=False)
+    from lfs_plugins.compat import LICHTFELD_VERSION
+
+    cmake_text = (PROJECT_ROOT / "CMakeLists.txt").read_text()
+    cmake_match = re.search(r"project\([^)]*\bVERSION\s+(\d+\.\d+\.\d+)", cmake_text)
+    assert cmake_match, "CMakeLists.txt: could not find project() VERSION"
+    assert cmake_match.group(1) == LICHTFELD_VERSION, (
+        f"CMakeLists.txt project VERSION ({cmake_match.group(1)!r}) is out of sync with "
+        f"compat.LICHTFELD_VERSION ({LICHTFELD_VERSION!r})"
+    )
 
 
 def test_python_stub_workflow_uses_explicit_sync_and_check_targets():

@@ -71,9 +71,9 @@ Gaussian_3D load_gaussian_split(
     StructuredBuffer<float> xyz_ws,
     StructuredBuffer<float> sh0,
 #if LFS_SHN_F16
-    StructuredBuffer<uint2> shN,
+    uint64_t shN_address,
 #elif LFS_SHN_Q16
-    StructuredBuffer<uint> shN,
+    uint64_t shN_address,
     StructuredBuffer<float2> shN_bounds,
 #else
     StructuredBuffer<float4> shN,
@@ -88,12 +88,12 @@ Gaussian_3D load_gaussian_split(
     float3 g_xyz_ws = read_t3_float3(g_idx, xyz_ws);
 #if LFS_SHN_F16
     SpherHarmCoeffs g_sh_coeffs = read_spherical_harmonics_coeffs_split_f16(
-        g_idx, sh0, shN, active_sh, shN_layout_slots);
+        g_idx, sh0, shN_address, active_sh, shN_layout_slots);
 #elif LFS_SHN_Q16
     // shN_layout_slots carries n_cells (pad-dropped u16 cells per primitive)
     // on the q16 path (host sets uniforms.shN_layout_slots = n_cells).
     SpherHarmCoeffs g_sh_coeffs = read_spherical_harmonics_coeffs_split_q16(
-        g_idx, sh0, shN, shN_bounds, active_sh, shN_layout_slots);
+        g_idx, sh0, shN_address, shN_bounds, active_sh, shN_layout_slots);
 #else
     SpherHarmCoeffs g_sh_coeffs = read_spherical_harmonics_coeffs_split(
         g_idx, sh0, shN, active_sh, shN_layout_slots);
@@ -651,13 +651,13 @@ layout(binding=4) StructuredBuffer<uint2> scaling_raw;  // log f16x3 + pad
 layout(binding=5) StructuredBuffer<uint> opacity_raw;  // f16, 2 splats per uint
 #elif LFS_SHN_F16
 layout(binding=1) StructuredBuffer<float> sh0;  // 1*3 fp32 DC
-layout(binding=2) StructuredBuffer<uint2> shN;  // IEEE f16 float4-swizzle rest
+// shN is uniforms.shN_address (PhysicalStorageBuffer64); binding 2 is unused.
 layout(binding=3) StructuredBuffer<float4> rotations;  // 4
 layout(binding=4) StructuredBuffer<float> scaling_raw;  // 3
 layout(binding=5) StructuredBuffer<float> opacity_raw;  // 1
 #elif LFS_SHN_Q16
 layout(binding=1) StructuredBuffer<float> sh0;  // 1*3 fp32 DC
-layout(binding=2) StructuredBuffer<uint> shN;  // pad-dropped q16 (2×u16/word)
+// shN is uniforms.shN_address (PhysicalStorageBuffer64); binding 2 is unused.
 layout(binding=3) StructuredBuffer<float4> rotations;  // 4
 layout(binding=4) StructuredBuffer<float> scaling_raw;  // 3
 layout(binding=5) StructuredBuffer<float> opacity_raw;  // 1
@@ -893,7 +893,15 @@ void main(
       );
     #elif LFS_SHN_Q16
     Gaussian_3D gauss = load_gaussian_split(
-        g_idx, xyz_ws, sh0, shN, shN_bounds, rotations,
+        g_idx, xyz_ws, sh0, uniforms.shN_address, shN_bounds, rotations,
+        scaling_raw, opacity_raw,
+        uniforms.lod_enabled,
+        active_sh,
+        uniforms.shN_layout_slots
+      );
+    #elif LFS_SHN_F16
+    Gaussian_3D gauss = load_gaussian_split(
+        g_idx, xyz_ws, sh0, uniforms.shN_address, rotations,
         scaling_raw, opacity_raw,
         uniforms.lod_enabled,
         active_sh,

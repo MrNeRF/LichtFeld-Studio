@@ -26,6 +26,7 @@
 #include "core/pinned_memory_allocator.hpp"
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
+#include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "io/exporter.hpp"
 #include "ppisp_fixture.hpp"
@@ -165,6 +166,73 @@ namespace lfs::python {
             EXPECT_TRUE(std::isfinite(value));
         for (const float value : grad_input)
             EXPECT_TRUE(std::isfinite(value));
+    }
+
+    std::unique_ptr<core::SplatData> make_construction_splat() {
+        const size_t n = 1;
+        std::vector<float> rotation{1.0f, 0.0f, 0.0f, 0.0f};
+        return std::make_unique<core::SplatData>(
+            0,
+            core::Tensor::zeros({n, 3}, core::Device::CUDA),
+            core::Tensor::zeros({n, 1, 3}, core::Device::CUDA),
+            core::Tensor::zeros({n, 0, 3}, core::Device::CUDA),
+            core::Tensor::zeros({n, 3}, core::Device::CUDA),
+            core::Tensor::from_vector(rotation, {n, 4}, core::Device::CUDA),
+            core::Tensor::zeros({n, 1}, core::Device::CUDA),
+            1.0f);
+    }
+
+    core::param::TrainingParameters make_construction_params(const bool use_ppisp,
+                                                             const std::filesystem::path& output) {
+        core::param::TrainingParameters params;
+        params.dataset.output_path = output;
+        params.optimization.strategy = "mcmc";
+        params.optimization.iterations = 8;
+        params.optimization.sh_degree = 0;
+        params.optimization.max_cap = 16;
+        params.optimization.headless = true;
+        params.optimization.enable_eval = false;
+        params.optimization.use_ppisp = use_ppisp;
+        return params;
+    }
+
+    TEST(TrainerConstructionTest, EvalAppearanceHookPresentIffUsePpisp) {
+        const auto output_on = std::filesystem::temp_directory_path() / "lfs_trainer_eval_hook_on";
+        const auto output_off = std::filesystem::temp_directory_path() / "lfs_trainer_eval_hook_off";
+        std::error_code ec;
+        std::filesystem::create_directories(output_on, ec);
+        std::filesystem::create_directories(output_off, ec);
+
+        {
+            core::Scene scene;
+            const core::NodeId cameras = scene.addGroup("Cameras");
+            scene.addCamera("camera.png", cameras, make_test_camera());
+            scene.addSplat("Model", make_construction_splat());
+            scene.setTrainingModelNode("Model");
+            training::Trainer trainer(scene);
+            const auto result = trainer.initialize(make_construction_params(true, output_on));
+            ASSERT_TRUE(result) << result.error();
+            EXPECT_TRUE(trainer.hasPPISP());
+            EXPECT_TRUE(trainer.hasEvalAppearance());
+            trainer.shutdown();
+        }
+
+        {
+            core::Scene scene;
+            const core::NodeId cameras = scene.addGroup("Cameras");
+            scene.addCamera("camera.png", cameras, make_test_camera());
+            scene.addSplat("Model", make_construction_splat());
+            scene.setTrainingModelNode("Model");
+            training::Trainer trainer(scene);
+            const auto result = trainer.initialize(make_construction_params(false, output_off));
+            ASSERT_TRUE(result) << result.error();
+            EXPECT_FALSE(trainer.hasPPISP());
+            EXPECT_FALSE(trainer.hasEvalAppearance());
+            trainer.shutdown();
+        }
+
+        std::filesystem::remove_all(output_on, ec);
+        std::filesystem::remove_all(output_off, ec);
     }
 
     TEST(TrainerConstructionTest, RejectsInvalidSceneBeforeAllocatingCudaResources) {

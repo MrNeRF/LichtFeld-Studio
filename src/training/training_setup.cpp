@@ -11,6 +11,7 @@
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
 #include "core/sh_value_quant.hpp"
+#include "core/shareable_allocation_limit.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_data_transform.hpp"
 #include "dataset.hpp"
@@ -435,6 +436,10 @@ namespace lfs::training {
                                                          float_cap,
                                                          lfs::core::DataType::Float32,
                                                          "SplatData.shN");
+                        } catch (const lfs::core::ShareableAllocationLimitError& error) {
+                            LOG_INFO("Float shN install rejected by shareable allocation limit ({}); "
+                                     "re-encoding to q16 instead",
+                                     error.what());
                         } catch (const std::exception& error) {
                             // Exportable q16 region rejects the swizzled float shape when
                             // live-N cells exceed the pad-dropped capacity; same fallback
@@ -529,8 +534,10 @@ namespace lfs::training {
             .load_masks = params.optimization.mask_mode != lfs::core::param::MaskMode::None,
             .load_depths = params.optimization.use_depth_loss &&
                            params.optimization.depth_loss_weight > 0.0f,
-            .load_normals = params.optimization.use_normal_loss &&
-                            params.optimization.normal_loss_weight > 0.0f,
+            .load_normals = (params.optimization.use_normal_loss &&
+                             params.optimization.normal_loss_weight > 0.0f) ||
+                            params.optimization.enable_eval,
+            .normal_auto_generate = params.optimization.normal_auto_generate,
             .centralize = parse_centralize(params.dataset.centralize_dataset),
             .progress = [&data_path](float percentage, const std::string& message) {
                 LOG_DEBUG("[{:5.1f}%] {}", percentage, message);
@@ -931,7 +938,8 @@ namespace lfs::training {
             .load_depths = params.optimization.use_depth_loss &&
                            params.optimization.depth_loss_weight > 0.0f,
             .load_normals = params.optimization.use_normal_loss &&
-                            params.optimization.normal_loss_weight > 0.0f};
+                            params.optimization.normal_loss_weight > 0.0f,
+            .normal_auto_generate = params.optimization.normal_auto_generate};
 
         auto result = data_loader->load(params.dataset.data_path, load_options);
         if (!result) {

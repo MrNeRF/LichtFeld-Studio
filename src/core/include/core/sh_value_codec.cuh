@@ -5,13 +5,13 @@
 
 /**
  * Device-side 16-bit SH-rest value codec.
- * Mirrors host math in sh_value_codec.hpp.
+ * Mirrors host math in lfs/training/sh_value_codec.hpp.
  */
 
 #include <cstdint>
 #include <cuda_runtime.h>
 
-namespace lfs::training::sh_value {
+namespace lfs::core::sh_value {
 
     constexpr float kQMaxDevice = 65535.0f;
     constexpr float kInvQMaxDevice = 1.0f / 65535.0f;
@@ -41,4 +41,4 @@ namespace lfs::training::sh_value {
         return block * (n_cells * R) + cell * R + lane;
     }
 
-} // namespace lfs::training::sh_value
+} // namespace lfs::core::sh_value

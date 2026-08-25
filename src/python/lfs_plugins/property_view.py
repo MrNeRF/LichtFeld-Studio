@@ -54,6 +54,8 @@ NUMBER_PROPS = (
     "normal_loss_weight",
     "normal_consistency_weight",
     "normal_flatten_weight",
+    "normal_start_fraction",
+    "normal_end_fraction",
     "opacity_reg",
     "scale_reg",
     "tv_loss_weight",
@@ -73,16 +75,19 @@ BOOL_PROPS = (
     "use_alpha_as_mask",
     "use_depth_loss",
     "use_normal_loss",
+    "normal_auto_generate",
     "enable_sparsity",
     "gut",
     "undistort",
     "mip_filter",
     "ppisp",
+    "ppisp_exposure_from_exif",
     "ppisp_use_controller",
     "ppisp_freeze_from_sidecar",
     "ppisp_freeze_gaussians",
     "random",
     "enable_eval",
+    "background_improvements",
 )
 
 SELECT_PROPS = ("mask_mode", "bg_mode", "normal_loss_space")
@@ -122,6 +127,7 @@ def _run(
 
 BASIC_RUNS = (
     _run("basic_struct", "iterations", "max_cap"),
+    _run("basic_background", "background_improvements", visibility_condition_id="dep_mrnf"),
     _run(
         "basic_live_start",
         "use_bilateral_grid",
@@ -136,9 +142,12 @@ BASIC_RUNS = (
     _run("basic_normal_toggle", "use_normal_loss"),
     _run(
         "basic_normal_weights",
+        "normal_auto_generate",
         "normal_loss_weight",
         "normal_consistency_weight",
         "normal_flatten_weight",
+        "normal_start_fraction",
+        "normal_end_fraction",
         "normal_loss_space",
         visibility_condition_id="dep_normal_loss",
     ),
@@ -164,6 +173,7 @@ BASIC_RUNS = (
     _run("basic_after_gut", "undistort", "mip_filter", "ppisp"),
     _run(
         "ppisp_freeze",
+        "ppisp_exposure_from_exif",
         "ppisp_freeze_from_sidecar",
         visibility_condition_id="dep_ppisp",
     ),
@@ -742,10 +752,12 @@ class SectionBinding:
         if row is None:
             return False
         if row["kind"] == "checkbox":
-            if isinstance(value, str):
-                value = value.strip().lower() in {"1", "true", "yes", "on"}
-            else:
-                value = bool(value)
+            # Only the click binding produces booleans. String payloads are
+            # creation-time change echoes from the row template's data-if'd
+            # select element carrying this row's id; committing them corrupts
+            # the parameter (e.g. normal_auto_generate flipped off at startup).
+            if not isinstance(value, bool):
+                return False
         elif row["kind"] == "select":
             try:
                 value = int(value)

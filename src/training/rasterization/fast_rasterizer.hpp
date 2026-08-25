@@ -191,14 +191,26 @@ namespace lfs::training {
         lfs::core::SplatData& gaussian_model,
         lfs::core::Tensor& bg_color,
         bool mip_filter = false,
-        const lfs::core::Tensor& bg_image = {}) {
-        auto result = fast_rasterize_forward(viewpoint_camera, gaussian_model, bg_color, 0, 0, 0, 0, mip_filter, bg_image);
+        const lfs::core::Tensor& bg_image = {},
+        bool render_normal = false) {
+        auto result = fast_rasterize_forward(
+            viewpoint_camera, gaussian_model, bg_color, 0, 0, 0, 0, mip_filter, bg_image, render_normal);
         if (!result) {
             throw lfs::Exception(std::move(result.error()));
         }
         RenderOutput output = std::move(result->first);
         result->second.release_forward_context();
         return output;
+    }
+
+    inline RenderOutput fast_rasterize(
+        lfs::core::Camera& viewpoint_camera,
+        lfs::core::SplatData& gaussian_model,
+        lfs::core::Tensor& bg_color,
+        bool mip_filter,
+        bool render_normal) {
+        return fast_rasterize(
+            viewpoint_camera, gaussian_model, bg_color, mip_filter, {}, render_normal);
     }
 
     // Inference-only rasterization does not mutate the camera; this overload avoids
@@ -208,12 +220,28 @@ namespace lfs::training {
         lfs::core::SplatData& gaussian_model,
         lfs::core::Tensor& bg_color,
         bool mip_filter = false,
-        const lfs::core::Tensor& bg_image = {}) {
+        const lfs::core::Tensor& bg_image = {},
+        bool render_normal = false) {
         return fast_rasterize(
             const_cast<lfs::core::Camera&>(viewpoint_camera),
             gaussian_model,
             bg_color,
             mip_filter,
-            bg_image);
+            bg_image,
+            render_normal);
+    }
+
+    inline RenderOutput fast_rasterize(
+        const lfs::core::Camera& viewpoint_camera,
+        lfs::core::SplatData& gaussian_model,
+        lfs::core::Tensor& bg_color,
+        bool mip_filter,
+        bool render_normal) {
+        return fast_rasterize(
+            const_cast<lfs::core::Camera&>(viewpoint_camera),
+            gaussian_model,
+            bg_color,
+            mip_filter,
+            render_normal);
     }
 } // namespace lfs::training

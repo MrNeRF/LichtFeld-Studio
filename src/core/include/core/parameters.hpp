@@ -174,10 +174,13 @@ namespace lfs::core {
             std::string depth_loss_mode = "ssi"; // ssi (auto prior), ssi-disparity, or ssi-depth
 
             // Normal supervision
-            bool use_normal_loss = false;            // Use dataset normal maps when available
-            float normal_loss_weight = 0.05f;        // Prior normal supervision weight
-            float normal_consistency_weight = 0.05f; // Depth-normal consistency weight
-            float normal_flatten_weight = 1.0f;      // L1 on the smallest scale axis while normal supervision is active
+            bool use_normal_loss = false;             // Use dataset normal maps when available
+            bool normal_auto_generate = true;         // Generate missing/mismatched maps from images/ with MoGe-2
+            float normal_loss_weight = 0.005f;        // Prior normal supervision weight (sweep: free geometry; raise to ~0.1 when geometry is the product)
+            float normal_consistency_weight = 0.001f; // Depth-normal consistency weight
+            float normal_flatten_weight = 0.0f;       // L1 on the smallest scale axis; off by default - it suppresses densification under the benchmark refine regime
+            float normal_start_fraction = 0.08f;      // Start normal supervision at floor(fraction * total iterations)
+            float normal_end_fraction = 1.0f;         // Active while iter < end_fraction * total; 1.0 means until the end
             NormalLossSpace normal_loss_space = NormalLossSpace::Auto;
 
             // Mip filter (anti-aliasing)
@@ -198,6 +201,7 @@ namespace lfs::core {
 
             // PPISP (Physically-Plausible ISP) parameters
             bool use_ppisp = false;
+            bool ppisp_exposure_from_exif = true;
             float ppisp_lr = 2e-3f;
             float ppisp_reg_weight = 0.001f;
             int ppisp_warmup_steps = 500;
@@ -225,6 +229,14 @@ namespace lfs::core {
             float bounds_percentile = 0.8f;
             bool use_error_map = true;
             bool use_edge_map = true;
+            bool background_improvements = false;
+            float far_scene_min_fraction = 0.01f; // min deep-far splat fraction that activates far-field (0 = always on); mrnf_defaults() overrides to 0.0
+            bool growth_ratio_rank = false;       // rank growth by err/vis^growth_ratio_pow; mrnf_defaults() overrides to true
+            float growth_ratio_pow = 0.75f;
+            size_t fill_pacing_iter = 0; // pace cap fill until this iteration (0 = off); mrnf_defaults() overrides to 15000
+            size_t far_seed_dose = 0;    // far seeds per refine window (0 = starvation default); mrnf_defaults() overrides to 2000
+            // Config-file / C++ only (no registry, GUI, locale, or CLI).
+            bool explore_starvation_weighting = true;
 
             // Random initialization parameters
             bool random = false;        // Use random initialization instead of SfM
@@ -249,6 +261,7 @@ namespace lfs::core {
             void apply_step_scaling();
             void remove_step_scaling();
             [[nodiscard]] int resolved_total_iterations() const;
+            [[nodiscard]] bool normal_supervision_active(int iter) const;
             [[nodiscard]] int resolved_ppisp_controller_activation_step(int total_iterations) const;
 
             nlohmann::json to_json() const;
@@ -321,6 +334,27 @@ namespace lfs::core {
             bool include_provenance = true; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
         };
 
+        struct TrainingParameters;
+
+        // Process-local presence map for --resume. Keys dumped here are the
+        // only ones re-applied after a project/checkpoint restore; omitted
+        // keys leave the restored values untouched. Not serialized.
+        struct LFS_CORE_API ExplicitTrainingOverrides {
+            std::string optimization_json;
+            std::string dataset_json;
+
+            [[nodiscard]] bool empty() const noexcept {
+                return optimization_json.empty() && dataset_json.empty();
+            }
+            [[nodiscard]] bool has_optimization_key(std::string_view key) const;
+            [[nodiscard]] bool has_dataset_key(std::string_view key) const;
+        };
+
+        LFS_CORE_API void merge_explicit_json_overlay(std::string& dst_json, std::string_view src_json);
+        LFS_CORE_API void apply_explicit_training_overrides(
+            TrainingParameters& target,
+            const ExplicitTrainingOverrides& overrides);
+
         struct LFS_CORE_API TrainingParameters {
             DatasetConfig dataset;
             OptimizationParameters optimization;
@@ -333,6 +367,7 @@ namespace lfs::core {
             bool reset_preferences = false;
             bool reset_layout = false;
             bool reset_all_settings = false;
+            std::optional<int> mcp_port = std::nullopt;
 
             // Viewer mode: splat files to load (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume)
             std::vector<std::filesystem::path> view_paths;
@@ -378,6 +413,8 @@ namespace lfs::core {
             // True when -i/--iter was provided. Resume adapters use this to
             // distinguish an explicit continuation target from the default.
             bool cli_iterations_set = false;
+
+            ExplicitTrainingOverrides overrides;
 
             std::vector<int> disabled_camera_uids;
 
@@ -438,24 +475,33 @@ namespace lfs::core {
                                           Normals,
                                           Both };
 
+        // Native in-tree MoGe-2 is the only runtime. The CLI still accepts
+        // --inference-backend native (and auto as an alias).
+        enum class InferenceBackend { Native };
+
         struct LFS_CORE_API PreprocessParameters {
             std::filesystem::path dataset_path;
             std::string images_folder = "images";
             std::filesystem::path model_path;
             PreprocessOutputMode mode = PreprocessOutputMode::Both;
+            InferenceBackend inference_backend = InferenceBackend::Native;
             int max_side = 518;
             std::int64_t num_tokens = 1800;
             int threads = 0;
             int png_compression = 1;
             int bit_depth = 16;
-            bool force_cpu = false;
             bool overwrite = false;
             bool no_download = false;
             bool download_only = false;
+            std::vector<std::filesystem::path> image_paths; // Empty = scan images_folder
+            std::string normals_folder = "normals";
         };
 
         // Modern C++23 functions returning expected values
         LFS_CORE_API std::expected<OptimizationParameters, std::string> read_optim_params_from_json(const std::filesystem::path& path);
+        LFS_CORE_API std::expected<OptimizationParameters, std::string> read_optim_params_from_json(
+            const std::filesystem::path& path,
+            ExplicitTrainingOverrides& captured_overrides);
 
         // Save training parameters to JSON
         LFS_CORE_API std::expected<void, std::string> save_training_parameters_to_json(

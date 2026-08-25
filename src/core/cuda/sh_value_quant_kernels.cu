@@ -7,8 +7,9 @@
 
 #include "core/cuda/sh_layout.cuh"
 #include "core/cuda_error.hpp"
-#include "lfs/training/sh_value_codec.cuh"
-#include "lfs/training/sh_value_codec.hpp"
+#include "core/sh_value_codec.cuh"
+#include "core/sh_value_quant.hpp"
+#include "core/sh_value_quant_kernels.hpp"
 
 #include <cstdint>
 #include <cuda_fp16.h>
@@ -16,7 +17,7 @@
 #include <limits>
 #include <stdexcept>
 
-namespace lfs::training::sh_value {
+namespace lfs::core::sh_value_quant {
     namespace {
 
         constexpr int kThreads = 256;
@@ -35,7 +36,7 @@ namespace lfs::training::sh_value {
             std::uint32_t n_primitives,
             std::uint32_t slots_per_prim,
             std::uint32_t n_cells_per_prim) {
-            using DC = DeviceCodec16;
+            using DC = lfs::core::sh_value::DeviceCodec16;
             const std::uint32_t quant_block = blockIdx.x;
             const std::uint32_t lane = threadIdx.x;
             const std::uint32_t p = quant_block * 256u + lane;
@@ -87,7 +88,7 @@ namespace lfs::training::sh_value {
             if (!in_range)
                 return;
             for (std::uint32_t c = 0; c < n_cells; ++c) {
-                dst_u16[shAtU16(p, c, n_cells_per_prim)] =
+                dst_u16[lfs::core::sh_value::shAtU16(p, c, n_cells_per_prim)] =
                     DC::encode(cells[c], mm.x, mm.y);
             }
         }
@@ -99,7 +100,7 @@ namespace lfs::training::sh_value {
             std::uint32_t n_primitives,
             std::uint32_t slots_per_prim,
             std::uint32_t n_cells_per_prim) {
-            using DC = DeviceCodec16;
+            using DC = lfs::core::sh_value::DeviceCodec16;
             const std::uint32_t p = blockIdx.x * blockDim.x + threadIdx.x;
             if (p >= n_primitives)
                 return;
@@ -111,7 +112,8 @@ namespace lfs::training::sh_value {
                 dst[shAtF4(p, k, slots_per_prim)] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
             }
             for (std::uint32_t c = 0; c < n_cells_per_prim; ++c) {
-                const float v = DC::decode(src_u16[shAtU16(p, c, n_cells_per_prim)], mm.x, mm.y);
+                const float v = DC::decode(
+                    src_u16[lfs::core::sh_value::shAtU16(p, c, n_cells_per_prim)], mm.x, mm.y);
                 const std::uint32_t slot = c / 4u;
                 const std::uint32_t comp = c % 4u;
                 if (slot >= slots_per_prim)
@@ -148,8 +150,8 @@ namespace lfs::training::sh_value {
             const auto cell = static_cast<std::uint32_t>(
                 canonical_index % floats_per_primitive);
             const float2 mm = bounds[primitive / 256u];
-            dst[output_index] = DeviceCodec16::decode(
-                src_u16[shAtU16(primitive, cell, n_cells_per_primitive)],
+            dst[output_index] = lfs::core::sh_value::DeviceCodec16::decode(
+                src_u16[lfs::core::sh_value::shAtU16(primitive, cell, n_cells_per_primitive)],
                 mm.x,
                 mm.y);
         }
@@ -219,8 +221,8 @@ namespace lfs::training::sh_value {
         if (n_primitives == 0 || coeffs_rest == 0)
             return;
         const auto slots = lfs::core::sh_float4_slots_for_rest(coeffs_rest);
-        const auto n_cells = n_value_cells_per_prim(coeffs_rest);
-        const auto n_bounds = n_bounds_for_prims(n_primitives);
+        const auto n_cells = lfs::core::sh_value_quant::n_value_cells_per_prim(coeffs_rest);
+        const auto n_bounds = lfs::core::sh_value_quant::n_bounds_for_prims(n_primitives);
         if (n_bounds == 0)
             return;
         encode_float4_to_u16_block_kernel<<<static_cast<unsigned>(n_bounds), 256, 0, stream>>>(
@@ -243,7 +245,7 @@ namespace lfs::training::sh_value {
         if (n_primitives == 0 || coeffs_rest == 0)
             return;
         const auto slots = lfs::core::sh_float4_slots_for_rest(coeffs_rest);
-        const auto n_cells = n_value_cells_per_prim(coeffs_rest);
+        const auto n_cells = lfs::core::sh_value_quant::n_value_cells_per_prim(coeffs_rest);
         const unsigned blocks =
             static_cast<unsigned>((n_primitives + kThreads - 1) / kThreads);
         decode_u16_to_float4_kernel<<<blocks, kThreads, 0, stream>>>(
@@ -277,7 +279,7 @@ namespace lfs::training::sh_value {
             float_count,
             n_primitives,
             dst_coeffs_rest);
-        const auto n_cells = n_value_cells_per_prim(layout_coeffs_rest);
+        const auto n_cells = lfs::core::sh_value_quant::n_value_cells_per_prim(layout_coeffs_rest);
         const auto blocks = static_cast<unsigned>(
             (float_count + kThreads - 1) / kThreads);
         decode_u16_range_to_canonical_kernel<<<blocks, kThreads, 0, stream>>>(
@@ -330,4 +332,4 @@ namespace lfs::training::sh_value {
             cudaGetLastError(), "decode_shN_f16_range_to_canonical");
     }
 
-} // namespace lfs::training::sh_value
+} // namespace lfs::core::sh_value_quant

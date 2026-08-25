@@ -7,6 +7,10 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 
+namespace lfs::training {
+    struct PositiveMedianScratch;
+}
+
 namespace lfs::training::kernels {
 
     /**
@@ -135,6 +139,7 @@ namespace lfs::training::kernels {
     void launch_normalize_by_positive_median(
         float* data,
         size_t n,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        lfs::training::PositiveMedianScratch* scratch = nullptr);
 
 } // namespace lfs::training::kernels

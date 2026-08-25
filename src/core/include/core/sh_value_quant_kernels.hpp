@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 
-namespace lfs::training::sh_value {
+namespace lfs::core::sh_value_quant {
 
     /// Encode float4-swizzled SH-rest into pad-dropped u16 + float2 bounds / 256.
     void encode_shN_float4_to_u16(
@@ -48,4 +48,4 @@ namespace lfs::training::sh_value {
         std::uint32_t layout_coeffs_rest,
         cudaStream_t stream = nullptr);
 
-} // namespace lfs::training::sh_value
+} // namespace lfs::core::sh_value_quant

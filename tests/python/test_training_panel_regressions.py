@@ -893,6 +893,39 @@ def test_training_rml_exposes_mrnf_grow_until_iter():
     assert 'data-event-mousedown="pv_step(row.id, -1)"' in content
 
 
+def test_training_panel_keeps_controls_and_search_outside_scroll_region():
+    project_root = Path(__file__).parent.parent.parent
+    resources = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+    rml = (resources / "training.rml").read_text()
+    rcss = (resources / "training.rcss").read_text()
+    panel_source = (project_root / "src" / "python" / "lfs_plugins" / "training_panel.py").read_text()
+
+    controls = rml.index('id="controls"')
+    search = rml.index('id="training-search-container"')
+    telemetry = rml.index('class="section-gap training-telemetry"')
+    scroll_start = rml.index('class="training-scroll-region"')
+    parameters = rml.index('class="training-panel-title"')
+    scroll_end = rml.index("<!-- /training-scroll-region -->")
+    color_picker = rml.index('id="color-picker-popup"')
+
+    assert controls < search < telemetry < scroll_start < parameters < scroll_end < color_picker
+    assert 'class="section-gap training-telemetry" data-if="show_training_telemetry"' in rml
+    assert 'id="training-search-icon" src="../icon/scene/search.png"' in rml
+    assert 'id="training-search-input" type="text"' in rml
+    assert '<img src="../icon/scene/x.png" />' in rml
+    assert ".training-panel-layout" in rcss
+    assert ".training-scroll-region" in rcss
+    assert ".training-telemetry" in rcss
+    assert "#training-search-input" in rcss
+    assert "background-color: transparent" in rcss
+    assert "border-width: 0" in rcss
+    assert "overflow-y: auto" in rcss
+    assert ".training-scroll-region scrollbarvertical" in rcss
+    assert "padding-bottom: 6dp" in rcss
+    assert "width: 4dp" in rcss
+    assert "height_mode = lf.ui.PanelHeightMode.FILL" in panel_source
+
+
 def test_set_bool_prop_hasattr_guard(training_panel_module, monkeypatch):
     """Issue #972: _set_bool_prop must not crash on missing attributes."""
     panel = training_panel_module.TrainingPanel()
@@ -978,6 +1011,35 @@ def test_save_steps_editable_in_active_trainer_states(training_panel_module):
         runtime.trainer_state.value = "finished"
         assert save_edit_mode() is False
         assert save_readonly_mode() is True
+    finally:
+        runtime.iteration._fallback = 0
+        runtime.training_state._fallback = "idle"
+
+
+def test_training_telemetry_is_reserved_from_start_until_clear(training_panel_module):
+    panel = training_panel_module.TrainingPanel()
+    model = _ModelStub()
+    params = _ParamsStub()
+    dataset = _DatasetStub()
+    runtime = training_panel_module.RuntimeState
+
+    panel._bind_visibility(model, lambda: params, lambda: dataset)
+    show_telemetry = model.bindings["show_training_telemetry"][0]
+
+    try:
+        runtime.trainer_state.value = "ready"
+        runtime.iteration.value = 0
+        assert show_telemetry() is False
+
+        runtime.trainer_state.value = "running"
+        assert show_telemetry() is True
+
+        runtime.trainer_state.value = "ready"
+        runtime.iteration.value = 1
+        assert show_telemetry() is True
+
+        runtime.iteration.value = 0
+        assert show_telemetry() is False
     finally:
         runtime.iteration._fallback = 0
         runtime.training_state._fallback = "idle"

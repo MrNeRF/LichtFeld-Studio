@@ -106,7 +106,7 @@ chosen build tool remains responsible for job control.
 
 ## Shared dependency downloads
 
-Immutable ONNX Runtime and uv release archives are cached outside disposable
+Immutable uv release archives are cached outside disposable
 build trees. The default is `$XDG_CACHE_HOME/lichtfeld/downloads` or
 `~/.cache/lichtfeld/downloads` on Linux, `%LOCALAPPDATA%/LichtFeldStudio/downloads`
 on Windows, and `~/Library/Caches/LichtFeldStudio/downloads` on macOS. Override

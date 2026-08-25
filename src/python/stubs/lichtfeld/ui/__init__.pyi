@@ -229,6 +229,12 @@ def remember_camera_view_snap() -> bool:
 def set_remember_camera_view_snap(enabled: bool) -> None:
     """Enable or disable camera view snap persistence"""
 
+def scene_graph_selection_markers() -> bool:
+    """Return whether Scene Graph selection markers are visible"""
+
+def set_scene_graph_selection_markers(enabled: bool) -> None:
+    """Show or hide Scene Graph selection markers"""
+
 class PanelSpace(enum.Enum):
     SIDE_PANEL = 0
 

@@ -5,13 +5,6 @@
 find_package(CURL REQUIRED)
 find_package(OpenSSL REQUIRED)
 
-if(NOT LFS_ONNXRUNTIME_TARGET OR NOT TARGET "${LFS_ONNXRUNTIME_TARGET}")
-    message(FATAL_ERROR "ONNX Runtime target was not configured; include cmake/SetupOnnxRuntime.cmake before src/preprocessing")
-endif()
-if(NOT LFS_ONNXRUNTIME_INCLUDE_DIR)
-    message(FATAL_ERROR "ONNX Runtime include directory was not configured")
-endif()
-
 add_library(lfs_preprocessing STATIC
     preprocess.cpp
     include/preprocessing/preprocess.hpp
@@ -25,7 +18,6 @@ target_include_directories(lfs_preprocessing
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/src/core/include
         ${CMAKE_SOURCE_DIR}/external
-        ${LFS_ONNXRUNTIME_INCLUDE_DIR}
 )
 
 target_link_libraries(lfs_preprocessing
@@ -34,7 +26,6 @@ target_link_libraries(lfs_preprocessing
     PRIVATE
         lfs_io                  # Scene import (Loader) for depth-anchor precompute
         lfs_depth_anchor        # Shared depth-anchor fit + sidecar cache
-        ${LFS_ONNXRUNTIME_TARGET}
         CURL::libcurl
         OpenSSL::Crypto
         lfs_oiio

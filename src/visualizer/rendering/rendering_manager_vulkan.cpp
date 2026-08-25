@@ -4273,9 +4273,7 @@ namespace lfs::vis {
                 std::move(shape),
                 dtype,
                 capacity,
-                debug_name.c_str(),
-                nullptr,
-                false);
+                debug_name.c_str());
             if (!tensor) {
                 throw lfs::core::TensorError(std::format(
                     "Vulkan-external thumbnail splat tensor allocation failed for '{}': {}",

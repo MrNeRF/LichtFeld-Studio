@@ -7,6 +7,7 @@
 #include "core/property_registry.hpp"
 #include "python/lfs/py_params.hpp"
 
+#include <algorithm>
 #include <any>
 #include <array>
 #include <cstdint>
@@ -22,6 +23,7 @@
 #include <string_view>
 #include <utility>
 
+using lfs::core::param::apply_explicit_training_overrides;
 using lfs::core::param::OptimizationParameters;
 using lfs::core::prop::PropertyMeta;
 using lfs::core::prop::PropertyObjectRef;
@@ -114,7 +116,7 @@ namespace {
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_lr"), 0.012f);
         EXPECT_EQ(resolved<int>(defaults, "max_cap"), 5'000'000);
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "min_opacity"), 1.0f / 255.0f);
-        EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_reg"), 0.0f);
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_reg"), 0.003f);
         EXPECT_EQ(resolved<size_t>(defaults, "refine_every"), 200u);
     }
 
@@ -132,6 +134,12 @@ namespace {
             {"bounds_percentile", {"mrnf"}},
             {"use_error_map", {"mrnf"}},
             {"use_edge_map", {"mrnf"}},
+            {"background_improvements", {"mrnf"}},
+            {"far_scene_min_fraction", {"mrnf"}},
+            {"growth_ratio_rank", {"mrnf"}},
+            {"growth_ratio_pow", {"mrnf"}},
+            {"fill_pacing_iter", {"mrnf"}},
+            {"far_seed_dose", {"mrnf"}},
             {"prune_opacity", {"igs+"}},
             {"reset_every", {"igs+"}},
             {"min_opacity", {"mcmc"}},
@@ -304,6 +312,17 @@ namespace {
         EXPECT_THROW((void)OptimizationParameters::from_json(json), nlohmann::json::out_of_range);
     }
 
+    TEST_F(TrainingParametersTest, PpispExposureFromExifRoundTripsThroughJson) {
+        auto params = OptimizationParameters::mrnf_defaults();
+        EXPECT_TRUE(params.ppisp_exposure_from_exif);
+        EXPECT_TRUE(params.to_json().at("ppisp_exposure_from_exif").get<bool>());
+
+        params.ppisp_exposure_from_exif = false;
+        const auto json = params.to_json();
+        EXPECT_FALSE(json.at("ppisp_exposure_from_exif").get<bool>());
+        EXPECT_FALSE(OptimizationParameters::from_json(json).ppisp_exposure_from_exif);
+    }
+
     TEST_F(TrainingParametersTest, MissingOptionalJsonValuesUseStrategyDefaults) {
         auto mrnf_json = OptimizationParameters::mrnf_defaults().to_json();
         mrnf_json.erase("max_cap");
@@ -350,6 +369,107 @@ namespace {
         }
     }
 
+    TEST_F(TrainingParametersTest, NormalAutoGenerateRoundTripAndDefault) {
+        auto params = OptimizationParameters::mrnf_defaults();
+        EXPECT_TRUE(params.normal_auto_generate);
+        EXPECT_TRUE(params.validate().empty());
+
+        params.normal_auto_generate = false;
+        const auto json = params.to_json();
+        EXPECT_FALSE(json.at("normal_auto_generate").get<bool>());
+
+        const auto restored = OptimizationParameters::from_json(json);
+        EXPECT_FALSE(restored.normal_auto_generate);
+
+        auto missing = json;
+        missing.erase("normal_auto_generate");
+        const auto defaults = OptimizationParameters::from_json(missing);
+        EXPECT_TRUE(defaults.normal_auto_generate);
+    }
+
+    TEST_F(TrainingParametersTest, NormalSupervisionScheduleRoundTripAndValidation) {
+        auto params = OptimizationParameters::mrnf_defaults();
+        EXPECT_FLOAT_EQ(params.normal_start_fraction, 0.08f);
+        EXPECT_FLOAT_EQ(params.normal_end_fraction, 1.0f);
+        EXPECT_TRUE(params.validate().empty());
+
+        params.normal_start_fraction = 0.3f;
+        params.normal_end_fraction = 0.9f;
+        const auto json = params.to_json();
+        EXPECT_FLOAT_EQ(json.at("normal_start_fraction").get<float>(), 0.3f);
+        EXPECT_FLOAT_EQ(json.at("normal_end_fraction").get<float>(), 0.9f);
+
+        const auto restored = OptimizationParameters::from_json(json);
+        EXPECT_FLOAT_EQ(restored.normal_start_fraction, 0.3f);
+        EXPECT_FLOAT_EQ(restored.normal_end_fraction, 0.9f);
+        EXPECT_TRUE(restored.validate().empty());
+
+        auto missing = json;
+        missing.erase("normal_start_fraction");
+        missing.erase("normal_end_fraction");
+        const auto defaults = OptimizationParameters::from_json(missing);
+        EXPECT_FLOAT_EQ(defaults.normal_start_fraction, 0.08f);
+        EXPECT_FLOAT_EQ(defaults.normal_end_fraction, 1.0f);
+
+        params.normal_start_fraction = 0.8f;
+        params.normal_end_fraction = 0.4f;
+        const auto order_error = params.validate();
+        EXPECT_NE(order_error.find("normal_start_fraction must not exceed normal_end_fraction"),
+                  std::string::npos)
+            << order_error;
+
+        params.normal_start_fraction = 0.4f;
+        params.normal_end_fraction = 0.4f;
+        EXPECT_TRUE(params.validate().empty());
+
+        params.normal_start_fraction = 1.1f;
+        params.normal_end_fraction = 1.0f;
+        EXPECT_NE(params.validate().find("normal_start_fraction"), std::string::npos);
+        params.normal_start_fraction = 0.2f;
+        params.normal_end_fraction = -0.1f;
+        EXPECT_NE(params.validate().find("normal_end_fraction"), std::string::npos);
+    }
+
+    TEST_F(TrainingParametersTest, NormalSupervisionActiveRespectsStartEndAndStepsScaler) {
+        OptimizationParameters params;
+        params.use_normal_loss = true;
+        params.iterations = 30'000;
+        params.normal_start_fraction = 0.2f;
+        params.normal_end_fraction = 1.0f;
+
+        const int total = params.resolved_total_iterations();
+        ASSERT_EQ(total, 30'000);
+        const int start_iter = static_cast<int>(
+            params.normal_start_fraction * static_cast<float>(std::max(1, total)));
+        EXPECT_EQ(start_iter, 6'000);
+
+        EXPECT_FALSE(params.normal_supervision_active(start_iter - 1));
+        EXPECT_TRUE(params.normal_supervision_active(start_iter));
+        EXPECT_TRUE(params.normal_supervision_active(total));
+
+        params.use_normal_loss = false;
+        EXPECT_FALSE(params.normal_supervision_active(start_iter));
+        params.use_normal_loss = true;
+
+        params.normal_end_fraction = 0.8f;
+        EXPECT_TRUE(params.normal_supervision_active(start_iter));
+        EXPECT_TRUE(params.normal_supervision_active(23'999));
+        EXPECT_FALSE(params.normal_supervision_active(24'000));
+        EXPECT_FALSE(params.normal_supervision_active(total));
+
+        params.normal_end_fraction = 1.0f;
+        params.steps_scaler = 0.5f;
+        params.apply_step_scaling();
+        const int scaled_total = params.resolved_total_iterations();
+        EXPECT_EQ(scaled_total, 15'000);
+        const int scaled_start = static_cast<int>(
+            params.normal_start_fraction * static_cast<float>(std::max(1, scaled_total)));
+        EXPECT_EQ(scaled_start, 3'000);
+        EXPECT_FALSE(params.normal_supervision_active(scaled_start - 1));
+        EXPECT_TRUE(params.normal_supervision_active(scaled_start));
+        EXPECT_TRUE(params.normal_supervision_active(scaled_total));
+    }
+
     TEST_F(TrainingParametersTest, OldNewToJsonParity) {
         const std::array<std::pair<std::string_view, OptimizationParameters>, 3> factories = {{
             {"mcmc", OptimizationParameters::mcmc_defaults()},
@@ -391,7 +511,7 @@ namespace {
 
     TEST_F(TrainingParametersTest, EvalBenchmarkConfigsParseAsIs) {
         const auto mcmc_path = eval_config_path("mcmc_optimization_params.json");
-        EXPECT_EQ(frozen_config_fingerprint(mcmc_path), 0x5296bbd8725d137eULL);
+        EXPECT_EQ(frozen_config_fingerprint(mcmc_path), 0x627939cba4bdc0bbULL);
         const auto mcmc_result = lfs::core::param::read_optim_params_from_json(mcmc_path);
         ASSERT_TRUE(mcmc_result.has_value()) << mcmc_result.error();
         EXPECT_FLOAT_EQ(mcmc_result->opacity_lr, 0.0335f);
@@ -401,16 +521,17 @@ namespace {
         EXPECT_EQ(mcmc_result->max_cap, 1'000'000);
 
         const auto mrnf_path = eval_config_path("mrnf_optimization_params.json");
-        EXPECT_EQ(frozen_config_fingerprint(mrnf_path), 0x40c65afdecde5828ULL);
+        EXPECT_EQ(frozen_config_fingerprint(mrnf_path), 0xd673eeb0fe318eeULL);
         const auto mrnf_result = lfs::core::param::read_optim_params_from_json(mrnf_path);
         ASSERT_TRUE(mrnf_result.has_value()) << mrnf_result.error();
-        EXPECT_FLOAT_EQ(mrnf_result->means_lr, 0.000128f);
-        EXPECT_EQ(mrnf_result->start_refine, 500u);
+        EXPECT_FLOAT_EQ(mrnf_result->means_lr, 2e-05f);
+        EXPECT_FLOAT_EQ(mrnf_result->means_lr_end, 2e-07f);
+        EXPECT_EQ(mrnf_result->start_refine, 0u);
         EXPECT_EQ(mrnf_result->stop_refine, 28'500u);
         EXPECT_FLOAT_EQ(mrnf_result->min_opacity, 0.0039215689f);
 
         const auto igs_path = eval_config_path("improvedGSplus_optimization_params.json");
-        EXPECT_EQ(frozen_config_fingerprint(igs_path), 0x2cf8daf2e3da1198ULL);
+        EXPECT_EQ(frozen_config_fingerprint(igs_path), 0xf86e40494df20d22ULL);
         const auto igs_result = lfs::core::param::read_optim_params_from_json(igs_path);
         ASSERT_TRUE(igs_result.has_value()) << igs_result.error();
         EXPECT_FLOAT_EQ(igs_result->init_opacity, 0.3f);
@@ -418,6 +539,22 @@ namespace {
         EXPECT_EQ(igs_result->refine_every, 500u);
         EXPECT_FLOAT_EQ(igs_result->tv_loss_weight, 5.0f);
         EXPECT_EQ(igs_result->strategy, "igs+");
+    }
+
+    TEST_F(TrainingParametersTest, ExploreStarvationWeightingIsConfigResidue) {
+        const auto defaults = OptimizationParameters::mrnf_defaults();
+        EXPECT_TRUE(defaults.explore_starvation_weighting);
+
+        const auto default_json = defaults.to_json();
+        EXPECT_FALSE(default_json.contains("explore_starvation_weighting"));
+        EXPECT_FALSE(PropertyRegistry::instance().get_property("optimization", "explore_starvation_weighting"));
+
+        auto json = defaults.to_json();
+        json["explore_starvation_weighting"] = false;
+        const auto parsed = OptimizationParameters::from_json(json);
+        EXPECT_FALSE(parsed.explore_starvation_weighting);
+        EXPECT_TRUE(parsed.validate().empty());
+        EXPECT_FALSE(parsed.to_json().at("explore_starvation_weighting").get<bool>());
     }
 
     TEST_F(TrainingParametersTest, SaveLoadRoundTripPreservesParameters) {
@@ -457,6 +594,70 @@ namespace {
                 expect_same_value(meta, meta.getter(actual_ref), meta.getter(expected_ref));
             }
         }
+    }
+
+    TEST(ExplicitTrainingOverridesTest, ResumeKeepsRestoredUnlessKeyPresent) {
+        lfs::core::param::TrainingParameters restored;
+        restored.optimization.iterations = 30'000;
+        restored.optimization.enable_eval = false;
+        restored.optimization.enable_save_eval_images = false;
+        restored.optimization.eval_steps = {7'000, 30'000};
+        restored.optimization.save_steps = {7'000, 30'000};
+        restored.optimization.max_cap = 1'234'567;
+        restored.dataset.test_every = 8;
+
+        lfs::core::param::ExplicitTrainingOverrides overrides;
+        apply_explicit_training_overrides(restored, overrides);
+        EXPECT_EQ(restored.optimization.iterations, 30'000u);
+        EXPECT_FALSE(restored.optimization.enable_eval);
+        EXPECT_EQ(restored.dataset.test_every, 8);
+        EXPECT_EQ(restored.optimization.max_cap, 1'234'567);
+
+        overrides.optimization_json = nlohmann::json{
+            {"iterations", 30100},
+            {"enable_eval", true},
+            {"enable_save_eval_images", true},
+            {"eval_steps", {30100}},
+            {"save_steps", {30100}},
+        }
+                                          .dump();
+        overrides.dataset_json = nlohmann::json{{"test_every", 64}}.dump();
+        apply_explicit_training_overrides(restored, overrides);
+
+        EXPECT_EQ(restored.optimization.iterations, 30100u);
+        EXPECT_TRUE(restored.optimization.enable_eval);
+        EXPECT_TRUE(restored.optimization.enable_save_eval_images);
+        EXPECT_EQ(restored.optimization.eval_steps, std::vector<size_t>({30100}));
+        EXPECT_EQ(restored.optimization.save_steps, std::vector<size_t>({30100}));
+        EXPECT_EQ(restored.dataset.test_every, 64);
+        EXPECT_EQ(restored.optimization.max_cap, 1'234'567);
+        EXPECT_TRUE(overrides.has_optimization_key("iterations"));
+        EXPECT_TRUE(overrides.has_optimization_key("eval_steps"));
+        EXPECT_TRUE(overrides.has_dataset_key("test_every"));
+        EXPECT_FALSE(overrides.has_optimization_key("max_cap"));
+    }
+
+    TEST(ExplicitTrainingOverridesTest, CliKeysWinOverConfigKeys) {
+        lfs::core::param::TrainingParameters restored;
+        restored.optimization.iterations = 30'000;
+        restored.optimization.eval_steps = {7'000, 30'000};
+        restored.dataset.test_every = 8;
+
+        lfs::core::param::ExplicitTrainingOverrides overrides;
+        lfs::core::param::merge_explicit_json_overlay(
+            overrides.optimization_json,
+            nlohmann::json{{"iterations", 30100}, {"eval_steps", {30100}}}.dump());
+        lfs::core::param::merge_explicit_json_overlay(
+            overrides.dataset_json, nlohmann::json{{"test_every", 32}}.dump());
+        lfs::core::param::merge_explicit_json_overlay(
+            overrides.optimization_json, nlohmann::json{{"iterations", 40000}}.dump());
+        lfs::core::param::merge_explicit_json_overlay(
+            overrides.dataset_json, nlohmann::json{{"test_every", 64}}.dump());
+
+        apply_explicit_training_overrides(restored, overrides);
+        EXPECT_EQ(restored.optimization.iterations, 40000u);
+        EXPECT_EQ(restored.optimization.eval_steps, std::vector<size_t>({30100}));
+        EXPECT_EQ(restored.dataset.test_every, 64);
     }
 
 } // namespace

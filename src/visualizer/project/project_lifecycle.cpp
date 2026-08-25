@@ -4608,7 +4608,17 @@ namespace lfs::vis::project {
             }
 
             if (fourcc == "SPLT") {
-                if (!node->model) {
+                std::unique_ptr<lfs::core::SplatData>
+                    extracted_model;
+                const lfs::core::SplatData* model =
+                    node->model.get();
+                if (!model) {
+                    extracted_model =
+                        scene.extractConsolidatedNodeModel(
+                            node->uuid);
+                    model = extracted_model.get();
+                }
+                if (!model) {
                     return fail<void>(
                         lfs::ErrorCode::DataLoss,
                         "A loaded splat node has no model.",
@@ -4618,7 +4628,7 @@ namespace lfs::vis::project {
                 auto payload =
                     lfs::io::project::
                         SplatChapterPayload::capture(
-                            *node->model,
+                            *model,
                             lfs::io::project::
                                 SplatSourceKind::Generated,
                             false);

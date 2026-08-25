@@ -70,10 +70,17 @@ namespace lfs::io {
         bool load_masks = false;
         bool load_depths = false;
         bool load_normals = false;
+        // When true, a normal map that fails the size contract is ignored (one
+        // warning naming the file) so auto-generate can overwrite it. When false,
+        // the load fails with NORMAL_SIZE_MISMATCH as before.
+        bool normal_auto_generate = false;
         CentralizeDataset centralize = CentralizeDataset::Off;
         ProgressCallback progress = nullptr;
         CancelCallback cancel_requested = nullptr;
         SplatTensorAllocator splat_tensor_allocator = {};
+        // When true, and splat_tensor_allocator is set, PLY SH-rest is encoded to
+        // q16 on the way in (no float32 SplatData.shN GPU workspace).
+        bool shN_q16 = false;
     };
 
     class LoadCancelledError : public std::runtime_error {

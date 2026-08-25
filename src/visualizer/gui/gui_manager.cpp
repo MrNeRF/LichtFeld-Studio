@@ -56,6 +56,7 @@
 #include "core/events.hpp"
 #include "core/parameters.hpp"
 #include "core/scene.hpp"
+#include "python/gil.hpp"
 #include "python/package_manager.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
@@ -3193,6 +3194,22 @@ namespace lfs::vis::gui {
             native_scene_panel_->setProjectActiveTab(tab);
     }
 
+    bool GuiManager::selectAllSceneNodesIfFocused() {
+        return native_scene_panel_ && native_scene_panel_->selectAllIfFocused();
+    }
+
+    bool GuiManager::toggleSceneSelectionVisibilityIfFocused() {
+        return native_scene_panel_ && native_scene_panel_->toggleSelectionVisibilityIfFocused();
+    }
+
+    bool GuiManager::toggleSceneSelectionTrainingIfFocused() {
+        return native_scene_panel_ && native_scene_panel_->toggleSelectionTrainingIfFocused();
+    }
+
+    bool GuiManager::requestDeleteSceneSelectionIfAvailable() {
+        return native_scene_panel_ && native_scene_panel_->requestDeleteSelectionIfAvailable();
+    }
+
     SceneTreeSessionChrome GuiManager::captureSceneTreeChrome(
         const lfs::core::Scene& scene) const {
         if (native_scene_panel_)
@@ -3835,6 +3852,10 @@ namespace lfs::vis::gui {
         rml_theme::invalidateBaseRcssCache();
         rml_theme::invalidateThemeMediaCache();
 
+        std::optional<lfs::python::GilAcquire> gil;
+        if (lfs::python::can_acquire_gil())
+            gil.emplace();
+
         startup_overlay_.reloadResources();
         rml_shell_frame_.reloadResources();
         rml_right_panel_.reloadResources();
@@ -3986,8 +4007,12 @@ namespace lfs::vis::gui {
         // static destruction happens after VulkanContext::shutdown().
         IconCache::instance().clear();
         setVulkanUiTextureContext(nullptr);
-        vulkan_viewport_pass_.reset();
+        shutdownVulkanViewportPass();
         vulkan_gui_ = false;
+    }
+
+    void GuiManager::shutdownVulkanViewportPass() {
+        vulkan_viewport_pass_.reset();
     }
 
     void GuiManager::registerNativePanels() {

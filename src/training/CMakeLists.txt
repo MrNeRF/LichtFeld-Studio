@@ -28,7 +28,6 @@ set(LFS_TRAINING_KERNEL_SOURCES
     kernels/mrnf_kernels.cu
     kernels/densification_kernels.cu
     kernels/morton_reorder_kernels.cu
-    kernels/sh_value_quant_kernels.cu
     kernels/grad_alpha.cu
     kernels/depth_loss.cu
     kernels/normal_loss.cu
@@ -52,6 +51,7 @@ target_link_libraries(lfs_training_kernels
     PUBLIC
         lfs_core         # For lfs::core::Tensor (tensor merged into lfs_core)
         CUDA::cudart
+        lfs_core_cuda    # q16 encode/decode kernels
 )
 
 set_target_properties(lfs_training_kernels PROPERTIES
@@ -115,6 +115,7 @@ set(TRAINING_NEW_SOURCES
         progress.cpp
         training_cropbox_mask.cpp
         trainer.cpp
+        normal_auto_generate.cpp
         vram_ledger.cpp
         perf_bench.cpp
     training_setup.cpp
@@ -157,6 +158,7 @@ target_link_libraries(lfs_training
 	edge_compute_backend    # For igs+ edge score rasterization
     PRIVATE
         lfs_depth_anchor        # Shared depth-anchor fit + sidecar cache
+        lfs_preprocessing       # MoGe-2 normal auto-generate
         lfs_python_utils
 )
 

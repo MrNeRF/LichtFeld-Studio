@@ -10,6 +10,8 @@
 #include "core/property_registry.hpp"
 #include "io/project_path.hpp"
 
+using lfs::core::param::apply_explicit_training_overrides;
+
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -17,6 +19,7 @@
 #include <nlohmann/json.hpp>
 #include <set>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -373,6 +376,35 @@ TEST(ArgumentParserTest, TrainingDefaultsApplyMaxWidthCap) {
     EXPECT_EQ((*parsed)->optimization.morton_reorder_interval, 5000u);
 }
 
+TEST(ArgumentParserTest, NoPpispExifExposureDisablesSeed) {
+    const auto data_path = make_test_path("lfs_arg_parser_ppisp_exif_data");
+    const auto output_path = make_test_path("lfs_arg_parser_ppisp_exif_output");
+
+    const char* default_argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str()};
+    auto default_parsed =
+        lfs::core::args::parse_args_and_params(static_cast<int>(std::size(default_argv)), default_argv);
+    ASSERT_TRUE(default_parsed.has_value()) << default_parsed.error();
+    EXPECT_TRUE((*default_parsed)->optimization.ppisp_exposure_from_exif);
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--no-ppisp-exif-exposure"};
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_FALSE((*parsed)->optimization.ppisp_exposure_from_exif);
+}
+
 TEST(ArgumentParserTest, MortonReorderIntervalFlag) {
     const auto data_path = make_test_path("lfs_arg_parser_morton_data");
     const auto output_path = make_test_path("lfs_arg_parser_morton_output");
@@ -403,6 +435,54 @@ TEST(ArgumentParserTest, MortonReorderIntervalFlag) {
         static_cast<int>(std::size(argv_1000)), argv_1000);
     ASSERT_TRUE(parsed_1000.has_value()) << parsed_1000.error();
     EXPECT_EQ((*parsed_1000)->optimization.morton_reorder_interval, 1000u);
+}
+
+TEST(ArgumentParserTest, MrnfKnobFlagsParseAndPopulateExplicitOverrides) {
+    const auto data_path = make_test_path("lfs_arg_parser_mrnf_knobs_data");
+    const auto output_path = make_test_path("lfs_arg_parser_mrnf_knobs_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--no-growth-ratio-rank",
+        "--no-background-improvements",
+        "--growth-ratio-pow",
+        "0.5",
+        "--fill-pacing-iter",
+        "12000",
+        "--far-seed-dose",
+        "500"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    EXPECT_FALSE((*parsed)->optimization.growth_ratio_rank);
+    EXPECT_FALSE((*parsed)->optimization.background_improvements);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.growth_ratio_pow, 0.5f);
+    EXPECT_EQ((*parsed)->optimization.fill_pacing_iter, 12000u);
+    EXPECT_EQ((*parsed)->optimization.far_seed_dose, 500u);
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("growth_ratio_rank"));
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("background_improvements"));
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("growth_ratio_pow"));
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("fill_pacing_iter"));
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("far_seed_dose"));
+
+    lfs::core::param::TrainingParameters restored;
+    restored.optimization.growth_ratio_rank = true;
+    restored.optimization.background_improvements = true;
+    restored.optimization.growth_ratio_pow = 0.75f;
+    restored.optimization.fill_pacing_iter = 15'000;
+    restored.optimization.far_seed_dose = 2'000;
+    apply_explicit_training_overrides(restored, (*parsed)->overrides);
+    EXPECT_FALSE(restored.optimization.growth_ratio_rank);
+    EXPECT_FALSE(restored.optimization.background_improvements);
+    EXPECT_FLOAT_EQ(restored.optimization.growth_ratio_pow, 0.5f);
+    EXPECT_EQ(restored.optimization.fill_pacing_iter, 12000u);
+    EXPECT_EQ(restored.optimization.far_seed_dose, 500u);
 }
 
 TEST(ArgumentParserTest, SafeModeIsProcessLocalAndNotATrainingConfigurationOption) {
@@ -925,6 +1005,10 @@ TEST(ArgumentParserTest, TrainingParsesExplicitNormalLossOptions) {
         "0.25",
         "--normal-flatten-weight",
         "5.0",
+        "--normal-start-fraction",
+        "0.3",
+        "--normal-end-fraction",
+        "0.9",
         "--normal-loss-space",
         "world"};
 
@@ -932,10 +1016,84 @@ TEST(ArgumentParserTest, TrainingParsesExplicitNormalLossOptions) {
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
     EXPECT_TRUE((*parsed)->optimization.use_normal_loss);
+    EXPECT_TRUE((*parsed)->optimization.normal_auto_generate);
     EXPECT_FLOAT_EQ((*parsed)->optimization.normal_loss_weight, 0.75f);
     EXPECT_FLOAT_EQ((*parsed)->optimization.normal_consistency_weight, 0.25f);
     EXPECT_FLOAT_EQ((*parsed)->optimization.normal_flatten_weight, 5.0f);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.normal_start_fraction, 0.3f);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.normal_end_fraction, 0.9f);
     EXPECT_EQ((*parsed)->optimization.normal_loss_space, lfs::core::param::NormalLossSpace::World);
+}
+
+TEST(ArgumentParserTest, TrainingParsesNoNormalAutoGenerate) {
+    const auto data_path = make_test_path("lfs_arg_parser_no_normal_auto_data");
+    const auto output_path = make_test_path("lfs_arg_parser_no_normal_auto_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--use-normal-loss",
+        "--no-normal-auto-generate"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->optimization.use_normal_loss);
+    EXPECT_FALSE((*parsed)->optimization.normal_auto_generate);
+}
+
+TEST(ArgumentParserTest, TrainingRejectsNormalStartAfterEnd) {
+    const auto data_path = make_test_path("lfs_arg_parser_normal_schedule_order_data");
+    const auto output_path = make_test_path("lfs_arg_parser_normal_schedule_order_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--use-normal-loss",
+        "--normal-start-fraction",
+        "0.8",
+        "--normal-end-fraction",
+        "0.4"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_NE(parsed.error().find("normal_start_fraction must not exceed normal_end_fraction"),
+              std::string::npos)
+        << parsed.error();
+}
+
+TEST(ArgumentParserTest, TrainingRejectsNormalScheduleOutsideUnitInterval) {
+    const auto data_path = make_test_path("lfs_arg_parser_normal_schedule_range_data");
+    const auto output_path = make_test_path("lfs_arg_parser_normal_schedule_range_output");
+
+    for (const auto& [flag, value] : {
+             std::pair{"--normal-start-fraction", "1.5"},
+             std::pair{"--normal-start-fraction", "-0.1"},
+             std::pair{"--normal-end-fraction", "1.5"},
+             std::pair{"--normal-end-fraction", "-0.1"}}) {
+        SCOPED_TRACE(std::string(flag) + "=" + value);
+        const char* argv[] = {
+            "LichtFeld-Studio",
+            "--headless",
+            "--data-path",
+            data_path.c_str(),
+            "--output-path",
+            output_path.c_str(),
+            flag,
+            value};
+
+        auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        ASSERT_FALSE(parsed.has_value());
+        EXPECT_NE(parsed.error().find("must be finite and within [0, 1]"), std::string::npos)
+            << parsed.error();
+    }
 }
 
 TEST(ArgumentParserTest, TrainingParsesBackgroundModeModulation) {
@@ -1170,4 +1328,115 @@ TEST(ArgumentParserTest, TrainingRejectsImageBackgroundWithoutPath) {
     auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_FALSE(parsed.has_value());
     EXPECT_NE(parsed.error().find("--bg-image-path is required"), std::string::npos);
+}
+
+TEST(ArgumentParserTest, ResumeCliFlagsPopulateExplicitOverrides) {
+    const auto directory = make_test_path("lfs_arg_parser_resume_overrides");
+    const auto project = std::filesystem::path(directory) / "session.licht";
+    std::ofstream(project).put('\n');
+    const auto project_text = project.string();
+    const auto output_path = make_test_path("lfs_arg_parser_resume_overrides_out");
+    const auto output_text = output_path;
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--resume",
+        project_text.c_str(),
+        "--headless",
+        "--train",
+        "--eval",
+        "--eval-steps",
+        "30100",
+        "-i",
+        "30100",
+        "--test-every",
+        "64",
+        "-o",
+        output_text.c_str(),
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    EXPECT_TRUE((*parsed)->cli_iterations_set);
+    EXPECT_EQ((*parsed)->optimization.iterations, 30100u);
+    EXPECT_TRUE((*parsed)->optimization.enable_eval);
+    EXPECT_EQ((*parsed)->optimization.eval_steps, std::vector<size_t>({30100}));
+    EXPECT_EQ((*parsed)->dataset.test_every, 64);
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("iterations"));
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("enable_eval"));
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("eval_steps"));
+    EXPECT_TRUE((*parsed)->overrides.has_dataset_key("test_every"));
+    EXPECT_FALSE((*parsed)->overrides.has_optimization_key("max_cap"));
+
+    lfs::core::param::TrainingParameters restored;
+    restored.optimization.iterations = 30'000;
+    restored.optimization.enable_eval = false;
+    restored.optimization.eval_steps = {7'000, 30'000};
+    restored.optimization.save_steps = {7'000, 30'000};
+    restored.dataset.test_every = 8;
+    restored.optimization.max_cap = 42;
+    apply_explicit_training_overrides(restored, (*parsed)->overrides);
+    EXPECT_EQ(restored.optimization.iterations, 30100u);
+    EXPECT_TRUE(restored.optimization.enable_eval);
+    EXPECT_EQ(restored.optimization.eval_steps, std::vector<size_t>({30100}));
+    EXPECT_EQ(restored.dataset.test_every, 64);
+    EXPECT_EQ(restored.optimization.max_cap, 42);
+}
+
+TEST(ArgumentParserTest, ResumeConfigKeysPopulateExplicitOverrides) {
+    const auto directory = make_test_path("lfs_arg_parser_resume_config_overrides");
+    const auto project = std::filesystem::path(directory) / "session.licht";
+    std::ofstream(project).put('\n');
+    const auto config_path = std::filesystem::path(directory) / "resume.json";
+    auto config = lfs::core::param::OptimizationParameters::mrnf_defaults().to_json();
+    config["iterations"] = 30100;
+    config["enable_eval"] = true;
+    config["enable_save_eval_images"] = true;
+    config["eval_steps"] = {30100};
+    config["save_steps"] = {30100};
+    std::ofstream(config_path) << config.dump(2);
+    const auto project_text = project.string();
+    const auto config_text = config_path.string();
+    const auto output_path = make_test_path("lfs_arg_parser_resume_config_overrides_out");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--resume",
+        project_text.c_str(),
+        "--headless",
+        "--config",
+        config_text.c_str(),
+        "--test-every",
+        "64",
+        "-o",
+        output_path.c_str(),
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    std::error_code ec;
+    std::filesystem::remove(config_path, ec);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("iterations"));
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("eval_steps"));
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("save_steps"));
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("enable_eval"));
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("enable_save_eval_images"));
+    EXPECT_TRUE((*parsed)->overrides.has_dataset_key("test_every"));
+
+    lfs::core::param::TrainingParameters restored;
+    restored.optimization.iterations = 30'000;
+    restored.optimization.enable_eval = false;
+    restored.optimization.enable_save_eval_images = false;
+    restored.optimization.eval_steps = {7'000, 30'000};
+    restored.optimization.save_steps = {7'000, 30'000};
+    restored.dataset.test_every = 8;
+    apply_explicit_training_overrides(restored, (*parsed)->overrides);
+    EXPECT_EQ(restored.optimization.iterations, 30100u);
+    EXPECT_TRUE(restored.optimization.enable_eval);
+    EXPECT_TRUE(restored.optimization.enable_save_eval_images);
+    EXPECT_EQ(restored.optimization.eval_steps, std::vector<size_t>({30100}));
+    EXPECT_EQ(restored.optimization.save_steps, std::vector<size_t>({30100}));
+    EXPECT_EQ(restored.dataset.test_every, 64);
 }

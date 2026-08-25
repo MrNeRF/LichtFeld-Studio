@@ -426,6 +426,10 @@ namespace lfs::core {
             DataType dtype,
             std::string_view name);
 
+        // Encode float/ieee-f16 shN into allocator-backed pad-dropped q16.
+        // No-op when already quantized, flag off, or shN empty.
+        [[nodiscard]] bool apply_shN_value_quant();
+
         // Optional hook for exportable / external storage growth.
         // When densification needs more rows than the committed exportable block,
         // AdamOptimizer calls this before falling back to Tensor::cat (which would

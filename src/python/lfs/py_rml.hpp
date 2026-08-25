@@ -225,13 +225,15 @@ namespace lfs::python {
 
     class PyEventListener : public Rml::EventListener {
     public:
-        explicit PyEventListener(nb::callable cb) : callback_(std::move(cb)) {}
+        explicit PyEventListener(nb::callable cb);
+        ~PyEventListener() override;
 
         void ProcessEvent(Rml::Event& event) override;
-        void OnDetach(Rml::Element*) override { delete this; }
+        void OnDetach(Rml::Element* element) override;
 
     private:
-        nb::callable callback_;
+        class Callback;
+        std::unique_ptr<Callback> callback_;
     };
 
     // Registry: document name -> PyRmlDocument, for Python access
@@ -251,6 +253,7 @@ namespace lfs::python {
     bool consume_document_update_request(Rml::ElementDocument* doc);
     bool is_document_dirty(Rml::ElementDocument* doc);
     bool is_document_update_requested(Rml::ElementDocument* doc);
+    void release_rml_document_state(Rml::ElementDocument* doc);
     void release_rml_context_state(Rml::Context* context);
 
     void register_rml_bindings(nb::module_& m);

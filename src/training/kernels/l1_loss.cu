@@ -43,11 +43,8 @@ namespace lfs::training::kernels {
              idx < N;
              idx += blockDim.x * gridDim.x) {
 
-            float diff = img1[idx] - target_value(img2, idx);
-            float abs_diff = fabsf(diff);
-
-            // Accumulate for loss
-            local_sum += abs_diff;
+            const float diff = img1[idx] - target_value(img2, idx);
+            local_sum += fabsf(diff);
 
             // Store gradient: sign(diff) * grad_scale
             // NOTE: sign(0) = 0 to match PyTorch behavior

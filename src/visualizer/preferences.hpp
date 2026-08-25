@@ -45,6 +45,8 @@ namespace lfs::vis {
         [[nodiscard]] bool cameraViewSnap();
         void setRememberCameraViewSnap(bool enabled);
         [[nodiscard]] bool rememberCameraViewSnap();
+        void setSceneGraphSelectionMarkers(bool enabled);
+        [[nodiscard]] bool sceneGraphSelectionMarkers();
 
         void setMcp(const McpPreferenceState& state);
         [[nodiscard]] McpPreferenceState mcp();
@@ -77,6 +79,8 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API bool loadCameraViewSnapPreference();
     LFS_VIS_API void setRememberCameraViewSnapPreference(bool enabled);
     [[nodiscard]] LFS_VIS_API bool rememberCameraViewSnapPreference();
+    LFS_VIS_API void saveSceneGraphSelectionMarkersPreference(bool enabled);
+    [[nodiscard]] LFS_VIS_API bool loadSceneGraphSelectionMarkersPreference();
     LFS_VIS_API void saveMcpPreferences(const McpPreferenceState& state);
     [[nodiscard]] LFS_VIS_API McpPreferenceState loadMcpPreferences();
     LFS_VIS_API void saveSceneUpscalerPreference(const std::string& backend_id,

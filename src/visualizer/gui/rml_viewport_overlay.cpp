@@ -174,6 +174,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlViewportOverlay::shutdown() {
+        lfs::python::notify_viewport_overlay_document_unloaded();
         if (doc_registered_)
             lfs::python::unregister_rml_document("viewport_overlay");
         doc_registered_ = false;
@@ -201,6 +202,7 @@ namespace lfs::vis::gui {
         if (!rml_context_)
             return;
 
+        lfs::python::notify_viewport_overlay_document_unloaded();
         if (doc_registered_)
             lfs::python::unregister_rml_document("viewport_overlay");
         doc_registered_ = false;

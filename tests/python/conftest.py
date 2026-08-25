@@ -24,6 +24,12 @@ MODULE_PATH = BUILD_DIR / "src" / "python"
 if MODULE_PATH.exists():
     sys.path.insert(1 if SOURCE_MODULE_PATH.exists() else 0, str(MODULE_PATH))
 
+# Since Python 3.8, PATH is not searched for extension-module dependencies on
+# Windows; part of lichtfeld's DLL chain lives only in the build root.
+if sys.platform == "win32" and BUILD_DIR.exists():
+    # Keep the handle alive so the registration lasts for the whole session.
+    _dll_dir = os.add_dll_directory(str(BUILD_DIR))
+
 # Ensure the C++ extension is loaded before numpy/torch so exception unwind
 # is not poisoned by their bundled native libs (see lane G nightly abort).
 try:

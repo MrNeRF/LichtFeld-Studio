@@ -280,6 +280,7 @@ target_include_directories(lfs_io
         $<INSTALL_INTERFACE:include>
         PRIVATE
         ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/src/rendering/include
         ${CMAKE_SOURCE_DIR}/external/spz
 )
 target_include_directories(lfs_io SYSTEM PRIVATE

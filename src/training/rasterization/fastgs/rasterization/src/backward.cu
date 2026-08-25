@@ -59,6 +59,8 @@ void fast_lfs::rasterization::backward(
     const float2* shN_value_bounds,
     const uint shN_value_n_cells,
     const uint shN_value_bits,
+    const bool* mean_step_far_mask,
+    const int mean_step_far_mask_n,
     cudaStream_t stream) {
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
     const uint64_t n_tiles_u64 = static_cast<uint64_t>(grid.x) * static_cast<uint64_t>(grid.y);
@@ -179,6 +181,8 @@ void fast_lfs::rasterization::backward(
                 clip_bottom,
                 sh_layout_slots,
                 fused_adam,
+                mean_step_far_mask,
+                mean_step_far_mask_n,
                 shN_value_bounds,
                 shN_value_n_cells,
                 shN_value_bits);

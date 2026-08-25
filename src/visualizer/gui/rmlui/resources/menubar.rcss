@@ -84,7 +84,7 @@ body {
     height: 24dp;
     min-width: 24dp;
     min-height: 24dp;
-    padding: 3dp;
+    padding: 2dp;
     border-width: 1dp;
     border-color: transparent;
     border-radius: 6dp;

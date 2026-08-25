@@ -454,6 +454,50 @@ TEST(DualRepOptimizer, MCMC_InitializeWithBothCodecsOn) {
                                       layout_rest));
 }
 
+TEST(DualRepOptimizer, MRNF_PerSplatMeanStepWithQuantizedAdamIsFinite) {
+    CodecsOnGuard guard;
+    auto splat = make_sh_splat(8, 3);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+    ASSERT_TRUE(splat.shN_value_quantized());
+
+    MRNF strategy(splat);
+    auto opt_params = param::OptimizationParameters::mrnf_defaults();
+    opt_params.iterations = 200;
+    opt_params.max_cap = 32;
+    opt_params.sh_degree_interval = 10000;
+    ASSERT_NO_THROW(strategy.initialize(opt_params));
+
+    std::vector<float> log_s(8 * 3);
+    for (size_t i = 0; i < 8; ++i) {
+        const float v = (i % 2 == 0) ? -1.0f : 1.5f;
+        log_s[i * 3 + 0] = v;
+        log_s[i * 3 + 1] = v;
+        log_s[i * 3 + 2] = v;
+    }
+    splat.scaling_raw() = Tensor::from_vector(log_s, {size_t{8}, size_t{3}}, Device::CUDA);
+
+    auto& opt = strategy.get_optimizer();
+    EXPECT_TRUE(opt.per_splat_mean_step());
+    const auto* means_st = opt.get_state(ParamType::Means);
+    ASSERT_NE(means_st, nullptr);
+    EXPECT_TRUE(means_st->is_joint());
+
+    auto far_mask = Tensor::zeros_bool({size_t{8}}, Device::CUDA).logical_not();
+    opt.set_mean_step_far_mask(far_mask.ptr<bool>(), 8);
+    EXPECT_NE(opt.mean_step_far_mask(), nullptr);
+    EXPECT_EQ(opt.mean_step_far_mask_n(), 8);
+
+    opt.get_grad(ParamType::Means).fill_(0.05f);
+    ASSERT_NO_THROW(opt.step(1));
+
+    const auto means = splat.means().cpu();
+    const float* p = means.ptr<float>();
+    for (size_t i = 0; i < means.numel(); ++i) {
+        EXPECT_TRUE(std::isfinite(p[i])) << "means[" << i << "]";
+        EXPECT_LT(std::abs(p[i]), 1.0e3f) << "means[" << i << "]";
+    }
+}
+
 TEST(DualRepOptimizer, MRNF_InitializeWithBothCodecsOn) {
     CodecsOnGuard guard;
     auto splat = make_sh_splat(12, 3);

@@ -6,6 +6,7 @@
 #include "core/crash_handler.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include <mutex>
 
@@ -168,6 +169,23 @@ namespace lfs::core {
                     shN_canon.index_select(0, indices) * g_cache.sh_mult[a][degree - 1];
                 shN_canon.index_copy_(0, indices, selected);
                 splat_data.shN_set_from_canonical(shN_canon, splat_data.means().capacity());
+                if (sh_value_quant::enabled()) {
+                    (void)splat_data.apply_shN_value_quant();
+                } else if (splat_data.has_tensor_allocator()) {
+                    auto& shN = splat_data.shN();
+                    if (shN.is_valid() && shN.dtype() == DataType::Float32) {
+                        const size_t n = splat_data.size();
+                        const size_t cap = std::max(n, splat_data.means().capacity());
+                        const auto rest = static_cast<uint32_t>(splat_data.max_sh_coeffs_rest());
+                        Tensor dest = splat_data.allocate_named_param(
+                            shN.shape(),
+                            sh_swizzled_float_count(cap, rest),
+                            DataType::Float32,
+                            "SplatData.shN");
+                        dest.copy_from(shN);
+                        shN = std::move(dest);
+                    }
+                }
             }
         }
     }

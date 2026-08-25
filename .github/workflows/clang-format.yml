@@ -2,7 +2,7 @@ name: Clang Format Check
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, dev ]
     paths-ignore:
       - '**.md'
       - 'docs/**'

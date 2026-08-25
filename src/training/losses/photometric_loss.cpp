@@ -88,7 +88,8 @@ namespace lfs::training::losses {
                 loss_tensor_gpu = lfs::core::Tensor::full({1}, 1.0f, lfs::core::Device::CUDA) - ssim_value_tensor;
 
                 // Backward: d(loss)/d(ssim) = -1 (since loss = 1 - ssim)
-                grad_combined = lfs::training::kernels::ssim_backward(ssim_ctx, ssim_ws, -1.0f);
+                grad_combined = lfs::training::kernels::ssim_backward(
+                    ssim_ctx, ssim_ws, -1.0f);
 
             } else {
                 LFS_TRACE("loss.fused_l1_ssim");
@@ -97,7 +98,8 @@ namespace lfs::training::losses {
                 auto [loss_tensor, fused_ctx] = lfs::training::kernels::fused_l1_ssim_forward(
                     rendered_4d, gt_4d, params.lambda_dssim, fused_ws, /*apply_valid_padding=*/true);
 
-                grad_combined = lfs::training::kernels::fused_l1_ssim_backward(fused_ctx, fused_ws);
+                grad_combined = lfs::training::kernels::fused_l1_ssim_backward(
+                    fused_ctx, fused_ws);
                 loss_tensor_gpu = loss_tensor;
             }
 

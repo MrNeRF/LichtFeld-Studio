@@ -252,6 +252,24 @@ EXPECTED_NUMBER_ROWS = {
         1_000.0,
         False,
     ),
+    "normal_start_fraction": (
+        "training_params.normal_start_fraction",
+        "training.tooltip.normal_start_fraction",
+        3,
+        0.01,
+        0.0,
+        1.0,
+        False,
+    ),
+    "normal_end_fraction": (
+        "training_params.normal_end_fraction",
+        "training.tooltip.normal_end_fraction",
+        3,
+        0.01,
+        0.0,
+        1.0,
+        False,
+    ),
     "opacity_reg": (
         "training.losses.opacity_reg",
         "training.tooltip.opacity_reg",
@@ -375,6 +393,10 @@ EXPECTED_CHECKBOX_ROWS = {
         "training_params.use_normal_loss",
         "training.tooltip.use_normal_loss",
     ),
+    "normal_auto_generate": (
+        "training_params.normal_auto_generate",
+        "training.tooltip.normal_auto_generate",
+    ),
     "enable_sparsity": (
         "training_params.sparsity",
         "training.tooltip.sparsity",
@@ -383,6 +405,10 @@ EXPECTED_CHECKBOX_ROWS = {
     "undistort": ("training_params.undistort", "training.tooltip.undistort"),
     "mip_filter": ("training_params.mip_filter", "training.tooltip.mip_filter"),
     "ppisp": ("training_params.ppisp", "training.tooltip.ppisp"),
+    "ppisp_exposure_from_exif": (
+        "training_params.ppisp_exposure_from_exif",
+        "training.tooltip.ppisp_exposure_from_exif",
+    ),
     "ppisp_use_controller": (
         "training_params.ppisp_controller",
         "training.tooltip.ppisp_controller",
@@ -399,6 +425,10 @@ EXPECTED_CHECKBOX_ROWS = {
     "enable_eval": (
         "training_params.enable_eval",
         "training.tooltip.enable_eval",
+    ),
+    "background_improvements": (
+        "training_params.background_improvements",
+        "training.tooltip.background_improvements",
     ),
 }
 
@@ -442,6 +472,7 @@ EXPECTED_ADVANCED_IDS = (
     "scaling_lr_end",
     "cropbox_lr_scale",
     "cropbox_loss_weight",
+    "morton_reorder_interval",
     "min_opacity",
     "growth_grad_threshold",
     "grow_fraction",
@@ -451,6 +482,11 @@ EXPECTED_ADVANCED_IDS = (
     "bounds_percentile",
     "use_error_map",
     "use_edge_map",
+    "far_scene_min_fraction",
+    "growth_ratio_rank",
+    "growth_ratio_pow",
+    "fill_pacing_iter",
+    "far_seed_dose",
     "ppisp_lr",
     "ppisp_reg_weight",
     "ppisp_warmup_steps",
@@ -478,13 +514,13 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     assert property_view.NUMBER_PROPS == tuple(EXPECTED_NUMBER_ROWS)
     assert property_view.BOOL_PROPS == tuple(EXPECTED_CHECKBOX_ROWS)
     assert property_view.SELECT_PROPS == tuple(EXPECTED_SELECT_ROWS)
-    assert len(property_view.MIGRATED_PROP_IDS) == 54
-    assert len(set(property_view.MIGRATED_PROP_IDS)) == 54
+    assert len(property_view.MIGRATED_PROP_IDS) == 59
+    assert len(set(property_view.MIGRATED_PROP_IDS)) == 59
 
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(rendered) == len(set(rendered)) == 68
+    assert len(rendered) == len(set(rendered)) == 79
     assert set(rendered) == (
         set(property_view.MIGRATED_PROP_IDS) | set(EXPECTED_ADVANCED_IDS)
     ) - set(property_view.BESPOKE_OR_HIDDEN)
@@ -493,6 +529,10 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
 def test_auto_advanced_roster_and_exclusions_follow_declaration_order(lf):
     group_info = lf.ui.property_group_info("optimization")
     assert property_view.auto_advanced_prop_ids(group_info) == EXPECTED_ADVANCED_IDS
+    assert "background_improvements" not in EXPECTED_ADVANCED_IDS
+    assert "background_improvements" in {
+        prop_id for run in property_view.BASIC_RUNS for prop_id in run.prop_ids
+    }
 
     properties = {meta["id"]: meta for meta in group_info["properties"]}
     for prop_id in EXPECTED_ADVANCED_IDS:
@@ -539,8 +579,14 @@ def test_strategy_applicability_filters_auto_rows_and_search(lf):
         "bounds_percentile",
         "use_error_map",
         "use_edge_map",
+        "background_improvements",
+        "far_scene_min_fraction",
+        "growth_ratio_rank",
+        "growth_ratio_pow",
+        "fill_pacing_iter",
+        "far_seed_dose",
     }
-    auto_mrnf_only = known_mrnf_only - {"grow_until_iter"}
+    auto_mrnf_only = known_mrnf_only - {"grow_until_iter", "background_improvements"}
     for prop_id in known_mrnf_only:
         assert properties[prop_id]["strategies"] == ["mrnf"]
 
@@ -681,7 +727,7 @@ def test_checkbox_and_select_rows_match_registry_declarations(lf):
         assert row["kind"] == "checkbox"
         assert row["label_key"] == label
         assert row["tooltip_key"] == tooltip
-        if prop_id in {"use_bilateral_grid", "random", "undistort"}:
+        if prop_id in {"use_bilateral_grid", "random", "undistort", "background_improvements"}:
             assert params.prop_info(prop_id)["needs_restart"] is True
 
     for prop_id, (label, tooltip, expected_items) in EXPECTED_SELECT_ROWS.items():
@@ -979,7 +1025,7 @@ def test_training_rml_mounts_every_run_with_writable_records():
     assert 'data-checked="row.checked"' in rml
     assert 'data-value="row.value"' in rml
     assert 'data-if="item.prop_id == row.id"' in rml
-    assert 'data-event-change="pv_value_change(row.id, row.checked)"' in rml
+    assert 'data-event-click="pv_value_change(row.id, !row.checked)"' in rml
     assert 'data-event-change="pv_value_change(row.id, ev.value)"' in rml
     assert 'data-pv-input="1"' in rml
     assert 'data-attr-data-pv-id="row.id"' in rml

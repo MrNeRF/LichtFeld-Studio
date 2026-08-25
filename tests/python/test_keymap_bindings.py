@@ -102,6 +102,9 @@ ACTION_NAMES = (
     "TOGGLE_MCP_SERVER",
     "TOGGLE_MCP_BINDING",
     "TOGGLE_GRID",
+    "SELECT_ALL_SCENE_NODES",
+    "TOGGLE_SCENE_SELECTION_VISIBILITY",
+    "TOGGLE_SCENE_SELECTION_TRAINING",
 )
 
 
@@ -268,6 +271,8 @@ def _install_lf_stub(monkeypatch):
         get_ui_scale_preference=lambda: 0.0,
         remember_camera_navigation=lambda: False,
         remember_camera_view_snap=lambda: False,
+        scene_graph_selection_markers=lambda: False,
+        set_scene_graph_selection_markers=lambda _enabled: None,
         get_scene_reconstruction_options=lambda: [
             {
                 "id": "native",

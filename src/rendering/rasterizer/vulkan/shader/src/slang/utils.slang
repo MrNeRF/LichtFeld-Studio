@@ -1043,10 +1043,10 @@ struct Uniforms {
     // 0 = median depth; > 0 = alpha-weighted (expected) depth, far bound = value.
     float expected_far;
     // Explicit padding to keep dist_coeffs 16-byte aligned; mirrors the C++
-    // struct exactly (192 bytes total).
+    // struct exactly (192 bytes total). shN_address occupies the former
+    // uniforms_pad1/pad2 (offset 104, 8-byte aligned).
     uint depth_wave;
-    uint uniforms_pad1;
-    uint uniforms_pad2;
+    uint64_t shN_address;
     float4 dist_coeffs;
     float4x4 world_view_transform;
 }

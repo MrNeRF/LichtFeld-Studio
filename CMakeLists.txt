@@ -451,77 +451,6 @@ if(WIN32)
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --diag-suppress 221,1394,1388 -Xcompiler=/wd4267 -Xcompiler=/Zc:preprocessor")
 endif()
 
-# cuDNN 9 runtime libraries are loaded indirectly by ONNX Runtime's CUDA
-# provider, so CMake's runtime dependency scanner only sees part of the set.
-# Discover the CUDA-versioned cuDNN bin directory explicitly and copy every
-# cudnn*.dll beside the executable / into portable installs on Windows.
-set(LFS_CUDNN_BIN_DIR "" CACHE PATH "Path to the cuDNN runtime DLL directory")
-set(CUDNN_ROOT_DIR "" CACHE PATH "Path to the cuDNN installation root")
-set(_lfs_cudnn_runtime_libs "")
-set(_lfs_cudnn_bin_dir "")
-if(WIN32)
-    function(_lfs_append_cudnn_bin_candidate OUT_VAR DIR)
-        if(DIR)
-            file(TO_CMAKE_PATH "${DIR}" _candidate)
-            list(APPEND ${OUT_VAR} "${_candidate}")
-            set(${OUT_VAR} "${${OUT_VAR}}" PARENT_SCOPE)
-        endif()
-    endfunction()
-
-    function(_lfs_append_cudnn_root_candidates OUT_VAR ROOT)
-        if(ROOT)
-            file(TO_CMAKE_PATH "${ROOT}" _root)
-            if(CUDAToolkit_VERSION_MAJOR AND CUDAToolkit_VERSION_MINOR)
-                _lfs_append_cudnn_bin_candidate(${OUT_VAR} "${_root}/bin/${CUDAToolkit_VERSION_MAJOR}.${CUDAToolkit_VERSION_MINOR}/x64")
-            endif()
-            if(CUDAToolkit_VERSION_MAJOR)
-                file(GLOB _major_matches LIST_DIRECTORIES true "${_root}/bin/${CUDAToolkit_VERSION_MAJOR}.*/x64")
-                list(SORT _major_matches COMPARE NATURAL ORDER DESCENDING)
-                foreach(_major_match IN LISTS _major_matches)
-                    _lfs_append_cudnn_bin_candidate(${OUT_VAR} "${_major_match}")
-                endforeach()
-            endif()
-            _lfs_append_cudnn_bin_candidate(${OUT_VAR} "${_root}/bin/x64")
-            _lfs_append_cudnn_bin_candidate(${OUT_VAR} "${_root}/bin")
-            set(${OUT_VAR} "${${OUT_VAR}}" PARENT_SCOPE)
-        endif()
-    endfunction()
-
-    set(_lfs_cudnn_bin_candidates "")
-    _lfs_append_cudnn_bin_candidate(_lfs_cudnn_bin_candidates "${LFS_CUDNN_BIN_DIR}")
-    _lfs_append_cudnn_root_candidates(_lfs_cudnn_bin_candidates "${CUDNN_ROOT_DIR}")
-    _lfs_append_cudnn_root_candidates(_lfs_cudnn_bin_candidates "$ENV{CUDNN_ROOT_DIR}")
-    _lfs_append_cudnn_bin_candidate(_lfs_cudnn_bin_candidates "$ENV{CUDNN_BIN_DIR}")
-    _lfs_append_cudnn_root_candidates(_lfs_cudnn_bin_candidates "$ENV{CUDNN_ROOT}")
-    _lfs_append_cudnn_root_candidates(_lfs_cudnn_bin_candidates "$ENV{CUDNN_PATH}")
-
-    file(GLOB _lfs_common_cudnn_roots LIST_DIRECTORIES true "C:/Program Files/NVIDIA/CUDNN/v*")
-    list(SORT _lfs_common_cudnn_roots COMPARE NATURAL ORDER DESCENDING)
-    foreach(_lfs_common_cudnn_root IN LISTS _lfs_common_cudnn_roots)
-        _lfs_append_cudnn_root_candidates(_lfs_cudnn_bin_candidates "${_lfs_common_cudnn_root}")
-    endforeach()
-    list(REMOVE_DUPLICATES _lfs_cudnn_bin_candidates)
-
-    foreach(_lfs_cudnn_candidate IN LISTS _lfs_cudnn_bin_candidates)
-        file(GLOB _lfs_cudnn_candidate_dlls CONFIGURE_DEPENDS "${_lfs_cudnn_candidate}/cudnn*.dll")
-        if(_lfs_cudnn_candidate_dlls)
-            set(_lfs_cudnn_bin_dir "${_lfs_cudnn_candidate}")
-            set(_lfs_cudnn_runtime_libs ${_lfs_cudnn_candidate_dlls})
-            list(SORT _lfs_cudnn_runtime_libs)
-            break()
-        endif()
-    endforeach()
-
-    if(_lfs_cudnn_runtime_libs)
-        list(LENGTH _lfs_cudnn_runtime_libs _lfs_cudnn_runtime_lib_count)
-        message(STATUS "cuDNN runtime DLLs: ${_lfs_cudnn_runtime_lib_count} found in ${_lfs_cudnn_bin_dir}")
-    elseif(BUILD_PORTABLE)
-        message(FATAL_ERROR "cuDNN runtime DLLs were not found. Set CUDNN_ROOT_DIR to the cuDNN root, or LFS_CUDNN_BIN_DIR to the CUDA-versioned cuDNN bin directory.")
-    else()
-        message(WARNING "cuDNN runtime DLLs were not found. Set CUDNN_ROOT_DIR or LFS_CUDNN_BIN_DIR if CUDA preprocessing/runtime inference needs cuDNN.")
-    endif()
-endif()
-
 # Create nvToolsExt target BEFORE finding Torch (PyTorch expects this)
 if(NOT TARGET CUDA::nvToolsExt)
     find_library(NVTOOLSEXT_LIBRARY
@@ -572,7 +501,6 @@ find_package(zstd CONFIG REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
 find_package(OpenImageIO REQUIRED)
 find_package(OpenSSL REQUIRED)
-include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SetupOnnxRuntime.cmake")
 find_package(pxr CONFIG REQUIRED)
 find_package(assimp REQUIRED)
 find_package(RmlUi CONFIG REQUIRED)
@@ -812,30 +740,6 @@ if(TARGET nvimgcodec)
     message(STATUS "Post-build: nvImageCodec libraries will be copied to executable directory")
 endif()
 
-# ONNX Runtime dlopens its CUDA execution providers at runtime. Keep the core
-# runtime and CUDA/shared provider libraries beside the exe so local and packaged
-# preprocess runs do not silently fall back to CPU.
-set(_lfs_ort_runtime_libs ${LFS_ONNXRUNTIME_RUNTIME_LIBS})
-if(NOT _lfs_ort_runtime_libs AND DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
-    file(GLOB _lfs_ort_runtime_libs
-        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/*onnxruntime*"
-        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/*onnxruntime*")
-endif()
-list(FILTER _lfs_ort_runtime_libs INCLUDE REGEX "\\.(dll|dylib|so(\\.[0-9]+)*)$")
-list(REMOVE_DUPLICATES _lfs_ort_runtime_libs)
-if(_lfs_ort_runtime_libs)
-    foreach(_lfs_ort_runtime_lib IN LISTS _lfs_ort_runtime_libs)
-        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${_lfs_ort_runtime_lib}"
-                "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-            COMMENT "Copying ONNX Runtime runtime library"
-        )
-    endforeach()
-else()
-    message(WARNING "ONNX Runtime runtime libraries were not found; preprocess CUDA inference may fall back to CPU or fail at startup")
-endif()
-
 # Copy Python DLLs for Windows runtime (Python is embedded in the application)
 if(WIN32)
     get_filename_component(VCPKG_PYTHON_DIR "${Python_EXECUTABLE}" DIRECTORY)
@@ -872,16 +776,6 @@ if(WIN32 AND CUDAToolkit_FOUND)
         endif()
     endforeach()
     message(STATUS "Post-build: CUDA DLLs will be copied from ${CUDAToolkit_BIN_DIR}")
-endif()
-
-if(WIN32 AND _lfs_cudnn_runtime_libs)
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${_lfs_cudnn_runtime_libs}
-            "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-        COMMENT "Copying cuDNN DLLs to executable directory"
-    )
-    message(STATUS "Post-build: cuDNN DLLs will be copied from ${_lfs_cudnn_bin_dir}")
 endif()
 
 # =============================================================================
@@ -1412,17 +1306,6 @@ install(TARGETS lfs_mcp
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
-if(_lfs_ort_runtime_libs)
-    if(WIN32)
-        set(_lfs_ort_install_dest "${CMAKE_INSTALL_BINDIR}")
-    else()
-        set(_lfs_ort_install_dest "${CMAKE_INSTALL_LIBDIR}")
-    endif()
-    install(FILES ${_lfs_ort_runtime_libs} DESTINATION ${_lfs_ort_install_dest})
-endif()
-if(WIN32 AND BUILD_PORTABLE AND _lfs_cudnn_runtime_libs)
-    install(FILES ${_lfs_cudnn_runtime_libs} DESTINATION ${CMAKE_INSTALL_BINDIR})
-endif()
 install(FILES "${CMAKE_SOURCE_DIR}/LICENSE" DESTINATION ".")
 
 set(INSTALL_RESOURCE_DIR "${CMAKE_INSTALL_DATADIR}/LichtFeld-Studio")
@@ -1535,9 +1418,6 @@ if(BUILD_PORTABLE)
             "${CMAKE_BINARY_DIR}/external/nvImageCodec"
             "${CUDAToolkit_BIN_DIR}"
             "${CUDAToolkit_LIBRARY_DIR}")
-    if(WIN32 AND _lfs_cudnn_bin_dir)
-        list(APPEND _RUNTIME_SEARCH_DIRS "${_lfs_cudnn_bin_dir}")
-    endif()
     if(DEFINED VCPKG_TARGET_TRIPLET)
         list(APPEND _RUNTIME_SEARCH_DIRS
                 "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin"
@@ -1581,9 +1461,6 @@ if(BUILD_PORTABLE)
     if(TARGET nvjpeg_ext)
         bundle_runtime_deps("$<TARGET_FILE:nvjpeg_ext>" TRUE)
     endif()
-    foreach(_lfs_ort_runtime_lib IN LISTS _lfs_ort_runtime_libs)
-        bundle_runtime_deps("${_lfs_ort_runtime_lib}" TRUE)
-    endforeach()
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         configure_file(

@@ -19,6 +19,8 @@ namespace fast_lfs::optimizer {
         float lr = 0.0f;
         float bias_correction1_rcp = 1.0f;
         float bias_correction2_sqrt_rcp = 1.0f;
+        // per-splat mean-step scaling applies to this entry (Means only)
+        int apply_mean_step = 0;
     };
 
     // Pure CUDA interface - no torch dependencies
@@ -47,7 +49,14 @@ namespace fast_lfs::optimizer {
         float eps,
         float bias_correction1_rcp,
         float bias_correction2_sqrt_rcp,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        const float* mean_step_scale_raw = nullptr,
+        int mean_step_scale_n = 0,
+        float mean_step_median_extent = 0.0f,
+        float mean_step_r_min = 1.0f,
+        float mean_step_r_max = 300.0f,
+        const bool* mean_step_far_mask = nullptr,
+        int mean_step_far_mask_n = 0);
 
     // One launch over a device table of contiguous joint params (means/sh0/scale/rot/opa).
     void adam_step_joint_contiguous_batched(
@@ -62,7 +71,14 @@ namespace fast_lfs::optimizer {
         float beta1,
         float beta2,
         float eps,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        const float* mean_step_scale_raw = nullptr,
+        int mean_step_scale_n = 0,
+        float mean_step_median_extent = 0.0f,
+        float mean_step_r_min = 1.0f,
+        float mean_step_r_max = 300.0f,
+        const bool* mean_step_far_mask = nullptr,
+        int mean_step_far_mask_n = 0);
 
     // Standalone joint 8-bit shN Adam over a swizzled fp32 gradient buffer.
     // Reuses apply_shN_grads_packed_joint (same device code as fused FastGS).

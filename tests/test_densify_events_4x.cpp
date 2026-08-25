@@ -6,7 +6,9 @@
  */
 
 #include "core/tensor.hpp"
+#include "lfs/training/refine_scratch.hpp"
 #include "training/kernels/densification_kernels.hpp"
+#include "training/kernels/mrnf_kernels.hpp"
 #include "training/strategies/strategy_utils.hpp"
 
 #include <algorithm>
@@ -168,6 +170,97 @@ TEST(DensifyEvents4x, PositiveMedianNormalizeMatchesSortReference) {
     }
 }
 
+TEST(DensifyEvents4x, PositiveMedianWorkspaceMatchesAllocatingPath) {
+    std::vector<float> data = {0.f, 1.f, 0.f, 5.f, 2.f, 4.f, 3.f, 0.f, -1.f};
+    auto allocating = Tensor::from_vector(data, TensorShape({data.size()}), Device::CUDA);
+    auto persisted = Tensor::from_vector(data, TensorShape({data.size()}), Device::CUDA);
+
+    kernels::launch_normalize_by_positive_median(allocating.ptr<float>(), allocating.numel());
+    PositiveMedianScratch scratch;
+    scratch.ensure_n(data.size(), Device::CUDA);
+    kernels::launch_normalize_by_positive_median(
+        persisted.ptr<float>(), persisted.numel(), nullptr, &scratch);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    const auto got_a = to_host(allocating);
+    const auto got_b = to_host(persisted);
+    ASSERT_EQ(got_a.size(), got_b.size());
+    for (size_t i = 0; i < got_a.size(); ++i) {
+        EXPECT_NEAR(got_a[i], got_b[i], 1e-5f) << "i=" << i;
+    }
+}
+
+TEST(DensifyEvents4x, PositiveMedianWorkspaceZerosWhenNoPositives) {
+    std::vector<float> data = {0.f, -1.f, 0.f, -2.f};
+    auto t = Tensor::from_vector(data, TensorShape({data.size()}), Device::CUDA);
+    PositiveMedianScratch scratch;
+    scratch.ensure_n(data.size(), Device::CUDA);
+    kernels::launch_normalize_by_positive_median(t.ptr<float>(), t.numel(), nullptr, &scratch);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    for (float v : to_host(t)) {
+        EXPECT_FLOAT_EQ(v, 0.f);
+    }
+}
+
+TEST(DensifyEvents4x, GumbelScratchMatchesAllocatingPath) {
+    constexpr size_t n = 64;
+    constexpr size_t k = 7;
+    std::vector<float> weights(n, 0.f);
+    size_t nnz = 0;
+    for (size_t i = 0; i < n; ++i) {
+        if (i % 3 != 0) {
+            weights[i] = static_cast<float>(i + 1);
+            ++nnz;
+        }
+    }
+    auto w = Tensor::from_vector(weights, TensorShape({n}), Device::CUDA);
+    auto allocating = Tensor::empty({k}, Device::CUDA, DataType::Int64);
+    auto persisted = Tensor::empty({k}, Device::CUDA, DataType::Int64);
+    constexpr uint64_t seed = 0xC0FFEEULL;
+
+    mrnf_strategy::launch_gumbel_topk(w.ptr<float>(), n, k, seed, allocating.ptr<int64_t>());
+    GumbelTopKScratch scratch;
+    scratch.ensure_n(n, Device::CUDA);
+    mrnf_strategy::launch_gumbel_topk(
+        w.ptr<float>(), n, k, seed, persisted.ptr<int64_t>(), nullptr, true, &scratch, nnz);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    const auto a = allocating.cpu().to_vector_int64();
+    const auto b = persisted.cpu().to_vector_int64();
+    ASSERT_EQ(a.size(), b.size());
+    for (size_t i = 0; i < a.size(); ++i) {
+        EXPECT_EQ(a[i], b[i]) << "i=" << i;
+    }
+}
+
+TEST(DensifyEvents4x, GumbelScratchDenseMatchesAllocatingPath) {
+    constexpr size_t n = 32;
+    constexpr size_t k = 5;
+    std::vector<float> weights(n);
+    for (size_t i = 0; i < n; ++i) {
+        weights[i] = 0.25f + static_cast<float>(i);
+    }
+    auto w = Tensor::from_vector(weights, TensorShape({n}), Device::CUDA);
+    auto allocating = Tensor::empty({k}, Device::CUDA, DataType::Int64);
+    auto persisted = Tensor::empty({k}, Device::CUDA, DataType::Int64);
+    constexpr uint64_t seed = 42;
+
+    mrnf_strategy::launch_gumbel_topk(
+        w.ptr<float>(), n, k, seed, allocating.ptr<int64_t>(), nullptr, false);
+    GumbelTopKScratch scratch;
+    scratch.ensure_n(n, Device::CUDA);
+    mrnf_strategy::launch_gumbel_topk(
+        w.ptr<float>(), n, k, seed, persisted.ptr<int64_t>(), nullptr, false, &scratch, n);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    const auto a = allocating.cpu().to_vector_int64();
+    const auto b = persisted.cpu().to_vector_int64();
+    ASSERT_EQ(a.size(), b.size());
+    for (size_t i = 0; i < a.size(); ++i) {
+        EXPECT_EQ(a[i], b[i]) << "i=" << i;
+    }
+}
+
 TEST(DensifyEvents4x, DensifyChildWorkspaceGrowsOnly) {
     DensifyChildWorkspace ws;
     ws.ensure(100, 0, false, false, Device::CUDA);
@@ -202,9 +295,9 @@ TEST(DensifyEvents4x, ScoreBufferAppendZerosInPlace) {
 TEST(DensifyEvents4x, DensificationInfoReusesMatchingShape) {
     Tensor info = Tensor::zeros({2, 32}, Device::CUDA);
     float* p0 = info.ptr<float>();
-    ensure_densification_info_shape_inplace(info, 32, Device::CUDA, 0);
+    ensure_densification_info_shape_inplace(info, 32, Device::CUDA);
     EXPECT_EQ(info.ptr<float>(), p0); // same storage
-    ensure_densification_info_shape_inplace(info, 40, Device::CUDA, 0);
+    ensure_densification_info_shape_inplace(info, 40, Device::CUDA);
     EXPECT_EQ(info.shape()[1], 40u);
     EXPECT_NE(info.ptr<float>(), p0); // reallocated for new N
 }

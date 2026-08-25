@@ -275,7 +275,7 @@ namespace lfs::core {
         void removeNode(std::string name, bool keep_children = false);
         void removeNodeById(NodeId id, bool keep_children = false);
         [[nodiscard]] std::vector<std::unique_ptr<lfs::core::SplatData>> detachSplatModelsForRemoval(
-            std::string name,
+            NodeId id,
             bool keep_children = false);
         void replaceNodeModel(const std::string& name, std::unique_ptr<lfs::core::SplatData> model);
         // Swap a node's model in place, returning the previous model so the caller can
@@ -391,6 +391,9 @@ namespace lfs::core {
 
         size_t consolidateNodeModels();
         [[nodiscard]] bool isConsolidated() const { return consolidated_; }
+        // Copy one SPLAT node's combined-model range (walks NULL_NODE slots).
+        [[nodiscard]] std::unique_ptr<lfs::core::SplatData>
+        extractConsolidatedNodeModel(const Uuid& uuid) const;
         [[nodiscard]] std::vector<bool> getNodeVisibilityMask() const;
 
         struct ConsolidatedNodeSlot {

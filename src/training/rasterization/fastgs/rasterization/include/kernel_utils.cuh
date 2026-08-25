@@ -4,11 +4,11 @@
 
 #pragma once
 
+#include "core/sh_value_codec.cuh"
 #include "fused_adam_types.h"
 #include "helper_math.h"
 #include "lfs/core/warp_reduce.cuh"
 #include "lfs/training/joint_adam_codec.cuh"
-#include "lfs/training/sh_value_codec.cuh"
 #include "rasterization_config.h"
 #include "utils.h"
 
@@ -77,7 +77,7 @@ namespace fast_lfs::rasterization::kernels {
 
         // ---- q16 decode-in-registers path (pad-dropped cell-linear) ----
         if (sh_value_bounds != nullptr && sh_value_n_cells > 0u) {
-            using DC = lfs::training::sh_value::DeviceCodec16;
+            using DC = lfs::core::sh_value::DeviceCodec16;
             const uint16_t* sh_u16 = reinterpret_cast<const uint16_t*>(sh_f4);
             const float2 mm = sh_value_bounds[primitive_idx / 256u];
             const uint n_cells = sh_value_n_cells;
@@ -91,11 +91,11 @@ namespace fast_lfs::rasterization::kernels {
                 if (i >= 8 && active_sh_bases <= 9)
                     break;
                 c[i] = make_float3(
-                    DC::decode(sh_u16[lfs::training::sh_value::shAtU16(primitive_idx, base + 0, n_cells)],
+                    DC::decode(sh_u16[lfs::core::sh_value::shAtU16(primitive_idx, base + 0, n_cells)],
                                mm.x, mm.y),
-                    DC::decode(sh_u16[lfs::training::sh_value::shAtU16(primitive_idx, base + 1, n_cells)],
+                    DC::decode(sh_u16[lfs::core::sh_value::shAtU16(primitive_idx, base + 1, n_cells)],
                                mm.x, mm.y),
-                    DC::decode(sh_u16[lfs::training::sh_value::shAtU16(primitive_idx, base + 2, n_cells)],
+                    DC::decode(sh_u16[lfs::core::sh_value::shAtU16(primitive_idx, base + 2, n_cells)],
                                mm.x, mm.y));
             }
             return;
@@ -235,18 +235,18 @@ namespace fast_lfs::rasterization::kernels {
         static_assert(COEFF >= 0 && COEFF < 15, "SH rest coeff 0..14");
 
         if (sh_value_bounds != nullptr && sh_value_n_cells > 0u) {
-            using DC = lfs::training::sh_value::DeviceCodec16;
+            using DC = lfs::core::sh_value::DeviceCodec16;
             const uint16_t* sh_u16 = reinterpret_cast<const uint16_t*>(sh_f4);
             const float2 mm = sh_value_bounds[primitive_idx / 256u];
             const uint base = static_cast<uint>(COEFF) * 3u;
             if (base + 2u >= sh_value_n_cells)
                 return make_float3(0.0f, 0.0f, 0.0f);
             return make_float3(
-                DC::decode(sh_u16[lfs::training::sh_value::shAtU16(primitive_idx, base + 0, sh_value_n_cells)],
+                DC::decode(sh_u16[lfs::core::sh_value::shAtU16(primitive_idx, base + 0, sh_value_n_cells)],
                            mm.x, mm.y),
-                DC::decode(sh_u16[lfs::training::sh_value::shAtU16(primitive_idx, base + 1, sh_value_n_cells)],
+                DC::decode(sh_u16[lfs::core::sh_value::shAtU16(primitive_idx, base + 1, sh_value_n_cells)],
                            mm.x, mm.y),
-                DC::decode(sh_u16[lfs::training::sh_value::shAtU16(primitive_idx, base + 2, sh_value_n_cells)],
+                DC::decode(sh_u16[lfs::core::sh_value::shAtU16(primitive_idx, base + 2, sh_value_n_cells)],
                            mm.x, mm.y));
         }
 
@@ -696,17 +696,17 @@ namespace fast_lfs::rasterization::kernels {
         const uint slot,
         const uint n_value_cells,
         const float2 old_vmm) {
-        using VC = lfs::training::sh_value::DeviceCodec16;
+        using VC = lfs::core::sh_value::DeviceCodec16;
         if (value_q16) {
             float px = 0.0f, py = 0.0f, pz = 0.0f, pw = 0.0f;
             if (k * 4u + 0u < n_value_cells)
-                px = VC::decode(param_u16[lfs::training::sh_value::shAtU16(primitive_idx, k * 4u + 0u, n_value_cells)], old_vmm.x, old_vmm.y);
+                px = VC::decode(param_u16[lfs::core::sh_value::shAtU16(primitive_idx, k * 4u + 0u, n_value_cells)], old_vmm.x, old_vmm.y);
             if (k * 4u + 1u < n_value_cells)
-                py = VC::decode(param_u16[lfs::training::sh_value::shAtU16(primitive_idx, k * 4u + 1u, n_value_cells)], old_vmm.x, old_vmm.y);
+                py = VC::decode(param_u16[lfs::core::sh_value::shAtU16(primitive_idx, k * 4u + 1u, n_value_cells)], old_vmm.x, old_vmm.y);
             if (k * 4u + 2u < n_value_cells)
-                pz = VC::decode(param_u16[lfs::training::sh_value::shAtU16(primitive_idx, k * 4u + 2u, n_value_cells)], old_vmm.x, old_vmm.y);
+                pz = VC::decode(param_u16[lfs::core::sh_value::shAtU16(primitive_idx, k * 4u + 2u, n_value_cells)], old_vmm.x, old_vmm.y);
             if (k * 4u + 3u < n_value_cells)
-                pw = VC::decode(param_u16[lfs::training::sh_value::shAtU16(primitive_idx, k * 4u + 3u, n_value_cells)], old_vmm.x, old_vmm.y);
+                pw = VC::decode(param_u16[lfs::core::sh_value::shAtU16(primitive_idx, k * 4u + 3u, n_value_cells)], old_vmm.x, old_vmm.y);
             return make_float4(px, py, pz, pw);
         }
         if (value_f16) {
@@ -806,7 +806,7 @@ namespace fast_lfs::rasterization::kernels {
         const uint sh_layout_slots,
         GradSource grad_source) {
         using C = lfs::training::joint_adam::DeviceCodec<8>;
-        using VC = lfs::training::sh_value::DeviceCodec16;
+        using VC = lfs::core::sh_value::DeviceCodec16;
         constexpr float kInf = 1e30f;
         const FusedAdamParam& p = fused_adam.shN;
         const bool value_q16 = p.sh_value_bits == 16 && p.sh_value_bounds != nullptr &&
@@ -984,7 +984,7 @@ namespace fast_lfs::rasterization::kernels {
                     if (value_q16) {
                         const uint cell_lin = k * 4u + static_cast<uint>(c);
                         if (cell_lin < n_value_cells) {
-                            param_u16[lfs::training::sh_value::shAtU16(
+                            param_u16[lfs::core::sh_value::shAtU16(
                                 primitive_idx, cell_lin, n_value_cells)] =
                                 VC::encode(pci, new_vmm.x, new_vmm.y);
                         }

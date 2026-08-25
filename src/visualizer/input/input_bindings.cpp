@@ -23,8 +23,8 @@ namespace lfs::vis::input {
 
         std::atomic<bool> g_persistence_enabled{true};
 
-        constexpr int PROFILE_VERSION = 23; // Version 23 adds the grid visibility shortcut.
-        constexpr Action LAST_ACTION = Action::TOGGLE_GRID;
+        constexpr int PROFILE_VERSION = 25; // Version 25 finalizes Scene Graph selection actions.
+        constexpr Action LAST_ACTION = Action::TOGGLE_SCENE_SELECTION_TRAINING;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -363,6 +363,19 @@ namespace lfs::vis::input {
             for (const auto& b : j["bindings"]) {
                 const int mode_value = b.value("mode", 0);
                 const int action_value = b["action"].get<int>();
+                const std::string stored_description = b.value("description", "");
+                const bool transient_scene_graph_binding =
+                    version == 24 &&
+                    (stored_description == "Select Scene Hierarchy" ||
+                     stored_description == "Select All Scene Nodes" ||
+                     stored_description == "Toggle Scene Cursor Selection" ||
+                     stored_description == "Toggle Scene Selection Visibility" ||
+                     stored_description == "Toggle Scene Selection Training");
+                if (transient_scene_graph_binding) {
+                    LOG_INFO("Replacing transient version 24 Scene Graph binding: '{}'",
+                             stored_description);
+                    continue;
+                }
                 if (mode_value == REMOVED_TOOL_MODE_2 ||
                     action_value == REMOVED_ACTION_39 ||
                     action_value == REMOVED_ACTION_66) {
@@ -517,7 +530,11 @@ namespace lfs::vis::input {
                 (version < 21 && def.action == Action::OPEN_PREFERENCES) ||
                 (version < 22 && def.action == Action::TOGGLE_MCP_SERVER) ||
                 (version < 22 && def.action == Action::TOGGLE_MCP_BINDING) ||
-                (version < 23 && def.action == Action::TOGGLE_GRID);
+                (version < 23 && def.action == Action::TOGGLE_GRID) ||
+                (version < 25 &&
+                 (def.action == Action::SELECT_ALL_SCENE_NODES ||
+                  def.action == Action::TOGGLE_SCENE_SELECTION_VISIBILITY ||
+                  def.action == Action::TOGGLE_SCENE_SELECTION_TRAINING));
             if (!should_add) {
                 continue;
             }
@@ -1026,6 +1043,12 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_F11, MODIFIER_NONE}, Action::TOGGLE_FULLSCREEN, "Fullscreen"},
             {KeyTrigger{KEY_F10, MODIFIER_NONE}, Action::TOGGLE_PERFORMANCE_HUD, "Performance HUD"},
             {KeyTrigger{KEY_COMMA, MODIFIER_CTRL}, Action::OPEN_PREFERENCES, "Preferences"},
+            {KeyTrigger{KEY_A, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::SELECT_ALL_SCENE_NODES,
+             getActionName(Action::SELECT_ALL_SCENE_NODES)},
+            {KeyTrigger{KEY_H, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::TOGGLE_SCENE_SELECTION_VISIBILITY,
+             getActionName(Action::TOGGLE_SCENE_SELECTION_VISIBILITY)},
+            {KeyTrigger{KEY_T, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::TOGGLE_SCENE_SELECTION_TRAINING,
+             getActionName(Action::TOGGLE_SCENE_SELECTION_TRAINING)},
             {KeyTrigger{KEY_M, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::TOGGLE_MCP_SERVER,
              getActionName(Action::TOGGLE_MCP_SERVER)},
             {KeyTrigger{KEY_N, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::TOGGLE_MCP_BINDING,
@@ -1195,6 +1218,9 @@ namespace lfs::vis::input {
         case Action::TOGGLE_MCP_SERVER: return "Toggle MCP Server";
         case Action::TOGGLE_MCP_BINDING: return "Toggle MCP Local/Network Binding";
         case Action::TOGGLE_GRID: return "Toggle Grid";
+        case Action::SELECT_ALL_SCENE_NODES: return "Select All Scene Nodes";
+        case Action::TOGGLE_SCENE_SELECTION_VISIBILITY: return "Toggle Scene Selection Visibility";
+        case Action::TOGGLE_SCENE_SELECTION_TRAINING: return "Toggle Scene Selection Training";
         default: return "Unknown";
         }
     }
@@ -1281,6 +1307,9 @@ namespace lfs::vis::input {
         case Action::TOGGLE_MCP_SERVER: return "toggle_mcp_server";
         case Action::TOGGLE_MCP_BINDING: return "toggle_mcp_binding";
         case Action::TOGGLE_GRID: return "toggle_grid";
+        case Action::SELECT_ALL_SCENE_NODES: return "select_all_scene_nodes";
+        case Action::TOGGLE_SCENE_SELECTION_VISIBILITY: return "toggle_scene_selection_visibility";
+        case Action::TOGGLE_SCENE_SELECTION_TRAINING: return "toggle_scene_selection_training";
         default: return {};
         }
     }
@@ -1965,6 +1994,9 @@ namespace lfs::vis::input {
         case Action::OPEN_PREFERENCES:
         case Action::TOGGLE_MCP_SERVER:
         case Action::TOGGLE_MCP_BINDING:
+        case Action::SELECT_ALL_SCENE_NODES:
+        case Action::TOGGLE_SCENE_SELECTION_VISIBILITY:
+        case Action::TOGGLE_SCENE_SELECTION_TRAINING:
             return d_ui_key;
         case Action::HISTOGRAM_ZOOM_MARKED:
             return d_ui_scroll;

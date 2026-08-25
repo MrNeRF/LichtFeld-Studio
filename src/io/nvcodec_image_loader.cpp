@@ -245,6 +245,33 @@ namespace lfs::io {
 #endif
         }
 
+        void log_decode_failure(nvimgcodecProcessingStatus_t status,
+                                size_t width, size_t height, size_t nbytes) {
+            const char* status_str = processing_status_to_string(status);
+            if (status != NVIMGCODEC_PROCESSING_STATUS_CODEC_UNSUPPORTED) {
+                LOG_ERROR("[NvCodecImageLoader] Decode failed: {} ({}x{}, {} bytes)",
+                          status_str, width, height, nbytes);
+                return;
+            }
+
+            static std::atomic<std::uint64_t> codec_unsupported_count{0};
+            const std::uint64_t n =
+                codec_unsupported_count.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (n == 1) {
+                log_extension_diagnostics(lfs::core::getExtensionsDir());
+                LOG_WARN("[NvCodecImageLoader] CODEC_UNSUPPORTED for common formats usually means "
+                         "the extensions directory is missing or stale; decode falls back to CPU "
+                         "(slower, not broken)");
+            }
+            if (n <= 3) {
+                LOG_ERROR("[NvCodecImageLoader] Decode failed: {} ({}x{}, {} bytes)",
+                          status_str, width, height, nbytes);
+            } else if (n % 500 == 0) {
+                LOG_ERROR("[NvCodecImageLoader] Decode failed: CODEC_UNSUPPORTED ({} so far, falling back to CPU)",
+                          n);
+            }
+        }
+
         bool should_run_nvimgcodec_diagnostics() {
             return lfs::core::environment::flag("LFS_NVCODEC_DIAGNOSTICS");
         }
@@ -864,6 +891,15 @@ namespace lfs::io {
             extensions_path_str = lfs::core::path_to_utf8(extensions_dir);
             extensions_path_ptr = extensions_path_str.c_str();
             LOG_DEBUG("[NvCodecImageLoader] Extensions: {}", extensions_path_str);
+        } else {
+            const auto exe_dir = lfs::core::getExecutableDir();
+            const auto lib_dir = lfs::core::getLibDir();
+            LOG_WARN("[NvCodecImageLoader] GPU decode extensions unavailable: directory empty or missing. "
+                     "Searched exe_dir/../extensions ({}), lib_dir/extensions ({}), exe_dir/extensions ({}). "
+                     "Images will fall back to CPU decode.",
+                     lfs::core::path_to_utf8(exe_dir.parent_path() / "extensions"),
+                     lfs::core::path_to_utf8(lib_dir / "extensions"),
+                     lfs::core::path_to_utf8(exe_dir / "extensions"));
         }
 
         const nvimgcodecInstanceCreateInfo_t create_info{
@@ -1170,8 +1206,8 @@ namespace lfs::io {
 
         if (!decode_success) {
             const char* status_str = processing_status_to_string(decode_status);
-            LOG_ERROR("[NvCodecImageLoader] Decode failed: {} ({}x{}, {} bytes)",
-                      status_str, src_width, src_height, jpeg_data.size());
+            log_decode_failure(decode_status, static_cast<size_t>(src_width),
+                               static_cast<size_t>(src_height), jpeg_data.size());
             throw std::runtime_error(std::string("Decode failed: ") + status_str);
         }
 
@@ -1400,6 +1436,7 @@ namespace lfs::io {
             outputs.reserve(count);
             for (size_t i = 0; i < count; ++i) {
                 if (statuses[i] != NVIMGCODEC_PROCESSING_STATUS_SUCCESS) {
+                    log_decode_failure(statuses[i], widths[i], heights[i], jpeg_spans[i].second);
                     throw std::runtime_error("JPEG batch item failed: " +
                                              std::string(processing_status_to_string(statuses[i])));
                 }

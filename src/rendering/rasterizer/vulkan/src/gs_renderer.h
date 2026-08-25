@@ -5,8 +5,36 @@
 #include "indirect_layout.h"
 #include "perf_timer.h"
 
+#include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <optional>
+#include <vector>
+
+// Descriptor layouts for q16/f16 projection skip binding 2 (shN is a 64-bit
+// buffer device address in push constants, not a storage-buffer descriptor).
+[[nodiscard]] inline std::vector<int> vksplatSkipBinding(const int binding_count, const int skip) {
+    std::vector<int> layouts;
+    layouts.reserve(static_cast<std::size_t>(binding_count > 0 ? binding_count - 1 : 0));
+    for (int i = 0; i < binding_count; ++i) {
+        if (i != skip) {
+            layouts.push_back(i);
+        }
+    }
+    return layouts;
+}
+
+[[nodiscard]] inline std::vector<int> vksplatWithout(const std::initializer_list<int> bindings,
+                                                     const int skip) {
+    std::vector<int> layouts;
+    layouts.reserve(bindings.size());
+    for (const int binding : bindings) {
+        if (binding != skip) {
+            layouts.push_back(binding);
+        }
+    }
+    return layouts;
+}
 
 PACK_STRUCT(struct VulkanGSRendererUniforms {
     uint32_t image_height;
@@ -42,15 +70,16 @@ PACK_STRUCT(struct VulkanGSRendererUniforms {
     // Honored by the per-pixel rasterizer (alphablend_shader) regardless of backend.
     float expected_far;
     // Explicit padding: dist_coeffs is a float4 on the shader side and must
-    // sit on a 16-byte boundary; both layouts pad here by hand so C++ and
-    // Slang can never silently disagree.
+    // sit on a 16-byte boundary. shN_address occupies the former pad1/pad2
+    // (8-byte aligned at offset 104) so C++ and Slang stay 192 bytes.
     uint32_t depth_wave;
-    uint32_t uniforms_pad1;
-    uint32_t uniforms_pad2;
+    uint64_t shN_address;
     float dist_coeffs[4];
     float world_view_transform[16];
 });
 static_assert(sizeof(VulkanGSRendererUniforms) == 192);
+static_assert(offsetof(VulkanGSRendererUniforms, shN_address) % 8 == 0);
+static_assert(offsetof(VulkanGSRendererUniforms, dist_coeffs) % 16 == 0);
 
 PACK_STRUCT(struct VulkanGSLodCompactUniforms {
     uint32_t chunk_count;
@@ -367,12 +396,12 @@ protected:
     // per-page dequant frames appended last.
     _ComputePipeline pipeline_projection_forward_quant = _ComputePipeline(25);
     _ComputePipeline pipeline_projection_forward_quant_3dgut = _ComputePipeline(25);
-    // IEEE f16 SH rest (standalone PLY/SOG): same 24 bindings as fp32 split path.
-    _ComputePipeline pipeline_projection_forward_shn_f16 = _ComputePipeline(24);
-    _ComputePipeline pipeline_projection_forward_shn_f16_3dgut = _ComputePipeline(24);
-    // Pad-dropped q16 SH rest (exportable training): 24 + bounds binding last.
-    _ComputePipeline pipeline_projection_forward_shn_q16 = _ComputePipeline(25);
-    _ComputePipeline pipeline_projection_forward_shn_q16_3dgut = _ComputePipeline(25);
+    // IEEE f16 SH rest (standalone PLY/SOG): fp32's 24 bindings minus shN (BDA).
+    _ComputePipeline pipeline_projection_forward_shn_f16 = _ComputePipeline(vksplatSkipBinding(24, 2));
+    _ComputePipeline pipeline_projection_forward_shn_f16_3dgut = _ComputePipeline(vksplatSkipBinding(24, 2));
+    // Pad-dropped q16 SH rest: 25 bindings minus shN (BDA); bounds stay last.
+    _ComputePipeline pipeline_projection_forward_shn_q16 = _ComputePipeline(vksplatSkipBinding(25, 2));
+    _ComputePipeline pipeline_projection_forward_shn_q16_3dgut = _ComputePipeline(vksplatSkipBinding(25, 2));
     _ComputePipeline pipeline_selection_mask = _ComputePipeline(11);
     _ComputePipeline pipeline_selection_polygon_rasterize = _ComputePipeline(2);
     _ComputePipeline pipeline_generate_keys_wave = _ComputePipeline(8);
@@ -393,10 +422,12 @@ protected:
         0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28});
     _ComputePipeline pipeline_projection_forward_quant_survivors = _ComputePipeline(std::vector<int>{
         0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29});
-    _ComputePipeline pipeline_projection_forward_shn_f16_survivors = _ComputePipeline(std::vector<int>{
-        0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28});
-    _ComputePipeline pipeline_projection_forward_shn_q16_survivors = _ComputePipeline(std::vector<int>{
-        0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29});
+    _ComputePipeline pipeline_projection_forward_shn_f16_survivors = _ComputePipeline(vksplatWithout(
+        {0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28},
+        2));
+    _ComputePipeline pipeline_projection_forward_shn_q16_survivors = _ComputePipeline(vksplatWithout(
+        {0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29},
+        2));
     _ComputePipeline pipeline_prepare_visible_chain = _ComputePipeline(4);
     _ComputePipeline pipeline_copy_visible_indices = _ComputePipeline(3);
     struct _CumsumIndirectComputePipeline {

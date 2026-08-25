@@ -343,6 +343,17 @@ namespace lfs::vis {
         impl_->loadLocked();
         return impl_->values.value("remember_camera_view_snap", false);
     }
+    void UserPreferences::setSceneGraphSelectionMarkers(const bool enabled) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["scene_graph_selection_markers"] = enabled;
+        impl_->saveLocked();
+    }
+    bool UserPreferences::sceneGraphSelectionMarkers() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        return impl_->values.value("scene_graph_selection_markers", false);
+    }
 
     void UserPreferences::setMcp(const McpPreferenceState& state) {
         std::scoped_lock lock(impl_->mutex);
@@ -443,6 +454,12 @@ namespace lfs::vis {
     bool loadCameraViewSnapPreference() { return UserPreferences::instance().cameraViewSnap(); }
     void setRememberCameraViewSnapPreference(const bool enabled) { UserPreferences::instance().setRememberCameraViewSnap(enabled); }
     bool rememberCameraViewSnapPreference() { return UserPreferences::instance().rememberCameraViewSnap(); }
+    void saveSceneGraphSelectionMarkersPreference(const bool enabled) {
+        UserPreferences::instance().setSceneGraphSelectionMarkers(enabled);
+    }
+    bool loadSceneGraphSelectionMarkersPreference() {
+        return UserPreferences::instance().sceneGraphSelectionMarkers();
+    }
     void saveMcpPreferences(const McpPreferenceState& state) { UserPreferences::instance().setMcp(state); }
     McpPreferenceState loadMcpPreferences() { return UserPreferences::instance().mcp(); }
     void saveSceneUpscalerPreference(const std::string& backend_id,

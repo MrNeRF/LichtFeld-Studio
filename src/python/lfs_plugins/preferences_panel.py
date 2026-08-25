@@ -50,6 +50,7 @@ class PreferencesPanel(Panel):
         "view_snap",
         "key_bindings",
         "interface",
+        "scene_graph",
         "file_associations",
         "mcp",
     )
@@ -119,6 +120,11 @@ class PreferencesPanel(Panel):
         model.bind("view_snap", lf.get_camera_view_snap_enabled, self._set_view_snap)
         model.bind("remember_navigation", lf.ui.remember_camera_navigation, self._set_remember_navigation)
         model.bind("remember_view_snap", lf.ui.remember_camera_view_snap, self._set_remember_view_snap)
+        model.bind(
+            "scene_graph_selection_markers",
+            lf.ui.scene_graph_selection_markers,
+            self._set_scene_graph_selection_markers,
+        )
         model.bind("mcp_enabled", lambda: self._mcp_enabled, self._set_mcp_enabled)
         model.bind("mcp_expose_network", lambda: self._mcp_expose_network, self._set_mcp_expose_network)
         model.bind("mcp_port", lambda: self._mcp_port, self._set_mcp_port)
@@ -467,6 +473,12 @@ class PreferencesPanel(Panel):
         lf.ui.set_remember_camera_view_snap(bool(enabled))
         if enabled:
             lf.set_camera_view_snap_enabled(lf.get_camera_view_snap_enabled())
+        self._refresh_selection()
+
+    def _set_scene_graph_selection_markers(self, enabled):
+        if self._mcp_safe_mode:
+            return
+        lf.ui.set_scene_graph_selection_markers(bool(enabled))
         self._refresh_selection()
 
     def _read_working_directory(self):
@@ -941,6 +953,8 @@ class PreferencesPanel(Panel):
             lf.set_camera_navigation_mode("orbit")
             lf.set_camera_view_snap_enabled(False)
         elif section == "interface":
+            if not self._mcp_safe_mode:
+                lf.ui.set_scene_graph_selection_markers(False)
             return lf.ui.reset_layout()
         elif section == "mcp":
             if not self._mcp_safe_mode:
@@ -965,5 +979,6 @@ class PreferencesPanel(Panel):
             self._handle.dirty("view_snap")
             self._handle.dirty("remember_navigation")
             self._handle.dirty("remember_view_snap")
+            self._handle.dirty("scene_graph_selection_markers")
             self._dirty_mcp()
             self._dirty_working_directory()

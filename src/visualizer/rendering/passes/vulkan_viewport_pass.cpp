@@ -1013,11 +1013,11 @@ namespace lfs::vis {
                         __FILE__,
                         __LINE__);
                 } else {
-                    result = vkQueueSubmit(graphics_queue, 1, &submit, fence);
+                    result = lfs::rendering::vk_queue_submit_synced(graphics_queue, 1, &submit, fence);
                 }
                 if (error.empty() && result != VK_SUCCESS) {
                     error = formatVkCheckFailure(
-                        "vkQueueSubmit(graphics_queue, 1, &submit, fence)",
+                        "lfs::rendering::vk_queue_submit_synced(graphics_queue, 1, &submit, fence)",
                         result,
                         std::format("One-shot graphics submission failed (queue={:#x}, command_buffer={:#x}, command_buffer_count=1, wait_semaphore_count=0, signal_semaphore_count=0, fence={:#x})",
                                     vkHandleValue(graphics_queue),
@@ -2673,9 +2673,19 @@ namespace lfs::vis {
 
         void reset() {
             if (device != VK_NULL_HANDLE) {
-                if (context != nullptr && !context->waitForSubmittedFrames()) {
-                    LOG_WARN("Vulkan viewport pass shutdown could not wait for submitted frames: {}",
-                             context->lastError());
+                if (context != nullptr) {
+                    if (!context->waitForSubmittedFrames()) {
+                        LOG_WARN("Vulkan viewport pass shutdown could not wait for submitted frames: {}",
+                                 context->lastError());
+                        if (!context->deviceWaitIdle()) {
+                            LOG_WARN("Vulkan viewport pass shutdown could not idle device: {}",
+                                     context->lastError());
+                        }
+                    }
+                    if (!context->waitForImmediateSubmits()) {
+                        LOG_WARN("Vulkan viewport pass shutdown could not drain immediate submits: {}",
+                                 context->lastError());
+                    }
                 }
                 scene_image_uploader.shutdown();
                 mesh_pass.shutdown();

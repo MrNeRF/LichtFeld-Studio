@@ -7,6 +7,7 @@
 #include "components/ppisp_controller_pool.hpp"
 #include "components/sparsity_optimizer.hpp"
 #include "core/logger.hpp"
+#include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "strategies/istrategy.hpp"
@@ -18,6 +19,7 @@
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -292,8 +294,13 @@ namespace lfs::training {
             };
         } catch (const std::exception& error) {
             // LFS-CENSUS-OK(empty-catch): normalize the exception into a typed checkpoint error.
+            const bool layout_changed =
+                std::string_view(error.what()).find("layout changed") !=
+                std::string_view::npos;
             return checkpoint_stream_error(
-                lfs::ErrorCode::Internal,
+                layout_changed
+                    ? lfs::ErrorCode::FailedPrecondition
+                    : lfs::ErrorCode::Internal,
                 std::string("Serialize checkpoint failed: ") +
                     error.what(),
                 LFS_SOURCE_SITE_CURRENT());
@@ -443,6 +450,8 @@ namespace lfs::training {
                         cli_bg_color;
                 loaded_params.cli_bg_color_set =
                     cli_bg_color_set;
+                lfs::core::param::apply_explicit_training_overrides(
+                    loaded_params, loaded_params.overrides);
             }
             if (loaded_params.optimization.max_cap < 0)
                 return std::unexpected("Invalid checkpoint parameters: max_cap must be nonnegative");

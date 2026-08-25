@@ -110,12 +110,18 @@ namespace lfs::training {
         int sparsity_n = 0;
         float sparsity_rho = 0.0f;
         float sparsity_grad_loss = 0.0f;
+        bool per_splat_mean_step = false;
+        float mean_step_median_extent = 0.0f;
+        float mean_step_r_min = 1.0f;
+        float mean_step_r_max = 300.0f;
         FastGSFusedAdamParam means;
         FastGSFusedAdamParam sh0;
         FastGSFusedAdamParam shN;
         FastGSFusedAdamParam scaling;
         FastGSFusedAdamParam rotation;
         FastGSFusedAdamParam opacity;
+        const bool* mean_step_far_mask = nullptr;
+        int mean_step_far_mask_n = 0;
     };
 
     class AdamOptimizer {
@@ -130,6 +136,16 @@ namespace lfs::training {
         void set_frozen_lr_scale(float scale);
         void set_crop_damping_mask(lfs::core::Tensor mask);
         void set_cropbox_lr_scale(float scale);
+        void set_per_splat_mean_step(bool enabled,
+                                     float median_extent,
+                                     float r_min,
+                                     float r_max);
+        void set_mean_step_far_mask(const bool* mask, int n);
+        [[nodiscard]] bool per_splat_mean_step() const noexcept { return per_splat_mean_step_; }
+        [[nodiscard]] const bool* mean_step_far_mask() const noexcept {
+            return mean_step_far_mask_;
+        }
+        [[nodiscard]] int mean_step_far_mask_n() const noexcept { return mean_step_far_mask_n_; }
         [[nodiscard]] const lfs::core::Tensor& crop_damping_mask() const noexcept {
             return crop_damping_mask_;
         }
@@ -202,6 +218,12 @@ namespace lfs::training {
         float frozen_lr_scale_ = 0.0f;
         lfs::core::Tensor crop_damping_mask_;
         float cropbox_lr_scale_ = 1.0f;
+        bool per_splat_mean_step_ = false;
+        float mean_step_median_extent_ = 0.0f;
+        float mean_step_r_min_ = 1.0f;
+        float mean_step_r_max_ = 300.0f;
+        const bool* mean_step_far_mask_ = nullptr;
+        int mean_step_far_mask_n_ = 0;
         int64_t fused_step_iteration_ = -1;
         bool last_step_zeroed_gradients_ = false;
 
