@@ -1040,6 +1040,33 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("wait") = false,
         "Save the active project to a new .licht path");
     m.def(
+        "project_poll_write", []() {
+            nb::dict result;
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                return result;
+            }
+            auto poll = viewer->projectPollWrite();
+            if (!poll) {
+                throw std::runtime_error(
+                    std::format(
+                        "project_poll_write failed: {}",
+                        lfs::format_for_developer(
+                            poll.error())));
+            }
+            result["running"] = poll->running;
+            result["generation"] = poll->generation;
+            result["path"] =
+                poll->path
+                    ? lfs::core::path_to_utf8(
+                          *poll->path)
+                    : std::string{};
+            result["error"] = poll->error;
+            return result;
+        },
+        "Return the active .licht project write state");
+    m.def(
         "project_open",
         [](const std::string& path,
            const bool discard_changes,

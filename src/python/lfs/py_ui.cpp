@@ -56,6 +56,7 @@
 #include "visualizer/theme/theme.hpp"
 #include "visualizer/tools/unified_tool_registry.hpp"
 #include "visualizer/training/training_manager.hpp"
+#include <RmlUi/Core/Core.h>
 #include <typeinfo>
 
 #include "config.h"
@@ -4441,6 +4442,14 @@ namespace lfs::python {
                     lfs::python::delete_ui_texture(tex_id);
             },
             nb::arg("texture_id"), "Release a UI texture");
+
+        m.def(
+            "release_rml_texture",
+            [](const std::string& source) {
+                return Rml::ReleaseTexture(source);
+            },
+            nb::arg("source"),
+            "Release a cached RmlUi texture by source URL");
 
         m.def(
             "get_image_info",

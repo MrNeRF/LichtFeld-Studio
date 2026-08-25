@@ -2277,6 +2277,9 @@ def load_thumbnail(path: str, max_size: int) -> tuple:
 def release_texture(texture_id: int) -> None:
     """Release a UI texture"""
 
+def release_rml_texture(source: str) -> bool:
+    """Release a cached RmlUi texture by source URL"""
+
 def get_image_info(path: str) -> tuple:
     """
     Get image dimensions without loading pixel data, returns (width, height, channels)
