@@ -4,7 +4,9 @@
 
 #include "core/cuda_error.hpp"
 #include "densification_kernels.hpp"
+#include "lfs/training/refine_scratch.hpp"
 #include <cub/cub.cuh>
+#include <limits>
 
 #include "kernel_stream.hpp"
 
@@ -483,10 +485,30 @@ namespace lfs::training::kernels {
         data[i] /= s;
     }
 
+    __global__ void fill_pos_inf_kernel(float* data, size_t n) {
+        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i < n)
+            data[i] = INFINITY;
+    }
+
+    __global__ void div_by_positive_median_or_zero_kernel(
+        float* data, size_t n, const float* sorted, const int* count) {
+        const int c = *count;
+        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i >= n)
+            return;
+        if (c <= 0) {
+            data[i] = 0.0f;
+            return;
+        }
+        data[i] /= fmaxf(sorted[c / 2], 1e-9f);
+    }
+
     void launch_normalize_by_positive_median(
         float* data,
         size_t n,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        PositiveMedianScratch* scratch) {
 
         stream = resolve_stream(stream);
         if (n == 0 || data == nullptr)
@@ -496,6 +518,75 @@ namespace lfs::training::kernels {
         const int grid = static_cast<int>((n + block - 1) / block);
         zero_nan_kernel<<<grid, block, 0, stream>>>(data, n);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.zero_nan");
+
+        if (scratch) {
+            LFS_ASSERT_MSG(n <= static_cast<size_t>(std::numeric_limits<int>::max()),
+                           "positive-median input exceeds CUB's int item-count limit");
+            scratch->ensure_n(n, lfs::core::Device::CUDA);
+            LFS_ASSERT_MSG(scratch->n_capacity >= n &&
+                               scratch->selected.is_valid() &&
+                               scratch->selected.ptr<float>() != nullptr,
+                           lfs::core::detail::format_cuda_safe(
+                               "positive-median selected scratch must cover n (cap={}, n={})",
+                               scratch->n_capacity, n));
+            LFS_ASSERT_MSG(scratch->sorted.is_valid() && scratch->sorted.ptr<float>() != nullptr,
+                           "positive-median sorted scratch must be a non-null CUDA f32 tensor");
+            LFS_ASSERT_MSG(scratch->count.is_valid() && scratch->count.ptr<int>() != nullptr,
+                           "positive-median count scratch must be a non-null CUDA i32 tensor");
+
+            float* d_selected = scratch->selected.ptr<float>();
+            float* d_sorted = scratch->sorted.ptr<float>();
+            int* d_count = scratch->count.ptr<int>();
+            const int n_int = static_cast<int>(n);
+
+            fill_pos_inf_kernel<<<grid, block, 0, stream>>>(d_selected, n);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.positive_median_fill_inf");
+
+            size_t temp_bytes = 0;
+            LFS_CUDA_CHECK_MSG(
+                cub::DeviceSelect::If(nullptr, temp_bytes, data, d_selected, d_count,
+                                      n_int, PositivePred{}, stream),
+                "positive_median select size");
+            scratch->ensure_temps(temp_bytes, 0, lfs::core::Device::CUDA);
+            LFS_ASSERT_MSG(temp_bytes == 0 ||
+                               (scratch->select_temp.is_valid() &&
+                                scratch->select_temp_bytes >= temp_bytes &&
+                                scratch->select_temp.data_ptr() != nullptr),
+                           lfs::core::detail::format_cuda_safe(
+                               "positive-median select temp must cover queried bytes (have={}, need={})",
+                               scratch->select_temp_bytes, temp_bytes));
+            LFS_CUDA_CHECK_MSG(
+                cub::DeviceSelect::If(
+                    temp_bytes == 0 ? nullptr : scratch->select_temp.data_ptr(),
+                    temp_bytes, data, d_selected, d_count,
+                    n_int, PositivePred{}, stream),
+                "positive_median select");
+
+            size_t sort_bytes = 0;
+            LFS_CUDA_CHECK_MSG(
+                cub::DeviceRadixSort::SortKeys(nullptr, sort_bytes, d_selected, d_sorted,
+                                               n_int, 0, sizeof(float) * 8, stream),
+                "positive_median sort size");
+            scratch->ensure_temps(temp_bytes, sort_bytes, lfs::core::Device::CUDA);
+            LFS_ASSERT_MSG(sort_bytes == 0 ||
+                               (scratch->sort_temp.is_valid() &&
+                                scratch->sort_temp_bytes >= sort_bytes &&
+                                scratch->sort_temp.data_ptr() != nullptr),
+                           lfs::core::detail::format_cuda_safe(
+                               "positive-median sort temp must cover queried bytes (have={}, need={})",
+                               scratch->sort_temp_bytes, sort_bytes));
+            LFS_CUDA_CHECK_MSG(
+                cub::DeviceRadixSort::SortKeys(
+                    sort_bytes == 0 ? nullptr : scratch->sort_temp.data_ptr(),
+                    sort_bytes, d_selected, d_sorted,
+                    n_int, 0, sizeof(float) * 8, stream),
+                "positive_median sort");
+
+            div_by_positive_median_or_zero_kernel<<<grid, block, 0, stream>>>(
+                data, n, d_sorted, d_count);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.div_by_median");
+            return;
+        }
 
         // Compact positives into a scratch buffer, radix-sort that only, pick mid.
         // Falls back to no-op (leave data) when zero positives.

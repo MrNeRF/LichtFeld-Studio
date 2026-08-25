@@ -482,7 +482,9 @@ namespace fast_lfs::rasterization {
         const FusedAdamSettings* fused_adam,
         const float* shN_value_bounds_ptr,
         unsigned shN_value_n_cells,
-        unsigned shN_value_bits) {
+        unsigned shN_value_bits,
+        const bool* mean_step_far_mask,
+        int mean_step_far_mask_n) {
 
         // The forward chose the stream and chained the arena frame on it; the
         // backward shares the same context/arena frame and must match.
@@ -662,6 +664,8 @@ namespace fast_lfs::rasterization {
                 reinterpret_cast<const float2*>(shN_value_bounds_ptr),
                 shN_value_n_cells,
                 shN_value_bits,
+                mean_step_far_mask,
+                mean_step_far_mask_n,
                 stream);
 
             // Mark frame as complete

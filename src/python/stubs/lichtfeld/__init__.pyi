@@ -2055,6 +2055,56 @@ class OptimizationParams:
     def enable_eval(self, arg: bool, /) -> None: ...
 
     @property
+    def background_improvements(self) -> bool:
+        """
+        Improve distant background reconstruction (MRNF): far-field seeding and splits, decay relief, growth cap, per-splat position steps, visibility-ratio growth ranking, paced capacity fill
+        """
+
+    @background_improvements.setter
+    def background_improvements(self, arg: bool, /) -> None: ...
+
+    @property
+    def far_scene_min_fraction(self) -> float:
+        """
+        Minimum deep-far splat fraction that activates far-field features (0 = always on)
+        """
+
+    @far_scene_min_fraction.setter
+    def far_scene_min_fraction(self, arg: float, /) -> None: ...
+
+    @property
+    def growth_ratio_rank(self) -> bool:
+        """
+        Rank MRNF growth by visibility-normalized error (err/vis^p) instead of raw window error
+        """
+
+    @growth_ratio_rank.setter
+    def growth_ratio_rank(self, arg: bool, /) -> None: ...
+
+    @property
+    def growth_ratio_pow(self) -> float:
+        """Visibility exponent p for the err/vis^p growth rank"""
+
+    @growth_ratio_pow.setter
+    def growth_ratio_pow(self, arg: float, /) -> None: ...
+
+    @property
+    def fill_pacing_iter(self) -> int:
+        """Pace MRNF cap fill until this iteration (0 = fill as fast as possible)"""
+
+    @fill_pacing_iter.setter
+    def fill_pacing_iter(self, arg: int, /) -> None: ...
+
+    @property
+    def far_seed_dose(self) -> int:
+        """
+        Far-field seeds injected per refine window (0 = starvation-scaled default)
+        """
+
+    @far_seed_dose.setter
+    def far_seed_dose(self, arg: int, /) -> None: ...
+
+    @property
     def steps_scaler(self) -> float:
         """Scale factor for training step counts"""
 

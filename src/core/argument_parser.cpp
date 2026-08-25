@@ -22,11 +22,13 @@
 #include <expected>
 #include <filesystem>
 #include <format>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <print>
 #include <set>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 #ifdef _WIN32
 #include <Windows.h>
 #endif
@@ -49,6 +51,8 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--steps-scaler", "steps_scaler", Float},
             OptimizationCliBinding{"--no-error-map", "use_error_map", Bool, true},
             OptimizationCliBinding{"--no-edge-map", "use_edge_map", Bool, true},
+            OptimizationCliBinding{"--no-background-improvements", "background_improvements", Bool, true},
+            OptimizationCliBinding{"--no-growth-ratio-rank", "growth_ratio_rank", Bool, true},
             OptimizationCliBinding{"--bg-mode", "bg_mode", Enum, false,
                                    "; values: solidcolor, modulation, image, random", "solid_color", "solidcolor"},
             OptimizationCliBinding{"--random", "random", Bool},
@@ -81,6 +85,10 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--ppisp-freeze", "ppisp_freeze_from_sidecar", Bool},
             OptimizationCliBinding{"--gut", "gut", Bool},
             OptimizationCliBinding{"--eval", "enable_eval", Bool},
+            OptimizationCliBinding{"--far-scene-min-fraction", "far_scene_min_fraction", Float},
+            OptimizationCliBinding{"--growth-ratio-pow", "growth_ratio_pow", Float},
+            OptimizationCliBinding{"--fill-pacing-iter", "fill_pacing_iter", Integer},
+            OptimizationCliBinding{"--far-seed-dose", "far_seed_dose", Integer},
             OptimizationCliBinding{"--headless", "headless", Bool},
             OptimizationCliBinding{"--undistort", "undistort", Bool},
         };
@@ -440,6 +448,12 @@ namespace {
             ::args::ValueFlag<float> steps_scaler(training_group, "steps_scaler", lfs::core::args::optimization_cli_help("--steps-scaler"), {"steps-scaler"});
             ::args::Flag no_error_map(training_group, "no_error_map", lfs::core::args::optimization_cli_help("--no-error-map"), {"no-error-map"});
             ::args::Flag no_edge_map(training_group, "no_edge_map", lfs::core::args::optimization_cli_help("--no-edge-map"), {"no-edge-map"});
+            ::args::Flag no_background_improvements(training_group, "no_background_improvements", lfs::core::args::optimization_cli_help("--no-background-improvements"), {"no-background-improvements"});
+            ::args::Flag no_growth_ratio_rank(training_group, "no_growth_ratio_rank", lfs::core::args::optimization_cli_help("--no-growth-ratio-rank"), {"no-growth-ratio-rank"});
+            ::args::ValueFlag<float> far_scene_min_fraction(training_group, "fraction", lfs::core::args::optimization_cli_help("--far-scene-min-fraction"), {"far-scene-min-fraction"});
+            ::args::ValueFlag<float> growth_ratio_pow(training_group, "growth_ratio_pow", lfs::core::args::optimization_cli_help("--growth-ratio-pow"), {"growth-ratio-pow"});
+            ::args::ValueFlag<int> fill_pacing_iter(training_group, "fill_pacing_iter", lfs::core::args::optimization_cli_help("--fill-pacing-iter"), {"fill-pacing-iter"});
+            ::args::ValueFlag<int> far_seed_dose(training_group, "far_seed_dose", lfs::core::args::optimization_cli_help("--far-seed-dose"), {"far-seed-dose"});
             ::args::ValueFlag<std::string> bg_mode(training_group, "mode", lfs::core::args::optimization_cli_help("--bg-mode"), {"bg-mode"});
             ::args::ValueFlag<std::string> bg_color(training_group, "color", "solidcolor background color as #RRGGBB or (R,G,B) with 0-255 channels (default: #000000)", {"bg-color"});
             ::args::ValueFlag<std::string> bg_image_path(training_group, "path", "Background image path (required when --bg-mode image)", {"bg-image-path"});
@@ -540,6 +554,7 @@ namespace {
             ::args::Group output_sep(parser, " ");
             ::args::Group output_group(parser, "OUTPUT OPTIONS:");
             ::args::Flag enable_eval(output_group, "eval", lfs::core::args::optimization_cli_help("--eval"), {"eval"});
+            ::args::ValueFlagList<int> eval_steps(output_group, "eval_steps", "Held-out evaluation iterations (repeatable; default: 7000 and 30000)", {"eval-steps"});
             ::args::Flag no_save_eval_images(output_group, "no_save_eval_images", "Disable saving of evaluation comparison images (GT vs rendered) during eval (default: enabled)", {"no-save-eval-images"});
             ::args::ValueFlagList<std::string> timelapse_images(output_group, "timelapse_images", "Image filenames to render timelapse images for", {"timelapse-images"});
             ::args::ValueFlag<int> timelapse_every(output_group, "timelapse_every", "Render timelapse image every N iterations (default: 50)", {"timelapse-every"});
@@ -1014,7 +1029,9 @@ namespace {
                                         // Capture values, not references
                                         iterations_val = cli_option_present({"-i", "--iter"}) ? std::optional<uint32_t>(::args::get(iterations)) : std::optional<uint32_t>(),
                                         resize_factor_val = resize_factor ? std::optional<int>(::args::get(resize_factor)) : std::optional<int>(1), // default 1
+                                        resize_factor_explicit = static_cast<bool>(resize_factor),
                                         max_width_val = max_width ? std::optional<int>(::args::get(max_width)) : std::optional<int>(3840),
+                                        max_width_explicit = static_cast<bool>(max_width),
                                         min_track_length_val = cli_option_present({"--min-track-length"}) ? std::optional<int>(::args::get(min_track_length)) : std::optional<int>(),
                                         no_cpu_cache_flag = static_cast<bool>(no_cpu_cache),
                                         use_16bit_flag = static_cast<bool>(use_16bit),
@@ -1097,6 +1114,13 @@ namespace {
                                         no_normal_auto_generate_flag = bool(no_normal_auto_generate),
                                         no_error_map_flag = bool(no_error_map),
                                         no_edge_map_flag = bool(no_edge_map),
+                                        no_background_improvements_flag = bool(no_background_improvements),
+                                        no_growth_ratio_rank_flag = bool(no_growth_ratio_rank),
+                                        far_scene_min_fraction_val = cli_option_present({"--far-scene-min-fraction"}) ? std::optional<float>(::args::get(far_scene_min_fraction)) : std::optional<float>(),
+                                        growth_ratio_pow_val = cli_option_present({"--growth-ratio-pow"}) ? std::optional<float>(::args::get(growth_ratio_pow)) : std::optional<float>(),
+                                        fill_pacing_iter_val = cli_option_present({"--fill-pacing-iter"}) ? std::optional<int>(::args::get(fill_pacing_iter)) : std::optional<int>(),
+                                        far_seed_dose_val = cli_option_present({"--far-seed-dose"}) ? std::optional<int>(::args::get(far_seed_dose)) : std::optional<int>(),
+                                        eval_steps_val = cli_option_present({"--eval-steps"}) ? std::optional<std::vector<int>>(::args::get(eval_steps)) : std::optional<std::vector<int>>(),
                                         freeze_lr_scale_val = cli_option_present({"--freeze-lr-scale"}) ? std::optional<float>(::args::get(freeze_lr_scale)) : std::optional<float>(),
                                         exclude_export_flag = bool(exclude_export),
                                         save_project_at_iteration_val =
@@ -1111,6 +1135,17 @@ namespace {
                 auto& opt = params.optimization;
                 auto& svs = params.server;
                 auto& ds = params.dataset;
+
+                std::vector<const char*> opt_keys;
+                std::vector<const char*> ds_keys;
+                auto note_opt = [&](const char* key, const bool present) {
+                    if (present)
+                        opt_keys.push_back(key);
+                };
+                auto note_ds = [&](const char* key, const bool present) {
+                    if (present)
+                        ds_keys.push_back(key);
+                };
 
                 // Simple lambdas to apply if flag/value exists
                 auto setVal = [](const auto& flag, auto& target) {
@@ -1127,9 +1162,13 @@ namespace {
                 setVal(iterations_val, opt.iterations);
                 params.cli_iterations_set =
                     iterations_val.has_value();
+                note_opt("iterations", iterations_val.has_value());
                 setVal(resize_factor_val, ds.resize_factor);
+                note_ds("resize_factor", resize_factor_explicit);
                 setVal(max_width_val, ds.max_width);
+                note_ds("max_width", max_width_explicit);
                 setVal(min_track_length_val, ds.min_track_length);
+                note_ds("min_track_length", min_track_length_val.has_value());
                 if (no_cpu_cache_flag)
                     ds.loading_params.use_cpu_memory = false;
                 setFlag(use_16bit_flag, ds.loading_params.use_16bit_color);
@@ -1220,6 +1259,25 @@ namespace {
                     opt.use_error_map = false;
                 if (no_edge_map_flag)
                     opt.use_edge_map = false;
+                if (no_background_improvements_flag)
+                    opt.background_improvements = false;
+                if (no_growth_ratio_rank_flag)
+                    opt.growth_ratio_rank = false;
+                setVal(far_scene_min_fraction_val, opt.far_scene_min_fraction);
+                setVal(growth_ratio_pow_val, opt.growth_ratio_pow);
+                setVal(fill_pacing_iter_val, opt.fill_pacing_iter);
+                setVal(far_seed_dose_val, opt.far_seed_dose);
+                if (eval_steps_val && !eval_steps_val->empty()) {
+                    opt.eval_steps.clear();
+                    for (const int step : *eval_steps_val) {
+                        if (step > 0) {
+                            opt.eval_steps.push_back(static_cast<size_t>(step));
+                        }
+                    }
+                    std::sort(opt.eval_steps.begin(), opt.eval_steps.end());
+                    opt.eval_steps.erase(std::unique(opt.eval_steps.begin(), opt.eval_steps.end()),
+                                         opt.eval_steps.end());
+                }
                 setVal(freeze_lr_scale_val, params.freeze_lr_scale);
                 setFlag(exclude_export_flag, params.exclude_frozen_add_splats_from_export);
 
@@ -1257,6 +1315,108 @@ namespace {
                 if (python_scripts_val) {
                     for (const auto& script : *python_scripts_val) {
                         params.python_scripts.emplace_back(script);
+                    }
+                }
+
+                note_ds("images", images_folder_val.has_value());
+                note_ds("test_every", test_every_val.has_value());
+                note_ds("timelapse_images", timelapse_images_val.has_value());
+                note_ds("timelapse_every", timelapse_every_val.has_value());
+                note_ds("output_name", output_name_val.has_value());
+                note_ds("invert_masks", invert_masks_flag);
+                note_ds("centralize_dataset", centralize_val.has_value());
+                note_opt("max_cap", max_cap_val.has_value());
+                note_opt("steps_scaler", steps_scaler_val.has_value());
+                note_opt("sh_degree_interval", sh_degree_interval_val.has_value());
+                note_opt("sh_degree", sh_degree_val.has_value());
+                note_opt("min_opacity", min_opacity_val.has_value());
+                note_opt("cropbox_lr_scale", cropbox_lr_scale_val.has_value());
+                note_opt("cropbox_loss_weight", cropbox_loss_weight_val.has_value());
+                note_opt("init_num_pts", init_num_pts_val.has_value());
+                note_opt("init_extent", init_extent_val.has_value());
+                note_opt("strategy", strategy_val.has_value());
+                note_opt("sparsify_steps", sparsify_steps_val.has_value());
+                note_opt("init_rho", init_rho_val.has_value());
+                note_opt("prune_ratio", prune_ratio_val.has_value());
+                note_opt("perf_bench", perf_bench_flag);
+                note_opt("perf_bench_warmup", perf_bench_warmup_val.has_value());
+                note_opt("profile_start_iter", profile_start_val.has_value());
+                note_opt("profile_stop_iter", profile_stop_val.has_value());
+                note_opt("mip_filter", enable_mip_flag);
+                note_opt("use_bilateral_grid", use_bilateral_grid_flag);
+                note_opt("use_ppisp", use_ppisp_flag || ppisp_controller_flag ||
+                                          ppisp_freeze_from_sidecar_flag);
+                note_opt("ppisp_use_controller", ppisp_controller_flag);
+                note_opt("ppisp_freeze_from_sidecar", ppisp_freeze_from_sidecar_flag);
+                note_opt("ppisp_sidecar_path", ppisp_sidecar_path_val.has_value());
+                note_opt("enable_eval", enable_eval_flag);
+                note_opt("headless", headless_flag);
+                note_opt("auto_train", auto_train_flag);
+                note_opt("no_splash", no_splash_flag);
+                note_opt("debug_python", debug_python_flag);
+                note_opt("debug_python_port", debug_python_port_val.has_value());
+                note_opt("enable_save_eval_images", no_save_eval_images_flag);
+                note_opt("bg_mode", bg_mode_val.has_value());
+                note_opt("bg_modulation", bg_mode_val.has_value());
+                note_opt("bg_color", bg_color_val.has_value());
+                note_opt("bg_image_path", bg_image_path_val.has_value());
+                note_opt("random", random_flag);
+                note_opt("gut", gut_flag);
+                note_opt("undistort", undistort_flag);
+                note_opt("enable_sparsity", enable_sparsity_flag);
+                note_opt("use_error_map", no_error_map_flag);
+                note_opt("use_edge_map", no_edge_map_flag);
+                note_opt("background_improvements", no_background_improvements_flag);
+                note_opt("growth_ratio_rank", no_growth_ratio_rank_flag);
+                note_opt("far_scene_min_fraction", far_scene_min_fraction_val.has_value());
+                note_opt("growth_ratio_pow", growth_ratio_pow_val.has_value());
+                note_opt("fill_pacing_iter", fill_pacing_iter_val.has_value());
+                note_opt("far_seed_dose", far_seed_dose_val.has_value());
+                note_opt("eval_steps", eval_steps_val && !eval_steps_val->empty());
+                note_opt("mask_mode", mask_mode_val.has_value());
+                note_opt("invert_masks", invert_masks_flag);
+                note_opt("use_alpha_as_mask", no_alpha_as_mask_flag);
+                note_opt("use_depth_loss", use_depth_loss_flag);
+                note_opt("depth_loss_weight", depth_loss_weight_val.has_value());
+                note_opt("depth_loss_mode", depth_loss_mode_val.has_value());
+                note_opt("use_normal_loss", use_normal_loss_flag);
+                note_opt("normal_loss_weight", normal_loss_weight_val.has_value());
+                note_opt("normal_consistency_weight", normal_consistency_weight_val.has_value());
+                note_opt("normal_flatten_weight", normal_flatten_weight_val.has_value());
+                note_opt("normal_loss_space", normal_loss_space_val.has_value());
+
+                if (!opt_keys.empty()) {
+                    const auto serialized = opt.to_json();
+                    nlohmann::json cli_opt;
+                    for (const char* key : opt_keys) {
+                        if (serialized.contains(key)) {
+                            cli_opt[key] = serialized[key];
+                            continue;
+                        }
+                        if (std::string_view(key) == "bg_image_path")
+                            cli_opt[key] = lfs::core::path_to_utf8(opt.bg_image_path);
+                    }
+                    if (!cli_opt.empty()) {
+                        lfs::core::param::merge_explicit_json_overlay(
+                            params.overrides.optimization_json, cli_opt.dump());
+                    }
+                }
+                if (!ds_keys.empty()) {
+                    const auto serialized = ds.to_json();
+                    nlohmann::json cli_ds;
+                    for (const char* key : ds_keys) {
+                        if (serialized.contains(key))
+                            cli_ds[key] = serialized[key];
+                        else if (std::string_view(key) == "centralize_dataset")
+                            cli_ds[key] = ds.centralize_dataset;
+                    }
+                    if (no_cpu_cache_flag)
+                        cli_ds["loading_params"]["use_cpu_memory"] = false;
+                    if (use_16bit_flag)
+                        cli_ds["loading_params"]["use_16bit_color"] = true;
+                    if (!cli_ds.empty()) {
+                        lfs::core::param::merge_explicit_json_overlay(
+                            params.overrides.dataset_json, cli_ds.dump());
                     }
                 }
             };
@@ -1321,7 +1481,8 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
 
     // Load from --config or use hardcoded defaults
     if (!config_file.empty()) {
-        const auto opt_result = lfs::core::param::read_optim_params_from_json(lfs::core::utf8_to_path(config_file));
+        const auto opt_result = lfs::core::param::read_optim_params_from_json(
+            lfs::core::utf8_to_path(config_file), params->overrides);
         if (!opt_result) {
             return std::unexpected(std::format("Config load failed: {}", opt_result.error()));
         }

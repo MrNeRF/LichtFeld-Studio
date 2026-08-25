@@ -10,9 +10,9 @@
 #include "core/cuda_error_typed.hpp"
 #include "core/logger.hpp"
 #include "core/sh_value_quant.hpp"
+#include "core/sh_value_quant_kernels.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor_serialization_sink.hpp"
-#include "lfs/training/sh_value_quant_kernels.hpp"
 #include "strategies/istrategy.hpp"
 
 #include <algorithm>
@@ -970,7 +970,7 @@ namespace lfs::training {
             if (encoding ==
                 lfs::core::TensorPayloadEncoding::
                     QuantizedShToCanonical) {
-                lfs::training::sh_value::
+                lfs::core::sh_value_quant::
                     decode_shN_u16_range_to_canonical(
                         static_cast<const std::uint16_t*>(
                             witness.source_pointer),
@@ -993,7 +993,7 @@ namespace lfs::training {
                                    SwizzledShToCanonical &&
                        witness.source_dtype ==
                            lfs::core::DataType::Float16) {
-                lfs::training::sh_value::
+                lfs::core::sh_value_quant::
                     decode_shN_f16_range_to_canonical(
                         static_cast<const std::uint16_t*>(
                             witness.source_pointer),

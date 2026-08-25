@@ -15,11 +15,10 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
-#include <atomic>
+#include <array>
 #include <cstring>
 #include <format>
 #include <limits>
-#include <new>
 #include <vector>
 
 namespace lfs::core {
@@ -32,57 +31,20 @@ namespace lfs::core {
         // projection shader dequants in registers (LFS_SHN_Q16). Standalone
         // PLY/SOG viewing keeps the separate IEEE f16 resident path.
         constexpr std::size_t kShNElementBytes = sizeof(std::uint16_t);
-        constexpr std::size_t kRegionAlignment = 256;
-        constexpr std::size_t kNoInjectedRelocateFailure =
-            std::numeric_limits<std::size_t>::max();
-        std::atomic<std::size_t> g_relocate_failure_for_testing{
-            kNoInjectedRelocateFailure};
-
-        class CudaStagingBuffer {
-        public:
-            CudaStagingBuffer() = default;
-            CudaStagingBuffer(const CudaStagingBuffer&) = delete;
-            CudaStagingBuffer& operator=(const CudaStagingBuffer&) = delete;
-
-            ~CudaStagingBuffer() {
-                if (ptr_) {
-                    if (const auto err = cudaFree(ptr_); err != cudaSuccess) {
-                        LOG_ERROR("SplatExportableStorage: staging cudaFree failed: {}",
-                                  cudaGetErrorString(err));
-                    }
-                }
-            }
-
-            void reset(void* ptr) noexcept { ptr_ = ptr; }
-            [[nodiscard]] void* get() const noexcept { return ptr_; }
-
-        private:
-            void* ptr_ = nullptr;
-        };
-
-        [[nodiscard]] bool consume_relocate_failure_for_testing(const std::size_t region) {
-            std::size_t expected = region;
-            return g_relocate_failure_for_testing.compare_exchange_strong(
-                expected,
-                kNoInjectedRelocateFailure,
-                std::memory_order_acq_rel,
-                std::memory_order_acquire);
-        }
 
         // True when `source` is a view into `block`'s VA range (CUDA-only or
         // Vulkan-interop alias of the same ExportableBlock). In that case
-        // rebind must install views only — never copy_from the (possibly stale
-        // offset) source into the new layout.
+        // rebind must install views only — never copy_from the source.
         [[nodiscard]] bool tensor_aliases_exportable_block(const Tensor& source,
                                                            const ExportableBlock& block) {
             if (!source.is_valid() || !source.is_external_storage()) {
                 return false;
             }
-            if (!block.device_ptr || block.size == 0 || source.numel() == 0) {
+            if (!block.device_ptr || block.reserved_bytes == 0 || source.numel() == 0) {
                 return false;
             }
             const auto* base = static_cast<const char*>(block.device_ptr);
-            const auto* end = base + block.size;
+            const auto* end = base + block.reserved_bytes;
             // storage_ptr is the allocation base (non-materializing); for
             // external views it equals the region start baked into the tensor.
             const auto* ptr = static_cast<const char*>(source.storage_ptr());
@@ -109,17 +71,16 @@ namespace lfs::core {
             std::size_t total = 0;
         };
 
-        Layout compute_layout(std::size_t capacity, int sh_degree) {
+        [[nodiscard]] std::array<std::size_t, SplatExportableStorage::Count>
+        region_raw_bytes(std::size_t capacity, int sh_degree) {
             using R = SplatExportableStorage;
             const auto rest_coeffs =
                 static_cast<std::uint32_t>(sh_rest_coefficients_for_degree(sh_degree));
             const std::size_t shN_u16_cells =
                 sh_value_quant::sh_value_u16_count(capacity, rest_coeffs);
             const std::size_t bounds_float2s = sh_value_quant::n_bounds_for_prims(capacity);
-            // bounds region: float2 per 256-splat block → 2 floats each
             const std::size_t bounds_bytes = bounds_float2s * 2u * kFloatBytes;
-
-            const std::array<std::size_t, R::Count> raw_bytes{
+            return {
                 region_bytes_for(capacity, 3),    // Means {N,3}
                 region_bytes_for(capacity, 3),    // Scaling {N,3}
                 region_bytes_for(capacity, 4),    // Rotation {N,4}
@@ -128,16 +89,20 @@ namespace lfs::core {
                 shN_u16_cells * kShNElementBytes, // ShN (pad-dropped q16)
                 bounds_bytes,                     // ShNBounds (float2 / 256)
             };
+        }
 
+        Layout compute_layout(std::size_t capacity, int sh_degree, std::size_t alignment) {
+            using R = SplatExportableStorage;
+            const auto raw_bytes = region_raw_bytes(capacity, sh_degree);
             Layout layout{};
             std::size_t cursor = 0;
             for (std::size_t i = 0; i < R::Count; ++i) {
-                cursor = align_up(cursor, kRegionAlignment);
+                cursor = align_up(cursor, alignment);
                 layout.offsets[i] = cursor;
                 layout.bytes[i] = raw_bytes[i];
                 cursor += raw_bytes[i];
             }
-            layout.total = cursor;
+            layout.total = cursor == 0 ? 0 : align_up(cursor, alignment);
             return layout;
         }
 
@@ -162,17 +127,18 @@ namespace lfs::core {
 
     } // namespace
 
-    void set_splat_exportable_relocate_failure_for_testing(
-        const std::optional<std::size_t> region) noexcept {
-        g_relocate_failure_for_testing.store(
-            region.value_or(kNoInjectedRelocateFailure), std::memory_order_release);
-    }
-
     std::size_t SplatExportableStorage::layoutBytes(std::size_t capacity, int sh_degree) {
         if (capacity == 0) {
             return 0;
         }
-        return compute_layout(capacity, sh_degree).total;
+        const std::size_t gran = exportable_allocation_granularity(0);
+        return compute_layout(capacity, sh_degree, gran).total;
+    }
+
+    std::size_t SplatExportableStorage::layoutBytesPerSplat(int sh_degree) {
+        constexpr std::size_t kSample = 1'000'000;
+        const std::size_t bytes = layoutBytes(kSample, sh_degree);
+        return std::max<std::size_t>(1, (bytes + kSample - 1) / kSample);
     }
 
     std::size_t SplatExportableStorage::growthCapacity(std::size_t live_or_needed,
@@ -213,21 +179,35 @@ namespace lfs::core {
 
         const std::size_t reserve_gaussians =
             reserve_capacity > 0 ? std::max(reserve_capacity, capacity) : capacity;
-        const Layout layout = compute_layout(capacity, sh_degree);
-        const std::size_t reserve_bytes = compute_layout(reserve_gaussians, sh_degree).total;
+        const std::size_t gran = exportable_allocation_granularity(device);
+        const Layout reserved_layout = compute_layout(reserve_gaussians, sh_degree, gran);
+        const auto live_bytes = region_raw_bytes(capacity, sh_degree);
 
         auto block_result =
-            allocateExportableDeviceBlock(layout.total, device, /*track_splat_bytes=*/true, reserve_bytes);
+            allocateExportableDeviceBlock(gran, device, /*track_splat_bytes=*/true, reserved_layout.total);
         if (!block_result) {
             return std::unexpected(std::format(
                 "SplatExportableStorage::create: backing-block allocation failed: {}",
                 block_result.error()));
         }
 
+        for (std::size_t i = 0; i < Count; ++i) {
+            if (live_bytes[i] == 0) {
+                continue;
+            }
+            auto committed = commitExportableDeviceRange(*block_result, reserved_layout.offsets[i], live_bytes[i]);
+            if (!committed) {
+                return std::unexpected(std::format(
+                    "SplatExportableStorage::create: region {} commit failed: {}",
+                    i,
+                    committed.error()));
+            }
+        }
+
         SplatExportableStorage out{};
         out.block = std::move(*block_result);
-        out.region_offsets = layout.offsets;
-        out.region_bytes = layout.bytes;
+        out.region_offsets = reserved_layout.offsets;
+        out.region_bytes = live_bytes;
         out.capacity_ = capacity;
         out.reserved_capacity_ = reserve_gaussians;
         out.sh_degree_ = sh_degree;
@@ -235,20 +215,24 @@ namespace lfs::core {
         out.control_ = std::make_shared<Control>();
         out.syncControl();
 
-        LOG_INFO("SplatExportableStorage: total={} MiB capacity={} reserve_capacity={} "
-                 "sh_degree={} (means={}, scaling={}, rotation={}, opacity={}, sh0={}, "
-                 "shN(q16)={}, shN_bounds={} MiB)",
-                 out.block->size >> 20,
+        diagnostics::VramProfiler::instance().setExportableSplatBytes(out.block->committed_bytes);
+
+        LOG_INFO("SplatExportableStorage: committed={} MiB reserved={} MiB capacity={} "
+                 "reserve_capacity={} sh_degree={} chunks={} (means={}, scaling={}, "
+                 "rotation={}, opacity={}, sh0={}, shN(q16)={}, shN_bounds={} MiB)",
+                 out.block->committed_bytes >> 20,
+                 out.block->reserved_bytes >> 20,
                  capacity,
                  reserve_gaussians,
                  sh_degree,
-                 layout.bytes[Means] >> 20,
-                 layout.bytes[Scaling] >> 20,
-                 layout.bytes[Rotation] >> 20,
-                 layout.bytes[Opacity] >> 20,
-                 layout.bytes[Sh0] >> 20,
-                 layout.bytes[ShN] >> 20,
-                 layout.bytes[ShNBounds] >> 20);
+                 out.block->chunks.size(),
+                 live_bytes[Means] >> 20,
+                 live_bytes[Scaling] >> 20,
+                 live_bytes[Rotation] >> 20,
+                 live_bytes[Opacity] >> 20,
+                 live_bytes[Sh0] >> 20,
+                 live_bytes[ShN] >> 20,
+                 live_bytes[ShNBounds] >> 20);
 
         return out;
     }
@@ -275,165 +259,90 @@ namespace lfs::core {
         }
 
         const std::size_t old_capacity = capacity_;
-        const Layout prev_layout = compute_layout(capacity_, sh_degree_);
-        const Layout grown_layout = compute_layout(new_capacity, sh_degree_);
+        const auto old_bytes = region_bytes;
+        const auto new_bytes = region_raw_bytes(new_capacity, sh_degree_);
 
-        // stream fence: relocation memcpys use the default stream; drain
-        // trainer/render work that may still be reading the block first.
         if (const auto err = cudaDeviceSynchronize(); err != cudaSuccess) {
             return std::unexpected(std::format(
-                "SplatExportableStorage::grow: pre-relocation synchronize failed: {}",
+                "SplatExportableStorage::grow: pre-grow synchronize failed: {}",
                 cudaGetErrorString(err)));
         }
 
-        // Grow physical under the stable VA when the packed layout needs more bytes.
-        if (grown_layout.total > block->size) {
-            auto grew = growExportableDeviceBlock(block, grown_layout.total);
-            if (!grew) {
+        for (std::size_t i = 0; i < Count; ++i) {
+            if (new_bytes[i] <= old_bytes[i]) {
+                continue;
+            }
+            auto committed = commitExportableDeviceRange(
+                block, region_offsets[i] + old_bytes[i], new_bytes[i] - old_bytes[i]);
+            if (!committed) {
                 return std::unexpected(std::format(
-                    "SplatExportableStorage::grow: block grow failed: {}", grew.error()));
+                    "SplatExportableStorage::grow: region {} commit failed: {}",
+                    i,
+                    committed.error()));
             }
         }
 
-        // Staging copy of the old packed SoA so region expansion can rewrite
-        // offsets without overlapping in-place memmoves.
-        CudaStagingBuffer staging;
-        const std::size_t old_total = prev_layout.total;
-        if (old_total > 0) {
-            void* staging_ptr = nullptr;
-            if (const auto err = cudaMalloc(&staging_ptr, old_total); err != cudaSuccess) {
-                return std::unexpected(std::format(
-                    "SplatExportableStorage::grow: staging cudaMalloc failed: {}",
-                    cudaGetErrorString(err)));
-            }
-            staging.reset(staging_ptr);
-            if (const auto err = cudaMemcpy(staging.get(), block->device_ptr, old_total,
-                                            cudaMemcpyDeviceToDevice);
-                err != cudaSuccess) {
-                return std::unexpected(std::format(
-                    "SplatExportableStorage::grow: staging cudaMemcpy failed: {}",
-                    cudaGetErrorString(err)));
-            }
-        }
-
-        // Prepare all fallible host allocations before the first destructive
-        // device write. The device staging snapshot remains live through commit.
         const std::size_t n_slack = new_capacity - old_capacity;
         std::vector<float> opacity_host;
         std::vector<float> rotation_host;
-        try {
-            opacity_host.assign(n_slack, -std::numeric_limits<float>::infinity());
-            rotation_host.assign(n_slack * 4, 0.0f);
-            for (std::size_t i = 0; i < n_slack; ++i) {
-                rotation_host[i * 4] = 1.0f; // identity quaternion w
-            }
-        } catch (const std::bad_alloc&) {
-            return std::unexpected(
-                "SplatExportableStorage::grow: slack host staging allocation failed");
+        opacity_host.assign(n_slack, -std::numeric_limits<float>::infinity());
+        rotation_host.assign(n_slack * 4, 0.0f);
+        for (std::size_t i = 0; i < n_slack; ++i) {
+            rotation_host[i * 4] = 1.0f;
         }
 
-        const auto fail_after_destructive_write =
-            [&](std::string failure) -> std::expected<bool, std::string> {
-            const auto restore_err =
-                staging.get() && old_total > 0
-                    ? cudaMemcpy(block->device_ptr, staging.get(), old_total,
-                                 cudaMemcpyDeviceToDevice)
-                    : cudaErrorInvalidValue;
-            const auto restore_sync_err =
-                restore_err == cudaSuccess ? cudaDeviceSynchronize() : restore_err;
-            if (restore_err == cudaSuccess && restore_sync_err == cudaSuccess) {
-                return std::unexpected(std::format("{}; previous layout restored", failure));
-            }
-
-            poisoned_ = true;
-            syncControl();
+        void* opacity_dst = static_cast<char*>(block->device_ptr) + region_offsets[Opacity] +
+                            old_capacity * kFloatBytes;
+        void* rotation_dst = static_cast<char*>(block->device_ptr) + region_offsets[Rotation] +
+                             old_capacity * 4 * kFloatBytes;
+        if (const auto err = cudaMemcpy(opacity_dst,
+                                        opacity_host.data(),
+                                        opacity_host.size() * kFloatBytes,
+                                        cudaMemcpyHostToDevice);
+            err != cudaSuccess) {
             return std::unexpected(std::format(
-                "{}; rollback failed: copy={} sync={}; storage poisoned",
-                failure,
-                cudaGetErrorString(restore_err),
-                cudaGetErrorString(restore_sync_err)));
-        };
-
-        // Zero the full committed range so expanded slack starts clean, then
-        // relocate live rows and mark slack non-renderable (opacity/rotation).
-        if (const auto err = cudaMemset(block->device_ptr, 0, grown_layout.total); err != cudaSuccess) {
-            return fail_after_destructive_write(std::format(
-                "SplatExportableStorage::grow: zero-fill failed: {}",
+                "SplatExportableStorage::grow: slack opacity init failed: {}",
+                cudaGetErrorString(err)));
+        }
+        if (const auto err = cudaMemcpy(rotation_dst,
+                                        rotation_host.data(),
+                                        rotation_host.size() * kFloatBytes,
+                                        cudaMemcpyHostToDevice);
+            err != cudaSuccess) {
+            return std::unexpected(std::format(
+                "SplatExportableStorage::grow: slack rotation init failed: {}",
                 cudaGetErrorString(err)));
         }
 
-        if (staging.get()) {
-            for (std::size_t i = 0; i < Count; ++i) {
-                const std::size_t copy_bytes = std::min(prev_layout.bytes[i], grown_layout.bytes[i]);
-                if (copy_bytes == 0) {
-                    continue;
-                }
-                void* dst = static_cast<char*>(block->device_ptr) + grown_layout.offsets[i];
-                const void* src =
-                    static_cast<const char*>(staging.get()) + prev_layout.offsets[i];
-                if (const auto err = cudaMemcpy(dst, src, copy_bytes, cudaMemcpyDeviceToDevice);
-                    err != cudaSuccess) {
-                    return fail_after_destructive_write(std::format(
-                        "SplatExportableStorage::grow: region {} relocate failed: {}",
-                        i,
-                        cudaGetErrorString(err)));
-                }
-                if (consume_relocate_failure_for_testing(i)) {
-                    return fail_after_destructive_write(std::format(
-                        "SplatExportableStorage::grow: injected region {} relocate failure",
-                        i));
-                }
-            }
-        }
-
-        // Slack rows [old_capacity, new_capacity) must not render if exposed:
-        // opacity raw → −∞ (sigmoid≈0),
-        // identity quaternion (1,0,0,0). Zero-fill alone yields opacity=0.5 and
-        // zero quat → NaN extents (half-screen splat blast radius).
-        if (new_capacity > old_capacity) {
-            void* opacity_dst = static_cast<char*>(block->device_ptr) + grown_layout.offsets[Opacity] +
-                                old_capacity * kFloatBytes;
-            void* rotation_dst = static_cast<char*>(block->device_ptr) + grown_layout.offsets[Rotation] +
-                                 old_capacity * 4 * kFloatBytes;
-            if (const auto err = cudaMemcpy(opacity_dst,
-                                            opacity_host.data(),
-                                            opacity_host.size() * kFloatBytes,
-                                            cudaMemcpyHostToDevice);
-                err != cudaSuccess) {
-                return fail_after_destructive_write(std::format(
-                    "SplatExportableStorage::grow: slack opacity init failed: {}",
-                    cudaGetErrorString(err)));
-            }
-            if (const auto err = cudaMemcpy(rotation_dst,
-                                            rotation_host.data(),
-                                            rotation_host.size() * kFloatBytes,
-                                            cudaMemcpyHostToDevice);
-                err != cudaSuccess) {
-                return fail_after_destructive_write(std::format(
-                    "SplatExportableStorage::grow: slack rotation init failed: {}",
-                    cudaGetErrorString(err)));
-            }
-        }
-
         if (const auto err = cudaDeviceSynchronize(); err != cudaSuccess) {
-            return fail_after_destructive_write(std::format(
+            return std::unexpected(std::format(
                 "SplatExportableStorage::grow: synchronize failed: {}",
                 cudaGetErrorString(err)));
         }
 
-        region_offsets = grown_layout.offsets;
-        region_bytes = grown_layout.bytes;
+        region_bytes = new_bytes;
         capacity_ = new_capacity;
         ++generation_;
         syncControl();
 
-        diagnostics::VramProfiler::instance().setExportableSplatBytes(block->size);
+        diagnostics::VramProfiler::instance().setExportableSplatBytes(block->committed_bytes);
 
-        LOG_INFO("SplatExportableStorage grew: capacity={} generation={} block={} MiB",
+        LOG_INFO("SplatExportableStorage grew: capacity={} generation={} committed={} MiB "
+                 "chunks={} (appended, no relocation)",
                  capacity_,
                  generation_,
-                 block->size >> 20);
+                 block->committed_bytes >> 20,
+                 block->chunks.size());
         return true;
+    }
+
+    void SplatExportableStorage::restoreCapacity(const std::size_t capacity,
+                                                 const std::array<std::size_t, Count>& bytes,
+                                                 const std::uint64_t generation) noexcept {
+        capacity_ = capacity;
+        region_bytes = bytes;
+        generation_ = generation;
+        syncControl();
     }
 
     void* SplatExportableStorage::live_region_ptr(Region region) const {
@@ -728,9 +637,8 @@ namespace lfs::core {
                     capacity_));
             }
 
-            // same-block rebind (post-grow, pre-grow Vulkan drop) only
-            // installs views at current region offsets. grow() already relocated
-            // live rows; copying from stale pre-grow views destroys them.
+            // same-block rebind only installs views at current region offsets.
+            // Offsets are constant across grow; copying would clobber live data.
             // Cross-allocator migrations (cuda.direct → exportable) still copy.
             const ExportableBlock& block_ref = *block;
             const auto install_param =

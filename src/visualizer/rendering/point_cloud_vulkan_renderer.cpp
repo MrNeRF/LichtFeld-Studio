@@ -1183,6 +1183,18 @@ namespace lfs::vis {
             if (device == VK_NULL_HANDLE) {
                 return;
             }
+            // Viewport scene descriptors sample these output views. Retire that
+            // compositor work before vkDestroyImageView (VUID-01026).
+            if (context != nullptr) {
+                if (!context->waitForSubmittedFrames()) {
+                    LOG_WARN("Point-cloud renderer teardown could not wait for submitted frames: {}",
+                             context->lastError());
+                    if (!context->deviceWaitIdle()) {
+                        LOG_WARN("Point-cloud renderer teardown could not idle device: {}",
+                                 context->lastError());
+                    }
+                }
+            }
             // C3: bounded teardown drain. Non-Ready retains fence + command pool
             // (AMB-4 / AMB-C5 — quarantine never authorizes free of in-flight work).
             bool command_resources_ready = true;
@@ -1913,7 +1925,7 @@ namespace lfs::vis {
                                                 VK_ERROR_INITIALIZATION_FAILED);
                 return std::unexpected<std::string>(error);
             }
-            r = vkQueueSubmit(submit_queue, 1, &si, fence);
+            r = lfs::rendering::vk_queue_submit_synced(submit_queue, 1, &si, fence);
             if (r != VK_SUCCESS) {
                 restore_tracked_layouts();
                 rejectSubmissionAndMaybeReplace("vkQueueSubmit", r);
@@ -2169,10 +2181,10 @@ namespace lfs::vis {
                                                 VK_ERROR_INITIALIZATION_FAILED);
                 return std::unexpected<std::string>(error);
             }
-            r = vkQueueSubmit(submit_queue, 1, &submit_info, fence);
+            r = lfs::rendering::vk_queue_submit_synced(submit_queue, 1, &submit_info, fence);
             if (r != VK_SUCCESS) {
-                rejectSubmissionAndMaybeReplace("vkQueueSubmit(point-cloud readback)", r);
-                return std::unexpected<std::string>(vkError("vkQueueSubmit(point-cloud readback)", r));
+                rejectSubmissionAndMaybeReplace("lfs::rendering::vk_queue_submit_synced(point-cloud readback)", r);
+                return std::unexpected<std::string>(vkError("lfs::rendering::vk_queue_submit_synced(point-cloud readback)", r));
             }
             {
                 using lfs::rendering::apply_submission_transition;

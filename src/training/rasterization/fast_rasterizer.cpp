@@ -832,7 +832,9 @@ namespace lfs::training {
             &fused_adam,
             bwd_shN_bounds_ptr,
             bwd_shN_n_cells,
-            bwd_shN_bits);
+            bwd_shN_bits,
+            fused_adam.mean_step_far_mask,
+            fused_adam.mean_step_far_mask_n);
 
         ctx.mark_forward_context_released();
 

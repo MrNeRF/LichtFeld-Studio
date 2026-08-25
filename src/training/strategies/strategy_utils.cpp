@@ -512,20 +512,20 @@ namespace lfs::training {
         lfs::core::Tensor& densification_info,
         const size_t n,
         const lfs::core::Device device,
-        const size_t /*reserve_cols*/) {
+        const size_t n_rows) {
         using namespace lfs::core;
-        // densification_info is row-major [2, N]: row1 starts at offset N. Growing N
-        // cannot use append_zeros (that grows dim0). When shape already matches,
-        // reuse the buffer (caller zeros). On mismatch, allocate exact [2,n].
-        // Pre-sizing columns would break the rasterizer's [2,N] row offsets, so
-        // shape mismatches require an exact allocation.
+        // densification_info is row-major [n_rows, N]: row k starts at offset k*N.
+        // Growing N cannot use append_zeros (that grows dim0). When shape already
+        // matches, reuse the buffer (caller zeros). On mismatch, allocate exact
+        // [n_rows,n]. Pre-sizing columns would break the rasterizer's row offsets.
+        const size_t rows = n_rows >= 2 ? n_rows : 2;
         if (densification_info.is_valid() &&
             densification_info.ndim() == 2 &&
-            densification_info.shape()[0] >= 2 &&
+            densification_info.shape()[0] == rows &&
             densification_info.shape()[1] == n) {
             return;
         }
-        densification_info = Tensor::zeros({2, n}, device);
+        densification_info = Tensor::zeros({rows, n}, device);
         densification_info.set_name("splat.densification_info");
     }
 

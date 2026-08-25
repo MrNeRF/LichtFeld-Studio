@@ -29,24 +29,6 @@ namespace lfs::test::licht {
         "VIEW-196 VIEW-197 VIEW-198 VIEW-199 VIEW-200 VIEW-201 VIEW-202 VIEW-203 "
         "VIEW-204 VIEW-205 VIEW-206 VIEW-207 VIEW-208 VIEW-209 VIEW-210 SEQR-218 "
         "SEQR-219 SEQR-220 SEQR-221 SEQR-222 METR-230 METR-231 METR-232 METR-233";
-    inline constexpr std::string_view OPTIMIZATION_PARAMETER_FIELD_DATA =
-        "iterations means_lr means_lr_end shs_lr opacity_lr scaling_lr scaling_lr_end "
-        "rotation_lr cropbox_lr_scale cropbox_loss_weight lambda_dssim min_opacity "
-        "refine_every start_refine stop_refine morton_reorder_interval sh_degree opacity_reg scale_reg "
-        "init_opacity init_scaling max_cap eval_steps save_steps enable_eval "
-        "enable_save_eval_images strategy mip_filter use_bilateral_grid bilateral_grid_X "
-        "bilateral_grid_Y bilateral_grid_W bilateral_grid_lr tv_loss_weight use_ppisp ppisp_lr "
-        "ppisp_reg_weight ppisp_warmup_steps ppisp_exposure_from_exif ppisp_freeze_from_sidecar ppisp_reference_uuid "
-        "ppisp_use_controller ppisp_freeze_gaussians_on_distill ppisp_controller_activation_step "
-        "ppisp_controller_lr prune_opacity reset_every gut undistort steps_scaler "
-        "sh_degree_interval random init_num_pts init_extent enable_sparsity sparsify_steps init_rho "
-        "prune_ratio bg_modulation bg_mode bg_color background_image_reference_uuid mask_mode "
-        "invert_masks mask_opacity_penalty_weight mask_opacity_penalty_power mask_threshold "
-        "use_alpha_as_mask use_depth_loss depth_loss_weight depth_loss_mode use_normal_loss "
-        "normal_auto_generate normal_loss_weight normal_consistency_weight normal_flatten_weight "
-        "normal_start_fraction normal_end_fraction normal_loss_space "
-        "growth_grad_threshold grow_fraction grow_until_iter opacity_decay scale_decay "
-        "means_noise_weight bounds_percentile use_error_map use_edge_map";
 
     struct PendingParameterExclusion {
         std::string_view field;

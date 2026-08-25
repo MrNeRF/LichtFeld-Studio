@@ -1,4 +1,5 @@
 {
+  "background_improvements": false,
   "bg_color": [
     0.0,
     0.0,
@@ -22,9 +23,14 @@
     7000,
     30000
   ],
+  "far_scene_min_fraction": 0.009999999776482582,
+  "far_seed_dose": 0,
+  "fill_pacing_iter": 0,
   "grow_fraction": 0.07000000029802322,
   "grow_until_iter": 15000,
   "growth_grad_threshold": 0.003000000026077032,
+  "growth_ratio_pow": 0.75,
+  "growth_ratio_rank": false,
   "gut": false,
   "headless": false,
   "init_extent": 3.0,

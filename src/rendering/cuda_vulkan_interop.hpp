@@ -52,13 +52,6 @@ namespace lfs::rendering {
         bool dedicated_allocation = false;
     };
 
-    struct CudaVulkanExternalBufferImport {
-        CudaVulkanExternalHandle memory_handle = kInvalidCudaVulkanExternalHandle;
-        std::size_t allocation_size = 0;
-        std::size_t size = 0;
-        bool dedicated_allocation = false;
-    };
-
     struct CudaVulkanExternalSemaphoreImport {
         CudaVulkanExternalHandle semaphore_handle = kInvalidCudaVulkanExternalHandle;
         std::uint64_t initial_value = 0;
@@ -192,40 +185,6 @@ namespace lfs::rendering {
         cudaExternalSemaphore_t cuda_timeline_ = nullptr;
         mutable std::uint64_t last_signaled_ = 0;
         mutable std::uint64_t last_waited_ = 0;
-        mutable std::string last_error_;
-    };
-
-    class CudaVulkanBufferInterop {
-    public:
-        CudaVulkanBufferInterop() = default;
-        ~CudaVulkanBufferInterop();
-
-        CudaVulkanBufferInterop(const CudaVulkanBufferInterop&) = delete;
-        CudaVulkanBufferInterop& operator=(const CudaVulkanBufferInterop&) = delete;
-        CudaVulkanBufferInterop(CudaVulkanBufferInterop&& other) noexcept;
-        CudaVulkanBufferInterop& operator=(CudaVulkanBufferInterop&& other) noexcept;
-
-        [[nodiscard]] bool init(CudaVulkanExternalBufferImport buffer);
-        void reset();
-
-        [[nodiscard]] bool valid() const;
-        [[nodiscard]] const std::string& lastError() const { return last_error_; }
-        [[nodiscard]] void* devicePointer() const { return device_ptr_; }
-        [[nodiscard]] std::size_t size() const { return size_; }
-        // Offset-aware variant for coalesced layouts where one CUDA-imported
-        // VkBuffer holds multiple sub-regions (xyz | rotations | scales+opacs |
-        // sh) instead of four separate allocations.
-        [[nodiscard]] bool copyFromTensor(const lfs::core::Tensor& tensor,
-                                          std::size_t byte_count,
-                                          std::size_t dst_offset,
-                                          cudaStream_t stream) const;
-
-    private:
-        cudaExternalMemory_t cuda_mem_ = nullptr;
-        void* device_ptr_ = nullptr;
-        std::size_t allocation_size_ = 0;
-        std::size_t size_ = 0;
-        mutable lfs::core::Tensor upload_source_;
         mutable std::string last_error_;
     };
 

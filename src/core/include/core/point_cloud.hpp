@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/tensor.hpp"
+#include <cstddef>
 #include <string>
 #include <vector>
 

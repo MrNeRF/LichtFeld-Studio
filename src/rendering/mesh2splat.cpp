@@ -1100,7 +1100,7 @@ void main() {
                 VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
                 submit.commandBufferCount = 1;
                 submit.pCommandBuffers = &cmd;
-                result = vkQueueSubmit(queue_, 1, &submit, fence);
+                result = lfs::rendering::vk_queue_submit_synced(queue_, 1, &submit, fence);
                 if (result != VK_SUCCESS) {
                     // Submit never accepted — fence is not in flight; free OK.
                     vkDestroyFence(device_, fence, nullptr);

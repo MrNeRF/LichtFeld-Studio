@@ -140,6 +140,13 @@
           <img data-attr-src="steps_scaling_lock_icon" />
         </button>
       </div>
+      <div class="setting-row" data-for="row : pv_basic_background_rows"
+           data-if="dep_mrnf"
+           data-attr-data-tooltip="row.tooltip_key">
+        <span class="prop-label">{{row.label}}</span>
+        <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
+               data-event-change="pv_value_change(row.id, row.checked)" />
+      </div>
       <div class="setting-row" data-tooltip="training.tooltip.sh_degree" data-if="!pv_search_active">
         <span class="prop-label">{{label_sh_degree}}</span>
         <select data-value="sh_degree_str">

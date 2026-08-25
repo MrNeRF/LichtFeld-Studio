@@ -8,6 +8,7 @@
 #include "helper_math.h"
 #include "kernel_utils.cuh"
 #include "lfs/core/warp_reduce.cuh"
+#include "lfs/training/mean_step_scale.cuh"
 #include "rasterization_config.h"
 #include "utils.h"
 #include <cooperative_groups.h>
@@ -65,6 +66,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float clip_bottom,
         const uint sh_layout_slots,
         FusedAdamSettings fused_adam,
+        const bool* __restrict__ mean_step_far_mask,
+        const int mean_step_far_mask_n,
         // model-truth shN-rest decode binds. fused_adam.shN.sh_value_*
         // is enablement-gated (null during SH warmup) and gates only the UPDATE
         // path; reading sh_coefficients_rest must always use these.
@@ -428,8 +431,26 @@ namespace fast_lfs::rasterization::kernels::backward {
             }
         } // visible geometry
 
-        // Apply geometry Adam after sh0 and shN have already been updated.
-        adam_step_row(mean_grads, fused_adam.means, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        // Scale the applied mean step, not the raw gradient.
+        const bool far_mean_step =
+            fused_adam.per_splat_mean_step &&
+            mean_step_far_mask != nullptr &&
+            primitive_idx < static_cast<uint>(mean_step_far_mask_n) &&
+            mean_step_far_mask[primitive_idx];
+        // single call site: helper runs block-wide reductions; divergent duplicates deadlock
+        FusedAdamParam means_p = fused_adam.means;
+        if (far_mean_step && fused_adam.scaling.param != nullptr) {
+            const uint sb = primitive_idx * 3u;
+            if (sb + 2u < static_cast<uint>(fused_adam.scaling.n_elements)) {
+                const float* s = fused_adam.scaling.param + sb;
+                means_p.step_size *= lfs::training::per_splat_mean_step_ratio(
+                    s[0], s[1], s[2],
+                    fused_adam.mean_step_median_extent,
+                    fused_adam.mean_step_r_min,
+                    fused_adam.mean_step_r_max);
+            }
+        }
+        adam_step_row(mean_grads, means_p, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         adam_step_row(rotation_grads, fused_adam.rotation, primitive_idx, 4, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         adam_step_row(scale_grads, fused_adam.scaling, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         adam_step_row(opacity_grads, fused_adam.opacity, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);

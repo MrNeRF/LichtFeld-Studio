@@ -7,6 +7,7 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "gui/gui_focus_state.hpp"
@@ -801,7 +802,8 @@ namespace lfs::vis::gui {
                             const bool loop = ply_stream_target_loop_.load(std::memory_order_acquire);
                             return !isPlySequenceFrameInWindow(frame_index, target, frame_count, loop);
                         },
-                        .splat_tensor_allocator = allocator};
+                        .splat_tensor_allocator = allocator,
+                        .shN_q16 = lfs::core::sh_value_quant::enabled()};
 
                     auto load_result = loader->load(path, load_options);
                     if (!load_result)

@@ -7,6 +7,7 @@
 #include "components/ppisp_controller_pool.hpp"
 #include "components/sparsity_optimizer.hpp"
 #include "core/logger.hpp"
+#include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "strategies/istrategy.hpp"
@@ -449,6 +450,8 @@ namespace lfs::training {
                         cli_bg_color;
                 loaded_params.cli_bg_color_set =
                     cli_bg_color_set;
+                lfs::core::param::apply_explicit_training_overrides(
+                    loaded_params, loaded_params.overrides);
             }
             if (loaded_params.optimization.max_cap < 0)
                 return std::unexpected("Invalid checkpoint parameters: max_cap must be nonnegative");

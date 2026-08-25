@@ -78,6 +78,9 @@ namespace lfs::io {
         ProgressCallback progress = nullptr;
         CancelCallback cancel_requested = nullptr;
         SplatTensorAllocator splat_tensor_allocator = {};
+        // When true, and splat_tensor_allocator is set, PLY SH-rest is encoded to
+        // q16 on the way in (no float32 SplatData.shN GPU workspace).
+        bool shN_q16 = false;
     };
 
     class LoadCancelledError : public std::runtime_error {

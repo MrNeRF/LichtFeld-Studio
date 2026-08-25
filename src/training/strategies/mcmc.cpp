@@ -175,7 +175,7 @@ namespace lfs::training {
         const size_t reserve =
             (_params && _params->max_cap > 0) ? static_cast<size_t>(_params->max_cap) : 0;
         ensure_densification_info_shape_inplace(
-            _splat_data->_densification_info, n, _splat_data->means().device(), reserve);
+            _splat_data->_densification_info, n, _splat_data->means().device());
 
         const size_t prev_n = _error_score_max.is_valid() ? _error_score_max.numel() : 0;
         ensure_score_buffer_inplace(
@@ -789,8 +789,7 @@ namespace lfs::training {
             }
 
             ensure_densification_info_shape_inplace(
-                _splat_data->_densification_info, n, _splat_data->means().device(),
-                _params && _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0);
+                _splat_data->_densification_info, n, _splat_data->means().device());
             _splat_data->_densification_info.zero_();
         }
 

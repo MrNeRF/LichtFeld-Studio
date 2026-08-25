@@ -188,6 +188,19 @@ def test_unregister_removes_draw_hook(overlays_module):
     ]
 
 
+def test_on_document_unloaded_resets_controller(overlays_module):
+    module, *_rest, _document = overlays_module
+
+    module.register()
+    assert module._document_controller is not None
+    assert module._document_controller._handle is not None
+
+    module.on_document_unloaded()
+
+    assert module._document_controller is not None
+    assert module._document_controller._handle is None
+
+
 def test_document_sync_binds_model_and_updates_actions(overlays_module):
     (
         module,

@@ -238,6 +238,8 @@ set(TEST_FILES
     test_assert_hardening.cpp
     test_cuda_error.cpp
     test_exportable_storage.cpp
+    test_shareable_allocation_limit.cpp
+    test_ply_q16_streamed_encode.cpp
     test_vram_leak_regression.cpp
     test_cuda_error_typed.cpp
     test_cuda_launch_check.cpp
@@ -405,6 +407,7 @@ set(TEST_FILES
     test_fastgs_tile_culling_boundary.cpp
     fastgs_tile_culling_boundary_cuda.cu
     test_sh_swizzle_layout.cpp
+    test_shn_bda_index_math.cpp
     test_python_io.cpp
     test_extended_unary_ops_vs_torch.cpp
     test_scene_validity.cpp
@@ -467,6 +470,7 @@ set(TEST_FILES
     test_splat_simplify.cpp
     test_rml_text_input_handler.cpp
     test_rml_im_mode_layout.cpp
+    test_rml_python_listener_lifetime.cpp
     test_status_bar_fit.cpp
     test_rotated_sh_correctness.cpp
     test_splat_raw_payload.cpp
@@ -797,7 +801,8 @@ string(CONCAT LFS_SLOW_TEST_FILTER
     "RadMetaSidecar.*:"
     "OctreeLod.*:"
     "NurecUsdzFormatTest.*:"
-    "UsdFormatTest.RoundtripPreservesValues"
+    "UsdFormatTest.RoundtripPreservesValues:"
+    "ShareableAllocationLimitTest.Migrate*"
 )
 
 set(LFS_NON_FAST_TEST_FILTER

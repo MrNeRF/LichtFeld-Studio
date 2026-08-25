@@ -8,6 +8,7 @@
 #include "core/parameters.hpp"
 #include "core/point_cloud.hpp"
 #include "core/sh_value_quant.hpp"
+#include "core/shareable_allocation_limit.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "core/tensor_serialization_sink.hpp"
 #include "nanoflann.hpp"
@@ -362,6 +363,11 @@ namespace {
                                           allocator,
                                           name,
                                           DataType::Float32);
+            } catch (const ShareableAllocationLimitError& error) {
+                LOG_INFO("allocate_swizzled_shN: allocator rejected float topology "
+                         "for '{}' ({}); using zeros_direct workspace",
+                         name,
+                         error.what());
             } catch (const std::exception& error) {
                 LOG_DEBUG("allocate_swizzled_shN: allocator rejected float topology "
                           "for '{}' ({}); using zeros_direct workspace",

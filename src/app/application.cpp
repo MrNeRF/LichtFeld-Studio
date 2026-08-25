@@ -16,6 +16,7 @@
 #include "core/image_loader.hpp"
 #include "core/legacy_settings_migration.hpp"
 #include "core/logger.hpp"
+#include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/provenance.hpp"
@@ -121,6 +122,15 @@ namespace lfs::app {
             // --perf-bench (and its warmup) still applies to the resumed run.
             checkpoint_params.optimization.perf_bench = params.optimization.perf_bench;
             checkpoint_params.optimization.perf_bench_warmup = params.optimization.perf_bench_warmup;
+            checkpoint_params.cli_iterations_set = params.cli_iterations_set;
+            checkpoint_params.cli_bg_color_set = params.cli_bg_color_set;
+            if (params.cli_iterations_set)
+                checkpoint_params.optimization.iterations = params.optimization.iterations;
+            if (params.cli_bg_color_set)
+                checkpoint_params.optimization.bg_color = params.optimization.bg_color;
+            checkpoint_params.overrides = params.overrides;
+            core::param::apply_explicit_training_overrides(
+                checkpoint_params, checkpoint_params.overrides);
 
             if (checkpoint_params.dataset.data_path.empty()) {
                 return std::unexpected("Checkpoint has no dataset path and none provided via --data-path");
@@ -350,6 +360,11 @@ namespace lfs::app {
                 cli_params.save_project_path;
             checkpoint_params.cli_iterations_set =
                 cli_params.cli_iterations_set;
+            checkpoint_params.cli_bg_color_set =
+                cli_params.cli_bg_color_set;
+            checkpoint_params.overrides = cli_params.overrides;
+            core::param::apply_explicit_training_overrides(
+                checkpoint_params, checkpoint_params.overrides);
 
             auto hydration =
                 recovery_document.document()

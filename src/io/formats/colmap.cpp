@@ -466,6 +466,7 @@ namespace lfs::io {
             std::vector<std::uint8_t> colors;
             std::vector<std::uint64_t> point_ids;
             std::size_t point_count = 0;
+            std::size_t track_elements = 0;
             std::size_t file_lines = 0;
             std::uintmax_t byte_size = 0;
         };
@@ -544,7 +545,8 @@ namespace lfs::io {
                                             std::vector<float>& positions,
                                             std::vector<uint8_t>& colors,
                                             std::vector<uint64_t>& point_ids,
-                                            size_t& point_count) {
+                                            size_t& point_count,
+                                            size_t& total_track_elements) {
             const char* cur = line.data();
             const char* end = cur + line.size();
             uint64_t point_id = 0;
@@ -573,7 +575,8 @@ namespace lfs::io {
 
             // Even the point-cloud-only fast path must validate the complete record;
             // otherwise malformed tracks silently survive when filtering is disabled.
-            if (!count_remaining_track_pairs(cur, end)) {
+            const auto track_count = count_remaining_track_pairs(cur, end);
+            if (!track_count) {
                 return false;
             }
 
@@ -585,6 +588,7 @@ namespace lfs::io {
             colors.push_back(static_cast<uint8_t>(blue));
             point_ids.push_back(point_id);
             ++point_count;
+            total_track_elements += *track_count;
             return true;
         }
     } // namespace
@@ -1514,8 +1518,9 @@ namespace lfs::io {
 
     PointCloud point3D_records_to_point_cloud(const std::vector<Point3DData>& points) {
         const uint64_t N = points.size();
-        if (N == 0)
-            return PointCloud();
+        if (N == 0) {
+            return {};
+        }
 
         std::vector<float> positions(N * 3);
         std::vector<uint8_t> colors(N * 3);
@@ -1534,7 +1539,8 @@ namespace lfs::io {
                                    .to(Device::CUDA)
                                    .contiguous();
 
-        return PointCloud(std::move(means), std::move(colors_tensor));
+        PointCloud cloud(std::move(means), std::move(colors_tensor));
+        return cloud;
     }
 
     ColmapPointCloudLoadStats point3D_records_to_point_cloud_with_stats(
@@ -2135,7 +2141,8 @@ namespace lfs::io {
                 "COLMAP point cloud parse cancelled",
                 [&](const std::string_view line, const size_t source_line) {
                     if (!parse_point3D_point_cloud_line(
-                            line, data.positions, data.colors, data.point_ids, data.point_count) &&
+                            line, data.positions, data.colors, data.point_ids, data.point_count,
+                            data.track_elements) &&
                         tally) {
                         tally->record(std::format("source_line={}", source_line));
                     }
@@ -2146,6 +2153,7 @@ namespace lfs::io {
                 std::vector<uint8_t> colors;
                 std::vector<uint64_t> point_ids;
                 size_t point_count = 0;
+                size_t track_elements = 0;
                 size_t file_lines = 0;
                 SkipTally tally;
             };
@@ -2166,7 +2174,8 @@ namespace lfs::io {
                     "COLMAP point cloud parse cancelled",
                     [&](const std::string_view line, const size_t source_line) {
                         if (!parse_point3D_point_cloud_line(
-                                line, result.positions, result.colors, result.point_ids, result.point_count)) {
+                                line, result.positions, result.colors, result.point_ids, result.point_count,
+                                result.track_elements)) {
                             result.tally.record(std::format("source_line={}", source_line));
                         }
                     });
@@ -2177,6 +2186,7 @@ namespace lfs::io {
             size_t total_point_ids = 0;
             for (const auto& result : results) {
                 data.point_count += result.point_count;
+                data.track_elements += result.track_elements;
                 data.file_lines += result.file_lines;
                 total_position_values += result.positions.size();
                 total_color_values += result.colors.size();
@@ -2221,8 +2231,9 @@ namespace lfs::io {
             }
         }
 
-        LOG_INFO("[COLMAP_LOAD] parse points3D.txt point_cloud_fast points={} file_lines={} bytes={} elapsed_ms={:.2f}",
+        LOG_INFO("[COLMAP_LOAD] parse points3D.txt point_cloud_fast points={} track_elements={} file_lines={} bytes={} elapsed_ms={:.2f}",
                  data.point_count,
+                 data.track_elements,
                  data.file_lines,
                  file_size_ec ? std::string("unknown") : std::format("{}", byte_size),
                  elapsed_ms(start));
@@ -2236,12 +2247,17 @@ namespace lfs::io {
         LOG_TIMER_TRACE("Read points3D.txt point cloud");
         auto data = parse_points3D_text_point_cloud_fast(file_path, options, tally);
 
+        if (data.point_count == 0) {
+            return {};
+        }
+
         Tensor means = Tensor::from_vector(data.positions, {data.point_count, 3}, Device::CUDA);
         Tensor colors_tensor = Tensor::from_blob(data.colors.data(), {data.point_count, 3}, Device::CPU, DataType::UInt8)
                                    .to(Device::CUDA)
                                    .contiguous();
 
-        return PointCloud(std::move(means), std::move(colors_tensor));
+        PointCloud cloud(std::move(means), std::move(colors_tensor));
+        return cloud;
     }
 
     std::unordered_map<uint64_t, std::array<float, 3>>

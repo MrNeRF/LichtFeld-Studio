@@ -32,6 +32,7 @@ namespace lfs::vis {
 
     // Forward declarations
     class VisualizerImpl;
+    class VulkanExternalTensorStorage;
     class VisualizerImplResetTest_ForceExitWhileStoppingArmsWatcher_Test;
     class VisualizerImplResetTest_NewProjectWhileCompletionPendingStillErrors_Test;
     class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
@@ -245,13 +246,8 @@ namespace lfs::vis {
         // running std::function target mid-call).
         [[nodiscard]] bool growExportableForDensify(std::size_t needed_rows);
 
-        // Drop Vulkan import of the exportable block (cuda-only views). Nested.
         [[nodiscard]] bool beginExportableDensifyBarrier();
-        // Re-import exportable block into Vulkan after densify/commit. Nested.
         [[nodiscard]] bool endExportableDensifyBarrier();
-        // Shared drop / re-import helpers used by grow and the densify barrier.
-        [[nodiscard]] bool rebindExportableCudaOnly();
-        [[nodiscard]] bool rebindExportableVulkanInterop();
 
         // Member variables
         std::unique_ptr<lfs::training::Trainer> trainer_;
@@ -263,6 +259,8 @@ namespace lfs::vis {
         VisualizerImpl* viewer_ = nullptr;
         core::Scene* scene_ = nullptr;
         std::optional<lfs::core::SplatExportableStorage> splat_storage_;
+        std::shared_ptr<VulkanExternalTensorStorage> splat_interop_parent_;
+        lfs::core::SplatTensorAllocator splat_interop_allocator_;
         // Nesting depth for densify-window Vulkan exclusion.
         int exportable_densify_barrier_depth_ = 0;
 

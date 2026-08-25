@@ -1,4 +1,5 @@
 {
+  "background_improvements": false,
   "bg_color": [
     0.0,
     0.0,
@@ -22,9 +23,14 @@
     7000,
     30000
   ],
+  "far_scene_min_fraction": 0.0,
+  "far_seed_dose": 2000,
+  "fill_pacing_iter": 15000,
   "grow_fraction": 0.07000000029802322,
   "grow_until_iter": 15000,
   "growth_grad_threshold": 0.003000000026077032,
+  "growth_ratio_pow": 0.75,
+  "growth_ratio_rank": true,
   "gut": false,
   "headless": false,
   "init_extent": 3.0,
@@ -55,7 +61,7 @@
   "normal_start_fraction": 0.07999999821186066,
   "opacity_decay": 0.004000000189989805,
   "opacity_lr": 0.012000000104308128,
-  "opacity_reg": 0.0,
+  "opacity_reg": 0.003000000026077032,
   "ppisp_controller_activation_step": -1,
   "ppisp_controller_lr": 0.0020000000949949026,
   "ppisp_exposure_from_exif": true,

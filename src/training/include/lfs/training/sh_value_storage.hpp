@@ -18,11 +18,17 @@
  * cadence so it never projects concurrent with densify/re-encode.
  */
 
+#include "core/sh_value_quant_kernels.hpp"
 #include "core/splat_data.hpp"
 
 #include <string_view>
 
 namespace lfs::training::sh_value {
+
+    using lfs::core::sh_value_quant::decode_shN_f16_range_to_canonical;
+    using lfs::core::sh_value_quant::decode_shN_u16_range_to_canonical;
+    using lfs::core::sh_value_quant::decode_shN_u16_to_float4;
+    using lfs::core::sh_value_quant::encode_shN_float4_to_u16;
 
     /// If quant is enabled and shN is still fp32, convert to Float16 u16 + bounds.
     /// No-op when already quantized or flag off. Returns true if converted.

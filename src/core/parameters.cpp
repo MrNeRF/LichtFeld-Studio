@@ -25,6 +25,7 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 
 namespace lfs::core {
     namespace param {
@@ -93,13 +94,14 @@ namespace lfs::core {
 
             void read_registered_optimization_properties(
                 const nlohmann::json& json,
-                OptimizationParameters& params) {
+                OptimizationParameters& params,
+                const bool skip_missing = false) {
                 const auto group = optimization_property_snapshot();
                 auto ref = PropertyObjectRef::cpp(&params);
 
                 for (const auto& meta : group.properties) {
                     const std::string key(optimization_json_key(meta));
-                    if (!meta.json_required && !json.contains(key))
+                    if (!json.contains(key) && (skip_missing || !meta.json_required))
                         continue;
 
                     const auto& value = json.at(key);
@@ -142,6 +144,114 @@ namespace lfs::core {
                 }
             }
 
+            nlohmann::json parse_overlay_object(const std::string_view text) {
+                if (text.empty())
+                    return nlohmann::json::object();
+                auto parsed = nlohmann::json::parse(text);
+                if (!parsed.is_object())
+                    return nlohmann::json::object();
+                return parsed;
+            }
+
+            bool overlay_has_key(const std::string_view text, const std::string_view key) {
+                if (text.empty() || key.empty())
+                    return false;
+                return parse_overlay_object(text).contains(key);
+            }
+
+            void apply_optimization_json_overlay(
+                OptimizationParameters& params,
+                const nlohmann::json& json,
+                const bool skip_missing = false) {
+                if (json.contains("strategy")) {
+                    const auto strategy = json.at("strategy").get<std::string>();
+                    if (const auto canonical = canonical_strategy_name(strategy); !canonical.empty()) {
+                        params.strategy = std::string(canonical);
+                    } else {
+                        LOG_WARN("Invalid strategy '{}' in JSON, using default", strategy);
+                    }
+                }
+                read_registered_optimization_properties(json, params, skip_missing);
+
+                if (json.contains("eval_steps")) {
+                    params.eval_steps.clear();
+                    for (const auto& step : json.at("eval_steps"))
+                        params.eval_steps.push_back(step.get<size_t>());
+                }
+                if (json.contains("save_steps")) {
+                    params.save_steps.clear();
+                    for (const auto& step : json.at("save_steps"))
+                        params.save_steps.push_back(step.get<size_t>());
+                }
+                if (json.contains("enable_save_eval_images"))
+                    params.enable_save_eval_images = json.at("enable_save_eval_images");
+                if (json.contains("ppisp_sidecar_path")) {
+                    params.ppisp_sidecar_path =
+                        utf8_to_path(json.at("ppisp_sidecar_path").get<std::string>());
+                }
+                if (json.contains("bg_color") && json.at("bg_color").is_array() &&
+                    json.at("bg_color").size() == 3) {
+                    params.bg_color = {
+                        json.at("bg_color")[0],
+                        json.at("bg_color")[1],
+                        json.at("bg_color")[2]};
+                }
+                if (json.contains("bg_image_path")) {
+                    params.bg_image_path =
+                        utf8_to_path(json.at("bg_image_path").get<std::string>());
+                }
+                if (json.contains("explore_starvation_weighting"))
+                    params.explore_starvation_weighting = json.at("explore_starvation_weighting");
+
+                if (json.contains("depth_loss_mode") &&
+                    (params.depth_loss_mode == "pearson" ||
+                     params.depth_loss_mode == "adaptive-warped-l1")) {
+                    LOG_WARN(
+                        "Migrating legacy depth loss mode '{}' to 'ssi'; the current depth "
+                        "pipeline auto-detects whether the prior stores depth or disparity",
+                        params.depth_loss_mode);
+                    params.depth_loss_mode = "ssi";
+                }
+            }
+
+            void apply_dataset_json_overlay(DatasetConfig& dataset, const nlohmann::json& j) {
+                if (j.contains("data_path"))
+                    dataset.data_path = utf8_to_path(j["data_path"].get<std::string>());
+                if (j.contains("output_folder"))
+                    dataset.output_path = utf8_to_path(j["output_folder"].get<std::string>());
+                if (j.contains("output_path"))
+                    dataset.output_path = utf8_to_path(j["output_path"].get<std::string>());
+                if (j.contains("images"))
+                    dataset.images = j["images"].get<std::string>();
+                if (j.contains("resize_factor"))
+                    dataset.resize_factor = j["resize_factor"].get<int>();
+                if (j.contains("max_width"))
+                    dataset.max_width = j["max_width"].get<int>();
+                if (j.contains("min_track_length"))
+                    dataset.min_track_length = j["min_track_length"].get<int>();
+                if (j.contains("test_every"))
+                    dataset.test_every = j["test_every"].get<int>();
+                if (j.contains("timelapse_images"))
+                    dataset.timelapse_images = j["timelapse_images"].get<std::vector<std::string>>();
+                if (j.contains("timelapse_every"))
+                    dataset.timelapse_every = j["timelapse_every"].get<int>();
+                if (j.contains("output_name"))
+                    dataset.output_name = j["output_name"].get<std::string>();
+                if (j.contains("invert_masks"))
+                    dataset.invert_masks = j["invert_masks"].get<bool>();
+                if (j.contains("mask_threshold"))
+                    dataset.mask_threshold = j["mask_threshold"].get<float>();
+                if (j.contains("centralize_dataset"))
+                    dataset.centralize_dataset = j["centralize_dataset"].get<std::string>();
+                if (j.contains("loading_params") && j["loading_params"].is_object()) {
+                    const auto& loading = j["loading_params"];
+                    auto merged = dataset.loading_params.to_json();
+                    for (auto it = loading.begin(); it != loading.end(); ++it)
+                        merged[it.key()] = it.value();
+                    dataset.loading_params = LoadingParams::from_json(merged);
+                }
+            }
+
             std::expected<nlohmann::json, std::string> read_json_file(const std::filesystem::path& path) {
                 if (!std::filesystem::exists(path)) {
                     return std::unexpected(std::format("Config file not found: {}", path_to_utf8(path)));
@@ -169,6 +279,7 @@ namespace lfs::core {
             iterations = apply(iterations);
             start_refine = apply(start_refine);
             stop_refine = apply(stop_refine);
+            fill_pacing_iter = apply(fill_pacing_iter);
             reset_every = apply(reset_every);
             refine_every = apply(refine_every);
             morton_reorder_interval = apply(morton_reorder_interval);
@@ -240,6 +351,8 @@ namespace lfs::core {
             opt_json["bg_color"] = {bg_color[0], bg_color[1], bg_color[2]};
             if (!bg_image_path.empty())
                 opt_json["bg_image_path"] = path_to_utf8(bg_image_path);
+            if (!explore_starvation_weighting)
+                opt_json["explore_starvation_weighting"] = false;
 
             return opt_json;
         }
@@ -342,6 +455,7 @@ namespace lfs::core {
                 std::pair{"prune_ratio", prune_ratio},
                 std::pair{"normal_start_fraction", normal_start_fraction},
                 std::pair{"normal_end_fraction", normal_end_fraction},
+                std::pair{"far_scene_min_fraction", far_scene_min_fraction},
             };
             for (const auto& [name, value] : probability_fields) {
                 if (auto error = invalid_probability(value, name); !error.empty())
@@ -546,10 +660,16 @@ namespace lfs::core {
             p.rotation_lr = 2e-3f;
             p.shs_lr = 2e-3f;
             p.lambda_dssim = 0.2f;
-            p.opacity_reg = 0.0f;
+            p.opacity_reg = 0.003f;
             p.scale_reg = 0.0f;
             p.use_error_map = true;
             p.use_edge_map = true;
+            p.background_improvements = false;
+            p.far_scene_min_fraction = 0.0f;
+            p.growth_ratio_rank = true;
+            p.growth_ratio_pow = 0.75f;
+            p.fill_pacing_iter = 15'000;
+            p.far_seed_dose = 2'000;
             return p;
         }
 
@@ -590,68 +710,73 @@ namespace lfs::core {
                     LOG_WARN("Invalid strategy '{}' in JSON, using default", strategy);
                 }
             }
-            read_registered_optimization_properties(json, params);
-
-            // Residue not represented by scalar registry properties.
-            if (json.contains("eval_steps")) {
-                params.eval_steps.clear();
-                for (const auto& step : json.at("eval_steps"))
-                    params.eval_steps.push_back(step.get<size_t>());
-            }
-            if (json.contains("save_steps")) {
-                params.save_steps.clear();
-                for (const auto& step : json.at("save_steps"))
-                    params.save_steps.push_back(step.get<size_t>());
-            }
-            if (json.contains("enable_save_eval_images"))
-                params.enable_save_eval_images = json.at("enable_save_eval_images");
-            if (json.contains("ppisp_sidecar_path")) {
-                params.ppisp_sidecar_path =
-                    utf8_to_path(json.at("ppisp_sidecar_path").get<std::string>());
-            }
-            if (json.contains("bg_color") && json.at("bg_color").is_array() &&
-                json.at("bg_color").size() == 3) {
-                params.bg_color = {
-                    json.at("bg_color")[0],
-                    json.at("bg_color")[1],
-                    json.at("bg_color")[2]};
-            }
-            if (json.contains("bg_image_path")) {
-                params.bg_image_path =
-                    utf8_to_path(json.at("bg_image_path").get<std::string>());
-            }
-
-            if (json.contains("depth_loss_mode") &&
-                (params.depth_loss_mode == "pearson" ||
-                 params.depth_loss_mode == "adaptive-warped-l1")) {
-                LOG_WARN(
-                    "Migrating legacy depth loss mode '{}' to 'ssi'; the current depth "
-                    "pipeline auto-detects whether the prior stores depth or disparity",
-                    params.depth_loss_mode);
-                params.depth_loss_mode = "ssi";
-            }
-
+            apply_optimization_json_overlay(params, json, false);
             return params;
         }
 
-        std::expected<OptimizationParameters, std::string> read_optim_params_from_json(const std::filesystem::path& path) {
+        bool ExplicitTrainingOverrides::has_optimization_key(const std::string_view key) const {
+            return overlay_has_key(optimization_json, key);
+        }
+
+        bool ExplicitTrainingOverrides::has_dataset_key(const std::string_view key) const {
+            return overlay_has_key(dataset_json, key);
+        }
+
+        void merge_explicit_json_overlay(std::string& dst_json, const std::string_view src_json) {
+            if (src_json.empty())
+                return;
+            auto src = parse_overlay_object(src_json);
+            if (src.empty())
+                return;
+            auto dst = parse_overlay_object(dst_json);
+            for (auto it = src.begin(); it != src.end(); ++it)
+                dst[it.key()] = it.value();
+            dst_json = dst.dump();
+        }
+
+        void apply_explicit_training_overrides(
+            TrainingParameters& target,
+            const ExplicitTrainingOverrides& overrides) {
+            if (!overrides.optimization_json.empty())
+                apply_optimization_json_overlay(
+                    target.optimization,
+                    parse_overlay_object(overrides.optimization_json),
+                    true);
+            if (!overrides.dataset_json.empty())
+                apply_dataset_json_overlay(
+                    target.dataset, parse_overlay_object(overrides.dataset_json));
+        }
+
+        std::expected<OptimizationParameters, std::string> read_optim_params_from_json(
+            const std::filesystem::path& path,
+            ExplicitTrainingOverrides& captured_overrides) {
             auto json_result = read_json_file(path);
             if (!json_result) {
                 return std::unexpected(json_result.error());
             }
 
             const auto& json = *json_result;
-            // Support both flat and nested {"optimization": {...}} formats
             const auto& opt_json = json.contains("optimization") ? json["optimization"] : json;
 
             try {
                 auto params = OptimizationParameters::from_json(opt_json);
                 if (auto error = params.validate(); !error.empty())
                     return std::unexpected("Invalid optimization parameters: " + error);
+                if (opt_json.is_object() && !opt_json.empty())
+                    captured_overrides.optimization_json = opt_json.dump();
+                if (json.contains("dataset") && json["dataset"].is_object() &&
+                    !json["dataset"].empty()) {
+                    captured_overrides.dataset_json = json["dataset"].dump();
+                }
                 return params;
             } catch (const std::exception& e) {
                 return std::unexpected(std::format("Error parsing optimization parameters: {}", e.what()));
             }
+        }
+
+        std::expected<OptimizationParameters, std::string> read_optim_params_from_json(const std::filesystem::path& path) {
+            ExplicitTrainingOverrides unused;
+            return read_optim_params_from_json(path, unused);
         }
 
         std::expected<void, std::string> save_training_parameters_to_json(

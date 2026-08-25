@@ -2815,6 +2815,25 @@ namespace lfs::training {
                         "Scene has no cameras with image files available for training");
                 }
 
+                if (params.overrides.has_dataset_key("test_every") ||
+                    params.overrides.has_optimization_key("enable_eval")) {
+                    std::sort(
+                        source_cameras.begin(), source_cameras.end(),
+                        [](const auto& lhs, const auto& rhs) {
+                            return lhs->uid() < rhs->uid();
+                        });
+                    const bool enable_eval = params.optimization.enable_eval;
+                    const int test_every = std::max(1, params.dataset.test_every);
+                    for (size_t i = 0; i < source_cameras.size(); ++i) {
+                        const bool is_val =
+                            enable_eval &&
+                            (i % static_cast<size_t>(test_every)) == 0;
+                        source_cameras[i]->set_split(
+                            is_val ? lfs::core::CameraSplit::Eval
+                                   : lfs::core::CameraSplit::Train);
+                    }
+                }
+
                 if (params.optimization.enable_eval) {
                     for (const auto& camera : source_cameras) {
                         switch (camera->split()) {
@@ -5958,7 +5977,9 @@ namespace lfs::training {
                     auto& model = strategy_->get_model();
                     if (run_fastgs_gaussian_backward) {
                         fused_extra_gradients.scale_reg_weight = params_.optimization.scale_reg;
-                        fused_extra_gradients.opacity_reg_weight = params_.optimization.opacity_reg;
+                        // Fused path shares the configured opacity_reg weight between gradient and loss accumulation.
+                        fused_extra_gradients.opacity_reg_weight =
+                            params_.optimization.opacity_reg;
                         if (normal_supervision_started) {
                             fused_extra_gradients.flatten_reg_weight = params_.optimization.normal_flatten_weight;
                         }
@@ -7159,6 +7180,9 @@ namespace lfs::training {
                     }
 
                     nvtxRangePop(); // End rasterize
+                    if (strategy_ && !in_sparsification) {
+                        strategy_->post_render(iter, r_output);
+                    }
                 }
 
                 if (tiles_processed == 0) {
@@ -7221,7 +7245,8 @@ namespace lfs::training {
                         if (fastgs_path) {
                             loss_tensor_gpu = loss_tensor_gpu + fused_opacity_reg_loss_gpu;
                         } else {
-                            auto opacity_loss_result = compute_opacity_reg_loss(strategy_->get_model(), strategy_->get_optimizer(), params_.optimization);
+                            auto opacity_loss_result = compute_opacity_reg_loss(
+                                strategy_->get_model(), strategy_->get_optimizer(), params_.optimization);
                             if (!opacity_loss_result) {
                                 return lfs::from_legacy_expected<StepDisposition>(
                                            std::unexpected(opacity_loss_result.error()),

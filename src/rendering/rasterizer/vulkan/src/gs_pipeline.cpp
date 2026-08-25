@@ -624,6 +624,7 @@ void VulkanGSPipeline::populateDeviceInfo(VkPhysicalDevice selected_physical_dev
         limits.maxComputeWorkGroupCount[0],
         limits.maxComputeWorkGroupCount[1],
         limits.maxComputeWorkGroupCount[2],
+        limits.maxStorageBufferRange,
     };
 }
 
@@ -659,6 +660,22 @@ void VulkanGSPipeline::validateBufferRange(const _VulkanBuffer& buffer,
                 buffer.offset,
                 relative_offset,
                 size,
+                buffer.capacity,
+                buffer.allocSize,
+                buffer.label ? buffer.label : "<unlabeled>"),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if (size > deviceInfo.maxStorageBufferRange) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "{} exceeds VkPhysicalDeviceLimits::maxStorageBufferRange (buffer={:#x}, allocation={:#x}, base_offset={}, relative_offset={}, range={}, maxStorageBufferRange={}, view_capacity={}, backing_size={}, label='{}')",
+                operation,
+                lfs::rendering::vkHandleValue(buffer.buffer),
+                lfs::rendering::vkHandleValue(buffer.allocation),
+                buffer.offset,
+                relative_offset,
+                size,
+                deviceInfo.maxStorageBufferRange,
                 buffer.capacity,
                 buffer.allocSize,
                 buffer.label ? buffer.label : "<unlabeled>"),

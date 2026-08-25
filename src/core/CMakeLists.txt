@@ -96,6 +96,7 @@ set(CORE_SOURCES
         splat_data_mirror.cpp
         splat_data_transform.cpp
         splat_exportable_storage.cpp
+        shareable_allocation_limit.cpp
         tensor_debug.cpp
         training_snapshot.cpp
         mesh_data.cpp

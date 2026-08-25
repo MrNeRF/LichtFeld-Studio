@@ -9,8 +9,10 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/executable_path.hpp"
+#include "core/exportable_storage.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
@@ -807,6 +809,14 @@ namespace lfs::vis {
             return ((value + alignment - 1) / alignment) * alignment;
         }
 
+        [[nodiscard]] void* exportableDevicePtr(const std::shared_ptr<lfs::core::ExportableBlock>& block) {
+            return block ? block->device_ptr : nullptr;
+        }
+
+        [[nodiscard]] std::size_t exportableMappedBytes(const std::shared_ptr<lfs::core::ExportableBlock>& block) {
+            return block ? block->committedPrefixBytes() : 0;
+        }
+
         [[nodiscard]] std::size_t outputSlotIndex(const VksplatViewportRenderer::OutputSlot slot) {
             constexpr std::size_t kOutputSlotEnumCount =
                 static_cast<std::size_t>(VksplatViewportRenderer::OutputSlot::Preview) + 1;
@@ -957,8 +967,8 @@ namespace lfs::vis {
 
         [[nodiscard]] std::expected<void, std::string> ensureCudaInteropBuffer(
             VulkanContext& context,
+            std::shared_ptr<lfs::core::ExportableBlock>& block,
             VulkanContext::ExternalBuffer& buffer,
-            lfs::rendering::CudaVulkanBufferInterop& interop,
             const std::size_t required_bytes,
             const std::string_view diagnostic_scope,
             const std::string_view diagnostic_label,
@@ -971,47 +981,53 @@ namespace lfs::vis {
             const bool label_matches =
                 buffer.diagnostic_scope == diagnostic_scope &&
                 buffer.diagnostic_label.starts_with(std::string(diagnostic_label));
-            if (buffer.buffer != VK_NULL_HANDLE && buffer.size >= required_bytes && label_matches) {
+            if (buffer.buffer != VK_NULL_HANDLE && buffer.size >= required_bytes && label_matches &&
+                exportableDevicePtr(block) != nullptr) {
                 return {};
             }
 
-            interop.reset();
             context.destroyExternalBuffer(buffer);
+            block.reset();
+
+            int device = 0;
+            if (const cudaError_t err = cudaGetDevice(&device); err != cudaSuccess) {
+                return std::unexpected(std::format(
+                    "VkSplat external {} buffer '{}' cudaGetDevice failed: {} ({})",
+                    error_label,
+                    diagnostic_label,
+                    cudaGetErrorName(err),
+                    cudaGetErrorString(err)));
+            }
+
+            auto block_result = lfs::core::allocateExportableDeviceBlock(
+                required_bytes, device, /*track_splat_bytes=*/false, required_bytes);
+            if (!block_result) {
+                return std::unexpected(std::format("VkSplat external {} buffer '{}' allocation failed: {}",
+                                                   error_label,
+                                                   diagnostic_label,
+                                                   block_result.error()));
+            }
 
             const VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                              VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                              VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-            if (!context.createExternalBuffer(static_cast<VkDeviceSize>(required_bytes),
-                                              usage,
-                                              buffer,
-                                              diagnostic_scope,
-                                              diagnostic_label)) {
+            if (!context.importExportableBlock(**block_result,
+                                               usage,
+                                               buffer,
+                                               diagnostic_scope,
+                                               diagnostic_label)) {
                 return std::unexpected(std::format("VkSplat external {} buffer '{}' allocation failed: {}",
                                                    error_label,
                                                    diagnostic_label,
                                                    context.lastError()));
             }
-            const auto native = context.releaseExternalBufferNativeHandle(buffer);
-            if (!VulkanContext::externalNativeHandleValid(native)) {
+            if (exportableDevicePtr(*block_result) == nullptr) {
                 context.destroyExternalBuffer(buffer);
-                return std::unexpected(std::format("VkSplat external {} buffer '{}' returned invalid native handle",
+                return std::unexpected(std::format("VkSplat external {} buffer '{}' mapped to a null CUDA pointer",
                                                    error_label,
                                                    diagnostic_label));
             }
-            lfs::rendering::CudaVulkanExternalBufferImport import{
-                .memory_handle = native,
-                .allocation_size = static_cast<std::size_t>(buffer.allocation_size),
-                .size = static_cast<std::size_t>(buffer.size),
-                .dedicated_allocation = context.externalMemoryDedicatedAllocationEnabled(),
-            };
-            if (!interop.init(import)) {
-                const std::string err = interop.lastError();
-                context.destroyExternalBuffer(buffer);
-                return std::unexpected(std::format("VkSplat external {} buffer '{}' CUDA import failed: {}",
-                                                   error_label,
-                                                   diagnostic_label,
-                                                   err));
-            }
+            block = std::move(*block_result);
             return {};
         }
 
@@ -1193,7 +1209,7 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] std::expected<void, std::string> copyHostBytesToInteropRegion(
-            const lfs::rendering::CudaVulkanBufferInterop& interop,
+            const std::shared_ptr<lfs::core::ExportableBlock>& block,
             const void* src,
             const std::size_t src_byte_count,
             const std::size_t byte_count,
@@ -1207,16 +1223,17 @@ namespace lfs::vis {
                     byte_count,
                     src_byte_count));
             }
-            if (dst_offset > interop.size() || byte_count > interop.size() - dst_offset) {
+            const std::size_t mapped = exportableMappedBytes(block);
+            if (dst_offset > mapped || byte_count > mapped - dst_offset) {
                 return std::unexpected(std::format(
                     "VkSplat {} upload range [{}, {}+{}) exceeds mapped query buffer {}",
                     label,
                     dst_offset,
                     dst_offset,
                     byte_count,
-                    interop.size()));
+                    mapped));
             }
-            auto* const base = static_cast<std::uint8_t*>(interop.devicePointer());
+            auto* const base = static_cast<std::uint8_t*>(exportableDevicePtr(block));
             if (base == nullptr) {
                 return std::unexpected(std::format(
                     "VkSplat {} upload requires a mapped CUDA/Vulkan buffer",
@@ -1237,13 +1254,13 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] std::expected<void, std::string> copyHostFloatsToInteropRegion(
-            const lfs::rendering::CudaVulkanBufferInterop& interop,
+            const std::shared_ptr<lfs::core::ExportableBlock>& block,
             const std::vector<float>& src,
             const std::size_t byte_count,
             const std::size_t dst_offset,
             const cudaStream_t stream,
             const std::string_view label) {
-            return copyHostBytesToInteropRegion(interop,
+            return copyHostBytesToInteropRegion(block,
                                                 src.data(),
                                                 src.size() * sizeof(float),
                                                 byte_count,
@@ -1253,19 +1270,79 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] std::expected<void, std::string> copyHostBytesToInteropRegion(
-            const lfs::rendering::CudaVulkanBufferInterop& interop,
+            const std::shared_ptr<lfs::core::ExportableBlock>& block,
             const std::vector<std::uint8_t>& src,
             const std::size_t byte_count,
             const std::size_t dst_offset,
             const cudaStream_t stream,
             const std::string_view label) {
-            return copyHostBytesToInteropRegion(interop,
+            return copyHostBytesToInteropRegion(block,
                                                 src.data(),
                                                 src.size(),
                                                 byte_count,
                                                 dst_offset,
                                                 stream,
                                                 label);
+        }
+
+        [[nodiscard]] std::expected<void, std::string> copyTensorToBlockRegion(
+            const std::shared_ptr<lfs::core::ExportableBlock>& block,
+            lfs::core::Tensor& keep_alive,
+            const lfs::core::Tensor& tensor,
+            const std::size_t byte_count,
+            const std::size_t dst_offset,
+            const cudaStream_t stream,
+            const std::string_view label) {
+            if (exportableDevicePtr(block) == nullptr) {
+                return std::unexpected(std::format(
+                    "VkSplat {} copy requires a mapped exportable block",
+                    label));
+            }
+            if (stream == nullptr) {
+                return std::unexpected(std::format(
+                    "VkSplat {} copy requires an explicit non-default stream",
+                    label));
+            }
+            const std::size_t mapped = exportableMappedBytes(block);
+            if (byte_count == 0 || dst_offset > mapped || byte_count > mapped - dst_offset) {
+                return std::unexpected(std::format(
+                    "VkSplat {} copy range [{}, {}+{}) exceeds mapped buffer {}",
+                    label,
+                    dst_offset,
+                    dst_offset,
+                    byte_count,
+                    mapped));
+            }
+            if (!tensor.is_valid() || tensor.data_ptr() == nullptr) {
+                return std::unexpected(std::format(
+                    "VkSplat {} copy requires valid tensor storage",
+                    label));
+            }
+            keep_alive = tensor;
+            if (keep_alive.device() != lfs::core::Device::CUDA) {
+                keep_alive = keep_alive.to(lfs::core::Device::CUDA, stream);
+            }
+            if (!keep_alive.is_contiguous()) {
+                keep_alive = keep_alive.contiguous();
+            }
+            if (byte_count > keep_alive.bytes()) {
+                return std::unexpected(std::format(
+                    "VkSplat {} copy requested {} bytes from {} byte tensor",
+                    label,
+                    byte_count,
+                    keep_alive.bytes()));
+            }
+            keep_alive.sync_to_stream(stream);
+            auto* const dst = static_cast<std::uint8_t*>(exportableDevicePtr(block)) + dst_offset;
+            const cudaError_t status = cudaMemcpyAsync(
+                dst, keep_alive.data_ptr(), byte_count, cudaMemcpyDeviceToDevice, stream);
+            if (status != cudaSuccess) {
+                return std::unexpected(std::format("VkSplat {} D2D copy failed: {} ({})",
+                                                   label,
+                                                   cudaGetErrorName(status),
+                                                   cudaGetErrorString(status)));
+            }
+            return {};
         }
 
         struct PolygonAabb {
@@ -1982,11 +2059,9 @@ namespace lfs::vis {
         for (std::size_t ring_slot = 0; ring_slot < kInputRingSize; ++ring_slot) {
             releaseOpacityCopySlot(*context_, ring_slot);
             auto& overlay = cuda_overlays_[ring_slot];
-            overlay.interop.reset();
             context_->destroyExternalBuffer(overlay.buffer);
             overlay = {};
         }
-        cuda_selection_query_.interop.reset();
         context_->destroyExternalBuffer(cuda_selection_query_.buffer);
         cuda_selection_query_ = {};
         for (auto& snap : ring_uploaded_) {
@@ -2011,7 +2086,6 @@ namespace lfs::vis {
         gpu_lod_frozen_frames_ = 0;
         gpu_lod_last_candidate_count_ = 0;
         gpu_lod_last_overflow_count_ = 0;
-        lod_page_inputs_.interop.reset();
         context_->destroyExternalBuffer(lod_page_inputs_.buffer);
         lod_page_inputs_ = {};
         releaseGpuLodTreeStorage();
@@ -2104,25 +2178,21 @@ namespace lfs::vis {
             }
         }
         for (auto& slot : cuda_opacity_copies_) {
-            slot.interop.reset();
             if (context_) {
                 context_->destroyExternalBuffer(slot.buffer);
             }
             slot = {};
         }
         for (auto& slot : cuda_overlays_) {
-            slot.interop.reset();
             if (context_) {
                 context_->destroyExternalBuffer(slot.buffer);
             }
             slot = {};
         }
-        cuda_selection_query_.interop.reset();
         if (context_) {
             context_->destroyExternalBuffer(cuda_selection_query_.buffer);
         }
         cuda_selection_query_ = {};
-        lod_page_inputs_.interop.reset();
         if (context_) {
             context_->destroyExternalBuffer(lod_page_inputs_.buffer);
         }
@@ -2294,7 +2364,6 @@ namespace lfs::vis {
                                     "LOD page input storage retired before upload completed");
             lod_engine_layout_ = {};
             lod_sink_model_ = nullptr;
-            lod_page_inputs_.interop.reset();
             context_->destroyExternalBuffer(lod_page_inputs_.buffer);
             lod_page_inputs_ = {};
         }
@@ -2302,7 +2371,7 @@ namespace lfs::vis {
     }
 
     void VksplatViewportRenderer::configureLodUploadEngine(const lfs::core::SplatData& splat_data) {
-        if (lod_page_inputs_.interop.devicePointer() == nullptr ||
+        if (exportableDevicePtr(lod_page_inputs_.block) == nullptr ||
             lod_page_inputs_.splat_capacity == 0 ||
             lod_page_inputs_.model != &splat_data) {
             return;
@@ -2315,12 +2384,12 @@ namespace lfs::vis {
             static_cast<std::uint32_t>(splat_data.max_sh_coeffs_rest()),
             lfs::core::sh_rest_coefficients_for_degree(lod_page_inputs_.input_sh_degree));
         const LodUploadEngine::DeviceLayout layout{
-            .device_base = lod_page_inputs_.interop.devicePointer(),
+            .device_base = exportableDevicePtr(lod_page_inputs_.block),
             .region_offset = lod_page_inputs_.region_offset,
             .splat_capacity = lod_page_inputs_.splat_capacity,
             .dst_rest = dst_rest,
             .dst_slots = lfs::core::sh_float4_slots_for_rest(dst_rest),
-            .meta_base = lod_tree_meta_.interop.devicePointer(),
+            .meta_base = exportableDevicePtr(lod_tree_meta_.block),
             .meta_bounds_offset = lod_tree_meta_.bounds_offset,
             .meta_links_offset = lod_tree_meta_.links_offset,
             .meta_capacity_nodes = lod_tree_meta_.capacity_nodes,
@@ -2582,8 +2651,8 @@ namespace lfs::vis {
                 const std::size_t meta_total =
                     layoutRegions(meta_bytes, meta_offsets, kRegionAlignment);
                 if (auto ok = ensureCudaInteropBuffer(*context_,
+                                                      lod_tree_meta_.block,
                                                       lod_tree_meta_.buffer,
-                                                      lod_tree_meta_.interop,
                                                       meta_total,
                                                       "vulkan.vksplat.lod_tree_meta",
                                                       std::format("nodes{}", physical_node_capacity),
@@ -2936,8 +3005,8 @@ namespace lfs::vis {
         }
 
         if (auto ok = ensureCudaInteropBuffer(context,
+                                              lod_page_inputs_.block,
                                               lod_page_inputs_.buffer,
-                                              lod_page_inputs_.interop,
                                               total_bytes,
                                               "vulkan.vksplat.lod_page_inputs",
                                               std::format("pages{}.sh{}",
@@ -2947,7 +3016,7 @@ namespace lfs::vis {
             !ok) {
             return std::unexpected(ok.error());
         }
-        if (lod_page_inputs_.interop.devicePointer() == nullptr) {
+        if (exportableDevicePtr(lod_page_inputs_.block) == nullptr) {
             return std::unexpected("VkSplat LOD page input storage is not mapped");
         }
 
@@ -2977,6 +3046,8 @@ namespace lfs::vis {
         buffers_.shN_f16 = false;
         buffers_.shN_q16 = false;
         buffers_.shN_n_cells = 0;
+        buffers_.shN_address = 0;
+        buffers_.shN_committed_bytes = 0;
         buffers_.shN_bounds.deviceBuffer = {};
         buffers_.pool_page_splats = static_cast<std::uint32_t>(LodPageCache::kChunkSplats);
         buffers_.scales_opacs.deviceBuffer = {};
@@ -3015,7 +3086,7 @@ namespace lfs::vis {
             return std::unexpected("VkSplat LOD page upload received an invalid ring slot");
         }
         if (lod_page_inputs_.model != &splat_data ||
-            lod_page_inputs_.interop.devicePointer() == nullptr ||
+            exportableDevicePtr(lod_page_inputs_.block) == nullptr ||
             lod_page_inputs_.physical_pages == 0 ||
             lod_page_inputs_.splat_capacity == 0) {
             return std::unexpected("VkSplat LOD page upload requires initialized page input storage");
@@ -3032,7 +3103,7 @@ namespace lfs::vis {
             }
         }
 
-        auto* const base = static_cast<std::uint8_t*>(lod_page_inputs_.interop.devicePointer());
+        auto* const base = static_cast<std::uint8_t*>(exportableDevicePtr(lod_page_inputs_.block));
         const auto region_ptr = [&](const std::size_t region) -> std::uint8_t* {
             return base + lod_page_inputs_.region_offset[region];
         };
@@ -3194,6 +3265,8 @@ namespace lfs::vis {
         detach(buffers_.sh_coeffs.deviceBuffer);
         detach(buffers_.sh0.deviceBuffer);
         detach(buffers_.shN.deviceBuffer);
+        buffers_.shN_address = 0;
+        buffers_.shN_committed_bytes = 0;
         detach(buffers_.scaling_raw.deviceBuffer);
         detach(buffers_.opacity_raw.deviceBuffer);
     }
@@ -3213,7 +3286,6 @@ namespace lfs::vis {
             buffers_.opacity_raw.deviceBuffer = {};
         }
 
-        slot.interop.reset();
         context.destroyExternalBuffer(slot.buffer);
         slot = {};
     }
@@ -3335,27 +3407,18 @@ namespace lfs::vis {
             profiler.setSharedScratchBytes(shared_scratch_.bytes);
         };
 
-        // Grow callback handed to the arena: when training's scratch demand
-        // outgrows the committed capacity, the arena invokes this (on the training
-        // thread) to grow the exportable block in place under its stable base
-        // address — contents preserved — and returns the new committed size. The
-        // render re-imports the larger range into Vulkan on its next frame.
-        // detach Vulkan import before release_physical inside the grow.
+        // Grow callback handed to the arena: training-thread append of CUDA
+        // chunks under the stable VA. Vulkan bind of the new chunks happens on
+        // the render thread in reimportSharedScratchIfGrown.
         const auto make_grow_fn = [this](std::shared_ptr<lfs::core::ExportableBlock> block) {
             return [this, block = std::move(block)](std::size_t need) -> std::size_t {
                 const std::size_t want =
                     need > (std::numeric_limits<std::size_t>::max() / 2) ? need : need + need / 2;
-                if (shared_scratch_.imported_buffer.buffer != VK_NULL_HANDLE &&
-                    shared_scratch_.block == block) {
-                    detachSharedScratchBuffers();
-                    retireSharedScratchBuffer(std::move(shared_scratch_.imported_buffer));
-                    shared_scratch_.imported_buffer = {};
-                }
                 auto grew = lfs::core::growExportableDeviceBlock(block, want);
                 if (!grew) {
                     return std::size_t{0};
                 }
-                return block->size;
+                return block->committedPrefixBytes();
             };
         };
 
@@ -3365,7 +3428,7 @@ namespace lfs::vis {
             }
             lfs::core::RasterizerMemoryArena::ExternalBacking backing{
                 .device_ptr = shared_scratch_.block->device_ptr,
-                .size = shared_scratch_.block->size,
+                .size = shared_scratch_.block->committedPrefixBytes(),
                 .device = device,
                 .owner = std::shared_ptr<void>(shared_scratch_.block),
                 .label = "vksplat.shared_scratch",
@@ -3406,46 +3469,34 @@ namespace lfs::vis {
             return std::unexpected("VkSplat shared scratch training rasterizer arena is busy");
         }
 
-        // Grow path: a block exists but is too small. Grow the committed physical
-        // IN PLACE under the stable virtual address so training's arena base
-        // pointer never changes (no use-after-free), then re-import the larger
-        // range into Vulkan. The arena drains all frames + the device before the
-        // commit callback runs, so the unmap/recommit is race-free.
-        //
-        // detach/retire the Vulkan import BEFORE growExportableDeviceBlock
-        // (which calls release_physical: unmap + cuMemRelease + close fd). Holding
-        // a live VkBuffer/VkDeviceMemory across that is the NVRM "invalid mmap
-        // context" pattern — mirror TrainerManager::growExportableForDensify.
+        // Grow path: append CUDA chunks under the stable VA, then bind the new
+        // chunks into the existing sparse VkBuffer.
         if (shared_scratch_.block && shared_scratch_.installed_in_training_arena) {
             void* const device_ptr = shared_scratch_.block->device_ptr;
             std::string commit_error;
             const auto commit = [&](std::size_t new_size) -> bool {
-                if (shared_scratch_.imported_buffer.buffer != VK_NULL_HANDLE) {
-                    detachSharedScratchBuffers();
-                    retireSharedScratchBuffer(std::move(shared_scratch_.imported_buffer));
-                    shared_scratch_.imported_buffer = {};
-                }
                 auto grew = lfs::core::growExportableDeviceBlock(shared_scratch_.block, new_size);
                 if (!grew) {
                     commit_error = grew.error();
                     return false;
                 }
-                if (*grew || shared_scratch_.imported_buffer.buffer == VK_NULL_HANDLE) {
-                    VulkanContext::ExternalBuffer reimported{};
-                    if (!context.importExternalBuffer(shared_scratch_.block->handle.native,
-                                                      static_cast<VkDeviceSize>(shared_scratch_.block->size),
-                                                      static_cast<VkDeviceSize>(shared_scratch_.block->handle.size),
-                                                      usage,
-                                                      reimported,
-                                                      "shared.scratch",
-                                                      "cuda_vulkan_arena")) {
+                if (shared_scratch_.imported_buffer.buffer == VK_NULL_HANDLE) {
+                    VulkanContext::ExternalBuffer imported{};
+                    if (!context.importExportableBlock(*shared_scratch_.block,
+                                                       usage,
+                                                       imported,
+                                                       "shared.scratch",
+                                                       "cuda_vulkan_arena")) {
                         commit_error = context.lastError();
                         return false;
                     }
-                    shared_scratch_.imported_buffer = reimported;
-                    shared_scratch_.bytes = shared_scratch_.block->size;
-                    ++shared_scratch_.generation;
+                    shared_scratch_.imported_buffer = imported;
+                } else if (!context.bindNewChunks(shared_scratch_.imported_buffer, *shared_scratch_.block)) {
+                    commit_error = context.lastError();
+                    return false;
                 }
+                shared_scratch_.bytes = shared_scratch_.block->committedPrefixBytes();
+                ++shared_scratch_.generation;
                 return true;
             };
             if (!lfs::core::GlobalArenaManager::instance().grow_external_backing(device_ptr, target_bytes, commit)) {
@@ -3482,20 +3533,18 @@ namespace lfs::vis {
         }
 
         VulkanContext::ExternalBuffer imported{};
-        if (!context.importExternalBuffer((*block_result)->handle.native,
-                                          static_cast<VkDeviceSize>((*block_result)->size),
-                                          static_cast<VkDeviceSize>((*block_result)->handle.size),
-                                          usage,
-                                          imported,
-                                          "shared.scratch",
-                                          "cuda_vulkan_arena")) {
+        if (!context.importExportableBlock(**block_result,
+                                           usage,
+                                           imported,
+                                           "shared.scratch",
+                                           "cuda_vulkan_arena")) {
             return std::unexpected(std::format("VkSplat shared scratch Vulkan import failed: {}",
                                                context.lastError()));
         }
 
         lfs::core::RasterizerMemoryArena::ExternalBacking backing{
             .device_ptr = (*block_result)->device_ptr,
-            .size = (*block_result)->size,
+            .size = (*block_result)->committedPrefixBytes(),
             .device = device,
             .owner = std::shared_ptr<void>(*block_result),
             .label = "vksplat.shared_scratch",
@@ -3509,7 +3558,7 @@ namespace lfs::vis {
         releaseSharedScratchImportOnly();
         shared_scratch_.block = std::move(*block_result);
         shared_scratch_.imported_buffer = imported;
-        shared_scratch_.bytes = shared_scratch_.block->size;
+        shared_scratch_.bytes = shared_scratch_.block->committedPrefixBytes();
         shared_scratch_.installed_in_training_arena = true;
         ++shared_scratch_.generation;
 
@@ -3531,33 +3580,33 @@ namespace lfs::vis {
         if (!shared_scratch_.block) {
             return {};
         }
-        if (shared_scratch_.imported_buffer.buffer != VK_NULL_HANDLE &&
-            shared_scratch_.bytes == shared_scratch_.block->size) {
-            return {}; // not grown since last import
-        }
-        // Precondition: caller owns the arena render-frame, so training cannot grow
-        // the block concurrently — block->size and block->handle are stable here.
         constexpr VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                              VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                              VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                                              VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
-        VulkanContext::ExternalBuffer reimported{};
-        if (!context.importExternalBuffer(shared_scratch_.block->handle.native,
-                                          static_cast<VkDeviceSize>(shared_scratch_.block->size),
-                                          static_cast<VkDeviceSize>(shared_scratch_.block->handle.size),
-                                          usage,
-                                          reimported,
-                                          "shared.scratch",
-                                          "cuda_vulkan_arena")) {
-            return std::unexpected(std::format("VkSplat shared scratch re-import after grow failed: {}",
-                                               context.lastError()));
+        if (shared_scratch_.imported_buffer.buffer == VK_NULL_HANDLE) {
+            VulkanContext::ExternalBuffer imported{};
+            if (!context.importExportableBlock(*shared_scratch_.block,
+                                               usage,
+                                               imported,
+                                               "shared.scratch",
+                                               "cuda_vulkan_arena")) {
+                return std::unexpected(std::format(
+                    "VkSplat shared scratch import after grow failed: {}",
+                    context.lastError()));
+            }
+            shared_scratch_.imported_buffer = imported;
+        } else if (shared_scratch_.imported_buffer.bound_chunks < shared_scratch_.block->chunks.size()) {
+            if (!context.bindNewChunks(shared_scratch_.imported_buffer, *shared_scratch_.block)) {
+                return std::unexpected(std::format(
+                    "VkSplat shared scratch bindNewChunks after grow failed: {}",
+                    context.lastError()));
+            }
+        } else {
+            shared_scratch_.bytes = shared_scratch_.block->committedPrefixBytes();
+            return {};
         }
-        detachSharedScratchBuffers();
-        if (shared_scratch_.imported_buffer.buffer != VK_NULL_HANDLE) {
-            retireSharedScratchBuffer(std::move(shared_scratch_.imported_buffer));
-        }
-        shared_scratch_.imported_buffer = reimported;
-        shared_scratch_.bytes = shared_scratch_.block->size;
+        shared_scratch_.bytes = shared_scratch_.block->committedPrefixBytes();
         ++shared_scratch_.generation;
         {
             auto& profiler = lfs::diagnostics::VramProfiler::instance();
@@ -3566,10 +3615,12 @@ namespace lfs::vis {
             profiler.setSharedScratchBytes(shared_scratch_.bytes);
         }
         LOG_DEBUG(
-            "vksplat.scratch.arena.reimport bytes={}MiB generation={}",
+            "vksplat.scratch.arena.bind_chunks bytes={}MiB generation={} bound={}",
             shared_scratch_.bytes >> 20,
-            shared_scratch_.generation);
-        LOG_INFO("VkSplat shared scratch re-imported after in-place grow: {} MiB", shared_scratch_.bytes >> 20);
+            shared_scratch_.generation,
+            shared_scratch_.imported_buffer.bound_chunks);
+        LOG_INFO("VkSplat shared scratch chunks bound after grow: {} MiB (no re-import)",
+                 shared_scratch_.bytes >> 20);
         return {};
     }
 
@@ -3825,7 +3876,6 @@ namespace lfs::vis {
             lod_page_cache_model_ = nullptr;
             discardLodEngineResults(lod_upload_engine_.configure({}, nullptr),
                                     "LOD tree metadata storage released before upload completed");
-            lod_tree_meta_.interop.reset();
             if (context_ != nullptr) {
                 context_->destroyExternalBuffer(lod_tree_meta_.buffer);
             }
@@ -4194,8 +4244,8 @@ namespace lfs::vis {
         {
             LOG_TIMER("uploadOverlayBindings.ensure_buffer");
             if (auto ok = ensureCudaInteropBuffer(context,
+                                                  slot.block,
                                                   slot.buffer,
-                                                  slot.interop,
                                                   total_bytes,
                                                   "vulkan.vksplat.overlay_bindings",
                                                   std::format("ring{}.overlay_bindings", ring_slot),
@@ -4354,28 +4404,34 @@ namespace lfs::vis {
             LOG_TIMER("uploadOverlayBindings.copy_to_interop");
             if (selection_enabled) {
                 LOG_TIMER("uploadOverlayBindings.copy_to_interop.selection_mask");
-                if (!slot.interop.copyFromTensor(slot.selection_source,
-                                                 num_splats,
-                                                 slot.region_offset[OverlaySelectionMask],
-                                                 stream)) {
-                    return std::unexpected(std::format("VkSplat selection mask upload failed: {}",
-                                                       slot.interop.lastError()));
+                if (auto ok = copyTensorToBlockRegion(slot.block,
+                                                      slot.copy_keep_alive,
+                                                      slot.selection_source,
+                                                      num_splats,
+                                                      slot.region_offset[OverlaySelectionMask],
+                                                      stream,
+                                                      "selection mask");
+                    !ok) {
+                    return std::unexpected(ok.error());
                 }
             }
             if (preview_enabled) {
                 LOG_TIMER("uploadOverlayBindings.copy_to_interop.preview_mask");
-                if (!slot.interop.copyFromTensor(slot.preview_source,
-                                                 num_splats,
-                                                 slot.region_offset[OverlayPreviewMask],
-                                                 stream)) {
-                    return std::unexpected(std::format("VkSplat preview selection mask upload failed: {}",
-                                                       slot.interop.lastError()));
+                if (auto ok = copyTensorToBlockRegion(slot.block,
+                                                      slot.copy_keep_alive,
+                                                      slot.preview_source,
+                                                      num_splats,
+                                                      slot.region_offset[OverlayPreviewMask],
+                                                      stream,
+                                                      "preview selection mask");
+                    !ok) {
+                    return std::unexpected(ok.error());
                 }
             }
             {
                 LOG_TIMER("uploadOverlayBindings.copy_to_interop.color_table");
                 if (!slot.color_table_uploaded) {
-                    if (auto ok = copyHostFloatsToInteropRegion(slot.interop,
+                    if (auto ok = copyHostFloatsToInteropRegion(slot.block,
                                                                 slot.color_table_upload_cpu,
                                                                 slot.region_bytes[OverlaySelectionColors],
                                                                 slot.region_offset[OverlaySelectionColors],
@@ -4389,19 +4445,22 @@ namespace lfs::vis {
             }
             if (transform_indices_enabled && !slot.transform_indices_uploaded) {
                 LOG_TIMER("uploadOverlayBindings.copy_to_interop.transform_indices");
-                if (!slot.interop.copyFromTensor(slot.transform_indices_source,
-                                                 slot.region_bytes[OverlayTransformIndices],
-                                                 slot.region_offset[OverlayTransformIndices],
-                                                 stream)) {
-                    return std::unexpected(std::format("VkSplat transform-index upload failed: {}",
-                                                       slot.interop.lastError()));
+                if (auto ok = copyTensorToBlockRegion(slot.block,
+                                                      slot.copy_keep_alive,
+                                                      slot.transform_indices_source,
+                                                      slot.region_bytes[OverlayTransformIndices],
+                                                      slot.region_offset[OverlayTransformIndices],
+                                                      stream,
+                                                      "transform-index");
+                    !ok) {
+                    return std::unexpected(ok.error());
                 }
                 slot.transform_indices_uploaded = true;
             }
             {
                 LOG_TIMER("uploadOverlayBindings.copy_to_interop.node_mask");
                 if (!slot.node_mask_uploaded) {
-                    if (auto ok = copyHostBytesToInteropRegion(slot.interop,
+                    if (auto ok = copyHostBytesToInteropRegion(slot.block,
                                                                slot.node_mask_upload_cpu,
                                                                slot.region_bytes[OverlayNodeMask],
                                                                slot.region_offset[OverlayNodeMask],
@@ -4416,7 +4475,7 @@ namespace lfs::vis {
             {
                 LOG_TIMER("uploadOverlayBindings.copy_to_interop.overlay_params");
                 if (!slot.overlay_params_uploaded) {
-                    if (auto ok = copyHostFloatsToInteropRegion(slot.interop,
+                    if (auto ok = copyHostFloatsToInteropRegion(slot.block,
                                                                 slot.overlay_params_upload_cpu,
                                                                 slot.region_bytes[OverlayParams],
                                                                 slot.region_offset[OverlayParams],
@@ -4431,7 +4490,7 @@ namespace lfs::vis {
             {
                 LOG_TIMER("uploadOverlayBindings.copy_to_interop.model_transforms");
                 if (!slot.model_transforms_uploaded) {
-                    if (auto ok = copyHostFloatsToInteropRegion(slot.interop,
+                    if (auto ok = copyHostFloatsToInteropRegion(slot.block,
                                                                 slot.model_transforms_upload_cpu,
                                                                 slot.region_bytes[OverlayModelTransforms],
                                                                 slot.region_offset[OverlayModelTransforms],
@@ -5052,8 +5111,8 @@ namespace lfs::vis {
                 {
                     LOG_TIMER("prepareInputs.opacity_copy.ensure_buffer");
                     if (auto ok = ensureCudaInteropBuffer(context,
+                                                          opacity_slot.block,
                                                           opacity_slot.buffer,
-                                                          opacity_slot.interop,
                                                           layout->opacity_bytes,
                                                           "vulkan.vksplat.opacity_copy",
                                                           std::format("ring{}.soft_deleted_opacity", ring_slot),
@@ -5075,7 +5134,7 @@ namespace lfs::vis {
                 releaseOpacityCopySlot(context, ring_slot);
             }
 
-            if (has_deleted_mask && opacity_slot.interop.devicePointer() == nullptr) {
+            if (has_deleted_mask && exportableDevicePtr(opacity_slot.block) == nullptr) {
                 return std::unexpected("VkSplat deleted-opacity buffer is not mapped");
             }
 
@@ -5111,32 +5170,52 @@ namespace lfs::vis {
                     sh0_storage->bytes(),
                     layout->sh0_bytes,
                     sh0_storage->vkOffset());
-                // q16 codes/bounds: bind the FULL exportable region capacity as the
-                // descriptor range (not live-N only). Live-N sizing is correct for
-                // the encode footprint, but capacity padding covers the reorder
-                // tail the shader may touch near N; generation-checked storage
-                // already exposes the live region size via live-control sub-views.
-                const std::size_t shN_bind_capacity =
-                    layout->omits_shN
-                        ? rotations_storage->bytes()
-                        : std::max(shN_storage->bytes(), layout->shN_bytes);
-                const std::size_t shN_bind_active =
-                    layout->omits_shN
-                        ? layout->shN_bytes
-                        : (layout->shN_q16 ? shN_bind_capacity : layout->shN_bytes);
-                buffers_.shN.deviceBuffer = layout->omits_shN
-                                                ? makeBorrowedBufferView(
-                                                      rotations_storage->vkBuffer(),
-                                                      rotations_storage->vkBufferSize(),
-                                                      rotations_storage->bytes(),
-                                                      layout->shN_bytes,
-                                                      rotations_storage->vkOffset())
-                                                : makeBorrowedBufferView(
-                                                      shN_storage->vkBuffer(),
-                                                      shN_storage->vkBufferSize(),
-                                                      shN_bind_capacity,
-                                                      shN_bind_active,
-                                                      shN_storage->vkOffset());
+                // q16/f16 rest SH is addressed via buffer device address; fp32 and
+                // omit-placeholder still bind a storage-buffer descriptor. q16
+                // codes/bounds use the FULL exportable region capacity as the
+                // committed BDA range (not live-N only) so reorder-tail loads near
+                // N stay in-range.
+                buffers_.shN_address = 0;
+                buffers_.shN_committed_bytes = 0;
+                const bool shN_bda = !layout->omits_shN && (layout->shN_q16 || layout->shN_f16);
+                if (layout->omits_shN) {
+                    buffers_.shN.deviceBuffer = makeBorrowedBufferView(
+                        rotations_storage->vkBuffer(),
+                        rotations_storage->vkBufferSize(),
+                        rotations_storage->bytes(),
+                        layout->shN_bytes,
+                        rotations_storage->vkOffset());
+                } else if (shN_bda) {
+                    buffers_.shN.deviceBuffer = {};
+                    buffers_.shN_address = shN_storage->vkDeviceAddress();
+                    buffers_.shN_committed_bytes =
+                        std::max(shN_storage->bytes(), layout->shN_bytes);
+                    if (buffers_.shN_address == 0) {
+                        return std::unexpected(
+                            "VkSplat q16/f16 SH requires a non-zero shN buffer device address");
+                    }
+                    const auto n = splat_data.size();
+                    const auto rest = static_cast<std::uint32_t>(splat_data.max_sh_coeffs_rest());
+                    const std::size_t need_bytes = layout->shN_q16
+                                                       ? lfs::core::sh_value_quant::sh_value_u16_count(n, rest) * 2u
+                                                       : lfs::core::sh_swizzled_f16_byte_count(n, rest);
+                    if (need_bytes > buffers_.shN_committed_bytes) {
+                        return std::unexpected(std::format(
+                            "VkSplat shN BDA region is smaller than the live index footprint: "
+                            "need {} bytes, committed {}",
+                            need_bytes,
+                            buffers_.shN_committed_bytes));
+                    }
+                } else {
+                    const std::size_t shN_bind_capacity =
+                        std::max(shN_storage->bytes(), layout->shN_bytes);
+                    buffers_.shN.deviceBuffer = makeBorrowedBufferView(
+                        shN_storage->vkBuffer(),
+                        shN_storage->vkBufferSize(),
+                        shN_bind_capacity,
+                        layout->shN_bytes,
+                        shN_storage->vkOffset());
+                }
                 buffers_.rotations.deviceBuffer = makeBorrowedBufferView(
                     rotations_storage->vkBuffer(),
                     rotations_storage->vkBufferSize(),
@@ -5220,7 +5299,7 @@ namespace lfs::vis {
                 LOG_TIMER("prepareInputs.opacity_copy.copyRawOpacity");
                 if (auto ok = vksplat::copyRawOpacityToBuffer(
                         splat_data,
-                        opacity_slot.interop.devicePointer(),
+                        exportableDevicePtr(opacity_slot.block),
                         stream);
                     !ok) {
                     return std::unexpected(ok.error());
@@ -6242,7 +6321,7 @@ namespace lfs::vis {
             return std::unexpected(std::move(*error));
         }
 
-        const VkResult result = vkQueueSubmit(submit_queue, 1, &submit_info, VK_NULL_HANDLE);
+        const VkResult result = lfs::rendering::vk_queue_submit_synced(submit_queue, 1, &submit_info, VK_NULL_HANDLE);
         if (result != VK_SUCCESS) {
             return std::unexpected(vkError(
                 std::format("vkQueueSubmit({})", operation_label),
@@ -7460,8 +7539,8 @@ namespace lfs::vis {
                          static_cast<std::size_t>(slot.buffer.size));
             }
             if (auto ok = ensureCudaInteropBuffer(context,
+                                                  slot.block,
                                                   slot.buffer,
-                                                  slot.interop,
                                                   total_bytes,
                                                   "vulkan.vksplat.selection_query",
                                                   "selection_query",
@@ -7595,17 +7674,20 @@ namespace lfs::vis {
         {
             LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.upload");
             if (transform_indices_enabled && !slot.transform_indices_uploaded) {
-                if (!slot.interop.copyFromTensor(slot.transform_indices_source,
-                                                 slot.region_bytes[SelectionQueryTransformIndices],
-                                                 slot.region_offset[SelectionQueryTransformIndices],
-                                                 selection_query_stream)) {
-                    return std::unexpected(std::format("VkSplat selection transform-index upload failed: {}",
-                                                       slot.interop.lastError()));
+                if (auto ok = copyTensorToBlockRegion(slot.block,
+                                                      slot.copy_keep_alive,
+                                                      slot.transform_indices_source,
+                                                      slot.region_bytes[SelectionQueryTransformIndices],
+                                                      slot.region_offset[SelectionQueryTransformIndices],
+                                                      selection_query_stream,
+                                                      "selection transform-index");
+                    !ok) {
+                    return std::unexpected(ok.error());
                 }
                 slot.transform_indices_uploaded = true;
             }
             if (!slot.node_mask_uploaded) {
-                if (auto ok = copyHostBytesToInteropRegion(slot.interop,
+                if (auto ok = copyHostBytesToInteropRegion(slot.block,
                                                            slot.node_mask_upload_cpu,
                                                            slot.region_bytes[SelectionQueryNodeMask],
                                                            slot.region_offset[SelectionQueryNodeMask],
@@ -7617,7 +7699,7 @@ namespace lfs::vis {
                 slot.node_mask_uploaded = true;
             }
             if (!slot.primitive_upload_cpu.empty()) {
-                if (auto ok = copyHostFloatsToInteropRegion(slot.interop,
+                if (auto ok = copyHostFloatsToInteropRegion(slot.block,
                                                             slot.primitive_upload_cpu,
                                                             slot.region_bytes[SelectionQueryPrimitives],
                                                             slot.region_offset[SelectionQueryPrimitives],
@@ -7628,7 +7710,7 @@ namespace lfs::vis {
                 }
             }
             if (!slot.model_transforms_uploaded) {
-                if (auto ok = copyHostFloatsToInteropRegion(slot.interop,
+                if (auto ok = copyHostFloatsToInteropRegion(slot.block,
                                                             slot.model_transforms_upload_cpu,
                                                             slot.region_bytes[SelectionQueryModelTransforms],
                                                             slot.region_offset[SelectionQueryModelTransforms],
@@ -7641,7 +7723,7 @@ namespace lfs::vis {
             }
             if (polygon_mode && !slot.polygon_vertices_uploaded) {
                 if (!slot.polygon_vertices_upload_cpu.empty()) {
-                    if (auto ok = copyHostFloatsToInteropRegion(slot.interop,
+                    if (auto ok = copyHostFloatsToInteropRegion(slot.block,
                                                                 slot.polygon_vertices_upload_cpu,
                                                                 slot.region_bytes[SelectionQueryPolygonVertices],
                                                                 slot.region_offset[SelectionQueryPolygonVertices],
@@ -7655,7 +7737,7 @@ namespace lfs::vis {
             }
             if (polygon_mode) {
                 auto* const polygon_mask_ptr =
-                    static_cast<std::uint8_t*>(slot.interop.devicePointer()) +
+                    static_cast<std::uint8_t*>(exportableDevicePtr(slot.block)) +
                     slot.region_offset[SelectionQueryPolygonMask];
                 if (const cudaError_t status =
                         cudaMemsetAsync(polygon_mask_ptr, 0, polygon_mask_region_bytes, selection_query_stream);
@@ -7667,7 +7749,7 @@ namespace lfs::vis {
             }
             if (ring_mode) {
                 auto* const ring_pick_ptr =
-                    static_cast<std::uint8_t*>(slot.interop.devicePointer()) +
+                    static_cast<std::uint8_t*>(exportableDevicePtr(slot.block)) +
                     slot.region_offset[SelectionQueryRingPick];
                 if (const cudaError_t status =
                         cudaMemsetAsync(ring_pick_ptr,
@@ -7815,7 +7897,7 @@ namespace lfs::vis {
             LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.ring_pick");
             std::array<std::uint32_t, 2> ring_pick{kRingPickNoHit, kRingPickNoHit};
             const auto* const ring_pick_src =
-                static_cast<const std::uint8_t*>(slot.interop.devicePointer()) +
+                static_cast<const std::uint8_t*>(exportableDevicePtr(slot.block)) +
                 slot.region_offset[SelectionQueryRingPick];
             if (const cudaError_t status = cudaMemcpyAsync(&ring_pick,
                                                            ring_pick_src,
