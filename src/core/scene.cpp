@@ -725,6 +725,72 @@ namespace lfs::core {
         return consolidated;
     }
 
+    std::unique_ptr<lfs::core::SplatData>
+    Scene::extractConsolidatedNodeModel(const Uuid& uuid) const {
+        if (!consolidated_) {
+            return nullptr;
+        }
+
+        const SceneNode* node = getNodeByUuid(uuid);
+        if (!node || node->type != NodeType::SPLAT) {
+            return nullptr;
+        }
+
+        std::lock_guard<std::mutex> lock(combined_model_mutex_);
+        if (!cached_combined_ || consolidated_node_slots_.empty()) {
+            return nullptr;
+        }
+
+        const auto& combined = *cached_combined_;
+        const size_t combined_n = static_cast<size_t>(combined.size());
+        assert(combined.means_raw().is_valid());
+        assert(combined.means_raw().ndim() >= 1);
+        assert(static_cast<size_t>(combined.means_raw().size(0)) == combined_n);
+
+        size_t start = 0;
+        bool found = false;
+        size_t count = 0;
+        for (const auto& slot : consolidated_node_slots_) {
+            if (slot.id == node->id) {
+                found = true;
+                count = slot.gaussian_count;
+                break;
+            }
+            start += slot.gaussian_count;
+        }
+        if (!found) {
+            return nullptr;
+        }
+
+        assert(start <= combined_n);
+        assert(count <= combined_n - start);
+
+        const auto device = combined.means_raw().device();
+        Tensor keep = Tensor::zeros_bool({combined_n}, device);
+        if (count > 0) {
+            keep.slice(0, start, start + count) = Tensor::ones_bool({count}, device);
+        }
+        if (combined.has_deleted_mask() &&
+            combined.deleted().numel() == combined_n) {
+            keep = keep.logical_and(
+                combined.deleted().logical_not().to(keep.device()));
+        }
+
+        auto extracted = extract_by_mask(combined, keep);
+        const size_t kept = static_cast<size_t>(keep.count_nonzero());
+        assert(static_cast<size_t>(extracted.size()) == kept);
+        assert(kept <= count);
+        if (kept == 0) {
+            return std::make_unique<lfs::core::SplatData>(std::move(extracted));
+        }
+
+        assert(extracted.means_raw().is_valid());
+        assert(extracted.means_raw().ndim() >= 1);
+        assert(static_cast<size_t>(extracted.means_raw().size(0)) == kept);
+        assert(extracted.get_max_sh_degree() == combined.get_max_sh_degree());
+        return std::make_unique<lfs::core::SplatData>(std::move(extracted));
+    }
+
     void Scene::removeConsolidatedNodeData(const NodeId id) {
         if (!consolidated_ || consolidated_node_slots_.empty()) {
             return;

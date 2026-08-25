@@ -391,6 +391,9 @@ namespace lfs::core {
 
         size_t consolidateNodeModels();
         [[nodiscard]] bool isConsolidated() const { return consolidated_; }
+        // Copy one SPLAT node's combined-model range (walks NULL_NODE slots).
+        [[nodiscard]] std::unique_ptr<lfs::core::SplatData>
+        extractConsolidatedNodeModel(const Uuid& uuid) const;
         [[nodiscard]] std::vector<bool> getNodeVisibilityMask() const;
 
         struct ConsolidatedNodeSlot {
