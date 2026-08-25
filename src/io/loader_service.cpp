@@ -94,17 +94,7 @@ namespace lfs::io {
                 const size_t capacity = shape.rank() > 0 ? shape[0] : source_contiguous.numel();
                 lfs::core::Tensor dst = allocator(shape, capacity, source_contiguous.dtype(), name);
                 dst.set_name(std::string{name});
-
-                // Viewer splat tensors are read directly by Vulkan. Match the PLY
-                // loader's known-good host-to-external upload path instead of
-                // relying on CUDA device-to-device copies into imported Vk memory.
-                if (dst.is_external_storage() &&
-                    dst.external_storage_kind() == "vulkan_external_buffer" &&
-                    source_contiguous.device() == lfs::core::Device::CUDA) {
-                    dst.copy_from(source_contiguous.cpu());
-                } else {
-                    dst.copy_from(source_contiguous);
-                }
+                dst.copy_from(source_contiguous);
                 return dst;
             };
 
@@ -116,8 +106,9 @@ namespace lfs::io {
 
             lfs::core::Tensor shN;
             lfs::core::Tensor shN_bounds;
-            if (model.shN_raw().is_valid() && model.shN_raw().numel() > 0) {
-                shN = copy_to_allocator(model.shN_raw(), "SplatData.shN");
+            const auto& shN_src = model.shN_raw();
+            if (shN_src.is_valid() && shN_src.numel() > 0) {
+                shN = copy_to_allocator(shN_src, "SplatData.shN");
             }
             if (shN_q16) {
                 shN_bounds = copy_to_allocator(

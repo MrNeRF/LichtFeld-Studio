@@ -11,6 +11,7 @@
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
 #include "core/sh_value_quant.hpp"
+#include "core/shareable_allocation_limit.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_data_transform.hpp"
 #include "dataset.hpp"
@@ -435,6 +436,10 @@ namespace lfs::training {
                                                          float_cap,
                                                          lfs::core::DataType::Float32,
                                                          "SplatData.shN");
+                        } catch (const lfs::core::ShareableAllocationLimitError& error) {
+                            LOG_INFO("Float shN install rejected by shareable allocation limit ({}); "
+                                     "re-encoding to q16 instead",
+                                     error.what());
                         } catch (const std::exception& error) {
                             // Exportable q16 region rejects the swizzled float shape when
                             // live-N cells exceed the pad-dropped capacity; same fallback

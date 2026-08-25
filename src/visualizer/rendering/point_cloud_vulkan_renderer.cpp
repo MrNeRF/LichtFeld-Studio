@@ -1913,7 +1913,7 @@ namespace lfs::vis {
                                                 VK_ERROR_INITIALIZATION_FAILED);
                 return std::unexpected<std::string>(error);
             }
-            r = vkQueueSubmit(submit_queue, 1, &si, fence);
+            r = lfs::rendering::vk_queue_submit_synced(submit_queue, 1, &si, fence);
             if (r != VK_SUCCESS) {
                 restore_tracked_layouts();
                 rejectSubmissionAndMaybeReplace("vkQueueSubmit", r);
@@ -2169,10 +2169,10 @@ namespace lfs::vis {
                                                 VK_ERROR_INITIALIZATION_FAILED);
                 return std::unexpected<std::string>(error);
             }
-            r = vkQueueSubmit(submit_queue, 1, &submit_info, fence);
+            r = lfs::rendering::vk_queue_submit_synced(submit_queue, 1, &submit_info, fence);
             if (r != VK_SUCCESS) {
-                rejectSubmissionAndMaybeReplace("vkQueueSubmit(point-cloud readback)", r);
-                return std::unexpected<std::string>(vkError("vkQueueSubmit(point-cloud readback)", r));
+                rejectSubmissionAndMaybeReplace("lfs::rendering::vk_queue_submit_synced(point-cloud readback)", r);
+                return std::unexpected<std::string>(vkError("lfs::rendering::vk_queue_submit_synced(point-cloud readback)", r));
             }
             {
                 using lfs::rendering::apply_submission_transition;

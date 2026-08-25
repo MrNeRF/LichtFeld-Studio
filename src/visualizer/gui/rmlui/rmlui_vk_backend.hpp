@@ -367,7 +367,7 @@ private:
             info.pCommandBuffers = &m_p_command_buffer;
             info.commandBufferCount = 1;
 
-            return vkQueueSubmit(m_p_graphics_queue, 1, &info, m_p_fence) == VK_SUCCESS;
+            return lfs::rendering::vk_queue_submit_synced(m_p_graphics_queue, 1, &info, m_p_fence) == VK_SUCCESS;
         }
 
     private:

@@ -333,6 +333,9 @@ namespace lfs::vis {
         // while shutting down. Destroy it before invalidating the service
         // locator or releasing any of the components it observes.
         project_lifecycle_.reset();
+        if (rendering_manager_) {
+            rendering_manager_->releaseSceneModelResources();
+        }
 
         // Clear event handlers before destroying components to prevent use-after-free
         lfs::event::EventBridge::instance().clear_all();

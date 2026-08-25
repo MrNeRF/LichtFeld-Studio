@@ -1282,7 +1282,8 @@ namespace lfs::io {
             const size_t row_capacity = capacity != 0
                                             ? capacity
                                             : (shape.rank() > 0 ? shape[0] : 0);
-            tensor = options.splat_tensor_allocator(shape, row_capacity, DataType::Float32, name);
+            tensor = options.splat_tensor_allocator(
+                shape, row_capacity, DataType::Float32, name);
         } else {
             tensor = Tensor::empty(shape, Device::CUDA, DataType::Float32);
         }

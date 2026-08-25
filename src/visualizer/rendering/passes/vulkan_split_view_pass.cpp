@@ -1038,7 +1038,7 @@ namespace lfs::vis {
                     __FILE__,
                     __LINE__));
             }
-            result = vkQueueSubmit(graphics_queue, 1, &si, panel.fence);
+            result = lfs::rendering::vk_queue_submit_synced(graphics_queue, 1, &si, panel.fence);
             if (result != VK_SUCCESS) {
                 return replacePanelFenceSignaled(panel, "vkQueueSubmit", result);
             }

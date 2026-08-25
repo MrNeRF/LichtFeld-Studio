@@ -369,21 +369,19 @@ namespace lfs::vis {
         [[nodiscard]] std::size_t acquireRingSlot();
         [[nodiscard]] std::size_t latestOutputRingSlot(OutputSlot output_slot) const;
 
-        // Fallback coalesced CUDA-imported VkBuffer per ring slot, holding raw
-        // SplatData input regions back-to-back. Training tensors created as
-        // Vulkan-external buffers bypass this allocation and are bound directly.
         static constexpr std::size_t kInputRegionCount = 7;
         static constexpr std::size_t kOverlayRegionCount = 7;
         static constexpr std::size_t kSelectionQueryRegionCount = 7;
         static constexpr std::size_t kRegionAlignment = 256; // VK minStorageBufferOffsetAlignment upper bound on common HW
         struct CudaOpacityCopySlot {
+            std::shared_ptr<lfs::core::ExportableBlock> block;
             VulkanContext::ExternalBuffer buffer{};
-            lfs::rendering::CudaVulkanBufferInterop interop{};
             std::size_t bytes = 0;
         };
         struct CudaOverlaySlot {
+            std::shared_ptr<lfs::core::ExportableBlock> block;
             VulkanContext::ExternalBuffer buffer{};
-            lfs::rendering::CudaVulkanBufferInterop interop{};
+            lfs::core::Tensor copy_keep_alive;
             std::array<std::size_t, kOverlayRegionCount> region_offset{};
             std::array<std::size_t, kOverlayRegionCount> region_bytes{};
             lfs::core::Tensor selection_source;
@@ -413,8 +411,9 @@ namespace lfs::vis {
             bool model_transforms_uploaded = false;
         };
         struct CudaSelectionQuerySlot {
+            std::shared_ptr<lfs::core::ExportableBlock> block;
             VulkanContext::ExternalBuffer buffer{};
-            lfs::rendering::CudaVulkanBufferInterop interop{};
+            lfs::core::Tensor copy_keep_alive;
             std::array<std::size_t, kSelectionQueryRegionCount> region_offset{};
             std::array<std::size_t, kSelectionQueryRegionCount> region_bytes{};
             std::array<std::size_t, kSelectionQueryRegionCount> region_capacity_bytes{};
@@ -614,8 +613,8 @@ namespace lfs::vis {
         // engine writes expanded tree metadata with page payloads; the
         // Buffer shells above hold region views into it.
         struct LodTreeMetaStorage {
+            std::shared_ptr<lfs::core::ExportableBlock> block;
             VulkanContext::ExternalBuffer buffer{};
-            lfs::rendering::CudaVulkanBufferInterop interop{};
             std::size_t bounds_offset = 0;
             std::size_t links_offset = 0;
             std::size_t capacity_nodes = 0;
@@ -628,8 +627,8 @@ namespace lfs::vis {
         LodUploadEngine::DeviceLayout lod_engine_layout_{};
         const lfs::core::SplatData* lod_sink_model_ = nullptr;
         struct LodPageInputStorage {
+            std::shared_ptr<lfs::core::ExportableBlock> block;
             VulkanContext::ExternalBuffer buffer{};
-            lfs::rendering::CudaVulkanBufferInterop interop{};
             std::array<std::size_t, kInputRegionCount> region_offset{};
             std::array<std::size_t, kInputRegionCount> region_bytes{};
             const lfs::core::SplatData* model = nullptr;

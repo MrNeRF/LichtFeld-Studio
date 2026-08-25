@@ -893,7 +893,7 @@ namespace lfs::vis {
             }
             // Async submit: in-order queue execution makes the upload visible to the
             // viewport pass that samples this image right after on the same queue.
-            result = vkQueueSubmit(graphics_queue, 1, &si, transfer_fence);
+            result = lfs::rendering::vk_queue_submit_synced(graphics_queue, 1, &si, transfer_fence);
             if (result != VK_SUCCESS) {
                 return replaceTransferFenceSignaled("vkQueueSubmit", result);
             }

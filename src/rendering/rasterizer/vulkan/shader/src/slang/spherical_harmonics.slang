@@ -168,26 +168,31 @@ float decode_shn_q16_cell(uint q, float lo, float hi) {
 }
 
 // Cell-linear swizzle index: [ceil(N/R), n_cells, R] of uint16, R=SH_REORDER_SIZE.
+// 64-bit: at SH3 the u16 cell index exceeds 2^32 above ~95M primitives.
+// Keep this formula text in sync with tests/test_shn_bda_index_math.cpp.
 [ForceInline]
-uint shAtU16(uint primitive_idx, uint cell, uint n_cells) {
-    const uint block = primitive_idx / SH_REORDER_SIZE;
-    const uint lane = primitive_idx % SH_REORDER_SIZE;
-    return block * (n_cells * SH_REORDER_SIZE) + cell * SH_REORDER_SIZE + lane;
+uint64_t shAtU16(uint primitive_idx, uint cell, uint n_cells) {
+    const uint64_t block = primitive_idx / SH_REORDER_SIZE;
+    const uint64_t lane = primitive_idx % SH_REORDER_SIZE;
+    const uint64_t n = n_cells;
+    return block * (n * SH_REORDER_SIZE) + uint64_t(cell) * SH_REORDER_SIZE + lane;
 }
 
-// Load one u16 from a uint-packed buffer (two cells per word).
+// Load one u16 from a uint-packed PhysicalStorageBuffer64 (two cells per word).
 [ForceInline]
-uint load_shn_q16_u16(IArray<uint> shN_words, uint u16_index) {
-    const uint word = shN_words[u16_index >> 1];
+uint load_shn_q16_u16(uint64_t shN_address, uint64_t u16_index) {
+    uint* p = (uint*)shN_address;
+    const uint word = p[u16_index >> 1];
     return (u16_index & 1u) != 0u ? (word >> 16) : (word & 0xFFFFu);
 }
 
-// Pad-dropped q16 rest SH (exportable training zero-copy). shN_words is the
-// cell-linear u16 buffer packed as uint; bounds is float2 per 256-splat block.
+// Pad-dropped q16 rest SH (exportable training zero-copy). shN_address is the
+// 64-bit device address of the cell-linear u16 buffer packed as uint; bounds
+// is float2 per 256-splat block (still a descriptor).
 SpherHarmCoeffs read_spherical_harmonics_coeffs_split_q16(
     uint32_t g_idx,
     IArray<float> sh0,
-    IArray<uint> shN_words,
+    uint64_t shN_address,
     IArray<float2> bounds,
     uint32_t active_sh,
     uint32_t n_cells)
@@ -211,9 +216,9 @@ SpherHarmCoeffs read_spherical_harmonics_coeffs_split_q16(
             const uint base = uint(rest_i) * 3u; \
             if (base + 2u < n_cells) { \
                 g_sh_coeffs.coeff_field = float3( \
-                    decode_shn_q16_cell(load_shn_q16_u16(shN_words, shAtU16(g_idx, base + 0u, n_cells)), lo, hi), \
-                    decode_shn_q16_cell(load_shn_q16_u16(shN_words, shAtU16(g_idx, base + 1u, n_cells)), lo, hi), \
-                    decode_shn_q16_cell(load_shn_q16_u16(shN_words, shAtU16(g_idx, base + 2u, n_cells)), lo, hi)); \
+                    decode_shn_q16_cell(load_shn_q16_u16(shN_address, shAtU16(g_idx, base + 0u, n_cells)), lo, hi), \
+                    decode_shn_q16_cell(load_shn_q16_u16(shN_address, shAtU16(g_idx, base + 1u, n_cells)), lo, hi), \
+                    decode_shn_q16_cell(load_shn_q16_u16(shN_address, shAtU16(g_idx, base + 2u, n_cells)), lo, hi)); \
             } \
         } while (0)
 
@@ -247,7 +252,7 @@ SpherHarmCoeffs read_spherical_harmonics_coeffs_split_q16(
 SpherHarmCoeffs read_spherical_harmonics_coeffs_split_f16(
     uint32_t g_idx,
     IArray<float> sh0,
-    IArray<uint2> shN,
+    uint64_t shN_address,
     uint32_t active_sh,
     uint32_t shN_slots_per_primitive)
 {
@@ -262,13 +267,14 @@ SpherHarmCoeffs read_spherical_harmonics_coeffs_split_f16(
     if (shN_slots_per_primitive == 0)
         return g_sh_coeffs;
 
+    uint2* shN = (uint2*)shN_address;
   #if SH_REORDER_SIZE <= 1
-    uint32_t base = shN_slots_per_primitive*g_idx;
-    #define _SHN_F16_COEFF(idx) unpack_shn_slot_f16(shN[base+idx])
+    uint64_t base = uint64_t(shN_slots_per_primitive) * uint64_t(g_idx);
+    #define _SHN_F16_COEFF(idx) unpack_shn_slot_f16(shN[base+uint64_t(idx)])
   #else
-    uint32_t base = (g_idx/SH_REORDER_SIZE) * (shN_slots_per_primitive*SH_REORDER_SIZE);
+    uint64_t base = uint64_t(g_idx/SH_REORDER_SIZE) * (uint64_t(shN_slots_per_primitive)*SH_REORDER_SIZE);
     uint32_t offset = g_idx%SH_REORDER_SIZE;
-    #define _SHN_F16_COEFF(idx) unpack_shn_slot_f16(shN[base+SH_REORDER_SIZE*idx+offset])
+    #define _SHN_F16_COEFF(idx) unpack_shn_slot_f16(shN[base+uint64_t(SH_REORDER_SIZE)*uint64_t(idx)+offset])
   #endif
 
     float4 temp0, temp1;

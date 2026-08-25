@@ -150,6 +150,10 @@ struct VulkanGSPipelineBuffers {
     bool shN_q16 = false;
     Buffer<float> shN_bounds; // (n_blocks, 2) float2 min/max when shN_q16
     uint32_t shN_n_cells = 0; // pad-dropped u16 cells per primitive when shN_q16
+    // q16/f16 SH rest: PhysicalStorageBuffer64 address of the shN region
+    // (ImportedBlock device_address + vkOffset). Zero when unused.
+    uint64_t shN_address = 0;
+    size_t shN_committed_bytes = 0;
 
     // projection outputs
     Buffer<int32_t> tiles_touched;    // (N,)

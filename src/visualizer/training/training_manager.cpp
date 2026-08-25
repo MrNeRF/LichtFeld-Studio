@@ -13,6 +13,7 @@
 #include "core/reactive/store.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
+#include "core/shareable_allocation_limit.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/tensor_ops.hpp"
 #include "python/python_runtime.hpp"
@@ -130,6 +131,12 @@ namespace lfs::vis {
                              const lfs::core::DataType dtype,
                              const std::string_view name) -> lfs::core::Tensor {
                 const std::string debug_name{name};
+                if (keepFloatShNInPooledCuda(debug_name, dtype)) {
+                    auto pooled = lfs::core::Tensor::zeros_direct(
+                        std::move(shape), capacity, lfs::core::Device::CUDA, dtype);
+                    pooled.set_name(debug_name);
+                    return pooled;
+                }
                 auto tensor = makeVulkanExternalTensor(
                     *context,
                     std::move(shape),
@@ -137,10 +144,14 @@ namespace lfs::vis {
                     capacity,
                     debug_name.c_str());
                 if (!tensor) {
-                    throw lfs::core::TensorError(std::format(
+                    const auto message = std::format(
                         "Vulkan-external training tensor allocation failed for '{}': {}",
                         debug_name,
-                        tensor.error()));
+                        tensor.error());
+                    if (lfs::core::is_shareable_allocation_limit_message(tensor.error())) {
+                        throw lfs::core::ShareableAllocationLimitError(message);
+                    }
+                    throw lfs::core::TensorError(message);
                 }
                 tensor->set_name(debug_name);
                 return std::move(*tensor);
@@ -160,6 +171,8 @@ namespace lfs::vis {
     lfs::core::SplatTensorAllocator TrainerManager::createTrainingSplatTensorAllocator(
         const lfs::core::param::TrainingParameters& params,
         const std::size_t min_capacity) {
+        splat_interop_allocator_ = {};
+        splat_interop_parent_.reset();
         splat_storage_.reset();
         lfs::core::SplatTensorAllocator tensor_allocator;
 
@@ -196,8 +209,23 @@ namespace lfs::vis {
 
         const std::size_t exportable_capacity =
             lfs::core::SplatExportableStorage::growthCapacity(live_estimate, configured_capacity);
-        const std::size_t reserve_capacity =
-            configured_capacity > 0 ? configured_capacity : exportable_capacity;
+        std::size_t reserve_capacity = configured_capacity;
+        if (reserve_capacity == 0) {
+            std::size_t free_mem = 0;
+            std::size_t total_mem = 0;
+            if (cudaMemGetInfo(&free_mem, &total_mem) == cudaSuccess && total_mem > 0) {
+                const std::size_t per_splat =
+                    lfs::core::SplatExportableStorage::layoutBytesPerSplat(sh_degree);
+                reserve_capacity = total_mem / std::max<std::size_t>(per_splat, 1);
+                reserve_capacity = std::min(reserve_capacity, std::size_t{0x7fffffff});
+            }
+            reserve_capacity = std::max(reserve_capacity, exportable_capacity);
+            LOG_INFO("Exportable splat reserve derived from device memory: reserve_capacity={} "
+                     "(exportable_capacity={}, sh_degree={})",
+                     reserve_capacity,
+                     exportable_capacity,
+                     sh_degree);
+        }
 
         VulkanContext* vk_ctx = nullptr;
         if (viewer_ && viewer_->getWindowManager()) {
@@ -211,25 +239,33 @@ namespace lfs::vis {
                 exportable_capacity, sh_degree, /*device=*/0, reserve_capacity);
             if (storage_result) {
                 splat_storage_ = std::move(*storage_result);
-                auto interop_alloc_result =
-                    makeSplatExportableInteropAllocator(*vk_ctx, *splat_storage_);
+                auto interop_alloc_result = makeSplatExportableInteropAllocator(
+                    *vk_ctx, *splat_storage_, &splat_interop_parent_);
                 if (interop_alloc_result) {
-                    tensor_allocator = std::move(*interop_alloc_result);
+                    splat_interop_allocator_ = std::move(*interop_alloc_result);
+                    tensor_allocator = splat_interop_allocator_;
                     LOG_INFO("Training tensors share one CUDA-exportable VMM block "
                              "imported into Vulkan (live≈{}, capacity={}, reserve={}, "
-                             "sh_degree={}, block={} MiB) — zero-copy viewer interop "
-                             "during live-N growth",
+                             "sh_degree={}, committed={} MiB reserved={} MiB chunks={}) "
+                             "— zero-copy viewer interop during live-N growth",
                              live_estimate,
                              exportable_capacity,
                              reserve_capacity,
                              sh_degree,
-                             splat_storage_->block->size >> 20);
+                             splat_storage_->block->committed_bytes >> 20,
+                             splat_storage_->block->reserved_bytes >> 20,
+                             splat_storage_->block->chunks.size());
                 } else {
                     LOG_WARN("Exportable-interop allocator failed ({}); dropping storage "
                              "and falling back to legacy Vulkan-external allocator",
                              interop_alloc_result.error());
+                    splat_interop_parent_.reset();
                     splat_storage_.reset();
                 }
+            } else if (lfs::core::is_shareable_allocation_limit_message(storage_result.error())) {
+                LOG_WARN("SplatExportableStorage creation exceeded the shareable allocation "
+                         "limit ({}); falling back to legacy Vulkan-external allocator",
+                         storage_result.error());
             } else {
                 LOG_WARN("SplatExportableStorage creation failed ({}); falling back to "
                          "legacy Vulkan-external allocator",
@@ -270,61 +306,6 @@ namespace lfs::vis {
         trainer_->setExportableDensifyBarrier(
             [this]() -> bool { return beginExportableDensifyBarrier(); },
             [this]() -> bool { return endExportableDensifyBarrier(); });
-    }
-
-    bool TrainerManager::rebindExportableCudaOnly() {
-        if (!splat_storage_ || !splat_storage_->valid()) {
-            return false;
-        }
-        auto* model_ptr = scene_ ? scene_->getTrainingModel() : nullptr;
-        if (!model_ptr) {
-            return false;
-        }
-        auto cuda_only = splat_storage_->make_allocator();
-        if (auto ok = splat_storage_->rebindSplatData(*model_ptr, cuda_only); !ok) {
-            LOG_ERROR("Exportable cuda-only rebind (drop Vulkan import) failed: {}",
-                      ok.error());
-            return false;
-        }
-        installExportableCapacityEnsure(*model_ptr);
-        if (trainer_) {
-            trainer_->setSplatTensorAllocator(cuda_only);
-        }
-        return true;
-    }
-
-    bool TrainerManager::rebindExportableVulkanInterop() {
-        if (!splat_storage_ || !splat_storage_->valid()) {
-            return false;
-        }
-        auto* model_ptr = scene_ ? scene_->getTrainingModel() : nullptr;
-        if (!model_ptr) {
-            return false;
-        }
-        lfs::core::SplatTensorAllocator alloc;
-        VulkanContext* vk_ctx = nullptr;
-        if (viewer_ && viewer_->getWindowManager()) {
-            vk_ctx = viewer_->getWindowManager()->getVulkanContext();
-        }
-        if (vk_ctx && vk_ctx->externalMemoryInteropEnabled()) {
-            auto interop = makeSplatExportableInteropAllocator(*vk_ctx, *splat_storage_);
-            if (!interop) {
-                LOG_ERROR("Exportable Vulkan re-import failed: {}", interop.error());
-                return false;
-            }
-            alloc = std::move(*interop);
-        } else {
-            alloc = splat_storage_->make_allocator();
-        }
-        if (auto ok = splat_storage_->rebindSplatData(*model_ptr, alloc); !ok) {
-            LOG_ERROR("Exportable rebind after Vulkan re-import failed: {}", ok.error());
-            return false;
-        }
-        installExportableCapacityEnsure(*model_ptr);
-        if (trainer_) {
-            trainer_->setSplatTensorAllocator(alloc);
-        }
-        return true;
     }
 
     bool TrainerManager::beginExportableDensifyBarrier() {
@@ -381,50 +362,10 @@ namespace lfs::vis {
             return false;
         }
 
-        // CRITICAL teardown order (NVRM "VM: invalid mmap context"):
-        // growExportableDeviceBlock() unmaps + cuMemRelease + closes the old
-        // export fd. Vulkan's imported VkDeviceMemory must be destroyed BEFORE
-        // that happens. Drop all VulkanExternalTensorStorage owners by rebinding
-        // to CUDA-only views of the SAME ExportableBlock (not a separate pool —
-        // make_allocator hands out base+offset views into the packed SoA). The
-        // rebind is views-only when source already aliases the block.
-        // Trainer may also hold the old interop allocator — clear it too.
-        //
-        // Grow must run when the GPU is not reading the block (densify is on the
-        // training thread between steps; the next viewer frame re-imports).
-        // Physical grow always requires dropping Vulkan imports first (NVRM).
-        // Densify barrier is device-sync only and does not drop imports.
-        if (!rebindExportableCudaOnly()) {
-            LOG_ERROR("Exportable pre-grow rebind (drop Vulkan import) failed");
-            return false;
-        }
-        // From this point until a successful re-import, every exit must restore
-        // the viewer's Vulkan-backed tensor owners. In particular, grow() can
-        // fail transactionally after the old import was already detached.
-        auto restore_vulkan_interop = ScopeExit([this]() noexcept {
-            try {
-                if (!rebindExportableVulkanInterop()) {
-                    LOG_ERROR("Failed to restore Vulkan interop after exportable grow failure; "
-                              "stopping training");
-                    if (trainer_) {
-                        trainer_->request_stop();
-                    }
-                }
-            } catch (const std::exception& error) {
-                LOG_ERROR("Exception while restoring Vulkan interop after exportable grow "
-                          "failure: {}; stopping training",
-                          error.what());
-                if (trainer_) {
-                    trainer_->request_stop();
-                }
-            } catch (...) {
-                LOG_ERROR("Unknown exception while restoring Vulkan interop after exportable "
-                          "grow failure; stopping training");
-                if (trainer_) {
-                    trainer_->request_stop();
-                }
-            }
-        });
+        const std::size_t old_capacity = splat_storage_->capacity();
+        const auto old_bytes = splat_storage_->region_bytes;
+        const std::uint64_t old_generation = splat_storage_->generation();
+
         if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
             LOG_ERROR("cudaDeviceSynchronize before exportable grow failed: {} ({})",
                       cudaGetErrorName(err),
@@ -435,37 +376,47 @@ namespace lfs::vis {
         auto grew = splat_storage_->grow(want);
         if (!grew) {
             LOG_ERROR("Exportable splat grow failed (need={}): {}", needed_rows, grew.error());
-            if (splat_storage_->poisoned() && trainer_) {
-                LOG_ERROR("Exportable splat storage is poisoned; stopping training");
-                trainer_->request_stop();
-            }
             return false;
         }
         if (splat_storage_->capacity() < needed_rows) {
             LOG_ERROR("Exportable splat grow left capacity {} < needed {}",
                       splat_storage_->capacity(),
                       needed_rows);
+            splat_storage_->restoreCapacity(old_capacity, old_bytes, old_generation);
             return false;
+        }
+
+        if (splat_interop_parent_) {
+            if (!splat_interop_parent_->bindNewExportableChunks(*splat_storage_->block)) {
+                LOG_ERROR("Exportable Vulkan bindNewChunks after grow failed; restoring capacity");
+                splat_storage_->restoreCapacity(old_capacity, old_bytes, old_generation);
+                return false;
+            }
         }
 
         model_ptr = scene_ ? scene_->getTrainingModel() : nullptr;
         if (!model_ptr) {
+            splat_storage_->restoreCapacity(old_capacity, old_bytes, old_generation);
             return false;
         }
 
-        // Post-grow rebind: grow() already relocated every region to the new
-        // offsets. rebindSplatData installs views at those offsets and does NOT
-        // copy_from the stale pre-grow tensors. Always
-        // re-import Vulkan after grow (export handle changes).
-        if (!rebindExportableVulkanInterop()) {
-            LOG_ERROR("Exportable rebind after grow failed");
+        const auto alloc = splat_interop_allocator_ ? splat_interop_allocator_
+                                                    : splat_storage_->make_allocator();
+        if (auto ok = splat_storage_->rebindSplatData(*model_ptr, alloc); !ok) {
+            LOG_ERROR("Exportable rebind after grow failed: {}", ok.error());
+            splat_storage_->restoreCapacity(old_capacity, old_bytes, old_generation);
             return false;
         }
-        restore_vulkan_interop.release();
-        LOG_INFO("Exportable splat storage grew for densify: capacity={} block={} MiB gen={}",
+        installExportableCapacityEnsure(*model_ptr);
+        if (trainer_) {
+            trainer_->setSplatTensorAllocator(alloc);
+        }
+        LOG_INFO("Exportable splat storage grew for densify: capacity={} committed={} MiB "
+                 "gen={} chunks={} (appended/bound, no re-import)",
                  splat_storage_->capacity(),
-                 splat_storage_->block->size >> 20,
-                 splat_storage_->generation());
+                 splat_storage_->block->committed_bytes >> 20,
+                 splat_storage_->generation(),
+                 splat_storage_->block->chunks.size());
         model_ptr = scene_ ? scene_->getTrainingModel() : nullptr;
         return model_ptr && model_ptr->means_raw().capacity() >= needed_rows;
     }
@@ -639,6 +590,8 @@ namespace lfs::vis {
             // Model tensors retain their own shared ownership while edit/view mode
             // still uses the exportable block. The manager must not remain the final
             // owner after scene teardown.
+            splat_interop_allocator_ = {};
+            splat_interop_parent_.reset();
             splat_storage_.reset();
         }
         checkpoint_baseline_iteration_.reset();
