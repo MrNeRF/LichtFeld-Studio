@@ -576,6 +576,13 @@ def register():
     _sync_viewport_overlay_document()
 
 
+def on_document_unloaded():
+    """Drop Python overlay handles before RmlUi frees the native document."""
+    global _document_controller
+    if _document_controller is not None:
+        _document_controller.reset()
+
+
 def unregister():
     """Unregister built-in viewport overlay controllers."""
     global _hook_registered
@@ -584,5 +591,4 @@ def unregister():
 
     lf.ui.remove_hook(_HOOK_PANEL, _DRAW_SECTION, _draw_viewport_overlay)
     _hook_registered = False
-    if _document_controller is not None:
-        _document_controller.reset()
+    on_document_unloaded()

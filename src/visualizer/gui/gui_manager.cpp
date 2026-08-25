@@ -56,6 +56,7 @@
 #include "core/events.hpp"
 #include "core/parameters.hpp"
 #include "core/scene.hpp"
+#include "python/gil.hpp"
 #include "python/package_manager.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
@@ -3850,6 +3851,10 @@ namespace lfs::vis::gui {
     void GuiManager::reloadRmlResources() {
         rml_theme::invalidateBaseRcssCache();
         rml_theme::invalidateThemeMediaCache();
+
+        std::optional<lfs::python::GilAcquire> gil;
+        if (lfs::python::can_acquire_gil())
+            gil.emplace();
 
         startup_overlay_.reloadResources();
         rml_shell_frame_.reloadResources();

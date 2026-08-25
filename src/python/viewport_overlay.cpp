@@ -49,6 +49,22 @@ namespace lfs::python {
             return false;
         }
 
+        void unload_document_impl() {
+            if (!can_acquire_gil()) {
+                LOG_DEBUG("Viewport overlay document unload skipped: Python not ready");
+                return;
+            }
+
+            const GilAcquire gil;
+            try {
+                auto overlays = nb::module_::import_("lfs_plugins.overlays");
+                if (nb::hasattr(overlays, "on_document_unloaded"))
+                    overlays.attr("on_document_unloaded")();
+            } catch (const std::exception& e) {
+                LOG_ERROR("Viewport overlay document unload failed: {}", e.what());
+            }
+        }
+
         void invoke_overlay_impl(const float* view_matrix, const float* proj_matrix,
                                  const float* vp_pos, const float* vp_size,
                                  const float* cam_pos, const float* cam_fwd,
@@ -151,6 +167,7 @@ namespace lfs::python {
     void register_viewport_overlay_bridge() {
         set_viewport_overlay_callbacks(has_handlers_impl, invoke_overlay_impl);
         set_viewport_overlay_document_sync_callback(sync_document_impl);
+        set_viewport_overlay_document_unload_callback(unload_document_impl);
     }
 
 } // namespace lfs::python

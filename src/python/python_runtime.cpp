@@ -110,6 +110,7 @@ namespace lfs::python {
         HasViewportDrawHandlersCallback g_has_viewport_draw_handlers_cb = nullptr;
         InvokeViewportOverlayCallback g_invoke_viewport_overlay_cb = nullptr;
         SyncViewportOverlayDocumentCallback g_sync_viewport_overlay_document_cb = nullptr;
+        ViewportOverlayDocumentUnloadCallback g_viewport_overlay_document_unload_cb = nullptr;
 
         // Selection sub-mode (shared between C++ toolbar and Python operator)
         std::atomic<int> g_selection_submode{0};
@@ -1546,6 +1547,11 @@ namespace lfs::python {
         g_sync_viewport_overlay_document_cb = sync_cb;
     }
 
+    void set_viewport_overlay_document_unload_callback(
+        ViewportOverlayDocumentUnloadCallback unload_cb) {
+        g_viewport_overlay_document_unload_cb = unload_cb;
+    }
+
     bool has_viewport_draw_handlers() {
         return g_has_viewport_draw_handlers_cb && g_has_viewport_draw_handlers_cb();
     }
@@ -1553,6 +1559,11 @@ namespace lfs::python {
     bool sync_viewport_overlay_document(void* document) {
         return document && g_sync_viewport_overlay_document_cb &&
                g_sync_viewport_overlay_document_cb(document);
+    }
+
+    void notify_viewport_overlay_document_unloaded() {
+        if (g_viewport_overlay_document_unload_cb)
+            g_viewport_overlay_document_unload_cb();
     }
 
     void invoke_viewport_overlay(const float* view_matrix, const float* proj_matrix,

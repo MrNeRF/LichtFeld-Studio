@@ -789,12 +789,17 @@ namespace lfs::python {
                                                    void* overlay_renderer,
                                                    void* draw_list);
 
+    using ViewportOverlayDocumentUnloadCallback = void (*)();
+
     LFS_PYTHON_RUNTIME_API void set_viewport_overlay_callbacks(HasViewportDrawHandlersCallback has_cb,
                                                                InvokeViewportOverlayCallback invoke_cb);
     LFS_PYTHON_RUNTIME_API void set_viewport_overlay_document_sync_callback(
         SyncViewportOverlayDocumentCallback sync_cb);
+    LFS_PYTHON_RUNTIME_API void set_viewport_overlay_document_unload_callback(
+        ViewportOverlayDocumentUnloadCallback unload_cb);
     LFS_PYTHON_RUNTIME_API bool has_viewport_draw_handlers();
     LFS_PYTHON_RUNTIME_API bool sync_viewport_overlay_document(void* document);
+    LFS_PYTHON_RUNTIME_API void notify_viewport_overlay_document_unloaded();
     LFS_PYTHON_RUNTIME_API void invoke_viewport_overlay(const float* view_matrix, const float* proj_matrix,
                                                         const float* vp_pos, const float* vp_size,
                                                         const float* cam_pos, const float* cam_fwd,
