@@ -523,6 +523,10 @@ namespace lfs::io::project {
     struct CompactionOptions {
         ReaderOptions compatibility;
         lfs::core::Uuid new_file_uuid;
+        // Save As staging may replace the project identity before rewriting
+        // the project-keyed singleton chapters. Ordinary compaction leaves
+        // this null and preserves the source project UUID.
+        lfs::core::Uuid new_project_uuid = {};
         lfs::core::Uuid commit_uuid;
         lfs::core::Uuid snapshot_uuid;
         std::uint64_t creation_time_unix_ns = 0;

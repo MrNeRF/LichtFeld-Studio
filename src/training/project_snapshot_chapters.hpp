@@ -36,6 +36,7 @@ namespace lfs::training {
     // inheriting an unrelated destination project's identity.
     struct ProjectSnapshotDocumentContext {
         lfs::core::Uuid project_uuid;
+        lfs::core::Uuid save_as_project_uuid = {};
         std::optional<std::filesystem::path>
             source_path;
         lfs::io::project::ProjectChapter project;

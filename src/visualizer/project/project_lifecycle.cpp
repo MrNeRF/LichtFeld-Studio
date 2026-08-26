@@ -5796,6 +5796,19 @@ namespace lfs::vis::project {
             return lfs::Status::failure(
                 std::move(normalized).error());
         }
+        lfs::core::Uuid save_as_project_uuid;
+        const auto current_project_path =
+            recovered_master_path_
+                ? recovered_master_path_
+                : document_->source_path();
+        if (hasSourcePath() &&
+            current_project_path &&
+            current_project_path
+                    ->lexically_normal() !=
+                normalized->lexically_normal()) {
+            save_as_project_uuid =
+                lfs::core::generate_uuid_v4();
+        }
         if (auto* trainer = viewer_.getTrainer();
             trainer &&
             viewer_.getTrainerManager() &&
@@ -5834,6 +5847,8 @@ namespace lfs::vis::project {
             }
             context->allow_existing_destination_replacement =
                 allow_existing_destination_replacement;
+            context->save_as_project_uuid =
+                save_as_project_uuid;
             std::vector<std::byte> preview;
             if (regenerate_preview) {
                 auto captured =
@@ -5906,6 +5921,8 @@ namespace lfs::vis::project {
                     },
                 .file_uuid =
                     lfs::core::generate_uuid_v4(),
+                .save_as_project_uuid =
+                    save_as_project_uuid,
                 .index_compression =
                     lfs::io::project::
                         IndexCompression::Zstd,
