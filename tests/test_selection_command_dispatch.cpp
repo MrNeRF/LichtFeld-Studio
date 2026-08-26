@@ -138,7 +138,7 @@ TEST_F(SelectionCommandDispatchTest, SelectRingCommandRoutesThroughSceneManager)
     SelectRing{
         .x = 50.0f,
         .y = 50.0f,
-        .camera_index = 0,
+        .camera_index = -1,
         .mode = "replace",
     }
         .emit();

@@ -262,14 +262,14 @@ namespace lfs::vis {
         void copySelectionToClipboard();
         void pasteSelectionFromClipboard();
         [[nodiscard]] SelectionResult selectBrush(float x, float y, float radius, const std::string& mode,
-                                                  int camera_index = 0);
+                                                  int camera_index = -1);
         [[nodiscard]] SelectionResult selectRect(float x0, float y0, float x1, float y1, const std::string& mode,
-                                                 int camera_index = 0);
+                                                 int camera_index = -1);
         [[nodiscard]] SelectionResult selectPolygon(const std::vector<glm::vec2>& points, const std::string& mode,
-                                                    int camera_index = 0);
+                                                    int camera_index = -1);
         [[nodiscard]] SelectionResult selectLasso(const std::vector<glm::vec2>& points, const std::string& mode,
-                                                  int camera_index = 0);
-        [[nodiscard]] SelectionResult selectRing(float x, float y, const std::string& mode, int camera_index = 0);
+                                                  int camera_index = -1);
+        [[nodiscard]] SelectionResult selectRing(float x, float y, const std::string& mode, int camera_index = -1);
         [[nodiscard]] SelectionResult applySelectionMask(const std::vector<uint8_t>& mask);
         [[nodiscard]] SelectionResult applySelectionMask(const lfs::core::Tensor& mask);
         [[nodiscard]] SelectionResult previewSelectionMask(const lfs::core::Tensor& mask);

@@ -437,7 +437,7 @@ TEST_F(SelectionServiceInteractionsTest, TestingScreenPositionsCommandFallbackWo
     }));
 
     const auto result = service_->selectRect(
-        0.0f, 0.0f, 50.0f, 50.0f, lfs::vis::SelectionMode::Replace, 0);
+        0.0f, 0.0f, 50.0f, 50.0f, lfs::vis::SelectionMode::Replace, -1);
     ASSERT_TRUE(result.success);
     EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
 }
@@ -509,8 +509,182 @@ TEST_F(SelectionServiceInteractionsTest, RingsCommitKeepsGaussianInsideDepthBand
 TEST_F(SelectionServiceInteractionsTest, CommandRingSelectionUsesHoveredGaussianOverride) {
     service_->setTestingHoveredGaussianId(1);
 
-    const auto result = service_->selectRing(50.0f, 50.0f, lfs::vis::SelectionMode::Replace, 0);
+    const auto result = service_->selectRing(50.0f, 50.0f, lfs::vis::SelectionMode::Replace, -1);
     ASSERT_TRUE(result.success);
     EXPECT_EQ(result.affected_count, 1u);
     EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 1}));
+}
+
+// --- Command-camera mask/filter projection identity -----------------
+//
+// These two tests pin that a command selection builds its mask from the camera
+// named by camera_index, while applyDepthFilter must use the same command
+// camera — not the interactive-or-focused viewer viewport. Mask construction
+// and depth filtering must therefore run against the SAME camera.
+//
+// Fixture geometry (both derived from source, not assumed):
+//   * Viewer camera: the file-static testing viewport, t = (-5.657, 3, -5.657)
+//     looking at the origin. Camera depths: splat0 = 8.5442, splat1 = 9.2063.
+//   * Dataset camera below: world->camera R is the cyclic permutation mapping
+//     world +X onto camera +Z, with T = (0, 0, 10). Camera depths:
+//     splat0 (0,0,0) -> 10.0, splat1 (1,0,0) -> 11.0. Both project exactly to
+//     the principal point, so the screen-window rect never co-decides.
+//
+// The depth band is encoded near = -max.z, far = -min.z. Band [9.5, 10.5]
+// therefore keeps ONLY splat0 under the dataset camera, and rejects BOTH splats
+// under the viewer camera. The three distinguishable outcomes are:
+//   {1, 0} filter ran against the command camera (correct)
+//   {}     filter ran against the wrong camera
+//   {1, 1} filter did not run
+// Neither test can pass vacuously.
+namespace {
+
+    std::shared_ptr<lfs::core::Camera> make_x_axis_dataset_camera() {
+        // world->camera rotation: R * (1,0,0) = (0,0,1), det = +1.
+        auto rotation = Tensor::from_vector(
+            std::vector<float>{
+                0.0f, 1.0f, 0.0f,
+                0.0f, 0.0f, 1.0f,
+                1.0f, 0.0f, 0.0f},
+            {size_t{3}, size_t{3}}, Device::CPU);
+        auto translation = Tensor::from_vector(std::vector<float>{0.0f, 0.0f, 10.0f}, {size_t{3}}, Device::CPU);
+        return std::make_shared<lfs::core::Camera>(
+            std::move(rotation),
+            std::move(translation),
+            100.0f, 100.0f, 50.0f, 50.0f,
+            Tensor{}, Tensor{},
+            lfs::core::CameraModelType::PINHOLE,
+            "dataset.png", std::filesystem::path{}, std::filesystem::path{},
+            100, 100, 0);
+    }
+
+    void arm_dataset_camera_depth_band(lfs::vis::RenderingManager& rendering_manager) {
+        auto settings = rendering_manager.getSettings();
+        settings.depth_filter_enabled = true;
+        // near = -max.z = 9.5, far = -min.z = 10.5
+        settings.depth_filter_min = {-0.5f, -0.5f, -10.5f};
+        settings.depth_filter_max = {0.5f, 0.5f, -9.5f};
+        // Full-viewport window so only depth can decide.
+        settings.depth_filter_scale = 1.0f;
+        settings.depth_filter_offset_x = 0.0f;
+        settings.depth_filter_offset_y = 0.0f;
+        rendering_manager.updateSettings(settings);
+    }
+
+} // namespace
+
+TEST_F(SelectionServiceInteractionsTest, ExplicitCameraRectFiltersWithTheCommandCameraNotTheViewer) {
+    const auto cameras_group = scene_manager_->getScene().addGroup("Cameras");
+    scene_manager_->getScene().addCamera("dataset.png", cameras_group, make_x_axis_dataset_camera());
+    ASSERT_EQ(scene_manager_->getScene().getAllCameras().size(), 1u);
+
+    arm_dataset_camera_depth_band(*rendering_manager_);
+
+    // Mask side: both splats inside the rect, bound to camera 0 so the mask is
+    // unambiguously the command camera's.
+    service_->setTestingScreenPositionsForCamera(0, make_screen_positions({
+                                                        10.0f,
+                                                        10.0f,
+                                                        20.0f,
+                                                        20.0f,
+                                                    }));
+
+    const auto result = service_->selectRect(0.0f, 0.0f, 50.0f, 50.0f, lfs::vis::SelectionMode::Replace, 0);
+    ASSERT_TRUE(result.success);
+
+    // Depth filtering must use camera 0 (band keeps splat0 only), NOT the
+    // viewer camera (which rejects both and yields {}).
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
+}
+
+TEST_F(SelectionServiceInteractionsTest, ExplicitCameraColorSeedFiltersWithTheCommandCamera) {
+    const auto cameras_group = scene_manager_->getScene().addGroup("Cameras");
+    scene_manager_->getScene().addCamera("dataset.png", cameras_group, make_x_axis_dataset_camera());
+    ASSERT_EQ(scene_manager_->getScene().getAllCameras().size(), 1u);
+
+    arm_dataset_camera_depth_band(*rendering_manager_);
+
+    // Deliberately NOT setTestingHoveredGaussianId: the override short-circuits
+    // resolveCommandHoveredGaussianId and would bypass the seed-camera identity
+    // this test exists to prove.
+    service_->setTestingScreenPositionsForCamera(0, make_screen_positions({
+                                                        10.0f,
+                                                        10.0f,
+                                                        20.0f,
+                                                        20.0f,
+                                                    }));
+    // Viewer-side positions too, so the seed pick can resolve a candidate at
+    // all. Without these the failure is merely "no positions", which would not
+    // distinguish a wrong-camera filter from an unseeded fixture.
+    service_->setTestingScreenPositions(make_screen_positions({
+        10.0f,
+        10.0f,
+        20.0f,
+        20.0f,
+    }));
+
+    // CONTROL: with filtering off, the seed resolves and the colour selection
+    // succeeds. This is what makes the assertion below non-vacuous - it proves
+    // the fixture can seed, so a later failure is the FILTER's doing.
+    {
+        lfs::vis::SelectionFilterState unfiltered;
+        const auto control =
+            service_->selectByColorAt(10.0f, 10.0f, lfs::vis::SelectionMode::Replace, unfiltered, 0);
+        ASSERT_TRUE(control.success) << "fixture cannot seed at all: " << control.error;
+        ASSERT_FALSE(selection_values(*scene_manager_).empty());
+    }
+
+    lfs::vis::SelectionFilterState filters;
+    filters.depth_filter = true;
+
+    // Colour selection applies filters during SEED PICKING (applyFilters inside
+    // pickHoveredGaussianIdFromScreenPositions), BEFORE commitSelection — which
+    // is why a rect-only repair would leave this path wrong.
+    // Under the command camera the band accepts splat0, so the seed must survive.
+    const auto result = service_->selectByColorAt(10.0f, 10.0f, lfs::vis::SelectionMode::Replace, filters, 0);
+    ASSERT_TRUE(result.success) << "seed rejected by a filter using the wrong camera: " << result.error;
+
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
+}
+
+TEST_F(SelectionServiceInteractionsTest, ExplicitCameraIndexOutOfRangeHardFailsWithoutOverrides) {
+    set_initial_selection({1, 0});
+
+    const auto result = service_->selectRect(
+        0.0f, 0.0f, 50.0f, 50.0f, lfs::vis::SelectionMode::Replace, 99);
+    EXPECT_FALSE(result.success);
+    EXPECT_EQ(result.affected_count, 0u);
+    EXPECT_EQ(result.error, "Camera index out of range");
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
+}
+
+TEST_F(SelectionServiceInteractionsTest, ArmedOverrideWithInvalidCameraFailsInsteadOfFallingBackToViewer) {
+    // An armed test switch must not silently move projection onto the viewer camera.
+    auto rotation = Tensor::from_vector(
+        std::vector<float>{
+            1.0f, 0.0f, 0.0f,
+            0.0f, 1.0f, 0.0f,
+            0.0f, 0.0f, 1.0f},
+        {size_t{3}, size_t{3}}, Device::CPU);
+    auto translation = Tensor::from_vector(std::vector<float>{0.0f, 0.0f, 10.0f}, {size_t{3}}, Device::CPU);
+    const auto zero_dimension_camera = std::make_shared<lfs::core::Camera>(
+        std::move(rotation),
+        std::move(translation),
+        100.0f, 100.0f, 50.0f, 50.0f,
+        Tensor{}, Tensor{},
+        lfs::core::CameraModelType::PINHOLE,
+        "zero_dim.png", std::filesystem::path{}, std::filesystem::path{},
+        0, 0, 0);
+
+    const auto cameras_group = scene_manager_->getScene().addGroup("Cameras");
+    scene_manager_->getScene().addCamera("zero_dim.png", cameras_group, zero_dimension_camera);
+    ASSERT_EQ(scene_manager_->getScene().getAllCameras().size(), 1u);
+
+    set_initial_selection({1, 0});
+    service_->setTestingHoveredGaussianId(1);
+
+    const auto result = service_->selectRing(50.0f, 50.0f, lfs::vis::SelectionMode::Replace, 0);
+    EXPECT_FALSE(result.success);
+    EXPECT_EQ(result.error, "Camera projection unavailable");
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
 }
