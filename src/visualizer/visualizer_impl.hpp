@@ -396,6 +396,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_PostTrainingProjectSaveRestoresCameraEnabledAndHidden_Test;
         friend class VisualizerImplResetTest_CaptureOmitsPlySequenceClipAndCollapsedUuid_Test;
         friend class VisualizerImplResetTest_AssetManagerProjectRestorePreservesLeftDockWidth_Test;
+        friend class VisualizerImplResetTest_SaveAsAssignsNewProjectIdentity_Test;
 
         // Allow ToolContext to access GUI manager for logging
         friend class ToolContext;

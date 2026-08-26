@@ -2406,15 +2406,13 @@ namespace {
             FOURCC_METR,
         };
         for (const auto fourcc : singleton_fourccs) {
-            EXPECT_NE(
-                destination_reader.find(
-                    fourcc, new_project_uuid),
-                nullptr)
-                << fourcc.to_string();
-            EXPECT_EQ(
-                destination_reader.find(
-                    fourcc, original_project_uuid),
-                nullptr)
+            const auto* rekeyed = destination_reader.find(
+                fourcc, new_project_uuid);
+            ASSERT_NE(rekeyed, nullptr) << fourcc.to_string();
+            EXPECT_TRUE(rekeyed->is_live()) << fourcc.to_string();
+            const auto* stale = destination_reader.find(
+                fourcc, original_project_uuid);
+            EXPECT_TRUE(!stale || !stale->is_live())
                 << fourcc.to_string();
         }
         EXPECT_NE(
