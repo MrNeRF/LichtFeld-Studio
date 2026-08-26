@@ -1109,7 +1109,7 @@
     "depth_view_panel": "Controles del mapa de profundidad",
     "depth_view_tool": "Vista de mapa de profundidad activa",
     "depth_view_mode": "Elegir el modo de color de profundidad",
-    "gt_compare_mode": "Elige la comparación con datos de referencia RGB, normales o profundidad",
+    "gt_compare_mode": "Elige la visualización de referencia RGB, normales, profundidad o pérdida",
     "depth_view_range": "Rango de visualización de profundidad",
     "depth_view_near": "Límite cercano del rango de profundidad",
     "depth_view_far": "Límite lejano del rango de profundidad",

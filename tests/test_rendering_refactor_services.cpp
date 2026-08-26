@@ -212,6 +212,43 @@ namespace lfs::vis {
         EXPECT_TRUE(idle_info.right_name.empty());
     }
 
+    TEST(GTComparisonTest, LossHeatmapIsBlackForMatchingPixelsAndHighlightsLargerErrors) {
+        const glm::vec3 ground_truth(0.4f, 0.5f, 0.6f);
+        const glm::vec3 matching = gtLossHeatmapColor(ground_truth, ground_truth);
+        const glm::vec3 small_error = gtLossHeatmapColor(
+            ground_truth, ground_truth + glm::vec3(0.01f));
+        const glm::vec3 large_error = gtLossHeatmapColor(
+            ground_truth, ground_truth + glm::vec3(0.5f));
+
+        EXPECT_EQ(matching, glm::vec3(0.0f));
+        EXPECT_GT(small_error.r + small_error.g + small_error.b, 0.0f);
+        EXPECT_GT(large_error.r + large_error.g + large_error.b,
+                  small_error.r + small_error.g + small_error.b);
+    }
+
+    TEST(GTComparisonTest, LossModeSurvivesSettingsSanitization) {
+        RenderSettings settings;
+        settings.gt_comparison_mode = GTComparisonMode::Loss;
+
+        sanitizeGTComparisonSettings(settings);
+
+        EXPECT_EQ(settings.gt_comparison_mode, GTComparisonMode::Loss);
+    }
+
+    TEST_F(RenderingManagerEventsTest, LossModeDoesNotExposeDraggableDivider) {
+        RenderingManager manager;
+        auto settings = manager.getSettings();
+        settings.split_view_mode = SplitViewMode::GTComparison;
+        settings.gt_comparison_mode = GTComparisonMode::RGB;
+        manager.updateSettings(settings);
+        ASSERT_TRUE(manager.getSplitDividerScreenX({10.0f, 20.0f}, {800.0f, 600.0f}).has_value());
+
+        settings.gt_comparison_mode = GTComparisonMode::Loss;
+        manager.updateSettings(settings);
+
+        EXPECT_FALSE(manager.getSplitDividerScreenX({10.0f, 20.0f}, {800.0f, 600.0f}).has_value());
+    }
+
     TEST(SplitViewServiceTest, SceneClearedDisablesSplitViewAndResetsOffset) {
         SplitViewService service;
         RenderSettings settings;

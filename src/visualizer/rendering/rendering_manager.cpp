@@ -816,7 +816,9 @@ namespace lfs::vis {
     std::optional<float> RenderingManager::getSplitDividerScreenX(const glm::vec2& viewport_pos,
                                                                   const glm::vec2& viewport_size) const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        if (!split_view_service_.isActive(settings_)) {
+        if (!split_view_service_.isActive(settings_) ||
+            (splitViewUsesGTComparison(settings_.split_view_mode) &&
+             gtComparisonShowsLoss(settings_.gt_comparison_mode))) {
             return std::nullopt;
         }
 

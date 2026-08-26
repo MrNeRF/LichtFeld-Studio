@@ -1109,7 +1109,7 @@
     "depth_view_panel": "Sterowanie mapą głębi",
     "depth_view_tool": "Aktywny widok mapy głębi",
     "depth_view_mode": "Wybierz tryb koloru głębi",
-    "gt_compare_mode": "Wybierz porównanie z referencją RGB, normalnych lub głębi",
+    "gt_compare_mode": "Wybierz wizualizację referencji RGB, normalnych, głębi lub straty",
     "depth_view_range": "Zakres wizualizacji głębi",
     "depth_view_near": "Bliska granica zakresu głębi",
     "depth_view_far": "Daleka granica zakresu głębi",

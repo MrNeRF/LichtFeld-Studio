@@ -29,6 +29,8 @@ def _normalize_mode(value):
         return "normal"
     if value == "depth":
         return "depth"
+    if value == "loss":
+        return "loss"
     return _DEFAULT_MODE
 
 

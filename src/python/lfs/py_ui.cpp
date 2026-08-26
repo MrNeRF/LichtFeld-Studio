@@ -4128,11 +4128,12 @@ namespace lfs::python {
                 switch (rm->getSettings().gt_comparison_mode) {
                 case vis::GTComparisonMode::Normal: return "normal";
                 case vis::GTComparisonMode::Depth: return "depth";
+                case vis::GTComparisonMode::Loss: return "loss";
                 case vis::GTComparisonMode::RGB:
                 default: return "rgb";
                 }
             },
-            "Get ground-truth comparison mode: rgb, normal, or depth.");
+            "Get ground-truth comparison mode: rgb, normal, depth, or loss.");
 
         m.def(
             "set_gt_comparison_mode",
@@ -4147,8 +4148,10 @@ namespace lfs::python {
                     settings.gt_comparison_mode = vis::GTComparisonMode::Normal;
                 } else if (mode == "depth") {
                     settings.gt_comparison_mode = vis::GTComparisonMode::Depth;
+                } else if (mode == "loss") {
+                    settings.gt_comparison_mode = vis::GTComparisonMode::Loss;
                 } else {
-                    throw nb::value_error("GT comparison mode must be 'rgb', 'normal', or 'depth'");
+                    throw nb::value_error("GT comparison mode must be 'rgb', 'normal', 'depth', or 'loss'");
                 }
                 rm->updateSettings(settings, vis::DirtyFlag::ALL);
             },
@@ -4169,6 +4172,9 @@ namespace lfs::python {
                     settings.gt_comparison_mode = vis::GTComparisonMode::Depth;
                     break;
                 case vis::GTComparisonMode::Depth:
+                    settings.gt_comparison_mode = vis::GTComparisonMode::Loss;
+                    break;
+                case vis::GTComparisonMode::Loss:
                 default:
                     settings.gt_comparison_mode = vis::GTComparisonMode::RGB;
                     break;
@@ -4177,11 +4183,12 @@ namespace lfs::python {
                 switch (settings.gt_comparison_mode) {
                 case vis::GTComparisonMode::Normal: return "normal";
                 case vis::GTComparisonMode::Depth: return "depth";
+                case vis::GTComparisonMode::Loss: return "loss";
                 case vis::GTComparisonMode::RGB:
                 default: return "rgb";
                 }
             },
-            "Cycle ground-truth comparison mode: rgb -> normal -> depth -> rgb.");
+            "Cycle ground-truth comparison mode: rgb -> normal -> depth -> loss -> rgb.");
 
         m.def(
             "reveal_in_file_manager",

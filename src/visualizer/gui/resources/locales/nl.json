@@ -1109,7 +1109,7 @@
     "depth_view_panel": "Bediening voor dieptekaart",
     "depth_view_tool": "Actieve dieptekaartweergave",
     "depth_view_mode": "Kleurmodus voor dieptekaart kiezen",
-    "gt_compare_mode": "Kies RGB-, normaal- of diepte-ground-truthvergelijking",
+    "gt_compare_mode": "Kies RGB-, normaal-, diepte- of verliesvisualisatie voor ground truth",
     "depth_view_range": "Visualisatiebereik van dieptekaart",
     "depth_view_near": "Dichtbijgrens van het dieptebereik",
     "depth_view_far": "Verre grens van het dieptebereik",

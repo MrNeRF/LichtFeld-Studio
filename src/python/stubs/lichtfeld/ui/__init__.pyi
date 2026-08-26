@@ -2192,13 +2192,15 @@ def is_gt_comparison_active() -> bool:
     """
 
 def get_gt_comparison_mode() -> str:
-    """Get ground-truth comparison mode: rgb, normal, or depth."""
+    """Get ground-truth comparison mode: rgb, normal, depth, or loss."""
 
 def set_gt_comparison_mode(mode: str) -> None:
     """Set ground-truth comparison mode."""
 
 def cycle_gt_comparison_mode() -> str:
-    """Cycle ground-truth comparison mode: rgb -> normal -> depth -> rgb."""
+    """
+    Cycle ground-truth comparison mode: rgb -> normal -> depth -> loss -> rgb.
+    """
 
 def reveal_in_file_manager(path: str) -> bool:
     """

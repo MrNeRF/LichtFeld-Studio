@@ -778,6 +778,7 @@
                         <option value="rgb">RGB</option>
                         <option value="normal">@tr:ui.normal</option>
                         <option value="depth">@tr:ui.depth</option>
+                        <option value="loss">@tr:status.loss</option>
                     </select>
                 </div>
             </div>

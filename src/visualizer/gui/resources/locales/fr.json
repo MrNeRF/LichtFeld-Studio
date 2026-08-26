@@ -1109,7 +1109,7 @@
     "depth_view_panel": "Contrôles de la carte de profondeur",
     "depth_view_tool": "Vue de carte de profondeur active",
     "depth_view_mode": "Choisir le mode couleur de profondeur",
-    "gt_compare_mode": "Choisir la comparaison de référence RGB, normales ou profondeur",
+    "gt_compare_mode": "Choisir la visualisation de référence RGB, normales, profondeur ou perte",
     "depth_view_range": "Plage de visualisation de profondeur",
     "depth_view_near": "Limite proche de la plage de profondeur",
     "depth_view_far": "Limite éloignée de la plage de profondeur",
