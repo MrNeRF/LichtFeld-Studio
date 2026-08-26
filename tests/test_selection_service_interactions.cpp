@@ -73,6 +73,19 @@ namespace {
         return splat.deleted().cpu().to_vector_bool();
     }
 
+    void arm_viewer_camera_depth_band(lfs::vis::RenderingManager& rendering_manager) {
+        auto settings = rendering_manager.getSettings();
+        settings.depth_filter_enabled = true;
+        // Camera-depth band [8.0, 8.875]: keeps splat0 (8.5442), rejects splat1 (9.2063).
+        settings.depth_filter_min = {-0.5f, -0.5f, -8.875f};
+        settings.depth_filter_max = {0.5f, 0.5f, -8.0f};
+        // Full-viewport window so only depth can decide.
+        settings.depth_filter_scale = 1.0f;
+        settings.depth_filter_offset_x = 0.0f;
+        settings.depth_filter_offset_y = 0.0f;
+        rendering_manager.updateSettings(settings);
+    }
+
 } // namespace
 
 class SelectionServiceInteractionsTest : public ::testing::Test {
@@ -385,10 +398,8 @@ TEST_F(SelectionServiceInteractionsTest, TestingScreenPositionsPolygonFallbackWo
 TEST_F(SelectionServiceInteractionsTest, TestingScreenPositionsFallbackAppliesDepthFilterInPointCloudMode) {
     auto settings = rendering_manager_->getSettings();
     settings.point_cloud_mode = true;
-    settings.depth_filter_enabled = true;
-    settings.depth_filter_min = {-0.25f, -0.25f, -0.25f};
-    settings.depth_filter_max = {0.25f, 0.25f, 0.25f};
     rendering_manager_->updateSettings(settings);
+    arm_viewer_camera_depth_band(*rendering_manager_);
 
     service_->setTestingScreenPositions(make_screen_positions({
         10.0f,
@@ -450,11 +461,7 @@ TEST_F(SelectionServiceInteractionsTest, RingsCommitUsesHoveredGaussian) {
 TEST_F(SelectionServiceInteractionsTest, RingsCommitAppliesDepthFilter) {
     set_initial_selection({0, 0});
 
-    auto settings = rendering_manager_->getSettings();
-    settings.depth_filter_enabled = true;
-    settings.depth_filter_min = {-0.25f, -0.25f, -0.25f};
-    settings.depth_filter_max = {0.25f, 0.25f, 0.25f};
-    rendering_manager_->updateSettings(settings);
+    arm_viewer_camera_depth_band(*rendering_manager_);
     service_->setTestingHoveredGaussianId(1);
 
     lfs::vis::SelectionFilterState filters;
@@ -471,6 +478,31 @@ TEST_F(SelectionServiceInteractionsTest, RingsCommitAppliesDepthFilter) {
     ASSERT_TRUE(result.success);
     EXPECT_EQ(result.affected_count, 0u);
     EXPECT_TRUE(selection_values(*scene_manager_).empty());
+    EXPECT_FALSE(service_->isInteractiveSelectionActive());
+}
+// If the filter never ran, the negative would yield {0,1} and fail; if the filter
+// rejected everything, the positive would yield {} and fail. Neither test alone
+// excludes both wrong modes.
+TEST_F(SelectionServiceInteractionsTest, RingsCommitKeepsGaussianInsideDepthBand) {
+    set_initial_selection({0, 0});
+
+    arm_viewer_camera_depth_band(*rendering_manager_);
+    service_->setTestingHoveredGaussianId(0);
+
+    lfs::vis::SelectionFilterState filters;
+    filters.depth_filter = true;
+
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Rings,
+        lfs::vis::SelectionMode::Replace,
+        {50.0f, 50.0f},
+        0.0f,
+        filters));
+
+    const auto result = service_->finishInteractiveSelection();
+    ASSERT_TRUE(result.success);
+    EXPECT_EQ(result.affected_count, 1u);
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
     EXPECT_FALSE(service_->isInteractiveSelectionActive());
 }
 
