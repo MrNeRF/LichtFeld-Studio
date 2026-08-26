@@ -6,13 +6,13 @@
 #include "io/project_document.hpp"
 
 #include "core/error.hpp"
+#include "core/guarded_task.hpp"
 #include "core/image_io.hpp"
 #include "core/path_utils.hpp"
 #include "io/filesystem_utils.hpp"
 
 #include <stb_image_write.h>
 
-#include <exception>
 #include <filesystem>
 #include <format>
 #include <optional>
@@ -82,44 +82,40 @@ namespace lfs::io::project {
 
     std::optional<std::filesystem::path>
     first_dataset_image(const lfs::core::param::DatasetConfig& dataset) {
-        try {
-            if (dataset.data_path.empty()) {
-                return std::nullopt;
-            }
-            const auto images_dir = dataset_images_directory(dataset);
-            std::error_code ec;
-            if (!std::filesystem::is_directory(images_dir, ec) || ec) {
-                return std::nullopt;
-            }
-            std::optional<std::filesystem::path> first;
-            std::string first_key;
-            std::filesystem::directory_iterator it(
-                images_dir,
-                std::filesystem::directory_options::skip_permission_denied,
-                ec);
-            if (ec) {
-                return std::nullopt;
-            }
-            for (; it != std::filesystem::directory_iterator() && !ec;
-                 it.increment(ec)) {
-                std::error_code file_ec;
-                if (!it->is_regular_file(file_ec) || file_ec) {
-                    continue;
-                }
-                const auto path = it->path();
-                if (!lfs::io::is_image_file(path)) {
-                    continue;
-                }
-                auto key = path.filename().generic_string();
-                if (!first || key < first_key) {
-                    first = std::move(path);
-                    first_key = std::move(key);
-                }
-            }
-            return first;
-        } catch (...) {
+        if (dataset.data_path.empty()) {
             return std::nullopt;
         }
+        const auto images_dir = dataset_images_directory(dataset);
+        std::error_code ec;
+        if (!std::filesystem::is_directory(images_dir, ec) || ec) {
+            return std::nullopt;
+        }
+        std::optional<std::filesystem::path> first;
+        std::string first_key;
+        std::filesystem::directory_iterator it(
+            images_dir,
+            std::filesystem::directory_options::skip_permission_denied,
+            ec);
+        if (ec) {
+            return std::nullopt;
+        }
+        for (; !ec && it != std::filesystem::directory_iterator();
+             it.increment(ec)) {
+            std::error_code file_ec;
+            if (!it->is_regular_file(file_ec) || file_ec) {
+                continue;
+            }
+            const auto path = it->path();
+            if (!lfs::io::is_image_file(path)) {
+                continue;
+            }
+            auto key = path.filename().generic_string();
+            if (!first || key < first_key) {
+                first = std::move(path);
+                first_key = std::move(key);
+            }
+        }
+        return first;
     }
 
     std::optional<std::filesystem::path>
@@ -164,18 +160,14 @@ namespace lfs::io::project {
         try {
             std::tie(image.pixels, width, height, channels) =
                 lfs::core::load_image(first_image, -1, max_size);
-        } catch (const std::exception& ex) {
-            return preview_error(
-                lfs::ErrorCode::DataLoss,
-                "The dataset preview image could not be loaded.",
-                ex.what(),
-                "preview.image");
         } catch (...) {
-            return preview_error(
-                lfs::ErrorCode::DataLoss,
-                "The dataset preview image could not be loaded.",
-                "load_image threw an unknown exception",
-                "preview.image");
+            return lfs::core::detail::normalize_current_exception(
+                lfs::core::TaskContext{
+                    .name = "io.project.dataset_preview_png",
+                    .domain = lfs::ErrorDomain::IO,
+                    .operation_id = lfs::OperationId::generate(),
+                    .site = LFS_SOURCE_SITE_CURRENT(),
+                });
         }
         if (!image.pixels || width <= 0 || height <= 0 || channels < 1 ||
             channels > 4) {

@@ -417,9 +417,10 @@ def test_embedded_preview_url_encodes_path_and_keys_cache_by_commit(panel_module
     decorator = panel._thumbnail_decorator(asset)
 
     encoded = quote(asset["path"], safe="/:._-~")
+    assert " " not in encoded
     assert decorator == (
         "image(preview://kind=licht&thumb=256"
-        f"&rev={asset['commit_uuid']}&path={encoded})"
+        f"&rev={asset['commit_uuid']}&path={encoded} cover center)"
     )
     assert asset["path"] not in decorator
     assert panel._thumbnail_decorator({**asset, "has_preview": False}) == "none"
@@ -431,17 +432,19 @@ def test_thumbnail_decorator_embedded_fallback_and_none(panel_module, tmp_path):
     stat = fallback_image.stat()
     encoded_fallback = quote(str(fallback_image), safe="/:._-~")
     fallback_rev = quote(f"{stat.st_size}-{stat.st_mtime_ns}", safe="-._~")
+    assert " " not in encoded_fallback
     expected_fallback = (
         "image(preview://kind=image&thumb=256"
-        f"&rev={fallback_rev}&path={encoded_fallback})"
+        f"&rev={fallback_rev}&path={encoded_fallback} cover center)"
     )
 
     embedded = _project()
     embedded_decorator = panel._thumbnail_decorator(embedded)
     encoded_project = quote(embedded["path"], safe="/:._-~")
+    assert " " not in encoded_project
     assert embedded_decorator == (
         "image(preview://kind=licht&thumb=256"
-        f"&rev={embedded['commit_uuid']}&path={encoded_project})"
+        f"&rev={embedded['commit_uuid']}&path={encoded_project} cover center)"
     )
     embedded_row = panel._format_asset_for_ui(embedded)
     assert embedded_row["shows_placeholder"] is False
@@ -484,13 +487,16 @@ def test_fallback_thumbnail_source_is_tracked_and_released(panel_module, tmp_pat
     asset = _project(has_preview=False, fallback_preview_path=str(fallback_image))
 
     first = panel._format_asset_for_ui(asset)["thumbnail_decorator"]
-    first_source = first[6:-1]
+    first_source = panel._thumbnail_source_from_decorator(first)
     assert first.startswith("image(preview://kind=image")
+    assert first.endswith(" cover center)")
+    assert first_source.startswith("preview://kind=image")
+    assert " cover center" not in first_source
     assert panel._thumbnail_sources_by_asset[asset["id"]] == first_source
 
     fallback_image.write_bytes(_MIN_PNG + b"\x00")
     second = panel._format_asset_for_ui(asset)["thumbnail_decorator"]
-    second_source = second[6:-1]
+    second_source = panel._thumbnail_source_from_decorator(second)
     assert first != second
     assert panel._thumbnail_sources_by_asset[asset["id"]] == second_source
     assert panel_module.lf._test_state.released_textures == [first_source]
@@ -501,6 +507,29 @@ def test_fallback_thumbnail_source_is_tracked_and_released(panel_module, tmp_pat
     assert none_row["shows_placeholder"] is True
     assert asset["id"] not in panel._thumbnail_sources_by_asset
     assert panel_module.lf._test_state.released_textures == [first_source, second_source]
+
+
+def test_thumbnail_source_strips_cover_center_suffix(panel_module, tmp_path):
+    panel = panel_module.AssetManagerPanel()
+    fallback_image = _write_png(tmp_path / "dataset" / "frame 1.png")
+    embedded = _project()
+    fallback = _project(
+        has_preview=False,
+        fallback_preview_path=str(fallback_image),
+    )
+
+    for asset in (embedded, fallback):
+        decorator = panel._format_asset_for_ui(asset)["thumbnail_decorator"]
+        source = panel._thumbnail_source_from_decorator(decorator)
+        assert decorator == f"image({source} cover center)"
+        assert " " not in source
+        assert source.startswith("preview://")
+        assert "cover" not in source
+        assert "center" not in source
+        assert panel._thumbnail_sources_by_asset[asset["id"]] == source
+
+    none_source = panel._thumbnail_source_from_decorator("none")
+    assert none_source == ""
 
 
 def test_asset_rows_use_custom_name_and_runtime_metadata(panel_module):
@@ -967,8 +996,12 @@ def test_thumbnail_revision_falls_back_and_releases_stale_source(panel_module):
 
     assert "rev=4-" in first
     assert "rev=5-" in second
+    assert first.endswith(" cover center)")
+    assert second.endswith(" cover center)")
     assert first != second
-    assert panel_module.lf._test_state.released_textures == [first[6:-1]]
+    assert panel_module.lf._test_state.released_textures == [
+        panel._thumbnail_source_from_decorator(first)
+    ]
 
 
 def test_completed_project_save_reverifies_catalog_thumbnail(panel_module):

@@ -32,6 +32,7 @@ ASSET_WINDOW_OVERSCAN_ROWS = 2
 ASSET_LIST_FALLBACK_ROWS = 24
 ASSET_GALLERY_FALLBACK_ROWS = 8
 _RML_PATH_SAFE_CHARS = "/:._-~"
+_THUMBNAIL_FIT_ALIGN = "cover center"
 SCOPE_ALL = "__all__"
 PROJECT_DRAG_PAYLOAD_TYPE = "application/x-lichtfeld-project"
 
@@ -477,6 +478,21 @@ class AssetManagerPanel(Panel):
         return str(asset.get("name") or path_stem or tr("asset_manager.unnamed"))
 
     @staticmethod
+    def _thumbnail_image_decorator(source: str) -> str:
+        assert " " not in source
+        return f"image({source} {_THUMBNAIL_FIT_ALIGN})"
+
+    @staticmethod
+    def _thumbnail_source_from_decorator(decorator: str) -> str:
+        if not decorator.startswith("image(") or not decorator.endswith(")"):
+            return ""
+        inner = decorator[len("image(") : -1]
+        suffix = f" {_THUMBNAIL_FIT_ALIGN}"
+        if inner.endswith(suffix):
+            inner = inner[: -len(suffix)]
+        return inner
+
+    @staticmethod
     def _thumbnail_decorator(asset: Dict[str, Any]) -> str:
         if asset.get("has_preview") and asset.get("exists"):
             path = quote(str(asset.get("path") or ""), safe=_RML_PATH_SAFE_CHARS)
@@ -485,7 +501,9 @@ class AssetManagerPanel(Panel):
                 for field in ("generation", "saved_at_unix_ns", "file_size_bytes")
             )
             revision = quote(str(revision_value), safe="-._~")
-            return f"image(preview://kind=licht&thumb=256&rev={revision}&path={path})"
+            return AssetManagerPanel._thumbnail_image_decorator(
+                f"preview://kind=licht&thumb=256&rev={revision}&path={path}"
+            )
         fallback = str(asset.get("fallback_preview_path") or "")
         if not fallback:
             return "none"
@@ -498,17 +516,15 @@ class AssetManagerPanel(Panel):
             return "none"
         revision = quote(f"{stat.st_size}-{stat.st_mtime_ns}", safe="-._~")
         encoded = quote(fallback, safe=_RML_PATH_SAFE_CHARS)
-        return f"image(preview://kind=image&thumb=256&rev={revision}&path={encoded})"
+        return AssetManagerPanel._thumbnail_image_decorator(
+            f"preview://kind=image&thumb=256&rev={revision}&path={encoded}"
+        )
 
     def _format_asset_for_ui(self, asset: Dict[str, Any]) -> Dict[str, Any]:
         folder_name = self._folder_name(asset.get("folder_id"))
         asset_id = str(asset.get("id") or asset.get("project_uuid") or "")
         thumbnail_decorator = self._thumbnail_decorator(asset)
-        thumbnail_source = (
-            thumbnail_decorator[6:-1]
-            if thumbnail_decorator.startswith("image(")
-            else ""
-        )
+        thumbnail_source = self._thumbnail_source_from_decorator(thumbnail_decorator)
         previous_source = self._thumbnail_sources_by_asset.get(asset_id, "")
         if previous_source and previous_source != thumbnail_source:
             release_texture = getattr(lf.ui, "release_rml_texture", None)

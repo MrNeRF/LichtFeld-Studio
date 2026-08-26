@@ -2692,31 +2692,26 @@ namespace lfs::io::project {
         std::vector<std::byte> dataset_preview;
         std::span<const std::byte> preview_png = options.preview_png;
 #if !defined(LFS_FORMAT_TEST_TARGET)
-        if (!is_autosave && preview_png.empty() &&
+        if (!is_autosave &&
             (options.commit.kind == CommitKind::Explicit ||
              options.commit.kind == CommitKind::Recovered)) {
-            const bool has_existing_preview =
-                impl_->source_reader &&
-                impl_->source_reader->preview().has_value();
-            if (!has_existing_preview) {
-                const auto project_root =
-                    impl_->source_path ? impl_->source_path->parent_path()
-                                       : std::filesystem::path{};
-                if (const auto first = first_dataset_image(
-                        impl_->project, impl_->references, impl_->parameters,
-                        project_root)) {
-                    auto encoded = dataset_preview_png(*first);
-                    if (encoded) {
-                        LOG_INFO(
-                            "Embedded dataset image as project preview: {}",
-                            lfs::core::path_to_utf8(*first));
-                        dataset_preview = std::move(*encoded);
-                        preview_png = dataset_preview;
-                    } else {
-                        LOG_WARN(
-                            "Could not encode dataset image as project preview: {}",
-                            lfs::format_for_developer(encoded.error()));
-                    }
+            const auto project_root =
+                impl_->source_path ? impl_->source_path->parent_path()
+                                   : std::filesystem::path{};
+            if (const auto first = first_dataset_image(
+                    impl_->project, impl_->references, impl_->parameters,
+                    project_root)) {
+                auto encoded = dataset_preview_png(*first);
+                if (encoded) {
+                    LOG_INFO(
+                        "Embedded dataset image as project preview: {}",
+                        lfs::core::path_to_utf8(*first));
+                    dataset_preview = std::move(*encoded);
+                    preview_png = dataset_preview;
+                } else {
+                    LOG_WARN(
+                        "Could not encode dataset image as project preview: {}",
+                        lfs::format_for_developer(encoded.error()));
                 }
             }
         }
