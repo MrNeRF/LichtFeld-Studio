@@ -1417,3 +1417,134 @@ def test_reset_without_dirty_or_training_runs_immediately(
     panel._on_action(None, None, ["reset"])
 
     assert resets == [True]
+
+
+def _stub_stored_session(training_panel_module, monkeypatch, **overrides):
+    state = {
+        "available": True,
+        "iteration": 0,
+        "max_iterations": 0,
+        "strategy": "mrnf",
+        "completed": False,
+        "hydrated": False,
+        "restoring": False,
+        "error": "",
+    }
+    state.update(overrides)
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "project_training_session_state",
+        lambda: dict(state),
+        raising=False,
+    )
+    return state
+
+
+def test_completed_stored_session_shows_complete_mode_and_buttons(
+    training_panel_module, monkeypatch
+):
+    _stub_stored_session(
+        training_panel_module,
+        monkeypatch,
+        iteration=30000,
+        max_iterations=30000,
+        completed=True,
+    )
+    panel = training_panel_module.TrainingPanel()
+    model = _ModelStub()
+    params = _ParamsStub()
+    dataset = _DatasetStub()
+    runtime = training_panel_module.RuntimeState
+
+    panel._bind_visibility(model, lambda: params, lambda: dataset)
+    panel._bind_status(model, lambda: params)
+    try:
+        runtime.has_trainer.value = False
+        runtime.trainer_state.value = "idle"
+        runtime.iteration.value = 30000
+        runtime.max_iterations.value = 30000
+
+        assert model.bindings["show_ctrl_completed"][0]() is True
+        assert model.bindings["show_ctrl_paused"][0]() is False
+        assert model.bindings["show_ctrl_ready"][0]() is False
+        assert "status.complete" in model.bindings["status_mode"][0]()
+        assert "30,000/30,000" in model.bindings["progress_text"][0]()
+        assert "session_at_iteration" not in model.bindings["status_mode"][0]()
+    finally:
+        runtime.has_trainer._fallback = False
+        runtime.training_state._fallback = "idle"
+        runtime.iteration._fallback = 0
+        runtime.total_iterations._fallback = 0
+
+
+def test_paused_stored_session_shows_paused_mode_and_resume(
+    training_panel_module, monkeypatch
+):
+    _stub_stored_session(
+        training_panel_module,
+        monkeypatch,
+        iteration=7000,
+        max_iterations=30000,
+        completed=False,
+    )
+    panel = training_panel_module.TrainingPanel()
+    model = _ModelStub()
+    params = _ParamsStub()
+    dataset = _DatasetStub()
+    runtime = training_panel_module.RuntimeState
+
+    panel._bind_visibility(model, lambda: params, lambda: dataset)
+    panel._bind_status(model, lambda: params)
+    try:
+        runtime.has_trainer.value = False
+        runtime.trainer_state.value = "idle"
+        runtime.iteration.value = 7000
+        runtime.max_iterations.value = 30000
+
+        assert model.bindings["show_ctrl_paused"][0]() is True
+        assert model.bindings["show_ctrl_completed"][0]() is False
+        assert model.bindings["show_ctrl_ready"][0]() is False
+        assert "status.paused" in model.bindings["status_mode"][0]()
+        assert "7,000/30,000" in model.bindings["progress_text"][0]()
+        assert "session_at_iteration" not in model.bindings["status_mode"][0]()
+    finally:
+        runtime.has_trainer._fallback = False
+        runtime.training_state._fallback = "idle"
+        runtime.iteration._fallback = 0
+        runtime.total_iterations._fallback = 0
+
+
+def test_resume_on_stored_session_restores_before_resuming(
+    training_panel_module, monkeypatch
+):
+    _stub_stored_session(
+        training_panel_module,
+        monkeypatch,
+        iteration=7000,
+        max_iterations=30000,
+        completed=False,
+    )
+    calls = []
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "restore_training_session",
+        lambda then_start=False: calls.append(("restore", then_start)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "resume_training",
+        lambda: calls.append(("resume",)),
+        raising=False,
+    )
+    runtime = training_panel_module.RuntimeState
+    try:
+        runtime.has_trainer.value = False
+        runtime.trainer_state.value = "paused"
+        panel = training_panel_module.TrainingPanel()
+        panel._on_action(None, None, ["resume"])
+        assert calls[0] == ("restore", True)
+        assert ("resume",) in calls
+    finally:
+        runtime.has_trainer._fallback = False
+        runtime.training_state._fallback = "idle"

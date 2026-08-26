@@ -1002,7 +1002,7 @@
     "save_steps": "Kroki Zapisu/Evaluacji",
     "new_step": "Nowy Krok",
     "mrnf_params": "MRNF Parameters",
-    "session_at_iteration": "Sesja w iteracji {n}, Wznów ją wczyta",
+
     "loading_session": "Wczytywanie sesji treningowej (iteracja {n})…",
     "session_restore_failed": "Nie udało się wczytać sesji treningowej",
     "edit_mode_discards_session_title": "Opuścić sesję treningową?",

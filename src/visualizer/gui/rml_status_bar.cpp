@@ -1090,6 +1090,15 @@ namespace lfs::vis::gui {
         // Mode text
         auto content_type = sm ? sm->getContentType() : SceneManager::ContentType::Empty;
         auto training_state = tm ? tm->getState() : TrainingState::Idle;
+        std::string stored_strategy;
+        if (viewer && (!tm || !tm->hasTrainer())) {
+            const auto session = viewer->projectTrainingSessionState();
+            if (session.available) {
+                training_state = session.completed ? TrainingState::Finished
+                                                   : TrainingState::Paused;
+                stored_strategy = session.strategy;
+            }
+        }
 
         std::string mode_rml;
         std::string mode_color;
@@ -1101,7 +1110,10 @@ namespace lfs::vis::gui {
             mode_rml = LOC("mode.viewer");
             mode_color = colorToRml(p.info);
         } else {
-            const char* strategy_raw = tm ? tm->getStrategyType() : "default";
+            const char* strategy_raw = !stored_strategy.empty()
+                                           ? stored_strategy.c_str()
+                                       : tm ? tm->getStrategyType()
+                                            : "default";
             bool gut = tm && tm->isGutEnabled();
             std::string method = gut ? "GUT" : "3DGS";
             std::string strat_name;

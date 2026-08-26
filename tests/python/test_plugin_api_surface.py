@@ -145,6 +145,13 @@ def test_ui_stub_surface_matches_panel_api_names():
     assert "def set_theme_vignette_style(arg0: float, arg1: float, arg2: float, /) -> None:" in stub_text
 
 
+def test_training_session_stub_surface():
+    stub = (PROJECT_ROOT / "src" / "python" / "stubs" / "lichtfeld" / "__init__.pyi").read_text()
+    assert "def project_training_session_state() -> dict:" in stub
+    assert "def restore_training_session(then_start: bool = False) -> None:" in stub
+    assert "def training_get_state() -> dict:" in stub
+
+
 def test_plugin_stub_surface_exposes_v1_compatibility_contract():
     root_stub = (PROJECT_ROOT / "src" / "python" / "stubs" / "lichtfeld" / "__init__.pyi").read_text()
     plugins_stub = (PROJECT_ROOT / "src" / "python" / "stubs" / "lichtfeld" / "plugins.pyi").read_text()

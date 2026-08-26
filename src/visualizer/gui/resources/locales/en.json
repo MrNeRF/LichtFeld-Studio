@@ -1002,7 +1002,6 @@
     "save_steps": "Save/Eval Steps",
     "new_step": "New Step",
     "mrnf_params": "MRNF Parameters",
-    "session_at_iteration": "Session at iteration {n}, Resume loads it",
     "loading_session": "Loading training session (iteration {n})…",
     "session_restore_failed": "Could not load the training session",
     "edit_mode_discards_session_title": "Leave training session?",

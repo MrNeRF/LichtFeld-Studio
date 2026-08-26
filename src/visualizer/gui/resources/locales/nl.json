@@ -1002,7 +1002,7 @@
     "save_steps": "Bewaar/Eval Stappen",
     "new_step": "Nieuwe Stap",
     "mrnf_params": "MRNF Parameters",
-    "session_at_iteration": "Sessie bij iteratie {n}, Hervatten laadt deze",
+
     "loading_session": "Trainingssessie laden (iteratie {n})…",
     "session_restore_failed": "De trainingssessie kon niet worden geladen",
     "edit_mode_discards_session_title": "Trainingssessie verlaten?",

@@ -1275,6 +1275,25 @@ namespace lfs::vis {
                 LOG_WARN("Cannot reset: no dataset");
                 return;
             }
+            if (project_lifecycle_ &&
+                (!trainer_manager_ ||
+                 !trainer_manager_->hasTrainer())) {
+                const auto session =
+                    project_lifecycle_->trainingSessionState();
+                if (session.available && !session.hydrated) {
+                    if (auto restored =
+                            project_lifecycle_
+                                ->restoreTrainingSession(
+                                    false, true);
+                        !restored) {
+                        LOG_ERROR(
+                            "Failed to restore training session before reset: {}",
+                            lfs::format_for_developer(
+                                restored.error()));
+                    }
+                    return;
+                }
+            }
             if (trainer_manager_ &&
                 (trainer_manager_->isTrainingActive() || trainer_manager_->isCompletionPending())) {
                 trainer_manager_->suppressCompletionNotification();
@@ -3332,6 +3351,9 @@ namespace lfs::vis {
         ProjectTrainingSessionState state;
         state.available = session.available;
         state.iteration = session.iteration;
+        state.max_iterations = session.max_iterations;
+        state.strategy = session.strategy;
+        state.completed = session.completed;
         state.hydrated = session.hydrated;
         state.restoring = session.restoring;
         state.error = session.error;

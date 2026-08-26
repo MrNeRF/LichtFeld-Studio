@@ -251,6 +251,8 @@ namespace lfs::vis {
         friend class gui::GuiManager;
         friend class project::ProjectLifecycle;
         friend class VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnSave_Test;
+        friend class VisualizerImplResetTest_StoredSessionAtPrmsIterationsReportsCompleted_Test;
+        friend class VisualizerImplResetTest_StoredSessionBelowPrmsIterationsReportsNotCompleted_Test;
         friend class VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnAutosave_Test;
         friend class VisualizerImplResetTest_EditModeWithoutHydratedSessionDropsCheckpoint_Test;
         friend class VisualizerImplResetTest_RestoreThenTrainWritesNewCheckpoint_Test;

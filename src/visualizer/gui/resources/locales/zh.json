@@ -1002,7 +1002,7 @@
     "save_steps": "保存/评估步骤",
     "new_step": "新建步骤",
     "mrnf_params": "MRNF参数",
-    "session_at_iteration": "第 {n} 次迭代的会话，恢复将加载它",
+
     "loading_session": "正在加载训练会话（第 {n} 次迭代）…",
     "session_restore_failed": "无法加载训练会话",
     "edit_mode_discards_session_title": "离开训练会话？",

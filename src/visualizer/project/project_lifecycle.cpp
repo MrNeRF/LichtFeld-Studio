@@ -83,6 +83,33 @@ namespace lfs::vis::project {
         using lfs::io::project::ProjectDocument;
         using lfs::io::project::ProjectDocumentSaveOptions;
         using lfs::io::project::ProjectSessionChapters;
+        using lfs::io::project::TrainingFinishReason;
+
+        [[nodiscard]] const lfs::core::param::OptimizationParameters&
+        currentOptimizationParams(
+            const lfs::io::project::ParameterManagerSnapshot&
+                snapshot) {
+            const auto strategy =
+                lfs::core::param::canonical_strategy_name(
+                    snapshot.active_strategy);
+            if (strategy == lfs::core::param::kStrategyMCMC) {
+                return snapshot.mcmc_current;
+            }
+            if (strategy == lfs::core::param::kStrategyIGSPlus) {
+                return snapshot.igs_current;
+            }
+            return snapshot.mrnf_current;
+        }
+
+        [[nodiscard]] bool storedSessionCompleted(
+            const int iteration,
+            const int max_iterations,
+            const TrainingFinishReason finish_reason) {
+            if (finish_reason == TrainingFinishReason::Completed) {
+                return true;
+            }
+            return max_iterations > 0 && iteration >= max_iterations;
+        }
 
         [[nodiscard]] lfs::Error lifecycleError(
             const lfs::ErrorCode code,
@@ -761,14 +788,24 @@ namespace lfs::vis::project {
         stored_training_kind_ = StoredTrainingKind::None;
         stored_checkpoint_uuid_.reset();
         stored_dataset_output_path_.clear();
+        stored_max_iterations_ = 0;
+        stored_strategy_.clear();
+        stored_completed_ = false;
         training_session_hydrated_.store(
             false, std::memory_order_release);
         training_session_restoring_.store(
             false, std::memory_order_release);
         restore_then_start_.store(
             false, std::memory_order_release);
-        std::lock_guard lock(training_session_mutex_);
-        training_session_error_.clear();
+        restore_then_reset_.store(
+            false, std::memory_order_release);
+        {
+            std::lock_guard lock(training_session_mutex_);
+            training_session_error_.clear();
+        }
+        if (auto* trainer_manager = viewer_.getTrainerManager()) {
+            trainer_manager->publishStoredSessionPresentation();
+        }
     }
 
     void ProjectLifecycle::abandonStoredTrainingSession() {
@@ -793,6 +830,9 @@ namespace lfs::vis::project {
         {
             std::lock_guard lock(training_session_mutex_);
             state.error = training_session_error_;
+            state.max_iterations = stored_max_iterations_;
+            state.strategy = stored_strategy_;
+            state.completed = stored_completed_;
         }
         if (stored_training_kind_ ==
             StoredTrainingKind::None) {
@@ -812,12 +852,47 @@ namespace lfs::vis::project {
         stored_training_kind_ = StoredTrainingKind::None;
         stored_checkpoint_uuid_.reset();
         stored_dataset_output_path_.clear();
+        stored_max_iterations_ = 0;
+        stored_strategy_.clear();
+        stored_completed_ = false;
         training_session_hydrated_.store(
             false, std::memory_order_release);
         {
             std::lock_guard lock(training_session_mutex_);
             training_session_error_.clear();
         }
+        const auto fill_facts = [&] {
+            const auto& params = currentOptimizationParams(
+                report.pending_parameters);
+            std::string strategy(
+                lfs::core::param::canonical_strategy_name(
+                    report.pending_parameters.active_strategy));
+            if (strategy.empty()) {
+                strategy = report.pending_parameters.active_strategy;
+            }
+            const int iteration =
+                cached_bound_checkpoint_iteration_.value_or(0);
+            const int max_iterations =
+                static_cast<int>(params.iterations);
+            const bool completed = storedSessionCompleted(
+                iteration,
+                max_iterations,
+                report.pending_session.metrics.finish_reason);
+            std::lock_guard lock(training_session_mutex_);
+            stored_max_iterations_ = max_iterations;
+            stored_strategy_ = std::move(strategy);
+            stored_completed_ = completed;
+        };
+        struct PresentationGuard {
+            VisualizerImpl& viewer;
+            ~PresentationGuard() {
+                if (auto* trainer_manager =
+                        viewer.getTrainerManager()) {
+                    trainer_manager
+                        ->publishStoredSessionPresentation();
+                }
+            }
+        } presentation_guard{viewer_};
         if (!document_) {
             return;
         }
@@ -834,6 +909,7 @@ namespace lfs::vis::project {
             stored_dataset_output_path_ =
                 report.pending_parameters.dataset
                     .output_path;
+            fill_facts();
             if (report.checkpoint_header->iteration < 0) {
                 std::lock_guard lock(training_session_mutex_);
                 training_session_error_ =
@@ -906,6 +982,7 @@ namespace lfs::vis::project {
             StoredTrainingKind::DatasetScene;
         stored_dataset_output_path_ =
             report.pending_parameters.dataset.output_path;
+        fill_facts();
         const auto dataset =
             document_->project().dataset_reference();
         if (!dataset || !*dataset) {
@@ -1004,7 +1081,35 @@ namespace lfs::vis::project {
                 const bool then_start =
                     restore_then_start_.exchange(
                         false, std::memory_order_acq_rel);
-                if (!then_start || !installed) {
+                const bool then_reset =
+                    restore_then_reset_.exchange(
+                        false, std::memory_order_acq_rel);
+                if (auto* trainer_manager =
+                        viewer_.getTrainerManager()) {
+                    trainer_manager
+                        ->publishStoredSessionPresentation();
+                }
+                if (!installed) {
+                    return;
+                }
+                if (then_reset) {
+                    viewer_.postWork({
+                        .run =
+                            [this, epoch] {
+                                if (epoch_.load(
+                                        std::memory_order_acquire) !=
+                                    epoch) {
+                                    return;
+                                }
+                                lfs::core::events::cmd::
+                                    ResetTraining{}
+                                        .emit();
+                            },
+                        .cancel = {},
+                    });
+                    return;
+                }
+                if (!then_start) {
                     return;
                 }
                 viewer_.postWork({
@@ -1030,9 +1135,14 @@ namespace lfs::vis::project {
 
     lfs::Result<void>
     ProjectLifecycle::restoreTrainingSession(
-        const bool then_start) {
+        const bool then_start,
+        const bool then_reset) {
         if (then_start) {
             restore_then_start_.store(
+                true, std::memory_order_release);
+        }
+        if (then_reset) {
+            restore_then_reset_.store(
                 true, std::memory_order_release);
         }
         if (training_session_hydrated_.load(
@@ -1041,11 +1151,17 @@ namespace lfs::vis::project {
                 restore_then_start_.store(
                     false, std::memory_order_release);
             }
+            if (then_reset) {
+                restore_then_reset_.store(
+                    false, std::memory_order_release);
+            }
             return {};
         }
         if (stored_training_kind_ ==
             StoredTrainingKind::None) {
             restore_then_start_.store(
+                false, std::memory_order_release);
+            restore_then_reset_.store(
                 false, std::memory_order_release);
             return {};
         }

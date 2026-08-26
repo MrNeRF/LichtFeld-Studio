@@ -1002,7 +1002,7 @@
     "save_steps": "Passi di Salvataggio/Valutazione",
     "new_step": "Nuovo Passo",
     "mrnf_params": "Parametri MRNF",
-    "session_at_iteration": "Sessione all'iterazione {n}, Riprendi la carica",
+
     "loading_session": "Caricamento della sessione di addestramento (iterazione {n})…",
     "session_restore_failed": "Impossibile caricare la sessione di addestramento",
     "edit_mode_discards_session_title": "Uscire dalla sessione di addestramento?",

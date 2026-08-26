@@ -258,6 +258,9 @@ namespace lfs::vis::project {
         struct TrainingSessionState {
             bool available = false;
             int iteration = 0;
+            int max_iterations = 0;
+            std::string strategy;
+            bool completed = false;
             bool hydrated = false;
             bool restoring = false;
             std::string error;
@@ -266,7 +269,8 @@ namespace lfs::vis::project {
         [[nodiscard]] TrainingSessionState
         trainingSessionState() const;
         [[nodiscard]] lfs::Result<void>
-        restoreTrainingSession(bool then_start = false);
+        restoreTrainingSession(bool then_start = false,
+                               bool then_reset = false);
         void abandonStoredTrainingSession();
 
         [[nodiscard]] std::optional<std::filesystem::path>
@@ -686,8 +690,12 @@ namespace lfs::vis::project {
         std::atomic<bool> training_session_hydrated_{false};
         std::atomic<bool> training_session_restoring_{false};
         std::atomic<bool> restore_then_start_{false};
+        std::atomic<bool> restore_then_reset_{false};
         mutable std::mutex training_session_mutex_;
         std::string training_session_error_;
+        int stored_max_iterations_ = 0;
+        std::string stored_strategy_;
+        bool stored_completed_ = false;
         mutable std::mutex thread_mutex_;
         std::vector<std::jthread> hydration_threads_;
         std::atomic<CloseSaveState>

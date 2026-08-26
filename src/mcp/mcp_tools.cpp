@@ -458,11 +458,13 @@ namespace lfs::mcp {
                 return json{
                     {"iteration", snapshot.iteration},
                     {"max_iterations", snapshot.max_iterations},
+                    {"strategy", snapshot.strategy},
                     {"num_gaussians", snapshot.num_gaussians},
                     {"loss", snapshot.loss},
                     {"is_running", snapshot.is_running},
                     {"is_paused", snapshot.is_paused},
                     {"is_refining", snapshot.is_refining},
+                    {"session_hydrated", snapshot.session_hydrated},
                     {"project_snapshot",
                      {
                          {"completed",

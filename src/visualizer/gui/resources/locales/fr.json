@@ -1002,7 +1002,7 @@
     "save_steps": "Étapes de Sauvegarde/Éval",
     "new_step": "Nouvelle Étape",
     "mrnf_params": "Paramètres MRNF",
-    "session_at_iteration": "Session à l'itération {n}, Reprendre la charge",
+
     "loading_session": "Chargement de la session d'entraînement (itération {n})…",
     "session_restore_failed": "Impossible de charger la session d'entraînement",
     "edit_mode_discards_session_title": "Quitter la session d'entraînement ?",

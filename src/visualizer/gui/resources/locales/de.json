@@ -1002,7 +1002,6 @@
     "save_steps": "Speicher-/Eval-Schritte",
     "new_step": "Neuer Schritt",
     "mrnf_params": "MRNF Parameters",
-    "session_at_iteration": "Sitzung bei Iteration {n}, Fortsetzen lädt sie",
     "loading_session": "Trainingssitzung wird geladen (Iteration {n})…",
     "session_restore_failed": "Die Trainingssitzung konnte nicht geladen werden",
     "edit_mode_discards_session_title": "Trainingssitzung verlassen?",

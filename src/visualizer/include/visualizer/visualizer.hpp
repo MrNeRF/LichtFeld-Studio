@@ -263,6 +263,9 @@ namespace lfs::vis {
         struct ProjectTrainingSessionState {
             bool available = false;
             int iteration = 0;
+            int max_iterations = 0;
+            std::string strategy;
+            bool completed = false;
             bool hydrated = false;
             bool restoring = false;
             std::string error;

@@ -907,7 +907,8 @@ namespace {
             finish_reason =
                 lfs::io::project::
                     TrainingFinishReason::None,
-        const int sh_degree = 0) {
+        const int sh_degree = 0,
+        const int prms_iterations = -1) {
         auto document = lfs::test::licht::make_empty_document(
             lfs::core::generate_uuid_v4(), 1);
         lfs::core::Scene source;
@@ -963,6 +964,19 @@ namespace {
                 None) {
             document->edit_metrics().finish_reason =
                 finish_reason;
+        }
+        if (prms_iterations >= 0) {
+            auto snapshot = lfs::test::licht::require_result(
+                document->parameters().snapshot());
+            const auto iterations =
+                static_cast<std::size_t>(prms_iterations);
+            snapshot.mrnf_session.iterations = iterations;
+            snapshot.mrnf_current.iterations = iterations;
+            snapshot.mcmc_session.iterations = iterations;
+            snapshot.mcmc_current.iterations = iterations;
+            lfs::test::licht::require_status(
+                document->edit_parameters().set_snapshot(
+                    snapshot));
         }
         auto options =
             lfs::test::licht::
@@ -12511,6 +12525,117 @@ namespace lfs::vis {
             checkpoint_identity(project_path);
         EXPECT_EQ(after_save.first, before.first);
         EXPECT_EQ(after_save.second, before.second);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           StoredSessionAtPrmsIterationsReportsCompleted) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto project_path =
+            temporary_.path / "stored-session-complete.licht";
+        const auto dataset_path =
+            temporary_.path / "stored-session-complete-dataset";
+        write_minimal_transforms_dataset(dataset_path);
+        write_resumable_project_with_checkpoint(
+            project_path,
+            lfs::core::generate_uuid_v4(),
+            lfs::core::generate_uuid_v4(),
+            dataset_path,
+            lfs::io::project::TrainingFinishReason::None,
+            0,
+            11);
+
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        viewer.input_controller_ =
+            std::make_unique<InputController>(
+                nullptr, viewer.getViewport());
+        auto opened = viewer.projectOpen(
+            project_path,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened)
+            << lfs::format_for_developer(
+                   opened.error());
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(waitForHydrationComplete(
+            viewer, viewer.work_queue_mutex_,
+            viewer.work_queue_));
+        ASSERT_FALSE(
+            viewer.getTrainerManager()->hasTrainer());
+        const auto session =
+            viewer.projectTrainingSessionState();
+        EXPECT_TRUE(session.available);
+        EXPECT_FALSE(session.hydrated);
+        EXPECT_EQ(session.iteration, 11);
+        EXPECT_EQ(session.max_iterations, 11);
+        EXPECT_TRUE(session.completed);
+        EXPECT_EQ(session.strategy, "mrnf");
+
+        auto* const manager = viewer.getTrainerManager();
+        ASSERT_NE(manager, nullptr);
+        EXPECT_EQ(manager->getCurrentIteration(), 11);
+        EXPECT_EQ(manager->getTotalIterations(), 11);
+        EXPECT_EQ(manager->getState(), TrainingState::Finished);
+        EXPECT_STREQ(manager->getStrategyType(), "mrnf");
+        EXPECT_EQ(manager->getNumSplats(), 2);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           StoredSessionBelowPrmsIterationsReportsNotCompleted) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto project_path =
+            temporary_.path / "stored-session-paused.licht";
+        const auto dataset_path =
+            temporary_.path / "stored-session-paused-dataset";
+        write_minimal_transforms_dataset(dataset_path);
+        write_resumable_project_with_checkpoint(
+            project_path,
+            lfs::core::generate_uuid_v4(),
+            lfs::core::generate_uuid_v4(),
+            dataset_path);
+
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        viewer.input_controller_ =
+            std::make_unique<InputController>(
+                nullptr, viewer.getViewport());
+        auto opened = viewer.projectOpen(
+            project_path,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened)
+            << lfs::format_for_developer(
+                   opened.error());
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(waitForHydrationComplete(
+            viewer, viewer.work_queue_mutex_,
+            viewer.work_queue_));
+        ASSERT_FALSE(
+            viewer.getTrainerManager()->hasTrainer());
+        const auto session =
+            viewer.projectTrainingSessionState();
+        EXPECT_TRUE(session.available);
+        EXPECT_FALSE(session.hydrated);
+        EXPECT_EQ(session.iteration, 11);
+        EXPECT_EQ(session.max_iterations, 30000);
+        EXPECT_FALSE(session.completed);
+        EXPECT_EQ(session.strategy, "mrnf");
+
+        auto* const manager = viewer.getTrainerManager();
+        ASSERT_NE(manager, nullptr);
+        EXPECT_EQ(manager->getCurrentIteration(), 11);
+        EXPECT_EQ(manager->getTotalIterations(), 30000);
+        EXPECT_EQ(manager->getState(), TrainingState::Paused);
+        EXPECT_STREQ(manager->getStrategyType(), "mrnf");
+        EXPECT_EQ(manager->getNumSplats(), 2);
     }
 
     TEST_F(VisualizerImplResetTest,

@@ -1002,7 +1002,7 @@
     "save_steps": "保存/評価ステップ",
     "new_step": "新規ステップ",
     "mrnf_params": "MRNF Parameters",
-    "session_at_iteration": "イテレーション {n} のセッション、再開で読み込みます",
+
     "loading_session": "トレーニングセッションを読み込み中（イテレーション {n}）…",
     "session_restore_failed": "トレーニングセッションを読み込めませんでした",
     "edit_mode_discards_session_title": "トレーニングセッションを終了しますか？",

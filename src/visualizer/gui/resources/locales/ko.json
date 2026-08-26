@@ -1002,7 +1002,7 @@
     "save_steps": "저장/평가 단계",
     "new_step": "새 단계",
     "mrnf_params": "MRNF Parameters",
-    "session_at_iteration": "반복 {n}의 세션, 재개가 불러옵니다",
+
     "loading_session": "학습 세션을 불러오는 중(반복 {n})…",
     "session_restore_failed": "학습 세션을 불러올 수 없습니다",
     "edit_mode_discards_session_title": "학습 세션을 나갈까요?",
