@@ -19,6 +19,7 @@
 #include <cassert>
 #include <chrono>
 #include <cstring>
+#include <exception>
 #include <format>
 #include <istream>
 #include <limits>
@@ -53,6 +54,38 @@ namespace lfs::io::project {
             std::uint32_t reserved[3]{};
         };
         static_assert(sizeof(PpispFileHeader) == 32);
+
+        void encode_staged_splat_shN(lfs::core::Scene& scene) {
+            bool encoded = false;
+            for (const auto* node : scene.getNodes()) {
+                if (!node ||
+                    node->type != lfs::core::NodeType::SPLAT) {
+                    continue;
+                }
+                auto* live = scene.getNodeById(node->id);
+                if (!live || !live->model) {
+                    continue;
+                }
+                auto& model = *live->model;
+                if (!model.has_tensor_allocator() ||
+                    model.shN_value_quantized() ||
+                    !model.shN_raw().is_valid() ||
+                    model.shN_raw().numel() == 0) {
+                    continue;
+                }
+                try {
+                    encoded =
+                        model.apply_shN_value_quant() || encoded;
+                } catch (const std::exception& error) {
+                    LOG_WARN(
+                        "Hydrated splat SH q16 skipped for '{}': {}",
+                        live->name, error.what());
+                }
+            }
+            if (encoded) {
+                lfs::core::Tensor::trim_memory_pool();
+            }
+        }
 
         lfs::Error document_error(const lfs::ErrorCode code,
                                   std::string message,
@@ -4296,6 +4329,7 @@ namespace lfs::io::project {
             (*staged_scene)
                 ->installRestoreSelectionState(
                     std::move(staged_selection->state));
+            encode_staged_splat_shN(**staged_scene);
 
             auto plan =
                 std::make_unique<ProjectHydrationPlan::Impl>();

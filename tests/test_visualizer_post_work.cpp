@@ -25,10 +25,12 @@
 #include "io/project_path.hpp"
 #include "io/project_recovery.hpp"
 #include "io/session_chapters.hpp"
+#include "io/splat_chapter.hpp"
 #include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "scene/viewer_splat_quantize.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "training/checkpoint.hpp"
 #include "training/components/ppisp_file.hpp"
@@ -715,18 +717,56 @@ namespace {
             document->save(project_path, options));
     }
 
+    std::unique_ptr<lfs::core::SplatData>
+    make_degree1_splat(const std::size_t count) {
+        std::vector<float> means(count * 3, 0.0f);
+        std::vector<float> rotations(count * 4, 0.0f);
+        for (std::size_t index = 0; index < count; ++index) {
+            means[index * 3] = static_cast<float>(index);
+            rotations[index * 4] = 1.0f;
+        }
+        return std::make_unique<lfs::core::SplatData>(
+            1,
+            lfs::core::Tensor::from_vector(
+                means,
+                {count, std::size_t{3}},
+                lfs::core::Device::CPU),
+            lfs::core::Tensor::zeros(
+                {count, std::size_t{1}, std::size_t{3}},
+                lfs::core::Device::CPU),
+            lfs::core::Tensor::zeros(
+                {count, std::size_t{3}, std::size_t{3}},
+                lfs::core::Device::CPU),
+            lfs::core::Tensor::zeros(
+                {count, std::size_t{3}},
+                lfs::core::Device::CPU),
+            lfs::core::Tensor::from_vector(
+                rotations,
+                {count, std::size_t{4}},
+                lfs::core::Device::CPU),
+            lfs::core::Tensor::zeros(
+                {count, std::size_t{1}},
+                lfs::core::Device::CPU),
+            1.0f);
+    }
+
     lfs::io::project::LazyChunkValue
     make_training_autosave_checkpoint_payload(
         const lfs::core::Uuid& checkpoint_uuid,
-        const std::filesystem::path& dataset_path = {}) {
-        auto model = lfs::test::licht::make_splat(2);
+        const std::filesystem::path& dataset_path = {},
+        const int sh_degree = 0) {
+        const std::size_t count = sh_degree > 0 ? 8 : 2;
+        auto model = sh_degree > 0
+                         ? make_degree1_splat(count)
+                         : lfs::test::licht::make_splat(count);
         lfs::training::MCMC strategy(*model);
         lfs::core::param::TrainingParameters parameters;
         parameters.optimization =
             lfs::core::param::OptimizationParameters::
                 mcmc_defaults();
-        parameters.optimization.sh_degree = 0;
-        parameters.optimization.max_cap = 2;
+        parameters.optimization.sh_degree = sh_degree;
+        parameters.optimization.max_cap =
+            static_cast<int>(count);
         parameters.dataset.data_path = dataset_path;
         strategy.initialize(parameters.optimization);
         std::ostringstream stream(
@@ -747,7 +787,8 @@ namespace {
     void write_project_with_specified_checkpoint(
         const std::filesystem::path& path,
         const lfs::core::Uuid& training_uuid,
-        const lfs::core::Uuid& checkpoint_uuid) {
+        const lfs::core::Uuid& checkpoint_uuid,
+        const int sh_degree = 0) {
         auto document = lfs::test::licht::make_empty_document(
             lfs::core::generate_uuid_v4(), 1);
         const auto root_uuid = lfs::core::generate_uuid_v4();
@@ -782,12 +823,77 @@ namespace {
             document->set_checkpoint(
                 checkpoint_uuid,
                 make_training_autosave_checkpoint_payload(
-                    checkpoint_uuid)));
+                    checkpoint_uuid, {}, sh_degree)));
         auto options =
             lfs::test::licht::
                 deterministic_document_save_options(
                     0x76000010, 1, 2);
         options.commit.snapshot_uuid = checkpoint_uuid;
+        (void)lfs::test::licht::require_result(
+            document->save(path, options));
+    }
+
+    void write_splt_project(
+        const std::filesystem::path& path,
+        std::unique_ptr<lfs::core::SplatData> model) {
+        auto document =
+            lfs::test::licht::make_empty_document(
+                lfs::core::generate_uuid_v4(), 1);
+        const auto splat_uuid =
+            lfs::core::generate_uuid_v4();
+        lfs::test::licht::require_status(
+            document->edit_scene_graph().upsert_node(
+                lfs::io::project::SceneNodeRecord{
+                    .uuid = splat_uuid,
+                    .type = "splat",
+                    .name = "Splat",
+                    .child_order = 0,
+                    .payload =
+                        lfs::io::project::PayloadBinding{
+                            .fourcc = "SPLT",
+                            .instance_uuid = splat_uuid,
+                            .source_kind = "ply",
+                        },
+                }));
+        auto splat = lfs::test::licht::require_result(
+            lfs::io::project::SplatChapterPayload::capture(
+                *model,
+                lfs::io::project::SplatSourceKind::ImportedPly,
+                false));
+        const auto splat_hash =
+            lfs::io::project::xxh3_128(splat.bytes());
+        lfs::test::licht::require_status(
+            document->set_splat(
+                splat_uuid, std::move(splat)));
+        lfs::test::licht::require_status(
+            document->edit_project().upsert_embed_decision(
+                lfs::io::project::EmbedDecision{
+                    .uuid = splat_uuid,
+                    .node_uuid = splat_uuid,
+                    .payload_fourcc = "SPLT",
+                    .decision = "embedded",
+                    .reason = "viewer shN fixture",
+                }));
+        lfs::test::licht::require_status(
+            document->edit_project()
+                .upsert_embedded_payload_provenance(
+                    lfs::io::project::EmbeddedPayloadProvenance{
+                        .uuid = splat_uuid,
+                        .node_uuid = splat_uuid,
+                        .fourcc = "SPLT",
+                        .import_locator =
+                            {.preferred = "assets/SPLT.bin",
+                             .base = lfs::io::project::
+                                 LocatorBase::Project},
+                        .import_fingerprint =
+                            lfs::test::licht::fingerprint(41),
+                        .content_xxh3_128 = splat_hash,
+                    }));
+        auto options =
+            lfs::test::licht::
+                deterministic_document_save_options(
+                    0x76000012, 1, 2);
+        options.commit.snapshot_uuid = {};
         (void)lfs::test::licht::require_result(
             document->save(path, options));
     }
@@ -800,7 +906,8 @@ namespace {
         lfs::io::project::TrainingFinishReason
             finish_reason =
                 lfs::io::project::
-                    TrainingFinishReason::None) {
+                    TrainingFinishReason::None,
+        const int sh_degree = 0) {
         auto document = lfs::test::licht::make_empty_document(
             lfs::core::generate_uuid_v4(), 1);
         lfs::core::Scene source;
@@ -811,14 +918,21 @@ namespace {
             "frame_0001.png", cameras,
             make_project_request_test_camera(
                 dataset_path / "frame_0001.png"));
+        const std::size_t gaussian_count =
+            sh_degree > 0 ? 8 : 2;
+        auto training_model =
+            sh_degree > 0
+                ? make_degree1_splat(gaussian_count)
+                : lfs::test::licht::make_splat(
+                      gaussian_count);
         const auto training = source.restoreNodeWithUuid(
             lfs::core::Scene::RestoreNodeDesc{
                 .uuid = training_uuid,
                 .type = lfs::core::NodeType::SPLAT,
                 .name = "Training",
                 .parent = root,
-                .gaussian_count = 2,
-                .model = lfs::test::licht::make_splat(2),
+                .gaussian_count = gaussian_count,
+                .model = std::move(training_model),
             });
         if (training == lfs::core::NULL_NODE) {
             throw std::runtime_error(
@@ -842,7 +956,8 @@ namespace {
             document->set_checkpoint(
                 checkpoint_uuid,
                 make_training_autosave_checkpoint_payload(
-                    checkpoint_uuid, dataset_path)));
+                    checkpoint_uuid, dataset_path,
+                    sh_degree)));
         if (finish_reason !=
             lfs::io::project::TrainingFinishReason::
                 None) {
@@ -12625,6 +12740,139 @@ namespace lfs::vis {
             checkpoint_identity(project_path);
         ASSERT_FALSE(after.first.empty());
         EXPECT_NE(after.second, before.second);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           OpenWithoutRestoreCkptModelIsRendererReady) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto project_path =
+            temporary_.path / "lazy-ckpt-render.licht";
+        const auto dataset_path =
+            temporary_.path / "lazy-ckpt-render-dataset";
+        write_minimal_transforms_dataset(dataset_path);
+        write_resumable_project_with_checkpoint(
+            project_path,
+            lfs::core::generate_uuid_v4(),
+            lfs::core::generate_uuid_v4(),
+            dataset_path,
+            lfs::io::project::TrainingFinishReason::None,
+            1);
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        auto allocator =
+            viewer.getSceneManager()
+                ->makeExternalSplatAllocator();
+        ASSERT_TRUE(static_cast<bool>(allocator));
+        auto document =
+            lfs::test::licht::require_result_ptr(
+                lfs::io::project::ProjectDocument::open(
+                    project_path));
+        lfs::core::Scene scene;
+        auto hydrated = document->hydrate(
+            scene, {}, std::move(allocator));
+        ASSERT_TRUE(hydrated)
+            << lfs::format_for_developer(
+                   hydrated.error());
+        EXPECT_FALSE(
+            viewer.getTrainerManager()->hasTrainer());
+        const auto* model = scene.getTrainingModel();
+        ASSERT_NE(model, nullptr);
+        ASSERT_TRUE(model->has_tensor_allocator());
+        EXPECT_GT(model->get_max_sh_degree(), 0);
+        EXPECT_TRUE(
+            lfs::vis::viewerSplatTensorsRendererReady(
+                *model));
+        EXPECT_TRUE(model->shN_value_quantized());
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           OpenWithoutRestoreMissingDatasetCkptModelIsRendererReady) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto project_path =
+            temporary_.path /
+            "lazy-ckpt-missing-dataset-render.licht";
+        write_project_with_specified_checkpoint(
+            project_path,
+            lfs::core::generate_uuid_v4(),
+            lfs::core::generate_uuid_v4(),
+            1);
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        auto allocator =
+            viewer.getSceneManager()
+                ->makeExternalSplatAllocator();
+        ASSERT_TRUE(static_cast<bool>(allocator));
+        auto document =
+            lfs::test::licht::require_result_ptr(
+                lfs::io::project::ProjectDocument::open(
+                    project_path));
+        lfs::core::Scene scene;
+        auto hydrated = document->hydrate(
+            scene, {}, std::move(allocator));
+        ASSERT_TRUE(hydrated)
+            << lfs::format_for_developer(
+                   hydrated.error());
+        EXPECT_FALSE(
+            viewer.getTrainerManager()->hasTrainer());
+        const auto* model = scene.getTrainingModel();
+        ASSERT_NE(model, nullptr);
+        ASSERT_TRUE(model->has_tensor_allocator());
+        EXPECT_GT(model->get_max_sh_degree(), 0);
+        EXPECT_TRUE(
+            lfs::vis::viewerSplatTensorsRendererReady(
+                *model));
+        EXPECT_TRUE(model->shN_value_quantized());
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           OpenWithoutRestoreSpltModelIsRendererReady) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto project_path =
+            temporary_.path / "lazy-splt-render.licht";
+        write_splt_project(
+            project_path, make_degree1_splat(8));
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        auto allocator =
+            viewer.getSceneManager()
+                ->makeExternalSplatAllocator();
+        ASSERT_TRUE(static_cast<bool>(allocator));
+        auto document =
+            lfs::test::licht::require_result_ptr(
+                lfs::io::project::ProjectDocument::open(
+                    project_path));
+        lfs::core::Scene scene;
+        auto hydrated = document->hydrate(
+            scene, {}, std::move(allocator));
+        ASSERT_TRUE(hydrated)
+            << lfs::format_for_developer(
+                   hydrated.error());
+        EXPECT_FALSE(
+            viewer.getTrainerManager()->hasTrainer());
+        const auto* node = scene.getNode("Splat");
+        ASSERT_NE(node, nullptr);
+        ASSERT_NE(node->model, nullptr);
+        ASSERT_TRUE(node->model->has_tensor_allocator());
+        EXPECT_GT(node->model->get_max_sh_degree(), 0);
+        EXPECT_TRUE(
+            lfs::vis::viewerSplatTensorsRendererReady(
+                *node->model));
+        EXPECT_TRUE(node->model->shN_value_quantized());
     }
 
     TEST_F(VisualizerImplResetTest,

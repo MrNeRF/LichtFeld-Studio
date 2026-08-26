@@ -38,6 +38,7 @@
 #include "rendering/image_layout.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
 #include "scene/scene_manager.hpp"
+#include "scene/viewer_splat_quantize.hpp"
 #include "training/project_snapshot_chapters.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
@@ -1622,6 +1623,24 @@ namespace lfs::vis::project {
                 return SceneManager::ContentType::Dataset;
             }
             return SceneManager::ContentType::SplatFiles;
+        }
+
+        void ensureHydratedSplatShNExportable(
+            lfs::core::Scene& scene,
+            const std::filesystem::path& path) {
+            for (const auto* node : scene.getNodes()) {
+                if (!node ||
+                    node->type !=
+                        lfs::core::NodeType::SPLAT) {
+                    continue;
+                }
+                auto* live = scene.getNodeById(node->id);
+                if (!live || !live->model) {
+                    continue;
+                }
+                lfs::vis::ensureViewerSplatShNExportable(
+                    path, *live->model);
+            }
         }
 
         void pngWriteCallback(
@@ -6571,6 +6590,15 @@ namespace lfs::vis::project {
                                     manager->changeContentType(
                                         inferContentType(
                                             manager->getScene()));
+                                    const auto display_path =
+                                        document->source_path()
+                                            ? *document
+                                                   ->source_path()
+                                            : std::filesystem::
+                                                  path{};
+                                    ensureHydratedSplatShNExportable(
+                                        manager->getScene(),
+                                        display_path);
                                     const auto scene_committed_at =
                                         std::chrono::steady_clock::
                                             now();
