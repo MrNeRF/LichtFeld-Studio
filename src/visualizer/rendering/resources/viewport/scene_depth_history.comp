@@ -1,0 +1,52 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D u_current_depth;
+layout(set = 0, binding = 1, r32f) uniform writeonly image2D u_linear_history;
+
+layout(push_constant) uniform DepthHistoryParams {
+    ivec4 extent_encoding; // xy = extent, z = 1 linear, 2 perspective NDC, 3 ortho NDC, w = flip y
+    vec4 planes;           // x = near, y = far
+    vec4 source_uv;        // xy = valid scale, zw = valid clamp max
+} params;
+
+float ndc_to_linear(float depth) {
+    float near_plane = params.planes.x;
+    float far_plane = params.planes.y;
+    float denominator = far_plane - depth * (far_plane - near_plane);
+    return denominator > 1e-7 ? near_plane * far_plane / denominator : 0.0;
+}
+
+float ortho_ndc_to_linear(float depth) {
+    return params.planes.x + depth * (params.planes.y - params.planes.x);
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 extent = params.extent_encoding.xy;
+    if (any(greaterThanEqual(pixel, extent))) {
+        return;
+    }
+
+    vec2 uv = (vec2(pixel) + vec2(0.5)) / vec2(extent);
+    if (params.extent_encoding.w != 0) {
+        uv.y = 1.0 - uv.y;
+    }
+    uv = min(uv * params.source_uv.xy, params.source_uv.zw);
+    float source = texture(u_current_depth, uv).r;
+    float linear_depth = params.extent_encoding.z == 2
+                             ? ndc_to_linear(source)
+                             : (params.extent_encoding.z == 3
+                                    ? ortho_ndc_to_linear(source)
+                                    : source);
+    if (isnan(linear_depth) || isinf(linear_depth) || !(linear_depth > 0.0) ||
+        !(linear_depth < params.planes.y)) {
+        linear_depth = 0.0;
+    }
+    imageStore(u_linear_history, pixel, vec4(linear_depth, 0.0, 0.0, 0.0));
+}

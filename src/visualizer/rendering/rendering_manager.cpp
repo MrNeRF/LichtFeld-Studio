@@ -204,6 +204,11 @@ namespace lfs::vis {
         markDirty(DirtyFlag::CAMERA);
     }
 
+    void RenderingManager::markCameraCut() {
+        temporal_camera_cut_generation_.fetch_add(1, std::memory_order_release);
+        markCameraPoseChanged();
+    }
+
     bool RenderingManager::pollDirtyState() {
         if (const DirtyMask animation_dirty = animation_state_.pollDirtyState(); animation_dirty) {
             dirty_mask_.fetch_or(animation_dirty, std::memory_order_relaxed);
@@ -218,6 +223,19 @@ namespace lfs::vis {
 
     void RenderingManager::requestRenderFollowUp() {
         dirty_mask_.fetch_or(DirtyFlag::CAMERA, std::memory_order_relaxed);
+
+        std::function<void()> wake_callback;
+        {
+            std::scoped_lock lock(wake_callback_mutex_);
+            wake_callback = wake_callback_;
+        }
+        if (wake_callback) {
+            wake_callback();
+        }
+    }
+
+    void RenderingManager::requestTemporalFollowUp() {
+        dirty_mask_.fetch_or(DirtyFlag::TEMPORAL, std::memory_order_relaxed);
 
         std::function<void()> wake_callback;
         {
@@ -434,17 +452,25 @@ namespace lfs::vis {
     }
 
     void RenderingManager::updateSettings(const RenderSettings& new_settings,
-                                          const DirtyMask dirty_flags) {
+                                          const DirtyMask dirty_flags,
+                                          const SceneUpscalerPresetUpdate preset_update) {
         RenderSettings sanitized_settings = new_settings;
         const auto backend = sceneUpscalerBackendFromId(sanitized_settings.scene_upscaler)
                                  .value_or(SceneUpscalerBackend::Native);
-        if (!sceneUpscalerPreset(backend, sanitized_settings.scene_upscaler_preset)) {
-            sanitized_settings.scene_upscaler_preset = loadSceneUpscalerPresetPreference(
-                std::string(sceneUpscalerBackendId(backend)));
+        const std::string backend_id(sceneUpscalerBackendId(backend));
+        if (preset_update == SceneUpscalerPresetUpdate::RestoreRememberedForBackend) {
+            const auto restored = resolveSceneUpscalerPresetUpdate(
+                                      backend,
+                                      std::nullopt,
+                                      loadSceneUpscalerPresetPreference(backend_id))
+                                      .value_or(defaultSceneUpscalerPreset(backend));
+            sanitized_settings.scene_upscaler_preset = std::string(restored.id);
+        } else if (!sceneUpscalerPreset(backend, sanitized_settings.scene_upscaler_preset)) {
+            sanitized_settings.scene_upscaler_preset = loadSceneUpscalerPresetPreference(backend_id);
         }
         const auto preset = sceneUpscalerPreset(backend, sanitized_settings.scene_upscaler_preset)
                                 .value_or(defaultSceneUpscalerPreset(backend));
-        sanitized_settings.scene_upscaler = std::string(sceneUpscalerBackendId(backend));
+        sanitized_settings.scene_upscaler = backend_id;
         sanitized_settings.scene_upscaler_preset = std::string(preset.id);
         sanitized_settings.scene_upscaler_scale = preset.input_scale;
         bool clear_metrics = false;
@@ -534,8 +560,20 @@ namespace lfs::vis {
 
     void RenderingManager::reportSceneUpscalerRuntimeSelection(
         const SceneUpscalerSelection selection) {
-        std::lock_guard lock(settings_mutex_);
-        scene_upscaler_runtime_selection_ = selection;
+        bool changed = false;
+        {
+            std::lock_guard lock(settings_mutex_);
+            changed = scene_upscaler_runtime_selection_ != selection;
+            scene_upscaler_runtime_selection_ = selection;
+        }
+        // The renderer chooses its source resolution before the presentation pass
+        // proves whether reconstruction is available. A real active/fallback
+        // transition therefore needs one feedback frame: active may adopt the
+        // preset scale, while fallback must replace any cached reduced source with
+        // a full-resolution native frame. TEMPORAL deliberately avoids restarting
+        // the convergence sequence as CAMERA would.
+        if (changed)
+            requestTemporalFollowUp();
     }
 
     SceneUpscalerSelection RenderingManager::sceneUpscalerRuntimeSelection() const {

@@ -1690,15 +1690,36 @@ namespace lfs::vis {
         const bool resize_deferring = frame_lifecycle_service_.isResizeDeferring();
         const auto requested_upscaler = sceneUpscalerBackendFromId(frame_settings.scene_upscaler)
                                             .value_or(SceneUpscalerBackend::Native);
+        if (!scene_reconstruction_request_logged_ ||
+            last_scene_reconstruction_backend_ != frame_settings.scene_upscaler ||
+            last_scene_reconstruction_preset_ != frame_settings.scene_upscaler_preset) {
+            if (scene_reconstruction_request_logged_) {
+                LOG_INFO("Scene reconstruction request: {}/{} -> {}/{} (input_scale={:.4f})",
+                         last_scene_reconstruction_backend_,
+                         last_scene_reconstruction_preset_,
+                         frame_settings.scene_upscaler,
+                         frame_settings.scene_upscaler_preset,
+                         frame_settings.scene_upscaler_scale);
+            } else {
+                LOG_INFO("Scene reconstruction initial request: {}/{} (input_scale={:.4f})",
+                         frame_settings.scene_upscaler,
+                         frame_settings.scene_upscaler_preset,
+                         frame_settings.scene_upscaler_scale);
+                scene_reconstruction_request_logged_ = true;
+            }
+            last_scene_reconstruction_backend_ = frame_settings.scene_upscaler;
+            last_scene_reconstruction_preset_ = frame_settings.scene_upscaler_preset;
+        }
         const auto reported_upscaler = sceneUpscalerRuntimeSelection();
-        const bool spatial_runtime_ready =
+        const bool reconstruction_runtime_ready =
             reported_upscaler.requested == requested_upscaler &&
-            reported_upscaler.effective == SceneUpscalerBackend::Spatial &&
+            requested_upscaler != SceneUpscalerBackend::Native &&
+            reported_upscaler.effective == requested_upscaler &&
             !reported_upscaler.fellBack();
         float scale = effectiveSceneRenderScale(
             frame_settings.render_scale,
             frame_settings.scene_upscaler_scale,
-            spatial_runtime_ready);
+            reconstruction_runtime_ready);
         if (resize_result.use_interactive_render_scale) {
             scale = std::min(scale, kInteractiveResizeRenderScale);
         }
@@ -1727,7 +1748,7 @@ namespace lfs::vis {
                                      effectiveSceneRenderScale(frame_settings.render_scale, 1.0f, false));
         resolution_profiler.setGauge(
             "viewer.resolution.scene.reconstruction_scale",
-            !spatial_runtime_ready
+            !reconstruction_runtime_ready
                 ? 1.0
                 : frame_settings.scene_upscaler_scale);
         resolution_profiler.setGauge("viewer.resolution.scene.effective_scale", scale);
@@ -1841,12 +1862,12 @@ namespace lfs::vis {
         } // !render_lock_contended model-change tracking
 
         const bool synchronize_vksplat_input_upload = is_training;
-        if (const DirtyMask training_dirty = frame_lifecycle_service_.handleTrainingRefresh(
-                is_training,
-                framerate_controller_.getSettings().training_frame_refresh_time_sec);
-            training_dirty) {
-            markDirty(training_dirty);
-        }
+        // Keep this cadence dirty separate until the frame consumes the atomic
+        // dirty mask. Its provenance determines whether a temporal settle burst
+        // can produce useful history or would only race the next training tick.
+        const DirtyMask training_refresh_dirty = frame_lifecycle_service_.handleTrainingRefresh(
+            is_training,
+            framerate_controller_.getSettings().training_frame_refresh_time_sec);
 
         const bool has_cached_gpu_only_frame = [&]() {
             if (vulkan_viewport_image_size_.x <= 0 || vulkan_viewport_image_size_.y <= 0) {
@@ -1881,14 +1902,54 @@ namespace lfs::vis {
         }
 
         DirtyMask frame_dirty = dirty_mask_.exchange(0);
-        if (lod_controller_ && lod_controller_->hasReadyResults()) {
+        constexpr DirtyMask temporal_source_dirty =
+            DirtyFlag::CAMERA | DirtyFlag::SPLATS | DirtyFlag::MESH |
+            DirtyFlag::VIEWPORT | DirtyFlag::BACKGROUND | DirtyFlag::SPLIT_VIEW;
+        const DirtyMask independently_dirty_temporal_sources = frame_dirty & temporal_source_dirty;
+        frame_dirty |= training_refresh_dirty;
+        const bool lod_results_ready = lod_controller_ && lod_controller_->hasReadyResults();
+        const bool lod_transition_active = lod_controller_ && lod_controller_->transitionActive();
+        if (lod_results_ready) {
             frame_dirty |= DirtyFlag::CAMERA;
         }
-        if (lod_controller_ && lod_controller_->transitionActive()) {
+        if (lod_transition_active) {
             frame_dirty |= DirtyFlag::CAMERA;
+        }
+        const bool temporal_split_supported =
+            !split_view_service_.isActive(frame_settings) ||
+            splitViewUsesIndependentPanels(frame_settings.split_view_mode) ||
+            splitViewUsesPLYComparison(frame_settings.split_view_mode);
+        const bool temporal_eligible =
+            requested_upscaler == SceneUpscalerBackend::Temporal &&
+            !frame_settings.equirectangular && !frame_settings.apply_appearance_correction &&
+            temporal_split_supported &&
+            lfs::rendering::isVkSplatBackend(frame_settings.raster_backend);
+        const bool training_refresh_only =
+            training_refresh_dirty != 0 && independently_dirty_temporal_sources == 0;
+        const bool allow_temporal_settle =
+            !training_refresh_only && !lod_results_ready && !lod_transition_active;
+        temporal_convergence_.prepare(
+            temporal_eligible,
+            (frame_dirty & temporal_source_dirty) != 0,
+            allow_temporal_settle);
+        glm::vec2 applied_temporal_jitter_pixels = temporal_convergence_.jitter();
+        if (reported_upscaler.requested == SceneUpscalerBackend::Temporal &&
+            reported_upscaler.fellBack()) {
+            // Native fallback still presents this raster; zero jitter so it does
+            // not shimmer while Temporal retries.
+            applied_temporal_jitter_pixels = glm::vec2(0.0f);
+        }
+        const std::uint64_t temporal_camera_cut_generation =
+            temporal_camera_cut_generation_.load(std::memory_order_acquire);
+        const bool temporal_camera_cut =
+            temporal_camera_cut_generation != consumed_temporal_camera_cut_generation_;
+        if ((frame_dirty & (DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::BACKGROUND)) != 0) {
+            if (++temporal_scene_revision_ == 0)
+                ++temporal_scene_revision_;
         }
         constexpr DirtyMask projection_dirty =
-            DirtyFlag::CAMERA | DirtyFlag::SPLATS | DirtyFlag::VIEWPORT | DirtyFlag::SPLIT_VIEW;
+            DirtyFlag::CAMERA | DirtyFlag::SPLATS | DirtyFlag::VIEWPORT |
+            DirtyFlag::SPLIT_VIEW | DirtyFlag::TEMPORAL;
         if ((frame_dirty & projection_dirty) != 0) {
             ++viewport_projection_generation_;
             if (viewport_projection_generation_ == 0) {
@@ -1905,8 +1966,12 @@ namespace lfs::vis {
         // Step-boundary contention during densify: retain last splat image, re-queue
         // dirty so the next cadence tick retries after the exclusive lock drops.
         if (render_lock_contended && has_cached_viewport_output) {
-            if (frame_dirty != 0) {
-                dirty_mask_.fetch_or(frame_dirty, std::memory_order_relaxed);
+            DirtyMask retry_dirty = frame_dirty;
+            if (training_refresh_only) {
+                retry_dirty &= ~training_refresh_dirty;
+            }
+            if (retry_dirty != 0) {
+                dirty_mask_.fetch_or(retry_dirty, std::memory_order_relaxed);
             }
             LOG_PERF("renderVulkanFrame: step-boundary lock contended (retaining cached splat)");
             render_lock.reset();
@@ -2117,13 +2182,27 @@ namespace lfs::vis {
             .current_camera_id = camera_interaction_service_.currentCameraId(),
             .hovered_gaussian_id = viewport_overlay_service_.hoveredGaussianId(),
             .selection_flash_intensity = getSelectionFlashIntensity(),
-            .view_panels = {}};
+            .view_panels = {},
+            .scene_jitter_pixels = applied_temporal_jitter_pixels};
+
+        const auto complete_temporal_convergence_frame =
+            [this, temporal_camera_cut_generation]() {
+                consumed_temporal_camera_cut_generation_ = temporal_camera_cut_generation;
+                if (temporal_convergence_.completeSuccessfulFrame())
+                    requestTemporalFollowUp();
+            };
 
         std::shared_ptr<lfs::core::Tensor> rendered_image;
         lfs::rendering::FrameMetadata rendered_metadata{};
         std::string render_error;
         bool rendered_image_contains_ground_truth = false;
         glm::ivec2 rendered_gt_content_size{0, 0};
+        const SceneTemporalQuality temporal_quality =
+            frame_settings.scene_upscaler_preset == "performance"
+                ? SceneTemporalQuality::Performance
+            : frame_settings.scene_upscaler_preset == "quality"
+                ? SceneTemporalQuality::Quality
+                : SceneTemporalQuality::Balanced;
         std::optional<SplitViewInfo> rendered_split_info;
         VulkanSplitViewParams pending_split_view{};
         const auto release_inactive_split_outputs = [&] {
@@ -2161,8 +2240,15 @@ namespace lfs::vis {
         struct RenderedPanel {
             std::shared_ptr<lfs::core::Tensor> image;
             lfs::rendering::FrameMetadata metadata;
+            VkImage external_image = VK_NULL_HANDLE;
             VkImageView external_image_view = VK_NULL_HANDLE;
+            VkImageLayout external_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
             std::uint64_t external_image_generation = 0;
+            VkImage depth_image = VK_NULL_HANDLE;
+            VkImageView depth_image_view = VK_NULL_HANDLE;
+            VkImageLayout depth_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            std::uint64_t depth_image_generation = 0;
+            std::optional<TemporalFrameInput> temporal_input;
             bool flip_y = false;
             glm::ivec2 size{0, 0};
             glm::ivec2 alloc_size{0, 0};
@@ -2260,6 +2346,21 @@ namespace lfs::vis {
                 const lfs::rendering::ViewportRenderRequest* request_override = nullptr)
             -> std::expected<RenderedPanel, std::string> {
             const lfs::core::SplatData* const panel_model = model_override ? model_override : model;
+            std::uint64_t panel_scene_generation =
+                static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(panel_model));
+            if (panel_model) {
+                panel_scene_generation ^= static_cast<std::uint64_t>(panel_model->size()) +
+                                          0x9e3779b97f4a7c15ull +
+                                          (panel_scene_generation << 6) +
+                                          (panel_scene_generation >> 2);
+                panel_scene_generation ^= panel_model->param_layout_generation() +
+                                          0x9e3779b97f4a7c15ull +
+                                          (panel_scene_generation << 6) +
+                                          (panel_scene_generation >> 2);
+            }
+            panel_scene_generation ^= temporal_scene_revision_ + 0x9e3779b97f4a7c15ull +
+                                      (panel_scene_generation << 6) +
+                                      (panel_scene_generation >> 2);
             const bool panel_has_visible_gaussian_model =
                 hasRenderableGaussians(panel_model) &&
                 (model_override != nullptr || panel_model != model || has_visible_gaussian_model);
@@ -2425,8 +2526,30 @@ namespace lfs::vis {
                     metadata.flip_y = result->flip_y;
                     return RenderedPanel{.image = nullptr,
                                          .metadata = std::move(metadata),
+                                         .external_image = result->image,
                                          .external_image_view = result->image_view,
+                                         .external_image_layout = result->image_layout,
                                          .external_image_generation = result->generation,
+                                         .depth_image = result->depth_image,
+                                         .depth_image_view = result->depth_image_view,
+                                         .depth_image_layout = result->depth_image_layout,
+                                         .depth_image_generation = result->depth_generation,
+                                         .temporal_input = temporal_eligible
+                                                               ? std::optional<TemporalFrameInput>{
+                                                                     {.view = frame_ctx.makeFrameView(
+                                                                          source_viewport, panel_size),
+                                                                      .output_extent = panel_size,
+                                                                      .jitter = request.frame_view.orthographic
+                                                                                    ? glm::vec2(0.0f)
+                                                                                    : temporalJitterNdc(
+                                                                                          applied_temporal_jitter_pixels,
+                                                                                          panel_size),
+                                                                      .render_scale = scale,
+                                                                      .scene_generation = panel_scene_generation,
+                                                                      .backend_key =
+                                                                          static_cast<std::uint64_t>(temporal_quality) + 1,
+                                                                      .camera_cut = temporal_camera_cut}}
+                                                               : std::nullopt,
                                          .flip_y = result->flip_y,
                                          .size = result->size,
                                          .alloc_size = result->alloc_size};
@@ -2441,10 +2564,10 @@ namespace lfs::vis {
         };
 
         const auto make_split_panel =
-            [](const RenderedPanel& panel,
-               const float start,
-               const float end,
-               const bool normalize_x_to_panel) {
+            [&](const RenderedPanel& panel,
+                const float start,
+                const float end,
+                const bool normalize_x_to_panel) {
                 const glm::ivec2 valid = panel.size;
                 const glm::ivec2 alloc =
                     panel.alloc_size.x > 0 && panel.alloc_size.y > 0 ? panel.alloc_size : valid;
@@ -2454,8 +2577,18 @@ namespace lfs::vis {
                     .end_position = end,
                     .normalize_x_to_panel = normalize_x_to_panel,
                     .flip_y = panel.flip_y,
+                    .external_image = panel.external_image,
                     .external_image_view = panel.external_image_view,
+                    .external_image_layout = panel.external_image_layout,
                     .external_image_generation = panel.external_image_generation,
+                    .depth_image = panel.depth_image,
+                    .depth_image_view = panel.depth_image_view,
+                    .depth_image_layout = panel.depth_image_layout,
+                    .depth_image_generation = panel.depth_image_generation,
+                    .image_size = valid,
+                    .allocation_size = alloc,
+                    .temporal_input = panel.temporal_input,
+                    .temporal_settings = sceneTemporalQualitySettings(temporal_quality),
                     .uv_scale = outputUvScale(valid, alloc),
                     .uv_clamp_max = outputUvClampMax(valid, alloc),
                 };
@@ -3067,8 +3200,10 @@ namespace lfs::vis {
                 }
             }
         } else if (splitViewUsesIndependentPanels(frame_settings.split_view_mode)) {
-            if (const auto layouts = split_view_service_.panelLayouts(frame_settings, render_size.x);
-                layouts && render_size.x > 1) {
+            const auto layouts = split_view_service_.panelLayouts(frame_settings, render_size.x);
+            const auto output_layouts =
+                split_view_service_.panelLayouts(frame_settings, current_size.x);
+            if (layouts && output_layouts && render_size.x > 1 && current_size.x > 1) {
                 auto left = render_panel_image(
                     context.viewport,
                     {std::max((*layouts)[0].width, 1), render_size.y},
@@ -3086,6 +3221,14 @@ namespace lfs::vis {
                     nullptr,
                     VksplatViewportRenderer::OutputSlot::SplitRight);
                 if (left && right) {
+                    if (left->temporal_input) {
+                        left->temporal_input->output_extent = {
+                            std::max((*output_layouts)[0].width, 1), current_size.y};
+                    }
+                    if (right->temporal_input) {
+                        right->temporal_input->output_extent = {
+                            std::max((*output_layouts)[1].width, 1), current_size.y};
+                    }
                     pending_split_view.enabled = true;
                     pending_split_view.split_position = frame_settings.split_position;
                     pending_split_view.background = frame_settings.background_color;
@@ -3140,6 +3283,10 @@ namespace lfs::vis {
                         nullptr,
                         VksplatViewportRenderer::OutputSlot::SplitRight);
                     if (left && right) {
+                        if (left->temporal_input)
+                            left->temporal_input->output_extent = current_size;
+                        if (right->temporal_input)
+                            right->temporal_input->output_extent = current_size;
                         pending_split_view.enabled = true;
                         pending_split_view.split_position = frame_settings.split_position;
                         pending_split_view.background = frame_settings.background_color;
@@ -3184,7 +3331,7 @@ namespace lfs::vis {
             // Other split panels use the reconstruction filter only after the
             // presentation pass confirmed that spatial reconstruction is active.
             const bool filter_reconstructed_panels =
-                spatial_runtime_ready && !rendered_image_contains_ground_truth;
+                reconstruction_runtime_ready && !rendered_image_contains_ground_truth;
             pending_split_view.left.spatial_filter = filter_reconstructed_panels;
             pending_split_view.right.spatial_filter = filter_reconstructed_panels;
             pending_split_view.coordinate_extent = render_size;
@@ -3644,6 +3791,10 @@ namespace lfs::vis {
                         lfs::rendering::FrameMetadata metadata{};
                         metadata.valid = true;
                         metadata.flip_y = render_result.flip_y;
+                        bool temporal_frame_published =
+                            pending_split_view.enabled &&
+                            pending_split_view.left.temporal_input.has_value() &&
+                            pending_split_view.right.temporal_input.has_value();
 
                         const auto publish_mesh_frame_for_vksplat = [&]() {
                             // VkSplat returns before the shared mesh-frame setup below.
@@ -3652,7 +3803,8 @@ namespace lfs::vis {
                             const bool publish_mesh_frame =
                                 !frame_ctx.scene_state.meshes.empty() ||
                                 environmentBackgroundEnabled(frame_settings) ||
-                                render_result.depth_image_view != VK_NULL_HANDLE;
+                                render_result.depth_image_view != VK_NULL_HANDLE ||
+                                pending_split_view.enabled;
                             if (publish_mesh_frame) {
                                 auto mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view);
                                 populate_independent_split_mesh_panels(mesh_frame);
@@ -3675,6 +3827,39 @@ namespace lfs::vis {
                                     mesh_frame.depth_blit.uv_scale = outputUvScale(depth_valid, depth_alloc);
                                     mesh_frame.depth_blit.uv_clamp_max =
                                         outputUvClampMax(depth_valid, depth_alloc);
+                                    if (temporal_eligible) {
+                                        const SceneTemporalQuality quality = temporal_quality;
+                                        std::uint64_t scene_generation =
+                                            static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(model));
+                                        scene_generation ^= static_cast<std::uint64_t>(model->size()) +
+                                                            0x9e3779b97f4a7c15ull +
+                                                            (scene_generation << 6) +
+                                                            (scene_generation >> 2);
+                                        scene_generation ^= model->param_layout_generation() +
+                                                            0x9e3779b97f4a7c15ull +
+                                                            (scene_generation << 6) +
+                                                            (scene_generation >> 2);
+                                        scene_generation ^= temporal_scene_revision_ +
+                                                            0x9e3779b97f4a7c15ull +
+                                                            (scene_generation << 6) +
+                                                            (scene_generation >> 2);
+                                        mesh_frame.temporal = VulkanMeshFrame::TemporalFrame{
+                                            .input = {
+                                                .view = frame_ctx.makeFrameView(),
+                                                .output_extent = current_size,
+                                                .jitter = request.frame_view.orthographic
+                                                              ? glm::vec2(0.0f)
+                                                              : temporalJitterNdc(
+                                                                    applied_temporal_jitter_pixels, render_size),
+                                                .render_scale = scale,
+                                                .scene_generation = scene_generation,
+                                                .backend_key = static_cast<std::uint64_t>(quality) + 1,
+                                                .camera_cut = temporal_camera_cut,
+                                            },
+                                            .resolve_settings = sceneTemporalQualitySettings(quality),
+                                        };
+                                        temporal_frame_published = true;
+                                    }
                                 }
                                 setVulkanMeshFrame(std::move(mesh_frame));
                             } else {
@@ -3784,6 +3969,10 @@ namespace lfs::vis {
                                     split_view_service_.updateInfo(FrameResources{});
                                     publish_mesh_frame_for_vksplat();
                                     release_inactive_split_outputs();
+                                    if (temporal_frame_published)
+                                        complete_temporal_convergence_frame();
+                                    else if (temporal_convergence_.enabled())
+                                        temporal_convergence_.cancelSettle();
 
                                     vulkan_viewport_coordinate_size_ = current_size;
                                     return {.image = vulkan_viewport_image_,
@@ -3864,6 +4053,10 @@ namespace lfs::vis {
 
                         publish_mesh_frame_for_vksplat();
                         release_inactive_split_outputs();
+                        if (temporal_frame_published)
+                            complete_temporal_convergence_frame();
+                        else if (temporal_convergence_.enabled())
+                            temporal_convergence_.cancelSettle();
 
                         vulkan_viewport_coordinate_size_ = current_size;
                         return {.image = {},
@@ -4006,6 +4199,13 @@ namespace lfs::vis {
             }
 
             setVulkanMeshFrame(std::move(gpu_mesh_frame));
+            if (pending_split_view.enabled &&
+                pending_split_view.left.temporal_input.has_value() &&
+                pending_split_view.right.temporal_input.has_value()) {
+                complete_temporal_convergence_frame();
+            } else if (temporal_convergence_.enabled()) {
+                temporal_convergence_.cancelSettle();
+            }
         }
         render_lock.reset();
 

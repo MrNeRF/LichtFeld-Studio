@@ -935,7 +935,10 @@ namespace lfs::python {
             settings_.gut = rendering::isGutBackend(
                 static_cast<rendering::GaussianRasterBackend>(settings_.raster_backend));
         }
-        vis::update_render_settings(settings_);
+        vis::update_render_settings(
+            settings_,
+            {.scene_upscaler_explicit = name == "scene_upscaler",
+             .scene_upscaler_preset_explicit = name == "scene_upscaler_preset"});
         // update_render_settings may normalize dependent properties (for
         // example the preset when switching scene reconstruction backends).
         // Keep this Python proxy in lockstep with that applied state so the

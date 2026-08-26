@@ -5,11 +5,14 @@
 #pragma once
 
 #include "core/tensor_fwd.hpp"
+#include "rendering/scene_temporal_resolve.hpp"
+#include "rendering/temporal_frame_tracker.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
+#include <optional>
 #include <vulkan/vulkan.h>
 
 namespace lfs::vis {
@@ -25,8 +28,18 @@ namespace lfs::vis {
         // When set, the pass binds this VkImageView directly and skips the staging
         // upload path. The caller owns the image and must keep it alive through
         // the viewport pass record/submit.
+        VkImage external_image = VK_NULL_HANDLE;
         VkImageView external_image_view = VK_NULL_HANDLE;
+        VkImageLayout external_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         std::uint64_t external_image_generation = 0;
+        VkImage depth_image = VK_NULL_HANDLE;
+        VkImageView depth_image_view = VK_NULL_HANDLE;
+        VkImageLayout depth_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        std::uint64_t depth_image_generation = 0;
+        glm::ivec2 image_size{0, 0};
+        glm::ivec2 allocation_size{0, 0};
+        std::optional<TemporalFrameInput> temporal_input;
+        SceneTemporalResolveSettings temporal_settings;
         // Valid-region UV for padded panel textures (default identity).
         glm::vec2 uv_scale{1.0f, 1.0f};
         glm::vec2 uv_clamp_max{1.0f, 1.0f};

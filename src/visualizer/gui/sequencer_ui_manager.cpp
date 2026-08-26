@@ -348,7 +348,7 @@ namespace lfs::vis::gui {
 
         if (auto* const rm = viewer_->getRenderingManager()) {
             rm->setFocalLength(state.focal_length_mm);
-            rm->markCameraPoseChanged();
+            rm->markCameraCut();
         }
     }
 

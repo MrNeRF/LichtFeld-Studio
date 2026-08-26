@@ -1,0 +1,120 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D u_current;
+layout(set = 0, binding = 1) uniform sampler2D u_history;
+layout(set = 0, binding = 2) uniform sampler2D u_motion;
+layout(set = 0, binding = 3) uniform sampler2D u_current_depth;
+layout(set = 0, binding = 4) uniform sampler2D u_history_depth;
+layout(set = 0, binding = 5, rgba16f) uniform writeonly image2D u_output;
+
+layout(push_constant) uniform ResolveParams {
+    ivec4 extents;       // xy = render, zw = output
+    vec4 control;        // x = history valid, y = weight, z = motion rejection pixels
+    vec4 current_uv;     // xy = scale, zw = clamp max
+    vec4 depth_control;  // x = enabled, y = relative threshold, z = absolute threshold, w = far
+    vec4 jitter_pixels;  // xy = current, zw = previous; render-pixel image convention
+    vec4 reconstruction; // x = current sharpness, y = geometric-motion confidence span
+}
+params;
+
+bool finite2(vec2 value) {
+    return !any(isnan(value)) && !any(isinf(value));
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 output_extent = params.extents.zw;
+    if (any(greaterThanEqual(pixel, output_extent))) {
+        return;
+    }
+
+    vec2 output_uv = (vec2(pixel) + vec2(0.5)) / vec2(output_extent);
+    vec2 render_extent = vec2(params.extents.xy);
+    vec2 render_half_texel = 0.5 / render_extent;
+    vec2 current_render_uv = output_uv + params.jitter_pixels.xy / render_extent;
+    vec2 motion_uv = clamp(current_render_uv,
+                           render_half_texel,
+                           vec2(1.0) - render_half_texel);
+    vec2 current_color_uv = clamp(current_render_uv * params.current_uv.xy,
+                                  vec2(0.0),
+                                  params.current_uv.zw);
+    vec4 current = texture(u_current, current_color_uv);
+    vec3 neighborhood_min = current.rgb;
+    vec3 neighborhood_max = current.rgb;
+    vec3 neighborhood_cross_sum = vec3(0.0);
+    vec2 color_texel = params.current_uv.xy / render_extent;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            vec2 sample_uv = min(current_color_uv + vec2(x, y) * color_texel,
+                                 params.current_uv.zw);
+            vec3 value = texture(u_current, max(sample_uv, vec2(0.0))).rgb;
+            neighborhood_min = min(neighborhood_min, value);
+            neighborhood_max = max(neighborhood_max, value);
+            if (abs(x) + abs(y) == 1) {
+                neighborhood_cross_sum += value;
+            }
+        }
+    }
+    float sharpness = clamp(params.reconstruction.x, 0.0, 0.25);
+    vec3 reconstructed_current = clamp(
+        current.rgb * (1.0 + 4.0 * sharpness) - neighborhood_cross_sum * sharpness,
+        neighborhood_min,
+        neighborhood_max);
+    vec4 current_output = vec4(reconstructed_current, current.a);
+    if (params.control.x < 0.5) {
+        imageStore(u_output, pixel, current_output);
+        return;
+    }
+
+    vec2 motion = texture(u_motion, motion_uv).xy;
+    if (!finite2(motion) || length(motion) > params.control.z) {
+        imageStore(u_output, pixel, current_output);
+        return;
+    }
+    vec2 previous_uv = output_uv + motion / render_extent;
+    vec2 previous_render_uv = previous_uv + params.jitter_pixels.zw / render_extent;
+    vec2 history_half_texel = 0.5 / vec2(output_extent);
+    if (!finite2(previous_uv) || any(lessThan(previous_uv, history_half_texel)) ||
+        any(greaterThan(previous_uv, vec2(1.0) - history_half_texel))) {
+        imageStore(u_output, pixel, current_output);
+        return;
+    }
+
+    if (params.depth_control.x > 0.5) {
+        if (any(lessThan(previous_render_uv, render_half_texel)) ||
+            any(greaterThan(previous_render_uv, vec2(1.0) - render_half_texel))) {
+            imageStore(u_output, pixel, current_output);
+            return;
+        }
+        float current_depth = texture(u_current_depth, motion_uv).r;
+        float history_depth = texture(u_history_depth, previous_render_uv).r;
+        float threshold = max(params.depth_control.z,
+                              params.depth_control.y * current_depth);
+        if (isnan(current_depth) || isinf(current_depth) || !(current_depth > 0.0) ||
+            isnan(history_depth) || isinf(history_depth) || !(history_depth > 0.0) ||
+            !(params.depth_control.w > 0.0) || current_depth >= params.depth_control.w ||
+            history_depth >= params.depth_control.w ||
+            abs(current_depth - history_depth) > threshold) {
+            imageStore(u_output, pixel, current_output);
+            return;
+        }
+    }
+
+    vec3 history = clamp(texture(u_history, previous_uv).rgb,
+                         neighborhood_min,
+                         neighborhood_max);
+    float geometric_motion = length(motion);
+    float confidence = params.control.z > 0.0 && params.reconstruction.y > 0.0
+                           ? clamp(1.0 - geometric_motion / params.reconstruction.y, 0.0, 1.0)
+                           : 0.0;
+    vec3 resolved = mix(reconstructed_current,
+                        history,
+                        clamp(params.control.y, 0.0, 1.0) * confidence);
+    imageStore(u_output, pixel, vec4(resolved, current.a));
+}

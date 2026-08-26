@@ -361,12 +361,16 @@ namespace lfs::vis {
 
         reset_camera_handler_id_ = cmd::ResetCamera::when([this](const auto&) {
             viewport_.camera.resetToHome();
+            if (auto* const rendering = services().renderingOrNull())
+                rendering->markCameraCut();
             publishCameraMove();
         });
 
         dataset_load_completed_handler_id_ = state::DatasetLoadCompleted::when([this](const auto& e) {
             if (e.success) {
                 viewport_.camera.resetToHome();
+                if (auto* const rendering = services().renderingOrNull())
+                    rendering->markCameraCut();
                 publishCameraMove();
             }
         });
@@ -1803,6 +1807,8 @@ namespace lfs::vis {
 
             case input::Action::CAMERA_RESET_HOME:
                 activeKeyboardViewport().camera.resetToHome();
+                if (auto* const rendering = services().renderingOrNull())
+                    rendering->markCameraCut();
                 publishCameraMove(&activeKeyboardViewport());
                 return;
 
@@ -2505,6 +2511,8 @@ namespace lfs::vis {
             pivot_distance = 5.0f;
 
         target_viewport.setViewMatrix(pose.rotation, pose.translation);
+        if (auto* const rendering = services().renderingOrNull())
+            rendering->markCameraCut();
 
         target_viewport.camera.updatePivotFromCamera(pivot_distance);
 
@@ -2624,6 +2632,8 @@ namespace lfs::vis {
 
         if (has_bounds) {
             target_viewport.camera.focusOnBounds(total_min, total_max);
+            if (auto* const rendering = services().renderingOrNull())
+                rendering->markCameraCut();
             publishCameraMove(&target_viewport);
             return true;
         }
@@ -3067,6 +3077,7 @@ namespace lfs::vis {
 
         if (auto* const rendering = services().renderingOrNull()) {
             rendering->setGridPlaneForPanel(panel, snapped_axis);
+            rendering->markCameraCut();
         }
 
         return true;

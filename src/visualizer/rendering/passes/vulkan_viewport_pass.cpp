@@ -224,6 +224,9 @@ namespace lfs::vis {
             VkDescriptorSet frustum_descriptor_set = VK_NULL_HANDLE;
             VkDescriptorSet shape_overlay_descriptor_set = VK_NULL_HANDLE;
             VkImageView bound_shape_overlay_depth_view = VK_NULL_HANDLE;
+            bool temporal_presentation = false;
+            bool temporal_split_presentation = false;
+            VulkanSplitViewParams effective_split_view;
         };
         std::vector<FrameResources> frame_resources;
 
@@ -235,6 +238,8 @@ namespace lfs::vis {
         VulkanEnvironmentPass environment_pass;
         VulkanDepthBlitPass depth_blit_pass;
         VulkanSplitViewPass split_view_pass;
+        VulkanSceneTemporalPipeline temporal_pipeline;
+        bool temporal_pipeline_initialized = false;
 
         VkDescriptorSetLayout grid_descriptor_layout = VK_NULL_HANDLE;
         VkDescriptorPool grid_descriptor_pool = VK_NULL_HANDLE;
@@ -257,6 +262,7 @@ namespace lfs::vis {
         bool scene_spatial_pipeline_failed = false;
         SceneUpscalerSelection scene_upscaler_selection{};
         std::optional<SceneUpscalerSelection> logged_scene_upscaler_selection;
+        std::string temporal_failure;
         VkPipelineLayout vignette_pipeline_layout = VK_NULL_HANDLE;
         VkPipeline vignette_pipeline = VK_NULL_HANDLE;
         VkPipelineLayout grid_pipeline_layout = VK_NULL_HANDLE;
@@ -2011,13 +2017,179 @@ namespace lfs::vis {
             scene_image_uploader.upload(params, frame.scene_descriptor_set);
         }
 
+        void updateSceneUpscalerSelection(const SceneUpscalerBackend requested,
+                                          const bool runtime_available,
+                                          const bool log_fallback_transition = true) {
+            scene_upscaler_selection = resolveSceneUpscalerSelection(requested, runtime_available);
+            auto& profiler = lfs::diagnostics::VramProfiler::instance();
+            profiler.setGauge("viewer.upscaler.requested",
+                              static_cast<double>(scene_upscaler_selection.requested));
+            profiler.setGauge("viewer.upscaler.effective",
+                              static_cast<double>(scene_upscaler_selection.effective));
+            profiler.setGauge("viewer.upscaler.fallback",
+                              scene_upscaler_selection.fellBack() ? 1.0 : 0.0);
+            profiler.setGauge("viewer.upscaler.runtime_ready", runtime_available ? 1.0 : 0.0);
+            if (!logged_scene_upscaler_selection ||
+                *logged_scene_upscaler_selection != scene_upscaler_selection) {
+                if (scene_upscaler_selection.fellBack() && log_fallback_transition) {
+                    LOG_WARN("Scene reconstruction '{}' unavailable; using native presentation",
+                             sceneUpscalerBackendId(scene_upscaler_selection.requested));
+                } else if (!scene_upscaler_selection.fellBack()) {
+                    LOG_INFO("Scene reconstruction active: {}",
+                             sceneUpscalerBackendId(scene_upscaler_selection.effective));
+                }
+                logged_scene_upscaler_selection = scene_upscaler_selection;
+            }
+        }
+
+        void reportTemporalFailure(std::string reason) {
+            if (temporal_failure == reason)
+                return;
+            temporal_failure = std::move(reason);
+            LOG_WARN("Temporal reconstruction unavailable: {}", temporal_failure);
+        }
+
+        void clearTemporalFailure() {
+            temporal_failure.clear();
+        }
+
+        [[nodiscard]] static std::string_view temporalStatusName(
+            const VulkanSceneTemporalPipelineStatus status) {
+            switch (status) {
+            case VulkanSceneTemporalPipelineStatus::Inactive:
+                return "inactive";
+            case VulkanSceneTemporalPipelineStatus::Resolved:
+                return "resolved";
+            case VulkanSceneTemporalPipelineStatus::InvalidRequest:
+                return "invalid-request";
+            case VulkanSceneTemporalPipelineStatus::MotionUnavailable:
+                return "motion-unavailable";
+            case VulkanSceneTemporalPipelineStatus::MotionFailure:
+                return "motion-failure";
+            case VulkanSceneTemporalPipelineStatus::ResolveUnavailable:
+                return "resolve-unavailable";
+            case VulkanSceneTemporalPipelineStatus::ResolveFailure:
+                return "resolve-failure";
+            case VulkanSceneTemporalPipelineStatus::CommitFailure:
+                return "commit-failure";
+            }
+            return "unknown";
+        }
+
+        [[nodiscard]] bool hasPreRenderWork(const VulkanViewportPassParams& params) const {
+            if (params.scene_upscaler != SceneUpscalerBackend::Temporal)
+                return false;
+            if (params.split_view.enabled) {
+                return params.split_temporal[0].has_value() &&
+                       params.split_temporal[1].has_value() &&
+                       validVulkanSceneTemporalPipelineRequest(*params.split_temporal[0]) &&
+                       validVulkanSceneTemporalPipelineRequest(*params.split_temporal[1]);
+            }
+            return params.temporal.has_value() &&
+                   validVulkanSceneTemporalPipelineRequest(*params.temporal);
+        }
+
+        void releaseTemporalHistory() {
+            if (!temporal_pipeline_initialized)
+                return;
+            if (temporal_pipeline.resourceStats().history_images == 0)
+                return;
+            if (context != nullptr && !context->waitForSubmittedFrames()) {
+                temporal_pipeline.resetAll(TemporalResetReason::HistoryDisabled);
+                LOG_WARN("Scene temporal resources could not be released after leaving Temporal: {}",
+                         context->lastError());
+                return;
+            }
+            temporal_pipeline.releaseHistory();
+        }
+
+        [[nodiscard]] bool recordPreRenderWork(const VkCommandBuffer command_buffer,
+                                               const VulkanViewportPassParams& params) {
+            if (!hasPreRenderWork(params)) {
+                if (params.scene_upscaler == SceneUpscalerBackend::Temporal)
+                    temporal_pipeline.resetAll(TemporalResetReason::InvalidInput);
+                else
+                    releaseTemporalHistory();
+                updateSceneUpscalerSelection(params.scene_upscaler, false);
+                return false;
+            }
+            if (!temporal_pipeline_initialized) {
+                temporal_pipeline_initialized = temporal_pipeline.init(*context);
+            }
+            if (!temporal_pipeline_initialized) {
+                reportTemporalFailure("pipeline initialization failed");
+                updateSceneUpscalerSelection(params.scene_upscaler, false);
+                return false;
+            }
+
+            auto& frame = resourcesForFrame(params.frame_slot);
+            if (params.split_view.enabled) {
+                const auto left = temporal_pipeline.record(command_buffer, *params.split_temporal[0]);
+                const auto right = temporal_pipeline.record(command_buffer, *params.split_temporal[1]);
+                if (!left.resolved() || !right.resolved()) {
+                    temporal_pipeline.reset(TemporalViewId::SplitLeft,
+                                            TemporalResetReason::ResolveFailure);
+                    temporal_pipeline.reset(TemporalViewId::SplitRight,
+                                            TemporalResetReason::ResolveFailure);
+                    reportTemporalFailure(std::format(
+                        "split pipeline status left={} right={}",
+                        temporalStatusName(left.status),
+                        temporalStatusName(right.status)));
+                    updateSceneUpscalerSelection(params.scene_upscaler, false);
+                    return false;
+                }
+                frame.effective_split_view = params.split_view;
+                frame.effective_split_view.left.external_image_view = left.output_view;
+                frame.effective_split_view.left.external_image_layout = VK_IMAGE_LAYOUT_GENERAL;
+                frame.effective_split_view.left.external_image_generation = left.sequence;
+                frame.effective_split_view.left.uv_scale = {1.0f, 1.0f};
+                frame.effective_split_view.left.uv_clamp_max = {1.0f, 1.0f};
+                frame.effective_split_view.left.spatial_filter = false;
+                frame.effective_split_view.right.external_image_view = right.output_view;
+                frame.effective_split_view.right.external_image_layout = VK_IMAGE_LAYOUT_GENERAL;
+                frame.effective_split_view.right.external_image_generation = right.sequence;
+                frame.effective_split_view.right.uv_scale = {1.0f, 1.0f};
+                frame.effective_split_view.right.uv_clamp_max = {1.0f, 1.0f};
+                frame.effective_split_view.right.spatial_filter = false;
+                split_view_pass.prepare(frame.effective_split_view, params.frame_slot);
+                frame.temporal_split_presentation = true;
+                clearTemporalFailure();
+                updateSceneUpscalerSelection(params.scene_upscaler, true);
+                return true;
+            }
+
+            const auto result = temporal_pipeline.record(command_buffer, *params.temporal);
+            if (!result.resolved()) {
+                reportTemporalFailure(std::format("pipeline status {}", temporalStatusName(result.status)));
+                updateSceneUpscalerSelection(params.scene_upscaler, false);
+                return false;
+            }
+            if (!scene_image_uploader.bindPresentationView(frame.scene_descriptor_set,
+                                                           result.output_view,
+                                                           VK_IMAGE_LAYOUT_GENERAL)) {
+                temporal_pipeline.reset(result.view, TemporalResetReason::ResolveFailure);
+                reportTemporalFailure("presentation descriptor bind failed");
+                updateSceneUpscalerSelection(params.scene_upscaler, false);
+                return false;
+            }
+            frame.temporal_presentation = true;
+            clearTemporalFailure();
+            updateSceneUpscalerSelection(params.scene_upscaler, true);
+            return true;
+        }
+
         void prepare(const VulkanViewportPassParams& params) {
+            if (params.scene_upscaler != SceneUpscalerBackend::Temporal)
+                releaseTemporalHistory();
             if (params.scene_upscaler == SceneUpscalerBackend::Native) {
                 scene_spatial_pipeline_failed = false;
-            } else {
+            } else if (params.scene_upscaler == SceneUpscalerBackend::Spatial) {
                 static_cast<void>(ensureSpatialScenePipeline());
             }
             auto& frame = resourcesForFrame(params.frame_slot);
+            frame.temporal_presentation = false;
+            frame.temporal_split_presentation = false;
+            frame.effective_split_view = params.split_view;
             updateQuadBuffer(params.scene_image_flip_y);
             updateGridUniforms(params);
             updateFrustumInstances(params);
@@ -2051,29 +2223,37 @@ namespace lfs::vis {
             environment_pass.prepare(params.environment, params.frame_slot);
             depth_blit_pass.prepare(params.depth_blit, params.frame_slot);
             split_view_pass.prepare(params.split_view, params.frame_slot);
-            const bool runtime_available = params.split_view.enabled
-                                               ? split_view_pass.available()
-                                               : scene_spatial_pipeline != VK_NULL_HANDLE;
-            scene_upscaler_selection = resolveSceneUpscalerSelection(
-                params.scene_upscaler, runtime_available);
-            auto& profiler = lfs::diagnostics::VramProfiler::instance();
-            profiler.setGauge("viewer.upscaler.requested",
-                              static_cast<double>(scene_upscaler_selection.requested));
-            profiler.setGauge("viewer.upscaler.effective",
-                              static_cast<double>(scene_upscaler_selection.effective));
-            profiler.setGauge("viewer.upscaler.fallback",
-                              scene_upscaler_selection.fellBack() ? 1.0 : 0.0);
-            profiler.setGauge("viewer.upscaler.runtime_ready", runtime_available ? 1.0 : 0.0);
-            if (!logged_scene_upscaler_selection ||
-                *logged_scene_upscaler_selection != scene_upscaler_selection) {
-                if (scene_upscaler_selection.fellBack()) {
-                    LOG_WARN("Scene reconstruction '{}' unavailable; using native presentation",
-                             sceneUpscalerBackendId(scene_upscaler_selection.requested));
-                } else {
-                    LOG_INFO("Scene reconstruction active: {}",
-                             sceneUpscalerBackendId(scene_upscaler_selection.effective));
+            if (params.scene_upscaler == SceneUpscalerBackend::Temporal &&
+                !hasPreRenderWork(params)) {
+                const bool invalid_request = params.temporal.has_value();
+                if (invalid_request) {
+                    reportTemporalFailure("request contract is invalid");
                 }
-                logged_scene_upscaler_selection = scene_upscaler_selection;
+                temporal_pipeline.resetAll(invalid_request
+                                               ? TemporalResetReason::InvalidInput
+                                               : TemporalResetReason::RuntimeUnavailable);
+                // A temporal request can legitimately precede the first paired color/depth
+                // frame (at startup and for one frame after a backend transition). Keep the
+                // effective native fallback observable without reporting expected warm-up as
+                // an unavailable backend. Invalid requests and pipeline failures remain noisy.
+                updateSceneUpscalerSelection(params.scene_upscaler, false, invalid_request);
+                return;
+            }
+            const auto runtime_available = [&]() -> std::optional<bool> {
+                switch (params.scene_upscaler) {
+                case SceneUpscalerBackend::Native:
+                    return true;
+                case SceneUpscalerBackend::Spatial:
+                    return params.split_view.enabled
+                               ? split_view_pass.available()
+                               : scene_spatial_pipeline != VK_NULL_HANDLE;
+                case SceneUpscalerBackend::Temporal:
+                    return std::nullopt;
+                }
+                return false;
+            }();
+            if (runtime_available.has_value()) {
+                updateSceneUpscalerSelection(params.scene_upscaler, *runtime_available);
             }
         }
 
@@ -2251,7 +2431,10 @@ namespace lfs::vis {
             if (split_active) {
                 // content_rect arrives panel-local; lift it into framebuffer
                 // coords so the shader's letterbox check matches gl_FragCoord.
-                VulkanSplitViewParams adjusted = params.split_view;
+                const auto& source_split = frame.temporal_split_presentation
+                                               ? frame.effective_split_view
+                                               : params.split_view;
+                VulkanSplitViewParams adjusted = source_split;
                 if (adjusted.coordinate_extent.x > 0 && adjusted.coordinate_extent.y > 0) {
                     const float scale_x = static_cast<float>(rect.width) /
                                           static_cast<float>(adjusted.coordinate_extent.x);
@@ -2294,10 +2477,12 @@ namespace lfs::vis {
                     params.scene_image_alloc_size.x > 0 && params.scene_image_alloc_size.y > 0
                         ? params.scene_image_alloc_size
                         : valid;
-                const ScenePush scene_push{
-                    .uv_scale = outputUvScale(valid, alloc),
-                    .uv_clamp_max = outputUvClampMax(valid, alloc),
-                };
+                const ScenePush scene_push = frame.temporal_presentation
+                                                 ? ScenePush{}
+                                                 : ScenePush{
+                                                       .uv_scale = outputUvScale(valid, alloc),
+                                                       .uv_clamp_max = outputUvClampMax(valid, alloc),
+                                                   };
                 vkCmdPushConstants(command_buffer,
                                    selected_layout,
                                    VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -2687,6 +2872,7 @@ namespace lfs::vis {
                                  context->lastError());
                     }
                 }
+                temporal_pipeline.shutdown();
                 scene_image_uploader.shutdown();
                 mesh_pass.shutdown();
                 environment_pass.shutdown();
@@ -2793,6 +2979,16 @@ namespace lfs::vis {
             return;
         }
         impl_->prepare(params);
+    }
+
+    bool VulkanViewportPass::hasPreRenderWork(const VulkanViewportPassParams& params) const {
+        return impl_ && impl_->hasPreRenderWork(params);
+    }
+
+    bool VulkanViewportPass::recordPreRenderWork(
+        const VkCommandBuffer command_buffer,
+        const VulkanViewportPassParams& params) {
+        return impl_ && impl_->recordPreRenderWork(command_buffer, params);
     }
 
     void VulkanViewportPass::record(VkCommandBuffer command_buffer,

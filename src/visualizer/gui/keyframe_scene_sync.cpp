@@ -103,7 +103,7 @@ namespace lfs::vis::gui {
 
             if (auto* rm = viewer_->getRenderingManager()) {
                 rm->setFocalLength(kf->focal_length_mm);
-                rm->markCameraPoseChanged();
+                rm->markCameraCut();
             }
 
             emitNodeSelectedForKeyframe(e.keyframe_index);

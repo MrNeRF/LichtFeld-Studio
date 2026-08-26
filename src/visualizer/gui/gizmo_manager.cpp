@@ -3042,6 +3042,7 @@ namespace lfs::vis::gui {
                             if (released_panel->viewport->camera.snapToNearestAxisView(
                                     kAxisSnapAngleDegrees, &snapped_axis, nullptr)) {
                                 rendering_manager->setGridPlaneForPanel(released_panel->panel, snapped_axis);
+                                rendering_manager->markCameraCut();
                             }
                         }
                         rendering_manager->markCameraPoseChanged();

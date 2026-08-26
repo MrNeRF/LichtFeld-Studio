@@ -9,6 +9,7 @@
 #include "vulkan_depth_blit_pass.hpp"
 #include "vulkan_environment_pass.hpp"
 #include "vulkan_mesh_pass.hpp"
+#include "vulkan_scene_temporal_pipeline.hpp"
 #include "vulkan_split_view_pass.hpp"
 
 #include <array>
@@ -16,6 +17,7 @@
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
+#include <optional>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -119,6 +121,8 @@ namespace lfs::vis {
         // incompletely prepared image during the deferral window.
         bool preserve_scene_image_binding = false;
         SceneUpscalerBackend scene_upscaler = SceneUpscalerBackend::Native;
+        std::optional<VulkanSceneTemporalPipelineRequest> temporal;
+        std::array<std::optional<VulkanSceneTemporalPipelineRequest>, 2> split_temporal;
 
         bool grid_enabled = false;
         glm::mat4 grid_view{1.0f};
@@ -178,6 +182,9 @@ namespace lfs::vis {
 
         [[nodiscard]] bool init(VulkanContext& context);
         void prepare(VulkanContext& context, const VulkanViewportPassParams& params);
+        [[nodiscard]] bool hasPreRenderWork(const VulkanViewportPassParams& params) const;
+        [[nodiscard]] bool recordPreRenderWork(VkCommandBuffer command_buffer,
+                                               const VulkanViewportPassParams& params);
         void record(VkCommandBuffer command_buffer,
                     VkExtent2D framebuffer_extent,
                     const VulkanViewportPassParams& params);

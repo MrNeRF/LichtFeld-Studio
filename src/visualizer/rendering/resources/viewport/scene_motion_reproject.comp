@@ -1,0 +1,76 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D u_depth;
+layout(set = 0, binding = 1, rg16f) uniform writeonly image2D u_motion;
+layout(set = 0, binding = 2, std140) uniform ReprojectionParams {
+    mat4 inverse_current_view_projection;
+    mat4 previous_view_projection;
+    ivec4 render_info; // xy = extent, z = flip_y, w = 0 NDC, 1 perspective linear, 2 ortho linear
+    vec4 depth_info;   // x = near plane, y = far plane, z = source depth flip y
+} params;
+
+float view_depth_to_ndc(float view_depth) {
+    float near_plane = params.depth_info.x;
+    float far_plane = params.depth_info.y;
+    if (!(view_depth > 0.0) || !(near_plane > 0.0) || !(far_plane > near_plane)) {
+        return 1.0;
+    }
+    if (params.render_info.w == 2) {
+        return (view_depth - near_plane) / (far_plane - near_plane);
+    }
+    return far_plane / (far_plane - near_plane) *
+           (1.0 - near_plane / max(view_depth, near_plane));
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pixel, params.render_info.xy))) {
+        return;
+    }
+
+    ivec2 depth_pixel = pixel;
+    if (params.depth_info.z > 0.5) {
+        depth_pixel.y = params.render_info.y - 1 - depth_pixel.y;
+    }
+    float depth = texelFetch(u_depth, depth_pixel, 0).r;
+    if (params.render_info.w != 0) {
+        depth = view_depth_to_ndc(depth);
+    }
+    if (isnan(depth) || isinf(depth) || depth < 0.0 || depth >= 1.0) {
+        imageStore(u_motion, pixel, vec4(0.0));
+        return;
+    }
+
+    vec2 extent = vec2(params.render_info.xy);
+    vec2 current_ndc = vec2(
+        2.0 * (float(pixel.x) + 0.5) / extent.x - 1.0,
+        1.0 - 2.0 * (float(pixel.y) + 0.5) / extent.y);
+    vec4 world = params.inverse_current_view_projection * vec4(current_ndc, depth, 1.0);
+    if (isnan(world.w) || isinf(world.w) || abs(world.w) <= 1e-7) {
+        imageStore(u_motion, pixel, vec4(0.0));
+        return;
+    }
+    world /= world.w;
+
+    vec4 previous_clip = params.previous_view_projection * world;
+    if (any(isnan(previous_clip.xyw)) || any(isinf(previous_clip.xyw)) ||
+        abs(previous_clip.w) <= 1e-7) {
+        imageStore(u_motion, pixel, vec4(0.0));
+        return;
+    }
+
+    vec2 previous_ndc = previous_clip.xy / previous_clip.w;
+    vec2 motion_pixels = vec2(
+        (previous_ndc.x - current_ndc.x) * 0.5 * extent.x,
+        (current_ndc.y - previous_ndc.y) * 0.5 * extent.y);
+    if (params.render_info.z != 0) {
+        motion_pixels.y = -motion_pixels.y;
+    }
+    imageStore(u_motion, pixel, vec4(motion_pixels, 0.0, 0.0));
+}

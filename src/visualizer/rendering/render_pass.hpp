@@ -85,6 +85,7 @@ namespace lfs::vis {
         int hovered_gaussian_id = -1;
         float selection_flash_intensity = 0;
         std::vector<FrameViewPanel> view_panels;
+        glm::vec2 scene_jitter_pixels{0.0f};
 
         [[nodiscard]] const FrameViewPanel* findViewPanel(const SplitViewPanelId panel_id) const {
             for (const auto& panel : view_panels) {

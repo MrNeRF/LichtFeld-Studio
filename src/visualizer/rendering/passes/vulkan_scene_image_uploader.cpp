@@ -198,6 +198,17 @@ namespace lfs::vis {
         [[nodiscard]] bool hasImage() const {
             return scene_image_view != VK_NULL_HANDLE;
         }
+
+        [[nodiscard]] bool bindPresentationView(const VkDescriptorSet scene_descriptor_set,
+                                                const VkImageView image_view,
+                                                const VkImageLayout image_layout) const {
+            if (device == VK_NULL_HANDLE || scene_descriptor_set == VK_NULL_HANDLE ||
+                image_view == VK_NULL_HANDLE || image_layout == VK_IMAGE_LAYOUT_UNDEFINED) {
+                return false;
+            }
+            updateSceneDescriptor(scene_descriptor_set, image_view, image_layout);
+            return true;
+        }
     };
 
     VulkanSceneImageUploader::VulkanSceneImageUploader()
@@ -224,6 +235,13 @@ namespace lfs::vis {
     void VulkanSceneImageUploader::upload(const VulkanViewportPassParams& params,
                                           const VkDescriptorSet scene_descriptor_set) {
         impl_->upload(params, scene_descriptor_set);
+    }
+
+    bool VulkanSceneImageUploader::bindPresentationView(
+        const VkDescriptorSet scene_descriptor_set,
+        const VkImageView image_view,
+        const VkImageLayout image_layout) {
+        return impl_ && impl_->bindPresentationView(scene_descriptor_set, image_view, image_layout);
     }
 
     bool VulkanSceneImageUploader::hasImage() const {

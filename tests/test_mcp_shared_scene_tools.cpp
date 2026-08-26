@@ -66,7 +66,8 @@ namespace {
                     return {};
                 },
                 .start_training = []() -> std::expected<void, std::string> { return {}; },
-                .render_capture = [](std::optional<int>, int, int) -> std::expected<std::string, std::string> {
+                .render_capture = [](std::optional<int>, int, int, bool)
+                    -> std::expected<std::string, std::string> {
                     return std::string{};
                 },
                 .gaussian_count = []() -> std::expected<int64_t, std::string> { return 0; },

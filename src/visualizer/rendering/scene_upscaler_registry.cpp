@@ -33,6 +33,23 @@ namespace lfs::vis {
                 .input_scale = 0.50f,
             },
         };
+        constexpr std::array TEMPORAL_PRESETS{
+            SceneUpscalerPreset{
+                .id = "quality",
+                .label_key = "preferences.scene_reconstruction_quality",
+                .input_scale = 0.75f,
+            },
+            SceneUpscalerPreset{
+                .id = "balanced",
+                .label_key = "preferences.scene_reconstruction_balanced",
+                .input_scale = 0.67f,
+            },
+            SceneUpscalerPreset{
+                .id = "performance",
+                .label_key = "preferences.scene_reconstruction_performance",
+                .input_scale = 0.50f,
+            },
+        };
         constexpr std::array DESCRIPTORS{
             SceneUpscalerDescriptor{
                 .backend = SceneUpscalerBackend::Native,
@@ -45,6 +62,12 @@ namespace lfs::vis {
                 .id = "spatial",
                 .label_key = "preferences.scene_reconstruction_spatial",
                 .presets = SPATIAL_PRESETS,
+            },
+            SceneUpscalerDescriptor{
+                .backend = SceneUpscalerBackend::Temporal,
+                .id = "temporal",
+                .label_key = "preferences.scene_reconstruction_temporal",
+                .presets = TEMPORAL_PRESETS,
             },
         };
     } // namespace
@@ -89,6 +112,17 @@ namespace lfs::vis {
                                : presets.front();
     }
 
+    std::optional<SceneUpscalerPreset> resolveSceneUpscalerPresetUpdate(
+        const SceneUpscalerBackend backend,
+        const std::optional<std::string_view> explicit_preset_id,
+        const std::string_view remembered_preset_id) {
+        if (explicit_preset_id) {
+            return sceneUpscalerPreset(backend, *explicit_preset_id);
+        }
+        return sceneUpscalerPreset(backend, remembered_preset_id)
+            .value_or(defaultSceneUpscalerPreset(backend));
+    }
+
     SceneUpscalerSelection resolveSceneUpscalerSelection(
         const SceneUpscalerBackend requested,
         const bool runtime_available) {
@@ -104,6 +138,16 @@ namespace lfs::vis {
             .effective = SceneUpscalerBackend::Native,
             .fallback = SceneUpscalerFallback::RuntimeUnavailable,
         };
+    }
+
+    std::string_view sceneUpscalerFallbackId(const SceneUpscalerFallback fallback) noexcept {
+        switch (fallback) {
+        case SceneUpscalerFallback::None:
+            return "none";
+        case SceneUpscalerFallback::RuntimeUnavailable:
+            return "runtime_unavailable";
+        }
+        return "unknown";
     }
 
 } // namespace lfs::vis

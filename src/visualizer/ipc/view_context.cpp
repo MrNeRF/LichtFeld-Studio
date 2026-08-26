@@ -125,10 +125,11 @@ namespace lfs::vis {
         return s.get_render_settings_callback();
     }
 
-    void update_render_settings(const RenderSettingsProxy& settings) {
+    void update_render_settings(const RenderSettingsProxy& settings,
+                                const RenderSettingsUpdateIntent intent) {
         const auto& s = state();
         if (s.set_render_settings_callback) {
-            s.set_render_settings_callback(settings);
+            s.set_render_settings_callback(settings, intent);
         }
     }
 

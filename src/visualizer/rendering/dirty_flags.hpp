@@ -21,9 +21,12 @@ namespace lfs::vis {
         constexpr DirtyMask BACKGROUND = 1 << 7;
         constexpr DirtyMask SPLIT_VIEW = 1 << 8;
         constexpr DirtyMask SPLIT_POSITION = 1 << 9;
-        constexpr DirtyMask LAST_ = SPLIT_POSITION;
+        // Internal follow-up for a finite temporal convergence sequence. It must
+        // not masquerade as CAMERA and restart the sequence it is advancing.
+        constexpr DirtyMask TEMPORAL = 1 << 10;
+        constexpr DirtyMask LAST_ = TEMPORAL;
         constexpr DirtyMask ALL = (LAST_ << 1) - 1;
-        static_assert(ALL == 0x3FF, "Update LAST_ when adding new flags");
+        static_assert(ALL == 0x7FF, "Update LAST_ when adding new flags");
     } // namespace DirtyFlag
 
 } // namespace lfs::vis
