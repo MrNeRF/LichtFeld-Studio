@@ -80,9 +80,10 @@
             </div>
 
             <div class="asset-gallery-header-actions">
-              <button class="asset-button asset-button--icon asset-view-button asset-refresh-clean-button" data-event-click="refresh_catalog" data-tooltip="asset_manager.tooltip.refresh"><img src="../icon/sequencer/rotate-cw.png" /></button>
+              <button class="asset-button asset-button--icon asset-view-button asset-refresh-button" data-event-click="refresh_catalog" data-tooltip="asset_manager.tooltip.refresh"><img src="../icon/sequencer/rotate-cw.png" /></button>
             </div>
           </div>
+          <div class="asset-gallery-notice" data-if="has_catalog_notice">{{catalog_notice}}</div>
         </div>
 
           <div id="asset-gallery-scroll" class="asset-gallery-scroll" tabindex="0">
@@ -93,6 +94,7 @@
                   <div class="asset-card-slot" data-style-width="asset_card_slot_width" data-for="asset : assets">
                     <div class="asset-card" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-class-is-draggable="asset.can_load" data-attr-data-asset-id="asset.id" data-asset-action="select">
                       <div class="asset-card-thumb asset-thumb-project" data-style-decorator="asset.thumbnail_decorator">
+                        <span class="asset-card-placeholder" data-if="asset.shows_placeholder">{{asset.placeholder_label}}</span>
                       </div>
                       <div class="asset-card-body">
                         <div class="asset-card-title-row">
@@ -169,7 +171,7 @@
 
               <div class="asset-info-section">
                 <div class="asset-info-section-title">{{asset_details_title}}</div>
-                <div class="parameter-row" data-if="selected_asset_folder_name">
+                <div class="parameter-row" data-if="selected_asset_has_folder">
                   <span class="parameter-label">{{prop_folder_label}}</span>
                   <span class="parameter-value">{{selected_asset_folder_name}}</span>
                 </div>
@@ -191,12 +193,17 @@
                 </div>
               </div>
 
-              <div class="asset-info-section asset-info-warning" data-if="selected_asset_file_missing">
-                <div class="asset-info-section-title">{{file_not_found_title}}</div>
+              <div class="asset-info-section asset-info-warning" data-if="selected_asset_can_locate">
+                <div class="asset-info-section-title">{{locate_section_title}}</div>
                 <div class="parameter-row">
                   <span class="parameter-label">{{prop_expected_path_label}}</span>
                   <span class="parameter-value">{{selected_asset_expected_path}}</span>
                 </div>
+                <div class="parameter-row" data-if="selected_asset_has_relocation_candidate">
+                  <span class="parameter-label">{{found_at_label}}</span>
+                  <span class="parameter-value asset-path-value">{{selected_asset_relocation_candidate}}</span>
+                </div>
+                <button class="asset-button asset-button--text asset-info-button" data-if="selected_asset_has_relocation_candidate" data-event-click="on_use_found_location"><span class="asset-button-text">{{use_found_location_label}}</span></button>
                 <button class="asset-button asset-button--text asset-info-button" data-event-click="on_locate_file"><span class="asset-button-text">{{locate_file_button_label}}</span></button>
               </div>
 

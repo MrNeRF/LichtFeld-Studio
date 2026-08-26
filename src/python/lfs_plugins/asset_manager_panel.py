@@ -128,6 +128,11 @@ class AssetManagerPanel(Panel):
         self._folder_scan_lock = threading.Lock()
         self._folder_scan_active = False
         self._folder_scan_refresh_pending = False
+        self._folder_scan_rerun_pending = False
+        self._folder_scan_cancel: Optional[threading.Event] = None
+        self._folder_scan_thread: Optional[threading.Thread] = None
+        self._panel_mounted = True
+        self._catalog_load_failed = False
         self._drag_payload_token: Optional[int] = None
         self._last_project_write_generation: Optional[int] = None
         self._project_write_was_running = False
@@ -158,7 +163,9 @@ class AssetManagerPanel(Panel):
             self._handle.dirty_all()
 
     def _initialize_backend(self) -> bool:
+        self._catalog_load_failed = False
         if not BACKEND_AVAILABLE:
+            self._catalog_load_failed = True
             return False
         try:
             storage_path = resolve_asset_manager_storage_path()
@@ -168,9 +175,12 @@ class AssetManagerPanel(Panel):
             self._asset_index = AssetIndex()
             loaded = self._asset_index.load()
             self._last_default_folder_path = str(resolve_default_asset_directory())
+            if not loaded:
+                self._catalog_load_failed = True
             return loaded
         except Exception as exc:
             self._log_error("Failed to initialize Asset Manager: %s", exc)
+            self._catalog_load_failed = True
             return False
 
     def on_bind_model(self, ctx):
@@ -222,10 +232,15 @@ class AssetManagerPanel(Panel):
         model.bind_func("is_floating", lambda: self._is_floating)
         model.bind_func("asset_results_summary_visible", lambda: True)
         model.bind_func("asset_results_summary", self.get_asset_results_summary)
+        model.bind_func("catalog_notice", self.get_catalog_notice)
+        model.bind_func("has_catalog_notice", self.get_has_catalog_notice)
 
         model.bind_func("selected_asset_name", self.get_selected_asset_name)
         model.bind_func(
             "selected_asset_folder_name", self.get_selected_asset_folder_name
+        )
+        model.bind_func(
+            "selected_asset_has_folder", self.get_selected_asset_has_folder
         )
         model.bind_func("selected_asset_path", self.get_selected_asset_path)
         model.bind_func("selected_asset_size", self.get_selected_asset_size)
@@ -233,6 +248,18 @@ class AssetManagerPanel(Panel):
         model.bind_func("selected_asset_modified", self.get_selected_asset_modified)
         model.bind_func(
             "selected_asset_file_missing", self.get_selected_asset_file_missing
+        )
+        model.bind_func(
+            "selected_asset_can_locate", self.get_selected_asset_can_locate
+        )
+        model.bind_func("locate_section_title", self.get_locate_section_title)
+        model.bind_func(
+            "selected_asset_relocation_candidate",
+            self.get_selected_asset_relocation_candidate,
+        )
+        model.bind_func(
+            "selected_asset_has_relocation_candidate",
+            self.get_selected_asset_has_relocation_candidate,
         )
         model.bind_func(
             "selected_asset_expected_path", self.get_selected_asset_path
@@ -260,6 +287,8 @@ class AssetManagerPanel(Panel):
             "asset_details_title": "asset_manager.info_panel.asset_details",
             "folder_details_title": "asset_manager.info_panel.folder_details",
             "file_not_found_title": "asset_manager.info_panel.file_not_found",
+            "found_at_label": "asset_manager.info_panel.found_at",
+            "use_found_location_label": "asset_manager.action.use_found_location",
             "prop_folder_label": "asset_manager.property.folder",
             "prop_size_label": "asset_manager.property.size",
             "prop_path_label": "asset_manager.property.path",
@@ -283,6 +312,7 @@ class AssetManagerPanel(Panel):
             ("cycle_sort_mode", self.cycle_sort_mode),
             ("refresh_catalog", self.refresh_catalog),
             ("on_locate_file", self.on_locate_file),
+            ("on_use_found_location", self.on_use_found_location),
             ("on_sidebar_resize_start", self.on_sidebar_resize_start),
             ("on_bottom_panel_resize_start", self.on_bottom_panel_resize_start),
             ("close_panel", self._on_close_panel),
@@ -432,8 +462,14 @@ class AssetManagerPanel(Panel):
             "AVAILABLE": "asset_manager.status.available",
             "MISSING": "asset_manager.status.missing",
             "IDENTITY_MISMATCH": "asset_manager.status.identity_mismatch",
+            "REPAIR_ONLY": "asset_manager.status.needs_repair",
+            "UNSUPPORTED_NEWER": "asset_manager.status.newer_version",
         }.get(status, "asset_manager.status.unverified")
         return tr(key)
+
+    @staticmethod
+    def _placeholder_label(display_name: str) -> str:
+        return " ".join(str(display_name or "").split()[:2])[:24]
 
     def _get_asset_display_name(self, asset: Dict[str, Any]) -> str:
         path = str(asset.get("path") or "")
@@ -442,15 +478,27 @@ class AssetManagerPanel(Panel):
 
     @staticmethod
     def _thumbnail_decorator(asset: Dict[str, Any]) -> str:
-        if not asset.get("has_preview") or not asset.get("exists"):
+        if asset.get("has_preview") and asset.get("exists"):
+            path = quote(str(asset.get("path") or ""), safe=_RML_PATH_SAFE_CHARS)
+            revision_value = asset.get("commit_uuid") or "-".join(
+                str(asset.get(field) or 0)
+                for field in ("generation", "saved_at_unix_ns", "file_size_bytes")
+            )
+            revision = quote(str(revision_value), safe="-._~")
+            return f"image(preview://kind=licht&thumb=256&rev={revision}&path={path})"
+        fallback = str(asset.get("fallback_preview_path") or "")
+        if not fallback:
             return "none"
-        path = quote(str(asset.get("path") or ""), safe=_RML_PATH_SAFE_CHARS)
-        revision_value = asset.get("commit_uuid") or "-".join(
-            str(asset.get(field) or 0)
-            for field in ("generation", "saved_at_unix_ns", "file_size_bytes")
-        )
-        revision = quote(str(revision_value), safe="-._~")
-        return f"image(preview://kind=licht&thumb=256&rev={revision}&path={path})"
+        fallback_path = Path(fallback)
+        try:
+            if not fallback_path.is_file():
+                return "none"
+            stat = fallback_path.stat()
+        except OSError:
+            return "none"
+        revision = quote(f"{stat.st_size}-{stat.st_mtime_ns}", safe="-._~")
+        encoded = quote(fallback, safe=_RML_PATH_SAFE_CHARS)
+        return f"image(preview://kind=image&thumb=256&rev={revision}&path={encoded})"
 
     def _format_asset_for_ui(self, asset: Dict[str, Any]) -> Dict[str, Any]:
         folder_name = self._folder_name(asset.get("folder_id"))
@@ -470,9 +518,11 @@ class AssetManagerPanel(Panel):
             self._thumbnail_sources_by_asset[asset_id] = thumbnail_source
         else:
             self._thumbnail_sources_by_asset.pop(asset_id, None)
+        display_name = self._get_asset_display_name(asset)
         return {
             **asset,
-            "display_name": self._get_asset_display_name(asset),
+            "display_name": display_name,
+            "placeholder_label": self._placeholder_label(display_name),
             "id": asset_id,
             "folder_name": folder_name,
             "size_label": self._format_size(asset.get("file_size_bytes", 0)),
@@ -480,6 +530,8 @@ class AssetManagerPanel(Panel):
             "status_label": self._project_status_label(asset),
             "is_selected": str(asset.get("id") or asset.get("project_uuid"))
             in self._selected_asset_ids,
+            "has_preview": bool(asset.get("has_preview")),
+            "shows_placeholder": thumbnail_decorator == "none",
             "can_load": self._project_available(asset),
             "thumbnail_decorator": thumbnail_decorator,
         }
@@ -594,6 +646,17 @@ class AssetManagerPanel(Panel):
         except Exception:
             return str(self._last_asset_match_count)
 
+    def get_catalog_notice(self) -> str:
+        if self._catalog_load_failed:
+            return tr("asset_manager.status.load_failed")
+        issues = getattr(self._asset_index, "load_issues", None) if self._asset_index else None
+        if issues:
+            return tr("asset_manager.status.skipped_entries", count=len(issues))
+        return ""
+
+    def get_has_catalog_notice(self) -> bool:
+        return bool(self.get_catalog_notice())
+
     def _get_selected_asset(self) -> Optional[Dict[str, Any]]:
         asset_id = self.get_selected_asset_id()
         return self._asset_index_assets().get(asset_id) if asset_id else None
@@ -605,6 +668,9 @@ class AssetManagerPanel(Panel):
     def get_selected_asset_folder_name(self) -> str:
         asset = self._get_selected_asset()
         return self._folder_name(asset.get("folder_id")) if asset else ""
+
+    def get_selected_asset_has_folder(self) -> bool:
+        return bool(self.get_selected_asset_folder_name())
 
     def get_selected_asset_path(self) -> str:
         asset = self._get_selected_asset()
@@ -625,6 +691,28 @@ class AssetManagerPanel(Panel):
     def get_selected_asset_file_missing(self) -> bool:
         asset = self._get_selected_asset()
         return bool(asset) and not bool(asset.get("exists", False))
+
+    def get_selected_asset_can_locate(self) -> bool:
+        asset = self._get_selected_asset()
+        return bool(asset) and str(asset.get("status") or "") in {
+            "MISSING",
+            "IDENTITY_MISMATCH",
+        }
+
+    def get_locate_section_title(self) -> str:
+        asset = self._get_selected_asset()
+        if not asset:
+            return ""
+        if str(asset.get("status") or "") == "IDENTITY_MISMATCH":
+            return tr("asset_manager.status.identity_mismatch")
+        return tr("asset_manager.info_panel.file_not_found")
+
+    def get_selected_asset_relocation_candidate(self) -> str:
+        asset = self._get_selected_asset()
+        return str(asset.get("relocation_candidate") or "") if asset else ""
+
+    def get_selected_asset_has_relocation_candidate(self) -> bool:
+        return bool(self.get_selected_asset_relocation_candidate())
 
     def _get_selected_folder(self) -> Optional[Dict[str, Any]]:
         return self._asset_index_folders().get(self._selected_folder_id or "")
@@ -676,6 +764,7 @@ class AssetManagerPanel(Panel):
         self._selection_cursor_id = None
         self._update_selection_type()
         self.refresh_catalog(scan_folders=False)
+        self._scan_asset_folders()
         return folder.id
 
     def add_asset_folder(self, _handle=None, _ev=None, _args=None):
@@ -775,12 +864,19 @@ class AssetManagerPanel(Panel):
             "show_selection_multiple",
             "selected_asset_name",
             "selected_asset_folder_name",
+            "selected_asset_has_folder",
             "selected_asset_path",
             "selected_asset_size",
             "selected_asset_created",
             "selected_asset_modified",
             "selected_asset_file_missing",
+            "selected_asset_can_locate",
+            "locate_section_title",
+            "selected_asset_relocation_candidate",
+            "selected_asset_has_relocation_candidate",
             "selected_asset_expected_path",
+            "catalog_notice",
+            "has_catalog_notice",
         )
 
     def on_locate_file(self, _handle=None, _ev=None, args=None):
@@ -795,6 +891,22 @@ class AssetManagerPanel(Panel):
                 self.refresh_catalog(scan_folders=False)
             else:
                 self._log_warn("Selected file belongs to a different .licht project")
+        except Exception as exc:
+            self._log_error("Failed to relink .licht project: %s", exc)
+
+    def on_use_found_location(self, _handle=None, _ev=None, args=None):
+        asset_id = self._resolve_event_value(args, _ev, "data-asset-id") or self.get_selected_asset_id()
+        if not asset_id or not self._asset_index:
+            return
+        asset = self._asset_index_assets().get(asset_id)
+        candidate = str((asset or {}).get("relocation_candidate") or "")
+        if not candidate:
+            return
+        try:
+            if self._asset_index.relink_asset(asset_id, candidate):
+                self.refresh_catalog(scan_folders=False)
+            else:
+                self._log_warn("Could not use the found location for this project")
         except Exception as exc:
             self._log_error("Failed to relink .licht project: %s", exc)
 
@@ -851,6 +963,13 @@ class AssetManagerPanel(Panel):
         items: List[Dict[str, Any]] = []
         if self._project_available(asset):
             items.append({"label": tr("menu.file.open_project"), "action": "load"})
+        if str(asset.get("relocation_candidate") or ""):
+            items.append(
+                {
+                    "label": tr("asset_manager.action.use_found_location"),
+                    "action": "use_found_location",
+                }
+            )
         items.extend(
             [
                 {"label": tr("asset_manager.action.rename"), "action": "rename"},
@@ -867,6 +986,8 @@ class AssetManagerPanel(Panel):
     def _handle_asset_context_action(self, action: str, asset_id: str) -> None:
         if action == "load":
             self._load_asset(asset_id)
+        elif action == "use_found_location":
+            self.on_use_found_location(None, None, [asset_id])
         elif action == "rename":
             self.on_rename_asset(None, None, [asset_id])
         elif action == "show_in_folder":
@@ -1005,6 +1126,9 @@ class AssetManagerPanel(Panel):
             return
         with self._folder_scan_lock:
             if self._folder_scan_active:
+                self._folder_scan_rerun_pending = True
+                return
+            if not self._panel_mounted:
                 return
             if not any(
                 folder.get("path")
@@ -1012,40 +1136,56 @@ class AssetManagerPanel(Panel):
             ):
                 return
             self._folder_scan_active = True
-        index = self._asset_index
+            self._folder_scan_rerun_pending = False
+            cancel_event = threading.Event()
+            self._folder_scan_cancel = cancel_event
+            thread = threading.Thread(
+                target=self._folder_scan_worker,
+                args=(self._asset_index, cancel_event),
+                daemon=True,
+                name="AssetManagerFolderScan",
+            )
+            self._folder_scan_thread = thread
+        thread.start()
 
-        def worker() -> None:
-            try:
-                result = scan_all_asset_folders(index)
-                _log.info(
-                    "Asset folder scan: discovered=%d added=%d existing=%d failed=%d",
-                    result.discovered,
-                    result.added,
-                    result.already_cataloged,
-                    result.failed,
-                )
-            except Exception:
-                _log.exception("Asset Manager folder scan failed")
-            finally:
-                with self._folder_scan_lock:
-                    self._folder_scan_active = False
-                    self._folder_scan_refresh_pending = True
-                scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
-                if callable(scheduler):
-                    scheduler(self._finish_folder_scan)
-
-        threading.Thread(
-            target=worker,
-            daemon=True,
-            name="AssetManagerFolderScan",
-        ).start()
+    def _folder_scan_worker(self, index: Any, cancel_event: threading.Event) -> None:
+        try:
+            result = scan_all_asset_folders(index, cancel_event)
+            _log.info(
+                "Asset folder scan: discovered=%d added=%d existing=%d failed=%d",
+                result.discovered,
+                result.added,
+                result.already_cataloged,
+                result.failed,
+            )
+        except Exception:
+            _log.exception("Asset Manager folder scan failed")
+        finally:
+            with self._folder_scan_lock:
+                self._folder_scan_active = False
+                self._folder_scan_refresh_pending = True
+                if self._folder_scan_thread is threading.current_thread():
+                    self._folder_scan_thread = None
+            scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
+            if callable(scheduler):
+                scheduler(self._complete_folder_scan)
 
     def _finish_folder_scan(self) -> None:
         with self._folder_scan_lock:
             if not self._folder_scan_refresh_pending:
                 return
             self._folder_scan_refresh_pending = False
+        if not self._panel_mounted:
+            return
         self.refresh_catalog(scan_folders=False)
+
+    def _complete_folder_scan(self) -> None:
+        self._finish_folder_scan()
+        with self._folder_scan_lock:
+            rerun = self._folder_scan_rerun_pending
+            self._folder_scan_rerun_pending = False
+        if rerun and self._panel_mounted:
+            self._scan_asset_folders()
 
     def _sync_default_folder_path(self) -> bool:
         if not self._asset_index:
@@ -1591,7 +1731,18 @@ class AssetManagerPanel(Panel):
         find_by_path = getattr(self._asset_index, "find_asset_by_path", None)
         project = find_by_path(path) if callable(find_by_path) else None
         if project is None:
-            return False
+            folder_id_for_path = getattr(self._asset_index, "folder_id_for_path", None)
+            if not callable(folder_id_for_path) or folder_id_for_path(path) is None:
+                return False
+            try:
+                self._asset_index.register_licht_asset(path)
+            except Exception as exc:
+                self._log_error("Failed to register saved project %s: %s", path, exc)
+                return False
+            self._refresh_records(assets=True, folders=True)
+            if self._handle:
+                self._handle.dirty_all()
+            return True
         verify_asset = getattr(self._asset_index, "verify_asset", None)
         if not callable(verify_asset) or verify_asset(project.id) is None:
             return False
@@ -1602,9 +1753,11 @@ class AssetManagerPanel(Panel):
 
     def on_mount(self, doc):
         super().on_mount(doc)
+        self._panel_mounted = True
         self._doc = doc
         if self._asset_index is None:
-            self._initialize_backend()
+            if not self._initialize_backend():
+                self._log_warn("Asset Manager catalog could not be loaded")
         self._repair_selection()
         self._bind_dom_event_listeners(doc)
         self._subscribe_reactive_state()
@@ -1623,7 +1776,7 @@ class AssetManagerPanel(Panel):
             self._dirty_fields("is_floating")
             changed = True
         if self._folder_scan_refresh_pending:
-            self._finish_folder_scan()
+            self._complete_folder_scan()
             changed = True
         if self._asset_window_refresh_pending or self._sync_asset_window_viewport(doc):
             self._asset_window_refresh_pending = False
@@ -1632,6 +1785,17 @@ class AssetManagerPanel(Panel):
         return changed
 
     def on_unmount(self, doc):
+        with self._folder_scan_lock:
+            self._panel_mounted = False
+            self._folder_scan_rerun_pending = False
+            cancel = self._folder_scan_cancel
+            thread = self._folder_scan_thread
+        if cancel is not None:
+            cancel.set()
+        if thread is not None and thread.ident is not None:
+            thread.join(timeout=2.0)
+            if thread.is_alive():
+                self._log_warn("Asset Manager folder scan did not finish before unmount")
         if self._drag_payload_token is not None:
             cancel_drag = getattr(lf.ui, "cancel_drag_payload", None)
             if callable(cancel_drag):

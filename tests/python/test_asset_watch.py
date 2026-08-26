@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Regression tests for .licht discovery in real Asset Manager folders."""
 
+import logging
+import os
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -195,3 +197,26 @@ def test_cancelled_scan_rolls_back_discovered_projects(tmp_path: Path):
 
     assert result.cancelled is True
     assert index.paths == []
+
+
+def test_discovery_warns_once_when_folder_has_more_than_10000_directories(
+    monkeypatch, tmp_path: Path, caplog
+):
+    def fake_walk(_root, topdown=True, onerror=None, followlinks=False):
+        for index in range(10001):
+            yield str(tmp_path / f"dir-{index}"), [], []
+
+    monkeypatch.setattr(os, "walk", fake_walk)
+
+    with caplog.at_level(logging.WARNING, logger="lfs_plugins.asset_watch"):
+        discovered = discover_licht_projects(str(tmp_path))
+
+    assert discovered == []
+    warnings = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+        and "very large (>10000 directories)" in record.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert str(tmp_path) in warnings[0].getMessage()

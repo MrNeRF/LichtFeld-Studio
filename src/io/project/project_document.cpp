@@ -6,6 +6,7 @@
 #include "io/project_document.hpp"
 
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "io/loader.hpp"
 #include "io/project_recovery.hpp"
 #include "project_container_internal.hpp"
@@ -2688,6 +2689,38 @@ namespace lfs::io::project {
                 "Automatic saves must carry THMB forward",
                 "save.preview_png");
         }
+        std::vector<std::byte> dataset_preview;
+        std::span<const std::byte> preview_png = options.preview_png;
+#if !defined(LFS_FORMAT_TEST_TARGET)
+        if (!is_autosave && preview_png.empty() &&
+            (options.commit.kind == CommitKind::Explicit ||
+             options.commit.kind == CommitKind::Recovered)) {
+            const bool has_existing_preview =
+                impl_->source_reader &&
+                impl_->source_reader->preview().has_value();
+            if (!has_existing_preview) {
+                const auto project_root =
+                    impl_->source_path ? impl_->source_path->parent_path()
+                                       : std::filesystem::path{};
+                if (const auto first = first_dataset_image(
+                        impl_->project, impl_->references, impl_->parameters,
+                        project_root)) {
+                    auto encoded = dataset_preview_png(*first);
+                    if (encoded) {
+                        LOG_INFO(
+                            "Embedded dataset image as project preview: {}",
+                            lfs::core::path_to_utf8(*first));
+                        dataset_preview = std::move(*encoded);
+                        preview_png = dataset_preview;
+                    } else {
+                        LOG_WARN(
+                            "Could not encode dataset image as project preview: {}",
+                            lfs::format_for_developer(encoded.error()));
+                    }
+                }
+            }
+        }
+#endif
         auto normalized = normalized_absolute_path(path);
         if (!normalized) {
             return std::move(normalized).error();
@@ -3069,9 +3102,9 @@ namespace lfs::io::project {
             !result) {
             return std::move(result).error();
         }
-        if (!options.preview_png.empty()) {
+        if (!preview_png.empty()) {
             auto added = checked_add(
-                *planned_bytes, options.preview_png.size(),
+                *planned_bytes, preview_png.size(),
                 "save.preview_bytes");
             if (!added) {
                 return std::move(added).error();
@@ -3179,15 +3212,22 @@ namespace lfs::io::project {
         }
 
         ProjectDocumentSaveReport report;
-        if (!options.preview_png.empty()) {
-            if (auto result = writer->set_preview(options.preview_png);
+        if (!preview_png.empty()) {
+            if (auto result = writer->set_preview(preview_png);
                 !result) {
-                return std::move(result).error();
+                if (dataset_preview.empty()) {
+                    return std::move(result).error();
+                }
+                LOG_WARN(
+                    "Could not embed dataset image as project preview: {}",
+                    lfs::format_for_developer(result.error()));
+                preview_png = {};
+            } else {
+                ++report.rewritten_chunks;
             }
-            ++report.rewritten_chunks;
         }
         for (const auto& [key, source] : impl_->source_rows) {
-            if (!options.preview_png.empty() &&
+            if (!preview_png.empty() &&
                 key.fourcc == FOURCC_THMB) {
                 continue;
             }

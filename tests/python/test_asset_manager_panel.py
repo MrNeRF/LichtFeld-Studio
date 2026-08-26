@@ -6,7 +6,10 @@ from importlib import import_module
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from urllib.parse import quote
+import re
 import sys
+import threading
+import time
 
 import pytest
 
@@ -131,6 +134,35 @@ class _Handle:
         self.dirty_fields.append("__update__")
 
 
+class _BindingModel:
+    def __init__(self):
+        self.func_bindings = {}
+        self.handle = _Handle()
+
+    def bind(self, name, getter, setter=None):
+        return None
+
+    def bind_func(self, name, getter):
+        self.func_bindings[name] = getter
+
+    def bind_event(self, name, handler):
+        return None
+
+    def bind_record_list(self, name):
+        return None
+
+    def get_handle(self):
+        return self.handle
+
+
+class _BindingContext:
+    def __init__(self, model):
+        self._model = model
+
+    def create_data_model(self, _name):
+        return self._model
+
+
 class _Element:
     def __init__(self, attrs=None, parent=None):
         self.attrs = attrs or {}
@@ -223,6 +255,18 @@ class _Document:
         self.listeners[event] = callback
 
 
+_MIN_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+    "0000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
+)
+
+
+def _write_png(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(_MIN_PNG)
+    return path
+
+
 def _project(project_id="11111111-1111-4111-8111-111111111111", **overrides):
     value = {
         "id": project_id,
@@ -239,6 +283,7 @@ def _project(project_id="11111111-1111-4111-8111-111111111111", **overrides):
         "role": "MASTER",
         "open_state": "OPEN",
         "has_preview": True,
+        "fallback_preview_path": "",
         "exists": True,
         "available": True,
         "status": "AVAILABLE",
@@ -249,6 +294,8 @@ def _project(project_id="11111111-1111-4111-8111-111111111111", **overrides):
 
 
 def _index(assets=None, folders=None, **methods):
+    payload = {"load_issues": []}
+    payload.update(methods)
     return SimpleNamespace(
         assets=assets or {},
         folders=folders
@@ -259,8 +306,26 @@ def _index(assets=None, folders=None, **methods):
                 "path": "/home/tester/.lichtfeld/assets",
             }
         },
-        **methods,
+        **payload,
     )
+
+
+def _wait_until(predicate, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def _scan_result(**overrides):
+    value = SimpleNamespace(
+        discovered=0, added=0, already_cataloged=0, failed=0, cancelled=False
+    )
+    for key, item in overrides.items():
+        setattr(value, key, item)
+    return value
 
 
 def test_panel_contract_polls_preference_and_remains_left_dock(panel_module):
@@ -290,6 +355,8 @@ def test_rml_and_panel_have_no_scene_or_disk_thumbnail_model():
     assert "col_type_label" not in source
     assert "folder_pill_label" not in source
     assert "asset-pill-folder" not in rml
+    assert ".asset-pill {" not in rcss
+    assert ".asset-pill-folder" not in rcss
     assert 'data-style-decorator="asset.thumbnail_decorator"' in rml
 
 
@@ -307,7 +374,10 @@ def test_results_header_uses_icon_views_and_nondestructive_refresh_action():
     assert 'data-event-click="clean_missing"' not in rml
     assert "asset-list-secondary" not in rml
     assert "display_subtitle" not in rml
-    assert ".asset-refresh-clean-button img" in rcss
+    assert ".asset-refresh-button img" in rcss
+    assert ".asset-refresh-clean-button" not in rcss
+    assert 'data-if="has_catalog_notice"' in rml
+    assert "{{catalog_notice}}" in rml
     assert "width: 18dp;" in rcss
 
 
@@ -355,6 +425,84 @@ def test_embedded_preview_url_encodes_path_and_keys_cache_by_commit(panel_module
     assert panel._thumbnail_decorator({**asset, "has_preview": False}) == "none"
 
 
+def test_thumbnail_decorator_embedded_fallback_and_none(panel_module, tmp_path):
+    panel = panel_module.AssetManagerPanel()
+    fallback_image = _write_png(tmp_path / "dataset" / "frame 1.png")
+    stat = fallback_image.stat()
+    encoded_fallback = quote(str(fallback_image), safe="/:._-~")
+    fallback_rev = quote(f"{stat.st_size}-{stat.st_mtime_ns}", safe="-._~")
+    expected_fallback = (
+        "image(preview://kind=image&thumb=256"
+        f"&rev={fallback_rev}&path={encoded_fallback})"
+    )
+
+    embedded = _project()
+    embedded_decorator = panel._thumbnail_decorator(embedded)
+    encoded_project = quote(embedded["path"], safe="/:._-~")
+    assert embedded_decorator == (
+        "image(preview://kind=licht&thumb=256"
+        f"&rev={embedded['commit_uuid']}&path={encoded_project})"
+    )
+    embedded_row = panel._format_asset_for_ui(embedded)
+    assert embedded_row["shows_placeholder"] is False
+    assert embedded_row["has_preview"] is True
+
+    fallback_asset = _project(
+        has_preview=False,
+        fallback_preview_path=str(fallback_image),
+    )
+    fallback_decorator = panel._thumbnail_decorator(fallback_asset)
+    assert fallback_decorator == expected_fallback
+    assert "kind=image" in fallback_decorator
+    assert "kind=licht" not in fallback_decorator
+    assert "frame 1.png" not in fallback_decorator
+    fallback_row = panel._format_asset_for_ui(fallback_asset)
+    assert fallback_row["shows_placeholder"] is False
+    assert fallback_row["has_preview"] is False
+    assert fallback_row["thumbnail_decorator"] == expected_fallback
+
+    none_asset = _project(has_preview=False)
+    assert panel._thumbnail_decorator(none_asset) == "none"
+    none_row = panel._format_asset_for_ui(none_asset)
+    assert none_row["shows_placeholder"] is True
+    assert none_row["has_preview"] is False
+
+    missing_fallback = _project(
+        has_preview=False,
+        fallback_preview_path=str(tmp_path / "missing.png"),
+    )
+    assert panel._thumbnail_decorator(missing_fallback) == "none"
+
+    both = _project(fallback_preview_path=str(fallback_image))
+    assert "kind=licht" in panel._thumbnail_decorator(both)
+
+
+def test_fallback_thumbnail_source_is_tracked_and_released(panel_module, tmp_path):
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index()
+    fallback_image = _write_png(tmp_path / "dataset" / "preview.png")
+    asset = _project(has_preview=False, fallback_preview_path=str(fallback_image))
+
+    first = panel._format_asset_for_ui(asset)["thumbnail_decorator"]
+    first_source = first[6:-1]
+    assert first.startswith("image(preview://kind=image")
+    assert panel._thumbnail_sources_by_asset[asset["id"]] == first_source
+
+    fallback_image.write_bytes(_MIN_PNG + b"\x00")
+    second = panel._format_asset_for_ui(asset)["thumbnail_decorator"]
+    second_source = second[6:-1]
+    assert first != second
+    assert panel._thumbnail_sources_by_asset[asset["id"]] == second_source
+    assert panel_module.lf._test_state.released_textures == [first_source]
+
+    asset["fallback_preview_path"] = ""
+    none_row = panel._format_asset_for_ui(asset)
+    assert none_row["thumbnail_decorator"] == "none"
+    assert none_row["shows_placeholder"] is True
+    assert asset["id"] not in panel._thumbnail_sources_by_asset
+    assert panel_module.lf._test_state.released_textures == [first_source, second_source]
+
+
 def test_asset_rows_use_custom_name_and_runtime_metadata(panel_module):
     panel = panel_module.AssetManagerPanel()
     panel._asset_index = _index(assets={_project()["id"]: _project()})
@@ -380,7 +528,11 @@ def test_selecting_project_updates_info_without_rebuilding_rows(panel_module):
     assert panel.get_selection_type() == "asset"
     assert panel.get_selected_asset_name() == "Bicycle"
     assert panel.get_selected_asset_path() == asset["path"]
+    assert panel.get_selected_asset_has_folder() is True
     assert "selected_asset_path" in panel._handle.dirty_fields
+    assert "selected_asset_has_folder" in panel._handle.dirty_fields
+    assert "selected_asset_has_relocation_candidate" in panel._handle.dirty_fields
+    assert "has_catalog_notice" in panel._handle.dirty_fields
     assert "assets" not in panel._handle.records
 
 
@@ -537,6 +689,7 @@ def test_add_folder_uses_real_directory_picker(panel_module):
         verify_projects=lambda: (0, 0),
     )
     panel.refresh_catalog = lambda **_kwargs: None
+    panel._scan_asset_folders = lambda: None
 
     panel.on_add_folder()
 
@@ -913,3 +1066,296 @@ def test_default_folder_links_to_settings_instead_of_removal(panel_module):
             "separator_before": True,
         },
     ]
+
+
+def test_add_folder_starts_scan(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    scans = []
+    panel._asset_index = _index(
+        add_folder=lambda _path: SimpleNamespace(id="selected-folder"),
+        verify_projects=lambda: (0, 0),
+    )
+    monkeypatch.setattr(panel, "_scan_asset_folders", lambda: scans.append("scan"))
+
+    assert panel._add_folder_from_path("/tmp/assets") == "selected-folder"
+    assert scans == ["scan"]
+
+
+def test_catalog_notice_for_skipped_entries_and_clean_load(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(load_issues=["bad uuid", "duplicate path"])
+
+    assert panel.get_catalog_notice() == "asset_manager.status.skipped_entries"
+    assert panel.get_has_catalog_notice() is True
+
+    panel._asset_index.load_issues = []
+    assert panel.get_catalog_notice() == ""
+    assert panel.get_has_catalog_notice() is False
+
+
+def test_catalog_notice_for_failed_load_and_on_mount_warning(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    panel._catalog_load_failed = True
+    assert panel.get_catalog_notice() == "asset_manager.status.load_failed"
+    assert panel.get_has_catalog_notice() is True
+
+    warnings = []
+    monkeypatch.setattr(panel, "_initialize_backend", lambda: False)
+    monkeypatch.setattr(
+        panel, "_log_warn", lambda msg, *args: warnings.append(msg % args if args else msg)
+    )
+    monkeypatch.setattr(panel, "_bind_dom_event_listeners", lambda _doc: None)
+    monkeypatch.setattr(panel, "_scan_asset_folders", lambda: None)
+    panel.on_mount(_Document())
+    assert warnings
+
+
+def test_unmount_cancels_running_folder_scan(panel_module, monkeypatch):
+    started = threading.Event()
+    observed = {}
+
+    def fake_scan(_index, cancel_event=None):
+        observed["event"] = cancel_event
+        started.set()
+        if cancel_event is not None:
+            observed["waited"] = cancel_event.wait(timeout=2.0)
+        return _scan_result()
+
+    monkeypatch.setattr(panel_module, "scan_all_asset_folders", fake_scan)
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(verify_projects=lambda: (0, 0))
+    panel._scan_asset_folders()
+    assert started.wait(timeout=2.0)
+
+    cancel = panel._folder_scan_cancel
+    thread = panel._folder_scan_thread
+    panel.on_unmount(_Document())
+
+    assert cancel is not None and cancel.is_set()
+    assert observed["event"] is cancel
+    assert observed.get("waited") is True
+    assert thread is not None and not thread.is_alive()
+
+
+def test_refresh_during_scan_schedules_exactly_one_rerun(panel_module, monkeypatch):
+    started = threading.Event()
+    gate = threading.Event()
+    calls = []
+
+    def fake_scan(_index, cancel_event=None):
+        calls.append(1)
+        started.set()
+        gate.wait(timeout=2.0)
+        return _scan_result()
+
+    monkeypatch.setattr(panel_module, "scan_all_asset_folders", fake_scan)
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    panel._asset_index = _index(verify_projects=lambda: (0, 0))
+    panel._scan_asset_folders()
+    assert started.wait(timeout=2.0)
+
+    panel.refresh_catalog()
+    panel.refresh_catalog()
+    assert len(calls) == 1
+
+    started.clear()
+    gate.set()
+    assert _wait_until(lambda: len(calls) == 2)
+    assert len(calls) == 2
+    assert _wait_until(lambda: not panel._folder_scan_active)
+    panel.on_unmount(_Document())
+
+
+def test_use_found_location_relinks_selected_asset(panel_module):
+    asset = _project(
+        exists=False,
+        available=False,
+        status="MISSING",
+        relocation_candidate="/tmp/found.licht",
+    )
+    relinked = []
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(
+        assets={asset["id"]: asset},
+        relink_asset=lambda asset_id, path: relinked.append((asset_id, path)) or True,
+        verify_projects=lambda: (0, 0),
+    )
+    panel._selected_asset_ids = {asset["id"]}
+    panel._selection_cursor_id = asset["id"]
+    panel._update_selection_type()
+    panel.refresh_catalog = lambda **_kwargs: relinked.append("refresh")
+
+    assert panel.get_selected_asset_has_relocation_candidate() is True
+    assert panel.get_selected_asset_relocation_candidate() == "/tmp/found.licht"
+    assert panel.get_selected_asset_has_folder() is True
+
+    panel.on_use_found_location()
+
+    assert relinked == [(asset["id"], "/tmp/found.licht"), "refresh"]
+
+
+def test_context_menu_shows_use_found_location_only_with_candidate(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project()
+    assert [item["action"] for item in panel._asset_context_menu_items(asset)] == [
+        "load",
+        "rename",
+        "show_in_folder",
+        "remove",
+    ]
+
+    asset["relocation_candidate"] = "/tmp/found.licht"
+    assert "use_found_location" in [
+        item["action"] for item in panel._asset_context_menu_items(asset)
+    ]
+
+
+def test_identity_mismatch_exposes_locate_and_relinks(panel_module):
+    asset = _project(status="IDENTITY_MISMATCH", exists=True, available=False)
+    relinked = []
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(
+        assets={asset["id"]: asset},
+        relink_asset=lambda asset_id, path: relinked.append((asset_id, path)) or True,
+        verify_projects=lambda: (0, 0),
+    )
+    panel._selected_asset_ids = {asset["id"]}
+    panel._selection_cursor_id = asset["id"]
+    panel._update_selection_type()
+    panel.refresh_catalog = lambda **_kwargs: None
+    panel_module.lf._test_state.dialog_path = "/tmp/correct.licht"
+
+    assert panel.get_selected_asset_can_locate() is True
+    assert panel.get_selected_asset_file_missing() is False
+    assert panel.get_locate_section_title() == "asset_manager.status.identity_mismatch"
+
+    root = Path(__file__).resolve().parents[2]
+    rml = (root / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
+    assert 'data-if="selected_asset_can_locate"' in rml
+    assert 'data-if="selected_asset_file_missing"' not in rml
+
+    panel.on_locate_file()
+    assert relinked == [(asset["id"], "/tmp/correct.licht")]
+
+
+def test_repair_only_and_newer_version_status_labels(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    assert panel._project_status_label({"status": "REPAIR_ONLY"}) == (
+        "asset_manager.status.needs_repair"
+    )
+    assert panel._project_status_label({"status": "UNSUPPORTED_NEWER"}) == (
+        "asset_manager.status.newer_version"
+    )
+
+
+def test_completed_save_registers_new_project_inside_folder(panel_module):
+    registered = []
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    panel._asset_index = _index(
+        find_asset_by_path=lambda _path: None,
+        folder_id_for_path=lambda path: "default" if path.startswith("/tmp/assets") else None,
+        register_licht_asset=lambda path: registered.append(path) or SimpleNamespace(id="new"),
+        verify_projects=lambda: (0, 0),
+    )
+    polls = [
+        {"running": False, "generation": 4, "path": "", "error": ""},
+        {"running": False, "generation": 5, "path": "/tmp/assets/new.licht", "error": ""},
+    ]
+    panel_module.lf.project_poll_write = lambda: polls.pop(0)
+
+    assert panel._refresh_after_project_write() is False
+    assert panel._refresh_after_project_write() is True
+    assert registered == ["/tmp/assets/new.licht"]
+
+
+def test_completed_save_outside_folder_is_ignored(panel_module):
+    registered = []
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    panel._asset_index = _index(
+        find_asset_by_path=lambda _path: None,
+        folder_id_for_path=lambda _path: None,
+        register_licht_asset=lambda path: registered.append(path),
+        verify_projects=lambda: (0, 0),
+    )
+    polls = [
+        {"running": False, "generation": 4, "path": "", "error": ""},
+        {"running": False, "generation": 5, "path": "/tmp/outside/new.licht", "error": ""},
+    ]
+    panel_module.lf.project_poll_write = lambda: polls.pop(0)
+
+    assert panel._refresh_after_project_write() is False
+    assert panel._refresh_after_project_write() is False
+    assert registered == []
+
+
+def test_placeholder_label_uses_first_two_words(panel_module):
+    panel = panel_module.AssetManagerPanel()
+    row = panel._format_asset_for_ui(
+        _project(name="Bicycle Scene Extra Words", has_preview=False)
+    )
+    assert row["placeholder_label"] == "Bicycle Scene"
+    assert row["has_preview"] is False
+    assert row["shows_placeholder"] is True
+
+    truncated = panel._format_asset_for_ui(
+        _project(name="Supercalifragilisticexpialidocious Wonderful", has_preview=False)
+    )
+    assert truncated["placeholder_label"] == "Supercalifragilisticexpi"
+    assert len(truncated["placeholder_label"]) == 24
+
+    root = Path(__file__).resolve().parents[2]
+    rml = (root / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
+    rcss = (root / "src/visualizer/gui/rmlui/resources/asset_manager.rcss").read_text()
+    assert 'data-if="asset.shows_placeholder"' in rml
+    assert 'data-if="!asset.has_preview"' not in rml
+    assert "{{asset.placeholder_label}}" in rml
+    assert "display: block;" in rcss.split(".asset-card-placeholder {", 1)[1].split("}", 1)[0]
+    assert "width: 100%;" in rcss.split(".asset-card-placeholder {", 1)[1].split("}", 1)[0]
+
+
+def test_data_if_model_fields_are_boolean_bindings(panel_module):
+    root = Path(__file__).resolve().parents[2]
+    rml = (root / "src/visualizer/gui/rmlui/resources/asset_manager.rml").read_text()
+    expressions = re.findall(r'\bdata-if="([^"]+)"', rml)
+    assert expressions
+
+    asset = _project(
+        has_preview=False,
+        relocation_candidate="/tmp/found.licht",
+    )
+    panel = panel_module.AssetManagerPanel()
+    panel._asset_index = _index(assets={asset["id"]: asset})
+    panel._selected_asset_ids = {asset["id"]}
+    panel._selection_cursor_id = asset["id"]
+    panel._update_selection_type()
+
+    model = _BindingModel()
+    panel.on_bind_model(_BindingContext(model))
+    formatted = panel._format_asset_for_ui(asset)
+    folders = panel.get_folder_list()
+    assert folders
+
+    plain = re.compile(r"^!?[A-Za-z_][A-Za-z0-9_]*$")
+    dotted = re.compile(r"^!?([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)$")
+    for expr in expressions:
+        if plain.fullmatch(expr):
+            name = expr[1:] if expr.startswith("!") else expr
+            assert name in model.func_bindings, expr
+            result = model.func_bindings[name]()
+            assert isinstance(result, bool), (expr, type(result), result)
+            continue
+        match = dotted.fullmatch(expr)
+        assert match, f"unsupported data-if expression: {expr}"
+        scope, field = match.group(1), match.group(2)
+        if scope == "asset":
+            assert field in formatted, expr
+            assert isinstance(formatted[field], bool), (expr, type(formatted[field]))
+        elif scope == "folder":
+            assert field in folders[0], expr
+            assert isinstance(folders[0][field], bool), (expr, type(folders[0][field]))
+        else:
+            raise AssertionError(f"unsupported data-if scope: {expr}")

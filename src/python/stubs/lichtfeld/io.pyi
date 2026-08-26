@@ -229,6 +229,9 @@ class ProjectInspection:
     @property
     def has_preview(self) -> bool: ...
 
+    @property
+    def fallback_preview_path(self) -> str: ...
+
 def inspect_project(path: str | os.PathLike) -> ProjectInspection:
     """
     Inspect validated .licht container metadata without reading project payloads.

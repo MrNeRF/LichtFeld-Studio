@@ -283,13 +283,13 @@
     background-color: #d8d0c3;
 }
 
-.asset-refresh-clean-button img {
+.asset-refresh-button img {
     width: 18dp;
     height: 18dp;
     image-color: rgba(216, 208, 195, 235);
 }
 
-.asset-refresh-clean-button:hover img {
+.asset-refresh-button:hover img {
     image-color: rgba(255, 255, 255, 255);
 }
 
@@ -518,6 +518,14 @@
     display: block;
 }
 
+.asset-gallery-notice {
+    display: block;
+    font-size: 11dp;
+    line-height: 14dp;
+    margin-top: 6dp;
+    color: #d9a39a;
+}
+
 .asset-gallery-scroll {
     flex: 1;
     display: flex;
@@ -619,6 +627,7 @@
     border-bottom-width: 1dp;
     border-bottom-color: #514a42;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
     overflow: hidden;
@@ -628,17 +637,20 @@
     background-color: #2f4545;
 }
 
-
-.asset-pill {
+.asset-card-placeholder {
+    display: block;
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    padding: 4dp 6dp;
     font-size: 12dp;
-    font-weight: bold;
-    padding: 2dp 6dp;
-    border-radius: 3dp;
-}
-
-.asset-pill-folder {
-    background-color: #38342f;
-    color: #d8d0c3;
+    font-weight: 600;
+    line-height: 16dp;
+    text-align: center;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    color: #8f887c;
 }
 
 .asset-card-body {

@@ -108,6 +108,19 @@ namespace lfs::io::project {
         bool leave_unbound = false;
     };
 
+    [[nodiscard]] LFS_IO_API lfs::Result<std::vector<std::byte>>
+    dataset_preview_png(const std::filesystem::path& first_image,
+                        int max_size = 512);
+
+    [[nodiscard]] LFS_IO_API std::optional<std::filesystem::path>
+    first_dataset_image(const lfs::core::param::DatasetConfig& dataset);
+
+    [[nodiscard]] LFS_IO_API std::optional<std::filesystem::path>
+    first_dataset_image(const ProjectChapter& project,
+                        const ReferencesChapter& references,
+                        const ParametersChapter& parameters,
+                        const std::filesystem::path& project_root = {});
+
     struct ProjectDocumentAutosaveOptions {
         lfs::core::Uuid file_uuid;
         lfs::core::Uuid base_explicit_commit_uuid;

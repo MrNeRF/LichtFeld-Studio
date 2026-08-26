@@ -4,6 +4,7 @@
  */
 
 #include "app/headless_recovery_document.hpp"
+#include "core/image_io.hpp"
 #include "io/loaders/loader_utils.hpp"
 #include "io/project/project_container_internal.hpp"
 #include "io/project/span_streambuf.hpp"
@@ -111,6 +112,33 @@ namespace {
         const std::uint64_t identity_tag, const std::uint64_t wallclock) {
         return lfs::test::licht::deterministic_document_save_options(
             0x70000000, identity_tag, wallclock);
+    }
+
+    void write_solid_png(const fs::path& path, const int width, const int height) {
+        auto image = Tensor::empty(
+            {static_cast<std::size_t>(height),
+             static_cast<std::size_t>(width), 3},
+            Device::CPU, DataType::UInt8);
+        auto* pixels = image.ptr<std::uint8_t>();
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                const auto offset =
+                    (static_cast<std::size_t>(y) * width + x) * 3;
+                pixels[offset] = static_cast<std::uint8_t>(x & 0xff);
+                pixels[offset + 1] = static_cast<std::uint8_t>(y & 0xff);
+                pixels[offset + 2] = 160;
+            }
+        }
+        lfs::core::save_image_u8(path, image);
+    }
+
+    lfs::core::Uuid bind_dataset(ProjectDocument& document,
+                                 const fs::path& dataset_root) {
+        const auto uuid = require_result(upsert_path_reference(
+            document.edit_references(), {}, dataset_root, "dataset.root",
+            "dataset"));
+        require_status(document.edit_project().set_dataset_reference(uuid));
+        return uuid;
     }
 
     void inject_legacy_gui_window(
@@ -1797,6 +1825,96 @@ namespace {
             reader->commit().kind,
             CommitKind::Recovered);
         ASSERT_TRUE(reader->preview());
+        auto bytes = reader->read_preview();
+        ASSERT_TRUE(bytes);
+        EXPECT_EQ(*bytes, preview);
+    }
+
+    TEST(ProjectDocumentTest, FirstDatasetImageOrdersLexicographically) {
+        TemporaryDirectory temporary;
+        const auto images = temporary.path / "images";
+        fs::create_directories(images / "nested");
+        std::ofstream(images / "zebra.png") << "z";
+        std::ofstream(images / "mango.jpg") << "m";
+        std::ofstream(images / "apple.png") << "a";
+        std::ofstream(images / "notes.txt") << "ignore";
+        std::ofstream(images / "nested" / "aardvark.png") << "nested";
+
+        lfs::core::param::DatasetConfig dataset;
+        dataset.data_path = temporary.path;
+        dataset.images = "images";
+        const auto first = first_dataset_image(dataset);
+        ASSERT_TRUE(first);
+        EXPECT_EQ(first->filename(), "apple.png");
+    }
+
+    TEST(ProjectDocumentTest, FirstDatasetImageMissingDirectoryIsEmpty) {
+        lfs::core::param::DatasetConfig dataset;
+        dataset.data_path = fs::path("/definitely/missing/lfs-dataset-preview");
+        dataset.images = "images";
+        EXPECT_FALSE(first_dataset_image(dataset));
+
+        TemporaryDirectory temporary;
+        dataset.data_path = temporary.path;
+        fs::create_directories(temporary.path / "images");
+        EXPECT_FALSE(first_dataset_image(dataset));
+    }
+
+    TEST(ProjectDocumentTest, SaveEmbedsDatasetImageWhenPreviewEmpty) {
+        TemporaryDirectory temporary;
+        const auto images = temporary.path / "images";
+        fs::create_directories(images);
+        write_solid_png(images / "scene.png", 800, 400);
+
+        auto document = make_empty_document(fixed_uuid(2100), 100);
+        auto snapshot = require_result(document->parameters().snapshot());
+        snapshot.dataset.images = "images";
+        require_status(document->edit_parameters().set_snapshot(snapshot));
+        bind_dataset(*document, temporary.path);
+
+        const auto path = temporary.path / "dataset-preview.licht";
+        auto saved = document->save(path, save_options(2101, 200));
+        ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+
+        auto reader = ProjectReader::open(path);
+        ASSERT_TRUE(reader);
+        ASSERT_TRUE(reader->preview());
+        auto png = reader->read_preview();
+        ASSERT_TRUE(png);
+        ASSERT_FALSE(png->empty());
+        const auto [pixels, width, height, channels] =
+            lfs::core::load_image_from_memory(
+                reinterpret_cast<const std::uint8_t*>(png->data()),
+                png->size());
+        ASSERT_NE(pixels, nullptr);
+        EXPECT_LE(std::max(width, height), 512);
+        EXPECT_GT(width, 0);
+        EXPECT_GT(height, 0);
+        EXPECT_GE(channels, 1);
+        lfs::core::free_image(pixels);
+    }
+
+    TEST(ProjectDocumentTest, CallerPreviewWinsOverDatasetImage) {
+        TemporaryDirectory temporary;
+        const auto images = temporary.path / "images";
+        fs::create_directories(images);
+        write_solid_png(images / "scene.png", 64, 64);
+
+        auto document = make_empty_document(fixed_uuid(2110), 100);
+        auto snapshot = require_result(document->parameters().snapshot());
+        snapshot.dataset.images = "images";
+        require_status(document->edit_parameters().set_snapshot(snapshot));
+        bind_dataset(*document, temporary.path);
+
+        const auto preview = one_pixel_png();
+        auto options = save_options(2111, 200);
+        options.preview_png = std::span<const std::byte>(preview);
+        const auto path = temporary.path / "caller-preview.licht";
+        auto saved = document->save(path, options);
+        ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+
+        auto reader = ProjectReader::open(path);
+        ASSERT_TRUE(reader);
         auto bytes = reader->read_preview();
         ASSERT_TRUE(bytes);
         EXPECT_EQ(*bytes, preview);

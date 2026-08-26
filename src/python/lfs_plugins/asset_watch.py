@@ -50,6 +50,7 @@ def discover_licht_projects(
         return []
 
     projects: list[str] = []
+    visited_directories = 0
 
     def _on_error(exc: OSError) -> None:
         _log.warning("Could not scan Asset Manager folder: %s", exc)
@@ -62,6 +63,12 @@ def discover_licht_projects(
     ):
         if cancel_event is not None and cancel_event.is_set():
             break
+        visited_directories += 1
+        if visited_directories == 10001:
+            _log.warning(
+                "Asset folder %s is very large (>10000 directories); consider a smaller folder",
+                root,
+            )
         directory_names[:] = sorted(
             name
             for name in directory_names

@@ -236,6 +236,8 @@ class Project:
     available: bool = False
     status: str = "UNVERIFIED"
     error: str = ""
+    relocation_candidate: str = ""
+    fallback_preview_path: str = ""
 
     @property
     def id(self) -> str:
@@ -266,6 +268,8 @@ class Project:
             "available": self.available,
             "status": self.status,
             "error": self.error,
+            "relocation_candidate": self.relocation_candidate,
+            "fallback_preview_path": self.fallback_preview_path,
         }
 
 
@@ -300,6 +304,7 @@ class AssetIndex:
         self._folders: Dict[str, Folder] = {}
         self._projects: Dict[str, Project] = {}
         self._project_by_path: Dict[str, str] = {}
+        self.load_issues: List[str] = []
 
     @property
     def library_path(self) -> Path:
@@ -346,9 +351,19 @@ class AssetIndex:
         project.role = _enum_name(inspection.role)
         project.open_state = _enum_name(inspection.open_state)
         project.has_preview = bool(inspection.has_preview)
+        project.fallback_preview_path = str(
+            getattr(inspection, "fallback_preview_path", "") or ""
+        )
         project.exists = True
         project.available = project.role == "MASTER" and project.open_state == "OPEN"
-        project.status = "AVAILABLE" if project.available else "UNSUPPORTED"
+        if project.available:
+            project.status = "AVAILABLE"
+        elif project.open_state == "REPAIR_ONLY":
+            project.status = "REPAIR_ONLY"
+        elif project.open_state == "UNSUPPORTED_NEWER":
+            project.status = "UNSUPPORTED_NEWER"
+        else:
+            project.status = "UNSUPPORTED"
         project.error = ""
 
     def _clear_runtime(self, project: Project, status: str, error: str = "") -> None:
@@ -361,6 +376,7 @@ class AssetIndex:
         project.role = ""
         project.open_state = ""
         project.has_preview = False
+        project.fallback_preview_path = ""
         project.exists = status != "MISSING"
         project.available = False
         project.status = status
@@ -370,6 +386,7 @@ class AssetIndex:
         if not Path(project.path).is_file():
             self._clear_runtime(project, "MISSING")
             return
+        project.relocation_candidate = ""
         try:
             inspection = self._inspect_path(project.path)
             if str(inspection.project_uuid) != project.project_uuid:
@@ -499,25 +516,45 @@ class AssetIndex:
         seen_paths = set()
         for project_uuid, value in projects_data.items():
             if not isinstance(value, dict):
-                raise ValueError("Invalid Asset Manager project record")
-            normalized = normalized or set(value) != {"name", "path", "folder_id"}
+                self.load_issues.append(
+                    f"Skipped catalog entry {project_uuid}: record is not an object"
+                )
+                continue
             try:
                 canonical_uuid = str(uuid.UUID(str(project_uuid)))
-            except ValueError as exc:
-                raise ValueError(f"Invalid project UUID: {project_uuid}") from exc
+            except ValueError:
+                self.load_issues.append(
+                    f"Skipped catalog entry {project_uuid}: invalid project UUID"
+                )
+                continue
             if canonical_uuid != project_uuid:
-                raise ValueError(f"Project UUID is not canonical: {project_uuid}")
+                self.load_issues.append(
+                    f"Skipped catalog entry {project_uuid}: project UUID is not canonical"
+                )
+                continue
 
             stored_path = str(value.get("path") or "")
+            if not stored_path.strip():
+                self.load_issues.append(
+                    f"Skipped catalog entry {project_uuid}: empty path"
+                )
+                continue
             path = _normalize_path(stored_path)
-            normalized = normalized or path != stored_path
             if not is_supported_asset_path(path):
-                raise ValueError(f"Asset Manager project is not a .licht file: {path}")
+                self.load_issues.append(
+                    f"Skipped catalog entry {project_uuid}: not a .licht file: {path}"
+                )
+                continue
             path_key = self._path_key(path)
             if path_key in seen_paths:
-                raise ValueError(f"Duplicate Asset Manager project path: {path}")
+                self.load_issues.append(
+                    f"Skipped catalog entry {project_uuid}: duplicate path: {path}"
+                )
+                continue
             seen_paths.add(path_key)
 
+            normalized = normalized or set(value) != {"name", "path", "folder_id"}
+            normalized = normalized or path != stored_path
             stored_folder_id = str(value.get("folder_id") or DEFAULT_FOLDER_ID)
             folder_id = self._folder_id_for_path(path)
             if folder_id is None:
@@ -694,9 +731,7 @@ class AssetIndex:
                 _log.warning("Could not remove obsolete Asset Manager storage %s: %s", obsolete, exc)
 
     def _preserve_legacy_backup(self, source_path: Path) -> None:
-        if source_path == self._library_path:
-            return
-        backup = self._library_path.with_suffix(".json.bak")
+        backup = self._library_path.with_name(self._library_path.name + ".legacy.bak")
         backup_temp = backup.with_suffix(backup.suffix + ".tmp")
         try:
             self._library_path.parent.mkdir(parents=True, exist_ok=True)
@@ -707,6 +742,7 @@ class AssetIndex:
 
     @_synchronized
     def load(self) -> bool:
+        self.load_issues = []
         previous_state = self._snapshot_state()
         source_path = self._library_path
         migrating_legacy_location = False
@@ -1006,6 +1042,8 @@ class AssetIndex:
                     persisted_changed = True
                 self._apply_inspection(project, inspection)
             else:
+                if not Path(project.path).is_file():
+                    project.relocation_candidate = path
                 self._refresh_project(project)
 
             if name is not None and project.name != name:
@@ -1052,6 +1090,7 @@ class AssetIndex:
         self._project_by_path.pop(self._path_key(project.path), None)
         project.path = path
         project.folder_id = folder_id
+        project.relocation_candidate = ""
         self._project_by_path[path_key] = asset_id
         self._apply_inspection(project, inspection)
         if self.save():

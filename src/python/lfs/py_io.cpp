@@ -26,6 +26,7 @@
 #include "io/ply_export_internal.hpp"
 #include "io/project_chapters.hpp"
 #include "io/project_container.hpp"
+#include "io/project_document.hpp"
 #include "training/dataset.hpp"
 
 #include <filesystem>
@@ -193,6 +194,7 @@ namespace lfs::python {
             io::project::ContainerRole role = io::project::ContainerRole::Master;
             io::project::OpenState open_state = io::project::OpenState::HardFail;
             bool has_preview = false;
+            std::string fallback_preview_path;
         };
 
         core::Tensor tensor_from_python_attribute(const nb::handle& value) {
@@ -373,7 +375,13 @@ namespace lfs::python {
                 "verify_and_refresh",
                 [](project::ReferencesChapter& value, const std::string& uuid,
                    const std::filesystem::path& path) {
-                    return unwrap(value.verify_and_refresh(parse_reference_uuid(uuid), path));
+                    const auto parsed = parse_reference_uuid(uuid);
+                    std::optional<lfs::Result<project::FingerprintCheck>> result;
+                    {
+                        nb::gil_scoped_release release;
+                        result = value.verify_and_refresh(parsed, path);
+                    }
+                    return unwrap(std::move(*result));
                 },
                 nb::arg("uuid"), nb::arg("path"))
             .def(
@@ -381,7 +389,13 @@ namespace lfs::python {
                 [](project::ReferencesChapter& value, const std::string& uuid,
                    const project::ReferenceLocator& locator, const std::filesystem::path& path,
                    const bool accept_content_change) {
-                    unwrap(value.relink(parse_reference_uuid(uuid), locator, path, accept_content_change));
+                    const auto parsed = parse_reference_uuid(uuid);
+                    lfs::Status result;
+                    {
+                        nb::gil_scoped_release release;
+                        result = value.relink(parsed, locator, path, accept_content_change);
+                    }
+                    unwrap(std::move(result));
                 },
                 nb::arg("uuid"), nb::arg("locator"), nb::arg("path"),
                 nb::arg("accept_content_change") = false);
@@ -389,7 +403,12 @@ namespace lfs::python {
         m.def(
             "fingerprint_path",
             [](const std::filesystem::path& path, const bool include_full_hash) {
-                return unwrap(project::fingerprint_path(path, include_full_hash));
+                std::optional<lfs::Result<project::ReferenceFingerprint>> result;
+                {
+                    nb::gil_scoped_release release;
+                    result = project::fingerprint_path(path, include_full_hash);
+                }
+                return unwrap(std::move(*result));
             },
             nb::arg("path"), nb::arg("include_full_hash") = false,
             "Fingerprint a file or directory for durable content identity.");
@@ -397,7 +416,12 @@ namespace lfs::python {
         m.def(
             "check_fingerprint",
             [](const std::filesystem::path& path, const project::ReferenceFingerprint& expected) {
-                return unwrap(project::check_fingerprint(path, expected));
+                std::optional<lfs::Result<project::FingerprintCheck>> result;
+                {
+                    nb::gil_scoped_release release;
+                    result = project::check_fingerprint(path, expected);
+                }
+                return unwrap(std::move(*result));
             },
             nb::arg("path"), nb::arg("expected"),
             "Compare a path with a previously stored content fingerprint.");
@@ -429,14 +453,57 @@ namespace lfs::python {
             .def_ro("physical_file_size", &PyProjectInspection::physical_file_size)
             .def_ro("role", &PyProjectInspection::role)
             .def_ro("open_state", &PyProjectInspection::open_state)
-            .def_ro("has_preview", &PyProjectInspection::has_preview);
+            .def_ro("has_preview", &PyProjectInspection::has_preview)
+            .def_ro("fallback_preview_path", &PyProjectInspection::fallback_preview_path);
 
         m.def(
             "inspect_project",
             [](const std::filesystem::path& path) {
                 project::ReaderOptions options;
                 options.allow_unsupported_inspection = true;
-                auto reader = unwrap(project::ProjectReader::open(path, options));
+                std::optional<lfs::Result<project::ProjectReader>> opened;
+                std::string fallback_preview_path;
+                {
+                    nb::gil_scoped_release release;
+                    opened = project::ProjectReader::open(path, options);
+                    if (opened && opened->has_value() &&
+                        !(**opened).preview().has_value()) {
+                        const auto& reader = **opened;
+                        const auto project_uuid =
+                            reader.superblock().project_uuid;
+                        const auto* proj = reader.find(
+                            project::FOURCC_PROJ, project_uuid);
+                        const auto* refs = reader.find(
+                            project::FOURCC_REFS, project_uuid);
+                        const auto* prms = reader.find(
+                            project::FOURCC_PRMS, project_uuid);
+                        if (proj && refs && prms) {
+                            auto proj_bytes = reader.read_chunk(*proj);
+                            auto refs_bytes = reader.read_chunk(*refs);
+                            auto prms_bytes = reader.read_chunk(*prms);
+                            if (proj_bytes && refs_bytes && prms_bytes) {
+                                auto project_chapter =
+                                    project::ProjectChapter::from_bytes(*proj_bytes);
+                                auto references_chapter =
+                                    project::ReferencesChapter::from_bytes(*refs_bytes);
+                                auto parameters_chapter =
+                                    project::ParametersChapter::from_bytes(*prms_bytes);
+                                if (project_chapter && references_chapter &&
+                                    parameters_chapter) {
+                                    if (const auto first =
+                                            project::first_dataset_image(
+                                                *project_chapter, *references_chapter,
+                                                *parameters_chapter,
+                                                reader.path().parent_path())) {
+                                        fallback_preview_path =
+                                            lfs::core::path_to_utf8(*first);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                auto reader = unwrap(std::move(*opened));
                 return PyProjectInspection{
                     .project_uuid = reader.superblock().project_uuid.to_string(),
                     .file_uuid = reader.superblock().file_uuid.to_string(),
@@ -448,6 +515,7 @@ namespace lfs::python {
                     .role = reader.superblock().role,
                     .open_state = reader.open_state(),
                     .has_preview = reader.preview().has_value(),
+                    .fallback_preview_path = std::move(fallback_preview_path),
                 };
             },
             nb::arg("path"),

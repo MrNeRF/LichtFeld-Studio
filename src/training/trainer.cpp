@@ -4936,6 +4936,27 @@ namespace lfs::training {
                             return std::move(staged)
                                 .error();
                         }
+                        if (preview_png.empty()) {
+                            if (const auto first =
+                                    lfs::io::project::
+                                        first_dataset_image(
+                                            chapters
+                                                ->parameters
+                                                .dataset)) {
+                                auto encoded =
+                                    lfs::io::project::
+                                        dataset_preview_png(
+                                            *first);
+                                if (encoded) {
+                                    LOG_INFO(
+                                        "Embedded dataset image as project preview: {}",
+                                        lfs::core::path_to_utf8(
+                                            *first));
+                                    preview_png =
+                                        std::move(*encoded);
+                                }
+                            }
+                        }
 
                         const auto wallclock_ns =
                             static_cast<std::uint64_t>(
