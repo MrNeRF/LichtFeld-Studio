@@ -5002,6 +5002,11 @@ namespace lfs::training {
                                     .file_uuid =
                                         lfs::core::
                                             generate_uuid_v4(),
+                                    .save_as_project_uuid =
+                                        document_context
+                                            ? document_context
+                                                  ->save_as_project_uuid
+                                            : lfs::core::Uuid{},
                                     .allow_existing_destination_replacement =
                                         document_context &&
                                         document_context

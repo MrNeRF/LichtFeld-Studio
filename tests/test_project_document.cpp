@@ -2349,6 +2349,97 @@ namespace {
     }
 
     TEST(ProjectDocumentTest,
+         SaveAsCanAssignNewProjectIdentityAndRekeySingletons) {
+        TemporaryDirectory temporary;
+        const auto source =
+            temporary.path / "identity-source.licht";
+        const auto destination =
+            temporary.path / "identity-destination.licht";
+        write_phase_a_fixture(source);
+
+        auto document = require_result_ptr(ProjectDocument::open(
+            source,
+            ProjectDocumentOpenOptions{
+                .defer_geometry_payloads = true,
+            }));
+        const auto original_project_uuid =
+            document->project_uuid();
+        const auto new_project_uuid =
+            fixed_uuid(1011);
+        ASSERT_NE(
+            original_project_uuid,
+            new_project_uuid);
+        auto options = save_options(1010, 600);
+        options.save_as_project_uuid =
+            new_project_uuid;
+
+        auto saved = document->save_as(
+            destination, options);
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(
+                   saved.error());
+        EXPECT_EQ(
+            document->project_uuid(),
+            new_project_uuid);
+
+        auto source_reader = require_result(
+            ProjectReader::open(source));
+        auto destination_reader = require_result(
+            ProjectReader::open(destination));
+        EXPECT_EQ(
+            source_reader.superblock().project_uuid,
+            original_project_uuid);
+        EXPECT_EQ(
+            destination_reader.superblock().project_uuid,
+            new_project_uuid);
+
+        const std::array singleton_fourccs{
+            FOURCC_PROJ,
+            FOURCC_REFS,
+            FOURCC_SCNG,
+            FOURCC_SELM,
+            FOURCC_PRMS,
+            FOURCC_GUIL,
+            FOURCC_VIEW,
+            FOURCC_EDTR,
+            FOURCC_SEQR,
+            FOURCC_METR,
+        };
+        for (const auto fourcc : singleton_fourccs) {
+            const auto* rekeyed = destination_reader.find(
+                fourcc, new_project_uuid);
+            ASSERT_NE(rekeyed, nullptr) << fourcc.to_string();
+            EXPECT_TRUE(rekeyed->is_live()) << fourcc.to_string();
+            const auto* stale = destination_reader.find(
+                fourcc, original_project_uuid);
+            EXPECT_TRUE(!stale || !stale->is_live())
+                << fourcc.to_string();
+        }
+        EXPECT_NE(
+            destination_reader.find(
+                FOURCC_SPLT, fixed_uuid(952)),
+            nullptr);
+        EXPECT_NE(
+            destination_reader.find(
+                FOURCC_PCLD, fixed_uuid(953)),
+            nullptr);
+        EXPECT_NE(
+            destination_reader.find(
+                FOURCC_MESH, fixed_uuid(954)),
+            nullptr);
+
+        auto reopened = require_result_ptr(
+            ProjectDocument::open(destination));
+        EXPECT_EQ(
+            reopened->project_uuid(),
+            new_project_uuid);
+        auto chapter_uuid =
+            reopened->project().project_uuid();
+        ASSERT_TRUE(chapter_uuid);
+        EXPECT_EQ(*chapter_uuid, new_project_uuid);
+    }
+
+    TEST(ProjectDocumentTest,
          FirstSaveExplicitlyReplacesForeignDestinationAtomically) {
         TemporaryDirectory temporary;
         const auto destination = temporary.path / "destination.licht";
@@ -4017,10 +4108,20 @@ namespace {
         auto document =
             require_result_ptr(ProjectDocument::open(source));
         auto options = save_options(9970, 500);
+        options.save_as_project_uuid =
+            fixed_uuid(9971);
         options.disk_reserve_bytes =
             std::numeric_limits<std::uint64_t>::max() / 2;
         auto saved = document->save_as(destination, options);
         ASSERT_FALSE(saved);
+        EXPECT_EQ(
+            document->project_uuid(),
+            fixed_uuid(950));
+        ASSERT_TRUE(document->source_path());
+        EXPECT_EQ(
+            *document->source_path(),
+            std::filesystem::absolute(source)
+                .lexically_normal());
         EXPECT_FALSE(fs::exists(destination));
         auto destination_lock = destination;
         destination_lock += ".lock";

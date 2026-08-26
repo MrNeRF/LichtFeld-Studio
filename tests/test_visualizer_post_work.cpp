@@ -6374,6 +6374,71 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
+           SaveAsAssignsNewProjectIdentity) {
+        const auto source_path =
+            temporary_.path / "identity-source.licht";
+        const auto destination =
+            temporary_.path / "identity-save-as.licht";
+        write_empty_project(source_path);
+        auto source_before =
+            lfs::test::licht::require_result(
+                lfs::io::project::ProjectReader::open(
+                    source_path));
+        const auto original_project_uuid =
+            source_before.superblock().project_uuid;
+
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(
+            viewer.getParameterManager()
+                ->ensureLoaded());
+        viewer.input_controller_ =
+            std::make_unique<InputController>(
+                nullptr, viewer.getViewport());
+        ASSERT_TRUE(viewer.projectOpen(
+            source_path,
+            ProjectSwitchDisposition::DiscardChanges));
+        ASSERT_TRUE(waitForHydrationComplete(
+            viewer, viewer.work_queue_mutex_,
+            viewer.work_queue_));
+
+        ASSERT_TRUE(viewer.projectSaveAs(
+            destination, false));
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                return !viewer.jobs().anyRunning(
+                    JobType::ProjectWrite);
+            }));
+
+        const auto info = viewer.projectGetInfo();
+        ASSERT_TRUE(info)
+            << lfs::format_for_developer(
+                   info.error());
+        ASSERT_TRUE(info->path);
+        EXPECT_EQ(
+            info->path->lexically_normal(),
+            destination.lexically_normal());
+        EXPECT_NE(
+            info->project_uuid,
+            original_project_uuid.to_string());
+
+        auto source_after =
+            lfs::test::licht::require_result(
+                lfs::io::project::ProjectReader::open(
+                    source_path));
+        auto saved_as =
+            lfs::test::licht::require_result_ptr(
+                lfs::io::project::ProjectDocument::open(
+                    destination));
+        EXPECT_EQ(
+            source_after.superblock().project_uuid,
+            original_project_uuid);
+        EXPECT_EQ(
+            saved_as->project_uuid().to_string(),
+            info->project_uuid);
+    }
+
+    TEST_F(VisualizerImplResetTest,
            SaveAsAndExitClearsParameterDirtyBaseline) {
         const auto source_path = temporary_.path / "parameter-source.licht";
         const auto destination = temporary_.path / "parameter-save-as.licht";
