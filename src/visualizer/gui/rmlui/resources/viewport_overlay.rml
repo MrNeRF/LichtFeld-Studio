@@ -782,6 +782,19 @@
                     </select>
                 </div>
             </div>
+            <div class="viewport-gt-loss-legend"
+                 data-if="gt_compare_mode_value == 'loss'">
+                <div class="viewport-gt-loss-scale">
+                    <span class="viewport-gt-loss-scale__segment viewport-gt-loss-scale__segment--match"></span>
+                    <span class="viewport-gt-loss-scale__segment viewport-gt-loss-scale__segment--low"></span>
+                    <span class="viewport-gt-loss-scale__segment viewport-gt-loss-scale__segment--medium"></span>
+                    <span class="viewport-gt-loss-scale__segment viewport-gt-loss-scale__segment--high"></span>
+                </div>
+                <div class="viewport-gt-loss-labels">
+                    <span>@tr:tooltip.gt_loss_match</span>
+                    <span>@tr:tooltip.gt_loss_higher_error</span>
+                </div>
+            </div>
         </div>
     </div>
 

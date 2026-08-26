@@ -1515,6 +1515,20 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert "viewport-export-status" not in rml[panel_start:panel_end]
 
 
+def test_gt_loss_mode_shows_matching_heatmap_legend():
+    project_root = Path(__file__).parent.parent.parent
+    resources = project_root / "src/visualizer/gui/rmlui/resources"
+    rml = (resources / "viewport_overlay.rml").read_text(encoding="utf-8")
+    rcss = (resources / "viewport_overlay.rcss").read_text(encoding="utf-8")
+
+    assert 'data-if="gt_compare_mode_value == \'loss\'"' in rml
+    assert rml.count("viewport-gt-loss-scale__segment--") == 4
+    assert "@tr:tooltip.gt_loss_match" in rml
+    assert "@tr:tooltip.gt_loss_higher_error" in rml
+    assert "horizontal-gradient(#000000 #380578)" in rcss
+    assert "horizontal-gradient(#fca60a #ffffbf)" in rcss
+
+
 def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypatch):
     module, _hook_calls, _remove_calls = toolbar_module
     model = _DataModelStub()

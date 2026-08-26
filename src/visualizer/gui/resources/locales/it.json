@@ -1110,6 +1110,8 @@
     "depth_view_tool": "Vista mappa di profondità attiva",
     "depth_view_mode": "Scegli il modo colore della profondità",
     "gt_compare_mode": "Scegli la visualizzazione della ground truth RGB, delle normali, della profondità o della perdita",
+    "gt_loss_match": "Corrispondenza (0)",
+    "gt_loss_higher_error": "Errore maggiore",
     "depth_view_range": "Intervallo di visualizzazione della profondità",
     "depth_view_near": "Limite vicino dell'intervallo di profondità",
     "depth_view_far": "Limite lontano dell'intervallo di profondità",
