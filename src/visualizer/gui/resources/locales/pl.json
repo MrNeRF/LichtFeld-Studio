@@ -1110,7 +1110,7 @@
     "depth_view_tool": "Aktywny widok mapy głębi",
     "depth_view_mode": "Wybierz tryb koloru głębi",
     "gt_compare_mode": "Wybierz wizualizację referencji RGB, normalnych, głębi lub straty",
-    "gt_loss_match": "Zgodność (0)",
+    "gt_loss_lower_error": "Mniejszy błąd",
     "gt_loss_higher_error": "Większy błąd",
     "depth_view_range": "Zakres wizualizacji głębi",
     "depth_view_near": "Bliska granica zakresu głębi",

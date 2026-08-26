@@ -1110,7 +1110,7 @@
     "depth_view_tool": "활성 깊이 맵 보기",
     "depth_view_mode": "깊이 맵 색상 모드 선택",
     "gt_compare_mode": "RGB, 법선, 깊이 또는 손실 정답 시각화 선택",
-    "gt_loss_match": "일치 (0)",
+    "gt_loss_lower_error": "낮은 오차",
     "gt_loss_higher_error": "높은 오차",
     "depth_view_range": "깊이 맵 시각화 범위",
     "depth_view_near": "깊이 범위의 가까운 경계",

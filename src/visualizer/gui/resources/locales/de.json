@@ -1109,7 +1109,7 @@
     "depth_view_tool": "Aktive Tiefenkartenansicht",
     "depth_view_mode": "Farbmodus der Tiefenkarte wählen",
     "gt_compare_mode": "RGB-, Normalen-, Tiefen- oder Verlustvisualisierung auswählen",
-    "gt_loss_match": "Übereinstimmung (0)",
+    "gt_loss_lower_error": "Niedrigerer Fehler",
     "gt_loss_higher_error": "Höherer Fehler",
     "depth_view_range": "Visualisierungsbereich der Tiefenkarte",
     "depth_view_near": "Nahe Grenze des Tiefenkartenbereichs",

@@ -782,16 +782,35 @@
                     </select>
                 </div>
             </div>
-            <div class="viewport-gt-loss-legend"
-                 data-if="gt_compare_mode_value == 'loss'">
-                <div class="viewport-gt-loss-scale">
-                    <span class="viewport-gt-loss-scale__segment viewport-gt-loss-scale__segment--match"></span>
-                    <span class="viewport-gt-loss-scale__segment viewport-gt-loss-scale__segment--low"></span>
-                    <span class="viewport-gt-loss-scale__segment viewport-gt-loss-scale__segment--medium"></span>
-                    <span class="viewport-gt-loss-scale__segment viewport-gt-loss-scale__segment--high"></span>
+            <div class="viewport-gt-color-legend"
+                 data-if="gt_compare_mode_value == 'depth'">
+                <div class="viewport-gt-color-scale"
+                     data-if="gt_compare_depth_mode_value == 'palette'">
+                    <span class="viewport-gt-color-scale__segment viewport-gt-color-scale__segment--depth-far"></span>
+                    <span class="viewport-gt-color-scale__segment viewport-gt-color-scale__segment--depth-far-mid"></span>
+                    <span class="viewport-gt-color-scale__segment viewport-gt-color-scale__segment--depth-mid"></span>
+                    <span class="viewport-gt-color-scale__segment viewport-gt-color-scale__segment--depth-near-mid"></span>
+                    <span class="viewport-gt-color-scale__segment viewport-gt-color-scale__segment--depth-near"></span>
                 </div>
-                <div class="viewport-gt-loss-labels">
-                    <span>@tr:tooltip.gt_loss_match</span>
+                <div class="viewport-gt-color-scale"
+                     data-if="gt_compare_depth_mode_value == 'gray'">
+                    <span class="viewport-gt-color-scale__segment viewport-gt-color-scale__segment--depth-gray"></span>
+                </div>
+                <div class="viewport-gt-color-labels">
+                    <span>@tr:ui.far</span>
+                    <span>@tr:ui.near</span>
+                </div>
+            </div>
+            <div class="viewport-gt-color-legend"
+                 data-if="gt_compare_mode_value == 'loss'">
+                <div class="viewport-gt-color-scale">
+                    <span class="viewport-gt-color-scale__segment viewport-gt-color-scale__segment--loss-lowest"></span>
+                    <span class="viewport-gt-color-scale__segment viewport-gt-color-scale__segment--loss-low"></span>
+                    <span class="viewport-gt-color-scale__segment viewport-gt-color-scale__segment--loss-medium"></span>
+                    <span class="viewport-gt-color-scale__segment viewport-gt-color-scale__segment--loss-high"></span>
+                </div>
+                <div class="viewport-gt-color-labels">
+                    <span>@tr:tooltip.gt_loss_lower_error</span>
                     <span>@tr:tooltip.gt_loss_higher_error</span>
                 </div>
             </div>

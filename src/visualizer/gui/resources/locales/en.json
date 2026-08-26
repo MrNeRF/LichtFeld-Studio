@@ -1109,7 +1109,7 @@
     "depth_view_tool": "Active depth-map view",
     "depth_view_mode": "Choose depth-map color mode",
     "gt_compare_mode": "Choose RGB, normal, depth, or loss ground-truth visualization",
-    "gt_loss_match": "Match (0)",
+    "gt_loss_lower_error": "Lower error",
     "gt_loss_higher_error": "Higher error",
     "depth_view_range": "Depth-map visualization range",
     "depth_view_near": "Near edge of the depth-map range",

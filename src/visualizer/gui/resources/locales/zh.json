@@ -1110,7 +1110,7 @@
     "depth_view_tool": "活动深度图视图",
     "depth_view_mode": "选择深度图颜色模式",
     "gt_compare_mode": "选择 RGB、法线、深度或损失真值可视化",
-    "gt_loss_match": "匹配 (0)",
+    "gt_loss_lower_error": "更低误差",
     "gt_loss_higher_error": "更高误差",
     "depth_view_range": "深度图可视化范围",
     "depth_view_near": "深度范围近端",
