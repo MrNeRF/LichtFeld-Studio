@@ -73,37 +73,58 @@ namespace lfs::vis {
             throw std::runtime_error(std::move(message));
         }
 
-    } // namespace
+        void encodeViewerSplatShNIfNeeded(const std::filesystem::path& path,
+                                          lfs::core::SplatData& model) {
+            if (!model.has_tensor_allocator()) {
+                LOG_WARN("Viewer SH q16 skipped for '{}': Vulkan-external storage is unavailable or degraded",
+                         lfs::core::path_to_utf8(path));
+                return;
+            }
 
-    void quantizeViewerLoadedPlyShN(const std::filesystem::path& path,
-                                    lfs::core::SplatData& model) {
-        if (!model.has_tensor_allocator()) {
-            LOG_WARN("Viewer PLY SH q16 skipped for '{}': Vulkan-external storage is unavailable or degraded",
-                     lfs::core::path_to_utf8(path));
-            return;
-        }
+            const bool shN_only_not_ready =
+                baseAttrsRendererReady(model) && !shNStorageRendererReady(model);
+            const bool should_encode =
+                (isPlyPath(path) || shN_only_not_ready) &&
+                !model.shN_value_quantized() &&
+                model.shN_raw().is_valid() &&
+                model.shN_raw().numel() > 0;
 
-        const bool shN_only_not_ready =
-            baseAttrsRendererReady(model) && !shNStorageRendererReady(model);
-        const bool should_encode =
-            (isPlyPath(path) || shN_only_not_ready) &&
-            !model.shN_value_quantized() &&
-            model.shN_raw().is_valid() &&
-            model.shN_raw().numel() > 0;
+            if (!should_encode) {
+                return;
+            }
 
-        if (should_encode) {
             const std::size_t shN_before_bytes = model.shN_raw().bytes();
             const bool converted = lfs::training::sh_value::apply_shN_value_quant(model);
             if (converted) {
                 const std::size_t shN_after_bytes =
                     model.shN_raw().bytes() + model.shN_value_bounds().bytes();
                 LOG_INFO(
-                    "Viewer PLY SH q16: path='{}' gaussians={} before_bytes={} after_bytes={} saved_mib={:.3f}",
+                    "Viewer SH q16: path='{}' gaussians={} before_bytes={} after_bytes={} saved_mib={:.3f}",
                     lfs::core::path_to_utf8(path), model.size(), shN_before_bytes, shN_after_bytes,
                     (static_cast<double>(shN_before_bytes) - static_cast<double>(shN_after_bytes)) /
                         (1024.0 * 1024.0));
             }
         }
+
+    } // namespace
+
+    bool viewerSplatTensorsRendererReady(const lfs::core::SplatData& model) {
+        return baseAttrsRendererReady(model) && shNStorageRendererReady(model);
+    }
+
+    void ensureViewerSplatShNExportable(const std::filesystem::path& path,
+                                        lfs::core::SplatData& model) {
+        try {
+            encodeViewerSplatShNIfNeeded(path, model);
+        } catch (const std::exception& error) {
+            LOG_WARN("Viewer SH q16 failed for '{}': {}",
+                     lfs::core::path_to_utf8(path), error.what());
+        }
+    }
+
+    void quantizeViewerLoadedPlyShN(const std::filesystem::path& path,
+                                    lfs::core::SplatData& model) {
+        encodeViewerSplatShNIfNeeded(path, model);
 
         if (baseAttrsRendererReady(model) && !shNStorageRendererReady(model)) {
             throwUnrenderable(path, model);

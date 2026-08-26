@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cstring>
 #include <cuda_runtime.h>
 #include <format>
@@ -472,6 +473,7 @@ namespace lfs::vis {
         }
 
         if (trainer) {
+            clearStoredSessionPresentation();
             const auto& params = trainer->getParams();
             pending_opt_params_ = params.optimization;
             pending_dataset_params_ = params.dataset;
@@ -508,6 +510,7 @@ namespace lfs::vis {
         }
 
         if (trainer) {
+            clearStoredSessionPresentation();
             const auto& params = trainer->getParams();
             pending_opt_params_ = params.optimization;
             pending_dataset_params_ = params.dataset;
@@ -551,6 +554,105 @@ namespace lfs::vis {
 
     bool TrainerManager::hasTrainer() const {
         return trainer_ != nullptr;
+    }
+
+    TrainingState TrainerManager::getState() const {
+        const auto state = state_machine_.getState();
+        if (trainer_ || state != TrainingState::Idle) {
+            return state;
+        }
+        if (stored_session_presentation_active_) {
+            return stored_session_presentation_completed_
+                       ? TrainingState::Finished
+                       : TrainingState::Paused;
+        }
+        return state;
+    }
+
+    void TrainerManager::clearStoredSessionPresentation() {
+        stored_session_presentation_active_ = false;
+        stored_session_presentation_completed_ = false;
+        stored_session_presentation_iteration_ = 0;
+        stored_session_presentation_max_iterations_ = 0;
+        stored_session_presentation_strategy_.clear();
+    }
+
+    void TrainerManager::publishStoredSessionPresentation() {
+        if (trainer_) {
+            clearStoredSessionPresentation();
+            return;
+        }
+        Visualizer::ProjectTrainingSessionState session;
+        if (viewer_) {
+            session = viewer_->projectTrainingSessionState();
+        }
+        if (!session.available) {
+            clearStoredSessionPresentation();
+            auto& store = app_store();
+            lfs::core::reactive::BatchUpdate batch(store.store());
+            store.trainer_loaded.set(false);
+            store.training_running.set(false);
+            store.training_state.set("idle");
+            store.iteration.set(0);
+            store.total_iterations.set(0);
+            python::update_training_state(false, "idle");
+            python::update_trainer_loaded(false, 0, 0);
+            python::flush_signals();
+            return;
+        }
+
+        const core::Scene* scene = scene_;
+        if (!scene && viewer_) {
+            scene = &viewer_->getScene();
+        }
+        int num_gaussians = 0;
+        if (scene) {
+            num_gaussians = static_cast<int>(
+                scene->getTrainingModelGaussianCount());
+        }
+        stored_session_presentation_active_ = true;
+        stored_session_presentation_completed_ = session.completed;
+        stored_session_presentation_iteration_ = session.iteration;
+        stored_session_presentation_max_iterations_ =
+            session.max_iterations;
+        stored_session_presentation_strategy_ =
+            session.strategy.empty() ? "unknown" : session.strategy;
+        const char* const presented_state =
+            session.completed ? "completed" : "paused";
+
+        auto& store = app_store();
+        {
+            lfs::core::reactive::BatchUpdate batch(store.store());
+            store.trainer_loaded.set(false);
+            store.training_running.set(false);
+            store.training_state.set(presented_state);
+            store.iteration.set(session.iteration);
+            store.total_iterations.set(session.max_iterations);
+            store.num_gaussians.set(
+                static_cast<std::int64_t>(num_gaussians));
+        }
+
+        python::update_trainer_loaded(
+            false, session.max_iterations, session.iteration);
+        python::update_training_state(false, presented_state);
+        python::update_training_progress(
+            session.iteration, 0.0f,
+            static_cast<std::size_t>(std::max(0, num_gaussians)));
+        python::flush_signals();
+
+        lfs::training::CommandCenter::instance().update_snapshot(
+            lfs::training::HookContext{
+                .iteration = session.iteration,
+                .num_gaussians = static_cast<std::size_t>(
+                    std::max(0, num_gaussians)),
+                .trainer = nullptr},
+            session.max_iterations,
+            !session.completed,
+            false,
+            false,
+            lfs::training::TrainingPhase::Idle);
+        lfs::training::CommandCenter::instance().overlay_stored_session(
+            stored_session_presentation_strategy_, session.hydrated);
     }
 
     bool TrainerManager::clearTrainer() {
@@ -855,6 +957,21 @@ namespace lfs::vis {
     }
 
     void TrainerManager::resumeTraining() {
+        if (!trainer_ && viewer_) {
+            const auto session =
+                viewer_->projectTrainingSessionState();
+            if (session.available && !session.hydrated) {
+                if (auto restored =
+                        viewer_->restoreProjectTrainingSession(
+                            true);
+                    !restored) {
+                    LOG_ERROR(
+                        "Failed to restore training session: {}",
+                        lfs::format_for_developer(restored.error()));
+                }
+                return;
+            }
+        }
         if (!canResume()) {
             LOG_TRACE("Cannot resume: {}", getActionBlockedReason(TrainingAction::Resume));
             return;
@@ -1208,7 +1325,13 @@ namespace lfs::vis {
     }
 
     int TrainerManager::getCurrentIteration() const {
-        return trainer_ ? trainer_->get_current_iteration() : 0;
+        if (trainer_) {
+            return trainer_->get_current_iteration();
+        }
+        if (stored_session_presentation_active_) {
+            return stored_session_presentation_iteration_;
+        }
+        return 0;
     }
 
     float TrainerManager::getCurrentLoss() const {
@@ -1216,14 +1339,29 @@ namespace lfs::vis {
     }
 
     int TrainerManager::getTotalIterations() const {
-        if (!trainer_)
-            return 0;
-        return trainer_->get_total_iterations();
+        if (trainer_) {
+            return trainer_->get_total_iterations();
+        }
+        if (stored_session_presentation_active_) {
+            return stored_session_presentation_max_iterations_;
+        }
+        return 0;
     }
 
     int TrainerManager::getNumSplats() const {
-        if (!trainer_)
+        if (!trainer_) {
+            if (stored_session_presentation_active_) {
+                const core::Scene* scene = scene_;
+                if (!scene && viewer_) {
+                    scene = &viewer_->getScene();
+                }
+                if (scene) {
+                    return static_cast<int>(
+                        scene->getTrainingModelGaussianCount());
+                }
+            }
             return 0;
+        }
 
         // Prefer scene metadata so UI polling does not dereference the live
         // training model while topology-changing refinement is in progress.
@@ -1277,9 +1415,14 @@ namespace lfs::vis {
     }
 
     const char* TrainerManager::getStrategyType() const {
-        if (!trainer_ || !trainer_->isInitialized())
-            return "unknown";
-        return trainer_->get_strategy().strategy_type();
+        if (trainer_ && trainer_->isInitialized()) {
+            return trainer_->get_strategy().strategy_type();
+        }
+        if (stored_session_presentation_active_ &&
+            !stored_session_presentation_strategy_.empty()) {
+            return stored_session_presentation_strategy_.c_str();
+        }
+        return "unknown";
     }
 
     bool TrainerManager::isGutEnabled() const {

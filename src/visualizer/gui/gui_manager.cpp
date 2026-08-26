@@ -4938,7 +4938,15 @@ namespace lfs::vis::gui {
                 focus.want_capture_keyboard = true;
             }
 
-            if (std::find(sdl_input.keys_pressed.begin(), sdl_input.keys_pressed.end(), SDL_SCANCODE_ESCAPE) != sdl_input.keys_pressed.end()) {
+            const bool escape_pressed =
+                std::find(sdl_input.keys_pressed.begin(), sdl_input.keys_pressed.end(),
+                          SDL_SCANCODE_ESCAPE) != sdl_input.keys_pressed.end();
+            const auto window_flags = SDL_GetWindowFlags(viewer_->getWindow());
+            if (escape_pressed || block_underlay_input || ui_hidden_ ||
+                (window_flags & SDL_WINDOW_INPUT_FOCUS) == 0) {
+                rmlui_manager_.cancelDragPayload();
+            }
+            if (escape_pressed) {
                 auto* console_state = panels::PythonConsoleState::tryGetInstance();
                 auto* editor = console_state ? console_state->getEditor() : nullptr;
                 const bool editor_owns_escape =
@@ -5455,10 +5463,10 @@ namespace lfs::vis::gui {
         }
 
         const float bottom_dock_h = std::max(panel_layout_.getBottomDockHeight(), 0.0f);
-        const float bottom_dock_w = show_main_panel_ && !ui_hidden_
-                                        ? std::max(0.0f, screen.work_size.x -
-                                                             panel_layout_.getRightPanelWidth())
-                                        : screen.work_size.x;
+        const auto bottom_dock_layout = panel_layout_.computeBottomDockHorizontalLayout(
+            show_main_panel_, ui_hidden_, screen);
+        const float bottom_dock_x = bottom_dock_layout.x;
+        const float bottom_dock_w = bottom_dock_layout.width;
         const float bottom_dock_y =
             screen.work_pos.y + screen.work_size.y - bottom_dock_h;
         const float bottom_dock_edge_grab_h =
@@ -5467,12 +5475,12 @@ namespace lfs::vis::gui {
         const bool pointer_over_bottom_dock =
             panel_layout_.isBottomDockVisible() &&
             pointInRect(panel_input.mouse_x, panel_input.mouse_y,
-                        glm::vec2{screen.work_pos.x, bottom_dock_y},
+                        glm::vec2{bottom_dock_x, bottom_dock_y},
                         glm::vec2{bottom_dock_w, bottom_dock_h});
         const bool pointer_over_bottom_dock_edge =
             panel_layout_.isBottomDockVisible() &&
-            panel_input.mouse_x >= screen.work_pos.x &&
-            panel_input.mouse_x < screen.work_pos.x + bottom_dock_w &&
+            panel_input.mouse_x >= bottom_dock_x &&
+            panel_input.mouse_x < bottom_dock_x + bottom_dock_w &&
             panel_input.mouse_y >= bottom_dock_y - bottom_dock_edge_grab_h &&
             panel_input.mouse_y <= bottom_dock_y + bottom_dock_edge_grab_h;
         const bool pointer_targets_bottom_dock =
@@ -5821,6 +5829,37 @@ namespace lfs::vis::gui {
         } else {
             startup_overlay_.setInput(nullptr);
         }
+        const auto resolve_project_asset_drag = [this, &sdl_input]() {
+            constexpr std::string_view kProjectPayloadType =
+                "application/x-lichtfeld-project";
+            const auto payload = rmlui_manager_.dragPayload();
+            const auto hit = hitTestPointer(sdl_input.mouse_x, sdl_input.mouse_y);
+            const bool can_drop =
+                payload && payload->type == kProjectPayloadType &&
+                isPositionInViewport(sdl_input.mouse_x, sdl_input.mouse_y) &&
+                !hit.blocks_pointer && !hit.blocks_mouse_button;
+
+            if (payload && payload->released) {
+                const auto released = rmlui_manager_.takeReleasedDragPayload();
+                rml_viewport_overlay_.setProjectDragOverlay({});
+                if (released && can_drop) {
+                    const auto path = lfs::core::utf8_to_path(released->data);
+                    lfs::core::events::cmd::ProjectOpen{
+                        .path = path,
+                        .keep_asset_manager_open = true}
+                        .emit();
+                    LOG_INFO("Opening Asset Manager project via viewport drop: {}",
+                             lfs::core::path_to_utf8(path.filename()));
+                }
+                return;
+            }
+
+            rml_viewport_overlay_.setProjectDragOverlay({
+                .visible = can_drop,
+                .label = can_drop ? payload->label : std::string{},
+            });
+        };
+        resolve_project_asset_drag();
         PanelInputState viewport_overlay_input = panel_input;
         if (has_floating_panels &&
             reg.isPositionOverFloatingPanel(panel_input.mouse_x, panel_input.mouse_y)) {
@@ -5912,6 +5951,9 @@ namespace lfs::vis::gui {
                               },
                               draw_ctx);
         }
+        // Floating Rml panels process their release after the viewport overlay,
+        // so resolve a second time to consume a drag ending in this frame.
+        resolve_project_asset_drag();
 
         applyFrameInputCapture(&rml_right_panel_);
 
@@ -7199,6 +7241,8 @@ namespace lfs::vis::gui {
             return true;
         }
         if (isViewportExportLocked())
+            return true;
+        if (rmlui_manager_.dragPayload())
             return true;
         if (startup_overlay_.needsAnimationFrame())
             return true;

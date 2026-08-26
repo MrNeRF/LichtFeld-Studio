@@ -25,6 +25,8 @@
 #include <exception>
 #include <expected>
 #include <format>
+#include <ios>
+#include <limits>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 #include <vector>
@@ -1959,6 +1961,92 @@ namespace lfs::core {
                 gpu_upload_finished));
 
         LOG_DEBUG("Deserialized SplatData: {} Gaussians, SH {}/{}", size(), active_sh, max_sh);
+    }
+
+    void SplatData::skip_serialized(std::istream& is) {
+        const auto skip_started = std::chrono::steady_clock::now();
+        uint32_t magic = 0, version = 0;
+        serialization_detail::read_exact(is, &magic, sizeof(magic), "SplatData magic");
+        serialization_detail::read_exact(is, &version, sizeof(version), "SplatData version");
+
+        if (magic != SPLAT_DATA_MAGIC) {
+            throw std::runtime_error("Invalid SplatData: wrong magic");
+        }
+        if (version != 3 && version != SPLAT_DATA_VERSION) {
+            throw std::runtime_error("Unsupported SplatData version: " + std::to_string(version));
+        }
+
+        int32_t active_sh = 0, max_sh = 0;
+        float scene_scale = 0.0f;
+        serialization_detail::read_exact(is, &active_sh, sizeof(active_sh), "SplatData active SH degree");
+        serialization_detail::read_exact(is, &max_sh, sizeof(max_sh), "SplatData maximum SH degree");
+        serialization_detail::read_exact(is, &scene_scale, sizeof(scene_scale), "SplatData scene scale");
+
+        if (max_sh < 0 || max_sh > MAX_SUPPORTED_SH_DEGREE || active_sh < 0 || active_sh > max_sh) {
+            throw std::runtime_error("Invalid SplatData: unsupported SH degree range");
+        }
+        if (!std::isfinite(scene_scale) || scene_scale <= 0.0f) {
+            throw std::runtime_error("Invalid SplatData: scene scale must be finite and positive");
+        }
+
+        serialization_detail::skip_serialized_tensor(is); // means
+        serialization_detail::skip_serialized_tensor(is); // sh0
+        serialization_detail::skip_serialized_tensor(is); // scaling
+        serialization_detail::skip_serialized_tensor(is); // rotation
+        serialization_detail::skip_serialized_tensor(is); // opacity
+        if (max_sh > 0) {
+            serialization_detail::skip_serialized_tensor(is); // shN
+        }
+
+        uint8_t has_deleted = 0;
+        serialization_detail::read_exact(is, &has_deleted, sizeof(has_deleted), "SplatData deleted flag");
+        if (has_deleted > 1)
+            throw std::runtime_error("Invalid SplatData: deleted flag must be boolean");
+        if (has_deleted)
+            serialization_detail::skip_serialized_tensor(is);
+
+        uint8_t has_densification = 0;
+        serialization_detail::read_exact(
+            is, &has_densification, sizeof(has_densification), "SplatData densification flag");
+        if (has_densification > 1)
+            throw std::runtime_error("Invalid SplatData: densification flag must be boolean");
+        if (has_densification)
+            serialization_detail::skip_serialized_tensor(is);
+
+        if (version >= SPLAT_DATA_MIN_VERSION_FROZEN_RANGES) {
+            uint8_t has_frozen_ranges = 0;
+            serialization_detail::read_exact(
+                is, &has_frozen_ranges, sizeof(has_frozen_ranges), "SplatData frozen-ranges flag");
+            if (has_frozen_ranges > 1)
+                throw std::runtime_error("Invalid SplatData: frozen-ranges flag must be boolean");
+            if (has_frozen_ranges) {
+                uint64_t range_count = 0;
+                serialization_detail::read_exact(
+                    is, &range_count, sizeof(range_count), "SplatData frozen-range count");
+                if (range_count == 0)
+                    throw std::runtime_error("Invalid SplatData: frozen-range count must be positive");
+                if (range_count > std::numeric_limits<uint32_t>::max())
+                    throw std::runtime_error("Invalid SplatData: frozen-range count exceeds supported range");
+                serialization_detail::require_remaining_bytes(
+                    is, range_count * 2 * sizeof(uint64_t), "SplatData frozen ranges");
+                const auto skip_bytes = range_count * 2 * sizeof(uint64_t);
+                if (skip_bytes > static_cast<uint64_t>(std::numeric_limits<std::streamoff>::max())) {
+                    throw std::runtime_error("SplatData frozen ranges exceed streamoff");
+                }
+                is.seekg(static_cast<std::streamoff>(skip_bytes), std::ios::cur);
+                if (!is)
+                    throw std::runtime_error("Failed to skip SplatData frozen ranges");
+            }
+        }
+
+        const auto skip_ms = std::chrono::duration<double, std::milli>(
+                                 std::chrono::steady_clock::now() - skip_started)
+                                 .count();
+        LOG_DEBUG(
+            "Splat skip-serialized stages: sh={}/{} total={:.3f} ms",
+            active_sh,
+            max_sh,
+            skip_ms);
     }
 
     lfs::Result<std::unique_ptr<SplatData>> SplatData::from_raw_tensors(

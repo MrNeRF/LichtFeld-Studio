@@ -31,6 +31,21 @@
     background-color: @{menu.background};
 }
 
+.project-drop-overlay {
+    background-color: @{alpha(primary,0.10)};
+    border-color: @{primary};
+}
+
+.project-drop-card {
+    color: @{text};
+    background-color: @{toolbar.background};
+    border-color: @{alpha(primary,0.70)};
+}
+
+.project-drop-label {
+    color: @{text_dim};
+}
+
 .toolbar-vertical {
     background-color: transparent;
     border-radius: 0;

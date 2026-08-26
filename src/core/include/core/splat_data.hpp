@@ -398,6 +398,9 @@ namespace lfs::core {
         // ========== Serialization ==========
         void serialize(std::ostream& os) const;
         void deserialize(std::istream& is, SplatTensorAllocator tensor_allocator = {});
+        // Advance `is` by one serialized SplatData without allocating tensors.
+        // Leaves the stream at the same position deserialize() would.
+        static void skip_serialized(std::istream& is);
 
         [[nodiscard]] static lfs::Result<std::unique_ptr<SplatData>>
         from_raw_tensors(int active_sh_degree, int max_sh_degree,

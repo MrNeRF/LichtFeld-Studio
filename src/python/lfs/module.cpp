@@ -59,6 +59,7 @@
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "core/scene.hpp"
 #include "core/session_breadcrumb.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/rmlui/elements/loss_graph_element.hpp"
@@ -720,6 +721,22 @@ namespace {
         return lfs::python::get_scene_for_python();
     }
 
+    lfs::vis::Visualizer::ProjectTrainingSessionState
+    stored_training_session() {
+        auto* const viewer = lfs::python::get_visualizer();
+        if (!viewer) {
+            return {};
+        }
+        return viewer->projectTrainingSessionState();
+    }
+
+    int scene_training_gaussian_count() {
+        if (auto* const scene = get_scene_internal()) {
+            return static_cast<int>(scene->getTrainingModelGaussianCount());
+        }
+        return 0;
+    }
+
 } // namespace
 
 NB_MODULE(lichtfeld, m) {
@@ -857,8 +874,13 @@ NB_MODULE(lichtfeld, m) {
         "trainer_state",
         []() -> const char* {
             const auto* const tm = lfs::python::get_trainer_manager();
-            if (!tm)
+            if (!tm || !tm->hasTrainer()) {
+                const auto session = stored_training_session();
+                if (session.available) {
+                    return session.completed ? "completed" : "paused";
+                }
                 return "idle";
+            }
             switch (tm->getState()) {
             case lfs::vis::TrainingState::Idle: return "idle";
             case lfs::vis::TrainingState::Ready: return "ready";
@@ -943,6 +965,76 @@ NB_MODULE(lichtfeld, m) {
             lfs::core::events::cmd::ResumeTraining{}.emit();
         },
         "Resume a paused training run");
+    m.def(
+        "project_training_session_state", []() {
+            nb::dict result;
+            const auto state = stored_training_session();
+            result["available"] = state.available;
+            result["iteration"] = state.iteration;
+            result["max_iterations"] = state.max_iterations;
+            result["strategy"] = state.strategy;
+            result["completed"] = state.completed;
+            result["hydrated"] = state.hydrated;
+            result["restoring"] = state.restoring;
+            result["error"] = state.error;
+            return result;
+        },
+        "Return the stored training-session restore state for the open project");
+    m.def(
+        "restore_training_session",
+        [](const bool then_start) {
+            nb::gil_scoped_release release;
+            auto* const viewer = lfs::python::get_visualizer();
+            if (!viewer) {
+                return;
+            }
+            if (auto restored =
+                    viewer->restoreProjectTrainingSession(then_start);
+                !restored) {
+                LOG_ERROR(
+                    "Failed to restore training session: {}",
+                    lfs::format_for_developer(restored.error()));
+            }
+        },
+        nb::arg("then_start") = false,
+        "Hydrate the stored training session on demand");
+    m.def(
+        "training_get_state",
+        []() {
+            nb::dict result;
+            const auto* const tm = lfs::python::get_trainer_manager();
+            const auto session = stored_training_session();
+            const bool live = tm && tm->hasTrainer();
+            int iteration = 0;
+            int max_iterations = 0;
+            std::string strategy;
+            int num_gaussians = scene_training_gaussian_count();
+            bool session_hydrated = true;
+            if (live) {
+                iteration = tm->getCurrentIteration();
+                max_iterations = tm->getTotalIterations();
+                strategy = tm->getStrategyType();
+                num_gaussians = tm->getNumSplats();
+                session_hydrated = true;
+            } else if (session.available) {
+                iteration = session.iteration;
+                max_iterations = session.max_iterations;
+                strategy = session.strategy;
+                session_hydrated = session.hydrated;
+            } else if (tm) {
+                iteration = tm->getCurrentIteration();
+                max_iterations = tm->getTotalIterations();
+                strategy = tm->getStrategyType();
+                num_gaussians = tm->getNumSplats();
+            }
+            result["iteration"] = iteration;
+            result["max_iterations"] = max_iterations;
+            result["strategy"] = strategy;
+            result["num_gaussians"] = num_gaussians;
+            result["session_hydrated"] = session_hydrated;
+            return result;
+        },
+        "Return the live trainer state, or the stored session when the trainer is not hydrated");
     m.def(
         "stop_training", []() {
             nb::gil_scoped_release release;
@@ -1040,27 +1132,59 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("wait") = false,
         "Save the active project to a new .licht path");
     m.def(
+        "project_poll_write", []() {
+            nb::dict result;
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                return result;
+            }
+            auto poll = viewer->projectPollWrite();
+            if (!poll) {
+                throw std::runtime_error(
+                    std::format(
+                        "project_poll_write failed: {}",
+                        lfs::format_for_developer(
+                            poll.error())));
+            }
+            result["running"] = poll->running;
+            result["generation"] = poll->generation;
+            result["path"] =
+                poll->path
+                    ? lfs::core::path_to_utf8(
+                          *poll->path)
+                    : std::string{};
+            result["error"] = poll->error;
+            return result;
+        },
+        "Return the active .licht project write state");
+    m.def(
         "project_open",
         [](const std::string& path,
            const bool discard_changes,
-           const bool stop_training) {
+           const bool stop_training,
+           const bool keep_asset_manager_open) {
             const auto project_path =
                 python_utf8_path(path);
-            if (project_path.empty() || stop_training) {
+            if (project_path.empty() || stop_training ||
+                keep_asset_manager_open) {
                 nb::gil_scoped_release release;
                 emit_project_cmd_marshaled(
                     project_path.empty()
                         ? "python.project_open_dialog"
                         : "python.project_open",
                     [project_path, discard_changes,
-                     stop_training] {
+                     stop_training,
+                     keep_asset_manager_open] {
                         lfs::core::events::cmd::
                             ProjectOpen{
                                 .path = project_path,
                                 .discard_changes =
                                     discard_changes,
                                 .stop_training =
-                                    stop_training}
+                                    stop_training,
+                                .keep_asset_manager_open =
+                                    keep_asset_manager_open}
                                 .emit();
                     });
                 return lfs::vis::
@@ -1090,6 +1214,7 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("path") = "",
         nb::arg("discard_changes") = false,
         nb::arg("stop_training") = false,
+        nb::arg("keep_asset_manager_open") = false,
         "Open a .licht project");
     m.def(
         "project_compact", []() {
@@ -1577,7 +1702,7 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "trainer_strategy_type", []() -> const char* {
             const auto* tm = lfs::python::get_trainer_manager();
-            return (tm && tm->hasTrainer()) ? tm->getStrategyType() : "unknown";
+            return tm ? tm->getStrategyType() : "unknown";
         },
         "Get training strategy type (mcmc, default, etc.)");
 

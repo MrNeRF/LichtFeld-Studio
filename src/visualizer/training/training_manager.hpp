@@ -96,8 +96,9 @@ namespace lfs::vis {
             return state_machine_.getActionBlockedReason(action);
         }
 
-        // State queries (delegate to state machine)
-        [[nodiscard]] TrainingState getState() const { return state_machine_.getState(); }
+        // State queries (delegate to the state machine). getState() overlays
+        // a stored, not-yet-hydrated project session as Paused or Finished.
+        [[nodiscard]] TrainingState getState() const;
         [[nodiscard]] bool isRunning() const { return state_machine_.isInState(TrainingState::Running); }
         [[nodiscard]] bool isPaused() const { return state_machine_.isInState(TrainingState::Paused); }
         [[nodiscard]] bool isFinished() const { return state_machine_.isInState(TrainingState::Finished); }
@@ -159,6 +160,7 @@ namespace lfs::vis {
         void restoreProjectMetrics(
             const lfs::io::project::MetricsChapter& metrics);
         void clearRestoredProjectMetrics();
+        void publishStoredSessionPresentation();
 
         // Access to trainer (for rendering, etc.)
         lfs::training::Trainer* getTrainer() { return trainer_.get(); }
@@ -307,10 +309,16 @@ namespace lfs::vis {
         std::optional<lfs::io::project::TrainingFinishReason>
             restored_finish_reason_;
         bool restored_finish_published_ = false;
+        bool stored_session_presentation_active_ = false;
+        bool stored_session_presentation_completed_ = false;
+        int stored_session_presentation_iteration_ = 0;
+        int stored_session_presentation_max_iterations_ = 0;
+        std::string stored_session_presentation_strategy_;
 
         [[nodiscard]] FinishReason resolvedRestoredFinishReason() const;
         void applyRestoredCheckpointPresentation();
         void publishRestoredTrainingStore();
+        void clearStoredSessionPresentation();
     };
 
 } // namespace lfs::vis

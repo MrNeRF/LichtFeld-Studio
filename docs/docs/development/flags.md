@@ -57,7 +57,8 @@ and RmlUI imports are controlled by `LFS_DEV_IMPORT_SOURCE_PYTHON` and
 | `LFS_RML_DEBUGGER` | `OFF` | Starts the RmlUi debugger overlay. |
 | `LFS_DEV_HOT_RELOAD` | `ON` | Enables Python, RmlUI, and locale watching when source imports were compiled in. |
 | `LFS_PLUGIN_AUTOLOAD` | `ON` | Automation override for scheduling startup plugin loading. Per-plugin `load_on_startup` remains persisted in plugin settings. |
-| `LFS_ASSET_MANAGER_DIR` | Platform data directory | Overrides Asset Manager storage for isolated development and tests. |
+| `LFS_ASSET_MANAGER_DIR` | `data/asset_library` | Overrides the Asset Manager catalog directory for isolated development and tests. |
+| `LFS_ASSET_MANAGER_ASSETS_DIR` | `~/.lichtfeld/assets` | Overrides the real filesystem directory represented by the Asset Manager's Default folder. The General preferences setting remains the normal user-facing control. |
 | `LFS_PLUGIN_REGISTRY_URL` | Built-in registries | Overrides the plugin registry endpoint for development and tests. |
 | `LFS_PYTHON_LSP` | Auto-discovered | Overrides the Python language-server executable. |
 | `LFS_PYTHON_LSP_WORKSPACE` | `~/.lichtfeld` | Overrides the language-server workspace directory. |

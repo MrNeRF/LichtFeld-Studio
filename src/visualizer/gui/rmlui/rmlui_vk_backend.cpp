@@ -3,12 +3,14 @@
  * SPDX-License-Identifier: MIT */
 
 #include "gui/rmlui/rmlui_vk_backend.hpp"
+#include "core/error.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/rmlui/vulkan/rmlui_shaders_spv.hpp"
 #include "internal/resource_paths.hpp"
+#include "io/project_container.hpp"
 #include "python/python_runtime.hpp"
 #include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/FileInterface.h>
@@ -32,6 +34,7 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <tuple>
 
 // AlignUp(314, 256) = 512
 template <typename T>
@@ -82,6 +85,7 @@ namespace {
     struct PreviewTextureRequest {
         std::filesystem::path path;
         int max_size = 0;
+        bool embedded_project_preview = false;
     };
 
     bool IsPreviewTextureSource(std::string_view source) {
@@ -203,6 +207,8 @@ namespace {
                 const std::string_view value = part.substr(eq + 1);
                 if (key == "path") {
                     request.path = lfs::core::utf8_to_path(PercentDecode(value));
+                } else if (key == "kind") {
+                    request.embedded_project_preview = value == "licht";
                 } else if (key == "thumb") {
                     thumb_size = ParseIntParam(value);
                 } else if (key == "pmw") {
@@ -1104,8 +1110,12 @@ Rml::TextureHandle RenderInterface_VK::LoadAsyncPreviewTexture(Rml::Vector2i& te
     m_async_preview_textures.push_back(state);
 
     try {
-        std::thread([state, path = request->path, max_size = request->max_size]() mutable {
-            auto result = DecodePreviewTexture(std::move(path), max_size);
+        std::thread([state,
+                     path = request->path,
+                     max_size = request->max_size,
+                     embedded_project_preview = request->embedded_project_preview]() mutable {
+            auto result = DecodePreviewTexture(
+                std::move(path), max_size, embedded_project_preview);
             {
                 std::lock_guard lock(state->mutex);
                 state->result = std::move(result);
@@ -1121,7 +1131,10 @@ Rml::TextureHandle RenderInterface_VK::LoadAsyncPreviewTexture(Rml::Vector2i& te
     return handle;
 }
 
-RenderInterface_VK::async_preview_result_t RenderInterface_VK::DecodePreviewTexture(std::filesystem::path path, const int max_size) {
+RenderInterface_VK::async_preview_result_t RenderInterface_VK::DecodePreviewTexture(
+    std::filesystem::path path,
+    const int max_size,
+    const bool embedded_project_preview) {
     static std::counting_semaphore<4> decode_slots(4);
     struct DecodeSlotGuard {
         std::counting_semaphore<4>& slots;
@@ -1134,25 +1147,83 @@ RenderInterface_VK::async_preview_result_t RenderInterface_VK::DecodePreviewText
     async_preview_result_t result;
     unsigned char* data = nullptr;
     try {
-        auto [pixels, width, height, channels] = lfs::core::load_image(path, -1, max_size);
+        int width = 0;
+        int height = 0;
+        int channels = 0;
+        unsigned char* pixels = nullptr;
+        if (embedded_project_preview) {
+            auto reader = lfs::io::project::ProjectReader::open(path);
+            if (!reader) {
+                LOG_WARN("Failed to inspect embedded project preview '{}': {}",
+                         lfs::core::path_to_utf8(path),
+                         lfs::format_for_developer(reader.error()));
+                return result;
+            }
+            auto preview = reader->read_preview();
+            if (!preview) {
+                LOG_WARN("Failed to read embedded project preview '{}': {}",
+                         lfs::core::path_to_utf8(path),
+                         lfs::format_for_developer(preview.error()));
+                return result;
+            }
+            const auto* bytes = reinterpret_cast<const std::uint8_t*>(preview->data());
+            std::tie(pixels, width, height, channels) =
+                lfs::core::load_image_from_memory(bytes, preview->size());
+        } else {
+            std::tie(pixels, width, height, channels) =
+                lfs::core::load_image(path, -1, max_size);
+        }
         data = pixels;
         if (pixels && width > 0 && height > 0 && channels > 0) {
-            const std::size_t pixel_count = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
-            result.pixels.resize(pixel_count * 4u);
-            for (std::size_t i = 0; i < pixel_count; ++i) {
-                const unsigned char* src = pixels + i * static_cast<std::size_t>(channels);
-                const unsigned char r = src[0];
-                const unsigned char g = channels > 1 ? src[1] : r;
-                const unsigned char b = channels > 2 ? src[2] : r;
-                const unsigned char a = channels > 3 ? src[3] : 255;
-                Rml::byte* dst = result.pixels.data() + i * 4u;
-                dst[0] = static_cast<Rml::byte>((static_cast<unsigned int>(r) * a + 127u) / 255u);
-                dst[1] = static_cast<Rml::byte>((static_cast<unsigned int>(g) * a + 127u) / 255u);
-                dst[2] = static_cast<Rml::byte>((static_cast<unsigned int>(b) * a + 127u) / 255u);
-                dst[3] = static_cast<Rml::byte>(a);
+            int output_width = width;
+            int output_height = height;
+            if (embedded_project_preview && max_size > 0 &&
+                std::max(width, height) > max_size) {
+                const double scale = static_cast<double>(max_size) /
+                                     static_cast<double>(std::max(width, height));
+                output_width = std::max(1, static_cast<int>(std::lround(width * scale)));
+                output_height = std::max(1, static_cast<int>(std::lround(height * scale)));
             }
-            result.width = width;
-            result.height = height;
+            const std::size_t pixel_count =
+                static_cast<std::size_t>(output_width) *
+                static_cast<std::size_t>(output_height);
+            result.pixels.resize(pixel_count * 4u);
+            for (int y = 0; y < output_height; ++y) {
+                const int source_y = std::min(
+                    height - 1,
+                    static_cast<int>((static_cast<std::int64_t>(y) * height) /
+                                     output_height));
+                for (int x = 0; x < output_width; ++x) {
+                    const int source_x = std::min(
+                        width - 1,
+                        static_cast<int>((static_cast<std::int64_t>(x) * width) /
+                                         output_width));
+                    const auto source_index =
+                        (static_cast<std::size_t>(source_y) *
+                             static_cast<std::size_t>(width) +
+                         static_cast<std::size_t>(source_x)) *
+                        static_cast<std::size_t>(channels);
+                    const unsigned char* src = pixels + source_index;
+                    const unsigned char r = src[0];
+                    const unsigned char g = channels > 1 ? src[1] : r;
+                    const unsigned char b = channels > 2 ? src[2] : r;
+                    const unsigned char a = channels > 3 ? src[3] : 255;
+                    Rml::byte* dst = result.pixels.data() +
+                                     (static_cast<std::size_t>(y) *
+                                          static_cast<std::size_t>(output_width) +
+                                      static_cast<std::size_t>(x)) *
+                                         4u;
+                    dst[0] = static_cast<Rml::byte>(
+                        (static_cast<unsigned int>(r) * a + 127u) / 255u);
+                    dst[1] = static_cast<Rml::byte>(
+                        (static_cast<unsigned int>(g) * a + 127u) / 255u);
+                    dst[2] = static_cast<Rml::byte>(
+                        (static_cast<unsigned int>(b) * a + 127u) / 255u);
+                    dst[3] = static_cast<Rml::byte>(a);
+                }
+            }
+            result.width = output_width;
+            result.height = output_height;
         }
     } catch (const std::exception& e) {
         LOG_WARN("Failed to decode preview texture '{}': {}", lfs::core::path_to_utf8(path), e.what());

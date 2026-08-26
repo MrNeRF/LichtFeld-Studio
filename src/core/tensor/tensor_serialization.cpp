@@ -7,6 +7,7 @@
 #include "core/tensor_serialization_sink.hpp"
 
 #include <fstream>
+#include <ios>
 #include <limits>
 #include <string_view>
 #include <vector>
@@ -150,59 +151,98 @@ namespace lfs::core {
         return os;
     }
 
+    namespace {
+
+        struct ParsedTensorPayload {
+            DataType dtype = DataType::Float32;
+            TensorShape shape;
+            uint64_t payload_bytes = 0;
+        };
+
+        ParsedTensorPayload parse_serialized_tensor_header(std::istream& is) {
+            TensorFileHeader header{};
+            serialization_detail::read_exact(is, &header, sizeof(header), "tensor header");
+
+            if (header.magic != TENSOR_FILE_MAGIC) {
+                throw std::runtime_error("Invalid tensor file: wrong magic number");
+            }
+            if (header.version != TENSOR_FILE_VERSION) {
+                throw std::runtime_error("Unsupported tensor file version");
+            }
+            if (header.rank > MAX_TENSOR_RANK) {
+                throw std::runtime_error("Invalid tensor file: rank exceeds supported maximum");
+            }
+            if (header.dtype > static_cast<uint8_t>(DataType::Bool)) {
+                throw std::runtime_error("Invalid tensor file: unsupported dtype");
+            }
+            if (header.device > static_cast<uint8_t>(Device::CUDA)) {
+                throw std::runtime_error("Invalid tensor file: unsupported device");
+            }
+
+            std::vector<size_t> dims(header.rank);
+            uint64_t checked_numel = 1;
+            for (uint16_t i = 0; i < header.rank; ++i) {
+                uint64_t d = 0;
+                serialization_detail::read_exact(is, &d, sizeof(d), "tensor dimension");
+                if (d > std::numeric_limits<size_t>::max()) {
+                    throw std::runtime_error("Invalid tensor file: dimension exceeds platform size");
+                }
+                if (d != 0 && checked_numel > std::numeric_limits<uint64_t>::max() / d) {
+                    throw std::runtime_error("Invalid tensor file: shape element count overflows");
+                }
+                checked_numel *= d;
+                dims[i] = static_cast<size_t>(d);
+            }
+
+            const DataType dtype = static_cast<DataType>(header.dtype);
+            if (checked_numel != header.numel) {
+                throw std::runtime_error("Shape elements mismatch");
+            }
+            const auto item_size = dtype_size(dtype);
+            if (item_size == 0 ||
+                header.numel > std::numeric_limits<uint64_t>::max() / item_size) {
+                throw std::runtime_error("Invalid tensor file: byte size overflows");
+            }
+            const uint64_t payload_bytes = header.numel * item_size;
+            if (payload_bytes > MAX_SERIALIZED_TENSOR_BYTES) {
+                throw std::runtime_error("Invalid tensor file: payload exceeds byte budget");
+            }
+            serialization_detail::require_remaining_bytes(is, payload_bytes, "tensor payload");
+            return ParsedTensorPayload{
+                .dtype = dtype,
+                .shape = TensorShape(dims),
+                .payload_bytes = payload_bytes,
+            };
+        }
+
+        void seek_serialized_payload(std::istream& is, const uint64_t payload_bytes) {
+            if (payload_bytes == 0) {
+                return;
+            }
+            if (payload_bytes >
+                static_cast<uint64_t>(std::numeric_limits<std::streamoff>::max())) {
+                throw std::runtime_error("Serialized tensor payload exceeds streamoff");
+            }
+            is.seekg(static_cast<std::streamoff>(payload_bytes), std::ios::cur);
+            if (!is) {
+                throw std::runtime_error("Failed to skip serialized tensor payload");
+            }
+        }
+
+    } // namespace
+
+    namespace serialization_detail {
+        void skip_serialized_tensor(std::istream& is) {
+            const auto parsed = parse_serialized_tensor_header(is);
+            seek_serialized_payload(is, parsed.payload_bytes);
+        }
+    } // namespace serialization_detail
+
     std::istream& operator>>(std::istream& is, Tensor& tensor) {
-        TensorFileHeader header{};
-        serialization_detail::read_exact(is, &header, sizeof(header), "tensor header");
-
-        if (header.magic != TENSOR_FILE_MAGIC) {
-            throw std::runtime_error("Invalid tensor file: wrong magic number");
-        }
-        if (header.version != TENSOR_FILE_VERSION) {
-            throw std::runtime_error("Unsupported tensor file version");
-        }
-        if (header.rank > MAX_TENSOR_RANK) {
-            throw std::runtime_error("Invalid tensor file: rank exceeds supported maximum");
-        }
-        if (header.dtype > static_cast<uint8_t>(DataType::Bool)) {
-            throw std::runtime_error("Invalid tensor file: unsupported dtype");
-        }
-        if (header.device > static_cast<uint8_t>(Device::CUDA)) {
-            throw std::runtime_error("Invalid tensor file: unsupported device");
-        }
-
-        std::vector<size_t> dims(header.rank);
-        uint64_t checked_numel = 1;
-        for (uint16_t i = 0; i < header.rank; ++i) {
-            uint64_t d = 0;
-            serialization_detail::read_exact(is, &d, sizeof(d), "tensor dimension");
-            if (d > std::numeric_limits<size_t>::max()) {
-                throw std::runtime_error("Invalid tensor file: dimension exceeds platform size");
-            }
-            if (d != 0 && checked_numel > std::numeric_limits<uint64_t>::max() / d) {
-                throw std::runtime_error("Invalid tensor file: shape element count overflows");
-            }
-            checked_numel *= d;
-            dims[i] = static_cast<size_t>(d);
-        }
-
-        const DataType dtype = static_cast<DataType>(header.dtype);
-        if (checked_numel != header.numel) {
-            throw std::runtime_error("Shape elements mismatch");
-        }
-        const auto item_size = dtype_size(dtype);
-        if (item_size == 0 ||
-            header.numel > std::numeric_limits<uint64_t>::max() / item_size) {
-            throw std::runtime_error("Invalid tensor file: byte size overflows");
-        }
-        const uint64_t payload_bytes = header.numel * item_size;
-        if (payload_bytes > MAX_SERIALIZED_TENSOR_BYTES) {
-            throw std::runtime_error("Invalid tensor file: payload exceeds byte budget");
-        }
-        serialization_detail::require_remaining_bytes(is, payload_bytes, "tensor payload");
-
-        const TensorShape shape(dims);
-        Tensor loaded = Tensor::empty(shape, Device::CPU, dtype);
-        serialization_detail::read_exact(is, loaded.data_ptr(), loaded.bytes(), "tensor payload");
+        const auto parsed = parse_serialized_tensor_header(is);
+        Tensor loaded = Tensor::empty(parsed.shape, Device::CPU, parsed.dtype);
+        serialization_detail::read_exact(
+            is, loaded.data_ptr(), loaded.bytes(), "tensor payload");
         tensor = std::move(loaded);
         return is;
     }

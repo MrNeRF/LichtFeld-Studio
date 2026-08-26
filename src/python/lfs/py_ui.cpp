@@ -56,6 +56,7 @@
 #include "visualizer/theme/theme.hpp"
 #include "visualizer/tools/unified_tool_registry.hpp"
 #include "visualizer/training/training_manager.hpp"
+#include <RmlUi/Core/Core.h>
 #include <typeinfo>
 
 #include "config.h"
@@ -260,8 +261,6 @@ namespace lfs::python {
         nb::object
             g_stop_training_confirmation_callback;
         nb::object g_open_camera_preview_callback;
-        nb::object g_save_asset_callback;
-
         constexpr std::string_view LEGACY_POPUP_PANEL = "__legacy_popup__";
         constexpr std::string_view LEGACY_POPUP_SECTION = "draw";
         const std::string LEGACY_POPUP_PANEL_STR{LEGACY_POPUP_PANEL};
@@ -2716,6 +2715,42 @@ namespace lfs::python {
         register_ui_modals(m);
         register_rml_bindings(m);
 
+        m.def(
+            "begin_drag_payload",
+            [](std::string type, std::string data, std::string label) {
+                auto* const manager = static_cast<lfs::vis::gui::RmlUIManager*>(
+                    lfs::python::get_rml_manager());
+                if (!manager)
+                    throw std::runtime_error("RmlUI drag payloads require an initialized UI");
+                const auto token = manager->beginDragPayload(
+                    std::move(type), std::move(data), std::move(label));
+                if (token == 0)
+                    throw nb::value_error("drag payload type and data must not be empty");
+                lfs::python::request_redraw();
+                return token;
+            },
+            nb::arg("type"), nb::arg("data"), nb::arg("label") = "",
+            "Begin one typed cross-context RmlUI drag payload and return its source token");
+        m.def(
+            "end_drag_payload",
+            [](const std::uint64_t token) {
+                auto* const manager = static_cast<lfs::vis::gui::RmlUIManager*>(
+                    lfs::python::get_rml_manager());
+                if (manager && manager->endDragPayload(token))
+                    lfs::python::request_redraw();
+            },
+            nb::arg("token"),
+            "Mark a cross-context RmlUI drag payload released for target resolution");
+        m.def(
+            "cancel_drag_payload",
+            [](const std::uint64_t token) {
+                auto* const manager = static_cast<lfs::vis::gui::RmlUIManager*>(
+                    lfs::python::get_rml_manager());
+                if (manager && manager->cancelDragPayload(token))
+                    lfs::python::request_redraw();
+            },
+            nb::arg("token"), "Cancel a cross-context RmlUI drag payload");
+
         // Hot-reload redraw request functions
         m.def(
             "request_redraw",
@@ -3212,6 +3247,19 @@ namespace lfs::python {
             "title is accepted for compatibility and currently ignored.");
 
         m.def(
+            "open_project_file_dialog",
+            [](const std::string& start_dir) -> std::string {
+                std::filesystem::path start_path;
+                if (!start_dir.empty()) {
+                    start_path = lfs::core::utf8_to_path(start_dir);
+                }
+                auto result = lfs::vis::gui::OpenProjectFileDialog(start_path);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("start_dir") = "",
+            "Open a file dialog to select a LichtFeld project (.licht). Returns empty string if cancelled.");
+
+        m.def(
             "open_ply_file_dialog",
             [](const std::string& start_dir) -> std::string {
                 std::filesystem::path start_path;
@@ -3685,7 +3733,8 @@ namespace lfs::python {
                                         event.new_project,
                                         lfs::core::
                                             path_to_utf8(
-                                                event.path));
+                                                event.path),
+                                        event.keep_asset_manager_open);
                                 } catch (
                                     const std::
                                         exception& error) {
@@ -3758,7 +3807,8 @@ namespace lfs::python {
                                         lfs::core::
                                             path_to_utf8(
                                                 event.path),
-                                        event.discard_changes);
+                                        event.discard_changes,
+                                        event.keep_asset_manager_open);
                                 } catch (
                                     const std::
                                         exception& error) {
@@ -4394,6 +4444,14 @@ namespace lfs::python {
             nb::arg("texture_id"), "Release a UI texture");
 
         m.def(
+            "release_rml_texture",
+            [](const std::string& source) {
+                return Rml::ReleaseTexture(source);
+            },
+            nb::arg("source"),
+            "Release a cached RmlUi texture by source URL");
+
+        m.def(
             "get_image_info",
             [](const std::string& path) -> nb::tuple {
                 auto [w, h, c] = lfs::core::get_image_info(lfs::core::utf8_to_path(path));
@@ -4796,22 +4854,6 @@ namespace lfs::python {
         m.def("free_plugin_textures", &free_plugin_textures, nb::arg("plugin_name"),
               "Free all dynamic textures associated with a plugin");
 
-        // Asset Manager save callback
-        m.def(
-            "set_save_asset_callback", [](nb::callable save_cb) {
-                  g_save_asset_callback = std::move(save_cb);
-                  set_save_asset_callback(
-                      [](const char* node_name) {
-                          if (g_save_asset_callback) {
-                              try {
-                                  nb::gil_scoped_acquire gil;
-                                  g_save_asset_callback(node_name);
-                              } catch (const std::exception& e) {
-                                  LOG_ERROR("Save asset callback failed: {}", e.what());
-                              }
-                          }
-                      }); }, nb::arg("save_cb"), "Set callback for Save Asset operation from scene graph");
-
         nb::class_<PyDynamicTexture>(m, "DynamicTexture")
             .def(nb::init<>())
             .def(
@@ -5050,6 +5092,54 @@ namespace lfs::python {
                 vis::clearWorkingDirectoryPreference();
             },
             "Clear the working folder preference so the default root is used.");
+
+        m.def(
+            "get_asset_manager_directory",
+            []() -> std::string {
+                nb::gil_scoped_release release;
+                return lfs::core::path_to_utf8(vis::loadAssetManagerDirectoryPreference());
+            },
+            "Get the effective Asset Manager folder (absolute).");
+
+        m.def(
+            "get_asset_manager_directory_preference",
+            []() -> std::string {
+                nb::gil_scoped_release release;
+                return lfs::core::path_to_utf8(vis::assetManagerDirectoryPreferenceRaw());
+            },
+            "Get the raw Asset Manager folder preference. Empty means the default folder.");
+
+        m.def(
+            "get_default_asset_manager_directory",
+            []() -> std::string {
+                nb::gil_scoped_release release;
+                return lfs::core::path_to_utf8(vis::defaultAssetManagerDirectory());
+            },
+            "Get the default Asset Manager folder under the LichtFeld user root.");
+
+        m.def(
+            "set_asset_manager_directory",
+            [](const std::string& path) -> std::string {
+                lfs::Status result;
+                {
+                    nb::gil_scoped_release release;
+                    result = vis::setAssetManagerDirectoryPreference(
+                        lfs::core::utf8_to_path(path));
+                }
+                if (!result)
+                    return std::string(result.error().user_message());
+                return {};
+            },
+            nb::arg("path"),
+            "Set the Asset Manager folder. Returns empty on success or a user-facing error.");
+
+        m.def(
+            "clear_asset_manager_directory",
+            [] {
+                nb::gil_scoped_release release;
+                vis::clearAssetManagerDirectoryPreference();
+            },
+            "Clear the Asset Manager folder preference so the default is used.");
 
         m.def(
             "get_mcp_status",

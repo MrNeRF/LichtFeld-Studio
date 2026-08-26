@@ -949,6 +949,17 @@ def modal_press(label: str) -> bool:
     Press an enabled modal button by label. Returns False if no matching enabled button.
     """
 
+def begin_drag_payload(type: str, data: str, label: str = '') -> int:
+    """
+    Begin one typed cross-context RmlUI drag payload and return its source token
+    """
+
+def end_drag_payload(token: int) -> None:
+    """Mark a cross-context RmlUI drag payload released for target resolution"""
+
+def cancel_drag_payload(token: int) -> None:
+    """Cancel a cross-context RmlUI drag payload"""
+
 def request_redraw(delay: float = 0.0) -> None:
     """
     Request a UI redraw; with delay > 0, schedule it no later than that many seconds from now.
@@ -1861,6 +1872,11 @@ def open_folder_dialog(title: str = 'Select Folder', start_dir: str = '') -> str
     Open a folder selection dialog. Returns empty string if cancelled. title is accepted for compatibility and currently ignored.
     """
 
+def open_project_file_dialog(start_dir: str = '') -> str:
+    """
+    Open a file dialog to select a LichtFeld project (.licht). Returns empty string if cancelled.
+    """
+
 def open_ply_file_dialog(start_dir: str = '') -> str:
     """
     Open a file dialog to select a splat file (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz). Returns empty string if cancelled.
@@ -2267,6 +2283,9 @@ def load_thumbnail(path: str, max_size: int) -> tuple:
 def release_texture(texture_id: int) -> None:
     """Release a UI texture"""
 
+def release_rml_texture(source: str) -> bool:
+    """Release a cached RmlUi texture by source URL"""
+
 def get_image_info(path: str) -> tuple:
     """
     Get image dimensions without loading pixel data, returns (width, height, channels)
@@ -2524,9 +2543,6 @@ def free_plugin_icons(plugin_name: str) -> None:
 def free_plugin_textures(plugin_name: str) -> None:
     """Free all dynamic textures associated with a plugin"""
 
-def set_save_asset_callback(save_cb: Callable) -> None:
-    """Set callback for Save Asset operation from scene graph"""
-
 class DynamicTexture:
     @overload
     def __init__(self) -> None: ...
@@ -2622,6 +2638,25 @@ def set_working_directory(path: str) -> str:
 
 def clear_working_directory() -> None:
     """Clear the working folder preference so the default root is used."""
+
+def get_asset_manager_directory() -> str:
+    """Get the effective Asset Manager folder (absolute)."""
+
+def get_asset_manager_directory_preference() -> str:
+    """
+    Get the raw Asset Manager folder preference. Empty means the default folder.
+    """
+
+def get_default_asset_manager_directory() -> str:
+    """Get the default Asset Manager folder under the LichtFeld user root."""
+
+def set_asset_manager_directory(path: str) -> str:
+    """
+    Set the Asset Manager folder. Returns empty on success or a user-facing error.
+    """
+
+def clear_asset_manager_directory() -> None:
+    """Clear the Asset Manager folder preference so the default is used."""
 
 def get_mcp_status() -> dict:
     """Get current MCP HTTP server runtime status"""

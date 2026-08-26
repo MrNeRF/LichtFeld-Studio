@@ -3152,7 +3152,10 @@ namespace lfs::io::project {
         impl->superblock = SuperblockInfo{
             .format = CURRENT_CONTAINER_VERSION,
             .role = ContainerRole::Master,
-            .project_uuid = source_result->superblock().project_uuid,
+            .project_uuid =
+                options.new_project_uuid.is_nil()
+                    ? source_result->superblock().project_uuid
+                    : options.new_project_uuid,
             .file_uuid = *file_uuid,
             .creation_time_unix_ns =
                 options.creation_time_unix_ns != 0

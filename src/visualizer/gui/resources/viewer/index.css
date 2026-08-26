@@ -199,6 +199,9 @@ button {
 #controlsWrap > #buttonsContainer #measure.active {
   color: #F60;
 }
+#controlsWrap > #buttonsContainer #orthoCamera.active {
+  color: #F60;
+}
 
 /* Measurement tool overlay */
 #measureToolSvg,

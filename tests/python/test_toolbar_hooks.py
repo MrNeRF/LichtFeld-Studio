@@ -1254,7 +1254,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
         "origin_pivot",
         "bounds_center_pivot",
     )
-    utility_toolbar_tooltip_keys = ()
+    utility_toolbar_tooltip_keys = ("asset_manager",)
     selection_tooltip_keys = (
         "selection_panel",
         "selection_depth_range",
@@ -1387,6 +1387,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
             "home",
             "fullscreen",
             "toggle_ui",
+            "asset_manager",
         )
         forbidden_shortcut_fragments = (
             "(1)",
@@ -1519,6 +1520,7 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     model = _DataModelStub()
     lf_stub = sys.modules["lichtfeld"]
     panel_enabled = {
+        "lfs.asset_manager": True,
         "lfs.preferences": True,
         "lfs.plugin_marketplace": True,
     }
@@ -1548,6 +1550,7 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
         "tr",
         lambda key: {
             "toolbar.focus_selection": "Focus Selection",
+            "toolbar.asset_manager": "Assets",
             "menu.tools.plugin_marketplace": "Plugins",
             "window.preferences": "Preferences",
             "toolbar.viewport_export": "Export",
@@ -1595,6 +1598,7 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     assert [button["button_id"] for button in extra_buttons] == [
         "util-preferences",
         "util-viewport-export",
+        "util-asset-manager",
         "util-plugin-marketplace",
         "util-sequencer",
     ]
@@ -1609,11 +1613,24 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     assert extra_by_id["util-viewport-export"]["icon_src"] == "../icon/sequencer/export.png"
     assert extra_by_id["util-viewport-export"]["tooltip_text"] == "Export"
     assert extra_by_id["util-viewport-export"]["selected"] is False
+    assert extra_by_id["util-asset-manager"]["action"] == "toggle_panel"
+    assert extra_by_id["util-asset-manager"]["value"] == "lfs.asset_manager"
+    assert extra_by_id["util-asset-manager"]["icon_src"] == "../icon/archive.png"
+    assert extra_by_id["util-asset-manager"]["tooltip_text"] == "Assets"
+    assert extra_by_id["util-asset-manager"]["selected"] is True
     assert extra_by_id["util-plugin-marketplace"]["action"] == "toggle_panel"
     assert extra_by_id["util-plugin-marketplace"]["value"] == "lfs.plugin_marketplace"
     assert extra_by_id["util-plugin-marketplace"]["icon_src"] == "../icon/puzzle.png"
     assert extra_by_id["util-plugin-marketplace"]["tooltip_text"] == "Plugins"
     assert extra_by_id["util-plugin-marketplace"]["selected"] is True
+
+    model.handle.record_updates.clear()
+    model.bound_events["toolbar_action"](None, None, ["toggle_panel", "lfs.asset_manager"])
+
+    assert panel_enabled["lfs.asset_manager"] is False
+    extra_buttons = model.handle.record_updates["utility_extra_buttons"]
+    extra_by_id = {button["button_id"]: button for button in extra_buttons}
+    assert extra_by_id["util-asset-manager"]["selected"] is False
 
     model.handle.record_updates.clear()
     model.bound_events["toolbar_action"](None, None, ["toggle_panel", "lfs.plugin_marketplace"])

@@ -88,6 +88,10 @@ namespace lfs::vis {
         }
         void setShutdownRequestedCallback(std::function<void()> callback) override;
         std::expected<void, std::string> startTraining() override;
+        [[nodiscard]] ProjectTrainingSessionState
+        projectTrainingSessionState() const override;
+        lfs::Result<void>
+        restoreProjectTrainingSession(bool then_start = false) override;
         [[nodiscard]] std::optional<int>
         trainingStartOverwriteConflict() override;
         lfs::Result<void>
@@ -246,6 +250,13 @@ namespace lfs::vis {
         JobRegistry job_registry_;
         friend class gui::GuiManager;
         friend class project::ProjectLifecycle;
+        friend class VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnSave_Test;
+        friend class VisualizerImplResetTest_StoredSessionAtPrmsIterationsReportsCompleted_Test;
+        friend class VisualizerImplResetTest_StoredSessionBelowPrmsIterationsReportsNotCompleted_Test;
+        friend class VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnAutosave_Test;
+        friend class VisualizerImplResetTest_EditModeWithoutHydratedSessionDropsCheckpoint_Test;
+        friend class VisualizerImplResetTest_RestoreThenTrainWritesNewCheckpoint_Test;
+        friend class VisualizerImplResetTest_HeadlessOpenPrintsHydrationStagesWhenBenchPathSet_Test;
         friend class VisualizerImplResetTest_ResetTrainingPreservesExplicitInitPath_Test;
         friend class VisualizerImplResetTest_DirtyProjectSwitchRequiresExplicitDiscardAuthorization_Test;
         friend class VisualizerImplResetTest_NewProjectDirtyGateRunsBelowEveryCommandEntry_Test;
@@ -384,6 +395,8 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_PreTrainingProjectSaveRestoresCameraEnabledAndHidden_Test;
         friend class VisualizerImplResetTest_PostTrainingProjectSaveRestoresCameraEnabledAndHidden_Test;
         friend class VisualizerImplResetTest_CaptureOmitsPlySequenceClipAndCollapsedUuid_Test;
+        friend class VisualizerImplResetTest_AssetManagerProjectRestorePreservesLeftDockWidth_Test;
+        friend class VisualizerImplResetTest_SaveAsAssignsNewProjectIdentity_Test;
 
         // Allow ToolContext to access GUI manager for logging
         friend class ToolContext;
@@ -439,10 +452,12 @@ namespace lfs::vis {
         void handleOpenProject(
             const std::filesystem::path& path,
             ProjectSwitchDisposition disposition,
-            bool stop_training = false);
+            bool stop_training = false,
+            bool keep_asset_manager_open = false);
         void performOpenProject(
             const std::filesystem::path& path,
-            ProjectSwitchDisposition disposition);
+            ProjectSwitchDisposition disposition,
+            bool keep_asset_manager_open = false);
         [[nodiscard]] bool
         shouldDeferProjectSwitchForTraining() const;
         void requestStopThenPendingAction();
@@ -589,6 +604,8 @@ namespace lfs::vis {
         ProjectSwitchDisposition
             pending_open_disposition_ =
                 ProjectSwitchDisposition::RequireClean;
+        bool pending_open_keep_asset_manager_open_ = false;
+        bool keep_asset_manager_open_after_restore_ = false;
         std::vector<lfs::core::events::cmd::LoadFile>
             pending_load_files_;
         int pending_training_completion_refresh_frames_ = 0;

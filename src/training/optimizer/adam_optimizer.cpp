@@ -19,6 +19,7 @@
 #include "lfs/training/sh_value_storage.hpp"
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cuda_runtime.h>
 #include <optional>
@@ -1784,6 +1785,7 @@ namespace lfs::training {
     }
 
     void AdamOptimizer::deserialize(std::istream& is) {
+        const auto deserialize_started = std::chrono::steady_clock::now();
         uint32_t magic = 0, version = 0;
         lfs::core::serialization_detail::read_exact(is, &magic, sizeof(magic), "Adam magic");
         lfs::core::serialization_detail::read_exact(is, &version, sizeof(version), "Adam version");
@@ -1950,8 +1952,6 @@ namespace lfs::training {
                         throw std::runtime_error("Invalid AdamOptimizer checkpoint: joint packed shape mismatch");
                     }
                 }
-                state.exp_avg = state.exp_avg.cuda();
-                state.joint_bounds = state.joint_bounds.cuda();
             }
 
             // Serialized capacity is advisory and may be attacker-controlled.
@@ -1962,10 +1962,44 @@ namespace lfs::training {
             loaded_states.emplace(std::move(name), std::move(state));
         }
 
+        const auto cpu_decode_finished = std::chrono::steady_clock::now();
+        // Tensor::to(CUDA, stream) rehomes onto that handle; do not destroy it.
+        cudaStream_t upload_stream = lfs::core::getCurrentCUDAStream();
+        for (auto& [state_name, state] : loaded_states) {
+            (void)state_name;
+            auto upload = [&](lfs::core::Tensor& tensor) {
+                if (!tensor.is_valid() ||
+                    tensor.device() == lfs::core::Device::CUDA) {
+                    return;
+                }
+                if (upload_stream != nullptr) {
+                    tensor = tensor.to(lfs::core::Device::CUDA, upload_stream);
+                    return;
+                }
+                tensor = tensor.to(lfs::core::Device::CUDA);
+                upload_stream = tensor.stream();
+            };
+            upload(state.exp_avg);
+            upload(state.joint_bounds);
+        }
+        if (upload_stream != nullptr) {
+            LFS_CUDA_CHECK(cudaStreamSynchronize(upload_stream));
+        }
+        const auto gpu_upload_finished = std::chrono::steady_clock::now();
+
         config_ = std::move(loaded_config);
         states_ = std::move(loaded_states);
 
         // Gradient buffers are transient and allocated lazily by get_grad().
+        const auto milliseconds = [](const auto begin, const auto end) {
+            return std::chrono::duration<double, std::milli>(end - begin).count();
+        };
+        LOG_DEBUG(
+            "Adam deserialize stages: states={} cpu_decode={:.3f} ms gpu_upload={:.3f} ms total={:.3f} ms",
+            num_states,
+            milliseconds(deserialize_started, cpu_decode_finished),
+            milliseconds(cpu_decode_finished, gpu_upload_finished),
+            milliseconds(deserialize_started, gpu_upload_finished));
         LOG_DEBUG("Deserialized AdamOptimizer: {} states", num_states);
     }
 

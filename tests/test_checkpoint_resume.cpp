@@ -16,6 +16,7 @@
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <utility>
@@ -30,6 +31,7 @@
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/scene.hpp"
+#include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "core/uuid.hpp"
 #include "io/loader.hpp"
@@ -253,6 +255,25 @@ namespace {
             lfs::core::Tensor::from_vector(rotations, {count, size_t{4}}, device),
             lfs::core::Tensor::zeros({count, size_t{1}}, device, lfs::core::DataType::Float32),
             1.0f);
+    }
+
+    [[nodiscard]] uint64_t tensor_fingerprint(const lfs::core::Tensor& tensor) {
+        if (!tensor.is_valid() || tensor.numel() == 0) {
+            return 0;
+        }
+        const auto host = tensor.cpu().contiguous();
+        const auto* bytes = static_cast<const std::uint8_t*>(host.data_ptr());
+        const std::size_t n = host.bytes();
+        uint64_t hash = n ^ (static_cast<uint64_t>(host.dtype()) << 32);
+        if (n == 0 || bytes == nullptr) {
+            return hash;
+        }
+        const std::size_t stride = std::max<std::size_t>(1, n / 32);
+        for (std::size_t i = 0; i < n; i += stride) {
+            hash = (hash * 1099511628211ull) ^ bytes[i];
+        }
+        hash = (hash * 1099511628211ull) ^ bytes[n - 1];
+        return hash;
     }
 
     void add_checkpoint_test_camera(lfs::core::Scene& scene) {
@@ -1637,6 +1658,33 @@ namespace {
             std::make_tuple("mcmc", 0, 1200, 2100)),
         TestName);
 
+    TEST(CheckpointSplatSkipTest, SkipSerializedMatchesDeserializeStreamPosition) {
+        auto splat = make_checkpoint_test_splat(17, lfs::core::Device::CUDA, 3);
+        ASSERT_NE(splat, nullptr);
+        splat->set_frozen_ranges({{3, 2}, {10, 1}});
+
+        std::ostringstream encoded(std::ios::binary);
+        splat->serialize(encoded);
+        const auto bytes = encoded.str();
+        ASSERT_FALSE(bytes.empty());
+
+        std::istringstream decoded(bytes, std::ios::binary);
+        lfs::core::SplatData roundtrip;
+        roundtrip.deserialize(decoded);
+        const auto after_deserialize = decoded.tellg();
+        ASSERT_NE(after_deserialize, std::streampos(-1));
+
+        std::istringstream skipped(bytes, std::ios::binary);
+        lfs::core::SplatData::skip_serialized(skipped);
+        const auto after_skip = skipped.tellg();
+        ASSERT_NE(after_skip, std::streampos(-1));
+        EXPECT_EQ(after_skip, after_deserialize);
+        EXPECT_EQ(static_cast<std::size_t>(after_skip), bytes.size());
+        EXPECT_EQ(roundtrip.size(), splat->size());
+        EXPECT_EQ(tensor_fingerprint(roundtrip.means()), tensor_fingerprint(splat->means()));
+        EXPECT_EQ(roundtrip.frozen_ranges().size(), 2u);
+    }
+
     class ProjectCheckpointTrainerInstall
         : public ::testing::Test {
     protected:
@@ -1766,54 +1814,118 @@ namespace {
             "bicycle";
         ckpt_params.dataset.output_path = output_path;
 
-        lfs::core::Scene scene;
-        const auto hydration = document->hydrate(scene);
-        ASSERT_TRUE(hydration)
-            << lfs::format_for_developer(
-                   hydration.error());
-        ASSERT_TRUE(hydration->trainer_state_pending);
-        ASSERT_TRUE(hydration->checkpoint_header);
-        const auto* display =
-            scene.getTrainingModel();
-        ASSERT_NE(display, nullptr);
-        const size_t display_count = display->size();
-        ASSERT_GT(display_count, 0u);
+        size_t display_count = 0;
+        uint64_t display_means = 0;
+        uint64_t display_sh0 = 0;
+        uint64_t display_opacity = 0;
+        uint64_t reused_adam = 0;
+        uint64_t reused_bounds = 0;
+        int expected_iteration = 0;
+        {
+            lfs::core::Scene scene;
+            const auto hydration = document->hydrate(scene);
+            ASSERT_TRUE(hydration)
+                << lfs::format_for_developer(
+                       hydration.error());
+            ASSERT_TRUE(hydration->trainer_state_pending);
+            ASSERT_TRUE(hydration->checkpoint_header);
+            const auto* display =
+                scene.getTrainingModel();
+            ASSERT_NE(display, nullptr);
+            display_count = display->size();
+            ASSERT_GT(display_count, 0u);
+            display_means = tensor_fingerprint(display->means());
+            display_sh0 = tensor_fingerprint(display->sh0());
+            display_opacity = tensor_fingerprint(display->opacity_raw());
+            expected_iteration = hydration->checkpoint_header->iteration;
 
-        auto installed =
-            lfs::training::
-                installTrainerFromProjectCheckpoint(
-                    scene, *document,
-                    checkpoint_uuids.front(),
-                    ckpt_params,
-                    lfs::core::path_to_utf8(
-                        project_path),
-                    hydration->checkpoint_header
-                        ->iteration);
-        ASSERT_TRUE(installed.has_value())
-            << installed.error();
-        ASSERT_NE(installed->trainer, nullptr);
-        EXPECT_EQ(
-            installed->iteration,
-            hydration->checkpoint_header->iteration);
-        EXPECT_EQ(
-            installed->trainer->get_current_iteration(),
-            hydration->checkpoint_header->iteration);
-        EXPECT_EQ(
-            static_cast<size_t>(
+            auto installed =
+                lfs::training::
+                    installTrainerFromProjectCheckpoint(
+                        scene, *document,
+                        checkpoint_uuids.front(),
+                        ckpt_params,
+                        lfs::core::path_to_utf8(
+                            project_path),
+                        expected_iteration);
+            ASSERT_TRUE(installed.has_value())
+                << installed.error();
+            ASSERT_NE(installed->trainer, nullptr);
+            EXPECT_EQ(installed->iteration, expected_iteration);
+            EXPECT_EQ(
+                installed->trainer->get_current_iteration(),
+                expected_iteration);
+            EXPECT_EQ(
+                static_cast<size_t>(
+                    installed->trainer->get_strategy()
+                        .get_model()
+                        .size()),
+                display_count);
+            EXPECT_GT(
                 installed->trainer->get_strategy()
-                    .get_model()
-                    .size()),
-            display_count);
-        EXPECT_GT(
-            installed->trainer->get_strategy()
-                .get_optimizer()
-                .get_lr(),
-            0.0f);
-        EXPECT_EQ(
-            scene.getTrainingModel()->size(),
-            display_count);
+                    .get_optimizer()
+                    .get_lr(),
+                0.0f);
+            EXPECT_EQ(
+                scene.getTrainingModel()->size(),
+                display_count);
 
-        installed->trainer->shutdown();
+            const auto& reused_model =
+                installed->trainer->get_strategy().get_model();
+            EXPECT_EQ(tensor_fingerprint(reused_model.means()), display_means);
+            EXPECT_EQ(tensor_fingerprint(reused_model.sh0()), display_sh0);
+            EXPECT_EQ(
+                tensor_fingerprint(reused_model.opacity_raw()), display_opacity);
+            const auto* reused_means_state =
+                installed->trainer->get_strategy().get_optimizer().get_state(
+                    lfs::training::ParamType::Means);
+            ASSERT_NE(reused_means_state, nullptr);
+            ASSERT_TRUE(reused_means_state->exp_avg.is_valid());
+            reused_adam = tensor_fingerprint(reused_means_state->exp_avg);
+            reused_bounds = tensor_fingerprint(reused_means_state->joint_bounds);
+            installed->trainer->shutdown();
+            installed->trainer.reset();
+        }
+        lfs::core::Tensor::trim_memory_pool();
+
+        {
+            lfs::core::Scene scene_old;
+            const auto hydration_old = document->hydrate(scene_old);
+            ASSERT_TRUE(hydration_old)
+                << lfs::format_for_developer(hydration_old.error());
+            auto trainer_old =
+                std::make_unique<lfs::training::Trainer>(scene_old);
+            auto init_old = trainer_old->initialize(ckpt_params);
+            ASSERT_TRUE(init_old) << init_old.error();
+            std::optional<lfs::training::CheckpointLoadResult> old_loaded;
+            ASSERT_TRUE(checkpoint->visit_stream(
+                [&](std::istream& source, const std::uint64_t bytes)
+                    -> lfs::Result<void> {
+                    old_loaded = trainer_old->load_checkpoint(
+                        source, bytes,
+                        lfs::core::path_to_utf8(project_path));
+                    return {};
+                }))
+                << "old-path CKPT stream failed";
+            ASSERT_TRUE(old_loaded.has_value());
+            ASSERT_TRUE(*old_loaded) << (*old_loaded).error();
+            const auto& old_model =
+                trainer_old->get_strategy().get_model();
+            EXPECT_EQ(tensor_fingerprint(old_model.means()), display_means);
+            EXPECT_EQ(tensor_fingerprint(old_model.sh0()), display_sh0);
+            EXPECT_EQ(
+                tensor_fingerprint(old_model.opacity_raw()), display_opacity);
+            const auto* old_means_state =
+                trainer_old->get_strategy().get_optimizer().get_state(
+                    lfs::training::ParamType::Means);
+            ASSERT_NE(old_means_state, nullptr);
+            EXPECT_EQ(tensor_fingerprint(old_means_state->exp_avg), reused_adam);
+            EXPECT_EQ(
+                tensor_fingerprint(old_means_state->joint_bounds), reused_bounds);
+            trainer_old->shutdown();
+            trainer_old.reset();
+        }
+        lfs::core::Tensor::trim_memory_pool();
         std::filesystem::remove_all(output_path, ec);
     }
 

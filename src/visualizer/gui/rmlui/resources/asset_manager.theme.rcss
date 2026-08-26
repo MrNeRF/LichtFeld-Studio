@@ -76,14 +76,6 @@
     border-color: @{primary};
 }
 
-/* ── Summary Bar ─────────────────────────────────────────── */
-
-#asset-popup-summary {
-    background-color: @{surface};
-    border-bottom-color: @{border};
-    color: @{text_dim};
-}
-
 #asset-viewport-edge {
     background-color: @{right_panel.border};
 }
@@ -147,6 +139,14 @@
     color: @{text_dim};
 }
 
+.asset-gallery-notice {
+    color: @{warning};
+}
+
+.asset-gallery-scan-status {
+    color: @{text_dim};
+}
+
 /* ── Asset Cards ─────────────────────────────────────────── */
 
 .asset-card {
@@ -166,9 +166,8 @@
     border-bottom-color: @{border};
 }
 
-.asset-pill-mp4 {
-    background-color: @{alpha(warning,0.25)};
-    color: @{warning};
+.asset-card-placeholder {
+    color: @{text_dim};
 }
 
 .asset-card-title {
@@ -243,11 +242,4 @@
 
 .parameter-value {
     color: @{text};
-}
-
-/* ── Footer / Batch Actions ─────────────────────────────── */
-
-#asset-popup-footer {
-    background-color: @{blend(surface,background,0.5)};
-    border-top-color: @{border};
 }

@@ -7,8 +7,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <future>
 #include <gtest/gtest.h>
@@ -21,6 +23,7 @@
 #include <vector>
 
 #include "core/camera_types.h"
+#include "core/error.hpp"
 #include "core/image_io.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
@@ -31,6 +34,11 @@
 #include "io/loader.hpp"
 #include "io/nvcodec_image_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
+#include "io/project_container.hpp"
+#include "io/project_document.hpp"
+#include "licht_test_support.hpp"
+#include "python/gil.hpp"
+#include "python/runner.hpp"
 #include "tinyply.hpp"
 
 namespace fs = std::filesystem;
@@ -1982,4 +1990,306 @@ TEST_F(PythonIOTest, PipelinedLoaderShutdownReleasesQueuedGpuTensorsBeforeDecode
     ASSERT_EQ(cudaMallocAsync(&probe, 4096, nullptr), cudaSuccess);
     ASSERT_EQ(cudaFreeAsync(probe, nullptr), cudaSuccess);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+}
+
+namespace {
+    bool containsLichtfeldModule(const fs::path& dir) {
+        std::error_code ec;
+        if (!fs::exists(dir, ec)) {
+            return false;
+        }
+        for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+            std::error_code file_ec;
+            if (!it->is_regular_file(file_ec) || file_ec) {
+                continue;
+            }
+            const auto filename = it->path().filename().string();
+            const auto ext = it->path().extension().string();
+            if ((ext == ".so" || ext == ".pyd") && filename.rfind("lichtfeld", 0) == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    fs::path findPythonModuleDir() {
+        std::error_code ec;
+        const auto cwd = fs::current_path(ec);
+        const auto project_root = fs::path(PROJECT_ROOT_PATH);
+        for (const auto& candidate : {
+                 cwd / "src" / "python",
+                 cwd.parent_path() / "src" / "python",
+                 project_root / "build" / "src" / "python",
+             }) {
+            if (containsLichtfeldModule(candidate)) {
+                return candidate;
+            }
+        }
+        return {};
+    }
+
+    void prependPythonPath(const fs::path& path) {
+        const auto value = path.string();
+        const char* existing = std::getenv("PYTHONPATH");
+#ifdef _WIN32
+        const char separator = ';';
+#else
+        const char separator = ':';
+#endif
+        const std::string combined =
+            existing && *existing ? value + separator + std::string(existing) : value;
+#ifdef _WIN32
+        _putenv_s("PYTHONPATH", combined.c_str());
+#else
+        setenv("PYTHONPATH", combined.c_str(), 1);
+#endif
+    }
+
+    std::string consumePythonError() {
+        if (!PyErr_Occurred()) {
+            return "unknown Python error";
+        }
+        PyObject* type = nullptr;
+        PyObject* value = nullptr;
+        PyObject* traceback = nullptr;
+        PyErr_Fetch(&type, &value, &traceback);
+        PyErr_NormalizeException(&type, &value, &traceback);
+        std::string message = "unknown Python error";
+        if (value) {
+            PyObject* as_str = PyObject_Str(value);
+            if (as_str) {
+                if (const char* utf8 = PyUnicode_AsUTF8(as_str)) {
+                    message = utf8;
+                }
+                Py_DECREF(as_str);
+            }
+        }
+        Py_XDECREF(type);
+        Py_XDECREF(value);
+        Py_XDECREF(traceback);
+        return message;
+    }
+} // namespace
+
+TEST_F(PythonIOTest, InspectProjectFromTwoThreadsReturnsSameUuid) {
+    using namespace lfs::io::project;
+    using namespace lfs::test::licht;
+
+    const auto container_path = temp_dir / "concurrent_inspect.licht";
+    const auto project_uuid = fixed_uuid(11);
+    const auto payload = byte_vector("inspect-concurrency");
+    {
+        auto created = ProjectWriter::create(
+            container_path,
+            CreateOptions{
+                .project_uuid = project_uuid,
+                .file_uuid = fixed_uuid(12),
+                .role = ContainerRole::Master,
+                .creation_time_unix_ns = 1'735'689'600'000'000'000,
+                .index_compression = IndexCompression::StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+            });
+        ASSERT_TRUE(created) << lfs::format_for_developer(created.error());
+        auto writer = std::move(*created);
+        auto planned = writer.plan_commit(CommitOptions{
+            .kind = CommitKind::Explicit,
+            .commit_uuid = fixed_uuid(13),
+            .snapshot_uuid = fixed_uuid(14),
+            .wallclock_unix_ns = 1'735'689'601'000'000'000,
+        });
+        ASSERT_TRUE(planned) << lfs::format_for_developer(planned.error());
+        auto preflighted = writer.preflight(payload.size());
+        ASSERT_TRUE(preflighted) << lfs::format_for_developer(preflighted.error());
+        auto written = writer.write_chunk(fixed_key("TEST", 15), payload);
+        ASSERT_TRUE(written) << lfs::format_for_developer(written.error());
+        auto committed = writer.commit();
+        ASSERT_TRUE(committed) << lfs::format_for_developer(committed.error());
+    }
+
+    const auto module_dir = findPythonModuleDir();
+    ASSERT_FALSE(module_dir.empty()) << "Could not locate built lichtfeld module";
+    prependPythonPath(module_dir);
+    const auto init = lfs::python::ensure_initialized();
+    ASSERT_TRUE(init) << lfs::format_for_developer(init.error());
+
+    const auto script = std::format(R"PY(
+import threading
+import lichtfeld as lf
+path = r"{}"
+uuids = [None, None]
+errors = [None, None]
+
+def worker(index):
+    try:
+        uuids[index] = lf.io.inspect_project(path).project_uuid
+    except Exception as exc:
+        errors[index] = repr(exc)
+
+threads = [
+    threading.Thread(target=worker, args=(0,)),
+    threading.Thread(target=worker, args=(1,)),
+]
+for thread in threads:
+    thread.start()
+for thread in threads:
+    thread.join(timeout=30)
+result_alive = any(thread.is_alive() for thread in threads)
+result_errors = [error for error in errors if error is not None]
+result_uuid_a = uuids[0]
+result_uuid_b = uuids[1]
+)PY",
+                                    container_path.generic_string());
+
+    const lfs::python::GilAcquire gil;
+    PyObject* namespace_dict = PyDict_New();
+    ASSERT_TRUE(namespace_dict);
+    PyDict_SetItemString(namespace_dict, "__builtins__", PyEval_GetBuiltins());
+    PyObject* exec_result =
+        PyRun_String(script.c_str(), Py_file_input, namespace_dict, namespace_dict);
+    if (!exec_result) {
+        const auto python_error = consumePythonError();
+        Py_DECREF(namespace_dict);
+        FAIL() << python_error;
+    }
+    Py_DECREF(exec_result);
+
+    auto* const alive_obj = PyDict_GetItemString(namespace_dict, "result_alive");
+    auto* const errors_obj = PyDict_GetItemString(namespace_dict, "result_errors");
+    auto* const uuid_a_obj = PyDict_GetItemString(namespace_dict, "result_uuid_a");
+    auto* const uuid_b_obj = PyDict_GetItemString(namespace_dict, "result_uuid_b");
+    ASSERT_TRUE(alive_obj);
+    ASSERT_TRUE(errors_obj);
+    ASSERT_TRUE(uuid_a_obj);
+    ASSERT_TRUE(uuid_b_obj);
+    EXPECT_FALSE(PyObject_IsTrue(alive_obj)) << "inspect_project hung on a worker thread";
+    EXPECT_EQ(PyList_Size(errors_obj), 0);
+    ASSERT_TRUE(PyUnicode_Check(uuid_a_obj));
+    ASSERT_TRUE(PyUnicode_Check(uuid_b_obj));
+    const std::string uuid_a = PyUnicode_AsUTF8(uuid_a_obj);
+    const std::string uuid_b = PyUnicode_AsUTF8(uuid_b_obj);
+    EXPECT_EQ(uuid_a, uuid_b);
+    EXPECT_EQ(uuid_a, project_uuid.to_string());
+
+    Py_DECREF(namespace_dict);
+}
+
+TEST_F(PythonIOTest, InspectProjectFallbackPreviewPath) {
+    using namespace lfs::io::project;
+    using namespace lfs::test::licht;
+
+    const auto dataset_root = temp_dir / "fallback_dataset";
+    const auto images_dir = dataset_root / "images";
+    const auto container_path = temp_dir / "fallback_inspect.licht";
+    fs::create_directories(dataset_root);
+
+    auto document = make_empty_document(fixed_uuid(21), 100);
+    auto snapshot = require_result(document->parameters().snapshot());
+    snapshot.dataset.images = "images";
+    require_status(document->edit_parameters().set_snapshot(snapshot));
+    const auto dataset_uuid = require_result(upsert_path_reference(
+        document->edit_references(), {}, dataset_root, "dataset.root", "dataset"));
+    require_status(document->edit_project().set_dataset_reference(dataset_uuid));
+    auto options = deterministic_document_save_options(0x70000000, 22, 300);
+    auto saved = document->save(container_path, options);
+    ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+
+    fs::create_directories(images_dir);
+    write_png(images_dir / "zulu.png", 8, 8);
+    write_png(images_dir / "alpha.png", 8, 8);
+
+    const auto module_dir = findPythonModuleDir();
+    ASSERT_FALSE(module_dir.empty()) << "Could not locate built lichtfeld module";
+    prependPythonPath(module_dir);
+    const auto init = lfs::python::ensure_initialized();
+    ASSERT_TRUE(init) << lfs::format_for_developer(init.error());
+
+    const auto script = std::format(R"PY(
+import lichtfeld as lf
+i = lf.io.inspect_project(r"{}")
+result_has_preview = i.has_preview
+result_fallback = i.fallback_preview_path
+)PY",
+                                    container_path.generic_string());
+
+    const lfs::python::GilAcquire gil;
+    PyObject* namespace_dict = PyDict_New();
+    ASSERT_TRUE(namespace_dict);
+    PyDict_SetItemString(namespace_dict, "__builtins__", PyEval_GetBuiltins());
+    PyObject* exec_result =
+        PyRun_String(script.c_str(), Py_file_input, namespace_dict, namespace_dict);
+    if (!exec_result) {
+        const auto python_error = consumePythonError();
+        Py_DECREF(namespace_dict);
+        FAIL() << python_error;
+    }
+    Py_DECREF(exec_result);
+
+    auto* const has_preview_obj = PyDict_GetItemString(namespace_dict, "result_has_preview");
+    auto* const fallback_obj = PyDict_GetItemString(namespace_dict, "result_fallback");
+    ASSERT_TRUE(has_preview_obj);
+    ASSERT_TRUE(fallback_obj);
+    EXPECT_FALSE(PyObject_IsTrue(has_preview_obj));
+    ASSERT_TRUE(PyUnicode_Check(fallback_obj));
+    const fs::path fallback = PyUnicode_AsUTF8(fallback_obj);
+    EXPECT_EQ(fallback.filename(), "alpha.png");
+    EXPECT_TRUE(fs::equivalent(fallback, images_dir / "alpha.png"));
+    Py_DECREF(namespace_dict);
+}
+
+TEST_F(PythonIOTest, InspectProjectFallbackEmptyWhenPreviewEmbedded) {
+    using namespace lfs::io::project;
+    using namespace lfs::test::licht;
+
+    const auto dataset_root = temp_dir / "embedded_dataset";
+    const auto images_dir = dataset_root / "images";
+    fs::create_directories(images_dir);
+    write_png(images_dir / "scene.png", 16, 16);
+
+    const auto container_path = temp_dir / "embedded_inspect.licht";
+    auto document = make_empty_document(fixed_uuid(31), 100);
+    auto snapshot = require_result(document->parameters().snapshot());
+    snapshot.dataset.images = "images";
+    require_status(document->edit_parameters().set_snapshot(snapshot));
+    const auto dataset_uuid = require_result(upsert_path_reference(
+        document->edit_references(), {}, dataset_root, "dataset.root", "dataset"));
+    require_status(document->edit_project().set_dataset_reference(dataset_uuid));
+    auto options = deterministic_document_save_options(0x70000000, 32, 300);
+    auto saved = document->save(container_path, options);
+    ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+
+    const auto module_dir = findPythonModuleDir();
+    ASSERT_FALSE(module_dir.empty()) << "Could not locate built lichtfeld module";
+    prependPythonPath(module_dir);
+    const auto init = lfs::python::ensure_initialized();
+    ASSERT_TRUE(init) << lfs::format_for_developer(init.error());
+
+    const auto script = std::format(R"PY(
+import lichtfeld as lf
+i = lf.io.inspect_project(r"{}")
+result_has_preview = i.has_preview
+result_fallback = i.fallback_preview_path
+)PY",
+                                    container_path.generic_string());
+
+    const lfs::python::GilAcquire gil;
+    PyObject* namespace_dict = PyDict_New();
+    ASSERT_TRUE(namespace_dict);
+    PyDict_SetItemString(namespace_dict, "__builtins__", PyEval_GetBuiltins());
+    PyObject* exec_result =
+        PyRun_String(script.c_str(), Py_file_input, namespace_dict, namespace_dict);
+    if (!exec_result) {
+        const auto python_error = consumePythonError();
+        Py_DECREF(namespace_dict);
+        FAIL() << python_error;
+    }
+    Py_DECREF(exec_result);
+
+    auto* const has_preview_obj = PyDict_GetItemString(namespace_dict, "result_has_preview");
+    auto* const fallback_obj = PyDict_GetItemString(namespace_dict, "result_fallback");
+    ASSERT_TRUE(has_preview_obj);
+    ASSERT_TRUE(fallback_obj);
+    EXPECT_TRUE(PyObject_IsTrue(has_preview_obj));
+    ASSERT_TRUE(PyUnicode_Check(fallback_obj));
+    EXPECT_STREQ(PyUnicode_AsUTF8(fallback_obj), "");
+    Py_DECREF(namespace_dict);
 }

@@ -86,6 +86,9 @@ namespace lfs::io::project {
     struct ProjectDocumentSaveOptions {
         CommitOptions commit;
         lfs::core::Uuid file_uuid;
+        // A titled-project Save As uses a new catalog identity. Leave null
+        // for ordinary saves, recovery publication, and first save.
+        lfs::core::Uuid save_as_project_uuid = {};
         IndexCompression index_compression = IndexCompression::Zstd;
         std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
         // Only a file-dialog-confirmed Save As may replace a first-save destination.
@@ -107,6 +110,19 @@ namespace lfs::io::project {
         // the live document to that app-private path.
         bool leave_unbound = false;
     };
+
+    [[nodiscard]] LFS_IO_API lfs::Result<std::vector<std::byte>>
+    dataset_preview_png(const std::filesystem::path& first_image,
+                        int max_size = 512);
+
+    [[nodiscard]] LFS_IO_API std::optional<std::filesystem::path>
+    first_dataset_image(const lfs::core::param::DatasetConfig& dataset);
+
+    [[nodiscard]] LFS_IO_API std::optional<std::filesystem::path>
+    first_dataset_image(const ProjectChapter& project,
+                        const ReferencesChapter& references,
+                        const ParametersChapter& parameters,
+                        const std::filesystem::path& project_root = {});
 
     struct ProjectDocumentAutosaveOptions {
         lfs::core::Uuid file_uuid;
@@ -156,6 +172,10 @@ namespace lfs::io::project {
         std::size_t hydrated_payload_units = 0;
         std::size_t invalidated_payload_units = 0;
         bool selection_installed = false;
+        double splat_read_ms = 0;
+        double splat_hash_ms = 0;
+        double splat_copy_ms = 0;
+        double splat_materialize_ms = 0;
     };
 
     class LFS_IO_API ProjectHydrationPlan {
@@ -296,9 +316,10 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<ProjectDocumentSaveReport>
         save(const std::filesystem::path& path,
              const ProjectDocumentSaveOptions& options = {});
-        // Publishes a compacted sibling with a new file UUID, preserving the
-        // project UUID and all clean/unloaded payloads. An existing
-        // destination is atomically replaced only after staged verification.
+        // Publishes a compacted sibling with a new file UUID and all
+        // clean/unloaded payloads. save_as_project_uuid optionally assigns a
+        // new project identity. An existing destination is atomically
+        // replaced only after staged verification.
         [[nodiscard]] lfs::Result<ProjectDocumentSaveReport>
         save_as(const std::filesystem::path& path,
                 const ProjectDocumentSaveOptions& options = {});

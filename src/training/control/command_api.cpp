@@ -131,6 +131,10 @@ namespace lfs::training {
         snapshot_.stop_requested = stop_requested;
         snapshot_.phase = phase;
         if (ctx.trainer) {
+            snapshot_.session_hydrated = true;
+            if (ctx.trainer->isInitialized()) {
+                snapshot_.strategy = ctx.trainer->get_strategy().strategy_type();
+            }
             const auto project =
                 ctx.trainer
                     ->get_project_snapshot_metrics();
@@ -188,6 +192,12 @@ namespace lfs::training {
             loss_history_.push_back({ctx.iteration, ctx.loss});
             last_recorded_iteration_ = ctx.iteration;
         }
+    }
+
+    void CommandCenter::overlay_stored_session(std::string strategy, bool hydrated) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        snapshot_.strategy = std::move(strategy);
+        snapshot_.session_hydrated = hydrated;
     }
 
     void CommandCenter::reset_snapshot_locked() {

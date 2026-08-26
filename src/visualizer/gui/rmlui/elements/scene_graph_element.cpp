@@ -317,20 +317,6 @@ namespace lfs::vis::gui {
                    !parent_is_dataset;
         }
 
-        [[nodiscard]] bool canSaveAsAsset(const core::SceneNode& node) {
-            switch (node.type) {
-            case core::NodeType::SPLAT:
-            case core::NodeType::POINTCLOUD:
-            case core::NodeType::MESH:
-            case core::NodeType::GROUP:
-            case core::NodeType::PLY_SEQUENCE:
-            case core::NodeType::DATASET:
-                return true;
-            default:
-                return false;
-            }
-        }
-
         [[nodiscard]] bool canDrag(const core::NodeType type, const bool parent_is_dataset) {
             if (parent_is_dataset)
                 return false;
@@ -2612,14 +2598,6 @@ namespace lfs::vis::gui {
                     !items.empty()));
             }
 
-            // Add Save Asset for asset-compatible node types
-            if (canSaveAsAsset(*node)) {
-                items.push_back(makeAction(
-                    tr(string_keys::Scene::SAVE_ASSET),
-                    prefixedAction(std::format("save_asset:{}", node_id)),
-                    !items.empty()));
-            }
-
             if (node_snapshots_.at(node_id).rename_enabled) {
                 items.push_back(makeAction(
                     tr(string_keys::Scene::RENAME),
@@ -2872,10 +2850,6 @@ namespace lfs::vis::gui {
                 .node_id = static_cast<int32_t>(node_id),
                 .new_parent_id = static_cast<int32_t>(parent_id)}
                 .emit();
-        } else if (kind == "save_asset" && parts.size() >= 2) {
-            core::NodeId node_id = core::NULL_NODE;
-            if (parseNodeId(parts[1], node_id))
-                cmd::SaveAssetById{.node_id = static_cast<int32_t>(node_id)}.emit();
         }
     }
 

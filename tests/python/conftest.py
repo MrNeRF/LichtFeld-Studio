@@ -12,7 +12,7 @@ import pytest
 
 # Find the build directory and add to path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
-BUILD_DIR = PROJECT_ROOT / "build"
+BUILD_DIR = Path(os.environ.get("LFS_TEST_BUILD_DIR", PROJECT_ROOT / "build"))
 SOURCE_MODULE_PATH = PROJECT_ROOT / "src" / "python"
 
 # Add the source Python modules first so tests exercise the working tree.
@@ -39,7 +39,9 @@ except Exception:
 
 
 # The real, user-facing Asset Manager catalog. No test may ever write here.
-PRODUCTION_ASSET_CATALOG_DIR = Path.home() / ".lichtfeld" / "asset_manager"
+PRODUCTION_ASSET_CATALOG_DIR = (
+    Path.home() / ".lichtfeld" / "data" / "asset_library"
+)
 
 
 def _asset_catalog_fingerprint():
@@ -66,6 +68,9 @@ def pytest_configure(config):
     # temp dir; this baseline only guarantees nothing resolves to production.
     session_catalog = Path(tempfile.gettempdir()) / "lfs-test-asset-manager"
     os.environ.setdefault("LFS_ASSET_MANAGER_DIR", str(session_catalog))
+    os.environ.setdefault(
+        "LFS_ASSET_MANAGER_ASSETS_DIR", str(session_catalog / "assets")
+    )
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -91,27 +96,13 @@ def guard_production_asset_catalog():
 def isolate_asset_manager_catalog(tmp_path, monkeypatch):
     """Redirect the Asset Manager catalog to a per-test temp directory.
 
-    Code paths that resolve the catalog implicitly (e.g.
-    register_catalog_asset_path -> load_asset_index) otherwise write into the
-    user's real ~/.lichtfeld/asset_manager/library.json, leaving dead entries
-    that point at deleted pytest tmp dirs. resolve_asset_manager_storage_path()
-    reads this env var first on every call, so the redirect is binding-proof;
-    pinning the legacy path to the temp dir suppresses the real-catalog copy.
+    Code paths that resolve the catalog implicitly otherwise write into the
+    user's real Asset Manager library. resolve_asset_manager_storage_path()
+    reads this env var first on every call, so the redirect is binding-proof.
     """
-    catalog_dir = tmp_path / "asset_manager"
+    catalog_dir = tmp_path / "asset_library"
     monkeypatch.setenv("LFS_ASSET_MANAGER_DIR", str(catalog_dir))
-    try:
-        from lfs_plugins import asset_index
-
-        monkeypatch.setattr(asset_index, "LEGACY_STORAGE_PATH", catalog_dir, raising=False)
-        monkeypatch.setattr(
-            asset_index, "LEGACY_LIBRARY_PATH", catalog_dir / "library.json", raising=False
-        )
-        monkeypatch.setattr(
-            asset_index, "DEFAULT_LIBRARY_PATH", catalog_dir / "library.json", raising=False
-        )
-    except Exception:
-        pass
+    monkeypatch.setenv("LFS_ASSET_MANAGER_ASSETS_DIR", str(tmp_path / "assets"))
     return catalog_dir
 
 

@@ -35,9 +35,13 @@ namespace {
                 break;
             case PanelDirectRenderMode::Draw:
                 ++draw_count;
+                last_draw_x = request.x;
+                last_draw_width = request.width;
                 break;
             case PanelDirectRenderMode::Cached:
                 ++cached_draw_count;
+                last_cached_x = request.x;
+                last_cached_width = request.width;
                 break;
             }
             return {.handled = true, .height = height_};
@@ -46,6 +50,10 @@ namespace {
         int preload_count = 0;
         int draw_count = 0;
         int cached_draw_count = 0;
+        float last_draw_x = 0.0f;
+        float last_draw_width = 0.0f;
+        float last_cached_x = 0.0f;
+        float last_cached_width = 0.0f;
 
     private:
         float height_ = 0.0f;
@@ -139,4 +147,31 @@ TEST_F(PanelLayoutRenderDemandTest, CanDrawSceneHeaderLiveWhileCachingActiveTab)
     EXPECT_EQ(active_tab->preload_count, 0);
     EXPECT_EQ(active_tab->draw_count, 0);
     EXPECT_EQ(active_tab->cached_draw_count, 1);
+}
+
+TEST_F(PanelLayoutRenderDemandTest, BottomDockStartsAfterVisibleLeftDock) {
+    using namespace lfs::vis::gui;
+
+    registerPanel("test.left", PanelSpace::LeftDock, 100.0f);
+    auto bottom = registerPanel("test.bottom", PanelSpace::BottomDock, 100.0f);
+
+    PanelLayoutManager layout;
+    UIContext ui;
+    PanelDrawContext draw_ctx;
+    draw_ctx.ui = &ui;
+    PanelInputState input;
+
+    layout.renderLeftDock(draw_ctx, true, false, input, screen());
+    ASSERT_TRUE(layout.isLeftDockVisible());
+
+    const auto viewport = layout.computeViewportLayout(true, false, false, screen());
+    layout.renderBottomDock(draw_ctx, true, false, input, screen());
+
+    EXPECT_FLOAT_EQ(bottom->last_draw_x, viewport.pos.x);
+    EXPECT_FLOAT_EQ(bottom->last_draw_width, viewport.size.x);
+
+    layout.renderBottomDockCached(draw_ctx, true, false, input, screen());
+
+    EXPECT_FLOAT_EQ(bottom->last_cached_x, viewport.pos.x);
+    EXPECT_FLOAT_EQ(bottom->last_cached_width, viewport.size.x);
 }

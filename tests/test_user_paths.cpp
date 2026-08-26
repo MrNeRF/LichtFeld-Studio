@@ -127,6 +127,9 @@ namespace {
         ASSERT_TRUE(json.contains("working_directory"));
         EXPECT_TRUE(json.at("working_directory").is_string());
         EXPECT_EQ(json.at("working_directory").get<std::string>(), "");
+        ASSERT_TRUE(json.contains("asset_manager_directory"));
+        EXPECT_TRUE(json.at("asset_manager_directory").is_string());
+        EXPECT_EQ(json.at("asset_manager_directory").get<std::string>(), "");
     }
 
     TEST_F(UserPathsContractTest, ResetPreferencesBacksUpExistingFile) {
