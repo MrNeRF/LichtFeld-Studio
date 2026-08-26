@@ -4404,10 +4404,43 @@ namespace lfs::io::project {
                 return nullptr;
             }
 
+            bool prefetch_stored_records(const std::vector<std::size_t>& indices) {
+                if (indices.empty()) {
+                    return true;
+                }
+                if (stored_cache_.size() != records_.size()) {
+                    try {
+                        stored_cache_.assign(records_.size(), {});
+                    } catch (const std::bad_alloc&) {
+                        return false;
+                    } catch (const std::length_error&) {
+                        return false;
+                    }
+                }
+                for (const auto index : indices) {
+                    if (index >= records_.size()) {
+                        return false;
+                    }
+                    if (!stored_cache_[index].empty()) {
+                        continue;
+                    }
+                    if (!read_record_stored(index, stored_cache_[index])) {
+                        stored_cache_[index].clear();
+                        break;
+                    }
+                }
+                return true;
+            }
+
             bool read_record_stored(const std::size_t index,
                                     std::vector<std::byte>& stored) {
                 if (index >= records_.size()) {
                     return false;
+                }
+                if (index < stored_cache_.size() &&
+                    !stored_cache_[index].empty()) {
+                    stored = stored_cache_[index];
+                    return true;
                 }
                 const FramedRecord& record = records_[index];
                 try {
@@ -4667,6 +4700,14 @@ namespace lfs::io::project {
                 if (first == kNpos || last == kNpos || last < first) {
                     return false;
                 }
+                std::vector<std::size_t> needed;
+                needed.reserve(last - first + 1);
+                for (std::size_t index = first; index <= last; ++index) {
+                    needed.push_back(index);
+                }
+                if (!prefetch_stored_records(needed)) {
+                    return false;
+                }
                 for (std::size_t batch_begin = first; batch_begin <= last;
                      batch_begin += kMaxResidentDecodeRecords) {
                     const std::size_t batch_end = std::min(
@@ -4728,6 +4769,16 @@ namespace lfs::io::project {
                 const std::uint64_t end = start + count;
                 if (count == 0) {
                     return true;
+                }
+                std::vector<std::size_t> needed;
+                needed.reserve(records_.size());
+                for (std::size_t index = 0; index < records_.size(); ++index) {
+                    if (shuffle_record_covers(index, start, end)) {
+                        needed.push_back(index);
+                    }
+                }
+                if (!prefetch_stored_records(needed)) {
+                    return false;
                 }
                 // 0 = unknown, 1 = ready, 2 = failed
                 std::vector<std::uint8_t> status(records_.size(), std::uint8_t{0});
@@ -5104,6 +5155,7 @@ namespace lfs::io::project {
             std::vector<FramedRecord> records_;
             std::vector<std::uint8_t> block_validated_;
             std::vector<CachedRecord> cache_;
+            std::vector<std::vector<std::byte>> stored_cache_;
             std::vector<char> window_;
             std::mutex io_mutex_;
         };

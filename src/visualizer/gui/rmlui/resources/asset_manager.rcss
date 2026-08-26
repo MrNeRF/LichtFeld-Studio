@@ -293,6 +293,13 @@
     image-color: rgba(255, 255, 255, 255);
 }
 
+.asset-refresh-button.is-stop {
+    width: auto;
+    min-width: 64dp;
+    max-width: none;
+    padding: 0 10dp;
+}
+
 .asset-import-button {
     background-color: #7fb9a5;
     border-color: #6ba08d;
@@ -500,9 +507,21 @@
     flex-direction: row;
     align-items: center;
     gap: 6dp;
-    flex-shrink: 0;
+    flex-shrink: 1;
     margin-left: auto;
     min-width: 0;
+}
+
+.asset-gallery-scan-status {
+    display: block;
+    font-size: 11dp;
+    line-height: 14dp;
+    margin: 0;
+    color: #a9a093;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .asset-gallery-title {

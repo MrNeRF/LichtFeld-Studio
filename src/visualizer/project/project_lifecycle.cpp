@@ -47,6 +47,8 @@
 #include <nlohmann/json.hpp>
 #include <stb_image_write.h>
 
+#include <cuda_runtime.h>
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -752,6 +754,315 @@ namespace lfs::vis::project {
             std::move(ckpt_params),
             report.checkpoint_header->iteration,
             *dataset_root);
+    }
+
+    void ProjectLifecycle::clearStoredTrainingSession() {
+        stored_training_kind_ = StoredTrainingKind::None;
+        stored_checkpoint_uuid_.reset();
+        stored_dataset_output_path_.clear();
+        training_session_hydrated_.store(
+            false, std::memory_order_release);
+        training_session_restoring_.store(
+            false, std::memory_order_release);
+        restore_then_start_.store(
+            false, std::memory_order_release);
+        std::lock_guard lock(training_session_mutex_);
+        training_session_error_.clear();
+    }
+
+    void ProjectLifecycle::abandonStoredTrainingSession() {
+        clearStoredTrainingSession();
+        cached_bound_checkpoint_iteration_.reset();
+    }
+
+    bool ProjectLifecycle::keepStoredCheckpointChapters() const {
+        return stored_training_kind_ ==
+                   StoredTrainingKind::Checkpoint &&
+               !training_session_hydrated_.load(
+                   std::memory_order_acquire);
+    }
+
+    ProjectLifecycle::TrainingSessionState
+    ProjectLifecycle::trainingSessionState() const {
+        TrainingSessionState state;
+        state.hydrated = training_session_hydrated_.load(
+            std::memory_order_acquire);
+        state.restoring = training_session_restoring_.load(
+            std::memory_order_acquire);
+        {
+            std::lock_guard lock(training_session_mutex_);
+            state.error = training_session_error_;
+        }
+        if (stored_training_kind_ ==
+            StoredTrainingKind::None) {
+            return state;
+        }
+        state.available = true;
+        if (cached_bound_checkpoint_iteration_) {
+            state.iteration =
+                *cached_bound_checkpoint_iteration_;
+        }
+        return state;
+    }
+
+    void ProjectLifecycle::captureStoredTrainingSession(
+        const lfs::io::project::
+            ProjectDocumentHydrationReport& report) {
+        stored_training_kind_ = StoredTrainingKind::None;
+        stored_checkpoint_uuid_.reset();
+        stored_dataset_output_path_.clear();
+        training_session_hydrated_.store(
+            false, std::memory_order_release);
+        {
+            std::lock_guard lock(training_session_mutex_);
+            training_session_error_.clear();
+        }
+        if (!document_) {
+            return;
+        }
+        if (report.trainer_state_pending &&
+            report.checkpoint_uuid &&
+            report.checkpoint_header) {
+            stored_training_kind_ =
+                StoredTrainingKind::Checkpoint;
+            stored_checkpoint_uuid_ = report.checkpoint_uuid;
+            if (report.checkpoint_header->iteration >= 0) {
+                cached_bound_checkpoint_iteration_ =
+                    report.checkpoint_header->iteration;
+            }
+            stored_dataset_output_path_ =
+                report.pending_parameters.dataset
+                    .output_path;
+            if (report.checkpoint_header->iteration < 0) {
+                std::lock_guard lock(training_session_mutex_);
+                training_session_error_ =
+                    "Project CKPT iteration is negative";
+                return;
+            }
+            const auto* checkpoint =
+                document_->find_checkpoint(
+                    *report.checkpoint_uuid);
+            if (!checkpoint) {
+                std::lock_guard lock(training_session_mutex_);
+                training_session_error_ =
+                    "Project CKPT handle disappeared";
+                return;
+            }
+            const auto dataset_root =
+                resolveDatasetRootForTrainer(
+                    *document_,
+                    report.pending_parameters.dataset
+                        .data_path);
+            if (dataset_root && !dataset_root->empty() &&
+                std::filesystem::exists(*dataset_root)) {
+                return;
+            }
+            std::optional<lfs::core::CheckpointParametersLoadResult>
+                parsed_params;
+            auto params_visit = checkpoint->visit_stream(
+                [&](std::istream& source,
+                    const std::uint64_t bytes)
+                    -> lfs::Result<void> {
+                    parsed_params =
+                        lfs::core::load_checkpoint_params(
+                            source, bytes);
+                    return {};
+                });
+            if (!params_visit || !parsed_params ||
+                !*parsed_params) {
+                std::lock_guard lock(training_session_mutex_);
+                training_session_error_ =
+                    !params_visit
+                        ? developerError(params_visit.error())
+                    : parsed_params ? parsed_params->error()
+                                    : "CKPT parameter visitor did not run";
+                return;
+            }
+            auto ckpt_params = std::move(**parsed_params);
+            const auto ckpt_dataset_root =
+                resolveDatasetRootForTrainer(
+                    *document_,
+                    ckpt_params.dataset.data_path);
+            if (ckpt_dataset_root &&
+                !ckpt_dataset_root->empty() &&
+                !std::filesystem::exists(
+                    *ckpt_dataset_root)) {
+                armMissingCheckpointDataset(
+                    *ckpt_dataset_root,
+                    *report.checkpoint_uuid,
+                    ckpt_params,
+                    report.checkpoint_header->iteration);
+            }
+            return;
+        }
+
+        const auto persisted_dataset =
+            inspectPersistedDatasetScene(*document_);
+        if (!persisted_dataset.has_dataset_node) {
+            return;
+        }
+        stored_training_kind_ =
+            StoredTrainingKind::DatasetScene;
+        stored_dataset_output_path_ =
+            report.pending_parameters.dataset.output_path;
+        const auto dataset =
+            document_->project().dataset_reference();
+        if (!dataset || !*dataset) {
+            return;
+        }
+        auto dataset_root = resolveDatasetRootForTrainer(
+            *document_, std::filesystem::path{});
+        if (!dataset_root || dataset_root->empty() ||
+            !std::filesystem::exists(*dataset_root)) {
+            if (dataset_root && !dataset_root->empty()) {
+                armMissingDatasetReload(
+                    *dataset_root,
+                    report.pending_parameters.dataset
+                        .output_path);
+            }
+        }
+    }
+
+    void ProjectLifecycle::launchStoredTrainingSessionRestore(
+        const std::uint64_t epoch) {
+        auto* manager = viewer_.getSceneManager();
+        auto document = document_;
+        if (!manager || !document) {
+            training_session_restoring_.store(
+                false, std::memory_order_release);
+            {
+                std::lock_guard lock(training_session_mutex_);
+                training_session_error_ =
+                    "Project has no trainer manager or document";
+            }
+            notifyTrainerRestoreFailure(
+                viewer_,
+                "Project has no trainer manager or document");
+            return;
+        }
+        const auto kind = stored_training_kind_;
+        const auto checkpoint_uuid = stored_checkpoint_uuid_;
+        const auto expected_iteration =
+            cached_bound_checkpoint_iteration_.value_or(-1);
+        const auto output_path = stored_dataset_output_path_;
+        std::lock_guard lock(thread_mutex_);
+        hydration_threads_.emplace_back(
+            [this, epoch, document, kind, checkpoint_uuid,
+             expected_iteration, output_path](
+                const std::stop_token stop) {
+                if (stop.stop_requested() ||
+                    epoch_.load(std::memory_order_acquire) !=
+                        epoch ||
+                    document_ != document) {
+                    training_session_restoring_.store(
+                        false, std::memory_order_release);
+                    return;
+                }
+                (void)cudaSetDevice(0);
+                auto* scene_manager =
+                    viewer_.getSceneManager();
+                if (!scene_manager || !document_) {
+                    training_session_restoring_.store(
+                        false, std::memory_order_release);
+                    notifyTrainerRestoreFailure(
+                        viewer_,
+                        "The scene manager became unavailable while restoring the training session.");
+                    return;
+                }
+                lfs::io::project::ProjectDocumentHydrationReport
+                    report;
+                report.trainer_state_pending =
+                    kind == StoredTrainingKind::Checkpoint;
+                report.checkpoint_uuid = checkpoint_uuid;
+                if (expected_iteration >= 0) {
+                    lfs::core::CheckpointHeader header{};
+                    header.iteration = expected_iteration;
+                    report.checkpoint_header = header;
+                }
+                report.pending_parameters.dataset.output_path =
+                    output_path;
+                tryInstallTrainerFromHydratedProject(
+                    *scene_manager, *document_, report);
+                const bool installed =
+                    viewer_.getTrainerManager() &&
+                    viewer_.getTrainerManager()->hasTrainer();
+                training_session_hydrated_.store(
+                    installed, std::memory_order_release);
+                training_session_restoring_.store(
+                    false, std::memory_order_release);
+                {
+                    std::lock_guard error_lock(
+                        training_session_mutex_);
+                    if (installed) {
+                        training_session_error_.clear();
+                    } else if (training_session_error_.empty()) {
+                        training_session_error_ =
+                            "Project trainer restore failed";
+                    }
+                }
+                const bool then_start =
+                    restore_then_start_.exchange(
+                        false, std::memory_order_acq_rel);
+                if (!then_start || !installed) {
+                    return;
+                }
+                viewer_.postWork({
+                    .run =
+                        [this, epoch] {
+                            if (epoch_.load(
+                                    std::memory_order_acquire) !=
+                                epoch) {
+                                return;
+                            }
+                            if (auto started =
+                                    viewer_.startTraining();
+                                !started) {
+                                LOG_ERROR(
+                                    "Failed to start training after session restore: {}",
+                                    started.error());
+                            }
+                        },
+                    .cancel = {},
+                });
+            });
+    }
+
+    lfs::Result<void>
+    ProjectLifecycle::restoreTrainingSession(
+        const bool then_start) {
+        if (then_start) {
+            restore_then_start_.store(
+                true, std::memory_order_release);
+        }
+        if (training_session_hydrated_.load(
+                std::memory_order_acquire)) {
+            if (then_start) {
+                restore_then_start_.store(
+                    false, std::memory_order_release);
+            }
+            return {};
+        }
+        if (stored_training_kind_ ==
+            StoredTrainingKind::None) {
+            restore_then_start_.store(
+                false, std::memory_order_release);
+            return {};
+        }
+        if (training_session_restoring_.exchange(
+                true, std::memory_order_acq_rel)) {
+            return {};
+        }
+        {
+            std::lock_guard lock(training_session_mutex_);
+            training_session_error_.clear();
+        }
+        if (hydration_.load(std::memory_order_acquire) !=
+            Hydration::Complete) {
+            return {};
+        }
+        launchStoredTrainingSessionRestore(
+            epoch_.load(std::memory_order_acquire));
+        return {};
     }
 
     namespace {
@@ -1766,7 +2077,8 @@ namespace lfs::vis::project {
         }
     }
 
-    void ProjectLifecycle::stopHydrationThreads() {
+    void ProjectLifecycle::stopHydrationThreads(
+        const bool cancel_open_job) {
         std::vector<std::jthread> hydration_threads;
         {
             std::lock_guard lock(thread_mutex_);
@@ -1777,7 +2089,7 @@ namespace lfs::vis::project {
                 hydration_threads_);
         }
         hydration_threads.clear();
-        if (project_open_job_) {
+        if (cancel_open_job && project_open_job_) {
             if (auto job = viewer_.jobs().peek(*project_open_job_);
                 job && job->running()) {
                 viewer_.jobs().canceled(*project_open_job_);
@@ -1991,6 +2303,11 @@ namespace lfs::vis::project {
                                     new_root,
                                     output_path,
                                     old_root);
+                                training_session_hydrated_.store(
+                                    viewer_.getTrainerManager() &&
+                                        viewer_.getTrainerManager()
+                                            ->hasTrainer(),
+                                    std::memory_order_release);
                             },
                         .cancel = {},
                     })) {
@@ -2051,6 +2368,11 @@ namespace lfs::vis::project {
                                     ckpt_params,
                                     expected_iteration,
                                     new_root);
+                                training_session_hydrated_.store(
+                                    viewer_.getTrainerManager() &&
+                                        viewer_.getTrainerManager()
+                                            ->hasTrainer(),
+                                    std::memory_order_release);
                             },
                         .cancel = {},
                     })) {
@@ -2490,6 +2812,7 @@ namespace lfs::vis::project {
         last_captured_selection_serial_.reset();
         cached_project_info_.reset();
         cached_bound_checkpoint_iteration_.reset();
+        clearStoredTrainingSession();
         hydration_.store(
             Hydration::Complete,
             std::memory_order_release);
@@ -4256,6 +4579,7 @@ namespace lfs::vis::project {
         last_captured_selection_serial_.reset();
         cached_project_info_.reset();
         cached_bound_checkpoint_iteration_.reset();
+        clearStoredTrainingSession();
         adopted_training_snapshot_count_ =
             metrics.capture.completed_snapshots;
         hydration_.store(
@@ -4418,8 +4742,9 @@ namespace lfs::vis::project {
             }
             if (node->uuid == training_uuid) {
                 if (mode ==
-                    DocumentSyncMode::
-                        LightTrainingAutosave) {
+                        DocumentSyncMode::
+                            LightTrainingAutosave &&
+                    !keepStoredCheckpointChapters()) {
                     omit_unbound_training.push_back(
                         node->uuid);
                     continue;
@@ -4492,7 +4817,8 @@ namespace lfs::vis::project {
         // autosaves while a training session is still bound.
         if ((mode == DocumentSyncMode::Default ||
              mode == DocumentSyncMode::Autosave) &&
-            training_uuid.is_nil()) {
+            training_uuid.is_nil() &&
+            !keepStoredCheckpointChapters()) {
             const auto checkpoint_uuids =
                 document_->checkpoint_uuids();
             for (const auto& uuid : checkpoint_uuids) {
@@ -4501,15 +4827,19 @@ namespace lfs::vis::project {
             }
             if (!checkpoint_uuids.empty()) {
                 cached_bound_checkpoint_iteration_.reset();
+                clearStoredTrainingSession();
             }
         }
         // Light autosave omits the unbound live training
         // node from SCNG. Drop CKPT chapters that node no
         // longer binds; otherwise V21 rejects the sidecar.
+        // A stored-but-not-hydrated session keeps both the
+        // SCNG training binding and the CKPT bytes.
         if (mode ==
                 DocumentSyncMode::
                     LightTrainingAutosave &&
-            !omit_unbound_training.empty()) {
+            !omit_unbound_training.empty() &&
+            !keepStoredCheckpointChapters()) {
             std::unordered_set<lfs::core::Uuid>
                 bound_checkpoints;
             if (const auto nodes =
@@ -4536,6 +4866,7 @@ namespace lfs::vis::project {
             }
             if (removed_any) {
                 cached_bound_checkpoint_iteration_.reset();
+                clearStoredTrainingSession();
             }
         }
         // Same bookkeeping as the trainer writer after a
@@ -5746,6 +6077,20 @@ namespace lfs::vis::project {
             return lfs::Status::failure(
                 std::move(normalized).error());
         }
+        stopHydrationThreads();
+        const auto opening_stage = std::format(
+            "Opening {}…",
+            lfs::core::path_to_utf8(
+                normalized->filename()));
+        project_open_job_ = viewer_.jobs().init(
+            JobType::ProjectOpen, opening_stage);
+        if (!project_open_job_) {
+            return fail<void>(
+                lfs::ErrorCode::Unavailable,
+                "Project opening could not be started.",
+                "The project-open job registry has no available slot",
+                "project.open.job");
+        }
         const auto normalized_at =
             std::chrono::steady_clock::now();
         auto opened = ProjectDocument::open(
@@ -5756,6 +6101,14 @@ namespace lfs::vis::project {
                 .defer_geometry_payloads = true,
             });
         if (!opened) {
+            if (project_open_job_) {
+                viewer_.jobs().failed(
+                    *project_open_job_,
+                    developerError(opened.error()),
+                    "Project open failed");
+                viewer_.jobs().free(*project_open_job_);
+                project_open_job_.reset();
+            }
             return lfs::Status::failure(
                 std::move(opened).error());
         }
@@ -5836,7 +6189,7 @@ namespace lfs::vis::project {
             gui->asyncTasks().cancelImport();
         }
 
-        stopHydrationThreads();
+        stopHydrationThreads(false);
         if (auto* trainer_manager = viewer_.getTrainerManager();
             trainer_manager && trainer_manager->hasTrainer() &&
             !trainer_manager->clearTrainer()) {
@@ -5865,6 +6218,7 @@ namespace lfs::vis::project {
 
         cached_project_info_.reset();
         cached_bound_checkpoint_iteration_.reset();
+        clearStoredTrainingSession();
         document_ = candidate;
         last_captured_selection_serial_.reset();
         bindTrainerSnapshotTarget();
@@ -5940,8 +6294,6 @@ namespace lfs::vis::project {
         }
         const auto lifecycle_installed_at =
             std::chrono::steady_clock::now();
-        project_open_job_ = viewer_.jobs().init(
-            JobType::ProjectOpen, "Reading project");
         if (!project_open_job_) {
             markHydrationFailed(
                 epoch,
@@ -6067,7 +6419,7 @@ namespace lfs::vis::project {
                     if (project_open_job) {
                         viewer_.jobs().work(*project_open_job);
                         viewer_.jobs().report(
-                            *project_open_job, 0.05F, "Reading project");
+                            *project_open_job, 0.05F);
                     }
                     const auto hydration_started =
                         std::chrono::steady_clock::now();
@@ -6116,7 +6468,7 @@ namespace lfs::vis::project {
                         std::chrono::steady_clock::now();
                     if (project_open_job) {
                         viewer_.jobs().report(
-                            *project_open_job, 0.20F, "Decompressing project data");
+                            *project_open_job, 0.20F);
                     }
                     auto* scene_manager =
                         viewer_.getSceneManager();
@@ -6138,8 +6490,7 @@ namespace lfs::vis::project {
                                     viewer_.jobs().report(
                                         *project_open_job,
                                         0.20F + 0.55F * static_cast<float>(completed) /
-                                                    static_cast<float>(total),
-                                        "Decompressing project data");
+                                                    static_cast<float>(total));
                                 }
                             });
                     if (!staged) {
@@ -6155,7 +6506,7 @@ namespace lfs::vis::project {
                         std::chrono::steady_clock::now();
                     if (project_open_job) {
                         viewer_.jobs().report(
-                            *project_open_job, 0.75F, "Uploading project data");
+                            *project_open_job, 0.75F);
                     }
                     auto plan =
                         std::make_shared<
@@ -6256,14 +6607,18 @@ namespace lfs::vis::project {
                                     const auto selection_restored_at =
                                         std::chrono::steady_clock::
                                             now();
-                                    // Trainer restore is soft: display
-                                    // hydration already succeeded.
+                                    // Display hydration is complete. The
+                                    // training session stays stored until
+                                    // Resume/Start (or another live-trainer
+                                    // operation) calls restoreTrainingSession.
+                                    const bool pending_restore =
+                                        training_session_restoring_.load(
+                                            std::memory_order_acquire);
                                     if (epoch_.load(
                                             std::memory_order_acquire) ==
                                             epoch &&
                                         document_ == document) {
-                                        tryInstallTrainerFromHydratedProject(
-                                            *manager, *document,
+                                        captureStoredTrainingSession(
                                             report);
                                     }
                                     const auto trainer_restored_at =
@@ -6275,6 +6630,14 @@ namespace lfs::vis::project {
                                             report
                                                 .checkpoint_header
                                                 ->iteration;
+                                    }
+                                    if (pending_restore &&
+                                        epoch_.load(
+                                            std::memory_order_acquire) ==
+                                            epoch &&
+                                        document_ == document) {
+                                        launchStoredTrainingSessionRestore(
+                                            epoch);
                                     }
                                     hydration_.store(
                                         Hydration::Complete,
@@ -6331,6 +6694,16 @@ namespace lfs::vis::project {
                                             : std::string{
                                                   "<untitled>"},
                                         milliseconds(hydration_started, source_opened_at), milliseconds(source_opened_at, payload_staged_at), milliseconds(queued_at, commit_started), milliseconds(commit_started, scene_committed_at), milliseconds(scene_committed_at, selection_restored_at), milliseconds(selection_restored_at, trainer_restored_at), milliseconds(trainer_restored_at, hydration_finished), milliseconds(hydration_started, hydration_finished));
+                                    LOG_DEBUG(
+                                        "Project hydration substages: path={} splat_read={:.3f} ms splat_hash={:.3f} ms splat_copy={:.3f} ms splat_materialize={:.3f} ms trainer_restore={:.3f} ms",
+                                        document->source_path()
+                                            ? lfs::core::
+                                                  path_to_utf8(
+                                                      *document
+                                                           ->source_path())
+                                            : std::string{
+                                                  "<untitled>"},
+                                        report.splat_read_ms, report.splat_hash_ms, report.splat_copy_ms, report.splat_materialize_ms, milliseconds(selection_restored_at, trainer_restored_at));
                                     LOG_INFO(
                                         "Project background hydration complete: {} (hydrated={}, invalidated={}, selection={})",
                                         document->source_path()
@@ -6502,6 +6875,7 @@ namespace lfs::vis::project {
         stopHydrationThreads();
         cached_project_info_.reset();
         cached_bound_checkpoint_iteration_.reset();
+        clearStoredTrainingSession();
         document_ =
             std::make_shared<ProjectDocument>(
                 std::move(*created));

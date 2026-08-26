@@ -8794,7 +8794,8 @@ namespace lfs::training {
     CheckpointLoadResult Trainer::load_checkpoint(
         std::istream& source,
         const std::uint64_t source_bytes,
-        const std::string_view source_name) {
+        const std::string_view source_name,
+        lfs::core::SplatData* preloaded_model) {
         if (!strategy_) {
             return std::unexpected("Cannot load checkpoint: no strategy initialized");
         }
@@ -8861,7 +8862,7 @@ namespace lfs::training {
             bilateral_grid_.get(), ppisp_.get(),
             ppisp_controller_pool_.get(),
             dynamic_cast<ADMMSparsityOptimizer*>(sparsity_optimizer_.get()),
-            splat_tensor_allocator_, source_name);
+            splat_tensor_allocator_, source_name, preloaded_model);
         if (!result) {
             return result;
         }

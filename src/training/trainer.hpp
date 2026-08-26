@@ -401,7 +401,8 @@ namespace lfs::training {
         CheckpointLoadResult load_checkpoint(
             std::istream& source,
             std::uint64_t source_bytes,
-            std::string_view source_name = "embedded CKPT");
+            std::string_view source_name = "embedded CKPT",
+            lfs::core::SplatData* preloaded_model = nullptr);
         [[nodiscard]] ProjectSnapshotRuntimeMetrics
         get_project_snapshot_metrics() const;
 

@@ -599,6 +599,62 @@ def test_v3_load_skips_one_bad_row_and_keeps_the_rest(monkeypatch, tmp_path: Pat
     assert library_path.read_text(encoding="utf-8") == original
 
 
+def test_v3_load_leaves_cached_rows_unverified_without_inspecting(
+    monkeypatch, tmp_path: Path
+):
+    project_path = tmp_path / "garden.licht"
+    project_path.write_bytes(b"garden")
+    project_uuid = str(uuid.uuid4())
+    inspect_calls = []
+
+    def inspect(_path):
+        inspect_calls.append(_path)
+        raise AssertionError("v3 load must not inspect catalog rows")
+
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(inspect))
+    library_path = tmp_path / "library.json"
+    library_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "folders": {"default": {"path": str(tmp_path)}},
+                "projects": {
+                    project_uuid: {
+                        "name": "Garden",
+                        "path": str(project_path),
+                        "folder_id": "default",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    index = AssetIndex(library_path=library_path)
+    assert index.load() is True
+
+    project = index.get_asset(project_uuid)
+    assert project is not None
+    assert project.status == "UNVERIFIED"
+    assert project.name == "Garden"
+    assert project.path == str(project_path)
+    assert project.exists is True
+    assert project.available is False
+    assert inspect_calls == []
+
+    monkeypatch.setattr(
+        AssetIndex, "_inspect_path", staticmethod(lambda _path: _inspection(project_uuid))
+    )
+    verified = index.verify_asset(project_uuid)
+    assert verified is not None
+    assert verified.status == "AVAILABLE"
+    assert verified.available is True
+
+    unavailable, total = index.verify_projects()
+    assert total == 1
+    assert unavailable == 0
+
+
 def test_malformed_v3_catalog_restores_previous_catalog(monkeypatch, tmp_path: Path):
     original_path = tmp_path / "original.licht"
     original_path.write_bytes(b"original")

@@ -4950,6 +4950,55 @@ namespace {
                   xxh3_128(shuffled_bytes));
     }
 
+    TEST(ProjectDocumentTest,
+         HydrationPipelineTensorChecksumsMatchMaterialized) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "splat-checksum.licht";
+        const Uuid project_uuid = fixed_uuid(12200);
+        const Uuid splat_uuid = fixed_uuid(12201);
+        auto model = make_splat(8);
+        model->set_frozen_ranges({{1, 2}, {5, 1}});
+        write_one_splat_document(path, *model, project_uuid, splat_uuid, 12210);
+        rewrite_splat_chunk(path, splat_uuid,
+                            Compression::ByteShuffleZstdFramed, 12220);
+
+        auto materialized = require_result_ptr(ProjectDocument::open(path));
+        Scene materialized_scene;
+        auto materialized_report = materialized->hydrate(materialized_scene);
+        ASSERT_TRUE(materialized_report)
+            << lfs::format_for_developer(materialized_report.error());
+        const auto* materialized_node =
+            materialized_scene.getNodeByUuid(splat_uuid);
+        ASSERT_NE(materialized_node, nullptr);
+        ASSERT_NE(materialized_node->model, nullptr);
+
+        auto deferred = require_result_ptr(ProjectDocument::open(
+            path, ProjectDocumentOpenOptions{.defer_geometry_payloads = true}));
+        Scene deferred_scene;
+        auto deferred_report = deferred->hydrate(deferred_scene);
+        ASSERT_TRUE(deferred_report)
+            << lfs::format_for_developer(deferred_report.error());
+        const auto* deferred_node = deferred_scene.getNodeByUuid(splat_uuid);
+        ASSERT_NE(deferred_node, nullptr);
+        ASSERT_NE(deferred_node->model, nullptr);
+
+        const auto checksum = [](const Tensor& tensor) {
+            const auto bytes = tensor_bytes(tensor);
+            return xxh3_128(bytes);
+        };
+        EXPECT_EQ(checksum(materialized_node->model->means()),
+                  checksum(deferred_node->model->means()));
+        EXPECT_EQ(checksum(materialized_node->model->sh0()),
+                  checksum(deferred_node->model->sh0()));
+        EXPECT_EQ(checksum(materialized_node->model->scaling_raw()),
+                  checksum(deferred_node->model->scaling_raw()));
+        EXPECT_EQ(checksum(materialized_node->model->rotation_raw()),
+                  checksum(deferred_node->model->rotation_raw()));
+        EXPECT_EQ(checksum(materialized_node->model->opacity_raw()),
+                  checksum(deferred_node->model->opacity_raw()));
+        expect_splats_bit_equal(*materialized_node->model, *deferred_node->model);
+    }
+
     TEST(ProjectDocumentTest, StreamHydrateForwardsMonotonicPayloadProgress) {
         TemporaryDirectory temporary;
         const fs::path path = temporary.path / "splat-progress.licht";

@@ -80,7 +80,8 @@
             </div>
 
             <div class="asset-gallery-header-actions">
-              <button class="asset-button asset-button--icon asset-view-button asset-refresh-button" data-event-click="refresh_catalog" data-tooltip="asset_manager.tooltip.refresh"><img src="../icon/sequencer/rotate-cw.png" /></button>
+              <span class="asset-gallery-scan-status" data-if="has_scan_status">{{scan_status}}</span>
+              <button class="asset-button asset-button--icon asset-view-button asset-refresh-button" data-class-is-stop="scan_active" data-event-click="refresh_catalog" data-attr-data-tooltip="refresh_action_tooltip"><img data-if="!scan_active" src="../icon/sequencer/rotate-cw.png" /><span class="asset-button-text" data-if="scan_active">{{stop_scan_label}}</span></button>
             </div>
           </div>
           <div class="asset-gallery-notice" data-if="has_catalog_notice">{{catalog_notice}}</div>

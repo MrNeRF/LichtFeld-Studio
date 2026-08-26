@@ -304,6 +304,7 @@ class AssetIndex:
         self._folders: Dict[str, Folder] = {}
         self._projects: Dict[str, Project] = {}
         self._project_by_path: Dict[str, str] = {}
+        self._catalog_epoch = 0
         self.load_issues: List[str] = []
 
     @property
@@ -341,6 +342,13 @@ class AssetIndex:
 
         return lf.io.inspect_project(path)
 
+    def _touch_catalog(self) -> None:
+        self._catalog_epoch += 1
+
+    @_synchronized
+    def catalog_epoch(self) -> int:
+        return self._catalog_epoch
+
     def _apply_inspection(self, project: Project, inspection: Any) -> None:
         project.file_uuid = str(inspection.file_uuid)
         project.commit_uuid = str(inspection.commit_uuid)
@@ -365,6 +373,7 @@ class AssetIndex:
         else:
             project.status = "UNSUPPORTED"
         project.error = ""
+        self._touch_catalog()
 
     def _clear_runtime(self, project: Project, status: str, error: str = "") -> None:
         project.file_uuid = ""
@@ -381,26 +390,34 @@ class AssetIndex:
         project.available = False
         project.status = status
         project.error = error
+        self._touch_catalog()
+
+    def _read_project_runtime(self, path: str, expected_uuid: str) -> Tuple[str, Any]:
+        if not Path(path).is_file():
+            return "MISSING", None
+        try:
+            inspection = self._inspect_path(path)
+        except Exception as exc:
+            return "UNREADABLE", str(exc)
+        if str(inspection.project_uuid) != expected_uuid:
+            return (
+                "IDENTITY_MISMATCH",
+                "The file at this path belongs to a different project",
+            )
+        if not self._inspection_is_master(inspection):
+            return "UNSUPPORTED", "Not a master project container"
+        return "AVAILABLE", inspection
+
+    def _apply_runtime_result(self, project: Project, kind: str, payload: Any) -> None:
+        if kind == "AVAILABLE":
+            project.relocation_candidate = ""
+            self._apply_inspection(project, payload)
+            return
+        self._clear_runtime(project, kind, str(payload or ""))
 
     def _refresh_project(self, project: Project) -> None:
-        if not Path(project.path).is_file():
-            self._clear_runtime(project, "MISSING")
-            return
-        project.relocation_candidate = ""
-        try:
-            inspection = self._inspect_path(project.path)
-            if str(inspection.project_uuid) != project.project_uuid:
-                self._clear_runtime(
-                    project,
-                    "IDENTITY_MISMATCH",
-                    "The file at this path belongs to a different project",
-                )
-            elif not self._inspection_is_master(inspection):
-                self._clear_runtime(project, "UNSUPPORTED", "Not a master project container")
-            else:
-                self._apply_inspection(project, inspection)
-        except Exception as exc:
-            self._clear_runtime(project, "UNREADABLE", str(exc))
+        kind, payload = self._read_project_runtime(project.path, project.project_uuid)
+        self._apply_runtime_result(project, kind, payload)
 
     def _rebuild_path_lookup(self) -> None:
         self._project_by_path = {
@@ -567,10 +584,13 @@ class AssetIndex:
                 name=str(value.get("name") or self._inspection_name(path)),
                 path=path,
                 folder_id=folder_id,
+                exists=True,
+                status="UNVERIFIED",
             )
-            self._refresh_project(project)
             self._projects[canonical_uuid] = project
             self._project_by_path[path_key] = canonical_uuid
+        if self._projects:
+            self._touch_catalog()
         return normalized
 
     def _migrate_legacy(self, data: Dict[str, Any]) -> None:
@@ -785,6 +805,7 @@ class AssetIndex:
                 len(self._folders),
                 len(self._projects),
             )
+            self._touch_catalog()
             return True
         except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
             self._restore_state(previous_state)
@@ -978,13 +999,13 @@ class AssetIndex:
             self._projects.update(removed)
             self._rebuild_path_lookup()
             return 0
+        self._touch_catalog()
         return len(removed)
 
     @_synchronized
     def get_asset(self, asset_id: str) -> Optional[Project]:
         return self._projects.get(asset_id)
 
-    @_synchronized
     def register_licht_asset(
         self,
         project_path: str,
@@ -993,8 +1014,8 @@ class AssetIndex:
         name: Optional[str] = None,
         adopt_existing: bool = True,
         save: bool = True,
+        inspection: Any = None,
     ) -> Tuple[Optional[Project], bool]:
-        previous_state = self._snapshot_state() if save else None
         path = _normalize_path(project_path)
         if not is_supported_asset_path(path):
             _log.warning("Asset Manager only supports .licht projects: %s", path)
@@ -1002,69 +1023,82 @@ class AssetIndex:
         if not Path(path).is_file():
             raise FileNotFoundError(path)
 
-        inspection = self._inspect_path(path)
+        if inspection is None:
+            inspection = self._inspect_path(path)
         if not self._inspection_is_master(inspection):
             raise ValueError("Asset Manager only registers master .licht project files")
         project_uuid = str(inspection.project_uuid)
         uuid.UUID(project_uuid)
 
-        target_folder_id = self._folder_id_for_path(path)
-        if target_folder_id is None:
-            target_folder_id = self._add_folder_record(str(Path(path).parent)).id
+        with self._lock:
+            previous_state = self._snapshot_state() if save else None
+            target_folder_id = self._folder_id_for_path(path)
+            if target_folder_id is None:
+                target_folder_id = self._add_folder_record(str(Path(path).parent)).id
 
-        path_key = self._path_key(path)
-        stale_uuid = self._project_by_path.get(path_key)
-        if stale_uuid is not None and stale_uuid != project_uuid:
-            self._projects.pop(stale_uuid, None)
-            self._project_by_path.pop(path_key, None)
+            path_key = self._path_key(path)
+            stale_uuid = self._project_by_path.get(path_key)
+            if stale_uuid is not None and stale_uuid != project_uuid:
+                self._projects.pop(stale_uuid, None)
+                self._project_by_path.pop(path_key, None)
 
-        project = self._projects.get(project_uuid)
-        created = project is None
-        persisted_changed = created or stale_uuid is not None
-        if project is None:
-            project = Project(
-                project_uuid=project_uuid,
-                name=name or self._inspection_name(path),
-                path=path,
-                folder_id=target_folder_id,
-            )
-            self._projects[project_uuid] = project
-            self._project_by_path[path_key] = project_uuid
-            self._apply_inspection(project, inspection)
-        else:
-            use_observed_path = adopt_existing or self._path_key(project.path) == path_key
-            if use_observed_path:
-                old_path_key = self._path_key(project.path)
-                if old_path_key != path_key:
-                    self._project_by_path.pop(old_path_key, None)
-                    project.path = path
-                    self._project_by_path[path_key] = project_uuid
-                    persisted_changed = True
+            project = self._projects.get(project_uuid)
+            created = project is None
+            persisted_changed = created or stale_uuid is not None
+            if project is None:
+                project = Project(
+                    project_uuid=project_uuid,
+                    name=name or self._inspection_name(path),
+                    path=path,
+                    folder_id=target_folder_id,
+                )
+                self._projects[project_uuid] = project
+                self._project_by_path[path_key] = project_uuid
                 self._apply_inspection(project, inspection)
             else:
-                if not Path(project.path).is_file():
-                    project.relocation_candidate = path
-                self._refresh_project(project)
+                use_observed_path = adopt_existing or self._path_key(project.path) == path_key
+                if use_observed_path:
+                    old_path_key = self._path_key(project.path)
+                    if old_path_key != path_key:
+                        self._project_by_path.pop(old_path_key, None)
+                        project.path = path
+                        self._project_by_path[path_key] = project_uuid
+                        persisted_changed = True
+                    self._apply_inspection(project, inspection)
+                else:
+                    if not Path(project.path).is_file():
+                        project.relocation_candidate = path
+                    self._refresh_project(project)
 
-            if name is not None and project.name != name:
-                project.name = name
-                persisted_changed = True
-            if adopt_existing and project.folder_id != target_folder_id:
-                project.folder_id = target_folder_id
-                persisted_changed = True
+                if name is not None and project.name != name:
+                    project.name = name
+                    persisted_changed = True
+                if adopt_existing and project.folder_id != target_folder_id:
+                    project.folder_id = target_folder_id
+                    persisted_changed = True
 
-        if save and persisted_changed and not self.save():
-            assert previous_state is not None
-            self._restore_state(previous_state)
-            return None, False
-        return project, created
+            if save and persisted_changed and not self.save():
+                assert previous_state is not None
+                self._restore_state(previous_state)
+                return None, False
+            return project, created
 
-    @_synchronized
     def verify_asset(self, asset_id: str) -> Optional[Project]:
-        project = self._projects.get(asset_id)
-        if project is not None:
-            self._refresh_project(project)
-        return project
+        with self._lock:
+            project = self._projects.get(asset_id)
+            if project is None:
+                return None
+            path = project.path
+            expected_uuid = project.project_uuid
+        kind, payload = self._read_project_runtime(path, expected_uuid)
+        with self._lock:
+            project = self._projects.get(asset_id)
+            if project is None:
+                return None
+            if project.path != path or project.project_uuid != expected_uuid:
+                return project
+            self._apply_runtime_result(project, kind, payload)
+            return project
 
     @_synchronized
     def relink_asset(self, asset_id: str, new_path: str) -> bool:
@@ -1098,12 +1132,20 @@ class AssetIndex:
         self._restore_state(previous_state)
         return False
 
-    @_synchronized
+    def verify_projects_batch(self, asset_ids: List[str]) -> int:
+        verified = 0
+        for asset_id in asset_ids:
+            if self.verify_asset(asset_id) is not None:
+                verified += 1
+        return verified
+
     def verify_projects(self) -> Tuple[int, int]:
-        for project in self._projects.values():
-            self._refresh_project(project)
-        unavailable = sum(not project.available for project in self._projects.values())
-        return unavailable, len(self._projects)
+        with self._lock:
+            asset_ids = list(self._projects)
+        self.verify_projects_batch(asset_ids)
+        with self._lock:
+            unavailable = sum(not project.available for project in self._projects.values())
+            return unavailable, len(self._projects)
 
     @_synchronized
     def list_projects(self, folder_id: Optional[str] = None) -> List[Project]:

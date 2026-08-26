@@ -88,6 +88,10 @@ namespace lfs::vis {
         }
         void setShutdownRequestedCallback(std::function<void()> callback) override;
         std::expected<void, std::string> startTraining() override;
+        [[nodiscard]] ProjectTrainingSessionState
+        projectTrainingSessionState() const override;
+        lfs::Result<void>
+        restoreProjectTrainingSession(bool then_start = false) override;
         [[nodiscard]] std::optional<int>
         trainingStartOverwriteConflict() override;
         lfs::Result<void>
@@ -246,6 +250,11 @@ namespace lfs::vis {
         JobRegistry job_registry_;
         friend class gui::GuiManager;
         friend class project::ProjectLifecycle;
+        friend class VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnSave_Test;
+        friend class VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnAutosave_Test;
+        friend class VisualizerImplResetTest_EditModeWithoutHydratedSessionDropsCheckpoint_Test;
+        friend class VisualizerImplResetTest_RestoreThenTrainWritesNewCheckpoint_Test;
+        friend class VisualizerImplResetTest_HeadlessOpenPrintsHydrationStagesWhenBenchPathSet_Test;
         friend class VisualizerImplResetTest_ResetTrainingPreservesExplicitInitPath_Test;
         friend class VisualizerImplResetTest_DirtyProjectSwitchRequiresExplicitDiscardAuthorization_Test;
         friend class VisualizerImplResetTest_NewProjectDirtyGateRunsBelowEveryCommandEntry_Test;

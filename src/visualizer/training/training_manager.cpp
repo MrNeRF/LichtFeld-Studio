@@ -855,6 +855,21 @@ namespace lfs::vis {
     }
 
     void TrainerManager::resumeTraining() {
+        if (!trainer_ && viewer_) {
+            const auto session =
+                viewer_->projectTrainingSessionState();
+            if (session.available && !session.hydrated) {
+                if (auto restored =
+                        viewer_->restoreProjectTrainingSession(
+                            true);
+                    !restored) {
+                    LOG_ERROR(
+                        "Failed to restore training session: {}",
+                        lfs::format_for_developer(restored.error()));
+                }
+                return;
+            }
+        }
         if (!canResume()) {
             LOG_TRACE("Cannot resume: {}", getActionBlockedReason(TrainingAction::Resume));
             return;

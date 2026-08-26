@@ -169,6 +169,10 @@ namespace lfs::io::project {
         std::size_t hydrated_payload_units = 0;
         std::size_t invalidated_payload_units = 0;
         bool selection_installed = false;
+        double splat_read_ms = 0;
+        double splat_hash_ms = 0;
+        double splat_copy_ms = 0;
+        double splat_materialize_ms = 0;
     };
 
     class LFS_IO_API ProjectHydrationPlan {

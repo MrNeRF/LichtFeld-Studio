@@ -6,10 +6,12 @@ from importlib import import_module
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from urllib.parse import quote
+import json
 import re
 import sys
 import threading
 import time
+import uuid
 
 import pytest
 
@@ -58,11 +60,12 @@ def _install_lf_stub(monkeypatch):
         ),
         PanelHeightMode=SimpleNamespace(FILL="FILL", CONTENT="CONTENT"),
         PanelOption=SimpleNamespace(DEFAULT_CLOSED="DEFAULT_CLOSED"),
-        tr=lambda key: (
-            'Remove "{name}" with {count} projects?'
-            if key == "asset_manager.dialog.remove_folder_message"
-            else key
-        ),
+        tr=lambda key: {
+            "asset_manager.dialog.remove_folder_message": 'Remove "{name}" with {count} projects?',
+            "asset_manager.status.scanning": "Scanning {name}: {folders} folders, {projects} projects found",
+            "asset_manager.action.stop_scan": "Stop scan",
+            "asset_manager.status.scan_stopped": "Scan stopped",
+        }.get(key, key),
         get_current_language=lambda: "en",
         get_mouse_screen_pos=lambda: (120.0, 220.0),
         show_context_menu=show_context_menu,
@@ -371,6 +374,11 @@ def test_results_header_uses_icon_views_and_nondestructive_refresh_action():
     assert "asset-icon-list" in rml
     assert 'data-event-click="refresh_and_clean"' not in rml
     assert rml.count('data-event-click="refresh_catalog"') == 1
+    assert 'data-if="has_scan_status"' in rml
+    assert "{{scan_status}}" in rml
+    assert 'data-class-is-stop="scan_active"' in rml
+    assert 'data-attr-data-tooltip="refresh_action_tooltip"' in rml
+    assert "{{stop_scan_label}}" in rml
     assert 'data-event-click="clean_missing"' not in rml
     assert "asset-list-secondary" not in rml
     assert "display_subtitle" not in rml
@@ -718,7 +726,7 @@ def test_add_folder_uses_real_directory_picker(panel_module):
         verify_projects=lambda: (0, 0),
     )
     panel.refresh_catalog = lambda **_kwargs: None
-    panel._scan_asset_folders = lambda: None
+    panel._scan_asset_folders = lambda **_kwargs: None
 
     panel.on_add_folder()
 
@@ -920,7 +928,9 @@ def test_gallery_keyboard_navigation_uses_visual_columns(panel_module):
     assert panel.get_selected_asset_id() == list(assets)[1]
 
 
-def test_toolbar_refresh_verifies_without_deleting_then_scans(panel_module, monkeypatch):
+def test_toolbar_refresh_does_not_verify_on_ui_thread_then_scans(
+    panel_module, monkeypatch
+):
     missing = _project(exists=False, available=False, status="MISSING")
     present = _project(
         "44444444-4444-4444-8444-444444444444",
@@ -941,10 +951,11 @@ def test_toolbar_refresh_verifies_without_deleting_then_scans(panel_module, monk
         verify_projects=verify_projects,
     )
     monkeypatch.setattr(panel, "_scan_asset_folders", lambda: calls.append("scan"))
+    monkeypatch.setattr(panel, "_start_catalog_verify", lambda: calls.append("verify_bg"))
 
     panel.refresh_catalog()
 
-    assert calls == ["verify", "scan"]
+    assert calls == ["verify_bg", "scan"]
     assert set(assets) == {missing["id"], present["id"]}
 
 
@@ -1106,13 +1117,17 @@ def test_add_folder_starts_scan(panel_module, monkeypatch):
     panel._handle = _Handle()
     scans = []
     panel._asset_index = _index(
-        add_folder=lambda _path: SimpleNamespace(id="selected-folder"),
+        add_folder=lambda _path: SimpleNamespace(id="selected-folder", path="/tmp/assets"),
         verify_projects=lambda: (0, 0),
     )
-    monkeypatch.setattr(panel, "_scan_asset_folders", lambda: scans.append("scan"))
+    monkeypatch.setattr(
+        panel,
+        "_scan_asset_folders",
+        lambda folder_id=None, directory=None: scans.append((folder_id, directory)),
+    )
 
     assert panel._add_folder_from_path("/tmp/assets") == "selected-folder"
-    assert scans == ["scan"]
+    assert scans == [("selected-folder", "/tmp/assets")]
 
 
 def test_catalog_notice_for_skipped_entries_and_clean_load(panel_module):
@@ -1139,7 +1154,7 @@ def test_catalog_notice_for_failed_load_and_on_mount_warning(panel_module, monke
         panel, "_log_warn", lambda msg, *args: warnings.append(msg % args if args else msg)
     )
     monkeypatch.setattr(panel, "_bind_dom_event_listeners", lambda _doc: None)
-    monkeypatch.setattr(panel, "_scan_asset_folders", lambda: None)
+    monkeypatch.setattr(panel, "_scan_asset_folders", lambda **_kwargs: None)
     panel.on_mount(_Document())
     assert warnings
 
@@ -1148,7 +1163,7 @@ def test_unmount_cancels_running_folder_scan(panel_module, monkeypatch):
     started = threading.Event()
     observed = {}
 
-    def fake_scan(_index, cancel_event=None):
+    def fake_scan(_index, cancel_event=None, progress=None):
         observed["event"] = cancel_event
         started.set()
         if cancel_event is not None:
@@ -1176,7 +1191,7 @@ def test_refresh_during_scan_schedules_exactly_one_rerun(panel_module, monkeypat
     gate = threading.Event()
     calls = []
 
-    def fake_scan(_index, cancel_event=None):
+    def fake_scan(_index, cancel_event=None, progress=None):
         calls.append(1)
         started.set()
         gate.wait(timeout=2.0)
@@ -1189,14 +1204,152 @@ def test_refresh_during_scan_schedules_exactly_one_rerun(panel_module, monkeypat
     panel._scan_asset_folders()
     assert started.wait(timeout=2.0)
 
-    panel.refresh_catalog()
-    panel.refresh_catalog()
+    panel._scan_asset_folders()
+    panel._scan_asset_folders()
     assert len(calls) == 1
 
     started.clear()
     gate.set()
     assert _wait_until(lambda: len(calls) == 2)
     assert len(calls) == 2
+    assert _wait_until(lambda: not panel._folder_scan_active)
+    panel.on_unmount(_Document())
+
+
+def test_add_folder_scans_only_the_added_folder(panel_module, monkeypatch):
+    started = threading.Event()
+    one_calls = []
+    all_calls = []
+
+    def fake_one(_index, folder_id, directory, cancel_event=None, progress=None):
+        one_calls.append((folder_id, directory))
+        started.set()
+        if cancel_event is not None:
+            cancel_event.wait(timeout=2.0)
+        return _scan_result()
+
+    def fake_all(_index, cancel_event=None, progress=None):
+        all_calls.append(1)
+        return _scan_result()
+
+    monkeypatch.setattr(panel_module, "scan_asset_folder", fake_one)
+    monkeypatch.setattr(panel_module, "scan_all_asset_folders", fake_all)
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    panel._asset_index = _index(
+        add_folder=lambda path: SimpleNamespace(id="selected-folder", path=path),
+        verify_projects=lambda: (0, 0),
+    )
+    panel._add_folder_from_path("/tmp/mrnf_local")
+    assert started.wait(timeout=2.0)
+    assert one_calls == [("selected-folder", "/tmp/mrnf_local")]
+    assert all_calls == []
+    panel.on_unmount(_Document())
+
+
+def test_on_mount_scans_all_folders_only_before_first_completed_scan(
+    panel_module, monkeypatch
+):
+    started = threading.Event()
+    gate = threading.Event()
+    calls = []
+
+    def fake_all(_index, cancel_event=None, progress=None):
+        calls.append("all")
+        started.set()
+        gate.wait(timeout=2.0)
+        return _scan_result()
+
+    monkeypatch.setattr(panel_module, "scan_all_asset_folders", fake_all)
+    monkeypatch.setattr(
+        panel_module,
+        "scan_asset_folder",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("mount must scan all folders")
+        ),
+    )
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    panel._asset_index = _index(verify_projects=lambda: (0, 0))
+    monkeypatch.setattr(panel, "_bind_dom_event_listeners", lambda _doc: None)
+    panel_module._folder_scan_completed_in_process = False
+
+    panel.on_mount(_Document())
+    assert started.wait(timeout=2.0)
+    assert calls == ["all"]
+    gate.set()
+    assert _wait_until(lambda: not panel._folder_scan_active)
+    assert panel_module._folder_scan_completed_in_process is True
+
+    started.clear()
+    panel.on_unmount(_Document())
+    panel._panel_mounted = True
+    panel.on_mount(_Document())
+    assert calls == ["all"]
+    assert not started.is_set()
+    panel.on_unmount(_Document())
+
+
+def test_refresh_during_scan_cancels_and_shows_stopped_status(panel_module, monkeypatch):
+    started = threading.Event()
+    calls = []
+
+    def fake_scan(_index, cancel_event=None, progress=None):
+        calls.append(1)
+        started.set()
+        if cancel_event is not None:
+            cancel_event.wait(timeout=2.0)
+        return _scan_result(cancelled=True)
+
+    monkeypatch.setattr(panel_module, "scan_all_asset_folders", fake_scan)
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    panel._asset_index = _index(verify_projects=lambda: (0, 0))
+    panel._scan_asset_folders()
+    assert started.wait(timeout=2.0)
+    assert panel.get_scan_active() is True
+
+    panel.refresh_catalog()
+    assert panel._folder_scan_cancel is not None and panel._folder_scan_cancel.is_set()
+    assert _wait_until(lambda: not panel._folder_scan_active)
+    assert len(calls) == 1
+    assert panel.get_scan_active() is False
+    assert panel.get_scan_status() == "Scan stopped"
+    assert panel.get_has_scan_status() is True
+    assert panel.get_refresh_action_tooltip() == "asset_manager.tooltip.refresh"
+    panel.on_unmount(_Document())
+
+
+def test_scan_status_reads_worker_progress_counters(panel_module, monkeypatch):
+    started = threading.Event()
+    gate = threading.Event()
+
+    def fake_scan(_index, cancel_event=None, progress=None):
+        if progress is not None:
+            progress.report(
+                directories=12, projects=3, current_root="/tmp/mrnf_local"
+            )
+        started.set()
+        gate.wait(timeout=2.0)
+        return _scan_result()
+
+    monkeypatch.setattr(panel_module, "scan_all_asset_folders", fake_scan)
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    panel._asset_index = _index(verify_projects=lambda: (0, 0))
+    panel._scan_asset_folders()
+    assert started.wait(timeout=2.0)
+    assert panel.get_scan_active() is True
+    assert panel.get_scan_status() == (
+        "Scanning mrnf_local: 12 folders, 3 projects found"
+    )
+    assert panel.get_has_scan_status() is True
+    assert panel.get_refresh_action_tooltip() == "asset_manager.action.stop_scan"
+    panel._published_scan_status = ""
+    panel._published_scan_active = False
+    assert panel.on_update(_Document()) is True
+    assert "scan_status" in panel._handle.dirty_fields
+    gate.set()
     assert _wait_until(lambda: not panel._folder_scan_active)
     panel.on_unmount(_Document())
 
@@ -1392,3 +1545,124 @@ def test_data_if_model_fields_are_boolean_bindings(panel_module):
             assert isinstance(folders[0][field], bool), (expr, type(folders[0][field]))
         else:
             raise AssertionError(f"unsupported data-if scope: {expr}")
+
+
+def test_on_mount_shows_cached_rows_without_inspecting(
+    panel_module, monkeypatch, tmp_path
+):
+    from lfs_plugins.asset_index import AssetIndex
+
+    inspect_calls = []
+    projects = {}
+    inspections = {}
+    for index in range(34):
+        project_uuid = str(uuid.uuid4())
+        path = tmp_path / f"{project_uuid}.licht"
+        path.write_bytes(b"container")
+        projects[project_uuid] = {
+            "name": f"P{index:02d}",
+            "path": str(path),
+            "folder_id": "default",
+        }
+        inspections[path.name] = SimpleNamespace(
+            project_uuid=project_uuid,
+            file_uuid=str(uuid.uuid4()),
+            commit_uuid=str(uuid.uuid4()),
+            generation=1,
+            created_at_unix_ns=100,
+            saved_at_unix_ns=200,
+            physical_file_size=1234,
+            role=SimpleNamespace(name="MASTER"),
+            open_state=SimpleNamespace(name="OPEN"),
+            has_preview=False,
+            fallback_preview_path="",
+        )
+
+    def inspect(path):
+        inspect_calls.append(path)
+        time.sleep(0.002)
+        return inspections[Path(path).name]
+
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(inspect))
+    library_path = tmp_path / "library.json"
+    library_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "folders": {"default": {"path": str(tmp_path)}},
+                "projects": projects,
+            }
+        ),
+        encoding="utf-8",
+    )
+    index = AssetIndex(library_path=library_path, default_folder_path=tmp_path)
+    loaded_at = time.perf_counter()
+    assert index.load() is True
+    load_ms = (time.perf_counter() - loaded_at) * 1000
+    assert inspect_calls == []
+    assert {project.status for project in index.list_projects()} == {"UNVERIFIED"}
+
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    panel._asset_index = index
+    panel_module._folder_scan_completed_in_process = True
+    monkeypatch.setattr(panel, "_bind_dom_event_listeners", lambda _doc: None)
+    monkeypatch.setattr(panel, "_scan_asset_folders", lambda **_kwargs: None)
+    refresh_at = {}
+    original_refresh = panel._refresh_records
+
+    def timed_refresh(*, assets=False, folders=False):
+        refresh_at["inspects"] = len(inspect_calls)
+        refresh_at["time"] = time.perf_counter()
+        return original_refresh(assets=assets, folders=folders)
+
+    panel._refresh_records = timed_refresh
+    started = time.perf_counter()
+    panel.on_mount(_Document())
+    mount_to_refresh_ms = (refresh_at["time"] - started) * 1000
+
+    assert refresh_at["inspects"] == 0
+    assert panel._last_asset_match_count == 34
+    assert {row["status"] for row in panel._handle.records["assets"]} == {"UNVERIFIED"}
+    assert mount_to_refresh_ms < 100.0
+    panel._mount_timing = {
+        "load_ms": load_ms,
+        "mount_to_refresh_ms": mount_to_refresh_ms,
+    }
+    assert _wait_until(
+        lambda: {project.status for project in index.list_projects()} == {"AVAILABLE"}
+    )
+    panel.on_update(_Document())
+    assert {row["status"] for row in panel._handle.records["assets"]} <= {
+        "AVAILABLE",
+        "UNVERIFIED",
+    }
+    panel.on_unmount(_Document())
+
+
+def test_on_update_publishes_new_catalog_rows(panel_module):
+    first = _project()
+    second = _project(
+        "44444444-4444-4444-8444-444444444444",
+        name="Garden",
+        path="/tmp/garden.licht",
+    )
+    epoch = {"value": 1}
+    assets = {first["id"]: first}
+    panel = panel_module.AssetManagerPanel()
+    panel._handle = _Handle()
+    panel._asset_index = _index(
+        assets=assets,
+        catalog_epoch=lambda: epoch["value"],
+    )
+    panel._catalog_epoch_seen = 1
+    panel._refresh_records(assets=True, folders=True)
+    assert {row["id"] for row in panel._handle.records["assets"]} == {first["id"]}
+
+    assets[second["id"]] = second
+    epoch["value"] = 2
+    assert panel.on_update(_Document()) is True
+    assert {row["id"] for row in panel._handle.records["assets"]} == {
+        first["id"],
+        second["id"],
+    }

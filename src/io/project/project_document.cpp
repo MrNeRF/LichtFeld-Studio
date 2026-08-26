@@ -3993,6 +3993,8 @@ namespace lfs::io::project {
                  impl_->checkpoints) {
                 std::optional<lfs::core::SplatData>
                     materialized;
+                const auto ckpt_started =
+                    std::chrono::steady_clock::now();
                 auto decoded = payload.visit_stream(
                     [&](std::istream& stream,
                         const std::uint64_t bytes)
@@ -4032,6 +4034,9 @@ namespace lfs::io::project {
                             std::move(*model));
                         return {};
                     });
+                splat_materialize_ms += milliseconds(
+                    ckpt_started,
+                    std::chrono::steady_clock::now());
                 if (!decoded) {
                     return std::move(decoded).error();
                 }
@@ -4313,6 +4318,11 @@ namespace lfs::io::project {
                         checkpoint_uuid.has_value(),
                     .pending_session =
                         std::move(pending_session),
+                    .splat_read_ms = splat_read_ms,
+                    .splat_hash_ms = splat_hash_ms,
+                    .splat_copy_ms = splat_copy_ms,
+                    .splat_materialize_ms =
+                        splat_materialize_ms,
                 };
             const double total_ms = milliseconds(
                 hydration_started,

@@ -143,6 +143,10 @@
     color: @{warning};
 }
 
+.asset-gallery-scan-status {
+    color: @{text_dim};
+}
+
 /* ── Asset Cards ─────────────────────────────────────────── */
 
 .asset-card {

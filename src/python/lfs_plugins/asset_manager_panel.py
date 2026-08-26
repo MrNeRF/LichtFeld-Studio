@@ -15,7 +15,12 @@ from urllib.parse import quote
 import lichtfeld as lf
 
 from . import rml_widgets
-from .asset_watch import scan_all_asset_folders
+from .asset_watch import (
+    AssetFolderScanProgress,
+    scan_all_asset_folders,
+    scan_asset_folder,
+    verify_catalog_projects,
+)
 from .localization import localized_count
 from .rml_keys import KI_DELETE, KI_DOWN, KI_LEFT, KI_RETURN, KI_RIGHT, KI_UP
 from .types import Panel
@@ -35,6 +40,7 @@ _RML_PATH_SAFE_CHARS = "/:._-~"
 _THUMBNAIL_FIT_ALIGN = "cover center"
 SCOPE_ALL = "__all__"
 PROJECT_DRAG_PAYLOAD_TYPE = "application/x-lichtfeld-project"
+_folder_scan_completed_in_process = False
 
 try:
     from .asset_index import (
@@ -130,8 +136,19 @@ class AssetManagerPanel(Panel):
         self._folder_scan_active = False
         self._folder_scan_refresh_pending = False
         self._folder_scan_rerun_pending = False
+        self._folder_scan_rerun_target: Optional[tuple[str, str]] = None
         self._folder_scan_cancel: Optional[threading.Event] = None
         self._folder_scan_thread: Optional[threading.Thread] = None
+        self._catalog_verify_active = False
+        self._catalog_verify_refresh_pending = False
+        self._catalog_verify_cancel: Optional[threading.Event] = None
+        self._catalog_verify_thread: Optional[threading.Thread] = None
+        self._catalog_epoch_seen: Optional[int] = None
+        self._scan_progress = AssetFolderScanProgress()
+        self._scan_stop_requested = False
+        self._scan_stopped_visible = False
+        self._published_scan_active = False
+        self._published_scan_status = ""
         self._panel_mounted = True
         self._catalog_load_failed = False
         self._drag_payload_token: Optional[int] = None
@@ -235,6 +252,13 @@ class AssetManagerPanel(Panel):
         model.bind_func("asset_results_summary", self.get_asset_results_summary)
         model.bind_func("catalog_notice", self.get_catalog_notice)
         model.bind_func("has_catalog_notice", self.get_has_catalog_notice)
+        model.bind_func("scan_active", self.get_scan_active)
+        model.bind_func("scan_status", self.get_scan_status)
+        model.bind_func("has_scan_status", self.get_has_scan_status)
+        model.bind_func("refresh_action_tooltip", self.get_refresh_action_tooltip)
+        model.bind_func(
+            "stop_scan_label", lambda: tr("asset_manager.action.stop_scan")
+        )
 
         model.bind_func("selected_asset_name", self.get_selected_asset_name)
         model.bind_func(
@@ -673,6 +697,36 @@ class AssetManagerPanel(Panel):
     def get_has_catalog_notice(self) -> bool:
         return bool(self.get_catalog_notice())
 
+    def get_scan_active(self) -> bool:
+        with self._folder_scan_lock:
+            return bool(self._folder_scan_active)
+
+    def get_scan_status(self) -> str:
+        with self._folder_scan_lock:
+            active = self._folder_scan_active
+            stopped = self._scan_stopped_visible
+            progress = self._scan_progress
+        if active:
+            directories, projects, root = progress.snapshot()
+            name = Path(root).name or root
+            return tr(
+                "asset_manager.status.scanning",
+                name=name,
+                folders=directories,
+                projects=projects,
+            )
+        if stopped:
+            return tr("asset_manager.status.scan_stopped")
+        return ""
+
+    def get_has_scan_status(self) -> bool:
+        return bool(self.get_scan_status())
+
+    def get_refresh_action_tooltip(self) -> str:
+        if self.get_scan_active():
+            return "asset_manager.action.stop_scan"
+        return "asset_manager.tooltip.refresh"
+
     def _get_selected_asset(self) -> Optional[Dict[str, Any]]:
         asset_id = self.get_selected_asset_id()
         return self._asset_index_assets().get(asset_id) if asset_id else None
@@ -780,7 +834,8 @@ class AssetManagerPanel(Panel):
         self._selection_cursor_id = None
         self._update_selection_type()
         self.refresh_catalog(scan_folders=False)
-        self._scan_asset_folders()
+        folder_path = str(getattr(folder, "path", "") or directory).strip()
+        self._scan_asset_folders(folder_id=folder.id, directory=folder_path)
         return folder.id
 
     def add_asset_folder(self, _handle=None, _ev=None, _args=None):
@@ -1125,9 +1180,18 @@ class AssetManagerPanel(Panel):
         request_update: bool = True,
         scan_folders: bool = True,
     ):
+        if scan_folders:
+            cancel = None
+            with self._folder_scan_lock:
+                if self._folder_scan_active:
+                    self._folder_scan_rerun_pending = False
+                    self._folder_scan_rerun_target = None
+                    self._scan_stop_requested = True
+                    cancel = self._folder_scan_cancel
+            if cancel is not None:
+                cancel.set()
+                return
         self._sync_default_folder_path()
-        if self._asset_index:
-            self._asset_index.verify_projects()
         self._repair_selection()
         self._refresh_records(assets=True, folders=True)
         if self._handle:
@@ -1135,44 +1199,103 @@ class AssetManagerPanel(Panel):
         if request_update:
             self._request_model_update()
         if scan_folders:
+            with self._folder_scan_lock:
+                self._scan_stopped_visible = False
+            self._start_catalog_verify()
             self._scan_asset_folders()
 
-    def _scan_asset_folders(self) -> None:
+    def _scan_asset_folders(
+        self,
+        folder_id: Optional[str] = None,
+        directory: Optional[str] = None,
+    ) -> None:
         if not self._asset_index:
             return
+        target: Optional[tuple[str, str]]
+        if folder_id and directory:
+            target = (str(folder_id), str(directory))
+        else:
+            target = None
         with self._folder_scan_lock:
             if self._folder_scan_active:
-                self._folder_scan_rerun_pending = True
+                if self._folder_scan_rerun_pending:
+                    if self._folder_scan_rerun_target != target:
+                        self._folder_scan_rerun_target = None
+                else:
+                    self._folder_scan_rerun_pending = True
+                    self._folder_scan_rerun_target = target
                 return
             if not self._panel_mounted:
                 return
-            if not any(
+            if target is None and not any(
                 folder.get("path")
                 for folder in self._asset_index_folders().values()
             ):
                 return
             self._folder_scan_active = True
             self._folder_scan_rerun_pending = False
+            self._folder_scan_rerun_target = None
+            self._scan_stop_requested = False
+            self._scan_stopped_visible = False
+            progress = AssetFolderScanProgress()
+            if target is not None:
+                progress.report(current_root=target[1])
+            else:
+                for folder in self._asset_index_folders().values():
+                    path = str(folder.get("path") or "").strip()
+                    if path:
+                        progress.report(current_root=path)
+                        break
+            self._scan_progress = progress
             cancel_event = threading.Event()
             self._folder_scan_cancel = cancel_event
+            scan_folder_id = target[0] if target else None
+            scan_directory = target[1] if target else None
             thread = threading.Thread(
                 target=self._folder_scan_worker,
-                args=(self._asset_index, cancel_event),
+                args=(
+                    self._asset_index,
+                    cancel_event,
+                    scan_folder_id,
+                    scan_directory,
+                    progress,
+                ),
                 daemon=True,
                 name="AssetManagerFolderScan",
             )
             self._folder_scan_thread = thread
         thread.start()
+        self._publish_scan_progress()
 
-    def _folder_scan_worker(self, index: Any, cancel_event: threading.Event) -> None:
+    def _folder_scan_worker(
+        self,
+        index: Any,
+        cancel_event: threading.Event,
+        folder_id: Optional[str],
+        directory: Optional[str],
+        progress: AssetFolderScanProgress,
+    ) -> None:
+        global _folder_scan_completed_in_process
         try:
-            result = scan_all_asset_folders(index, cancel_event)
+            if folder_id and directory:
+                result = scan_asset_folder(
+                    index,
+                    folder_id,
+                    directory,
+                    cancel_event,
+                    progress=progress,
+                )
+            else:
+                result = scan_all_asset_folders(
+                    index, cancel_event, progress=progress
+                )
             _log.info(
-                "Asset folder scan: discovered=%d added=%d existing=%d failed=%d",
+                "Asset folder scan: discovered=%d added=%d existing=%d failed=%d cancelled=%s",
                 result.discovered,
                 result.added,
                 result.already_cataloged,
                 result.failed,
+                result.cancelled,
             )
         except Exception:
             _log.exception("Asset Manager folder scan failed")
@@ -1180,8 +1303,12 @@ class AssetManagerPanel(Panel):
             with self._folder_scan_lock:
                 self._folder_scan_active = False
                 self._folder_scan_refresh_pending = True
+                if self._scan_stop_requested:
+                    self._scan_stopped_visible = True
+                self._scan_stop_requested = False
                 if self._folder_scan_thread is threading.current_thread():
                     self._folder_scan_thread = None
+                _folder_scan_completed_in_process = True
             scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
             if callable(scheduler):
                 scheduler(self._complete_folder_scan)
@@ -1199,9 +1326,106 @@ class AssetManagerPanel(Panel):
         self._finish_folder_scan()
         with self._folder_scan_lock:
             rerun = self._folder_scan_rerun_pending
+            target = self._folder_scan_rerun_target
             self._folder_scan_rerun_pending = False
+            self._folder_scan_rerun_target = None
+        self._publish_scan_progress()
         if rerun and self._panel_mounted:
-            self._scan_asset_folders()
+            if target is not None:
+                self._scan_asset_folders(folder_id=target[0], directory=target[1])
+            else:
+                self._scan_asset_folders()
+
+    def _catalog_epoch(self) -> Optional[int]:
+        if not self._asset_index:
+            return None
+        getter = getattr(self._asset_index, "catalog_epoch", None)
+        if callable(getter):
+            return int(getter())
+        if isinstance(getter, int):
+            return getter
+        return None
+
+    def _publish_catalog_if_changed(self) -> bool:
+        epoch = self._catalog_epoch()
+        if epoch is None or epoch == self._catalog_epoch_seen:
+            return False
+        self._catalog_epoch_seen = epoch
+        self._refresh_records(assets=True, folders=True)
+        self._dirty_selection()
+        return True
+
+    def _start_catalog_verify(self) -> None:
+        if not self._asset_index or not self._panel_mounted:
+            return
+        if not callable(getattr(self._asset_index, "verify_asset", None)):
+            return
+        if not callable(getattr(self._asset_index, "list_projects", None)):
+            return
+        with self._folder_scan_lock:
+            if self._catalog_verify_active:
+                return
+            if not self._panel_mounted:
+                return
+            self._catalog_verify_active = True
+            self._catalog_verify_refresh_pending = False
+            cancel_event = threading.Event()
+            self._catalog_verify_cancel = cancel_event
+            thread = threading.Thread(
+                target=self._catalog_verify_worker,
+                args=(self._asset_index, cancel_event),
+                daemon=True,
+                name="AssetManagerCatalogVerify",
+            )
+            self._catalog_verify_thread = thread
+        thread.start()
+
+    def _catalog_verify_worker(self, index: Any, cancel_event: threading.Event) -> None:
+        try:
+            verified = verify_catalog_projects(index, cancel_event)
+            _log.info("Asset catalog verify: verified=%d cancelled=%s", verified, cancel_event.is_set())
+        except Exception:
+            _log.exception("Asset Manager catalog verify failed")
+        finally:
+            with self._folder_scan_lock:
+                self._catalog_verify_active = False
+                self._catalog_verify_refresh_pending = True
+                if self._catalog_verify_thread is threading.current_thread():
+                    self._catalog_verify_thread = None
+            scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
+            if callable(scheduler):
+                scheduler(self._complete_catalog_verify)
+
+    def _complete_catalog_verify(self) -> None:
+        with self._folder_scan_lock:
+            if not self._catalog_verify_refresh_pending:
+                return
+            self._catalog_verify_refresh_pending = False
+        if not self._panel_mounted:
+            return
+        self._publish_catalog_if_changed()
+        self._refresh_records(assets=True, folders=True)
+        if self._handle:
+            self._handle.dirty_all()
+
+    def _publish_scan_progress(self) -> bool:
+        active = self.get_scan_active()
+        status = self.get_scan_status()
+        if (
+            active == self._published_scan_active
+            and status == self._published_scan_status
+        ):
+            return False
+        self._published_scan_active = active
+        self._published_scan_status = status
+        self._dirty_fields(
+            "scan_active",
+            "scan_status",
+            "has_scan_status",
+            "refresh_action_tooltip",
+            "stop_scan_label",
+        )
+        return True
 
     def _sync_default_folder_path(self) -> bool:
         if not self._asset_index:
@@ -1782,8 +2006,11 @@ class AssetManagerPanel(Panel):
         self._refresh_records(assets=True, folders=True)
         if self._handle:
             self._handle.dirty_all()
+        self._catalog_epoch_seen = self._catalog_epoch()
         self._refresh_after_project_write()
-        self._scan_asset_folders()
+        self._start_catalog_verify()
+        if not _folder_scan_completed_in_process:
+            self._scan_asset_folders()
 
     def on_update(self, doc):
         changed = self._sync_default_folder_path()
@@ -1793,6 +2020,13 @@ class AssetManagerPanel(Panel):
             changed = True
         if self._folder_scan_refresh_pending:
             self._complete_folder_scan()
+            changed = True
+        if self._catalog_verify_refresh_pending:
+            self._complete_catalog_verify()
+            changed = True
+        if self._publish_catalog_if_changed():
+            changed = True
+        if self._publish_scan_progress():
             changed = True
         if self._asset_window_refresh_pending or self._sync_asset_window_viewport(doc):
             self._asset_window_refresh_pending = False
@@ -1804,14 +2038,23 @@ class AssetManagerPanel(Panel):
         with self._folder_scan_lock:
             self._panel_mounted = False
             self._folder_scan_rerun_pending = False
+            self._folder_scan_rerun_target = None
             cancel = self._folder_scan_cancel
             thread = self._folder_scan_thread
+            verify_cancel = self._catalog_verify_cancel
+            verify_thread = self._catalog_verify_thread
         if cancel is not None:
             cancel.set()
+        if verify_cancel is not None:
+            verify_cancel.set()
         if thread is not None and thread.ident is not None:
             thread.join(timeout=2.0)
             if thread.is_alive():
                 self._log_warn("Asset Manager folder scan did not finish before unmount")
+        if verify_thread is not None and verify_thread.ident is not None:
+            verify_thread.join(timeout=2.0)
+            if verify_thread.is_alive():
+                self._log_warn("Asset Manager catalog verify did not finish before unmount")
         if self._drag_payload_token is not None:
             cancel_drag = getattr(lf.ui, "cancel_drag_payload", None)
             if callable(cancel_drag):

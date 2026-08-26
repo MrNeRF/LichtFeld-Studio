@@ -944,6 +944,29 @@ NB_MODULE(lichtfeld, m) {
         },
         "Resume a paused training run");
     m.def(
+        "project_training_session_state", []() {
+            nb::dict result;
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                result["available"] = false;
+                result["iteration"] = 0;
+                result["hydrated"] = false;
+                result["restoring"] = false;
+                result["error"] = std::string{};
+                return result;
+            }
+            const auto state =
+                viewer->projectTrainingSessionState();
+            result["available"] = state.available;
+            result["iteration"] = state.iteration;
+            result["hydrated"] = state.hydrated;
+            result["restoring"] = state.restoring;
+            result["error"] = state.error;
+            return result;
+        },
+        "Return the stored training-session restore state for the open project");
+    m.def(
         "stop_training", []() {
             nb::gil_scoped_release release;
             lfs::core::events::cmd::StopTraining{}.emit();
