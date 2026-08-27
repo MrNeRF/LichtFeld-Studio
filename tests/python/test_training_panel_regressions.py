@@ -37,6 +37,10 @@ def _install_lf_stub(monkeypatch):
     lf_stub.loss_buffer = lambda: []
     lf_stub.push_loss_to_element = lambda _element, _data: (0.0, 0.0)
     lf_stub.get_render_settings = lambda: None
+    lf_stub.detect_dataset_info = lambda _path: None
+    lf_stub.log = SimpleNamespace(error=lambda *_a, **_k: None, info=lambda *_a, **_k: None)
+    lf_stub.io = SimpleNamespace(save_point_cloud_ply=lambda *_a, **_k: None)
+    lf_stub.scene = SimpleNamespace(NodeType=SimpleNamespace(POINTCLOUD="POINTCLOUD"))
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
     return lf_stub
 
@@ -51,6 +55,7 @@ def test_bundled_locales_define_training_panel_strategy_and_color_keys():
         assert "refinement.grow_until_iter" in data["training"]
         assert "tooltip.grow_until_iter" in data["training"]
         assert data["training"]["overwrite.btn_save_as_start"]
+        assert data["training"]["save_pc.message_project"]
         assert data["training_panel"]["color_red_prefix"] == "R:"
         assert data["training_panel"]["color_green_prefix"] == "G:"
         assert data["training_panel"]["color_blue_prefix"] == "B:"
@@ -1548,3 +1553,127 @@ def test_resume_on_stored_session_restores_before_resuming(
     finally:
         runtime.has_trainer._fallback = False
         runtime.training_state._fallback = "idle"
+
+
+def test_save_modified_pc_writes_to_bound_project(training_panel_module, monkeypatch):
+    project_saves = []
+    detect_calls = []
+    ply_calls = []
+    scene = SimpleNamespace(is_point_cloud_modified=True)
+
+    def save_titled():
+        project_saves.append(True)
+        return True
+
+    monkeypatch.setattr(training_panel_module, "_project_has_path", lambda: True)
+    monkeypatch.setattr(training_panel_module, "_save_titled_project", save_titled)
+    monkeypatch.setattr(training_panel_module.lf, "get_scene", lambda: scene)
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "detect_dataset_info",
+        lambda *args, **kwargs: detect_calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "io",
+        SimpleNamespace(
+            save_point_cloud_ply=lambda *args, **kwargs: ply_calls.append((args, kwargs))
+        ),
+    )
+
+    training_panel_module.TrainingPanel()._save_modified_pc()
+
+    assert project_saves == [True]
+    assert detect_calls == []
+    assert ply_calls == []
+    assert scene.is_point_cloud_modified is False
+
+
+def test_save_modified_pc_bound_project_failed_save_skips_dataset(
+    training_panel_module, monkeypatch
+):
+    ply_calls = []
+    scene = SimpleNamespace(is_point_cloud_modified=True)
+
+    monkeypatch.setattr(training_panel_module, "_project_has_path", lambda: True)
+    monkeypatch.setattr(training_panel_module, "_save_titled_project", lambda: False)
+    monkeypatch.setattr(training_panel_module.lf, "get_scene", lambda: scene)
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "io",
+        SimpleNamespace(
+            save_point_cloud_ply=lambda *args, **kwargs: ply_calls.append((args, kwargs))
+        ),
+    )
+
+    training_panel_module.TrainingPanel()._save_modified_pc()
+
+    assert ply_calls == []
+    assert scene.is_point_cloud_modified is True
+
+
+def test_save_modified_pc_unbound_writes_dataset_ply(training_panel_module, monkeypatch):
+    ply_calls = []
+    pc = SimpleNamespace(size=12)
+    node = SimpleNamespace(
+        type=training_panel_module.lf.scene.NodeType.POINTCLOUD,
+        point_cloud=lambda: pc,
+    )
+    scene = SimpleNamespace(
+        is_point_cloud_modified=True,
+        get_nodes=lambda: [node],
+    )
+    dataset = SimpleNamespace(data_path="/data/scene_a", has_params=lambda: True)
+    info = SimpleNamespace(sparse_path="/data/scene_a/sparse/0")
+
+    monkeypatch.setattr(training_panel_module, "_project_has_path", lambda: False)
+    monkeypatch.setattr(training_panel_module.lf, "dataset_params", lambda: dataset)
+    monkeypatch.setattr(training_panel_module.lf, "detect_dataset_info", lambda _path: info)
+    monkeypatch.setattr(training_panel_module.lf, "get_scene", lambda: scene)
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "io",
+        SimpleNamespace(
+            save_point_cloud_ply=lambda cloud, path: ply_calls.append((cloud, path))
+        ),
+    )
+
+    training_panel_module.TrainingPanel()._save_modified_pc()
+
+    assert ply_calls == [(pc, "/data/scene_a/sparse/0/points3D.ply")]
+    assert scene.is_point_cloud_modified is False
+
+
+@pytest.mark.parametrize(
+    ("bound", "expected_message"),
+    [
+        (True, "training.save_pc.message_project"),
+        (False, "training.save_pc.message"),
+    ],
+)
+def test_show_save_pc_dialog_message_depends_on_project_binding(
+    training_panel_module, monkeypatch, bound, expected_message
+):
+    dialogs = []
+
+    monkeypatch.setattr(training_panel_module, "_project_has_path", lambda: bound)
+    monkeypatch.setattr(
+        training_panel_module.lf.ui,
+        "confirm_dialog",
+        lambda title, message, buttons, callback=None: dialogs.append(
+            (title, message, list(buttons), callback)
+        ),
+        raising=False,
+    )
+
+    training_panel_module.TrainingPanel()._show_save_pc_dialog()
+
+    assert len(dialogs) == 1
+    title, message, buttons, _callback = dialogs[0]
+    assert title == "training.save_pc.title"
+    assert message == expected_message
+    assert buttons == [
+        "training.save_pc.btn_save_start",
+        "training.save_pc.btn_start_without",
+        "training.conflict.btn_cancel",
+    ]

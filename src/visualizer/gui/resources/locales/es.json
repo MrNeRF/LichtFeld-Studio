@@ -413,6 +413,7 @@
     "conflict.btn_cancel": "Cancelar",
     "save_pc.title": "Nube de puntos modificada",
     "save_pc.message": "La nube de puntos se ha modificado. ¿Guardar en la carpeta del dataset para futuras sesiones?",
+    "save_pc.message_project": "La nube de puntos se ha modificado. ¿Guardar en el proyecto?",
     "save_pc.btn_save_start": "Guardar e iniciar",
     "save_pc.btn_start_without": "Iniciar sin guardar",
     "overwrite.title": "¿Sobrescribir el entrenamiento anterior?",

@@ -413,6 +413,7 @@
     "conflict.btn_cancel": "취소",
     "save_pc.title": "수정된 포인트 클라우드",
     "save_pc.message": "포인트 클라우드가 수정되었습니다. 향후 세션을 위해 데이터셋 폴더에 저장하시겠습니까?",
+    "save_pc.message_project": "포인트 클라우드가 수정되었습니다. 프로젝트에 저장하시겠습니까?",
     "save_pc.btn_save_start": "저장 후 시작",
     "save_pc.btn_start_without": "저장 없이 시작",
     "overwrite.title": "이전 학습을 덮어쓸까요?",

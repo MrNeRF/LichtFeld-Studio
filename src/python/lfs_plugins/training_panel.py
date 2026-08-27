@@ -15,6 +15,7 @@ from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .training_confirm import (
     _invoke_project_save_as,
     _project_has_path,
+    _save_titled_project,
     _schedule_once_project_bound,
     confirm_discard_work_then,
 )
@@ -2449,14 +2450,27 @@ class TrainingPanel(Panel):
             elif button == _k:
                 lf.start_training()
 
+        message = (
+            tr("training.save_pc.message_project")
+            if _project_has_path()
+            else tr("training.save_pc.message")
+        )
         lf.ui.confirm_dialog(
             tr("training.save_pc.title"),
-            tr("training.save_pc.message"),
+            message,
             [btn_save, btn_skip, btn_cancel],
             _on_result,
         )
 
     def _save_modified_pc(self):
+        if _project_has_path():
+            if _save_titled_project():
+                scene = lf.get_scene()
+                if scene:
+                    scene.is_point_cloud_modified = False
+            else:
+                lf.log.error("Failed to save the point cloud to the project")
+            return
         d = lf.dataset_params()
         if not d or not d.has_params() or not d.data_path:
             return

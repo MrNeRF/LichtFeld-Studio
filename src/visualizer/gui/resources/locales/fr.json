@@ -413,6 +413,7 @@
     "conflict.btn_cancel": "Annuler",
     "save_pc.title": "Nuage de points modifié",
     "save_pc.message": "Le nuage de points a été modifié. Sauvegarder dans le dossier du dataset pour les sessions futures ?",
+    "save_pc.message_project": "Le nuage de points a été modifié. Sauvegarder dans le projet ?",
     "save_pc.btn_save_start": "Sauvegarder et démarrer",
     "save_pc.btn_start_without": "Démarrer sans sauvegarder",
     "overwrite.title": "Écraser l'entraînement précédent ?",

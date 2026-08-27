@@ -413,6 +413,7 @@
     "conflict.btn_cancel": "Anuluj",
     "save_pc.title": "Zmodyfikowana chmura punktów",
     "save_pc.message": "Chmura punktów została zmodyfikowana. Zapisać w folderze datasetu dla przyszłych sesji?",
+    "save_pc.message_project": "Chmura punktów została zmodyfikowana. Zapisać w projekcie?",
     "save_pc.btn_save_start": "Zapisz i rozpocznij",
     "save_pc.btn_start_without": "Rozpocznij bez zapisywania",
     "overwrite.title": "Nadpisać poprzedni trening?",
