@@ -9,6 +9,7 @@
 #include <core/executable_path.hpp>
 #include <core/logger.hpp>
 #include <core/path_utils.hpp>
+#include <core/user_paths.hpp>
 
 #include <algorithm>
 #include <cstdio>
@@ -222,26 +223,19 @@ namespace lfs::python {
             return {exit_code, output};
         }
 
-        std::filesystem::path get_lichtfeld_dir() {
-#ifdef _WIN32
-            const DWORD size = GetEnvironmentVariableW(L"USERPROFILE", nullptr, 0);
-            if (size > 0) {
-                std::wstring home(size - 1, L'\0');
-                if (GetEnvironmentVariableW(L"USERPROFILE", home.data(), size) == size - 1) {
-                    return std::filesystem::path(home) / ".lichtfeld";
-                }
-            }
-            return std::filesystem::temp_directory_path() / "lichtfeld";
-#else
-            const char* const home = std::getenv("HOME");
-            return std::filesystem::path(home ? home : "/tmp") / ".lichtfeld";
-#endif
+        std::filesystem::path get_venv_dir() {
+            const auto paths = lfs::core::UserPaths::resolve();
+            if (paths)
+                return paths->venvDir();
+            LOG_WARN("Unable to resolve Python environment directory: {}; using temporary storage",
+                     lfs::format_for_developer(paths.error()));
+            return std::filesystem::temp_directory_path() / "lichtfeld" / "venv";
         }
 
     } // namespace
 
     PackageManager::PackageManager()
-        : m_root_dir(get_lichtfeld_dir()),
+        : m_root_dir(get_venv_dir().parent_path()),
           m_venv_dir(m_root_dir / "venv") {}
 
     PackageManager& PackageManager::instance() {
@@ -494,90 +488,6 @@ namespace lfs::python {
                 return true;
         }
         return false;
-    }
-
-    bool PackageManager::install_async(const std::string& package,
-                                       UvRunner::OutputCallback on_output,
-                                       UvRunner::CompletionCallback on_complete) {
-        if (!ensure_venv())
-            return false;
-
-        if (!m_runner) {
-            m_runner = std::make_unique<UvRunner>();
-        }
-
-        if (m_runner->is_running()) {
-            LOG_ERROR("Another UV operation is already running");
-            return false;
-        }
-
-        LOG_INFO("Installing {} (async)", package);
-
-        m_runner->set_output_callback(std::move(on_output));
-        m_runner->set_completion_callback(std::move(on_complete));
-
-        return m_runner->start({"pip", "install", package, "--python", lfs::core::path_to_utf8(venv_python())});
-    }
-
-    bool PackageManager::uninstall_async(const std::string& package,
-                                         UvRunner::OutputCallback on_output,
-                                         UvRunner::CompletionCallback on_complete) {
-        if (!ensure_venv())
-            return false;
-
-        if (!m_runner) {
-            m_runner = std::make_unique<UvRunner>();
-        }
-
-        if (m_runner->is_running()) {
-            LOG_ERROR("Another UV operation is already running");
-            return false;
-        }
-
-        LOG_INFO("Uninstalling {} (async)", package);
-
-        m_runner->set_output_callback(std::move(on_output));
-        m_runner->set_completion_callback(std::move(on_complete));
-
-        return m_runner->start({"pip", "uninstall", package, "-y", "--python", lfs::core::path_to_utf8(venv_python())});
-    }
-
-    bool PackageManager::install_torch_async(const std::string& cuda_version,
-                                             const std::string& torch_version,
-                                             UvRunner::OutputCallback on_output,
-                                             UvRunner::CompletionCallback on_complete) {
-        if (!ensure_venv())
-            return false;
-
-        if (!m_runner) {
-            m_runner = std::make_unique<UvRunner>();
-        }
-
-        if (m_runner->is_running()) {
-            LOG_ERROR("Another UV operation is already running");
-            return false;
-        }
-
-        const std::string cuda_tag = core::get_pytorch_cuda_tag(cuda_version);
-        LOG_INFO("PyTorch CUDA tag (async): {}", cuda_tag);
-
-        std::string package = "torch";
-        if (!torch_version.empty())
-            package += "==" + torch_version;
-
-        const std::string index_url = std::string(PYTORCH_INDEX) + cuda_tag;
-
-        LOG_INFO("Installing {} from {} (async)", package, cuda_tag);
-
-        m_runner->set_output_callback(std::move(on_output));
-        m_runner->set_completion_callback(std::move(on_complete));
-
-        std::vector<std::string> args = {"pip", "install", package, "--extra-index-url", index_url,
-                                         "--python", lfs::core::path_to_utf8(venv_python())};
-        if (torch_version.empty())
-            args.push_back("--upgrade");
-
-        return m_runner->start(args);
     }
 
     bool PackageManager::install_async_raw(const std::string& package,

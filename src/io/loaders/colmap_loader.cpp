@@ -196,7 +196,8 @@ namespace lfs::io {
                     .scene_center = Tensor::zeros({3}, Device::CPU),
                     .loader_used = name(),
                     .load_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time),
-                    .warnings = (has_points || has_points_text || has_points_ply) ? std::vector<std::string>{} : std::vector<std::string>{"No sparse point cloud found (points3D.bin|txt|ply) - will use random initialization"}};
+                    .warnings = (has_points || has_points_text || has_points_ply) ? std::vector<std::string>{} : std::vector<std::string>{"No sparse point cloud found (points3D.bin|txt|ply) - will use random initialization"},
+                    .georeference = std::nullopt};
             }
 
             // Load cameras and images
@@ -356,9 +357,13 @@ namespace lfs::io {
             }
 
             // Centralize scene
+            std::optional<ImportGeoreference> import_georeference;
             {
                 LOG_TIMER_DEBUG("COLMAP centralize scene");
-                scene_center = centralize_scene(cameras, point_cloud, options.centralize, scene_center);
+                auto centralization =
+                    centralize_scene(cameras, point_cloud, options.centralize, scene_center);
+                scene_center = std::move(centralization.scene_center);
+                import_georeference = std::move(centralization.georeference);
             }
 
             if (options.progress) {
@@ -381,7 +386,8 @@ namespace lfs::io {
                 .images_have_alpha = images_have_alpha,
                 .loader_used = name(),
                 .load_time = load_time,
-                .warnings = std::move(warnings)};
+                .warnings = std::move(warnings),
+                .georeference = std::move(import_georeference)};
 
             if (!has_points && !has_points_text && !has_points_ply) {
                 result.warnings.push_back("No sparse point cloud found - using random initialization");

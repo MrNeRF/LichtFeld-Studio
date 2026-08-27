@@ -83,6 +83,34 @@
 .row-icon.type-icon.pointcloud   { image-color: @{alpha(secondary,0.80)}; }
 .row-icon.type-icon.mesh         { image-color: @{alpha(success,0.90)}; }
 
+.row-icon.trash-icon {
+    image-color: @{alpha(error,0.82)};
+}
+
+.row-icon.training-toggle-icon {
+    image-color: @{alpha(primary,0.90)};
+}
+
+.row-icon.training-toggle-icon.training-disabled {
+    image-color: @{alpha(warning,0.72)};
+}
+
+.row-icon.training-toggle-icon.training-mixed {
+    image-color: @{warning};
+}
+
+.training-mixed-mark {
+    background-color: @{warning};
+}
+
+.row-icon.training-toggle-icon:hover {
+    image-color: @{text};
+}
+
+.row-icon.trash-icon:hover {
+    image-color: @{error};
+}
+
 .row-icon.trash-icon.trash-disabled,
 .row-icon.trash-icon.trash-disabled:hover {
     image-color: @{alpha(text_dim,0.50)};
@@ -106,6 +134,44 @@
     color: @{text_dim};
     background-color: @{panel.tab_inactive_bg};
     border-color: @{border};
+}
+
+.selection-action-bar {
+    color: @{text_dim};
+    background-color: @{alpha(surface,0.82)};
+    border-top-color: @{border};
+}
+
+.selection-action-button:hover {
+    background-color: @{alpha(primary,0.18)};
+}
+
+.selection-action-button.disabled:hover {
+    background-color: transparent;
+}
+
+#selection-visibility-icon {
+    image-color: @{success};
+}
+
+#selection-visibility-icon.selection-hidden {
+    image-color: @{text_dim};
+}
+
+#selection-training-icon {
+    image-color: @{primary};
+}
+
+#selection-training-icon.training-disabled {
+    image-color: @{warning};
+}
+
+#selection-delete-icon {
+    image-color: @{error};
+}
+
+#selection-clear-icon {
+    image-color: @{text_dim};
 }
 
 .scene-tab:hover,
@@ -132,6 +198,28 @@
     color: @{text};
     background-color: @{panel.chip_accent_bg};
     border-color: @{panel.chip_accent_border};
+}
+
+.tree-checkbox {
+    color: @{text};
+    border-color: @{alpha(text_dim,0.75)};
+    background-color: @{alpha(surface_bright,0.85)};
+}
+
+.tree-checkbox.checked {
+    color: @{surface};
+    border-color: @{primary};
+    background-color: @{primary};
+}
+
+.tree-checkbox.mixed {
+    color: @{surface};
+    border-color: @{warning};
+    background-color: @{warning};
+}
+
+.tree-row.selection-partial {
+    background-color: @{alpha(primary,0.10)};
 }
 
 .logging-field-label,

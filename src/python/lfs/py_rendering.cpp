@@ -9,6 +9,7 @@
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/property_registry.hpp"
+#include "core/provenance.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_data_transform.hpp"
@@ -39,6 +40,7 @@
 #include <filesystem>
 #include <functional>
 #include <numbers>
+#include <optional>
 #include <variant>
 
 #include <glm/glm.hpp>
@@ -787,6 +789,16 @@ namespace lfs::python {
                      2);
         add_bool(&Proxy::mip_filter, "mip_filter", "Mip Filter", "Enable mip-map filtering", false);
         add_float(&Proxy::render_scale, "render_scale", "Render Scale", "Render resolution scale", 1.0, 0.25, 1.0);
+        add_string(&Proxy::scene_upscaler,
+                   "scene_upscaler",
+                   "Scene Reconstruction",
+                   "Stable scene reconstruction backend identifier",
+                   "native");
+        add_string(&Proxy::scene_upscaler_preset,
+                   "scene_upscaler_preset",
+                   "Scene Reconstruction Preset",
+                   "Backend-specific scene reconstruction quality preset",
+                   "native");
         add_float(&Proxy::depth_view_min, "depth_view_min", "Depth Near", "Depth-map visualization near range",
                   lfs::rendering::DEFAULT_DEPTH_VIEW_MIN, 0.0, lfs::rendering::MAX_DEPTH_VIEW_DISTANCE);
         add_float(&Proxy::depth_view_max, "depth_view_max", "Depth Far", "Depth-map visualization far range",
@@ -924,6 +936,14 @@ namespace lfs::python {
                 static_cast<rendering::GaussianRasterBackend>(settings_.raster_backend));
         }
         vis::update_render_settings(settings_);
+        // update_render_settings may normalize dependent properties (for
+        // example the preset when switching scene reconstruction backends).
+        // Keep this Python proxy in lockstep with that applied state so the
+        // next property assignment cannot restore a stale, cross-backend
+        // preset.
+        if (const auto applied = vis::get_render_settings()) {
+            settings_ = *applied;
+        }
         request_redraw();
     }
 
@@ -1557,7 +1577,8 @@ namespace lfs::python {
                                    int width,
                                    int height,
                                    const bool transparent,
-                                   const int jpeg_quality) {
+                                   const int jpeg_quality,
+                                   const bool include_provenance) {
         auto output_path = core::utf8_to_path(path);
         const auto normalized_format = normalizeExportImageFormat(format, output_path);
         if (transparent && normalized_format != "png") {
@@ -1638,7 +1659,10 @@ namespace lfs::python {
             }
         }
 
-        core::save_image_u8(output_path, image, jpeg_quality);
+        const auto comment = core::provenance_to_json(
+            include_provenance ? core::make_provenance_stamp()
+                               : core::make_minimal_provenance_stamp());
+        core::save_image_u8(output_path, image, jpeg_quality, comment);
 
         nb::dict result;
         result["path"] = core::path_to_utf8(output_path);
@@ -1743,6 +1767,7 @@ namespace lfs::python {
               nb::arg("height") = 0,
               nb::arg("transparent") = false,
               nb::arg("jpeg_quality") = 95,
+              nb::arg("include_provenance") = true,
               R"doc(
 Export the active viewport image to PNG or JPEG.
 
@@ -1753,6 +1778,7 @@ Args:
     height: Target height in pixels. If both dimensions are zero, captures the current viewport.
     transparent: For PNG only, export straight RGBA from the preview renderer.
     jpeg_quality: JPEG compression quality in [1, 100].
+    include_provenance: When true, writes a full Comment stamp on PNG and JPEG; when false, a minimal build stamp is still embedded.
 
 Returns:
     Dict with path, width, height, channels, format, and transparent.

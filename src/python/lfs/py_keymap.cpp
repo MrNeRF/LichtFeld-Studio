@@ -138,6 +138,7 @@ namespace lfs::python {
             .value("SELECT_ALL", Action::SELECT_ALL)
             .value("COPY_SELECTION", Action::COPY_SELECTION)
             .value("CUT_SELECTION", Action::CUT_SELECTION)
+            .value("TOGGLE_PERFORMANCE_HUD", Action::TOGGLE_PERFORMANCE_HUD)
             .value("PASTE_SELECTION", Action::PASTE_SELECTION)
             .value("DEPTH_ADJUST_FAR", Action::DEPTH_ADJUST_FAR)
             .value("DEPTH_ADJUST_SIDE", Action::DEPTH_ADJUST_SIDE)
@@ -177,7 +178,14 @@ namespace lfs::python {
             .value("PIE_MENU", Action::PIE_MENU)
             .value("DEPTH_ADJUST_NEAR", Action::DEPTH_ADJUST_NEAR)
             .value("HISTOGRAM_ZOOM_MARKED", Action::HISTOGRAM_ZOOM_MARKED)
-            .value("TOGGLE_CAMERA_FRUSTUMS", Action::TOGGLE_CAMERA_FRUSTUMS);
+            .value("TOGGLE_CAMERA_FRUSTUMS", Action::TOGGLE_CAMERA_FRUSTUMS)
+            .value("OPEN_PREFERENCES", Action::OPEN_PREFERENCES)
+            .value("TOGGLE_MCP_SERVER", Action::TOGGLE_MCP_SERVER)
+            .value("TOGGLE_MCP_BINDING", Action::TOGGLE_MCP_BINDING)
+            .value("TOGGLE_GRID", Action::TOGGLE_GRID)
+            .value("SELECT_ALL_SCENE_NODES", Action::SELECT_ALL_SCENE_NODES)
+            .value("TOGGLE_SCENE_SELECTION_VISIBILITY", Action::TOGGLE_SCENE_SELECTION_VISIBILITY)
+            .value("TOGGLE_SCENE_SELECTION_TRAINING", Action::TOGGLE_SCENE_SELECTION_TRAINING);
 
         // Expose ToolMode enum
         nb::enum_<ToolMode>(keymap, "ToolMode")
@@ -526,10 +534,11 @@ namespace lfs::python {
             []() {
                 if (!get_keymap_bindings())
                     return;
-                auto config_dir = InputBindings::getConfigDir();
-                auto saved_path = config_dir / "Default.json";
-                if (std::filesystem::exists(saved_path)) {
-                    std::filesystem::remove(saved_path);
+                if (const auto config_dir = InputBindings::getConfigDir()) {
+                    const auto saved_path = *config_dir / "Default.json";
+                    if (std::filesystem::exists(saved_path)) {
+                        std::filesystem::remove(saved_path);
+                    }
                 }
                 get_keymap_bindings()->loadProfile("Default");
                 get_keymap_bindings()->saveProfile("Default");

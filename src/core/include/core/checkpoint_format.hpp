@@ -9,12 +9,17 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <iosfwd>
 #include <string>
+#include <string_view>
 
 namespace lfs::core {
 
     constexpr uint32_t CHECKPOINT_MAGIC = 0x4C464B50; // "LFKP"
-    constexpr uint32_t CHECKPOINT_VERSION = 1;
+    constexpr uint32_t CHECKPOINT_MIN_SUPPORTED_VERSION = 1;
+    constexpr uint32_t CHECKPOINT_VERSION_HAS_SPARSITY = 2;
+    constexpr uint32_t CHECKPOINT_VERSION_FIELDWISE_CONFIGS = 3;
+    constexpr uint32_t CHECKPOINT_VERSION = CHECKPOINT_VERSION_FIELDWISE_CONFIGS;
     constexpr uint64_t MAX_CHECKPOINT_FILE_BYTES = 256ULL * 1024ULL * 1024ULL * 1024ULL;
     constexpr uint64_t MAX_CHECKPOINT_JSON_BYTES = 16ULL * 1024ULL * 1024ULL;
     constexpr uint32_t MAX_CHECKPOINT_STRATEGY_NAME_BYTES = 64;
@@ -25,6 +30,7 @@ namespace lfs::core {
         HAS_BILATERAL_GRID = 1 << 0,
         HAS_PPISP = 1 << 1,
         HAS_PPISP_CONTROLLER = 1 << 2,
+        HAS_SPARSITY = 1 << 3,
     };
 
     constexpr CheckpointFlags operator|(const CheckpointFlags a, const CheckpointFlags b) {
@@ -52,12 +58,38 @@ namespace lfs::core {
 
     LFS_CORE_API std::expected<CheckpointHeader, std::string> load_checkpoint_header(
         const std::filesystem::path& path);
+    using CheckpointHeaderLoadResult =
+        decltype(load_checkpoint_header(std::filesystem::path{}));
+
+    // Stream overloads are the bounded-window entry points used by CKPT
+    // chapters. The stream must be seekable, positioned at byte zero, and
+    // expose exactly file_size bytes.
+    LFS_CORE_API CheckpointHeaderLoadResult load_checkpoint_header(
+        std::istream& stream,
+        uint64_t file_size);
 
     LFS_CORE_API std::expected<SplatData, std::string> load_checkpoint_splat_data(
         const std::filesystem::path& path,
         SplatTensorAllocator tensor_allocator = {});
+    using CheckpointSplatDataLoadResult =
+        decltype(load_checkpoint_splat_data(std::filesystem::path{}));
+
+    LFS_CORE_API CheckpointSplatDataLoadResult load_checkpoint_splat_data(
+        std::istream& stream,
+        uint64_t file_size,
+        SplatTensorAllocator tensor_allocator = {});
 
     LFS_CORE_API std::expected<param::TrainingParameters, std::string> load_checkpoint_params(
         const std::filesystem::path& path);
+    using CheckpointParametersLoadResult =
+        decltype(load_checkpoint_params(std::filesystem::path{}));
+
+    LFS_CORE_API CheckpointParametersLoadResult load_checkpoint_params(
+        std::istream& stream,
+        uint64_t file_size);
+
+    LFS_CORE_API param::TrainingParameters parse_checkpoint_params_json(
+        std::string_view json_text,
+        param::TrainingParameters base_params = {});
 
 } // namespace lfs::core

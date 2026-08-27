@@ -31,7 +31,6 @@ jobs:
       VCPKG_FORCE_SYSTEM_BINARIES: 1
       CMAKE_MAKE_PROGRAM: /usr/bin/ninja
       CUDA_PATH: /usr/local/cuda
-      CUDNN_ROOT_DIR: /usr/local/cuda
 
     steps:
       - name: Install Git
@@ -82,46 +81,13 @@ jobs:
           apt-get install -y git curl unzip \
             cmake=4.4.0-0kitware1ubuntu24.04.1 cmake-data=4.4.0-0kitware1ubuntu24.04.1 \
             gcc-14 g++-14 ccache ninja-build \
-            zip tar pkg-config python3 python3-dev libxinerama-dev libxcursor-dev xorg-dev libglu1-mesa-dev \
+            zip tar pkg-config python3 python3-dev python3-venv libxinerama-dev libxcursor-dev xorg-dev libglu1-mesa-dev \
             libwayland-dev libxkbcommon-dev libegl-dev libdecor-0-dev libibus-1.0-dev libdbus-1-dev \
             libsystemd-dev libgtk-3-dev \
             nasm autoconf autoconf-archive automake libtool
 
           update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100 \
                               --slave /usr/bin/g++ g++ /usr/bin/g++-14
-
-      - name: Ensure cuDNN is available
-        shell: bash
-        run: |
-          set -euo pipefail
-          # /usr/local/cuda and its lib64 are symlinks, so find must follow them (-L).
-          if [ -f /usr/local/cuda/include/cudnn.h ] && \
-             find -L /usr/local/cuda /usr/lib /usr/lib/x86_64-linux-gnu -name 'libcudnn.so.9*' -print -quit | grep -q .; then
-            echo "Using preinstalled cuDNN:"
-            find -L /usr/local/cuda /usr/lib /usr/lib/x86_64-linux-gnu -name 'libcudnn.so.9*' -print | head
-            exit 0
-          fi
-
-          echo "cuDNN 9 was not provided by the runner image; installing cuDNN 9.5.0 for CUDA 12 from NVIDIA redist."
-          CUDNN_URL="https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/linux-x86_64/cudnn-linux-x86_64-9.5.0.50_cuda12-archive.tar.xz"
-          mkdir -p /tmp/cudnn-redist
-          curl -L --retry 5 --retry-delay 10 "$CUDNN_URL" -o /tmp/cudnn.tar.xz
-          # We link cuDNN dynamically, so extract only headers and shared libs; the
-          # static archives are multi-GB and unused. Drop the tarball and staging tree
-          # as soon as they are consumed to keep peak disk usage down.
-          tar -xf /tmp/cudnn.tar.xz --strip-components=1 -C /tmp/cudnn-redist --exclude='*.a'
-          rm -f /tmp/cudnn.tar.xz
-          cp -a /tmp/cudnn-redist/include/. /usr/local/cuda/include/
-          cp -a /tmp/cudnn-redist/lib/. /usr/local/cuda/lib64/
-          rm -rf /tmp/cudnn-redist
-          ldconfig
-          test -f /usr/local/cuda/include/cudnn.h
-          if ! find -L /usr/local/cuda/lib64 -name 'libcudnn.so.9*' -print -quit | grep -q .; then
-            echo "cuDNN 9 library was not found after setup." >&2
-            exit 1
-          fi
-          find -L /usr/local/cuda/lib64 -name 'libcudnn.so.9*' -print | head
-          df -h
 
       - name: Cache vcpkg tool
         id: cache-vcpkg-tool
@@ -164,6 +130,7 @@ jobs:
           cmake -B build -S . -G Ninja \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
+            -DBUILD_FORMAT_TESTS=ON \
             -DBUILD_PYTHON_STUBS=OFF \
             -DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF \
             -DLFS_DEV_IMPORT_SOURCE_RESOURCES=OFF \
@@ -182,6 +149,11 @@ jobs:
       - name: Build
         run: cmake --build build -j $(nproc)
 
+      - name: Build and run CPU-only format tests
+        run: |
+          cmake --build build --target lichtfeld_format_tests -j $(nproc)
+          ctest --test-dir build --output-on-failure -R '^lichtfeld_format_tests$'
+
   # .clang-tidy is for local/IDE use only here; CI needs compile_commands.json in a later phase.
   error-debt-gate:
     if: github.repository == 'MrNeRF/LichtFeld-Studio' || github.event.pull_request.base.repo.full_name == 'MrNeRF/LichtFeld-Studio'
@@ -196,6 +168,9 @@ jobs:
 
       - name: Enforce no-new-error-debt baseline
         run: python3 tools/error_debt_census.py --baseline tools/error_debt_baseline.json
+
+      - name: Enforce I/O discipline
+        run: python3 tools/check_io_discipline.py
 
       - name: Upload error-debt census
         if: always()

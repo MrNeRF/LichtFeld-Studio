@@ -10,7 +10,6 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
-#include <cmath>
 #include <concepts>
 #include <cstring>
 #include <cuda_runtime.h>
@@ -33,6 +32,7 @@
 #include <variant>
 #include <vector>
 
+#include "cuda_stream_context.hpp"
 #include "lazy_config.hpp"
 #include "lazy_executor.hpp"
 #include "lazy_ir.hpp"
@@ -42,6 +42,7 @@
 #include "tensor_ops.hpp"
 
 #include "core/export.hpp"
+#include <cuda_fp16.h>
 
 namespace lfs::core {
 
@@ -179,14 +180,12 @@ namespace lfs::core {
         Permute = 1,
         Expand = 2,
         Pad = 3,
-        Shrink = 4,
         Flip = 5,
         Transpose = 6,
         Squeeze = 7,
         Unsqueeze = 8,
         Flatten = 9,
         Cat = 10,
-        Stack = 11,
         Slice = 12
     };
 
@@ -204,9 +203,96 @@ namespace lfs::core {
         Multinomial = 10
     };
 
+    // Stack-resident ranked size list (rank ≤ MAX_TENSOR_RANK). Replaces heap
+    // std::vector for TensorShape dims and Tensor strides.
+    struct RankedDims {
+        std::array<size_t, MAX_TENSOR_RANK> values{};
+        size_t rank = 0;
+
+        RankedDims() = default;
+        RankedDims(std::initializer_list<size_t> dims) { assign(dims); }
+        explicit RankedDims(const std::vector<size_t>& dims) { assign(dims); }
+        explicit RankedDims(std::span<const size_t> dims) { assign(dims); }
+
+        size_t size() const noexcept { return rank; }
+        bool empty() const noexcept { return rank == 0; }
+        size_t& operator[](size_t i) noexcept { return values[i]; }
+        size_t operator[](size_t i) const noexcept { return values[i]; }
+        size_t* data() noexcept { return values.data(); }
+        const size_t* data() const noexcept { return values.data(); }
+
+        size_t* begin() noexcept { return values.data(); }
+        size_t* end() noexcept { return values.data() + rank; }
+        const size_t* begin() const noexcept { return values.data(); }
+        const size_t* end() const noexcept { return values.data() + rank; }
+        const size_t* cbegin() const noexcept { return begin(); }
+        const size_t* cend() const noexcept { return end(); }
+
+        void clear() noexcept { rank = 0; }
+
+        void assign(std::span<const size_t> dims) {
+            LFS_ASSERT_MSG(dims.size() <= MAX_TENSOR_RANK,
+                           "Tensor rank exceeds MAX_TENSOR_RANK");
+            rank = dims.size();
+            if (rank > 0) {
+                std::copy_n(dims.begin(), rank, values.begin());
+            }
+        }
+        void assign(const std::vector<size_t>& dims) {
+            assign(std::span<const size_t>(dims.data(), dims.size()));
+        }
+        void assign(std::initializer_list<size_t> dims) {
+            assign(std::span<const size_t>(dims.begin(), dims.size()));
+        }
+
+        RankedDims& operator=(std::span<const size_t> dims) {
+            assign(dims);
+            return *this;
+        }
+        RankedDims& operator=(const std::vector<size_t>& dims) {
+            assign(dims);
+            return *this;
+        }
+        RankedDims& operator=(std::initializer_list<size_t> dims) {
+            assign(dims);
+            return *this;
+        }
+
+        operator std::span<const size_t>() const noexcept {
+            return {values.data(), rank};
+        }
+        // Enables `std::vector<size_t> v = shape.dims()` without a heap on the
+        // shape itself; only the destination vector allocates.
+        operator std::vector<size_t>() const {
+            return std::vector<size_t>(begin(), end());
+        }
+
+        bool operator==(const RankedDims& other) const noexcept {
+            return rank == other.rank &&
+                   std::equal(begin(), end(), other.begin());
+        }
+        bool operator!=(const RankedDims& other) const noexcept {
+            return !(*this == other);
+        }
+        bool operator==(const std::vector<size_t>& other) const noexcept {
+            return rank == other.size() &&
+                   std::equal(begin(), end(), other.begin());
+        }
+        bool operator!=(const std::vector<size_t>& other) const noexcept {
+            return !(*this == other);
+        }
+    };
+
+    inline bool operator==(const std::vector<size_t>& lhs, const RankedDims& rhs) noexcept {
+        return rhs == lhs;
+    }
+    inline bool operator!=(const std::vector<size_t>& lhs, const RankedDims& rhs) noexcept {
+        return rhs != lhs;
+    }
+
     class LFS_CORE_API TensorShape {
     private:
-        std::vector<size_t> dims_;
+        RankedDims dims_;
         size_t total_elements_ = 1;
 
     public:
@@ -217,30 +303,37 @@ namespace lfs::core {
         explicit TensorShape(const std::vector<size_t>& dims) : dims_(dims) {
             compute_total();
         }
-        explicit TensorShape(std::span<const size_t> dims) : dims_(dims.begin(), dims.end()) {
+        explicit TensorShape(std::span<const size_t> dims) : dims_(dims) {
+            compute_total();
+        }
+        explicit TensorShape(const RankedDims& dims) : dims_(dims) {
             compute_total();
         }
 
-        size_t rank() const { return dims_.size(); }
+        size_t rank() const { return dims_.rank; }
         size_t operator[](size_t i) const {
-            if (i >= dims_.size()) {
+            if (i >= dims_.rank) {
                 throw std::out_of_range(
-                    "Shape index " + std::to_string(i) + " out of range for rank " + std::to_string(dims_.size()));
+                    "Shape index " + std::to_string(i) + " out of range for rank " +
+                    std::to_string(dims_.rank));
             }
             return dims_[i];
         }
         size_t elements() const { return total_elements_; }
-        const std::vector<size_t>& dims() const { return dims_; }
+        // Span-compatible view into stack storage (no heap).
+        const RankedDims& dims() const { return dims_; }
 
-        // Calculate strides for row-major layout
-        std::vector<size_t> strides() const {
-            if (dims_.empty())
-                return {};
-
-            std::vector<size_t> result(dims_.size());
-            result.back() = 1;
-            for (int i = static_cast<int>(dims_.size()) - 2; i >= 0; --i) {
-                result[i] = result[i + 1] * dims_[i + 1];
+        // Row-major contiguous strides — stack only, no heap allocation.
+        RankedDims strides() const {
+            RankedDims result;
+            if (dims_.empty()) {
+                return result;
+            }
+            result.rank = dims_.rank;
+            result[dims_.rank - 1] = 1;
+            for (int i = static_cast<int>(dims_.rank) - 2; i >= 0; --i) {
+                result[static_cast<size_t>(i)] =
+                    result[static_cast<size_t>(i + 1)] * dims_[static_cast<size_t>(i + 1)];
             }
             return result;
         }
@@ -252,13 +345,14 @@ namespace lfs::core {
 
     private:
         void compute_total() {
-            LFS_ASSERT_MSG(dims_.size() <= MAX_TENSOR_RANK,
+            LFS_ASSERT_MSG(dims_.rank <= MAX_TENSOR_RANK,
                            "Tensor rank exceeds MAX_TENSOR_RANK");
             if (dims_.empty()) {
                 total_elements_ = 1;
             } else {
                 total_elements_ = 1;
-                for (auto d : dims_) {
+                for (size_t i = 0; i < dims_.rank; ++i) {
+                    const size_t d = dims_[i];
                     LFS_ASSERT_MSG(d == 0 || total_elements_ <= std::numeric_limits<size_t>::max() / d,
                                    "TensorShape element count overflow");
                     total_elements_ *= d;
@@ -381,6 +475,13 @@ namespace lfs::core {
         std::vector<std::weak_ptr<Tensor>> lazy_snapshots;
         std::string external_kind;
         std::shared_ptr<void> external_owner;
+        // Exportable packed-SoA provenance. When set, bind sites
+        // re-resolve the device pointer through the live control block instead of
+        // trusting the baked data_ pointer across a capacity grow.
+        // exportable_control holds shared_ptr<SplatExportableStorage::Control>.
+        std::shared_ptr<void> exportable_control;
+        std::uint32_t exportable_region = 0;
+        std::uint64_t exportable_bound_generation = 0;
     };
 
 } // namespace lfs::core
@@ -397,6 +498,7 @@ namespace lfs::core {
         friend void pin_operands(std::initializer_list<const Tensor*> tensors);
         friend std::shared_ptr<Tensor> internal::lazy_executor_snapshot_operand(
             const Tensor& source);
+        friend Tensor broadcast_to(const Tensor& src, const TensorShape& target);
 
         struct TensorState {
             // Capacity management for in-place growth (like std::vector)
@@ -438,14 +540,22 @@ namespace lfs::core {
 
         void* data_ = nullptr;
         std::shared_ptr<void> data_owner_;
-        std::shared_ptr<TensorState> state_ = std::make_shared<TensorState>();
+        // shared handle state (stream/name/lazy/capacity). Default empty
+        // tensors keep a null state (no heap cell) until first mutation/use.
+        std::shared_ptr<TensorState> state_;
         TensorShape shape_;
-        std::vector<size_t> strides_; // Stride for each dimension (in elements)
-        size_t storage_offset_ = 0;   // Offset from data_ (in elements)
-        bool is_contiguous_ = true;   // True if memory layout is C-contiguous
+        RankedDims strides_;        // Stride per dim (stack; rank matches shape_)
+        size_t storage_offset_ = 0; // Offset from data_ (in elements)
+        bool is_contiguous_ = true; // True if memory layout is C-contiguous
         Device device_ = Device::CPU;
         DataType dtype_ = DataType::Float32;
         bool is_view_ = false;
+
+        void ensure_state() {
+            if (!state_) {
+                state_ = std::make_shared<TensorState>();
+            }
+        }
 
         enum class StorageAccountingKind : uint8_t {
             CudaDirect,
@@ -462,15 +572,47 @@ namespace lfs::core {
 
         void materialize_deferred_slow();
         void materialize_if_deferred() {
-            if (state_ && state_->lazy) [[unlikely]] {
+            // is_deferred() is per-handle: shared TensorState may still hold
+            // lazy->result for sibling copies after this handle materializes.
+            if (is_deferred()) [[unlikely]] {
                 materialize_deferred_slow();
             }
         }
         void materialize_if_deferred() const {
-            if (state_ && state_->lazy) [[unlikely]] {
+            if (is_deferred()) [[unlikely]] {
                 const_cast<Tensor*>(this)->materialize_deferred_slow();
             }
         }
+
+        /// Materialize zero-stride expand/broadcast views before raw-pointer escape.
+        ///
+        /// Raw-pointer escape is the materialization boundary:
+        /// - Op paths are firewalled via contiguous_read / the allowlist.
+        /// - That firewall does NOT cover raw-pointer escapes: callers hand
+        ///   ptr()+numel() or data_ptr()+bytes() to flat memcpy/kernels (e.g.
+        ///   cudaMemcpy HostToDevice of scaling [N,3] from an expand of [N,1]).
+        /// - Materializing at the escape boundary preserves zero-copy expansion
+        ///   for allowlisted ops while making every
+        ///   flat-buffer consumer safe. storage_ptr() stays non-materializing
+        ///   (allocation base for lifetime / sharing checks only).
+        ///
+        /// Do not assign `contiguous()` back to `*this`: expand views
+        /// set is_view_=true, so operator= takes the view deep-copy path (copy_from),
+        /// which re-enters data_ptr() → infinite recursion. Rebind fields like
+        /// materialize_deferred_slow instead (implemented in tensor.cpp).
+        void materialize_zero_stride_for_raw_ptr_escape();
+        void materialize_zero_stride_for_raw_ptr_escape() const {
+            // has_zero_stride is cheap; avoid a virtual-ish hop when dense.
+            if (has_zero_stride()) [[unlikely]] {
+                const_cast<Tensor*>(this)->materialize_zero_stride_for_raw_ptr_escape();
+            }
+        }
+
+        /// Reject CPU-tagged tensors whose storage is CUDA device memory (and
+        /// the inverse) when escaping via raw pointers. Mismatched tagging
+        /// produces cudaMemcpy "invalid argument" with src/dst in the same
+        /// address region and is otherwise hard to diagnose.
+        void assert_device_storage_matches_tag() const;
 
         static Tensor make_deferred_expr_tensor(TensorShape shape,
                                                 Device device,
@@ -482,7 +624,6 @@ namespace lfs::core {
                                                 std::function<Tensor()> materializer,
                                                 std::vector<uint64_t> lazy_input_ids);
 
-        // Alignment bookkeeping was write-only and removed; keep the hook for call sites.
         void compute_alignment() {}
 
         void init_storage_meta() {
@@ -547,7 +688,10 @@ namespace lfs::core {
         void propagate_view_meta(Tensor& view) const {
             const_cast<Tensor*>(this)->ensure_storage_meta();
             view.storage_meta_ = storage_meta_;
-            view.state_->stream = state_->stream;
+            view.ensure_state();
+            if (state_) {
+                view.state_->stream = state_->stream;
+            }
             view.view_generation_snapshot_ =
                 storage_meta_->generation.load(std::memory_order_relaxed);
         }
@@ -647,9 +791,14 @@ namespace lfs::core {
                         result.numel(), op, result.stream());
                     // No sync - tensor operation
                 } else {
-                    // CPU broadcasting: materialize broadcasts first
-                    auto a_broadcast = a_needs_broadcast ? broadcast_to(broadcast_shape) : clone();
-                    auto b_broadcast = b_needs_broadcast ? other.broadcast_to(broadcast_shape) : other.clone();
+                    // CPU broadcasting: expand may return zero-stride views;
+                    // linear apply_binary_cpu needs dense storage — materialize.
+                    auto a_broadcast = a_needs_broadcast
+                                           ? broadcast_to(broadcast_shape).contiguous()
+                                           : clone();
+                    auto b_broadcast = b_needs_broadcast
+                                           ? other.broadcast_to(broadcast_shape).contiguous()
+                                           : other.clone();
                     pin_operands({&a_broadcast, &b_broadcast});
                     apply_binary_cpu(a_broadcast.ptr<SrcT>(), b_broadcast.ptr<SrcT>(),
                                      result.ptr<OutT>(), result.numel(), op);
@@ -737,6 +886,7 @@ namespace lfs::core {
             tensor_contract::require_dtype(
                 *this, DataType::Float32, "in-place scalar operation", "input",
                 LFS_SOURCE_SITE_CURRENT());
+            reject_inplace_on_zero_stride("in-place scalar op");
 
             if (!is_contiguous()) {
                 return mutate_logical_view(
@@ -785,6 +935,7 @@ namespace lfs::core {
             tensor_contract::require_dtype(
                 *this, DataType::Float32, "in-place binary operation", "destination",
                 LFS_SOURCE_SITE_CURRENT());
+            reject_inplace_on_zero_stride("in-place binary op");
 
             if (!is_contiguous()) {
                 return mutate_logical_view(
@@ -840,11 +991,28 @@ namespace lfs::core {
             }
         }
 
-        // Helper for binary operations with automatic type promotion
-        // Promotes types, converts operands if needed, and evaluates eagerly.
-        // Binary ops are always eager because our fusion system only handles
-        // unary/scalar chains — deferring binary ops provides no fusion benefit
-        // and creates dangerous reference chains when stored in member variables.
+        // Map add/sub/mul/div functors to LazyPointwiseOpKind tensor-binary stages.
+        // Returns nullopt for ops that are not fusable (pow, maximum, ...).
+        template <typename Op>
+        static std::optional<internal::LazyPointwiseOpKind> tensor_binary_fusion_kind() {
+            if constexpr (std::is_same_v<Op, ops::add_op>) {
+                return internal::LazyPointwiseOpKind::AddTensor;
+            } else if constexpr (std::is_same_v<Op, ops::sub_op>) {
+                return internal::LazyPointwiseOpKind::SubTensor;
+            } else if constexpr (std::is_same_v<Op, ops::mul_op>) {
+                return internal::LazyPointwiseOpKind::MulTensor;
+            } else if constexpr (std::is_same_v<Op, ops::div_op>) {
+                return internal::LazyPointwiseOpKind::DivTensor;
+            } else {
+                return std::nullopt;
+            }
+        }
+
+        // Helper for binary operations with automatic type promotion.
+        // Single same-shape contiguous ops stay on the eager fast path. When a
+        // fusable chain can form from the size heuristic or deferred LHS,
+        // seed or extend a pointwise fusion recipe with a tensor-binary stage so
+        // mul+add and mul→reduce collapse to one fused launch.
         template <typename Op>
         Tensor binary_op_with_promotion(const Tensor& other, Op op,
                                         bool true_division = false) const {
@@ -859,14 +1027,186 @@ namespace lfs::core {
             LFS_ASSERT_MSG(result_dtype != DataType::Bool,
                            "arithmetic on two Bool tensors is unsupported; use a logical operation");
 
-            // Convert operands to result dtype if needed
+            const auto fusion_kind = tensor_binary_fusion_kind<Op>();
+            const bool same_shape_contig_f32 =
+                result_dtype == DataType::Float32 &&
+                dtype_ == DataType::Float32 && other.dtype() == DataType::Float32 &&
+                shape_ == other.shape() &&
+                is_contiguous() && other.is_contiguous() &&
+                device_ == other.device() &&
+                numel() > 0;
+
+            // binary fusion: seed/extend deferred chain for large same-shape
+            // float32 binaries (or whenever LHS is already a deferred fusion node).
+            // Single non-deferred ops below the size threshold remain eager.
+            //
+            // Use the raw byte threshold here, not
+            // lazy_size_heuristic_should_defer(). That helper treats the test
+            // override "size heuristic off" as "always defer" so small unaries
+            // still form chains in IR tests — applying it to binaries would
+            // regress (tiny a.add(b) would become deferred).
+            const bool lhs_deferred = is_deferred();
+            const size_t nbytes = numel() * sizeof(float);
+            const bool size_wants_defer =
+                nbytes >= internal::lazy_executor_size_heuristic_threshold();
+            if (fusion_kind.has_value() &&
+                same_shape_contig_f32 &&
+                internal::lazy_executor_pointwise_fusion_enabled() &&
+                (lhs_deferred || size_wants_defer)) {
+                Tensor lhs_source = *this;
+                Tensor rhs_operand = other;
+                // Materializer fallback: direct vectorized launch (no re-entry into fusion).
+                const Device dev = device_;
+                const TensorShape shp = shape_;
+                // Stamp stream hint like TensorExpr::operator Tensor so deferred
+                // large binaries keep cross-stream ordering (D4 / stream tests).
+                const cudaStream_t stream_hint =
+                    (dev == Device::CUDA) ? getCurrentCUDAStream() : nullptr;
+                Tensor result = make_deferred_expr_tensor(
+                    shp, dev, DataType::Float32,
+                    [lhs_source, rhs_operand, op, shp, dev, stream_hint]() mutable {
+                        lhs_source.materialize_if_deferred();
+                        rhs_operand.materialize_if_deferred();
+                        std::optional<CUDAStreamGuard> execution_guard;
+                        if (dev == Device::CUDA) {
+                            execution_guard.emplace(prepare_inputs_for_stream(
+                                {&lhs_source, &rhs_operand}, stream_hint));
+                        }
+                        Tensor out = Tensor::empty(shp, dev, DataType::Float32);
+                        if (dev == Device::CUDA) {
+                            pin_operands({&lhs_source, &rhs_operand});
+                            tensor_ops::launch_float_binary_with_numeric_policy(
+                                lhs_source.ptr<float>(), rhs_operand.ptr<float>(),
+                                out.ptr<float>(), out.numel(), op, out.stream());
+                            tensor_ops::record_tensor_kernel_launch(1);
+                        } else {
+                            apply_binary_cpu(lhs_source.ptr<float>(), rhs_operand.ptr<float>(),
+                                             out.ptr<float>(), out.numel(), op);
+                        }
+                        return out;
+                    },
+                    {lazy_expr_id(), other.lazy_expr_id()});
+                if (dev == Device::CUDA) {
+                    result.set_stream(stream_hint);
+                }
+
+                if (result.is_valid() && result.is_deferred() && result.state_ &&
+                    result.state_->lazy) {
+                    const uint64_t result_node_id = result.lazy_expr_id();
+                    if (result_node_id != 0) {
+                        internal::LazyPointwiseOp fusion_op;
+                        fusion_op.kind = *fusion_kind;
+                        fusion_op.scalar = 0.0f;
+                        fusion_op.rhs = internal::lazy_executor_snapshot_operand(rhs_operand);
+                        internal::lazy_executor_register_pointwise_fusion_op(
+                            result_node_id,
+                            lazy_expr_id(),
+                            lhs_source,
+                            std::move(fusion_op),
+                            result.state_->lazy);
+                    }
+                }
+                return result;
+            }
+
+            // fast path: same shape/device/dtype, contiguous, non-deferred
+            // skip BinaryExpr + TensorLeaf heap cells and launch directly.
+            // Match BinaryExpr evaluator: prepare stream first, then empty, so the
+            // result tensor inherits the prepared execution stream.
+            const bool can_fast_path =
+                dtype_ == result_dtype && other.dtype() == result_dtype &&
+                shape_ == other.shape() &&
+                is_contiguous() && other.is_contiguous() &&
+                !is_deferred() && !other.is_deferred() &&
+                (result_dtype == DataType::Float32 || result_dtype == DataType::Float16 ||
+                 result_dtype == DataType::Int32 || result_dtype == DataType::Int64 ||
+                 result_dtype == DataType::UInt8);
+
+            if (can_fast_path) {
+                std::optional<CUDAStreamGuard> execution_guard;
+                if (device_ == Device::CUDA && numel() > 0) {
+                    execution_guard.emplace(prepare_inputs_for_stream({this, &other}));
+                }
+                Tensor result = Tensor::empty(shape_, device_, result_dtype);
+                if (numel() > 0) {
+                    pin_operands({this, &other});
+                    if (device_ == Device::CUDA) {
+                        switch (result_dtype) {
+                        case DataType::Float32:
+                            tensor_ops::launch_float_binary_with_numeric_policy(
+                                ptr<float>(), other.ptr<float>(), result.ptr<float>(),
+                                result.numel(), op, result.stream());
+                            tensor_ops::record_tensor_kernel_launch(1);
+                            break;
+                        case DataType::Float16:
+                            tensor_ops::launch_binary_op_generic(
+                                ptr<__half>(), other.ptr<__half>(), result.ptr<__half>(),
+                                result.numel(), op, result.stream());
+                            break;
+                        case DataType::Int32:
+                            tensor_ops::launch_binary_op_generic(
+                                ptr<int>(), other.ptr<int>(), result.ptr<int>(),
+                                result.numel(), op, result.stream());
+                            break;
+                        case DataType::Int64:
+                            tensor_ops::launch_binary_op_generic(
+                                ptr<int64_t>(), other.ptr<int64_t>(), result.ptr<int64_t>(),
+                                result.numel(), op, result.stream());
+                            break;
+                        case DataType::UInt8:
+                            tensor_ops::launch_binary_op_generic(
+                                ptr<uint8_t>(), other.ptr<uint8_t>(), result.ptr<uint8_t>(),
+                                result.numel(), op, result.stream());
+                            break;
+                        default:
+                            break; // unreachable given can_fast_path dtype filter
+                        }
+                    } else {
+                        switch (result_dtype) {
+                        case DataType::Float32:
+                            apply_binary_cpu(ptr<float>(), other.ptr<float>(), result.ptr<float>(),
+                                             result.numel(), op);
+                            break;
+                        case DataType::Float16: {
+                            const __half* left_ptr = ptr<__half>();
+                            const __half* right_ptr = other.ptr<__half>();
+                            __half* out_ptr = result.ptr<__half>();
+                            const size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = __float2half(
+                                    op(__half2float(left_ptr[i]), __half2float(right_ptr[i])));
+                            }
+                            break;
+                        }
+                        case DataType::Int32:
+                            apply_binary_cpu(ptr<int>(), other.ptr<int>(), result.ptr<int>(),
+                                             result.numel(), op);
+                            break;
+                        case DataType::Int64:
+                            apply_binary_cpu(ptr<int64_t>(), other.ptr<int64_t>(),
+                                             result.ptr<int64_t>(), result.numel(), op);
+                            break;
+                        case DataType::UInt8:
+                            apply_binary_cpu(ptr<uint8_t>(), other.ptr<uint8_t>(),
+                                             result.ptr<uint8_t>(), result.numel(), op);
+                            break;
+                        default:
+                            break;
+                        }
+                    }
+                }
+                internal::lazy_ir_record_binary(*this, other, result, "binary");
+                return result;
+            }
+
+            // Convert operands to result dtype if needed (promotion / broadcast path)
             const Tensor& lhs = (dtype_ == result_dtype) ? *this : this->to(result_dtype);
             const Tensor& rhs = (other.dtype() == result_dtype) ? other : other.to(result_dtype);
 
             // Compute broadcast shape
             auto broadcast_shape = lhs.broadcast_shape(rhs.shape());
 
-            // Evaluate eagerly — binary ops can't be fused by the pointwise system
+            // Evaluate eagerly for non-fusable / broadcast / promotion cases
             auto expr = BinaryExpr<TensorLeaf, TensorLeaf, Op>(
                 TensorLeaf(lhs), TensorLeaf(rhs), op,
                 broadcast_shape, lhs.device(), result_dtype);
@@ -948,7 +1288,9 @@ namespace lfs::core {
 
         // Helper to create view with shared ownership
         Tensor create_view(const TensorShape& new_shape) const {
-            if (state_ && state_->lazy) {
+            // Per-handle deferred: do not key off shared lazy alone
+            // a materialized sibling may still hold lazy->result for other handles.
+            if (is_deferred()) {
                 const uint64_t source_id = lazy_expr_id();
                 Tensor source = *this;
                 const cudaStream_t source_stream = source.stream();
@@ -987,13 +1329,13 @@ namespace lfs::core {
         }
 
         Tensor create_strided_view(const TensorShape& new_shape,
-                                   std::vector<size_t> new_strides) const {
+                                   RankedDims new_strides) const {
             LFS_ASSERT_MSG(new_strides.size() == new_shape.rank(),
                            "strided view shape and stride ranks must match");
             LFS_ASSERT_MSG(new_shape.elements() == numel(),
                            "metadata-only view must preserve the logical element count");
 
-            if (state_ && state_->lazy) {
+            if (is_deferred()) {
                 const bool identity_shape = new_shape == shape_;
                 const bool identity_strides =
                     new_strides == strides_ || new_strides == new_shape.strides();
@@ -1018,14 +1360,76 @@ namespace lfs::core {
             view.is_contiguous_ = true;
             for (int dimension = static_cast<int>(new_shape.rank()) - 1;
                  dimension >= 0; --dimension) {
-                if (view.strides_[dimension] != expected_stride) {
+                if (view.strides_[static_cast<size_t>(dimension)] != expected_stride) {
                     view.is_contiguous_ = false;
                     break;
                 }
-                expected_stride *= new_shape[dimension];
+                expected_stride *= new_shape[static_cast<size_t>(dimension)];
             }
             propagate_view_meta(view);
             return view;
+        }
+
+        // Accept vector-built strides from older call sites without forcing heap
+        // storage on the resulting view.
+        Tensor create_strided_view(const TensorShape& new_shape,
+                                   const std::vector<size_t>& new_strides) const {
+            return create_strided_view(new_shape, RankedDims(new_strides));
+        }
+
+        /// Zero-copy expand / broadcast_to view. Logical numel may grow; broadcast
+        // dims receive stride 0. Shares storage with *this.
+        Tensor create_broadcast_view(const TensorShape& target_shape,
+                                     std::vector<size_t> new_strides) const {
+            LFS_ASSERT_MSG(new_strides.size() == target_shape.rank(),
+                           "broadcast view shape and stride ranks must match");
+            materialize_if_deferred();
+            LFS_ASSERT_MSG(is_valid(),
+                           "broadcast view requires a valid source tensor");
+
+            Tensor view;
+            view.data_ = data_;
+            view.data_owner_ = data_owner_;
+            view.shape_ = target_shape;
+            view.strides_ = std::move(new_strides);
+            view.storage_offset_ = storage_offset_;
+            view.device_ = device_;
+            view.dtype_ = dtype_;
+            view.is_view_ = true;
+            view.id_ = profiling_enabled_ ? next_id_++ : 0;
+
+            size_t expected_stride = 1;
+            view.is_contiguous_ = true;
+            for (int dimension = static_cast<int>(target_shape.rank()) - 1;
+                 dimension >= 0; --dimension) {
+                if (view.strides_[static_cast<size_t>(dimension)] != expected_stride) {
+                    view.is_contiguous_ = false;
+                    break;
+                }
+                expected_stride *= target_shape[static_cast<size_t>(dimension)];
+            }
+            // size-1 dims may legally have any stride in contiguous layout; if any
+            // stride is 0 and rank>0 with elements, mark non-contiguous.
+            if (view.is_contiguous_) {
+                for (size_t s : view.strides_) {
+                    if (s == 0 && target_shape.elements() > 1) {
+                        view.is_contiguous_ = false;
+                        break;
+                    }
+                }
+            }
+            propagate_view_meta(view);
+            return view;
+        }
+
+        /// Reject in-place mutation of expand/broadcast views (shared cells).
+        void reject_inplace_on_zero_stride(const char* op_name) const {
+            if (has_zero_stride()) {
+                throw std::runtime_error(
+                    std::string(op_name) +
+                    " is not supported on zero-stride expand/broadcast views "
+                    "(materialize with contiguous() first)");
+            }
         }
 
         std::vector<size_t> resolve_dims(std::span<const int> dims) const;
@@ -1300,6 +1704,8 @@ namespace lfs::core {
         template <typename T>
         const T* ptr() const {
             materialize_if_deferred();
+            // raw ptr() is a flat-buffer escape — materialize stride-0 views.
+            materialize_zero_stride_for_raw_ptr_escape();
             tensor_contract::require_valid(
                 *this, "ptr<T>", "tensor", LFS_SOURCE_SITE_CURRENT());
             using Value = std::remove_cv_t<T>;
@@ -1320,31 +1726,40 @@ namespace lfs::core {
             assert_view_not_stale();
             LFS_ASSERT_MSG(data_ != nullptr || numel() == 0,
                            "ptr<T>() found null storage for a non-empty tensor");
+            assert_device_storage_matches_tag();
             const char* data_ptr = static_cast<const char*>(data_) + storage_offset_ * dtype_size(dtype_);
             return static_cast<const T*>(static_cast<const void*>(data_ptr));
         }
 
         void* data_ptr() {
             materialize_if_deferred();
+            // raw data_ptr() is a flat-buffer escape — materialize stride-0 views.
+            materialize_zero_stride_for_raw_ptr_escape();
             preserve_lazy_snapshots_before_write();
             tensor_contract::require_valid(
                 *this, "data_ptr", "tensor", LFS_SOURCE_SITE_CURRENT());
             assert_view_not_stale();
             LFS_ASSERT_MSG(data_ != nullptr || numel() == 0,
                            "data_ptr() found null storage for a non-empty tensor");
+            assert_device_storage_matches_tag();
             return static_cast<char*>(data_) + storage_offset_ * dtype_size(dtype_);
         }
         const void* data_ptr() const {
             materialize_if_deferred();
+            // raw data_ptr() is a flat-buffer escape — materialize stride-0 views.
+            materialize_zero_stride_for_raw_ptr_escape();
             tensor_contract::require_valid(
                 *this, "data_ptr", "tensor", LFS_SOURCE_SITE_CURRENT());
             assert_view_not_stale();
             LFS_ASSERT_MSG(data_ != nullptr || numel() == 0,
                            "data_ptr() found null storage for a non-empty tensor");
+            assert_device_storage_matches_tag();
             return static_cast<const char*>(data_) + storage_offset_ * dtype_size(dtype_);
         }
 
-        // Base of allocation (for memory management only)
+        // Base of allocation (for memory management / storage-identity only).
+        // Intentionally does NOT materialize zero-stride views: callers that need
+        // a dense flat buffer of numel() elements must use ptr()/data_ptr().
         void* storage_ptr() {
             materialize_if_deferred();
             preserve_lazy_snapshots_before_write();
@@ -1365,12 +1780,19 @@ namespace lfs::core {
         DataType dtype() const { return dtype_; }
         bool owns_memory() const { return static_cast<bool>(data_owner_) && !is_view_; }
         bool is_view() const { return is_view_; }
-        bool is_external_storage() const { return has_external_storage(); }
-        bool is_empty() const { return !is_valid() || numel() == 0; }
-        bool has_lazy_expr() const {
-            return (state_ && state_->lazy) || internal::tensor_has_lazy_expr(*this);
+        bool is_external_storage() const {
+            return storage_meta_ && static_cast<bool>(storage_meta_->external_owner);
         }
-        bool is_deferred() const { return state_ && state_->lazy; }
+        bool is_empty() const { return !is_valid() || numel() == 0; }
+        // Local deferred flag only — never takes the global IR mutex. Eager IR
+        // nodes (debug map) are NOT reported here; use lazy_expr_id() / IR APIs.
+        // Per-handle: after materialize, this handle has storage so it is no
+        // longer deferred even if shared TensorState still retains lazy->result
+        // for sibling copies.
+        bool has_lazy_expr() const { return is_deferred(); }
+        bool is_deferred() const {
+            return state_ && state_->lazy && data_ == nullptr && !data_owner_ && !is_view_;
+        }
         uint64_t lazy_expr_id() const;
         std::optional<internal::LazyExprDebugInfo> lazy_expr_info() const {
             if (const uint64_t node_id = lazy_expr_id(); node_id != 0) {
@@ -1402,7 +1824,9 @@ namespace lfs::core {
         // Home stream: where this tensor's pending writes are ordered. Frees route
         // here; reads from other streams must be recorded (record_stream) or
         // bridged + recorded (sync_to_stream).
-        cudaStream_t stream() const { return state_->stream; }
+        cudaStream_t stream() const {
+            return state_ ? static_cast<cudaStream_t>(state_->stream) : nullptr;
+        }
 
         // Declarative re-homing: future writes happen on `stream`. The old home
         // becomes a recorded use so the eventual free stays ordered after it.
@@ -1417,8 +1841,9 @@ namespace lfs::core {
         void sync_to_stream(cudaStream_t execution_stream) const;
 
         // Debug tracking - mark tensor to trace all operations it's involved in
-        bool is_tracked() const { return state_->tracked; }
+        bool is_tracked() const { return state_ && state_->tracked; }
         Tensor& set_tracked(bool tracked = true) {
+            ensure_state();
             state_->tracked = tracked;
             return *this;
         }
@@ -1427,8 +1852,12 @@ namespace lfs::core {
 
         // Optional name for identifying tensors in traces. Also forwarded to the
         // VRAM profiler so the underlying allocation is labelled with this name.
-        const std::string& name() const { return state_->name; }
+        const std::string& name() const {
+            static const std::string kEmpty;
+            return state_ ? state_->name : kEmpty;
+        }
         Tensor& set_name(std::string name) {
+            ensure_state();
             state_->name = std::move(name);
             relabel_allocation_for_profiler();
             return *this;
@@ -1451,17 +1880,40 @@ namespace lfs::core {
         // Capacity management (for in-place growth like std::vector)
         // capacity() returns the reserved capacity along dimension 0 (0 = no reservation)
         // logical_size() returns the logical size along dimension 0 (same as shape()[0])
-        size_t capacity() const { return state_->capacity; }
+        size_t capacity() const { return state_ ? state_->capacity : 0; }
         size_t logical_size() const {
-            return state_->capacity > 0
-                       ? state_->logical_size
-                       : (shape_.rank() > 0 ? shape_[0] : 0);
+            if (state_ && state_->capacity > 0) {
+                return state_->logical_size;
+            }
+            return shape_.rank() > 0 ? shape_[0] : 0;
         }
         std::string external_storage_kind() const {
             return storage_meta_ ? storage_meta_->external_kind : std::string{};
         }
         std::shared_ptr<void> external_storage_owner() const {
             return storage_meta_ ? storage_meta_->external_owner : nullptr;
+        }
+
+        // Exportable SoA provenance (stamped by SplatExportableStorage allocators).
+        void set_exportable_provenance(std::shared_ptr<void> control,
+                                       std::uint32_t region,
+                                       std::uint64_t bound_generation) {
+            ensure_storage_meta();
+            storage_meta_->exportable_control = std::move(control);
+            storage_meta_->exportable_region = region;
+            storage_meta_->exportable_bound_generation = bound_generation;
+        }
+        [[nodiscard]] bool has_exportable_provenance() const noexcept {
+            return storage_meta_ && static_cast<bool>(storage_meta_->exportable_control);
+        }
+        [[nodiscard]] std::shared_ptr<void> exportable_control() const noexcept {
+            return storage_meta_ ? storage_meta_->exportable_control : nullptr;
+        }
+        [[nodiscard]] std::uint32_t exportable_region() const noexcept {
+            return storage_meta_ ? storage_meta_->exportable_region : 0u;
+        }
+        [[nodiscard]] std::uint64_t exportable_bound_generation() const noexcept {
+            return storage_meta_ ? storage_meta_->exportable_bound_generation : 0u;
         }
         static std::string storage_memory_summary();
         static void log_storage_memory();
@@ -1478,8 +1930,8 @@ namespace lfs::core {
         Tensor to(DataType dtype) const;
         bool is_contiguous() const { return is_contiguous_; }
 
-        // Stride operations (Phase 4: Zero-copy views)
-        const std::vector<size_t>& strides() const { return strides_; }
+        // Stride operations (Zero-copy views) — stack RankedDims
+        const RankedDims& strides() const { return strides_; }
         size_t stride(size_t dim) const {
             LFS_ASSERT_MSG(is_valid(),
                            "stride() called on an invalid tensor");
@@ -1488,6 +1940,29 @@ namespace lfs::core {
             return strides_[dim];
         }
         size_t storage_offset() const { return storage_offset_; }
+
+        /// True if any dimension with size > 1 has stride 0 (expand / broadcast_to).
+        /// Such views share storage cells across logical indices; in-place mutation
+        // is rejected and non-allowlisted kernels must materialize first.
+        ///
+        /// stride of 0 (product of later dims includes 0), e.g. shN [N,0,3] →
+        /// strides [0,3,1]. That is NOT an expand view — only size>1 with stride 0
+        /// is a true broadcast. Size-1 dims with stride 0 are also expand-like but
+        /// do not change flat numel layout on their own.
+        bool has_zero_stride() const {
+            if (!is_valid() || numel() == 0) {
+                // Empty tensors (e.g. [N,0,3]) are never expand/broadcast views.
+                // Their row-major strides may still contain 0 from a zero-size dim.
+                return false;
+            }
+            const size_t rank = strides_.size();
+            for (size_t i = 0; i < rank; ++i) {
+                if (strides_[i] == 0 && shape_[i] > 1) {
+                    return true;
+                }
+            }
+            return false;
+        }
 
         Tensor cpu() const { return to(Device::CPU); }
         Tensor cuda() const { return to(Device::CUDA); }
@@ -2650,7 +3125,8 @@ namespace lfs::core {
     };
 
     inline uint64_t Tensor::lazy_expr_id() const {
-        if (state_ && state_->lazy && state_->lazy->node_id != 0) {
+        // Only the still-pending handle reports the deferred node id.
+        if (is_deferred() && state_->lazy->node_id != 0) {
             return state_->lazy->node_id;
         }
         return internal::tensor_lazy_expr_id(*this);

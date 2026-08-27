@@ -6,6 +6,7 @@
 #include "python_lsp_client.hpp"
 
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/path_utils.hpp"
 #include "core/services.hpp"
 #include "gui/editor/zep_rml_display.hpp"
 #include "gui/gui_focus_state.hpp"
@@ -29,10 +30,13 @@
 #include <cstdint>
 #include <filesystem>
 #include <format>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <set>
 #include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <zep/buffer.h>
@@ -2737,6 +2741,9 @@ namespace lfs::vis::editor {
         std::optional<PendingSyntaxPreEdit> pending_syntax_pre_edit;
         std::vector<lfs::python::PythonBufferEdit> pending_syntax_edits;
         std::string current_syntax_scope;
+        std::unordered_map<
+            const Zep::ZepBuffer*, std::string>
+            session_locators;
 
         bool request_focus = false;
         bool is_focused = false;
@@ -2779,6 +2786,195 @@ namespace lfs::vis::editor {
         float bound_font_size = 0.0f;
         bool vim_mode_enabled = false;
     };
+
+    namespace {
+
+        PythonEditorSessionState
+        capture_buffer_session_state(
+            const Zep::ZepBuffer& buffer,
+            Zep::ZepWindow* window) {
+            PythonEditorSessionState state;
+            if (window != nullptr) {
+                const auto cursor =
+                    window->GetBufferCursor();
+                if (cursor.Valid()) {
+                    state.cursor_byte =
+                        static_cast<std::size_t>(
+                            std::max(
+                                0l,
+                                cursor.Index()));
+                }
+                const auto scroll =
+                    window->GetScrollOffsetPx();
+                state.scroll_x = scroll.x;
+                state.scroll_y = scroll.y;
+
+                if (buffer.HasSelection()) {
+                    const auto selection =
+                        buffer.GetInclusiveSelection();
+                    if (selection.first.Valid() &&
+                        selection.second.Valid()) {
+                        const auto first =
+                            static_cast<std::size_t>(
+                                std::max(
+                                    0l,
+                                    selection.first
+                                        .Index()));
+                        const auto second =
+                            static_cast<std::size_t>(
+                                std::max(
+                                    0l,
+                                    selection.second
+                                        .Index()));
+                        const auto anchor =
+                            state.cursor_byte == first
+                                ? second
+                                : first;
+                        if (anchor !=
+                            state.cursor_byte) {
+                            state
+                                .selection_anchor_byte =
+                                anchor;
+                        }
+                    }
+                }
+            }
+
+            const auto& folds =
+                buffer.GetFoldRanges();
+            state.folds.reserve(folds.size());
+            for (const auto& fold : folds) {
+                state.folds.push_back(
+                    PythonEditorSessionFold{
+                        .start_byte =
+                            static_cast<
+                                std::size_t>(
+                                std::max(
+                                    0l,
+                                    fold.range.first)),
+                        .end_byte =
+                            static_cast<
+                                std::size_t>(
+                                std::max(
+                                    0l,
+                                    fold.range.second)),
+                        .start_line =
+                            static_cast<
+                                std::size_t>(
+                                std::max(
+                                    0l,
+                                    fold.startLine)),
+                        .end_line =
+                            static_cast<
+                                std::size_t>(
+                                std::max(
+                                    0l,
+                                    fold.endLine)),
+                        .kind = fold.kind,
+                        .collapsed =
+                            fold.collapsed,
+                    });
+            }
+            return state;
+        }
+
+        void restore_buffer_session_state(
+            Zep::ZepBuffer& buffer,
+            Zep::ZepWindow* window,
+            const std::string_view text,
+            const PythonEditorSessionState& state) {
+            const auto cursor_byte =
+                std::min(
+                    state.cursor_byte,
+                    text.size());
+            buffer.ClearSelection();
+            if (state.selection_anchor_byte) {
+                const auto anchor =
+                    std::min(
+                        *state.selection_anchor_byte,
+                        text.size());
+                if (anchor != cursor_byte) {
+                    buffer.SetSelection(
+                        Zep::GlyphRange{
+                            Zep::GlyphIterator(
+                                &buffer,
+                                cursor_byte),
+                            Zep::GlyphIterator(
+                                &buffer,
+                                anchor),
+                        });
+                }
+            }
+
+            constexpr auto max_long =
+                static_cast<std::size_t>(
+                    std::numeric_limits<
+                        long>::max());
+            std::vector<Zep::FoldRange> folds;
+            folds.reserve(state.folds.size());
+            for (const auto& fold :
+                 state.folds) {
+                const auto start_byte =
+                    std::min(
+                        fold.start_byte,
+                        text.size());
+                const auto end_byte =
+                    std::min(
+                        fold.end_byte,
+                        text.size());
+                if (start_byte >= end_byte ||
+                    fold.start_line >=
+                        fold.end_line) {
+                    continue;
+                }
+                folds.push_back(
+                    Zep::FoldRange{
+                        .range =
+                            Zep::ByteRange(
+                                static_cast<
+                                    Zep::ByteIndex>(
+                                    start_byte),
+                                static_cast<
+                                    Zep::ByteIndex>(
+                                    end_byte)),
+                        .startLine =
+                            static_cast<long>(
+                                std::min(
+                                    fold.start_line,
+                                    max_long)),
+                        .endLine =
+                            static_cast<long>(
+                                std::min(
+                                    fold.end_line,
+                                    max_long)),
+                        .kind = fold.kind,
+                        .collapsed =
+                            fold.collapsed,
+                    });
+            }
+            buffer.SetFoldRanges(
+                std::move(folds));
+
+            if (window != nullptr) {
+                window->SetBufferCursor(
+                    Zep::GlyphIterator(
+                        &buffer, cursor_byte));
+                window->SetScrollOffsetPx({
+                    std::max(
+                        0.0f, state.scroll_x),
+                    std::max(
+                        0.0f, state.scroll_y),
+                });
+            }
+        }
+
+        bool is_filesystem_editor_locator(
+            const std::string_view locator) {
+            return !locator.empty() &&
+                   !locator.contains("://");
+        }
+
+    } // namespace
 
     PythonEditor::PythonEditor()
         : impl_(std::make_unique<Impl>()) {
@@ -2986,6 +3182,14 @@ namespace lfs::vis::editor {
             const std::string text = impl_->getText();
             const CursorLocation cursor = impl_->getCursorLocation(text);
 
+            if (key == Rml::Input::KI_S &&
+                modifiers == Zep::ModifierKey::Ctrl) {
+                // Ctrl+S belongs to the application-level .licht save. Do not
+                // let the embedded editor also attempt to save its untitled
+                // buffer after the project command has already run.
+                event.StopPropagation();
+                return;
+            }
             if ((modifiers & Zep::ModifierKey::Ctrl) != 0 &&
                 (key == Rml::Input::KI_RETURN || key == Rml::Input::KI_NUMPADENTER)) {
                 execute_requested_ = true;
@@ -3063,6 +3267,18 @@ namespace lfs::vis::editor {
 
     void PythonEditor::clear() {
         impl_->setTextSilently("", std::nullopt);
+    }
+
+    void PythonEditor::setActiveSessionLocator(
+        std::string locator) {
+        if (impl_->buffer != nullptr)
+            impl_->session_locators.insert_or_assign(
+                impl_->buffer, std::move(locator));
+    }
+
+    void PythonEditor::clearActiveSessionLocator() {
+        if (impl_->buffer != nullptr)
+            impl_->session_locators.erase(impl_->buffer);
     }
 
     bool PythonEditor::consumeExecuteRequested() {
@@ -3194,6 +3410,250 @@ namespace lfs::vis::editor {
 
     bool PythonEditor::isVimModeEnabled() const {
         return impl_->vim_mode_enabled;
+    }
+
+    PythonEditorWorkspaceSessionState
+    PythonEditor::captureWorkspaceSessionState(
+        const std::string_view active_locator,
+        const bool active_modified) const {
+        PythonEditorWorkspaceSessionState result;
+        if (impl_->editor == nullptr)
+            return result;
+
+        struct DisplayedBuffer {
+            Zep::ZepBuffer* buffer = nullptr;
+            Zep::ZepWindow* window = nullptr;
+        };
+        std::vector<DisplayedBuffer> displayed;
+        std::unordered_map<
+            const Zep::ZepBuffer*, std::size_t>
+            indices;
+        auto* active_buffer =
+            impl_->editor->GetActiveBuffer();
+        auto* active_window =
+            impl_->editor->GetActiveWindow();
+        for (auto* tab :
+             impl_->editor->GetTabWindows()) {
+            if (tab == nullptr)
+                continue;
+            for (auto* window :
+                 tab->GetWindows()) {
+                if (window == nullptr)
+                    continue;
+                auto* buffer =
+                    &window->GetBuffer();
+                if (buffer->GetBufferType() !=
+                    Zep::BufferType::Normal) {
+                    continue;
+                }
+                const auto buffer_text =
+                    buffer->GetBufferText(
+                        buffer->Begin(), buffer->End());
+                if (buffer_text.empty() &&
+                    (buffer->HasFileFlags(
+                         Zep::FileFlags::DefaultBuffer) ||
+                     buffer->GetFilePath().empty())) {
+                    continue;
+                }
+                const auto [found, inserted] =
+                    indices.emplace(
+                        buffer,
+                        displayed.size());
+                if (inserted) {
+                    displayed.push_back({
+                        .buffer = buffer,
+                        .window = window,
+                    });
+                } else if (
+                    window == active_window) {
+                    displayed[found->second]
+                        .window = window;
+                }
+            }
+        }
+
+        result.open_files.reserve(
+            displayed.size());
+        std::unordered_set<std::string>
+            used_locators;
+        for (const auto& entry : displayed) {
+            auto* buffer = entry.buffer;
+            std::string locator;
+            const auto retained =
+                impl_->session_locators.find(
+                    buffer);
+            if (retained !=
+                impl_->session_locators.end()) {
+                locator = retained->second;
+            } else if (
+                !buffer->GetFilePath().empty()) {
+                locator =
+                    lfs::core::path_to_utf8(
+                        buffer->GetFilePath());
+            } else if (
+                buffer == active_buffer &&
+                !active_locator.empty()) {
+                locator = active_locator;
+            } else {
+                locator = "untitled://" +
+                          buffer->GetName();
+            }
+            if (locator.empty())
+                locator = "untitled://python";
+            const auto base_locator = locator;
+            for (std::size_t suffix = 2;
+                 !used_locators
+                      .emplace(locator)
+                      .second;
+                 ++suffix) {
+                locator =
+                    base_locator + "#" +
+                    std::to_string(suffix);
+            }
+
+            const bool modified =
+                buffer == active_buffer &&
+                        retained ==
+                            impl_->session_locators
+                                .end() &&
+                        buffer->GetFilePath()
+                            .empty()
+                    ? active_modified
+                    : buffer->HasFileFlags(
+                          Zep::FileFlags::Dirty);
+            const auto text = buffer->GetBufferText(
+                buffer->Begin(), buffer->End());
+            result.open_files.push_back(
+                PythonEditorSessionFile{
+                    .locator = locator,
+                    .text = text,
+                    .modified = modified,
+                    .editor =
+                        capture_buffer_session_state(
+                            *buffer,
+                            entry.window),
+                });
+            if (buffer == active_buffer) {
+                result.active_file = locator;
+            }
+        }
+        result.vim_mode =
+            impl_->vim_mode_enabled;
+        return result;
+    }
+
+    void PythonEditor::restoreWorkspaceSessionState(
+        const PythonEditorWorkspaceSessionState&
+            state) {
+        impl_ = std::make_unique<Impl>();
+        if (state.open_files.empty()) {
+            impl_->setVimModeEnabled(
+                state.vim_mode);
+            return;
+        }
+
+        Zep::ZepBuffer* active_buffer =
+            nullptr;
+        Zep::ZepWindow* active_window =
+            nullptr;
+        const PythonEditorSessionFile*
+            active_file = nullptr;
+        impl_->suppress_buffer_events = true;
+        for (std::size_t index = 0;
+             index < state.open_files.size();
+             ++index) {
+            const auto& file =
+                state.open_files[index];
+            Zep::ZepBuffer* buffer = nullptr;
+            Zep::ZepWindow* window = nullptr;
+            if (index == 0) {
+                buffer = impl_->buffer;
+                window =
+                    impl_->editor
+                        ->GetActiveWindow();
+            } else {
+                buffer =
+                    impl_->editor
+                        ->GetEmptyBuffer(
+                            file.locator);
+                auto* tab =
+                    impl_->editor
+                        ->AddTabWindow();
+                window = tab->AddWindow(
+                    buffer);
+            }
+            if (buffer == nullptr ||
+                window == nullptr) {
+                continue;
+            }
+
+            buffer->SetFileFlags(
+                Zep::FileFlags::
+                    DefaultBuffer,
+                false);
+            buffer->SetFileFlags(
+                Zep::FileFlags::InsertTabs,
+                false);
+            if (is_filesystem_editor_locator(
+                    file.locator)) {
+                buffer->SetFilePath(
+                    std::filesystem::path(
+                        file.locator));
+            }
+            buffer->SetText(
+                file.text,
+                !file.modified);
+            buffer->SetFileFlags(
+                Zep::FileFlags::Dirty,
+                file.modified);
+            buffer->SetPostKeyNotifier(
+                [owner = impl_.get()](
+                    const std::uint32_t key,
+                    const std::uint32_t
+                        modifier) {
+                    owner->handlePostKey(
+                        key, modifier);
+                    return false;
+                });
+            restore_buffer_session_state(
+                *buffer, window,
+                file.text, file.editor);
+            impl_->session_locators.emplace(
+                buffer, file.locator);
+
+            const bool requested_active =
+                state.active_file &&
+                *state.active_file ==
+                    file.locator;
+            if (requested_active ||
+                active_buffer == nullptr) {
+                active_buffer = buffer;
+                active_window = window;
+                active_file = &file;
+            }
+        }
+        impl_->suppress_buffer_events = false;
+
+        if (active_buffer != nullptr &&
+            active_window != nullptr) {
+            impl_->buffer = active_buffer;
+            impl_->editor->SetCurrentWindow(
+                active_window);
+        }
+        impl_->text_changed = false;
+        impl_->setVimModeEnabled(
+            state.vim_mode);
+        if (active_buffer != nullptr &&
+            active_window != nullptr &&
+            active_file != nullptr) {
+            // Activating a tab or global Zep mode may clear selection.
+            // The staged session remains authoritative.
+            restore_buffer_session_state(
+                *active_buffer, active_window,
+                active_file->text,
+                active_file->editor);
+        }
+        impl_->editor->RequestRefresh();
     }
 
     void PythonEditor::setReadOnly(bool readonly) {

@@ -163,11 +163,6 @@ namespace lfs::python {
             [](DatasetConfig& c, bool v) { c.loading_params.use_cpu_memory = v; });
 
         add_bool(
-            "use_fs_cache", "FS Cache", true, "Use filesystem cache for images", false,
-            [](const DatasetConfig& c) { return c.loading_params.use_fs_cache; },
-            [](DatasetConfig& c, bool v) { c.loading_params.use_fs_cache = v; });
-
-        add_bool(
             "use_16bit_color", "16-bit Color", false, "Train with 16-bit color images (HDR); caches losslessly as JPEG 2000", false,
             [](const DatasetConfig& c) { return c.loading_params.use_16bit_color; },
             [](DatasetConfig& c, bool v) { c.loading_params.use_16bit_color = v; });
@@ -908,6 +903,36 @@ namespace lfs::python {
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.enable_eval = v; }); },
                 "Enable evaluation during training")
             .def_prop_rw(
+                "background_improvements",
+                [](PyOptimizationParams& self) { return self.params().background_improvements; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.background_improvements = v; }); },
+                "Improve distant background reconstruction (MRNF): far-field seeding and splits, decay relief, growth cap, per-splat position steps, visibility-ratio growth ranking, paced capacity fill")
+            .def_prop_rw(
+                "far_scene_min_fraction",
+                [](PyOptimizationParams& self) { return self.params().far_scene_min_fraction; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.far_scene_min_fraction = v; }); },
+                "Minimum deep-far splat fraction that activates far-field features (0 = always on)")
+            .def_prop_rw(
+                "growth_ratio_rank",
+                [](PyOptimizationParams& self) { return self.params().growth_ratio_rank; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.growth_ratio_rank = v; }); },
+                "Rank MRNF growth by visibility-normalized error (err/vis^p) instead of raw window error")
+            .def_prop_rw(
+                "growth_ratio_pow",
+                [](PyOptimizationParams& self) { return self.params().growth_ratio_pow; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.growth_ratio_pow = v; }); },
+                "Visibility exponent p for the err/vis^p growth rank")
+            .def_prop_rw(
+                "fill_pacing_iter",
+                [](PyOptimizationParams& self) { return self.params().fill_pacing_iter; },
+                [](PyOptimizationParams&, size_t v) { modify_params([v](auto& p) { p.fill_pacing_iter = v; }); },
+                "Pace MRNF cap fill until this iteration (0 = fill as fast as possible)")
+            .def_prop_rw(
+                "far_seed_dose",
+                [](PyOptimizationParams& self) { return self.params().far_seed_dose; },
+                [](PyOptimizationParams&, size_t v) { modify_params([v](auto& p) { p.far_seed_dose = v; }); },
+                "Far-field seeds injected per refine window (0 = starvation-scaled default)")
+            .def_prop_rw(
                 "steps_scaler",
                 [](PyOptimizationParams& self) { return self.params().steps_scaler; },
                 [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.steps_scaler = v; }); },
@@ -961,6 +986,11 @@ namespace lfs::python {
                 [](PyOptimizationParams& self) { return self.params().use_ppisp; },
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.use_ppisp = v; }); },
                 "Enable per-pixel image signal processing")
+            .def_prop_rw(
+                "ppisp_exposure_from_exif",
+                [](PyOptimizationParams& self) { return self.params().ppisp_exposure_from_exif; },
+                [](PyOptimizationParams& self, bool v) { self.params().ppisp_exposure_from_exif = v; },
+                "Seed per-frame PPISP exposure from image EXIF")
             .def_prop_rw(
                 "ppisp_use_controller",
                 [](PyOptimizationParams& self) { return self.params().ppisp_use_controller; },
@@ -1058,6 +1088,11 @@ namespace lfs::python {
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.use_normal_loss = v; }); },
                 "Load normal maps and use normal-map supervision during training")
             .def_prop_rw(
+                "normal_auto_generate",
+                [](PyOptimizationParams& self) { return self.params().normal_auto_generate; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.normal_auto_generate = v; }); },
+                "Generate missing or size-mismatched maps with MoGe-2 from the full-resolution images/ folder so they work at every training resolution")
+            .def_prop_rw(
                 "normal_loss_weight",
                 [](PyOptimizationParams& self) { return self.params().normal_loss_weight; },
                 [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.normal_loss_weight = std::max(0.0f, v); }); },
@@ -1072,6 +1107,20 @@ namespace lfs::python {
                 [](PyOptimizationParams& self) { return self.params().normal_flatten_weight; },
                 [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.normal_flatten_weight = std::max(0.0f, v); }); },
                 "Min-axis scale flattening weight while normal supervision is active")
+            .def_prop_rw(
+                "normal_start_fraction",
+                [](PyOptimizationParams& self) { return self.params().normal_start_fraction; },
+                [](PyOptimizationParams&, float v) {
+                    modify_params([v](auto& p) { p.normal_start_fraction = std::clamp(v, 0.0f, 1.0f); });
+                },
+                "Fraction of total iterations at which normal supervision starts")
+            .def_prop_rw(
+                "normal_end_fraction",
+                [](PyOptimizationParams& self) { return self.params().normal_end_fraction; },
+                [](PyOptimizationParams&, float v) {
+                    modify_params([v](auto& p) { p.normal_end_fraction = std::clamp(v, 0.0f, 1.0f); });
+                },
+                "Fraction of total iterations at which normal supervision stops; 1.0 keeps it on until the end")
             .def_prop_rw(
                 "normal_loss_space",
                 [](PyOptimizationParams& self) { return std::string(normal_loss_space_name(self.params().normal_loss_space)); },
@@ -1094,7 +1143,7 @@ namespace lfs::python {
                 [](PyOptimizationParams& self) -> std::vector<size_t> {
                     return self.params().save_steps;
                 },
-                "List of iterations at which to save checkpoints")
+                "List of iterations at which to save the project (project.licht)")
             .def(
                 "add_save_step",
                 [](PyOptimizationParams&, size_t step) {
@@ -1234,15 +1283,6 @@ namespace lfs::python {
                     self.params().loading_params.use_cpu_memory = v;
                 },
                 "Cache images in CPU memory")
-            .def_prop_rw(
-                "use_fs_cache",
-                [](const PyDatasetConfig& self) { return self.params().loading_params.use_fs_cache; },
-                [](PyDatasetConfig& self, bool v) {
-                    if (!self.can_edit())
-                        throw std::runtime_error("Cannot edit dataset params during training");
-                    self.params().loading_params.use_fs_cache = v;
-                },
-                "Use filesystem cache for images")
             .def_prop_rw(
                 "use_16bit_color",
                 [](const PyDatasetConfig& self) { return self.params().loading_params.use_16bit_color; },

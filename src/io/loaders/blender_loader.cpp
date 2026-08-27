@@ -12,13 +12,17 @@
 #include "io/error.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/loaders/loader_utils.hpp"
+#include "io/loaders/missing_dataset_images.hpp"
 #include <chrono>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <ranges>
+#include <span>
 #include <tuple>
+#include <vector>
 
 namespace lfs::io {
 
@@ -79,7 +83,7 @@ namespace lfs::io {
             LOG_DEBUG("Validation only mode for Blender/NeRF: {}", lfs::core::path_to_utf8(transforms_file));
             // Check if the transforms file is valid JSON
             std::ifstream file;
-            if (!lfs::core::open_file_for_read(transforms_file, file)) {
+            if (!lfs::core::open_file_for_read(transforms_file, std::ios::in | std::ios::binary, file)) {
                 return make_error(ErrorCode::PERMISSION_DENIED,
                                   "Cannot open transforms file for reading", transforms_file);
             }
@@ -92,6 +96,29 @@ namespace lfs::io {
                 if (!j.contains("frames") || !j["frames"].is_array()) {
                     return make_error(ErrorCode::INVALID_DATASET,
                                       "Invalid transforms file: missing 'frames' array", transforms_file);
+                }
+
+                const auto base_path = transforms_file.parent_path();
+                std::vector<std::string> missing_images;
+                size_t referenced_images = 0;
+                for (const auto& frame : j["frames"]) {
+                    if (!frame.is_object() || !frame.contains("file_path") ||
+                        !frame["file_path"].is_string()) {
+                        continue;
+                    }
+                    ++referenced_images;
+                    const std::string file_path = frame["file_path"].get<std::string>();
+                    if (!safe_is_regular_file(GetTransformImagePath(base_path, file_path))) {
+                        missing_images.push_back(file_path);
+                    }
+                }
+                if (referenced_images > 0 && missing_images.size() == referenced_images) {
+                    return make_error(
+                        ErrorCode::EMPTY_DATASET,
+                        format_all_dataset_images_missing_message(
+                            missing_images,
+                            lfs::core::path_to_utf8(base_path)),
+                        base_path);
                 }
             } catch (const std::exception& e) {
                 return make_error(ErrorCode::MALFORMED_JSON,
@@ -112,7 +139,8 @@ namespace lfs::io {
                 .scene_center = Tensor::zeros({3}, Device::CPU, DataType::Float32),
                 .loader_used = name(),
                 .load_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time),
-                .warnings = {"Validation mode - point cloud not loaded"}};
+                .warnings = {"Validation mode - point cloud not loaded"},
+                .georeference = std::nullopt};
         }
 
         // Load the dataset
@@ -127,6 +155,23 @@ namespace lfs::io {
             auto [camera_infos, scene_center, train_val_split] =
                 read_transforms_cameras_and_images(transforms_file, options);
 
+            std::vector<std::string> missing_images;
+            for (const auto& info : camera_infos) {
+                if (!info._has_image) {
+                    missing_images.push_back(info._image_name.empty()
+                                                 ? lfs::core::path_to_utf8(info._image_path.filename())
+                                                 : info._image_name);
+                }
+            }
+            if (!camera_infos.empty() && missing_images.size() == camera_infos.size()) {
+                return make_error(
+                    ErrorCode::EMPTY_DATASET,
+                    format_all_dataset_images_missing_message(
+                        missing_images,
+                        lfs::core::path_to_utf8(transforms_file.parent_path())),
+                    transforms_file.parent_path());
+            }
+
             if (options.progress) {
                 options.progress(40.0f, std::format("Creating {} cameras...", camera_infos.size()));
             }
@@ -137,8 +182,25 @@ namespace lfs::io {
             std::vector<std::shared_ptr<lfs::core::Camera>> cameras;
             cameras.reserve(camera_infos.size());
 
-            // Get base path for mask lookup
+            // Sidecar paths are always associated so enabling masks/depth/normals
+            // after load works; malformed or ambiguous sidecar files only fail the
+            // load when the corresponding feature is enabled.
             std::filesystem::path base_path = transforms_file.parent_path();
+            const auto has_sidecar_directory = [&base_path](const std::span<const char* const> folders) {
+                return std::ranges::any_of(folders, [&base_path](const char* folder) {
+                    return safe_is_directory(base_path / folder);
+                });
+            };
+            if (!options.load_depths && has_sidecar_directory(DEPTH_SEARCH_FOLDERS)) {
+                LOG_INFO("depth maps present but unused (depth loss disabled)");
+            }
+            if (!options.load_normals && has_sidecar_directory(NORMAL_SEARCH_FOLDERS)) {
+                LOG_INFO("normal maps present but unused (normal loss disabled)");
+            }
+            if (!options.load_masks && has_sidecar_directory(MASK_SEARCH_FOLDERS)) {
+                LOG_INFO("mask maps present but unused (mask usage disabled)");
+            }
+
             MaskDirCache mask_cache(base_path, options.cancel_requested);
             DepthDirCache depth_cache(base_path, options.cancel_requested);
             NormalDirCache normal_cache(base_path, options.cancel_requested);
@@ -154,36 +216,48 @@ namespace lfs::io {
                     if (auto mask_lookup = mask_cache.lookup(info._image_name); mask_lookup.found()) {
                         mask_path = std::move(mask_lookup.path);
                     } else if (mask_lookup.ambiguous()) {
-                        return make_error(
-                            ErrorCode::INVALID_DATASET,
-                            std::format("Mask for image '{}' is ambiguous across the dataset mask folders. "
-                                        "Keep masks in the same relative subdirectories as the images or rename them uniquely.",
-                                        info._image_name),
-                            base_path);
+                        if (options.load_masks) {
+                            return make_error(
+                                ErrorCode::INVALID_DATASET,
+                                std::format("Mask for image '{}' is ambiguous across the dataset mask folders. "
+                                            "Keep masks in the same relative subdirectories as the images or rename them uniquely.",
+                                            info._image_name),
+                                base_path);
+                        }
+                        LOG_WARN("Mask for image '{}' is ambiguous; skipping sidecar because mask usage is disabled",
+                                 info._image_name);
                     }
 
                     std::filesystem::path depth_path;
                     if (auto depth_lookup = depth_cache.lookup(info._image_name); depth_lookup.found()) {
                         depth_path = std::move(depth_lookup.path);
                     } else if (depth_lookup.ambiguous()) {
-                        return make_error(
-                            ErrorCode::INVALID_DATASET,
-                            std::format("Depth map for image '{}' is ambiguous across the dataset depth folders. "
-                                        "Keep depth maps in the same relative subdirectories as the images or rename them uniquely.",
-                                        info._image_name),
-                            base_path);
+                        if (options.load_depths) {
+                            return make_error(
+                                ErrorCode::INVALID_DATASET,
+                                std::format("Depth map for image '{}' is ambiguous across the dataset depth folders. "
+                                            "Keep depth maps in the same relative subdirectories as the images or rename them uniquely.",
+                                            info._image_name),
+                                base_path);
+                        }
+                        LOG_WARN("Depth map for image '{}' is ambiguous; skipping sidecar because depth usage is disabled",
+                                 info._image_name);
                     }
 
                     std::filesystem::path normal_path;
                     if (auto normal_lookup = normal_cache.lookup(info._image_name); normal_lookup.found()) {
                         normal_path = std::move(normal_lookup.path);
                     } else if (normal_lookup.ambiguous()) {
-                        return make_error(
-                            ErrorCode::INVALID_DATASET,
-                            std::format("Normal map for image '{}' is ambiguous across the dataset normal folders. "
-                                        "Keep normal maps in the same relative subdirectories as the images or rename them uniquely.",
-                                        info._image_name),
-                            base_path);
+                        if (options.load_normals) {
+                            return make_error(
+                                ErrorCode::INVALID_DATASET,
+                                std::format("Normal map for image '{}' is ambiguous across the dataset normal folders. "
+                                            "Keep normal maps in the same relative subdirectories as the images or rename them uniquely.",
+                                            info._image_name),
+                                base_path);
+                        }
+                        LOG_WARN("Normal map for image '{}' is ambiguous; skipping sidecar because normal usage is disabled",
+                                 info._image_name);
                     }
 
                     // Validate mask/depth dimensions match image dimensions
@@ -194,7 +268,7 @@ namespace lfs::io {
                         }
                         return *image_info;
                     };
-                    if (!mask_path.empty()) {
+                    if (info._has_image && options.load_masks && !mask_path.empty()) {
                         auto [img_w, img_h, img_c] = get_image_info_cached();
                         auto [mask_w, mask_h, mask_c] = lfs::core::get_image_info(mask_path);
                         if (img_w != mask_w || img_h != mask_h) {
@@ -205,7 +279,7 @@ namespace lfs::io {
                                               mask_path);
                         }
                     }
-                    if (!depth_path.empty()) {
+                    if (info._has_image && options.load_depths && !depth_path.empty()) {
                         auto [img_w, img_h, img_c] = get_image_info_cached();
                         auto [depth_w, depth_h, depth_c] = lfs::core::get_image_info(depth_path);
                         if (img_w != depth_w || img_h != depth_h) {
@@ -216,15 +290,23 @@ namespace lfs::io {
                                               depth_path);
                         }
                     }
-                    if (!normal_path.empty()) {
+                    if (info._has_image && options.load_normals && !normal_path.empty()) {
                         auto [img_w, img_h, img_c] = get_image_info_cached();
                         auto [normal_w, normal_h, normal_c] = lfs::core::get_image_info(normal_path);
                         if (img_w != normal_w || img_h != normal_h) {
-                            return make_error(ErrorCode::NORMAL_SIZE_MISMATCH,
-                                              std::format("Normal map '{}' is {}x{} but image '{}' is {}x{}",
-                                                          lfs::core::path_to_utf8(normal_path.filename()), normal_w, normal_h,
-                                                          info._image_name, img_w, img_h),
-                                              normal_path);
+                            if (options.normal_auto_generate) {
+                                LOG_WARN("Normal map '{}' is {}x{} but image '{}' is {}x{}; "
+                                         "ignoring it so auto-generate can overwrite that file",
+                                         lfs::core::path_to_utf8(normal_path.filename()),
+                                         normal_w, normal_h, info._image_name, img_w, img_h);
+                                normal_path.clear();
+                            } else {
+                                return make_error(ErrorCode::NORMAL_SIZE_MISMATCH,
+                                                  std::format("Normal map '{}' is {}x{} but image '{}' is {}x{}",
+                                                              lfs::core::path_to_utf8(normal_path.filename()), normal_w, normal_h,
+                                                              info._image_name, img_w, img_h),
+                                                  normal_path);
+                            }
                         }
                     }
 
@@ -248,11 +330,16 @@ namespace lfs::io {
                         depth_path,
                         normal_path);
 
+                    cam->set_has_image(info._has_image);
                     cameras.push_back(cam);
                 } catch (const std::exception& e) {
                     LOG_ERROR("Failed to create camera {}: {}", i, e.what());
                     throw;
                 }
+            }
+
+            if (!missing_images.empty()) {
+                notify_missing_dataset_images(missing_images);
             }
 
             const bool images_have_alpha = detect_camera_alpha(cameras, options.cancel_requested);
@@ -265,7 +352,7 @@ namespace lfs::io {
 
             // Check ply_file_path in transforms.json (nerfstudio format), fallback to pointcloud.ply
             std::filesystem::path pointcloud_path;
-            if (std::ifstream file; lfs::core::open_file_for_read(transforms_file, file)) {
+            if (std::ifstream file; lfs::core::open_file_for_read(transforms_file, std::ios::in | std::ios::binary, file)) {
                 try {
                     if (const auto json = nlohmann::json::parse(file, nullptr, true, true);
                         json.contains("ply_file_path")) {
@@ -281,6 +368,9 @@ namespace lfs::io {
 
             std::shared_ptr<PointCloud> point_cloud;
             std::vector<std::string> warnings;
+            if (!missing_images.empty()) {
+                warnings.push_back(format_missing_dataset_images_warning(missing_images));
+            }
             if (std::filesystem::exists(pointcloud_path)) {
                 auto loaded_point_cloud = load_simple_ply_point_cloud(pointcloud_path, options);
                 point_cloud = std::make_shared<PointCloud>(
@@ -294,7 +384,9 @@ namespace lfs::io {
             }
 
             // Centralize scene
-            scene_center = centralize_scene(cameras, point_cloud, options.centralize, scene_center);
+            auto centralization =
+                centralize_scene(cameras, point_cloud, options.centralize, scene_center);
+            scene_center = std::move(centralization.scene_center);
 
             if (options.progress) {
                 options.progress(100.0f, "Blender/NeRF loading complete");
@@ -317,7 +409,8 @@ namespace lfs::io {
                 .images_have_alpha = images_have_alpha,
                 .loader_used = name(),
                 .load_time = load_time,
-                .warnings = std::move(warnings)};
+                .warnings = std::move(warnings),
+                .georeference = std::move(centralization.georeference)};
 
             LOG_INFO("Blender/NeRF dataset loaded successfully in {}ms", load_time.count());
             LOG_INFO("  - {} cameras", num_cameras);

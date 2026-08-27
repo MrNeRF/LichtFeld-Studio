@@ -138,7 +138,7 @@ namespace lfs::core {
                     return create_strided_view(shape_, strides_);
                 }
 
-                if (state_ && state_->lazy) {
+                if (is_deferred()) {
                     std::vector<int> axes(shape_.rank());
                     std::iota(axes.begin(), axes.end(), 0);
                     std::swap(axes[dim1], axes[dim2]);
@@ -221,7 +221,7 @@ namespace lfs::core {
                     }
                 }
 
-                if (state_ && state_->lazy) {
+                if (is_deferred()) {
                     return create_view(TensorShape(new_shape));
                 }
                 return create_strided_view(TensorShape(new_shape), std::move(new_strides));
@@ -257,7 +257,7 @@ namespace lfs::core {
                     new_strides.push_back(strides_[i]);
                 }
 
-                if (state_ && state_->lazy) {
+                if (is_deferred()) {
                     return create_view(TensorShape(new_shape));
                 }
                 return create_strided_view(TensorShape(new_shape), std::move(new_strides));

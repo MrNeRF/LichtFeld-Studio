@@ -20,10 +20,12 @@
   <div id="account-linking" class="account-state hidden" data-class-hidden="!show_linking">
     <span class="account-heading">@tr:account.linking.title</span>
     <span class="description">@tr:account.linking.description</span>
+    <span class="account-verification-url">{{ verification_display_url }}</span>
     <span class="account-user-code">{{ user_code }}</span>
     <span class="account-countdown"><span>@tr:account.expires_in</span><span class="account-countdown-value">{{ countdown }}</span></span>
     <div class="account-actions">
       <button id="account-open-link" type="button" class="btn btn--primary">@tr:account.open_portal</button>
+      <button id="account-copy-link" type="button" class="btn btn--secondary">@tr:account.copy_link</button>
       <button id="account-copy-code" type="button" class="btn btn--secondary">@tr:account.copy_code</button>
       <button id="account-cancel" type="button" class="btn btn--secondary">@tr:account.cancel</button>
     </div>

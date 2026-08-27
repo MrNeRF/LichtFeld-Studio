@@ -64,17 +64,6 @@ def _ui_label(key: str, fallback: str) -> str:
     return fallback
 
 
-def _format_ui_label(key: str, fallback: str, *args) -> str:
-    template = _ui_label(key, fallback).replace("%zu", "%d")
-    try:
-        return template % args
-    except (TypeError, ValueError):
-        try:
-            return template.format(*args)
-        except (IndexError, KeyError, ValueError):
-            return fallback % args
-
-
 def _quat_dot(a: List[float], b: List[float]) -> float:
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
 
@@ -164,19 +153,6 @@ class TransformControlsController:
         self._force_dirty = False
 
     def bind_model(self, model):
-        model.bind_func("transform_tool_label", self._tool_label)
-        model.bind_func(
-            "transform_node_name",
-            lambda: _format_ui_label("transform.node", "Node: %s", self._selected[0])
-            if self._selected
-            else "",
-        )
-        model.bind_func(
-            "transform_multi_label",
-            lambda: _format_ui_label("transform.nodes_selected", "%d nodes selected", len(self._selected))
-            if self._selected
-            else "",
-        )
         model.bind_func(
             "transform_reset_label",
             lambda: _ui_label("transform.reset_all_short", "Reset All")
@@ -184,16 +160,10 @@ class TransformControlsController:
             else _ui_label("transform.reset_transform", "Reset Transform"),
         )
         model.bind_func("transform_bake_label", lambda: _ui_label("transform.bake_transform", "Bake Transform"))
-        model.bind_func("transform_is_single", lambda: len(self._selected) == 1)
-        model.bind_func("transform_is_multi", lambda: len(self._selected) > 1)
         model.bind_func("transform_show_translate", lambda: self._active_tool == "builtin.translate")
         model.bind_func("transform_show_rotate", lambda: self._active_tool == "builtin.rotate")
         model.bind_func("transform_show_scale", lambda: self._active_tool == "builtin.scale")
         model.bind_func("transform_show_actions", lambda: self._active_tool in _NUMERIC_TRANSFORM_TOOL_IDS)
-        model.bind_func("transform_can_reset", self._can_reset_transform)
-        model.bind_func("transform_can_bake", self._can_bake_transform)
-        model.bind_func("transform_reset_opacity", lambda: "1" if self._can_reset_transform() else "0.22")
-        model.bind_func("transform_bake_opacity", lambda: "1" if self._can_bake_transform() else "0.22")
         for axis in ("x", "y", "z"):
             idx = _AXIS_INDEX[axis]
             model.bind(
@@ -335,14 +305,6 @@ class TransformControlsController:
         self._last_state_key = None
         self._force_dirty = False
 
-    def _tool_label(self):
-        labels = {
-            "builtin.translate": _ui_label("toolbar.translate", "Move"),
-            "builtin.rotate": _ui_label("toolbar.rotate", "Rotate"),
-            "builtin.scale": _ui_label("toolbar.scale", "Scale"),
-        }
-        return labels.get(self._active_tool, _ui_label("transform.tool", "Transform"))
-
     def _current_transform_space(self) -> int:
         value = _native_store_value("transform_space", _MISSING)
         if value is not _MISSING:
@@ -476,21 +438,12 @@ class TransformControlsController:
             self._handle.dirty(f"transform_rot_{axis}_str")
             self._handle.dirty(f"transform_scale_{axis}_str")
         self._handle.dirty("transform_scale_u_str")
-        self._handle.dirty("transform_tool_label")
-        self._handle.dirty("transform_node_name")
-        self._handle.dirty("transform_multi_label")
         self._handle.dirty("transform_reset_label")
         self._handle.dirty("transform_bake_label")
-        self._handle.dirty("transform_is_single")
-        self._handle.dirty("transform_is_multi")
         self._handle.dirty("transform_show_translate")
         self._handle.dirty("transform_show_rotate")
         self._handle.dirty("transform_show_scale")
         self._handle.dirty("transform_show_actions")
-        self._handle.dirty("transform_can_reset")
-        self._handle.dirty("transform_can_bake")
-        self._handle.dirty("transform_reset_opacity")
-        self._handle.dirty("transform_bake_opacity")
 
     def _begin_edit(self):
         if len(self._selected) == 1:

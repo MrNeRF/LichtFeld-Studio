@@ -34,6 +34,9 @@ namespace lfs::core {
         LFS_CORE_API void require_remaining_bytes(std::istream& is,
                                                   uint64_t required,
                                                   std::string_view field);
+        // Consume one serialized tensor without allocating host or device storage.
+        // Uses a seek over the payload so framed .licht streams do not decompress it.
+        LFS_CORE_API void skip_serialized_tensor(std::istream& is);
     } // namespace serialization_detail
 
     LFS_CORE_API std::ostream& operator<<(std::ostream& os, const Tensor& tensor);

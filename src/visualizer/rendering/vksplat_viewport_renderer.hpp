@@ -62,23 +62,30 @@ namespace lfs::vis {
             const lfs::core::SplatData* model = nullptr;
             std::size_t count = 0;
             int max_sh_degree = -1;
+            // Active training degree is part of the input contract: 0→1 is the
+            // first frame the viewer ever samples pad-dropped q16 rest (M4).
+            int active_sh_degree = -1;
             const void* means = nullptr;
             const void* scaling = nullptr;
             const void* rotation = nullptr;
             const void* opacity = nullptr;
             const void* sh0 = nullptr;
             const void* shn = nullptr;
+            const void* shn_bounds = nullptr;
             // The pointer/size catches mask allocation or removal; the version
             // catches in-place content edits so every input ring opacity copy is
             // refreshed without treating the edit as a full model change.
             const void* deleted = nullptr;
             std::uint64_t deleted_version = 0;
+            std::uint64_t exportable_generation = 0;
+            bool shn_q16 = false;
             std::size_t means_bytes = 0;
             std::size_t scaling_bytes = 0;
             std::size_t rotation_bytes = 0;
             std::size_t opacity_bytes = 0;
             std::size_t sh0_bytes = 0;
             std::size_t shn_bytes = 0;
+            std::size_t shn_bounds_bytes = 0;
             std::size_t deleted_bytes = 0;
 
             [[nodiscard]] bool valid() const { return model != nullptr && count > 0; }
@@ -195,9 +202,6 @@ namespace lfs::vis {
         // tensor. Valid only directly after a render into this slot, before the
         // next render reuses the pixel_depth scratch.
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readPreviewDepth(
-            VulkanContext& context,
-            OutputSlot output_slot = OutputSlot::Preview) const;
-        [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputDepthImage(
             VulkanContext& context,
             OutputSlot output_slot = OutputSlot::Preview) const;
         // Forces the non-batched per-pixel rasterizer chain (not the macro-tile
@@ -365,21 +369,19 @@ namespace lfs::vis {
         [[nodiscard]] std::size_t acquireRingSlot();
         [[nodiscard]] std::size_t latestOutputRingSlot(OutputSlot output_slot) const;
 
-        // Fallback coalesced CUDA-imported VkBuffer per ring slot, holding raw
-        // SplatData input regions back-to-back. Training tensors created as
-        // Vulkan-external buffers bypass this allocation and are bound directly.
         static constexpr std::size_t kInputRegionCount = 7;
         static constexpr std::size_t kOverlayRegionCount = 7;
         static constexpr std::size_t kSelectionQueryRegionCount = 7;
         static constexpr std::size_t kRegionAlignment = 256; // VK minStorageBufferOffsetAlignment upper bound on common HW
         struct CudaOpacityCopySlot {
+            std::shared_ptr<lfs::core::ExportableBlock> block;
             VulkanContext::ExternalBuffer buffer{};
-            lfs::rendering::CudaVulkanBufferInterop interop{};
             std::size_t bytes = 0;
         };
         struct CudaOverlaySlot {
+            std::shared_ptr<lfs::core::ExportableBlock> block;
             VulkanContext::ExternalBuffer buffer{};
-            lfs::rendering::CudaVulkanBufferInterop interop{};
+            lfs::core::Tensor copy_keep_alive;
             std::array<std::size_t, kOverlayRegionCount> region_offset{};
             std::array<std::size_t, kOverlayRegionCount> region_bytes{};
             lfs::core::Tensor selection_source;
@@ -409,8 +411,9 @@ namespace lfs::vis {
             bool model_transforms_uploaded = false;
         };
         struct CudaSelectionQuerySlot {
+            std::shared_ptr<lfs::core::ExportableBlock> block;
             VulkanContext::ExternalBuffer buffer{};
-            lfs::rendering::CudaVulkanBufferInterop interop{};
+            lfs::core::Tensor copy_keep_alive;
             std::array<std::size_t, kSelectionQueryRegionCount> region_offset{};
             std::array<std::size_t, kSelectionQueryRegionCount> region_bytes{};
             std::array<std::size_t, kSelectionQueryRegionCount> region_capacity_bytes{};
@@ -480,7 +483,7 @@ namespace lfs::vis {
         // retirement (producer timeline) plus graphics-frame submit serials.
         // force=true only after device idle; never destroys live acquisitions.
         // When readback_mutex_held is true the caller already owns readback_mutex_
-        // (release* paths); the pin predicate must not re-lock (F3-1).
+        // (release* paths); the pin predicate must not re-lock.
         void drainOutputImagePool(bool force, bool readback_mutex_held = false);
         // Free Failed ticket cells once the readback timeline reaches their ticket
         // (non-blocking). Caller must hold readback_mutex_.
@@ -610,8 +613,8 @@ namespace lfs::vis {
         // engine writes expanded tree metadata with page payloads; the
         // Buffer shells above hold region views into it.
         struct LodTreeMetaStorage {
+            std::shared_ptr<lfs::core::ExportableBlock> block;
             VulkanContext::ExternalBuffer buffer{};
-            lfs::rendering::CudaVulkanBufferInterop interop{};
             std::size_t bounds_offset = 0;
             std::size_t links_offset = 0;
             std::size_t capacity_nodes = 0;
@@ -624,8 +627,8 @@ namespace lfs::vis {
         LodUploadEngine::DeviceLayout lod_engine_layout_{};
         const lfs::core::SplatData* lod_sink_model_ = nullptr;
         struct LodPageInputStorage {
+            std::shared_ptr<lfs::core::ExportableBlock> block;
             VulkanContext::ExternalBuffer buffer{};
-            lfs::rendering::CudaVulkanBufferInterop interop{};
             std::array<std::size_t, kInputRegionCount> region_offset{};
             std::array<std::size_t, kInputRegionCount> region_bytes{};
             const lfs::core::SplatData* model = nullptr;

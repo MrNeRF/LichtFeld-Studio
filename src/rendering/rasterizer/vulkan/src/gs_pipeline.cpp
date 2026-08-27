@@ -2,6 +2,7 @@
 #include "perf_timer.h"
 
 #include "core/error.hpp"
+#include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
 
 #include <cassert>
@@ -86,7 +87,7 @@ namespace {
 
 [[noreturn]] static void throwRendererContractViolation(std::string detail,
                                                         lfs::core::SourceSite site) {
-    // Phase 7C-P4: shared typed helper (vulkan_result.hpp).
+    // Use the shared typed helper from vulkan_result.hpp.
     lfs::rendering::throw_renderer_contract(std::move(detail), site);
 }
 
@@ -102,8 +103,7 @@ namespace {
     return "Unknown";
 }
 
-// Phase 7C-P3: throw dialect for gs_pipeline bounded waits (C1/C2). DeviceLost
-// and other Result errors preserve their typed Error; flow outcomes map to
+// DeviceLost and other bounded-wait errors preserve their typed Error; flow outcomes map to
 // Cancelled / Unavailable. Throws typed lfs::Exception (never stdout / untyped
 // runtime_error).
 [[noreturn]] static void throwBoundedWaitFailure(
@@ -535,15 +535,11 @@ void VulkanGSPipeline::cleanup() {
     if (device != VK_NULL_HANDLE) {
         const VkResult idle_result = vkDeviceWaitIdle(device);
         if (idle_result != VK_SUCCESS) {
-            lfs::rendering::throw_vk_result(
-                idle_result,
-                "vkDeviceWaitIdle",
-                std::format(
-                    "VkSplat cleanup could not retire device work before destroying resources (device={:#x}, result={}({}))",
-                    lfs::rendering::vkHandleValue(device),
-                    lfs::rendering::vkResultToString(idle_result),
-                    static_cast<int>(idle_result)),
-                LFS_SOURCE_SITE_CURRENT());
+            LOG_ERROR("Vulkan: vkDeviceWaitIdle failed during VkSplat pipeline cleanup "
+                      "(device={:#x}, result={}({})); continuing resource destruction",
+                      lfs::rendering::vkHandleValue(device),
+                      lfs::rendering::vkResultToString(idle_result),
+                      static_cast<int>(idle_result));
         }
 
         drainRetiredBufferShells(/*force=*/true);
@@ -628,6 +624,7 @@ void VulkanGSPipeline::populateDeviceInfo(VkPhysicalDevice selected_physical_dev
         limits.maxComputeWorkGroupCount[0],
         limits.maxComputeWorkGroupCount[1],
         limits.maxComputeWorkGroupCount[2],
+        limits.maxStorageBufferRange,
     };
 }
 
@@ -663,6 +660,22 @@ void VulkanGSPipeline::validateBufferRange(const _VulkanBuffer& buffer,
                 buffer.offset,
                 relative_offset,
                 size,
+                buffer.capacity,
+                buffer.allocSize,
+                buffer.label ? buffer.label : "<unlabeled>"),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if (size > deviceInfo.maxStorageBufferRange) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "{} exceeds VkPhysicalDeviceLimits::maxStorageBufferRange (buffer={:#x}, allocation={:#x}, base_offset={}, relative_offset={}, range={}, maxStorageBufferRange={}, view_capacity={}, backing_size={}, label='{}')",
+                operation,
+                lfs::rendering::vkHandleValue(buffer.buffer),
+                lfs::rendering::vkHandleValue(buffer.allocation),
+                buffer.offset,
+                relative_offset,
+                size,
+                deviceInfo.maxStorageBufferRange,
                 buffer.capacity,
                 buffer.allocSize,
                 buffer.label ? buffer.label : "<unlabeled>"),
@@ -822,7 +835,6 @@ void VulkanGSPipeline::createShaderModule(const std::vector<uint32_t>& spirv_cod
 
 void VulkanGSPipeline::beginCommandBatch() {
     // Cheap non-blocking poll: free growth shells whose timeline keys completed.
-    // commandBatchInProgress is false here, so destroyBufferRetired's active-batch contract holds.
     drainRetiredBufferShells(/*force=*/false);
 
     if (commandBatchInProgress) {
@@ -1045,7 +1057,7 @@ void VulkanGSPipeline::waitForPendingBatchSlot(CommandBatchSlot& slot) {
             wait_info.semaphoreCount = 1;
             wait_info.pSemaphores = &slot.pending_signal;
             wait_info.pValues = &slot.pending_signal_value;
-            // Phase 7C-P3 C1: bounded wait via dispatch. Non-Ready throws and
+            // A non-ready bounded wait throws and
             // leaves pending_signal set (no manufactured readiness).
             lfs::rendering::WaitContext wait_ctx;
             wait_ctx.dispatch = &vulkan_dispatch_;
@@ -1483,8 +1495,8 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
                 "endCommandBatch fence path requires VulkanDispatch reset_fences",
                 LFS_SOURCE_SITE_CURRENT());
         }
-        // Phase 7C-P3 C2: bounded post-submit fence wait via dispatch.
-        // Non-Ready throws without reset (reset implies free-for-reuse).
+        // A non-ready post-submit fence wait throws without reset because reset
+        // implies the slot is free for reuse.
         lfs::rendering::WaitContext wait_ctx;
         wait_ctx.dispatch = &vulkan_dispatch_;
         wait_ctx.fingerprint = "vksplat.pipeline.wait_post_submit_fence";

@@ -272,6 +272,15 @@ def _color_channel_field(prop_id, suffix):
     return f"{prop_id}_{suffix}"
 
 
+RENDERING_INITIALLY_COLLAPSED = {
+    "lod",
+    "selection",
+    "mesh",
+    "post_process",
+    "ppisp_crf",
+}
+
+
 class RenderingPanel(Panel):
     id = "lfs.rendering"
     label = "Rendering"
@@ -284,7 +293,7 @@ class RenderingPanel(Panel):
     def __init__(self):
         self._handle = None
         self._color_edit_prop = None
-        self._collapsed = {"lod", "selection", "mesh", "post_process", "ppisp_crf"}
+        self._collapsed = set(RENDERING_INITIALLY_COLLAPSED)
         self._popup_el = None
         self._doc = None
         self._picker_click_handled = False
@@ -314,6 +323,18 @@ class RenderingPanel(Panel):
             self._set_scrub_value,
         )
         self._reactive_binding = PanelStateBinding()
+
+    def capture_chrome(self):
+        return {"collapsed": sorted(self._collapsed)}
+
+    def apply_chrome(self, payload):
+        self._collapsed = set(RENDERING_INITIALLY_COLLAPSED)
+        if isinstance(payload, dict):
+            collapsed = payload.get("collapsed")
+            if isinstance(collapsed, (list, tuple)):
+                self._collapsed = {str(name) for name in collapsed}
+        if self._handle:
+            self._handle.dirty_all()
 
     def _sync_panel_label(self):
         label = tr("window.rendering")
@@ -452,8 +473,6 @@ class RenderingPanel(Panel):
                     lambda: str(getattr(s(), "ppisp_mode", "")),
                     lambda v: self._set_ppisp_mode(v))
 
-        model.bind_func("environment_enabled",
-                        lambda: s() is not None and getattr(s(), "environment_mode", "") == "EQUIRECTANGULAR")
         model.bind_func("mesh_wireframe_supported", _mesh_wireframe_supported)
         model.bind_func("mesh_wide_lines_supported", _mesh_wide_lines_supported)
 
@@ -537,8 +556,6 @@ class RenderingPanel(Panel):
         model.bind_func("ppisp_auto",
                          lambda: s() is not None and getattr(s(), "ppisp_mode", "") != "MANUAL")
 
-        model.bind_func("label_panel_title",
-                         lambda: lf.ui.tr("rendering") or "Rendering")
         model.bind_func("label_hdr_viewport",
                          lambda: _tr_fallback("rendering_panel.section_viewport", "Viewport"))
         model.bind_func("label_hdr_camera",

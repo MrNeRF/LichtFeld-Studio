@@ -15,6 +15,10 @@ namespace lfs::vis {
     ViewportFrameLifecycleService::handleViewportResize(const glm::ivec2& current_size) {
         ResizeResult result;
         const bool resize_is_active = resize_active_.load(std::memory_order_relaxed);
+        result.require_immediate_output_resize =
+            resize_is_active &&
+            resize_render_policy_.load(std::memory_order_relaxed) ==
+                ViewportResizeRenderPolicy::FullResolution;
 
         if (current_size != last_viewport_size_) {
             const auto now = std::chrono::steady_clock::now();
@@ -27,7 +31,11 @@ namespace lfs::vis {
             } else {
                 resize_settle_pending_ = true;
                 result.dirty = DirtyFlag::OVERLAY;
-                result.render_interactive_frame = true;
+                result.render_resized_frame = true;
+                result.use_interactive_render_scale =
+                    !resize_is_active ||
+                    resize_render_policy_.load(std::memory_order_relaxed) ==
+                        ViewportResizeRenderPolicy::InteractivePreview;
             }
             return result;
         }
@@ -88,12 +96,19 @@ namespace lfs::vis {
         return dirty;
     }
 
-    DirtyMask ViewportFrameLifecycleService::setViewportResizeActive(const bool active) {
+    DirtyMask ViewportFrameLifecycleService::setViewportResizeActive(
+        const bool active,
+        const ViewportResizeRenderPolicy render_policy) {
+        if (active) {
+            resize_render_policy_.store(render_policy, std::memory_order_relaxed);
+        }
         const bool was_active = resize_active_.exchange(active);
         if (!was_active || active) {
             return 0;
         }
 
+        resize_render_policy_.store(ViewportResizeRenderPolicy::InteractivePreview,
+                                    std::memory_order_relaxed);
         resize_settle_pending_ = true;
         last_resize_change_ = std::chrono::steady_clock::now();
 

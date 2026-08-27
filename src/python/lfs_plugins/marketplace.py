@@ -10,7 +10,7 @@ import threading
 import time
 import urllib.request
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Callable, List, Optional, Set, Tuple
 
 from .http import urlopen
 

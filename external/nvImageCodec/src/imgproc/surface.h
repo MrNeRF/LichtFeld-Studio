@@ -33,11 +33,7 @@ namespace nvimgcodec {
         NVIMGCODEC_HOST_DEV constexpr Surface(T* data,
                                               int width, int height, int channels,
                                               int64_t pixel_stride, int64_t row_stride, int64_t channel_stride)
-            : data(data),
-              size(width, height),
-              channels(channels),
-              strides(pixel_stride, row_stride),
-              channel_stride(channel_stride) {
+            : data(data), size(width, height), channels(channels), strides(pixel_stride, row_stride), channel_stride(channel_stride) {
         }
 
         template <int N = spatial_ndim, std::enable_if_t<N == 3, int> = 0>
@@ -45,22 +41,14 @@ namespace nvimgcodec {
                                               int width, int height, int depth, int channels,
                                               int64_t pixel_stride, int64_t row_stride, int64_t slice_stride,
                                               int64_t channel_stride)
-            : data(data),
-              size(width, height, depth),
-              channels(channels),
-              strides(pixel_stride, row_stride, slice_stride),
-              channel_stride(channel_stride) {
+            : data(data), size(width, height, depth), channels(channels), strides(pixel_stride, row_stride, slice_stride), channel_stride(channel_stride) {
         }
 
         NVIMGCODEC_HOST_DEV
         constexpr Surface(T* data,
                           ivec<spatial_ndim> size, int channels,
                           i64vec<spatial_ndim> strides, int64_t channel_stride)
-            : data(data),
-              size(size),
-              channels(channels),
-              strides(strides),
-              channel_stride(channel_stride) {
+            : data(data), size(size), channels(channels), strides(strides), channel_stride(channel_stride) {
         }
 
         T* data;

@@ -1,0 +1,317 @@
+/* This compact utility panel does not need a directional drop shadow. */
+body.floating-panel {
+    box-shadow: none;
+}
+
+#content {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+.preferences-layout {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+
+.preferences-nav {
+    display: flex;
+    flex: 0 0 150dp;
+    flex-direction: column;
+    gap: 4dp;
+    margin-right: 14dp;
+    padding-right: 12dp;
+    border-right-width: 1dp;
+}
+
+.preferences-nav-item {
+    text-align: left;
+    white-space: nowrap;
+}
+
+.preferences-content {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 6dp;
+}
+
+.preferences-section {
+    margin-bottom: 8dp;
+}
+
+.preferences-description {
+    display: block;
+    font-size: 12dp;
+    line-height: 18dp;
+    opacity: 0.8;
+}
+
+.preferences-warning,
+.preferences-error {
+    margin: 4dp 0 8dp 0;
+}
+
+.preferences-value-selectable {
+    width: 360dp;
+    white-space: pre-wrap;
+}
+
+.preferences-inline-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6dp;
+    justify-content: flex-end;
+    margin: 8dp 0 12dp 0;
+}
+
+.preferences-row {
+    display: flex;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 12dp;
+    margin-bottom: 5dp;
+}
+
+.preferences-label {
+    flex: 1 1 auto;
+    min-width: 100dp;
+    max-width: 190dp;
+    font-size: 12dp;
+    white-space: normal;
+}
+
+.preferences-select {
+    flex: 0 0 200dp;
+    width: 200dp;
+    min-width: 140dp;
+    margin-left: auto;
+}
+
+.preferences-port-control {
+    display: flex;
+    flex: 0 0 240dp;
+    align-items: center;
+    gap: 6dp;
+    margin-left: auto;
+}
+
+.preferences-path-control {
+    display: flex;
+    flex: 1 1 360dp;
+    align-items: center;
+    gap: 6dp;
+    margin-left: auto;
+    min-width: 220dp;
+}
+
+.preferences-path-input {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 160dp;
+    margin-left: 0;
+}
+
+.preferences-port-input {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 100dp;
+    margin-left: 0;
+}
+
+.preferences-port-confirm {
+    flex: 0 0 auto;
+    min-width: 34dp;
+    padding-left: 8dp;
+    padding-right: 8dp;
+}
+
+.preferences-port-confirm.disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.preferences-switch-row {
+    align-items: center;
+}
+
+.preferences-mcp-toggle {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    width: 30dp;
+    height: 18dp;
+    margin-left: auto;
+    padding: 0;
+    border-width: 0;
+    background-color: transparent;
+}
+
+.preferences-mcp-toggle.disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.preferences-mcp-switch-track {
+    display: block;
+    position: relative;
+    width: 22dp;
+    height: 10dp;
+    border-width: 1dp;
+    border-radius: 6dp;
+}
+
+.preferences-mcp-switch-knob {
+    display: block;
+    position: absolute;
+    left: 1dp;
+    top: 1dp;
+    width: 6dp;
+    height: 6dp;
+    border-radius: 4dp;
+}
+
+.preferences-mcp-toggle.is-on .preferences-mcp-switch-knob {
+    left: 13dp;
+}
+
+.preferences-checkbox-row input {
+    margin-left: auto;
+}
+
+.preferences-interface-option {
+    margin-top: 10dp;
+}
+
+.preferences-scene-graph-section {
+    margin-top: 14dp;
+}
+
+.preferences-actions {
+    flex: 0 0 auto;
+    display: flex;
+}
+
+.preferences-footer-sidebar {
+    flex: 0 0 150dp;
+    padding-right: 12dp;
+    border-right-width: 1dp;
+}
+
+.preferences-footer-gutter {
+    flex: 0 0 14dp;
+    border-top-width: 1dp;
+}
+
+.preferences-actions-main {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6dp;
+    justify-content: flex-end;
+    padding-top: 12dp;
+    border-top-width: 1dp;
+}
+
+.preferences-actions-spacer {
+    flex: 1;
+}
+
+.preferences-bindings-table {
+    margin-top: 4dp;
+    margin-bottom: 6dp;
+    min-width: 0;
+}
+
+.preferences-binding-section {
+    display: block;
+    font-size: 12dp;
+    font-weight: bold;
+    padding: 3dp 4dp;
+    margin-top: 4dp;
+}
+
+.preferences-binding-row {
+    display: flex;
+    align-items: center;
+    padding: 2dp 4dp;
+    min-height: 22dp;
+    min-width: 0;
+    gap: 8dp;
+}
+
+.preferences-action-name {
+    width: 140dp;
+    font-size: 12dp;
+    flex-shrink: 0;
+}
+
+.preferences-binding-desc {
+    flex: 1;
+    min-width: 0;
+    font-size: 12dp;
+}
+
+.preferences-rebind-btn {
+    flex-shrink: 0;
+    min-width: 60dp;
+    font-size: 12dp;
+    padding: 1dp 6dp;
+}
+
+.preferences-capture-disabled {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+.preferences-conflict-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 50;
+}
+
+.preferences-conflict-overlay.hidden {
+    display: none;
+}
+
+.preferences-conflict-dialog {
+    border-width: 1dp;
+    border-radius: 6dp;
+    padding: 14dp;
+    min-width: 280dp;
+    max-width: 380dp;
+}
+
+.preferences-conflict-title {
+    display: block;
+    font-size: 12dp;
+    font-weight: bold;
+    margin-bottom: 6dp;
+}
+
+.preferences-conflict-message {
+    display: block;
+    font-size: 12dp;
+    margin-bottom: 8dp;
+}
+
+.preferences-conflict-buttons {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8dp;
+    margin-top: 8dp;
+}
+
+.preferences-conflict-buttons .btn {
+    min-width: 80dp;
+}

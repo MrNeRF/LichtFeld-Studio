@@ -163,3 +163,85 @@ class TestLoadProgress:
         # Progress values should be in [0, 100] (percentage)
         for progress, _ in progress_calls:
             assert 0.0 <= progress <= 100.0
+
+
+_ONE_PIXEL_PNG = bytes(
+    [
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+        0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00,
+        0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+        0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ]
+)
+
+
+class TestMissingDatasetImages:
+    """Python-visible load warnings for missing dataset images."""
+
+    def test_transforms_load_warns_and_keeps_missing_camera(self, lf, tmp_path):
+        dataset = tmp_path / "missing_images"
+        dataset.mkdir()
+        (dataset / "present.png").write_bytes(_ONE_PIXEL_PNG)
+        (dataset / "transforms.json").write_text(
+            """{
+  "w": 1,
+  "h": 1,
+  "fl_x": 1.0,
+  "fl_y": 1.0,
+  "cx": 0.5,
+  "cy": 0.5,
+  "frames": [
+    {
+      "file_path": "present.png",
+      "transform_matrix": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]
+    },
+    {
+      "file_path": "missing.png",
+      "transform_matrix": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]
+    }
+  ]
+}
+"""
+        )
+
+        result = lf.io.load(str(dataset))
+        assert result.is_dataset is True
+        assert any("missing.png" in warning and "missing" in warning for warning in result.warnings)
+
+        cameras = result.cameras
+        assert cameras is not None
+        assert len(cameras) == 1
+        assert cameras[0].image_name == "present.png"
+        assert cameras[0].has_image is True
+
+        records = cameras.cameras()
+        assert len(records) == 2
+        by_name = {camera.image_name: camera for camera in records}
+        assert by_name["present.png"].has_image is True
+        assert by_name["missing.png"].has_image is False
+
+    def test_transforms_all_missing_fails(self, lf, tmp_path):
+        dataset = tmp_path / "all_missing_images"
+        dataset.mkdir()
+        (dataset / "transforms.json").write_text(
+            """{
+  "w": 1,
+  "h": 1,
+  "fl_x": 1.0,
+  "fl_y": 1.0,
+  "cx": 0.5,
+  "cy": 0.5,
+  "frames": [
+    {
+      "file_path": "missing.png",
+      "transform_matrix": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]
+    }
+  ]
+}
+"""
+        )
+
+        with pytest.raises(RuntimeError, match="missing"):
+            lf.io.load(str(dataset))

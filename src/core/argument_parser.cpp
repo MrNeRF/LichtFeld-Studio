@@ -9,21 +9,26 @@
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
+#include "core/user_paths.hpp"
+#include "io/project_path.hpp"
 #include <algorithm>
 #include <any>
 #include <args.hxx>
 #include <array>
+#include <cctype>
 #include <charconv>
 #include <cmath>
 #include <cstdlib>
 #include <expected>
 #include <filesystem>
 #include <format>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <print>
 #include <set>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 #ifdef _WIN32
 #include <Windows.h>
 #endif
@@ -38,6 +43,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--strategy", "strategy", String, false, "; legacy aliases: mnrf, lfs"},
             OptimizationCliBinding{"--sh-degree", "sh_degree", Integer},
             OptimizationCliBinding{"--sh-degree-interval", "sh_degree_interval", Integer},
+            OptimizationCliBinding{"--morton-reorder-interval", "morton_reorder_interval", Integer},
             OptimizationCliBinding{"--max-cap", "max_cap", Integer},
             OptimizationCliBinding{"--min-opacity", "min_opacity", Float},
             OptimizationCliBinding{"--cropbox-lr-scale", "cropbox_lr_scale", Float},
@@ -45,6 +51,8 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--steps-scaler", "steps_scaler", Float},
             OptimizationCliBinding{"--no-error-map", "use_error_map", Bool, true},
             OptimizationCliBinding{"--no-edge-map", "use_edge_map", Bool, true},
+            OptimizationCliBinding{"--no-background-improvements", "background_improvements", Bool, true},
+            OptimizationCliBinding{"--no-growth-ratio-rank", "growth_ratio_rank", Bool, true},
             OptimizationCliBinding{"--bg-mode", "bg_mode", Enum, false,
                                    "; values: solidcolor, modulation, image, random", "solid_color", "solidcolor"},
             OptimizationCliBinding{"--random", "random", Bool},
@@ -58,9 +66,12 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--depth-loss-weight", "depth_loss_weight", Float},
             OptimizationCliBinding{"--depth-loss-mode", "depth_loss_mode", String},
             OptimizationCliBinding{"--use-normal-loss", "use_normal_loss", Bool},
+            OptimizationCliBinding{"--no-normal-auto-generate", "normal_auto_generate", Bool, true},
             OptimizationCliBinding{"--normal-loss-weight", "normal_loss_weight", Float},
             OptimizationCliBinding{"--normal-consistency-weight", "normal_consistency_weight", Float},
             OptimizationCliBinding{"--normal-flatten-weight", "normal_flatten_weight", Float},
+            OptimizationCliBinding{"--normal-start-fraction", "normal_start_fraction", Float},
+            OptimizationCliBinding{"--normal-end-fraction", "normal_end_fraction", Float},
             OptimizationCliBinding{"--normal-loss-space", "normal_loss_space", Enum},
             OptimizationCliBinding{"--enable-sparsity", "enable_sparsity", Bool},
             OptimizationCliBinding{"--sparsify-steps", "sparsify_steps", Integer},
@@ -69,10 +80,15 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--enable-mip", "mip_filter", Bool},
             OptimizationCliBinding{"--bilateral-grid", "use_bilateral_grid", Bool},
             OptimizationCliBinding{"--ppisp", "ppisp", Bool},
+            OptimizationCliBinding{"--no-ppisp-exif-exposure", "ppisp_exposure_from_exif", Bool, true},
             OptimizationCliBinding{"--ppisp-controller", "ppisp_use_controller", Bool},
             OptimizationCliBinding{"--ppisp-freeze", "ppisp_freeze_from_sidecar", Bool},
             OptimizationCliBinding{"--gut", "gut", Bool},
             OptimizationCliBinding{"--eval", "enable_eval", Bool},
+            OptimizationCliBinding{"--far-scene-min-fraction", "far_scene_min_fraction", Float},
+            OptimizationCliBinding{"--growth-ratio-pow", "growth_ratio_pow", Float},
+            OptimizationCliBinding{"--fill-pacing-iter", "fill_pacing_iter", Integer},
+            OptimizationCliBinding{"--far-seed-dose", "far_seed_dose", Integer},
             OptimizationCliBinding{"--headless", "headless", Bool},
             OptimizationCliBinding{"--undistort", "undistort", Bool},
         };
@@ -284,6 +300,62 @@ namespace {
         return lfs::core::LogLevel::Info; // Default
     }
 
+    std::expected<void, std::string> apply_view_path(
+        lfs::core::param::TrainingParameters& params, const std::string& view_path_str) {
+        const std::filesystem::path view_path = lfs::core::utf8_to_path(view_path_str);
+
+        if (!std::filesystem::exists(view_path)) {
+            return std::unexpected(
+                std::format("Path does not exist: {}", lfs::core::path_to_utf8(view_path)));
+        }
+
+        constexpr std::array<std::string_view, 13> SUPPORTED_EXTENSIONS = {
+            ".ply", ".sog", ".spz", ".rad", ".resume",
+            ".obj", ".fbx", ".gltf", ".glb", ".stl", ".dae", ".3ds", ".blend"};
+        const auto is_supported = [&](const std::filesystem::path& p) {
+            auto ext = p.extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            return std::ranges::find(SUPPORTED_EXTENSIONS, ext) != SUPPORTED_EXTENSIONS.end();
+        };
+
+        if (std::filesystem::is_directory(view_path)) {
+            for (const auto& entry : std::filesystem::directory_iterator(view_path)) {
+                if (entry.is_regular_file() && is_supported(entry.path())) {
+                    params.view_paths.push_back(entry.path());
+                }
+            }
+            std::ranges::sort(params.view_paths);
+
+            if (params.view_paths.empty()) {
+                return std::unexpected(std::format(
+                    "No supported files found in: {}", lfs::core::path_to_utf8(view_path)));
+            }
+            LOG_DEBUG("Found {} view files in directory", params.view_paths.size());
+            return {};
+        }
+
+        auto extension = view_path.extension().string();
+        std::ranges::transform(
+            extension, extension.begin(),
+            [](const unsigned char character) {
+                return static_cast<char>(std::tolower(character));
+            });
+        if (extension == ".licht") {
+            if (!lfs::io::project::isPublishedLichtPath(view_path)) {
+                return std::unexpected(
+                    lfs::io::project::unpublishedLichtUserMessage(view_path));
+            }
+            params.project_path = view_path;
+            return {};
+        }
+        if (!is_supported(view_path)) {
+            return std::unexpected(std::format(
+                "Unsupported file format: {}", lfs::core::path_to_utf8(view_path)));
+        }
+        params.view_paths.push_back(view_path);
+        return {};
+    }
+
     std::expected<std::tuple<ParseResult, std::function<void()>>, std::string> parse_arguments(
         const std::vector<std::string>& args,
         lfs::core::param::TrainingParameters& params) {
@@ -302,6 +374,9 @@ namespace {
                 "\n"
                 "EXAMPLES:\n"
                 "lichtfeld-studio -d ./data -o ./output\n"
+                "lichtfeld-studio -v session.licht\n"
+                "lichtfeld-studio --headless --resume session.licht\n"
+                "lichtfeld-studio -d ./data -o ./output --save-project-at-iter 7000\n"
                 "lichtfeld-studio --resume checkpoint.resume\n"
                 "lichtfeld-studio --render-camera-path path.json --render-load model.ply --render-output out.mp4\n"
                 "lichtfeld-studio -v model.ply\n"
@@ -320,8 +395,8 @@ namespace {
             ::args::Group mode_group(parser, "MODE SELECTION:");
             ::args::HelpFlag help(mode_group, "help", "Display help menu", {'h', "help"});
             ::args::Flag version(mode_group, "version", "Display version information", {'V', "version"});
-            ::args::ValueFlag<std::string> view_ply(mode_group, "path", "View file(s). Supports splat (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz) and mesh (.obj, .fbx, .gltf, .glb, .stl) formats. If directory, loads all.", {'v', "view"});
-            ::args::ValueFlag<std::string> resume_checkpoint(mode_group, "checkpoint", "Resume training from checkpoint file", {"resume"});
+            ::args::ValueFlag<std::string> view_ply(mode_group, "path", "View file(s). Supports projects (.licht), splat (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz) and mesh (.obj, .fbx, .gltf, .glb, .stl) formats. If directory, loads all.", {'v', "view"});
+            ::args::ValueFlag<std::string> resume_checkpoint(mode_group, "checkpoint", "Resume training from a .resume checkpoint or .licht project", {"resume"});
             ::args::ValueFlag<std::string> render_camera_path(mode_group, "path", "Render a JSON camera-keyframe path to video, headless (no GUI/window). Requires --render-load and --render-output; see RENDER PATH options.", {"render-camera-path"});
             ::args::CompletionFlag completion(parser, {"complete"});
 
@@ -339,6 +414,7 @@ namespace {
             ::args::CounterFlag freeze(paths_group, "freeze", "Freeze the immediately preceding --add-splat rows from optimizer gradients and densification", {"freeze"});
             ::args::ValueFlag<float> freeze_lr_scale(paths_group, "scale", "Learning-rate scale for frozen splats (0 = fully frozen, default; try 0.01-0.1 to let frozen splats absorb small appearance mismatch)", {"freeze-lr-scale"});
             ::args::Flag exclude_export(paths_group, "exclude_export", "Exclude frozen --add-splat rows from PLY exports", {"exclude-export"});
+            ::args::Flag no_provenance(paths_group, "no-provenance", "Strip identifying metadata (export id, timestamps, training info) from outputs; a minimal build stamp is always embedded", {"no-provenance"});
 
             ::args::ValueFlag<std::string> import_cameras(paths_group, "path", "Import COLMAP cameras from sparse folder (no images required)", {"import-cameras"});
 
@@ -353,6 +429,7 @@ namespace {
             ::args::ValueFlag<int> render_height(render_path_group, "height", "Output height (default 1080)", {"render-height"});
             ::args::ValueFlag<int> render_fps(render_path_group, "fps", "Output framerate (default 30)", {"render-fps"});
             ::args::ValueFlag<int> render_crf(render_path_group, "crf", "Video quality, lower=better (default 18)", {"render-crf"});
+            ::args::Group render_path_provenance_note(render_path_group, "  Metadata: videos always embed a minimal build stamp; --no-provenance strips identifying metadata");
 
             // =============================================================================
             // TRAINING PARAMETERS
@@ -363,6 +440,7 @@ namespace {
             ::args::ValueFlag<std::string> strategy(training_group, "strategy", lfs::core::args::optimization_cli_help("--strategy"), {"strategy"});
             ::args::ValueFlag<int> sh_degree(training_group, "sh_degree", lfs::core::args::optimization_cli_help("--sh-degree"), {"sh-degree"});
             ::args::ValueFlag<int> sh_degree_interval(training_group, "sh_degree_interval", lfs::core::args::optimization_cli_help("--sh-degree-interval"), {"sh-degree-interval"});
+            ::args::ValueFlag<int> morton_reorder_interval(training_group, "morton_reorder_interval", lfs::core::args::optimization_cli_help("--morton-reorder-interval"), {"morton-reorder-interval"});
             ::args::ValueFlag<int> max_cap(training_group, "max_cap", lfs::core::args::optimization_cli_help("--max-cap"), {"max-cap"});
             ::args::ValueFlag<float> min_opacity(training_group, "min_opacity", lfs::core::args::optimization_cli_help("--min-opacity"), {"min-opacity"});
             ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--cropbox-lr-scale"), {"cropbox-lr-scale"});
@@ -370,6 +448,12 @@ namespace {
             ::args::ValueFlag<float> steps_scaler(training_group, "steps_scaler", lfs::core::args::optimization_cli_help("--steps-scaler"), {"steps-scaler"});
             ::args::Flag no_error_map(training_group, "no_error_map", lfs::core::args::optimization_cli_help("--no-error-map"), {"no-error-map"});
             ::args::Flag no_edge_map(training_group, "no_edge_map", lfs::core::args::optimization_cli_help("--no-edge-map"), {"no-edge-map"});
+            ::args::Flag no_background_improvements(training_group, "no_background_improvements", lfs::core::args::optimization_cli_help("--no-background-improvements"), {"no-background-improvements"});
+            ::args::Flag no_growth_ratio_rank(training_group, "no_growth_ratio_rank", lfs::core::args::optimization_cli_help("--no-growth-ratio-rank"), {"no-growth-ratio-rank"});
+            ::args::ValueFlag<float> far_scene_min_fraction(training_group, "fraction", lfs::core::args::optimization_cli_help("--far-scene-min-fraction"), {"far-scene-min-fraction"});
+            ::args::ValueFlag<float> growth_ratio_pow(training_group, "growth_ratio_pow", lfs::core::args::optimization_cli_help("--growth-ratio-pow"), {"growth-ratio-pow"});
+            ::args::ValueFlag<int> fill_pacing_iter(training_group, "fill_pacing_iter", lfs::core::args::optimization_cli_help("--fill-pacing-iter"), {"fill-pacing-iter"});
+            ::args::ValueFlag<int> far_seed_dose(training_group, "far_seed_dose", lfs::core::args::optimization_cli_help("--far-seed-dose"), {"far-seed-dose"});
             ::args::ValueFlag<std::string> bg_mode(training_group, "mode", lfs::core::args::optimization_cli_help("--bg-mode"), {"bg-mode"});
             ::args::ValueFlag<std::string> bg_color(training_group, "color", "solidcolor background color as #RRGGBB or (R,G,B) with 0-255 channels (default: #000000)", {"bg-color"});
             ::args::ValueFlag<std::string> bg_image_path(training_group, "path", "Background image path (required when --bg-mode image)", {"bg-image-path"});
@@ -402,7 +486,6 @@ namespace {
             ::args::ValueFlag<int> max_width(dataset_group, "max_width", "Max width of images in px; 0 disables the cap (default: 3840)", {"max-width"});
             ::args::ValueFlag<int> min_track_length(dataset_group, "min_track_length", "Minimum point track length for COLMAP sparse point import; 0 disables filtering", {"min-track-length"});
             ::args::Flag no_cpu_cache(dataset_group, "no_cpu_cache", "Disable CPU memory caching (default: enabled)", {"no-cpu-cache"});
-            ::args::Flag no_fs_cache(dataset_group, "no_fs_cache", "Disable filesystem caching (default: enabled)", {"no-fs-cache"});
             ::args::Flag use_16bit(dataset_group, "use_16bit", "Train with 16-bit color images (HDR); caches losslessly as JPEG 2000 (default: 8-bit)", {"use-16bit"});
             ::args::Flag undistort(dataset_group, "undistort", lfs::core::args::optimization_cli_help("--undistort"), {"undistort"});
             ::args::MapFlag<std::string, std::string> centralize(dataset_group, "mode",
@@ -433,9 +516,12 @@ namespace {
             ::args::ValueFlag<float> depth_loss_weight(mask_group, "depth_loss_weight", lfs::core::args::optimization_cli_help("--depth-loss-weight"), {"depth-loss-weight"});
             ::args::ValueFlag<std::string> depth_loss_mode(mask_group, "depth_loss_mode", lfs::core::args::optimization_cli_help("--depth-loss-mode"), {"depth-loss-mode"});
             ::args::Flag use_normal_loss(mask_group, "use_normal_loss", lfs::core::args::optimization_cli_help("--use-normal-loss"), {"use-normal-loss"});
+            ::args::Flag no_normal_auto_generate(mask_group, "no_normal_auto_generate", lfs::core::args::optimization_cli_help("--no-normal-auto-generate"), {"no-normal-auto-generate"});
             ::args::ValueFlag<float> normal_loss_weight(mask_group, "normal_loss_weight", lfs::core::args::optimization_cli_help("--normal-loss-weight"), {"normal-loss-weight"});
             ::args::ValueFlag<float> normal_consistency_weight(mask_group, "normal_consistency_weight", lfs::core::args::optimization_cli_help("--normal-consistency-weight"), {"normal-consistency-weight"});
             ::args::ValueFlag<float> normal_flatten_weight(mask_group, "normal_flatten_weight", lfs::core::args::optimization_cli_help("--normal-flatten-weight"), {"normal-flatten-weight"});
+            ::args::ValueFlag<float> normal_start_fraction(mask_group, "normal_start_fraction", lfs::core::args::optimization_cli_help("--normal-start-fraction"), {"normal-start-fraction"});
+            ::args::ValueFlag<float> normal_end_fraction(mask_group, "normal_end_fraction", lfs::core::args::optimization_cli_help("--normal-end-fraction"), {"normal-end-fraction"});
             ::args::ValueFlag<std::string> normal_loss_space(mask_group, "normal_loss_space", lfs::core::args::optimization_cli_help("--normal-loss-space"), {"normal-loss-space"});
 
             // =============================================================================
@@ -456,6 +542,7 @@ namespace {
             ::args::Flag enable_mip(rendering_group, "enable_mip", lfs::core::args::optimization_cli_help("--enable-mip"), {"enable-mip"});
             ::args::Flag use_bilateral_grid(rendering_group, "bilateral_grid", lfs::core::args::optimization_cli_help("--bilateral-grid"), {"bilateral-grid"});
             ::args::Flag use_ppisp(rendering_group, "ppisp", lfs::core::args::optimization_cli_help("--ppisp"), {"ppisp"});
+            ::args::Flag no_ppisp_exif_exposure(rendering_group, "no_ppisp_exif_exposure", lfs::core::args::optimization_cli_help("--no-ppisp-exif-exposure"), {"no-ppisp-exif-exposure"});
             ::args::Flag ppisp_controller(rendering_group, "ppisp_controller", lfs::core::args::optimization_cli_help("--ppisp-controller"), {"ppisp-controller"});
             ::args::Flag ppisp_freeze_from_sidecar(rendering_group, "ppisp_freeze", lfs::core::args::optimization_cli_help("--ppisp-freeze"), {"ppisp-freeze"});
             ::args::ValueFlag<std::string> ppisp_sidecar_path(rendering_group, "path", "Path to PPISP sidecar (.ppisp) used for frozen PPISP training", {"ppisp-sidecar"});
@@ -467,9 +554,18 @@ namespace {
             ::args::Group output_sep(parser, " ");
             ::args::Group output_group(parser, "OUTPUT OPTIONS:");
             ::args::Flag enable_eval(output_group, "eval", lfs::core::args::optimization_cli_help("--eval"), {"eval"});
+            ::args::ValueFlagList<int> eval_steps(output_group, "eval_steps", "Held-out evaluation iterations (repeatable; default: 7000 and 30000)", {"eval-steps"});
             ::args::Flag no_save_eval_images(output_group, "no_save_eval_images", "Disable saving of evaluation comparison images (GT vs rendered) during eval (default: enabled)", {"no-save-eval-images"});
             ::args::ValueFlagList<std::string> timelapse_images(output_group, "timelapse_images", "Image filenames to render timelapse images for", {"timelapse-images"});
             ::args::ValueFlag<int> timelapse_every(output_group, "timelapse_every", "Render timelapse image every N iterations (default: 50)", {"timelapse-every"});
+            ::args::ValueFlag<uint32_t> save_project_at_iteration(
+                output_group, "iteration",
+                "Save a .licht project through the training snapshot service at this iteration",
+                {"save-project-at-iter"});
+            ::args::ValueFlag<std::string> save_project_path(
+                output_group, "path",
+                "Destination for --save-project-at-iter. If omitted, the bound project path is used",
+                {"save-project-path"});
 
             // =============================================================================
             // UI OPTIONS
@@ -478,11 +574,31 @@ namespace {
             ::args::Group ui_group(parser, "UI OPTIONS:");
             ::args::Flag headless(ui_group, "headless", lfs::core::args::optimization_cli_help("--headless"), {"headless"});
             ::args::Flag auto_train(ui_group, "train", "Start training immediately on startup", {"train"});
+            ::args::Flag safe_mode(ui_group, "safe_mode", "Start with user plugins disabled (recovery mode)", {"safe-mode"});
+            ::args::Flag reset_preferences(ui_group, "reset_preferences", "Back up and reset application preferences", {"reset-preferences"});
+            ::args::Flag reset_layout(ui_group, "reset_layout", "Back up and reset the UI layout", {"reset-layout"});
+            ::args::Flag reset_all_settings(ui_group, "reset_all_settings", "Back up and reset application preferences, UI layout, and window state", {"reset-all-settings"});
 #ifndef LFS_BUILD_PORTABLE
             ::args::Flag no_splash(ui_group, "no_splash", "Skip splash screen on startup", {"no-splash"});
 #endif
             ::args::Flag debug_python(ui_group, "debug_python", "Start debugpy listener on port 5678 for plugin debugging", {"debug-python"});
             ::args::ValueFlag<int> debug_python_port(ui_group, "port", "Port for debugpy listener (default: 5678)", {"debug-python-port"});
+            ::args::ValueFlag<int> mcp_port(ui_group, "port", "Override the MCP server port for this launch (does not change the saved preference)", {"mcp-port"});
+
+            // =============================================================================
+            // PERF / PROFILING
+            // =============================================================================
+            ::args::Group perf_sep(parser, " ");
+            ::args::Group perf_group(parser, "PERF / PROFILING:");
+            ::args::Flag perf_bench(perf_group, "perf_bench",
+                                    "Enable in-process perf bench collector (writes output/perf_bench.json)",
+                                    {"perf-bench"});
+            ::args::ValueFlag<int> perf_bench_warmup(perf_group, "N",
+                                                     "Warmup iterations excluded from steady-state metrics (default: 200)",
+                                                     {"perf-bench-warmup"});
+            ::args::ValueFlag<std::string> profile_window(perf_group, "START:STOP",
+                                                          "cudaProfilerStart/Stop window [START, STOP); enables per-iter NVTX ranges",
+                                                          {"profile-window"});
 
             // =============================================================================
             // LOGGING
@@ -547,7 +663,11 @@ namespace {
                     filter_pattern = ::args::get(log_filter);
                 }
 
-                lfs::core::Logger::get().init(level, log_file_path, filter_pattern);
+                std::string default_log_root;
+                if (const auto paths = lfs::core::UserPaths::resolve())
+                    default_log_root = lfs::core::path_to_utf8(paths->logDir().parent_path());
+                lfs::core::Logger::get().init(
+                    level, log_file_path, filter_pattern, false, default_log_root);
 
                 LOG_DEBUG("Logger initialized with level: {}", static_cast<int>(level));
                 if (!filter_pattern.empty()) {
@@ -563,50 +683,45 @@ namespace {
                 return std::make_tuple(ParseResult::Help, std::function<void()>{});
             }
 
+            // Validate --profile-window early (START:STOP integers, START < STOP).
+            std::optional<int> parsed_profile_start;
+            std::optional<int> parsed_profile_stop;
+            if (profile_window) {
+                const auto win = ::args::get(profile_window);
+                const auto colon = win.find(':');
+                if (colon == std::string::npos) {
+                    return std::unexpected(
+                        "--profile-window expects START:STOP (e.g. 200:500)");
+                }
+                try {
+                    parsed_profile_start = std::stoi(win.substr(0, colon));
+                    parsed_profile_stop = std::stoi(win.substr(colon + 1));
+                } catch (const std::exception&) {
+                    return std::unexpected(
+                        "--profile-window expects integer START:STOP (e.g. 200:500)");
+                }
+                if (*parsed_profile_start < 0 || *parsed_profile_stop < 0 ||
+                    *parsed_profile_stop <= *parsed_profile_start) {
+                    return std::unexpected(
+                        "--profile-window requires 0 <= START < STOP");
+                }
+            }
+
+            params.include_provenance = !no_provenance;
+
             // NO ARGUMENTS = VIEWER MODE (empty)
             if (args.size() == 1) {
                 return std::make_tuple(ParseResult::Success, std::function<void()>{});
             }
 
-            // Viewer mode: file or directory
+            // Viewer mode: file or directory. Bare positional paths are rewritten to
+            // -v in parse_args_and_params so they share this branch.
             if (view_ply) {
                 const auto& view_path_str = ::args::get(view_ply);
                 if (!view_path_str.empty()) {
-                    const std::filesystem::path view_path = lfs::core::utf8_to_path(view_path_str);
-
-                    if (!std::filesystem::exists(view_path)) {
-                        return std::unexpected(std::format("Path does not exist: {}", lfs::core::path_to_utf8(view_path)));
-                    }
-
-                    constexpr std::array<std::string_view, 13> SUPPORTED_EXTENSIONS = {
-                        ".ply", ".sog", ".spz", ".rad", ".resume",
-                        ".obj", ".fbx", ".gltf", ".glb", ".stl", ".dae", ".3ds", ".blend"};
-                    const auto is_supported = [&](const std::filesystem::path& p) {
-                        auto ext = p.extension().string();
-                        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                        return std::ranges::find(SUPPORTED_EXTENSIONS, ext) != SUPPORTED_EXTENSIONS.end();
-                    };
-
-                    if (std::filesystem::is_directory(view_path)) {
-                        for (const auto& entry : std::filesystem::directory_iterator(view_path)) {
-                            if (entry.is_regular_file() && is_supported(entry.path())) {
-                                params.view_paths.push_back(entry.path());
-                            }
-                        }
-                        std::ranges::sort(params.view_paths);
-
-                        if (params.view_paths.empty()) {
-                            return std::unexpected(std::format(
-                                "No supported files found in: {}", lfs::core::path_to_utf8(view_path)));
-                        }
-                        LOG_DEBUG("Found {} view files in directory", params.view_paths.size());
-                    } else {
-                        if (!is_supported(view_path)) {
-                            return std::unexpected(std::format(
-                                "Unsupported file format: {}", lfs::core::path_to_utf8(view_path)));
-                        }
-                        params.view_paths.push_back(view_path);
-                    }
+                    const auto applied = apply_view_path(params, view_path_str);
+                    if (!applied)
+                        return std::unexpected(applied.error());
                 }
 
                 if (gut) {
@@ -651,6 +766,7 @@ namespace {
                 if (render_crf) {
                     cfg.crf = ::args::get(render_crf);
                 }
+                cfg.include_provenance = params.include_provenance;
                 params.render_path = cfg;
 
                 return std::make_tuple(ParseResult::Success, std::function<void()>{});
@@ -680,10 +796,27 @@ namespace {
                     if (!std::filesystem::exists(ckpt_path)) {
                         return std::unexpected(std::format("Checkpoint file does not exist: {}", ckpt_path_str));
                     }
-                    params.resume_checkpoint = ckpt_path;
+                    auto extension = ckpt_path.extension().string();
+                    std::ranges::transform(
+                        extension, extension.begin(),
+                        [](const unsigned char character) {
+                            return static_cast<char>(
+                                std::tolower(character));
+                        });
+                    if (extension == ".licht") {
+                        if (!lfs::io::project::isPublishedLichtPath(
+                                ckpt_path)) {
+                            return std::unexpected(
+                                lfs::io::project::
+                                    unpublishedLichtUserMessage(
+                                        ckpt_path));
+                        }
+                        params.resume_project = ckpt_path;
+                    } else {
+                        params.resume_checkpoint = ckpt_path;
+                    }
                 }
             }
-
             if (init_path) {
                 const auto path_str = ::args::get(init_path);
                 params.init_path = path_str;
@@ -716,12 +849,16 @@ namespace {
             // Training mode
             const bool has_data_path = data_path && !::args::get(data_path).empty();
             const bool has_output_path = output_path && !::args::get(output_path).empty();
-            const bool has_resume = params.resume_checkpoint.has_value();
+            const bool has_resume =
+                params.resume_checkpoint.has_value() ||
+                params.resume_project.has_value();
 
-            // If headless mode, require data path or resume checkpoint
+            // If headless mode, require data path or resume
+            // (--resume accepts both .resume checkpoints and .licht projects).
             if (headless && !has_data_path && !has_resume) {
                 return std::unexpected(std::format(
-                    "ERROR: Headless mode requires --data-path or --resume\n\n{}",
+                    "ERROR: Headless mode requires --data-path or --resume "
+                    "(--resume file.licht counts as a project source)\n\n{}",
                     parser.Help()));
             }
 
@@ -802,12 +939,25 @@ namespace {
                     return std::unexpected("ERROR: --min-track-length must be 0 or greater");
                 }
             }
+            if (mcp_port) {
+                const int port = ::args::get(mcp_port);
+                if (port < 1 || port > 65535) {
+                    return std::unexpected("ERROR: --mcp-port must be between 1 and 65535");
+                }
+            }
 
             // Validate sh_degree (0-3)
             if (sh_degree) {
                 int degree = ::args::get(sh_degree);
                 if (degree < 0 || degree > 3) {
                     return std::unexpected("ERROR: --sh-degree must be 0, 1, 2, or 3");
+                }
+            }
+
+            if (morton_reorder_interval) {
+                const int interval = ::args::get(morton_reorder_interval);
+                if (interval < 0) {
+                    return std::unexpected("ERROR: --morton-reorder-interval must be >= 0 (0 disables)");
                 }
             }
 
@@ -879,10 +1029,11 @@ namespace {
                                         // Capture values, not references
                                         iterations_val = cli_option_present({"-i", "--iter"}) ? std::optional<uint32_t>(::args::get(iterations)) : std::optional<uint32_t>(),
                                         resize_factor_val = resize_factor ? std::optional<int>(::args::get(resize_factor)) : std::optional<int>(1), // default 1
+                                        resize_factor_explicit = static_cast<bool>(resize_factor),
                                         max_width_val = max_width ? std::optional<int>(::args::get(max_width)) : std::optional<int>(3840),
+                                        max_width_explicit = static_cast<bool>(max_width),
                                         min_track_length_val = cli_option_present({"--min-track-length"}) ? std::optional<int>(::args::get(min_track_length)) : std::optional<int>(),
                                         no_cpu_cache_flag = static_cast<bool>(no_cpu_cache),
-                                        no_fs_cache_flag = static_cast<bool>(no_fs_cache),
                                         use_16bit_flag = static_cast<bool>(use_16bit),
                                         tcp_server_connection_port_val = tcp_server_connection_port ? std::optional<int>(::args::get(tcp_server_connection_port)) : std::optional<int>(),
                                         tcp_broadcast_connection_port_val = tcp_broadcast_connection_port ? std::optional<int>(::args::get(tcp_broadcast_connection_port)) : std::optional<int>(),
@@ -893,6 +1044,7 @@ namespace {
                                         test_every_val = cli_option_present({"--test-every"}) ? std::optional<int>(::args::get(test_every)) : std::optional<int>(),
                                         steps_scaler_val = cli_option_present({"--steps-scaler"}) ? std::optional<float>(::args::get(steps_scaler)) : std::optional<float>(),
                                         sh_degree_interval_val = cli_option_present({"--sh-degree-interval"}) ? std::optional<int>(::args::get(sh_degree_interval)) : std::optional<int>(),
+                                        morton_reorder_interval_val = cli_option_present({"--morton-reorder-interval"}) ? std::optional<int>(::args::get(morton_reorder_interval)) : std::optional<int>(),
                                         sh_degree_val = cli_option_present({"--sh-degree"}) ? std::optional<int>(::args::get(sh_degree)) : std::optional<int>(),
                                         min_opacity_val = cli_option_present({"--min-opacity"}) ? std::optional<float>(::args::get(min_opacity)) : std::optional<float>(),
                                         cropbox_lr_scale_val = cli_option_present({"--cropbox-lr-scale"}) ? std::optional<float>(::args::get(cropbox_lr_scale)) : std::optional<float>(),
@@ -906,6 +1058,11 @@ namespace {
                                         sparsify_steps_val = cli_option_present({"--sparsify-steps"}) ? std::optional<int>(::args::get(sparsify_steps)) : std::optional<int>(),
                                         init_rho_val = cli_option_present({"--init-rho"}) ? std::optional<float>(::args::get(init_rho)) : std::optional<float>(),
                                         prune_ratio_val = cli_option_present({"--prune-ratio"}) ? std::optional<float>(::args::get(prune_ratio)) : std::optional<float>(),
+                                        // Perf / profiling
+                                        perf_bench_flag = bool(perf_bench),
+                                        perf_bench_warmup_val = cli_option_present({"--perf-bench-warmup"}) ? std::optional<int>(::args::get(perf_bench_warmup)) : std::optional<int>(),
+                                        profile_start_val = parsed_profile_start,
+                                        profile_stop_val = parsed_profile_stop,
                                         // Mask parameters
                                         mask_mode_val = cli_option_present({"--mask-mode"}) ? std::optional<lfs::core::param::MaskMode>(::args::get(mask_mode)) : std::optional<lfs::core::param::MaskMode>(),
                                         depth_loss_weight_val = cli_option_present({"--depth-loss-weight"}) ? std::optional<float>(::args::get(depth_loss_weight)) : std::optional<float>(),
@@ -913,6 +1070,8 @@ namespace {
                                         normal_loss_weight_val = cli_option_present({"--normal-loss-weight"}) ? std::optional<float>(::args::get(normal_loss_weight)) : std::optional<float>(),
                                         normal_consistency_weight_val = cli_option_present({"--normal-consistency-weight"}) ? std::optional<float>(::args::get(normal_consistency_weight)) : std::optional<float>(),
                                         normal_flatten_weight_val = cli_option_present({"--normal-flatten-weight"}) ? std::optional<float>(::args::get(normal_flatten_weight)) : std::optional<float>(),
+                                        normal_start_fraction_val = cli_option_present({"--normal-start-fraction"}) ? std::optional<float>(::args::get(normal_start_fraction)) : std::optional<float>(),
+                                        normal_end_fraction_val = cli_option_present({"--normal-end-fraction"}) ? std::optional<float>(::args::get(normal_end_fraction)) : std::optional<float>(),
                                         normal_loss_space_val = cli_option_present({"--normal-loss-space"}) ? std::optional<std::string>(::args::get(normal_loss_space)) : std::optional<std::string>(),
                                         // Python scripts
                                         python_scripts_val = cli_option_present({"--python-script"}) ? std::optional<std::vector<std::string>>(::args::get(python_scripts)) : std::optional<std::vector<std::string>>(),
@@ -921,12 +1080,17 @@ namespace {
                                         enable_mip_flag = bool(enable_mip),
                                         use_bilateral_grid_flag = bool(use_bilateral_grid),
                                         use_ppisp_flag = bool(use_ppisp),
+                                        no_ppisp_exif_exposure_flag = bool(no_ppisp_exif_exposure),
                                         ppisp_controller_flag = bool(ppisp_controller),
                                         ppisp_freeze_from_sidecar_flag = bool(ppisp_freeze_from_sidecar),
                                         ppisp_sidecar_path_val = cli_option_present({"--ppisp-sidecar"}) ? std::optional<std::string>(::args::get(ppisp_sidecar_path)) : std::optional<std::string>(),
                                         enable_eval_flag = bool(enable_eval),
                                         headless_flag = bool(headless),
                                         auto_train_flag = bool(auto_train),
+                                        safe_mode_flag = bool(safe_mode),
+                                        reset_preferences_flag = bool(reset_preferences),
+                                        reset_layout_flag = bool(reset_layout),
+                                        reset_all_settings_flag = bool(reset_all_settings),
 #ifdef LFS_BUILD_PORTABLE
                                         no_splash_flag = false,
 #else
@@ -934,6 +1098,7 @@ namespace {
 #endif
                                         debug_python_flag = bool(debug_python),
                                         debug_python_port_val = cli_option_present({"--debug-python-port"}) ? std::optional<int>(::args::get(debug_python_port)) : std::optional<int>(),
+                                        mcp_port_val = cli_option_present({"--mcp-port"}) ? std::optional<int>(::args::get(mcp_port)) : std::optional<int>(),
                                         no_save_eval_images_flag = bool(no_save_eval_images),
                                         bg_mode_val = parsed_bg_mode,
                                         bg_color_val = parsed_bg_color,
@@ -946,14 +1111,41 @@ namespace {
                                         no_alpha_as_mask_flag = bool(no_alpha_as_mask),
                                         use_depth_loss_flag = bool(use_depth_loss),
                                         use_normal_loss_flag = bool(use_normal_loss),
+                                        no_normal_auto_generate_flag = bool(no_normal_auto_generate),
                                         no_error_map_flag = bool(no_error_map),
                                         no_edge_map_flag = bool(no_edge_map),
+                                        no_background_improvements_flag = bool(no_background_improvements),
+                                        no_growth_ratio_rank_flag = bool(no_growth_ratio_rank),
+                                        far_scene_min_fraction_val = cli_option_present({"--far-scene-min-fraction"}) ? std::optional<float>(::args::get(far_scene_min_fraction)) : std::optional<float>(),
+                                        growth_ratio_pow_val = cli_option_present({"--growth-ratio-pow"}) ? std::optional<float>(::args::get(growth_ratio_pow)) : std::optional<float>(),
+                                        fill_pacing_iter_val = cli_option_present({"--fill-pacing-iter"}) ? std::optional<int>(::args::get(fill_pacing_iter)) : std::optional<int>(),
+                                        far_seed_dose_val = cli_option_present({"--far-seed-dose"}) ? std::optional<int>(::args::get(far_seed_dose)) : std::optional<int>(),
+                                        eval_steps_val = cli_option_present({"--eval-steps"}) ? std::optional<std::vector<int>>(::args::get(eval_steps)) : std::optional<std::vector<int>>(),
                                         freeze_lr_scale_val = cli_option_present({"--freeze-lr-scale"}) ? std::optional<float>(::args::get(freeze_lr_scale)) : std::optional<float>(),
                                         exclude_export_flag = bool(exclude_export),
+                                        save_project_at_iteration_val =
+                                            cli_option_present({"--save-project-at-iter"})
+                                                ? std::optional<uint32_t>(::args::get(save_project_at_iteration))
+                                                : std::optional<uint32_t>(),
+                                        save_project_path_val =
+                                            cli_option_present({"--save-project-path"})
+                                                ? std::optional<std::string>(::args::get(save_project_path))
+                                                : std::optional<std::string>(),
                                         output_name_val = cli_option_present({"--output-name"}) ? std::optional<std::string>(::args::get(output_name)) : std::optional<std::string>()]() {
                 auto& opt = params.optimization;
                 auto& svs = params.server;
                 auto& ds = params.dataset;
+
+                std::vector<const char*> opt_keys;
+                std::vector<const char*> ds_keys;
+                auto note_opt = [&](const char* key, const bool present) {
+                    if (present)
+                        opt_keys.push_back(key);
+                };
+                auto note_ds = [&](const char* key, const bool present) {
+                    if (present)
+                        ds_keys.push_back(key);
+                };
 
                 // Simple lambdas to apply if flag/value exists
                 auto setVal = [](const auto& flag, auto& target) {
@@ -968,13 +1160,17 @@ namespace {
 
                 // Apply all overrides
                 setVal(iterations_val, opt.iterations);
+                params.cli_iterations_set =
+                    iterations_val.has_value();
+                note_opt("iterations", iterations_val.has_value());
                 setVal(resize_factor_val, ds.resize_factor);
+                note_ds("resize_factor", resize_factor_explicit);
                 setVal(max_width_val, ds.max_width);
+                note_ds("max_width", max_width_explicit);
                 setVal(min_track_length_val, ds.min_track_length);
+                note_ds("min_track_length", min_track_length_val.has_value());
                 if (no_cpu_cache_flag)
                     ds.loading_params.use_cpu_memory = false;
-                if (no_fs_cache_flag)
-                    ds.loading_params.use_fs_cache = false;
                 setFlag(use_16bit_flag, ds.loading_params.use_16bit_color);
                 setVal(max_cap_val, opt.max_cap);
                 setVal(tcp_server_connection_port_val, svs.tcp_server_connection_port);
@@ -984,6 +1180,9 @@ namespace {
                 setVal(test_every_val, ds.test_every);
                 setVal(steps_scaler_val, opt.steps_scaler);
                 setVal(sh_degree_interval_val, opt.sh_degree_interval);
+                if (morton_reorder_interval_val) {
+                    opt.morton_reorder_interval = static_cast<size_t>(*morton_reorder_interval_val);
+                }
                 setVal(sh_degree_val, opt.sh_degree);
                 setVal(min_opacity_val, opt.min_opacity);
                 setVal(cropbox_lr_scale_val, opt.cropbox_lr_scale);
@@ -994,15 +1193,31 @@ namespace {
                 setVal(timelapse_images_val, ds.timelapse_images);
                 setVal(timelapse_every_val, ds.timelapse_every);
                 setVal(output_name_val, ds.output_name);
+                if (save_project_at_iteration_val) {
+                    params.save_project_at_iteration =
+                        static_cast<size_t>(*save_project_at_iteration_val);
+                }
+                if (save_project_path_val) {
+                    params.save_project_path =
+                        lfs::core::utf8_to_path(*save_project_path_val);
+                }
 
                 // Sparsity parameters
                 setVal(sparsify_steps_val, opt.sparsify_steps);
                 setVal(init_rho_val, opt.init_rho);
                 setVal(prune_ratio_val, opt.prune_ratio);
 
+                // Perf / profiling
+                setFlag(perf_bench_flag, opt.perf_bench);
+                setVal(perf_bench_warmup_val, opt.perf_bench_warmup);
+                setVal(profile_start_val, opt.profile_start_iter);
+                setVal(profile_stop_val, opt.profile_stop_iter);
+
                 setFlag(enable_mip_flag, opt.mip_filter);
                 setFlag(use_bilateral_grid_flag, opt.use_bilateral_grid);
                 setFlag(use_ppisp_flag, opt.use_ppisp);
+                if (no_ppisp_exif_exposure_flag)
+                    opt.ppisp_exposure_from_exif = false;
                 setFlag(ppisp_controller_flag, opt.ppisp_use_controller);
                 setFlag(ppisp_freeze_from_sidecar_flag, opt.ppisp_freeze_from_sidecar);
                 if (ppisp_sidecar_path_val) {
@@ -1015,9 +1230,14 @@ namespace {
                 setFlag(enable_eval_flag, opt.enable_eval);
                 setFlag(headless_flag, opt.headless);
                 setFlag(auto_train_flag, opt.auto_train);
+                setFlag(safe_mode_flag, params.safe_mode);
+                setFlag(reset_preferences_flag, params.reset_preferences);
+                setFlag(reset_layout_flag, params.reset_layout);
+                setFlag(reset_all_settings_flag, params.reset_all_settings);
                 setFlag(no_splash_flag, opt.no_splash);
                 setFlag(debug_python_flag, opt.debug_python);
                 setVal(debug_python_port_val, opt.debug_python_port);
+                setVal(mcp_port_val, params.mcp_port);
                 if (no_save_eval_images_flag)
                     opt.enable_save_eval_images = false;
                 if (bg_mode_val) {
@@ -1039,6 +1259,25 @@ namespace {
                     opt.use_error_map = false;
                 if (no_edge_map_flag)
                     opt.use_edge_map = false;
+                if (no_background_improvements_flag)
+                    opt.background_improvements = false;
+                if (no_growth_ratio_rank_flag)
+                    opt.growth_ratio_rank = false;
+                setVal(far_scene_min_fraction_val, opt.far_scene_min_fraction);
+                setVal(growth_ratio_pow_val, opt.growth_ratio_pow);
+                setVal(fill_pacing_iter_val, opt.fill_pacing_iter);
+                setVal(far_seed_dose_val, opt.far_seed_dose);
+                if (eval_steps_val && !eval_steps_val->empty()) {
+                    opt.eval_steps.clear();
+                    for (const int step : *eval_steps_val) {
+                        if (step > 0) {
+                            opt.eval_steps.push_back(static_cast<size_t>(step));
+                        }
+                    }
+                    std::sort(opt.eval_steps.begin(), opt.eval_steps.end());
+                    opt.eval_steps.erase(std::unique(opt.eval_steps.begin(), opt.eval_steps.end()),
+                                         opt.eval_steps.end());
+                }
                 setVal(freeze_lr_scale_val, params.freeze_lr_scale);
                 setFlag(exclude_export_flag, params.exclude_frozen_add_splats_from_export);
 
@@ -1053,9 +1292,13 @@ namespace {
                     opt.depth_loss_mode = *depth_loss_mode_val;
                 }
                 setFlag(use_normal_loss_flag, opt.use_normal_loss);
+                if (no_normal_auto_generate_flag)
+                    opt.normal_auto_generate = false;
                 setVal(normal_loss_weight_val, opt.normal_loss_weight);
                 setVal(normal_consistency_weight_val, opt.normal_consistency_weight);
                 setVal(normal_flatten_weight_val, opt.normal_flatten_weight);
+                setVal(normal_start_fraction_val, opt.normal_start_fraction);
+                setVal(normal_end_fraction_val, opt.normal_end_fraction);
                 if (normal_loss_space_val) {
                     if (const auto parsed = lfs::core::param::normal_loss_space_from_string(*normal_loss_space_val)) {
                         opt.normal_loss_space = *parsed;
@@ -1072,6 +1315,108 @@ namespace {
                 if (python_scripts_val) {
                     for (const auto& script : *python_scripts_val) {
                         params.python_scripts.emplace_back(script);
+                    }
+                }
+
+                note_ds("images", images_folder_val.has_value());
+                note_ds("test_every", test_every_val.has_value());
+                note_ds("timelapse_images", timelapse_images_val.has_value());
+                note_ds("timelapse_every", timelapse_every_val.has_value());
+                note_ds("output_name", output_name_val.has_value());
+                note_ds("invert_masks", invert_masks_flag);
+                note_ds("centralize_dataset", centralize_val.has_value());
+                note_opt("max_cap", max_cap_val.has_value());
+                note_opt("steps_scaler", steps_scaler_val.has_value());
+                note_opt("sh_degree_interval", sh_degree_interval_val.has_value());
+                note_opt("sh_degree", sh_degree_val.has_value());
+                note_opt("min_opacity", min_opacity_val.has_value());
+                note_opt("cropbox_lr_scale", cropbox_lr_scale_val.has_value());
+                note_opt("cropbox_loss_weight", cropbox_loss_weight_val.has_value());
+                note_opt("init_num_pts", init_num_pts_val.has_value());
+                note_opt("init_extent", init_extent_val.has_value());
+                note_opt("strategy", strategy_val.has_value());
+                note_opt("sparsify_steps", sparsify_steps_val.has_value());
+                note_opt("init_rho", init_rho_val.has_value());
+                note_opt("prune_ratio", prune_ratio_val.has_value());
+                note_opt("perf_bench", perf_bench_flag);
+                note_opt("perf_bench_warmup", perf_bench_warmup_val.has_value());
+                note_opt("profile_start_iter", profile_start_val.has_value());
+                note_opt("profile_stop_iter", profile_stop_val.has_value());
+                note_opt("mip_filter", enable_mip_flag);
+                note_opt("use_bilateral_grid", use_bilateral_grid_flag);
+                note_opt("use_ppisp", use_ppisp_flag || ppisp_controller_flag ||
+                                          ppisp_freeze_from_sidecar_flag);
+                note_opt("ppisp_use_controller", ppisp_controller_flag);
+                note_opt("ppisp_freeze_from_sidecar", ppisp_freeze_from_sidecar_flag);
+                note_opt("ppisp_sidecar_path", ppisp_sidecar_path_val.has_value());
+                note_opt("enable_eval", enable_eval_flag);
+                note_opt("headless", headless_flag);
+                note_opt("auto_train", auto_train_flag);
+                note_opt("no_splash", no_splash_flag);
+                note_opt("debug_python", debug_python_flag);
+                note_opt("debug_python_port", debug_python_port_val.has_value());
+                note_opt("enable_save_eval_images", no_save_eval_images_flag);
+                note_opt("bg_mode", bg_mode_val.has_value());
+                note_opt("bg_modulation", bg_mode_val.has_value());
+                note_opt("bg_color", bg_color_val.has_value());
+                note_opt("bg_image_path", bg_image_path_val.has_value());
+                note_opt("random", random_flag);
+                note_opt("gut", gut_flag);
+                note_opt("undistort", undistort_flag);
+                note_opt("enable_sparsity", enable_sparsity_flag);
+                note_opt("use_error_map", no_error_map_flag);
+                note_opt("use_edge_map", no_edge_map_flag);
+                note_opt("background_improvements", no_background_improvements_flag);
+                note_opt("growth_ratio_rank", no_growth_ratio_rank_flag);
+                note_opt("far_scene_min_fraction", far_scene_min_fraction_val.has_value());
+                note_opt("growth_ratio_pow", growth_ratio_pow_val.has_value());
+                note_opt("fill_pacing_iter", fill_pacing_iter_val.has_value());
+                note_opt("far_seed_dose", far_seed_dose_val.has_value());
+                note_opt("eval_steps", eval_steps_val && !eval_steps_val->empty());
+                note_opt("mask_mode", mask_mode_val.has_value());
+                note_opt("invert_masks", invert_masks_flag);
+                note_opt("use_alpha_as_mask", no_alpha_as_mask_flag);
+                note_opt("use_depth_loss", use_depth_loss_flag);
+                note_opt("depth_loss_weight", depth_loss_weight_val.has_value());
+                note_opt("depth_loss_mode", depth_loss_mode_val.has_value());
+                note_opt("use_normal_loss", use_normal_loss_flag);
+                note_opt("normal_loss_weight", normal_loss_weight_val.has_value());
+                note_opt("normal_consistency_weight", normal_consistency_weight_val.has_value());
+                note_opt("normal_flatten_weight", normal_flatten_weight_val.has_value());
+                note_opt("normal_loss_space", normal_loss_space_val.has_value());
+
+                if (!opt_keys.empty()) {
+                    const auto serialized = opt.to_json();
+                    nlohmann::json cli_opt;
+                    for (const char* key : opt_keys) {
+                        if (serialized.contains(key)) {
+                            cli_opt[key] = serialized[key];
+                            continue;
+                        }
+                        if (std::string_view(key) == "bg_image_path")
+                            cli_opt[key] = lfs::core::path_to_utf8(opt.bg_image_path);
+                    }
+                    if (!cli_opt.empty()) {
+                        lfs::core::param::merge_explicit_json_overlay(
+                            params.overrides.optimization_json, cli_opt.dump());
+                    }
+                }
+                if (!ds_keys.empty()) {
+                    const auto serialized = ds.to_json();
+                    nlohmann::json cli_ds;
+                    for (const char* key : ds_keys) {
+                        if (serialized.contains(key))
+                            cli_ds[key] = serialized[key];
+                        else if (std::string_view(key) == "centralize_dataset")
+                            cli_ds[key] = ds.centralize_dataset;
+                    }
+                    if (no_cpu_cache_flag)
+                        cli_ds["loading_params"]["use_cpu_memory"] = false;
+                    if (use_16bit_flag)
+                        cli_ds["loading_params"]["use_16bit_color"] = true;
+                    if (!cli_ds.empty()) {
+                        lfs::core::param::merge_explicit_json_overlay(
+                            params.overrides.dataset_json, cli_ds.dump());
                     }
                 }
             };
@@ -1136,7 +1481,8 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
 
     // Load from --config or use hardcoded defaults
     if (!config_file.empty()) {
-        const auto opt_result = lfs::core::param::read_optim_params_from_json(lfs::core::utf8_to_path(config_file));
+        const auto opt_result = lfs::core::param::read_optim_params_from_json(
+            lfs::core::utf8_to_path(config_file), params->overrides);
         if (!opt_result) {
             return std::unexpected(std::format("Config load failed: {}", opt_result.error()));
         }
@@ -1177,12 +1523,16 @@ namespace {
         "\n"
         "EXAMPLES:\n"
         "  LichtFeld-Studio convert input.ply output.spz --sh-degree 0\n"
+        "  LichtFeld-Studio convert input.ply output.spz --spz-version 3\n"
         "  LichtFeld-Studio convert input.ply -f html\n"
         "  LichtFeld-Studio convert ./splats/ -f sog --sh-degree 2\n"
+        "  LichtFeld-Studio convert project.licht output.ply\n"
         "\n"
         "SUPPORTED FORMATS:\n"
-        "  Input:  .ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume (checkpoint)\n"
+        "  Input:  .ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume (checkpoint), .licht (project)\n"
         "  Output: .ply, .sog, .spz, .usd, .usda, .usdc, .html, .rad\n"
+        "  SPZ:    --spz-version 4 (default, zstd) or 3 (legacy gzip)\n"
+        "  Metadata: --no-provenance strips identifying metadata; a minimal build stamp is always embedded\n"
         "\n";
 
     constexpr const char* MESH2SPLAT_HELP_HEADER = "LichtFeld Studio - Convert mesh files to Gaussian splats\n";
@@ -1198,9 +1548,10 @@ namespace {
         "  Input:  .obj, .fbx, .gltf, .glb, .stl, .dae, .3ds, .ply\n"
         "  Output: .ply, .sog, .spz, .usd, .usda, .usdc, .html, .rad\n"
         "  Multiple output formats: pass a comma-separated list to --format\n"
+        "  Metadata: --no-provenance strips identifying metadata; a minimal build stamp is always embedded\n"
         "\n";
 
-    constexpr const char* PREPROCESS_HELP_HEADER = "LichtFeld Studio - Generate dataset depth and normal maps with MoGe-2 ONNX\n";
+    constexpr const char* PREPROCESS_HELP_HEADER = "LichtFeld Studio - Generate dataset depth and normal maps with MoGe-2\n";
     constexpr const char* PREPROCESS_HELP_FOOTER =
         "\n"
         "EXAMPLES:\n"
@@ -1216,6 +1567,12 @@ namespace {
         "  Use --overwrite to recreate existing outputs.\n"
         "  PNG compression defaults to level 1; use 0 for fastest/largest files.\n"
         "  The auto-downloaded default model is SHA-256 verified before use.\n"
+        "\n"
+        "INFERENCE:\n"
+        "  Native in-tree MoGe-2 (CUDA). If only the ONNX is present, preprocess converts\n"
+        "  it once with tools/nn_export/export_onnx_weights.py (fp16) into a sibling .lfw.\n"
+        "  If conversion is not possible, it prints the command to run by hand.\n"
+        "  --inference-backend accepts native (default; auto is an alias).\n"
         "\n";
 
     std::optional<lfs::core::param::OutputFormat> parseFormat(const std::string& str) {
@@ -1279,6 +1636,8 @@ namespace {
         ::args::Positional<std::string> output(parser, "output", "Output file (optional)");
         ::args::ValueFlag<int> sh_degree(parser, "degree", "SH degree [0-3], -1 to keep original (default: -1)", {"sh-degree"});
         ::args::ValueFlag<std::string> format(parser, "format", "Output format: ply, sog, spz, html, usd, usda, usdc, rad", {'f', "format"});
+        ::args::ValueFlag<int> spz_version(parser, "version", "SPZ container version: 3 (legacy gzip) or 4 (zstd, default)", {"spz-version"});
+        ::args::Flag no_provenance(parser, "no-provenance", "Strip identifying metadata (export id, timestamps, training info) from outputs; a minimal build stamp is always embedded", {"no-provenance"});
         ::args::ValueFlag<int> sog_iter(parser, "iterations", "K-means iterations for SOG (default: 10)", {"sog-iterations"});
         ::args::ValueFlag<std::string> tiles(parser, "AxB", "Replicate a PLY source across an AxB ground-plane grid (RAD output only)", {"tiles"});
         ::args::ValueFlag<std::string> lod_builder(parser, "builder", "PLY->RAD LOD tree builder: bhatt (default) or octree (hybrid: octree fine levels + similarity-ordered bhatt top, much faster)", {"lod-builder"});
@@ -1306,6 +1665,8 @@ namespace {
         param::ConvertParameters params;
         params.input_path = lfs::core::utf8_to_path(::args::get(input));
         params.sh_degree = sh_degree ? ::args::get(sh_degree) : -1;
+        params.spz_version = spz_version ? ::args::get(spz_version) : 4;
+        params.include_provenance = !no_provenance;
 
         if (!std::filesystem::exists(params.input_path)) {
             return std::unexpected(std::format("Input not found: {}", lfs::core::path_to_utf8(params.input_path)));
@@ -1313,6 +1674,9 @@ namespace {
 
         if (params.sh_degree < -1 || params.sh_degree > 3) {
             return std::unexpected("SH degree must be -1 (keep) or 0-3");
+        }
+        if (params.spz_version != 3 && params.spz_version != 4) {
+            return std::unexpected("--spz-version must be 3 or 4");
         }
 
         if (output)
@@ -1394,6 +1758,8 @@ namespace {
         ::args::Positional<std::string> output(parser, "output", "Output file or directory (optional)");
         ::args::ValueFlag<std::string> output_flag(parser, "path", "Output file or directory", {'o', "output"});
         ::args::ValueFlag<std::string> format(parser, "formats", "Output format(s): ply, sog, spz, html, usd, usda, usdc, rad. Use commas for multiple outputs", {'f', "format"});
+        ::args::ValueFlag<int> spz_version(parser, "version", "SPZ container version: 3 (legacy gzip) or 4 (zstd, default)", {"spz-version"});
+        ::args::Flag no_provenance(parser, "no-provenance", "Strip identifying metadata (export id, timestamps, training info) from outputs; a minimal build stamp is always embedded", {"no-provenance"});
         ::args::ValueFlag<int> resolution(parser, "pixels", "Mesh2Splat raster resolution target (default: 1024)", {"resolution"});
         ::args::ValueFlag<float> sigma(parser, "scale", "Gaussian scale sigma (default: 0.65)", {"sigma"});
         ::args::ValueFlag<int> sog_iter(parser, "iterations", "K-means iterations for SOG/HTML output (default: 10)", {"sog-iterations"});
@@ -1421,9 +1787,14 @@ namespace {
 
         param::Mesh2SplatParameters params;
         params.input_path = lfs::core::utf8_to_path(::args::get(input));
+        params.spz_version = spz_version ? ::args::get(spz_version) : 4;
+        params.include_provenance = !no_provenance;
 
         if (!std::filesystem::exists(params.input_path)) {
             return std::unexpected(std::format("Input not found: {}", lfs::core::path_to_utf8(params.input_path)));
+        }
+        if (params.spz_version != 3 && params.spz_version != 4) {
+            return std::unexpected("--spz-version must be 3 or 4");
         }
 
         if (output_flag) {
@@ -1481,12 +1852,18 @@ namespace {
                                                                            {"both", param::PreprocessOutputMode::Both}});
         ::args::ValueFlag<std::string> images(parser, "folder", "Images subfolder (default: images)", {"images"});
         ::args::ValueFlag<std::string> model(parser, "path", "Local ONNX model path; skips default cache download", {"model"});
+        ::args::MapFlag<std::string, param::InferenceBackend> backend(
+            parser, "backend",
+            "Inference backend: native (default; auto is an alias)",
+            {"inference-backend"},
+            std::unordered_map<std::string, param::InferenceBackend>{
+                {"auto", param::InferenceBackend::Native},
+                {"native", param::InferenceBackend::Native}});
         ::args::ValueFlag<int> max_side(parser, "pixels", "Inference longest side, rounded to /14 (default: 518; 0 disables resize)", {"max-side"});
         ::args::ValueFlag<std::int64_t> num_tokens(parser, "tokens", "MoGe dynamic-token input when present (default: 1800)", {"num-tokens"});
-        ::args::ValueFlag<int> threads(parser, "count", "ONNX Runtime CPU threads (default: all available cores)", {"threads"});
+        ::args::ValueFlag<int> threads(parser, "count", "Host worker threads for image load/encode (default: all available cores)", {"threads"});
         ::args::ValueFlag<int> png_compression(parser, "level", "PNG compression level 0-9 (default: 1; 0 is fastest/largest)", {"png-compression"});
         ::args::ValueFlag<int> bit_depth(parser, "bits", "Output PNG bit depth, 8 or 16 (default: 16; 8-bit depth priors quantize visibly)", {"bit-depth"});
-        ::args::Flag cpu(parser, "cpu", "Force CPU inference even if CUDA is available", {"cpu"});
         ::args::Flag overwrite(parser, "overwrite", "Overwrite existing depth/normal files", {'y', "overwrite"});
         ::args::Flag no_download(parser, "no-download", "Fail if the default model is not already cached", {"no-download"});
         ::args::Flag download_only(parser, "download-only", "Download/verify the default model and exit", {"download-only"});
@@ -1514,6 +1891,9 @@ namespace {
         if (model) {
             params.model_path = lfs::core::utf8_to_path(::args::get(model));
         }
+        if (backend) {
+            params.inference_backend = ::args::get(backend);
+        }
         if (mode) {
             params.mode = ::args::get(mode);
         }
@@ -1532,7 +1912,6 @@ namespace {
         if (bit_depth) {
             params.bit_depth = ::args::get(bit_depth);
         }
-        params.force_cpu = cpu;
         params.overwrite = overwrite;
         params.no_download = no_download;
         params.download_only = download_only;

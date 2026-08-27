@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <glm/glm.hpp>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -70,6 +71,11 @@ namespace lfs::vis::gui {
             std::string hash_text;
         };
 
+        struct ProjectDragOverlayState {
+            bool visible = false;
+            std::string label;
+        };
+
         using VramHudOverlayState = VramHudOverlay::State;
 
         RmlViewportOverlay();
@@ -89,6 +95,7 @@ namespace lfs::vis::gui {
         void setSplitDividerOverlay(SplitDividerOverlayState state);
         void setGTMetricsOverlay(GTMetricsOverlayState state);
         void setLodStatsOverlay(LodStatsOverlayState state);
+        void setProjectDragOverlay(ProjectDragOverlayState state);
         void setVramHudOverlay(VramHudOverlayState state);
         void reloadResources();
         void render();
@@ -99,6 +106,9 @@ namespace lfs::vis::gui {
             return render_needed_ || document_sync_dirty_ || animation_active_ || tooltip_.revealDue() ||
                    (vram_hud_ && vram_hud_->needsAnimationFrame());
         }
+        // Finite RmlUi scheduled update delay (seconds) when > 0; nullopt for
+        // continuous demand (0) or idle (infinity).
+        [[nodiscard]] std::optional<double> nextScheduledUpdateDelay() const;
         [[nodiscard]] bool blocksPointer(double screen_x, double screen_y) const;
 
     private:
@@ -117,6 +127,7 @@ namespace lfs::vis::gui {
         void applyLeftDockResizeIndicator();
         void applyGTMetricsOverlay();
         void applyLodStatsOverlay();
+        void applyProjectDragOverlay();
         bool applyFrameTooltip();
         void queueCachedVulkanContext(bool refresh_cache);
         enum class RenderReason : std::uint32_t {
@@ -137,6 +148,8 @@ namespace lfs::vis::gui {
             Keyboard = 1u << 14,
             LodStats = 1u << 15,
             LeftDockResize = 1u << 16,
+            PerfHud = 1u << 17,
+            ProjectDrag = 1u << 18,
         };
         void markRenderNeeded(RenderReason reason);
         [[nodiscard]] std::string renderReasonSources() const;
@@ -173,6 +186,7 @@ namespace lfs::vis::gui {
         bool document_sync_dirty_ = true;
         bool data_model_binding_dirty_ = true;
         bool animation_active_ = false;
+        double next_update_delay_ = std::numeric_limits<double>::infinity();
         bool hovered_interactive_ = false;
         Rml::Element* last_hover_element_ = nullptr;
         bool mouse_pos_valid_ = false;
@@ -187,11 +201,13 @@ namespace lfs::vis::gui {
         SplitDividerOverlayState split_divider_overlay_;
         GTMetricsOverlayState gt_metrics_overlay_;
         LodStatsOverlayState lod_stats_overlay_;
+        ProjectDragOverlayState project_drag_overlay_;
         lfs::vis::AppStore::GTMetricsOverlayConfig gt_metrics_config_;
         std::optional<lfs::vis::AppStore::CameraMetrics> camera_metrics_;
         lfs::core::reactive::SubscriptionToken gt_metrics_config_subscription_;
         lfs::core::reactive::SubscriptionToken camera_metrics_subscription_;
         lfs::core::reactive::SubscriptionToken vram_hud_subscription_;
+        lfs::core::reactive::SubscriptionToken perf_hud_subscription_;
         std::vector<lfs::core::reactive::SubscriptionToken> document_sync_subscriptions_;
         std::unique_ptr<VramHudOverlay> vram_hud_;
         RmlTooltipController tooltip_;

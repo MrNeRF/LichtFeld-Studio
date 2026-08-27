@@ -137,6 +137,7 @@ namespace lfs::app {
                 {"playback_speed", controller.playbackSpeed()},
                 {"has_ply_sequence", has_ply_sequence},
                 {"ply_sequence_node", has_ply_sequence ? controller.plySequence()->node_name : ""},
+                {"ply_sequence_uuid", has_ply_sequence ? controller.plySequence()->node_uuid.to_string() : ""},
                 {"ply_sequence_fps", controller.plySequenceFps()},
                 {"ply_sequence_frame_count", has_ply_sequence ? controller.plySequence()->frames.size() : 0},
                 {"show_camera_path", ui_state ? ui_state->show_camera_path : true},

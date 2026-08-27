@@ -56,8 +56,8 @@ namespace lfs {
     // notification's error is const and copied into the closure by value if needed).
     struct ErrorAction {
         ErrorActionKind kind = ErrorActionKind::Dismiss;
-        std::string label;
-        std::function<void(OperationId)> on_invoke;
+        std::string label = {};
+        std::function<void(OperationId)> on_invoke = {};
     };
 
     // FROZEN (Section 7.5). `error` is a required lfs::Error, never a success

@@ -24,8 +24,7 @@
 namespace nvimgcodec {
 
     Codec::Codec(ILogger* logger, const char* name)
-        : logger_(logger),
-          name_(name) {
+        : logger_(logger), name_(name) {
     }
 
     std::unique_ptr<IImageParser> Codec::createParser(nvimgcodecCodeStreamDesc_t* code_stream) const {

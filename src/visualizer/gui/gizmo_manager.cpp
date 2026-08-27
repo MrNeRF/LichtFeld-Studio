@@ -1033,8 +1033,13 @@ namespace lfs::vis::gui {
                 break;
             }
 
-            if (auto* gui = viewer_->getGuiManager()) {
-                gui->panelLayout().setShowSequencer(false);
+            // Selecting an editing tool gives the viewport its working space,
+            // but clearing the active tool is a lifecycle operation and must
+            // not mutate the live workspace.
+            if (tool != ToolType::None) {
+                if (auto* gui = viewer_->getGuiManager()) {
+                    gui->panelLayout().setShowSequencer(false);
+                }
             }
         });
 
@@ -1719,6 +1724,7 @@ namespace lfs::vis::gui {
         }
 
         if (gizmo_changed && is_using) {
+            core::Scene::Transaction txn(scene_manager->getScene());
             if (node_gizmo_operation_ == GizmoOperation::Rotate) {
                 const glm::mat3 delta_rot = extractRotation(delta_matrix);
                 // Individual mode uses one drag-defined rotation path for the selection and

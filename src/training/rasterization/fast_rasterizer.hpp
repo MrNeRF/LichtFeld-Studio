@@ -137,6 +137,10 @@ namespace lfs::training {
         float scale_reg_weight = 0.0f;
         float flatten_reg_weight = 0.0f;
         float opacity_reg_weight = 0.0f;
+        // Optional persistent device scalars (caller zeros each step). Accumulated in
+        // preprocess_backward so loss-only reg kernels can be skipped on the FastGS path.
+        float* scale_reg_loss_out = nullptr;
+        float* opacity_reg_loss_out = nullptr;
         const float* sparsity_opa_sigmoid = nullptr;
         const float* sparsity_z = nullptr;
         const float* sparsity_u = nullptr;
@@ -177,20 +181,36 @@ namespace lfs::training {
     // Release per-thread renderer caches before the owning CUDA stream is torn down.
     bool release_fast_rasterizer_thread_local_caches() noexcept;
 
+    // Release FastGS sort high-water workspaces on the calling thread.
+    // Invoked from training-thread shutdown alongside other TLS CUDA caches.
+    void release_fastgs_sort_workspace_buffers() noexcept;
+
     // Convenience wrapper for inference (no backward needed)
     inline RenderOutput fast_rasterize(
         lfs::core::Camera& viewpoint_camera,
         lfs::core::SplatData& gaussian_model,
         lfs::core::Tensor& bg_color,
         bool mip_filter = false,
-        const lfs::core::Tensor& bg_image = {}) {
-        auto result = fast_rasterize_forward(viewpoint_camera, gaussian_model, bg_color, 0, 0, 0, 0, mip_filter, bg_image);
+        const lfs::core::Tensor& bg_image = {},
+        bool render_normal = false) {
+        auto result = fast_rasterize_forward(
+            viewpoint_camera, gaussian_model, bg_color, 0, 0, 0, 0, mip_filter, bg_image, render_normal);
         if (!result) {
             throw lfs::Exception(std::move(result.error()));
         }
         RenderOutput output = std::move(result->first);
         result->second.release_forward_context();
         return output;
+    }
+
+    inline RenderOutput fast_rasterize(
+        lfs::core::Camera& viewpoint_camera,
+        lfs::core::SplatData& gaussian_model,
+        lfs::core::Tensor& bg_color,
+        bool mip_filter,
+        bool render_normal) {
+        return fast_rasterize(
+            viewpoint_camera, gaussian_model, bg_color, mip_filter, {}, render_normal);
     }
 
     // Inference-only rasterization does not mutate the camera; this overload avoids
@@ -200,12 +220,28 @@ namespace lfs::training {
         lfs::core::SplatData& gaussian_model,
         lfs::core::Tensor& bg_color,
         bool mip_filter = false,
-        const lfs::core::Tensor& bg_image = {}) {
+        const lfs::core::Tensor& bg_image = {},
+        bool render_normal = false) {
         return fast_rasterize(
             const_cast<lfs::core::Camera&>(viewpoint_camera),
             gaussian_model,
             bg_color,
             mip_filter,
-            bg_image);
+            bg_image,
+            render_normal);
+    }
+
+    inline RenderOutput fast_rasterize(
+        const lfs::core::Camera& viewpoint_camera,
+        lfs::core::SplatData& gaussian_model,
+        lfs::core::Tensor& bg_color,
+        bool mip_filter,
+        bool render_normal) {
+        return fast_rasterize(
+            const_cast<lfs::core::Camera&>(viewpoint_camera),
+            gaussian_model,
+            bg_color,
+            mip_filter,
+            render_normal);
     }
 } // namespace lfs::training

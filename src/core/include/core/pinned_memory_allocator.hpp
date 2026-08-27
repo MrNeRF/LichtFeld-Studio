@@ -12,6 +12,7 @@
 #include <list>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace lfs::core {
@@ -131,6 +132,7 @@ namespace lfs::core {
             size_t malloc_fallback_frees{0};
             size_t evicted_blocks{0};
             size_t evicted_bytes{0};
+            size_t use_events_recorded{0}; ///< cudaEventRecord fences issued at deallocate
         };
 
         Stats get_stats() const;
@@ -211,6 +213,12 @@ namespace lfs::core {
 
         // Track all allocated blocks (for deallocation lookup)
         std::unordered_map<void*, AllocationInfo> allocated_blocks_;
+
+        // Streams severed via release_stream(): synchronized and about to be
+        // destroyed. Recording an event on such a handle is use-after-free
+        // inside the driver, so deallocate() must skip them. A recycled handle
+        // value re-enters service (and leaves this set) through record_stream().
+        std::unordered_set<cudaStream_t> severed_streams_;
 
         void update_peaks_locked();
         void publish_stats_locked() const;

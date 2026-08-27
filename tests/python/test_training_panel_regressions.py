@@ -32,6 +32,8 @@ def _install_lf_stub(monkeypatch):
     lf_stub.optimization_params = lambda: None
     lf_stub.dataset_params = lambda: None
     lf_stub.get_scene = lambda: None
+    lf_stub.start_training = lambda: None
+    lf_stub.training_start_overwrite_conflict = lambda: None
     lf_stub.loss_buffer = lambda: []
     lf_stub.push_loss_to_element = lambda _element, _data: (0.0, 0.0)
     lf_stub.get_render_settings = lambda: None
@@ -48,6 +50,7 @@ def test_bundled_locales_define_training_panel_strategy_and_color_keys():
         assert data["training"]["options.strategy.igs_plus"] == "IGS+"
         assert "refinement.grow_until_iter" in data["training"]
         assert "tooltip.grow_until_iter" in data["training"]
+        assert data["training"]["overwrite.btn_save_as_start"]
         assert data["training_panel"]["color_red_prefix"] == "R:"
         assert data["training_panel"]["color_green_prefix"] == "G:"
         assert data["training_panel"]["color_blue_prefix"] == "B:"
@@ -60,6 +63,7 @@ def training_panel_module(monkeypatch):
     if str(source_python) not in sys.path:
         sys.path.insert(0, str(source_python))
     sys.modules.pop("lfs_plugins.training_panel", None)
+    sys.modules.pop("lfs_plugins.training_confirm", None)
     sys.modules.pop("lfs_plugins", None)
     _install_lf_stub(monkeypatch)
     return import_module("lfs_plugins.training_panel")
@@ -199,6 +203,12 @@ class _ModelStub:
 
     def bind(self, name, getter, setter):
         self.bindings[name] = (getter, setter)
+
+    def bind_func(self, name, getter):
+        self.bindings[name] = (getter, None)
+
+    def bind_string_list(self, name):
+        self.bindings[name] = (None, None)
 
 
 def test_strategy_switch_resyncs_generated_rows_and_requests_panel_update(
@@ -389,16 +399,16 @@ def test_training_panel_language_update_requests_panel_update(training_panel_mod
         training_panel_module.RuntimeState.language_generation._fallback = 0
 
 
-def test_training_panel_checkpoint_saved_dirties_field(training_panel_module, monkeypatch):
+def test_training_panel_project_saved_dirties_field(training_panel_module, monkeypatch):
     panel = training_panel_module.TrainingPanel()
     panel._handle = _HandleStub()
     scheduled = []
     monkeypatch.setattr(panel, "_schedule_deferred_update", lambda delay: scheduled.append(delay))
 
-    panel._mark_checkpoint_saved()
+    panel._mark_project_saved()
 
-    assert panel._last_checkpoint_saved_visible is True
-    assert panel._handle.dirty_fields == ["show_checkpoint_saved"]
+    assert panel._last_project_saved_visible is True
+    assert panel._handle.dirty_fields == ["show_project_saved"]
     assert scheduled == [2.05]
 
 
@@ -883,6 +893,39 @@ def test_training_rml_exposes_mrnf_grow_until_iter():
     assert 'data-event-mousedown="pv_step(row.id, -1)"' in content
 
 
+def test_training_panel_keeps_controls_and_search_outside_scroll_region():
+    project_root = Path(__file__).parent.parent.parent
+    resources = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+    rml = (resources / "training.rml").read_text()
+    rcss = (resources / "training.rcss").read_text()
+    panel_source = (project_root / "src" / "python" / "lfs_plugins" / "training_panel.py").read_text()
+
+    controls = rml.index('id="controls"')
+    search = rml.index('id="training-search-container"')
+    telemetry = rml.index('class="section-gap training-telemetry"')
+    scroll_start = rml.index('class="training-scroll-region"')
+    parameters = rml.index('class="training-panel-title"')
+    scroll_end = rml.index("<!-- /training-scroll-region -->")
+    color_picker = rml.index('id="color-picker-popup"')
+
+    assert controls < search < telemetry < scroll_start < parameters < scroll_end < color_picker
+    assert 'class="section-gap training-telemetry" data-if="show_training_telemetry"' in rml
+    assert 'id="training-search-icon" src="../icon/scene/search.png"' in rml
+    assert 'id="training-search-input" type="text"' in rml
+    assert '<img src="../icon/scene/x.png" />' in rml
+    assert ".training-panel-layout" in rcss
+    assert ".training-scroll-region" in rcss
+    assert ".training-telemetry" in rcss
+    assert "#training-search-input" in rcss
+    assert "background-color: transparent" in rcss
+    assert "border-width: 0" in rcss
+    assert "overflow-y: auto" in rcss
+    assert ".training-scroll-region scrollbarvertical" in rcss
+    assert "padding-bottom: 6dp" in rcss
+    assert "width: 4dp" in rcss
+    assert "height_mode = lf.ui.PanelHeightMode.FILL" in panel_source
+
+
 def test_set_bool_prop_hasattr_guard(training_panel_module, monkeypatch):
     """Issue #972: _set_bool_prop must not crash on missing attributes."""
     panel = training_panel_module.TrainingPanel()
@@ -936,3 +979,572 @@ def test_training_panel_no_longer_uses_removed_image_dialog_alias():
     training_panel = project_root / "src" / "python" / "lfs_plugins" / "training_panel.py"
 
     assert "open_image_file_dialog" not in training_panel.read_text()
+
+
+def test_save_steps_editable_in_active_trainer_states(training_panel_module):
+    """Issue #1648: save steps stay editable after checkpoint resume and while running."""
+    panel = training_panel_module.TrainingPanel()
+    model = _ModelStub()
+    params = _ParamsStub()
+    dataset = _DatasetStub()
+    runtime = training_panel_module.RuntimeState
+
+    panel._bind_visibility(model, lambda: params, lambda: dataset)
+    save_edit_mode = model.bindings["save_edit_mode"][0]
+    save_readonly_mode = model.bindings["save_readonly_mode"][0]
+
+    try:
+        runtime.trainer_state.value = "ready"
+        runtime.iteration.value = 0
+        assert save_edit_mode() is True
+        assert save_readonly_mode() is False
+
+        runtime.iteration.value = 15000
+        assert save_edit_mode() is True
+
+        runtime.trainer_state.value = "paused"
+        assert save_edit_mode() is True
+
+        runtime.trainer_state.value = "running"
+        assert save_edit_mode() is True
+
+        runtime.trainer_state.value = "finished"
+        assert save_edit_mode() is False
+        assert save_readonly_mode() is True
+    finally:
+        runtime.iteration._fallback = 0
+        runtime.training_state._fallback = "idle"
+
+
+def test_training_telemetry_is_reserved_from_start_until_clear(training_panel_module):
+    panel = training_panel_module.TrainingPanel()
+    model = _ModelStub()
+    params = _ParamsStub()
+    dataset = _DatasetStub()
+    runtime = training_panel_module.RuntimeState
+
+    panel._bind_visibility(model, lambda: params, lambda: dataset)
+    show_telemetry = model.bindings["show_training_telemetry"][0]
+
+    try:
+        runtime.trainer_state.value = "ready"
+        runtime.iteration.value = 0
+        assert show_telemetry() is False
+
+        runtime.trainer_state.value = "running"
+        assert show_telemetry() is True
+
+        runtime.trainer_state.value = "ready"
+        runtime.iteration.value = 1
+        assert show_telemetry() is True
+
+        runtime.iteration.value = 0
+        assert show_telemetry() is False
+    finally:
+        runtime.iteration._fallback = 0
+        runtime.training_state._fallback = "idle"
+
+
+OVERWRITE_BTN = "training.overwrite.btn_overwrite_start"
+SAVE_AS_BTN = "training.overwrite.btn_save_as_start"
+CANCEL_BTN = "training.conflict.btn_cancel"
+
+
+def _overwrite_dialog_harness(training_panel_module, monkeypatch):
+    dialogs = []
+    starts = []
+    save_as_calls = []
+    scheduled = []
+    state = SimpleNamespace(has_path=False, save_as_result=True)
+
+    def confirm_dialog(title, message, buttons, callback=None):
+        dialogs.append((title, message, list(buttons), callback))
+
+    def project_save_as(path="", wait=False):
+        save_as_calls.append((path, wait))
+        return state.save_as_result
+
+    monkeypatch.setattr(
+        training_panel_module.lf.ui, "confirm_dialog", confirm_dialog, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf.ui,
+        "schedule_on_ui_thread",
+        scheduled.append,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "project_save_as", project_save_as, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "project_has_path",
+        lambda: state.has_path,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "start_training", lambda: starts.append(True)
+    )
+    monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: None)
+    monkeypatch.setattr(training_panel_module.lf, "get_scene", lambda: None)
+
+    panel = training_panel_module.TrainingPanel()
+    return panel, dialogs, starts, save_as_calls, scheduled, state
+
+
+@pytest.mark.parametrize("conflict", [7000, -1])
+def test_overwrite_dialog_offers_save_as_between_overwrite_and_cancel(
+    training_panel_module, monkeypatch, conflict
+):
+    panel, dialogs, _starts, _save_as_calls, _scheduled, _state = _overwrite_dialog_harness(
+        training_panel_module, monkeypatch
+    )
+
+    panel._show_overwrite_dialog(conflict)
+
+    assert len(dialogs) == 1
+    title, _message, buttons, _callback = dialogs[0]
+    assert buttons == [OVERWRITE_BTN, SAVE_AS_BTN, CANCEL_BTN]
+    if conflict >= 0:
+        assert title == "training.overwrite.title"
+    else:
+        assert title == "training.overwrite.existing_title"
+
+
+def test_overwrite_save_as_routes_through_project_save_as_and_starts_after_bind(
+    training_panel_module, monkeypatch
+):
+    panel, dialogs, starts, save_as_calls, scheduled, state = _overwrite_dialog_harness(
+        training_panel_module, monkeypatch
+    )
+    panel._show_overwrite_dialog(12)
+    _title, _message, _buttons, callback = dialogs[0]
+
+    state.save_as_result = True
+    state.has_path = True
+    callback(SAVE_AS_BTN)
+
+    assert save_as_calls == [("", True)]
+    assert starts == [True]
+    assert scheduled == []
+
+
+def test_overwrite_save_as_waits_for_fire_and_forget_save_to_bind(
+    training_panel_module, monkeypatch
+):
+    panel, dialogs, starts, save_as_calls, scheduled, state = _overwrite_dialog_harness(
+        training_panel_module, monkeypatch
+    )
+    panel._show_overwrite_dialog(-1)
+    _title, _message, _buttons, callback = dialogs[0]
+
+    state.save_as_result = True
+    state.has_path = False
+    callback(SAVE_AS_BTN)
+
+    assert save_as_calls == [("", True)]
+    assert starts == []
+    assert len(scheduled) == 1
+
+    state.has_path = True
+    scheduled[0]()
+    assert starts == [True]
+
+
+def test_overwrite_save_as_native_dialog_cancel_starts_nothing(
+    training_panel_module, monkeypatch
+):
+    panel, dialogs, starts, save_as_calls, scheduled, state = _overwrite_dialog_harness(
+        training_panel_module, monkeypatch
+    )
+    panel._show_overwrite_dialog(3)
+    _title, _message, _buttons, callback = dialogs[0]
+
+    state.save_as_result = False
+    state.has_path = False
+    callback(SAVE_AS_BTN)
+
+    assert save_as_calls == [("", True)]
+    assert starts == []
+    assert scheduled == []
+
+
+def test_overwrite_save_as_native_cancel_on_titled_project_starts_nothing(
+    training_panel_module, monkeypatch
+):
+    panel, dialogs, starts, save_as_calls, scheduled, state = _overwrite_dialog_harness(
+        training_panel_module, monkeypatch
+    )
+    panel._show_overwrite_dialog(4000)
+    _title, _message, _buttons, callback = dialogs[0]
+
+    state.save_as_result = False
+    state.has_path = True
+    callback(SAVE_AS_BTN)
+
+    assert save_as_calls == [("", True)]
+    assert starts == []
+    assert scheduled == []
+
+
+def test_overwrite_save_as_accepts_path_only_save_as_stub(
+    training_panel_module, monkeypatch
+):
+    panel, dialogs, starts, save_as_calls, _scheduled, state = _overwrite_dialog_harness(
+        training_panel_module, monkeypatch
+    )
+    path_only_calls = []
+
+    def project_save_as(path=""):
+        path_only_calls.append(path)
+        return True
+
+    monkeypatch.setattr(
+        training_panel_module.lf, "project_save_as", project_save_as, raising=False
+    )
+    panel._show_overwrite_dialog(-1)
+    _title, _message, _buttons, callback = dialogs[0]
+
+    state.has_path = True
+    callback(SAVE_AS_BTN)
+
+    assert path_only_calls == [""]
+    assert save_as_calls == []
+    assert starts == [True]
+
+
+def test_overwrite_dialog_cancel_button_starts_nothing(
+    training_panel_module, monkeypatch
+):
+    panel, dialogs, starts, save_as_calls, _scheduled, _state = _overwrite_dialog_harness(
+        training_panel_module, monkeypatch
+    )
+    panel._show_overwrite_dialog(-1)
+    _title, _message, _buttons, callback = dialogs[0]
+
+    callback(CANCEL_BTN)
+    callback("")
+
+    assert save_as_calls == []
+    assert starts == []
+
+
+def test_overwrite_and_start_still_starts_without_save_as(
+    training_panel_module, monkeypatch
+):
+    panel, dialogs, starts, save_as_calls, _scheduled, _state = _overwrite_dialog_harness(
+        training_panel_module, monkeypatch
+    )
+    panel._show_overwrite_dialog(9)
+    _title, _message, _buttons, callback = dialogs[0]
+
+    callback(OVERWRITE_BTN)
+
+    assert save_as_calls == []
+    assert starts == [True]
+
+
+def test_action_start_opens_overwrite_dialog_instead_of_starting(
+    training_panel_module, monkeypatch
+):
+    panel, dialogs, starts, save_as_calls, _scheduled, _state = _overwrite_dialog_harness(
+        training_panel_module, monkeypatch
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "training_start_overwrite_conflict",
+        lambda: 12,
+    )
+
+    panel._action_start()
+
+    assert len(dialogs) == 1
+    _title, _message, buttons, _callback = dialogs[0]
+    assert buttons == [OVERWRITE_BTN, SAVE_AS_BTN, CANCEL_BTN]
+    assert save_as_calls == []
+    assert starts == []
+
+
+def test_reset_prompts_when_dirty_then_resets_on_continue(
+    training_panel_module, monkeypatch
+):
+    dialogs = []
+    resets = []
+    monkeypatch.setattr(
+        training_panel_module.lf.ui,
+        "confirm_dialog",
+        lambda title, message, buttons, callback=None: dialogs.append(
+            (title, message, list(buttons), callback)
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "project_is_dirty", lambda: True, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "project_has_path", lambda: False, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "is_training_active", lambda: False, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "reset_training",
+        lambda: resets.append(True),
+        raising=False,
+    )
+
+    panel = training_panel_module.TrainingPanel()
+    panel._on_action(None, None, ["reset"])
+
+    assert resets == []
+    assert len(dialogs) == 1
+    title, message, buttons, callback = dialogs[0]
+    assert title == "training_panel.reset"
+    assert message == "exit_popup.unsaved_warning"
+    assert buttons == [
+        "menu.file.save_project_as",
+        "unsaved_work.continue_without_saving",
+        "common.cancel",
+    ]
+
+    callback("common.cancel")
+    assert resets == []
+
+    callback("unsaved_work.continue_without_saving")
+    assert resets == [True]
+
+
+def test_reset_when_dirty_and_training_does_not_ask_stop(
+    training_panel_module, monkeypatch
+):
+    dialogs = []
+    resets = []
+    monkeypatch.setattr(
+        training_panel_module.lf.ui,
+        "confirm_dialog",
+        lambda title, message, buttons, callback=None: dialogs.append(
+            (title, message, list(buttons), callback)
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "project_is_dirty", lambda: True, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "project_has_path", lambda: False, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "is_training_active", lambda: True, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "reset_training",
+        lambda: resets.append(True),
+        raising=False,
+    )
+
+    panel = training_panel_module.TrainingPanel()
+    panel._on_action(None, None, ["reset"])
+
+    assert resets == []
+    assert len(dialogs) == 1
+    title, message, buttons, callback = dialogs[0]
+    assert title == "training_panel.reset"
+    assert message == "exit_popup.unsaved_warning"
+    assert buttons == [
+        "menu.file.save_project_as",
+        "unsaved_work.continue_without_saving",
+        "common.cancel",
+    ]
+
+    callback("unsaved_work.continue_without_saving")
+    assert resets == [True]
+    assert len(dialogs) == 1
+
+
+def test_reset_when_training_and_clean_runs_immediately(
+    training_panel_module, monkeypatch
+):
+    dialogs = []
+    resets = []
+    monkeypatch.setattr(
+        training_panel_module.lf.ui,
+        "confirm_dialog",
+        lambda title, message, buttons, callback=None: dialogs.append(
+            (title, message, list(buttons), callback)
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "project_is_dirty", lambda: False, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "is_training_active", lambda: True, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "reset_training",
+        lambda: resets.append(True),
+        raising=False,
+    )
+
+    panel = training_panel_module.TrainingPanel()
+    panel._on_action(None, None, ["reset"])
+
+    assert dialogs == []
+    assert resets == [True]
+
+
+def test_reset_without_dirty_or_training_runs_immediately(
+    training_panel_module, monkeypatch
+):
+    resets = []
+    monkeypatch.setattr(
+        training_panel_module.lf, "project_is_dirty", lambda: False, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "is_training_active", lambda: False, raising=False
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "reset_training",
+        lambda: resets.append(True),
+        raising=False,
+    )
+
+    panel = training_panel_module.TrainingPanel()
+    panel._on_action(None, None, ["reset"])
+
+    assert resets == [True]
+
+
+def _stub_stored_session(training_panel_module, monkeypatch, **overrides):
+    state = {
+        "available": True,
+        "iteration": 0,
+        "max_iterations": 0,
+        "strategy": "mrnf",
+        "completed": False,
+        "hydrated": False,
+        "restoring": False,
+        "error": "",
+    }
+    state.update(overrides)
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "project_training_session_state",
+        lambda: dict(state),
+        raising=False,
+    )
+    return state
+
+
+def test_completed_stored_session_shows_complete_mode_and_buttons(
+    training_panel_module, monkeypatch
+):
+    _stub_stored_session(
+        training_panel_module,
+        monkeypatch,
+        iteration=30000,
+        max_iterations=30000,
+        completed=True,
+    )
+    panel = training_panel_module.TrainingPanel()
+    model = _ModelStub()
+    params = _ParamsStub()
+    dataset = _DatasetStub()
+    runtime = training_panel_module.RuntimeState
+
+    panel._bind_visibility(model, lambda: params, lambda: dataset)
+    panel._bind_status(model, lambda: params)
+    try:
+        runtime.has_trainer.value = False
+        runtime.trainer_state.value = "idle"
+        runtime.iteration.value = 30000
+        runtime.max_iterations.value = 30000
+
+        assert model.bindings["show_ctrl_completed"][0]() is True
+        assert model.bindings["show_ctrl_paused"][0]() is False
+        assert model.bindings["show_ctrl_ready"][0]() is False
+        assert "status.complete" in model.bindings["status_mode"][0]()
+        assert "30,000/30,000" in model.bindings["progress_text"][0]()
+        assert "session_at_iteration" not in model.bindings["status_mode"][0]()
+    finally:
+        runtime.has_trainer._fallback = False
+        runtime.training_state._fallback = "idle"
+        runtime.iteration._fallback = 0
+        runtime.total_iterations._fallback = 0
+
+
+def test_paused_stored_session_shows_paused_mode_and_resume(
+    training_panel_module, monkeypatch
+):
+    _stub_stored_session(
+        training_panel_module,
+        monkeypatch,
+        iteration=7000,
+        max_iterations=30000,
+        completed=False,
+    )
+    panel = training_panel_module.TrainingPanel()
+    model = _ModelStub()
+    params = _ParamsStub()
+    dataset = _DatasetStub()
+    runtime = training_panel_module.RuntimeState
+
+    panel._bind_visibility(model, lambda: params, lambda: dataset)
+    panel._bind_status(model, lambda: params)
+    try:
+        runtime.has_trainer.value = False
+        runtime.trainer_state.value = "idle"
+        runtime.iteration.value = 7000
+        runtime.max_iterations.value = 30000
+
+        assert model.bindings["show_ctrl_paused"][0]() is True
+        assert model.bindings["show_ctrl_completed"][0]() is False
+        assert model.bindings["show_ctrl_ready"][0]() is False
+        assert "status.paused" in model.bindings["status_mode"][0]()
+        assert "7,000/30,000" in model.bindings["progress_text"][0]()
+        assert "session_at_iteration" not in model.bindings["status_mode"][0]()
+    finally:
+        runtime.has_trainer._fallback = False
+        runtime.training_state._fallback = "idle"
+        runtime.iteration._fallback = 0
+        runtime.total_iterations._fallback = 0
+
+
+def test_resume_on_stored_session_restores_before_resuming(
+    training_panel_module, monkeypatch
+):
+    _stub_stored_session(
+        training_panel_module,
+        monkeypatch,
+        iteration=7000,
+        max_iterations=30000,
+        completed=False,
+    )
+    calls = []
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "restore_training_session",
+        lambda then_start=False: calls.append(("restore", then_start)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "resume_training",
+        lambda: calls.append(("resume",)),
+        raising=False,
+    )
+    runtime = training_panel_module.RuntimeState
+    try:
+        runtime.has_trainer.value = False
+        runtime.trainer_state.value = "paused"
+        panel = training_panel_module.TrainingPanel()
+        panel._on_action(None, None, ["resume"])
+        assert calls[0] == ("restore", True)
+        assert ("resume",) in calls
+    finally:
+        runtime.has_trainer._fallback = False
+        runtime.training_state._fallback = "idle"

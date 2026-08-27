@@ -24,6 +24,8 @@ namespace fast_lfs::rasterization {
         kFastGSForwardStatusInstanceWriteMismatch = 1u << 1,
         kFastGSForwardStatusPrimitiveIndexOutOfRange = 1u << 2,
         kFastGSForwardStatusTileInstanceRangeOutOfRange = 1u << 3,
+        /// instance count exceeded sort-buffer capacity (async path).
+        kFastGSForwardStatusSortCapacityOverflow = 1u << 4,
     };
 
     struct FastGSForwardStatus {
@@ -85,6 +87,9 @@ namespace fast_lfs::rasterization {
         }
         if ((flags & kFastGSForwardStatusTileInstanceRangeOutOfRange) != 0) {
             append("tile instance range out of range");
+        }
+        if ((flags & kFastGSForwardStatusSortCapacityOverflow) != 0) {
+            append("sort capacity overflow");
         }
         if (result.empty()) {
             result = "unknown status flag " + std::to_string(flags);
@@ -249,6 +254,16 @@ namespace fast_lfs::rasterization {
         return ((size_t)size) + 128;
     }
 
+    /// 128-bit packed screen position + pixel-space AABB for warp sub-tile culling.
+    /// Layout: float2 mean2d (8B) + ushort4 pixel_bbox (8B) = 16B, one 128-bit load.
+    /// pixel_bbox = (x_min, x_max_excl, y_min, y_max_excl) in absolute pixel coords.
+    /// Tile-space screen_bounds remain separate for create_instances.
+    struct alignas(16) PackedMeanBBox {
+        float2 mean2d;
+        ushort4 pixel_bbox;
+    };
+    static_assert(sizeof(PackedMeanBBox) == 16, "PackedMeanBBox must be 128-bit");
+
     struct PerPrimitiveBuffers {
         size_t cub_workspace_size;
         char* cub_workspace;
@@ -257,9 +272,9 @@ namespace fast_lfs::rasterization {
         std::uint64_t* n_touched_tiles;
         std::uint64_t* offset;
         ushort4* screen_bounds;
-        float2* mean2d;
+        PackedMeanBBox* mean2d;
         float4* conic_opacity;
-        float3* color;
+        float4* color; // float3 padded to float4 for 128-bit shared/global loads
         FastGSForwardStatus* forward_status;
 
         static PerPrimitiveBuffers from_blob(char*& blob, int n_primitives) {

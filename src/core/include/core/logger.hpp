@@ -44,21 +44,6 @@ namespace lfs::core {
         Off = 7
     };
 
-    enum class LogModule : uint8_t {
-        Core = 0,
-        Rendering = 1,
-        Visualizer = 2,
-        Loader = 3,
-        Scene = 4,
-        Training = 5,
-        Input = 6,
-        GUI = 7,
-        Window = 8,
-        Memory = 9,
-        Unknown = 10,
-        Count = 11
-    };
-
     struct LFS_LOGGER_API LogEntrySnapshot {
         std::chrono::system_clock::time_point timestamp{};
         LogLevel level = LogLevel::Info;
@@ -84,8 +69,8 @@ namespace lfs::core {
                   const std::string& log_file,
                   const std::string& filter_pattern,
                   bool use_stderr);
-        // default_log_dir_override replaces the resolved per-user LichtFeld directory
-        // (normally ~/.lichtfeld) used to place the always-on durable log; empty means
+        // default_log_dir_override replaces the resolved per-user LichtFeld root
+        // used to place the always-on durable log under its logs directory; empty means
         // use the real per-user directory. Exists so tests can redirect it without a
         // process-global env var.
         void init(LogLevel console_level,
@@ -223,8 +208,6 @@ namespace lfs::core {
 
         std::atomic<uint8_t> global_level_{static_cast<uint8_t>(LogLevel::Info)};
         std::atomic<bool> capture_all_to_file_{false};
-        std::array<std::atomic<bool>, static_cast<size_t>(LogModule::Count)> module_enabled_{};
-        std::array<std::atomic<uint8_t>, static_cast<size_t>(LogModule::Count)> module_level_{};
     };
 
     // Scoped timer for performance measurement

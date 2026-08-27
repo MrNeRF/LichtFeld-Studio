@@ -12,7 +12,6 @@ add_library(lfs_mcp ${LFS_MCP_LIB_TYPE}
     shared_scene_tools.cpp
     mcp_server.cpp
     mcp_http_server.cpp
-    mcp_training_context.cpp
     llm_client.cpp
 )
 
@@ -49,6 +48,7 @@ set_target_properties(lfs_mcp PROPERTIES
 )
 
 if(WIN32)
+    target_link_libraries(lfs_mcp PRIVATE iphlpapi ws2_32)
     set_target_properties(lfs_mcp PROPERTIES
         CXX_VISIBILITY_PRESET hidden
         VISIBILITY_INLINES_HIDDEN ON

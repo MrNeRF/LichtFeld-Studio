@@ -168,6 +168,7 @@ namespace lfs::vis {
             out.vram_label = vram_label.empty()
                                  ? std::format("buffer.{}B", static_cast<std::size_t>(bi.size))
                                  : std::string(vram_label);
+            vmaSetAllocationName(allocator, out.allocation, out.vram_label.c_str());
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 out.vram_scope,
                 out.vram_label,
@@ -1041,6 +1042,7 @@ namespace lfs::vis {
                                          "point_cloud.output[{}].color",
                                          slot_index);
             slot.color_vram_label = std::format("color.slot{}:{}x{}", slot_index, size.x, size.y);
+            vmaSetAllocationName(allocator, slot.color_alloc, "Point-cloud color target");
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.point_cloud.output_image",
                 slot.color_vram_label,
@@ -1099,6 +1101,7 @@ namespace lfs::vis {
                                          "point_cloud.output[{}].depth",
                                          slot_index);
             slot.depth_vram_label = std::format("depth.slot{}:{}x{}", slot_index, size.x, size.y);
+            vmaSetAllocationName(allocator, slot.depth_alloc, "Point-cloud depth target");
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.point_cloud.output_image",
                 slot.depth_vram_label,
@@ -1179,6 +1182,18 @@ namespace lfs::vis {
         void destroy() {
             if (device == VK_NULL_HANDLE) {
                 return;
+            }
+            // Viewport scene descriptors sample these output views. Retire that
+            // compositor work before vkDestroyImageView (VUID-01026).
+            if (context != nullptr) {
+                if (!context->waitForSubmittedFrames()) {
+                    LOG_WARN("Point-cloud renderer teardown could not wait for submitted frames: {}",
+                             context->lastError());
+                    if (!context->deviceWaitIdle()) {
+                        LOG_WARN("Point-cloud renderer teardown could not idle device: {}",
+                                 context->lastError());
+                    }
+                }
             }
             // C3: bounded teardown drain. Non-Ready retains fence + command pool
             // (AMB-4 / AMB-C5 — quarantine never authorizes free of in-flight work).
@@ -1910,7 +1925,7 @@ namespace lfs::vis {
                                                 VK_ERROR_INITIALIZATION_FAILED);
                 return std::unexpected<std::string>(error);
             }
-            r = vkQueueSubmit(submit_queue, 1, &si, fence);
+            r = lfs::rendering::vk_queue_submit_synced(submit_queue, 1, &si, fence);
             if (r != VK_SUCCESS) {
                 restore_tracked_layouts();
                 rejectSubmissionAndMaybeReplace("vkQueueSubmit", r);
@@ -2166,10 +2181,10 @@ namespace lfs::vis {
                                                 VK_ERROR_INITIALIZATION_FAILED);
                 return std::unexpected<std::string>(error);
             }
-            r = vkQueueSubmit(submit_queue, 1, &submit_info, fence);
+            r = lfs::rendering::vk_queue_submit_synced(submit_queue, 1, &submit_info, fence);
             if (r != VK_SUCCESS) {
-                rejectSubmissionAndMaybeReplace("vkQueueSubmit(point-cloud readback)", r);
-                return std::unexpected<std::string>(vkError("vkQueueSubmit(point-cloud readback)", r));
+                rejectSubmissionAndMaybeReplace("lfs::rendering::vk_queue_submit_synced(point-cloud readback)", r);
+                return std::unexpected<std::string>(vkError("lfs::rendering::vk_queue_submit_synced(point-cloud readback)", r));
             }
             {
                 using lfs::rendering::apply_submission_transition;

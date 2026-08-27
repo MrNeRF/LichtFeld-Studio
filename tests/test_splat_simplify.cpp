@@ -6,6 +6,8 @@
 #include "core/splat_simplify_history.hpp"
 #include "core/tensor.hpp"
 #include "io/formats/ply.hpp"
+#include "lfs/training/sh_value_codec.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 
 #include <gtest/gtest.h>
 
@@ -313,6 +315,15 @@ namespace {
         for (size_t i = 0; i < 9; ++i)
             EXPECT_NEAR(actual[i], expected[i], tol);
     }
+
+    struct ShValueQuantGuard {
+        explicit ShValueQuantGuard(const bool enabled) {
+            lfs::training::sh_value::set_sh_value_quant_enabled_for_testing(enabled);
+        }
+        ~ShValueQuantGuard() {
+            lfs::training::sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+        }
+    };
 
 } // namespace
 
@@ -1123,4 +1134,104 @@ TEST(SplatSimplify, RealPlySimplifyDoesNotUndershootRequestedTarget) {
     ASSERT_NE(*result, nullptr);
     EXPECT_EQ(source.size(), source_size_before);
     EXPECT_EQ((*result)->size(), target_count);
+}
+
+TEST(SplatSimplify, Q16DeletedMaskPreservesCanonicalSH) {
+    using lfs::training::sh_value::apply_shN_value_quant;
+
+    const ShValueQuantGuard quant_guard{true};
+
+    constexpr size_t kN = 64;
+    constexpr int kShDegree = 3;
+    constexpr size_t kRest = 15;
+
+    auto means = Tensor::zeros({kN, size_t{3}}, Device::CUDA, DataType::Float32);
+    auto sh0 = Tensor::zeros({kN, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
+    auto shN_can = Tensor::zeros({kN, kRest, size_t{3}}, Device::CUDA, DataType::Float32);
+    auto scaling = Tensor::zeros({kN, size_t{3}}, Device::CUDA, DataType::Float32);
+    auto rotation = Tensor::zeros({kN, size_t{4}}, Device::CUDA, DataType::Float32);
+    auto opacity = Tensor::zeros({kN, size_t{1}}, Device::CUDA, DataType::Float32);
+
+    {
+        auto means_cpu = means.cpu();
+        auto* m = means_cpu.ptr<float>();
+        for (size_t i = 0; i < kN; ++i) {
+            m[i * 3 + 0] = static_cast<float>(i) * 0.25f;
+        }
+        means = means_cpu.to(Device::CUDA);
+
+        auto shN_cpu = shN_can.cpu();
+        auto* p = shN_cpu.ptr<float>();
+        for (size_t i = 0; i < kN; ++i) {
+            for (size_t c = 0; c < kRest * 3; ++c)
+                p[i * kRest * 3 + c] = static_cast<float>(i) * 0.01f + static_cast<float>(c) * 0.001f;
+        }
+        shN_can = shN_cpu.to(Device::CUDA);
+
+        auto rot_cpu = rotation.cpu();
+        auto* r = rot_cpu.ptr<float>();
+        for (size_t i = 0; i < kN; ++i)
+            r[i * 4] = 1.0f;
+        rotation = rot_cpu.to(Device::CUDA);
+
+        opacity.fill_(2.0f);
+        scaling.fill_(std::log(0.1f));
+    }
+
+    auto source = std::make_unique<SplatData>(
+        kShDegree, means, sh0, shN_can, scaling, rotation, opacity, 1.0f);
+    source->set_active_sh_degree(kShDegree);
+    source->set_max_sh_degree(kShDegree);
+
+    const auto ref = source->shN_canonical().cpu().contiguous();
+    ASSERT_TRUE(apply_shN_value_quant(*source));
+    ASSERT_TRUE(source->shN_value_quantized());
+    ASSERT_EQ(source->shN_raw().dtype(), DataType::Float16);
+
+    std::vector<bool> deleted(kN, false);
+    deleted[1] = true;
+    deleted[17] = true;
+    deleted[63] = true;
+    source->deleted() = Tensor::from_vector(deleted, {deleted.size()}, Device::CPU).to(Device::CUDA);
+    source->refresh_deleted_count();
+    ASSERT_TRUE(source->has_deleted_mask());
+    ASSERT_EQ(source->deleted_count(), 3u);
+
+    SplatSimplifyOptions options;
+    options.ratio = 1.0;
+    options.opacity_prune_threshold = 0.0f;
+
+    auto result = lfs::core::simplify_splats(*source, options, {});
+    ASSERT_TRUE(result) << result.error();
+    ASSERT_NE(*result, nullptr);
+    ASSERT_EQ((*result)->size(), kN - 3);
+
+    const auto got = (*result)->shN_canonical().cpu().contiguous();
+    ASSERT_EQ(got.dtype(), DataType::Float32);
+    ASSERT_EQ(got.ndim(), 3u);
+    ASSERT_EQ(got.size(0), kN - 3);
+    ASSERT_EQ(got.size(1), kRest);
+    ASSERT_EQ(got.size(2), 3u);
+
+    const auto* refp = ref.ptr<float>();
+    const auto* gotp = got.ptr<float>();
+    constexpr size_t kRow = kRest * 3;
+    size_t out = 0;
+    float max_abs = 0.0f;
+    float max_mag = 0.0f;
+    for (size_t i = 0; i < kN; ++i) {
+        if (deleted[i])
+            continue;
+        for (size_t c = 0; c < kRow; ++c) {
+            const float expected = refp[i * kRow + c];
+            const float actual = gotp[out * kRow + c];
+            max_mag = std::max(max_mag, std::abs(expected));
+            max_abs = std::max(max_abs, std::abs(actual - expected));
+            EXPECT_NEAR(actual, expected, 0.05f) << "splat " << i << " coeff " << c;
+        }
+        ++out;
+    }
+    EXPECT_EQ(out, kN - 3);
+    EXPECT_LT(max_abs, 0.05f);
+    EXPECT_GT(max_mag, 0.01f);
 }

@@ -17,8 +17,13 @@
 
 #pragma once
 
+#include "utils/library_version.h"
+
 namespace nvjpeg2k {
 
-    bool is_version_at_least(int major, int minor, int patch);
+    using Nvjpeg2kVersion = nvimgcodec::LibraryVersion;
 
-}
+    // Get the current nvJPEG2000 library version
+    Nvjpeg2kVersion get_nvjpeg2k_version();
+
+} // namespace nvjpeg2k

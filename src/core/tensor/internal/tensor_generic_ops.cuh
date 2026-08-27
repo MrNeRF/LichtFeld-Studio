@@ -3,13 +3,14 @@
 
 #pragma once
 
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <thrust/device_ptr.h>
 #include <thrust/execution_policy.h>
 #include <thrust/iterator/constant_iterator.h>
 #include <thrust/transform.h>
 
-// Include vectorized operations for float4 optimizations
+// Include vectorized operations for float4 / half128 optimizations
 #include "tensor_vectorized_ops.cuh"
 
 namespace lfs::core::tensor_ops {
@@ -20,29 +21,23 @@ namespace lfs::core::tensor_ops {
 
     template <typename Func>
     inline void run_with_thrust_policy(cudaStream_t stream, Func&& func) {
-        // Always use .on(stream) to avoid implicit sync after thrust operations
-        // When stream is nullptr/0, this uses the default stream without syncing
-        func(thrust::cuda::par.on(stream));
+        // thrust::cuda::par is synchronous regardless of .on(stream): the calling
+        // thread waits for the stream before the algorithm returns. .on(stream)
+        // only selects which stream to enqueue on; it does not make the call async.
+        // par_nosync skips that blocking wait. Callers get stream-order guarantees
+        // only — later work on the same stream (or an explicit sync) must consume
+        // the output. Do not use this helper for reduce/scan/sort or any algorithm
+        // that returns a host-side result.
+        func(thrust::cuda::par_nosync.on(stream));
     }
 
     // ============================================================================
     // GENERIC OPERATIONS - Header-only for optimal inlining and specialization
     // ============================================================================
 
-    // These are in a header (not .cu) to allow:
-    // 1. Compiler to inline Thrust operations across translation units
-    // 2. Template specialization for specific functors (e.g., composed_unary_op)
-    // 3. Better devirtualization of functors at compile-time
-    // 4. No need for explicit template instantiations
-    // 5. Works with expression template fusion (composed functors)
-
     /**
      * Binary operation: Applies binary functor element-wise to two arrays
      * Supports different input/output types (e.g., float -> bool for comparisons)
-     *
-     * @tparam InT Input element type
-     * @tparam OutT Output element type
-     * @tparam Op Binary functor type (must be __device__ callable)
      */
     template <typename InT, typename OutT, typename Op>
     void launch_binary_op_generic(const InT* a, const InT* b, OutT* c, size_t n,
@@ -51,13 +46,12 @@ namespace lfs::core::tensor_ops {
             return;
 
         // FAST PATH 1: Vectorized comparison operations (float -> unsigned char)
-        // Perfect for <, >, ==, != operations
         if constexpr (std::is_same_v<InT, float> && std::is_same_v<OutT, unsigned char>) {
             bool a_aligned = (reinterpret_cast<uintptr_t>(a) % 16) == 0;
             bool b_aligned = (reinterpret_cast<uintptr_t>(b) % 16) == 0;
-            bool c_aligned = (reinterpret_cast<uintptr_t>(c) % 4) == 0; // uchar4 needs 4-byte alignment
+            bool c_aligned = (reinterpret_cast<uintptr_t>(c) % 4) == 0;
 
-            if (a_aligned && b_aligned && c_aligned && n > 1024) {
+            if (a_aligned && b_aligned && c_aligned && n > kVectorizedMinElems) {
                 launch_vectorized_comparison(a, b, c, n, op, stream);
                 return;
             }
@@ -69,8 +63,20 @@ namespace lfs::core::tensor_ops {
             bool b_aligned = (reinterpret_cast<uintptr_t>(b) % 16) == 0;
             bool c_aligned = (reinterpret_cast<uintptr_t>(c) % 16) == 0;
 
-            if (a_aligned && b_aligned && c_aligned && n > 1024) {
+            if (a_aligned && b_aligned && c_aligned && n > kVectorizedMinElems) {
                 launch_vectorized_binary(a, b, c, n, op, stream);
+                return;
+            }
+        }
+
+        // FAST PATH 3: Packed128 half->half
+        if constexpr (std::is_same_v<InT, __half> && std::is_same_v<OutT, __half>) {
+            bool a_aligned = (reinterpret_cast<uintptr_t>(a) % 16) == 0;
+            bool b_aligned = (reinterpret_cast<uintptr_t>(b) % 16) == 0;
+            bool c_aligned = (reinterpret_cast<uintptr_t>(c) % 16) == 0;
+
+            if (a_aligned && b_aligned && c_aligned && n > kVectorizedMinElems) {
+                launch_vectorized_binary_half(a, b, c, n, op, stream);
                 return;
             }
         }
@@ -87,11 +93,6 @@ namespace lfs::core::tensor_ops {
 
     /**
      * Unary operation: Applies unary functor element-wise to an array
-     * Supports different input/output types (e.g., float -> bool for predicates)
-     *
-     * @tparam InT Input element type
-     * @tparam OutT Output element type
-     * @tparam Op Unary functor type (must be __device__ callable)
      */
     template <typename InT, typename OutT, typename Op>
     void launch_unary_op_generic(const InT* input, OutT* output, size_t n,
@@ -104,8 +105,19 @@ namespace lfs::core::tensor_ops {
             bool input_aligned = (reinterpret_cast<uintptr_t>(input) % 16) == 0;
             bool output_aligned = (reinterpret_cast<uintptr_t>(output) % 16) == 0;
 
-            if (input_aligned && output_aligned && n > 1024) {
+            if (input_aligned && output_aligned && n > kVectorizedMinElems) {
                 launch_vectorized_unary(input, output, n, op, stream);
+                return;
+            }
+        }
+
+        // FAST PATH: Packed128 half->half
+        if constexpr (std::is_same_v<InT, __half> && std::is_same_v<OutT, __half>) {
+            bool input_aligned = (reinterpret_cast<uintptr_t>(input) % 16) == 0;
+            bool output_aligned = (reinterpret_cast<uintptr_t>(output) % 16) == 0;
+
+            if (input_aligned && output_aligned && n > kVectorizedMinElems) {
+                launch_vectorized_unary_half(input, output, n, op, stream);
                 return;
             }
         }
@@ -122,10 +134,6 @@ namespace lfs::core::tensor_ops {
     /**
      * Scalar operation: Applies binary operation with a scalar value
      * OPTIMIZED: Uses constant_iterator for zero-memory scalar broadcasting
-     *
-     * @tparam T Element type
-     * @tparam OutputT Output element type
-     * @tparam Op Binary functor type (must be __device__ callable)
      */
     template <typename T, typename OutputT, typename Op>
     void launch_scalar_op_generic(const T* data, T scalar, OutputT* result, size_t n,
@@ -138,7 +146,7 @@ namespace lfs::core::tensor_ops {
             bool data_aligned = (reinterpret_cast<uintptr_t>(data) % 16) == 0;
             bool result_aligned = (reinterpret_cast<uintptr_t>(result) % 16) == 0;
 
-            if (data_aligned && result_aligned && n > 512) {
+            if (data_aligned && result_aligned && n > kVectorizedScalarMinElems) {
                 launch_vectorized_scalar_broadcast(data, scalar, result, n, op, stream);
                 return;
             }

@@ -23,15 +23,13 @@
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <unordered_map>
 
 namespace lfs::vis {
 
     namespace op {
         class SceneSnapshot;
     }
-
-    // Forward declarations
-    class Trainer;
 
     class LFS_VIS_API SceneManager {
     public:
@@ -69,12 +67,25 @@ namespace lfs::vis {
             std::lock_guard<std::mutex> lock(state_mutex_);
             return dataset_path_;
         }
+
+        std::filesystem::path getColmapSparsePath() const {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            return colmap_sparse_path_;
+        }
+
+        std::filesystem::path getPPISPPath() const {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            return ppisp_path_;
+        }
         [[nodiscard]] std::optional<std::filesystem::path> getPlyPath(core::NodeId id) const;
         [[nodiscard]] std::optional<std::filesystem::path> getPlyPath(std::string name) const;
+        [[nodiscard]] std::optional<std::filesystem::path> getPlyPath(const core::Uuid& uuid) const;
         void setPlyPath(core::NodeId id, const std::filesystem::path& path);
         void setPlyPath(std::string name, const std::filesystem::path& path);
+        void setPlyPath(const core::Uuid& uuid, const std::filesystem::path& path);
         void clearPlyPath(core::NodeId id);
         void clearPlyPath(std::string name);
+        void clearPlyPath(const core::Uuid& uuid);
         void setDatasetPath(const std::filesystem::path& path);
 
         // Scene access
@@ -99,8 +110,11 @@ namespace lfs::vis {
 
         [[nodiscard]] std::expected<void, std::string> canRemoveNode(core::NodeId id) const;
         [[nodiscard]] std::expected<void, std::string> removePLYWithResult(std::string name, bool keep_children = false);
-        [[nodiscard]] std::expected<void, std::string> removeNodesWithResult(const std::vector<std::string>& names,
-                                                                             bool keep_children = false);
+        using BatchNodeRemovalResult = std::expected<void, std::string>;
+        [[nodiscard]] BatchNodeRemovalResult removeNodesWithResult(const std::vector<std::string>& names,
+                                                                   bool keep_children = false);
+        [[nodiscard]] BatchNodeRemovalResult removeNodesByIdsWithResult(const std::vector<core::NodeId>& ids,
+                                                                        bool keep_children = false);
         size_t publishLiveCameraCount();
         void removePLY(std::string name, bool keep_children = false);
         void setPLYVisibility(std::string name, bool visible);
@@ -121,6 +135,7 @@ namespace lfs::vis {
         void clearSelection();
         [[nodiscard]] std::string getSelectedNodeName() const;
         [[nodiscard]] std::vector<std::string> getSelectedNodeNames() const;
+        [[nodiscard]] std::vector<core::NodeId> getSelectedNodeIds() const;
         [[nodiscard]] bool hasSelectedNode() const;
         [[nodiscard]] core::NodeType getSelectedNodeType() const;
         [[nodiscard]] std::vector<bool> getSelectedNodeMask() const;
@@ -346,8 +361,12 @@ namespace lfs::vis {
         mutable std::mutex state_mutex_;
 
         ContentType content_type_ = ContentType::Empty;
-        std::map<core::NodeId, std::filesystem::path> splat_paths_;
+        // Durable splat identity to source path. Display-name adapters above
+        // resolve to UUID at the API boundary.
+        std::unordered_map<core::Uuid, std::filesystem::path> splat_paths_;
         std::filesystem::path dataset_path_;
+        std::filesystem::path colmap_sparse_path_;
+        std::filesystem::path ppisp_path_;
 
         // Cache for parameters
         std::optional<lfs::core::param::TrainingParameters> cached_params_;

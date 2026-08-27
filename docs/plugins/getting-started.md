@@ -1406,7 +1406,7 @@ lf.pause_training()
 lf.resume_training()
 lf.stop_training()
 lf.reset_training()
-lf.save_checkpoint()
+lf.project_save()
 ```
 
 ### Example: custom training callback
@@ -1424,7 +1424,7 @@ class AutoSavePlugin:
     def on_post_step(self, _hook):
         ctx = lf.context()
         if ctx.iteration - self.last_save >= self.interval:
-            lf.save_checkpoint()
+            lf.project_save()
             self.last_save = ctx.iteration
             lf.log.info(f"Auto-save requested at iteration {ctx.iteration}")
 

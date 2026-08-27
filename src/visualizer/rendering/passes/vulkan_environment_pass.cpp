@@ -611,9 +611,9 @@ namespace lfs::vis {
             bool submitted = false;
             bool wait_ready = false;
             if (r == VK_SUCCESS) {
-                r = vkQueueSubmit(graphics_queue, 1, &si, fence);
+                r = lfs::rendering::vk_queue_submit_synced(graphics_queue, 1, &si, fence);
                 if (r != VK_SUCCESS) {
-                    failed_expression = "vkQueueSubmit(graphics_queue, 1, &si, fence)";
+                    failed_expression = "lfs::rendering::vk_queue_submit_synced(graphics_queue, 1, &si, fence)";
                     failed_context = std::format(
                         "Environment upload submission failed (queue={:#x}, command_buffer={:#x}, command_buffer_count=1, wait_semaphore_count=0, signal_semaphore_count=0, fence={:#x})",
                         vkHandleValue(graphics_queue),
@@ -762,6 +762,7 @@ namespace lfs::vis {
                                          "environment.image[{}x{}]",
                                          w,
                                          h);
+            vmaSetAllocationName(allocator, image_alloc, "Environment image");
             image_vram_label = std::format("env:{}:{}x{}",
                                            lfs::core::path_to_utf8(path),
                                            w,

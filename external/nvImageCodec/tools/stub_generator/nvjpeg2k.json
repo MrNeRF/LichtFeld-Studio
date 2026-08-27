@@ -23,7 +23,6 @@
       "nvjpeg2kEncodeParamsDestroy": {},
       "nvjpeg2kEncodeParamsSetEncodeConfig": {},
       "nvjpeg2kEncodeParamsSetInputFormat": {},
-      "nvjpeg2kEncodeParamsSetQuality": {},
       "nvjpeg2kEncodeParamsSpecifyQuality": {},
       "nvjpeg2kEncoderCreateSimple": {},
       "nvjpeg2kEncoderDestroy": {},

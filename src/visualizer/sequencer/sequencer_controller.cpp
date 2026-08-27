@@ -5,8 +5,42 @@
 
 #include <algorithm>
 #include <cmath>
+#include <nlohmann/json.hpp>
 
 namespace lfs::vis {
+
+    std::expected<core::NodeId, PlySequenceResolveError> resolvePlySequenceNode(
+        const core::Scene& scene,
+        const core::Uuid& node_uuid,
+        const std::string_view node_name) {
+        if (!node_uuid.is_nil()) {
+            const auto node_id = scene.getNodeIdByUuid(node_uuid);
+            if (node_id == core::NULL_NODE) {
+                return std::unexpected(PlySequenceResolveError{
+                    .code = PlySequenceResolveErrorCode::UUID_NOT_FOUND,
+                    .message = "PLY sequence node UUID " + node_uuid.to_string() +
+                               " does not resolve",
+                });
+            }
+            return node_id;
+        }
+
+        if (node_name.empty()) {
+            return std::unexpected(PlySequenceResolveError{
+                .code = PlySequenceResolveErrorCode::LEGACY_NAME_NOT_FOUND,
+                .message = "PLY sequence node has neither UUID nor display label",
+            });
+        }
+        const auto node_id = scene.getNodeIdByName(std::string(node_name));
+        if (node_id == core::NULL_NODE) {
+            return std::unexpected(PlySequenceResolveError{
+                .code = PlySequenceResolveErrorCode::LEGACY_NAME_NOT_FOUND,
+                .message = "PLY sequence node label '" + std::string(node_name) +
+                           "' does not resolve",
+            });
+        }
+        return node_id;
+    }
 
     namespace {
         constexpr float KEYFRAME_SEEK_EPS = 1e-4f;
@@ -116,6 +150,8 @@ namespace lfs::vis {
 
         if (timeline_.realKeyframeCount() == 0 && hasPlySequence()) {
             const auto* const sequence = plySequence();
+            if (!sequence)
+                return;
             const auto current_frame = plySequenceFrameIndex(playhead_).value_or(0);
             const size_t target_frame = std::min(current_frame + 1, sequence->frames.size() - 1);
             playhead_ = static_cast<float>(target_frame) / plySequenceFps();
@@ -151,6 +187,8 @@ namespace lfs::vis {
         if (hasPlayableContent()) {
             if (timeline_.realKeyframeCount() == 0 && hasPlySequence()) {
                 const auto* const sequence = plySequence();
+                if (!sequence)
+                    return;
                 playhead_ = static_cast<float>(sequence->frames.size() - 1) / plySequenceFps();
             } else {
                 playhead_ = timeline_.realKeyframeCount() > 0 ? timeline_.realEndTime() : timeline_.endTime();
@@ -447,6 +485,10 @@ namespace lfs::vis {
         return timeline_.saveToJson(path);
     }
 
+    nlohmann::json SequencerController::saveToJson() const {
+        return timeline_.saveToJson();
+    }
+
     bool SequencerController::loadFromJson(const std::string& path) {
         stop();
         deselectKeyframe();
@@ -458,11 +500,24 @@ namespace lfs::vis {
         return true;
     }
 
+    bool SequencerController::loadFromJson(
+        const nlohmann::json& json) {
+        stop();
+        deselectKeyframe();
+        if (!timeline_.loadFromJson(json))
+            return false;
+        rebuildLoopKeyframe();
+        markTimelineChanged();
+        return true;
+    }
+
     void SequencerController::setPlySequence(std::filesystem::path directory,
                                              std::string node_name,
                                              std::vector<std::filesystem::path> paths,
                                              std::vector<std::string> node_names,
-                                             const float fps) {
+                                             const float fps,
+                                             core::Uuid node_uuid,
+                                             std::vector<core::Uuid> node_uuids) {
         const size_t frame_count = std::min(paths.size(), node_names.size());
         if (frame_count == 0) {
             clearPlySequence();
@@ -472,12 +527,14 @@ namespace lfs::vis {
         PlySequenceClip sequence;
         sequence.directory = std::move(directory);
         sequence.node_name = std::move(node_name);
+        sequence.node_uuid = node_uuid;
         sequence.fps = clampSequenceFps(fps);
         sequence.frames.reserve(frame_count);
         for (size_t i = 0; i < frame_count; ++i) {
             sequence.frames.push_back({
                 .path = std::move(paths[i]),
                 .node_name = std::move(node_names[i]),
+                .node_uuid = i < node_uuids.size() ? node_uuids[i] : core::Uuid{},
             });
         }
 

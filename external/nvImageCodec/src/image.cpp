@@ -25,11 +25,7 @@
 namespace nvimgcodec {
 
     Image::Image()
-        : index_(0),
-          image_info_{NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO, sizeof(nvimgcodecImageInfo_t), nullptr},
-          image_desc_{NVIMGCODEC_STRUCTURE_TYPE_IMAGE_DESC, sizeof(nvimgcodecImageDesc_t), nullptr, this, Image::static_get_image_info,
-                      Image::static_image_ready},
-          promise_(nullptr) {
+        : index_(0), image_info_{NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO, sizeof(nvimgcodecImageInfo_t), nullptr}, image_desc_{NVIMGCODEC_STRUCTURE_TYPE_IMAGE_DESC, sizeof(nvimgcodecImageDesc_t), nullptr, this, Image::static_get_image_info, Image::static_image_ready}, promise_(nullptr) {
     }
 
     Image::~Image() {

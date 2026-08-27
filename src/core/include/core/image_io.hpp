@@ -13,7 +13,9 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <queue>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -32,12 +34,15 @@ namespace lfs::core {
     LFS_CORE_API std::tuple<uint16_t*, int, int, int>
     load_image_u16(std::filesystem::path p, int res_div = -1, int max_width = 0);
 
-    LFS_CORE_API void save_image(const std::filesystem::path& path, Tensor image);
-    LFS_CORE_API void save_image_u8(const std::filesystem::path& path, Tensor image, int jpeg_quality = 95);
+    LFS_CORE_API void save_image(const std::filesystem::path& path, Tensor image,
+                                 const std::optional<std::string>& metadata_comment = {});
+    LFS_CORE_API void save_image_u8(const std::filesystem::path& path, Tensor image, int jpeg_quality = 95,
+                                    const std::optional<std::string>& metadata_comment = {});
     LFS_CORE_API void save_image(const std::filesystem::path& path,
                                  const std::vector<Tensor>& images,
                                  bool horizontal = true,
-                                 int separator_width = 2);
+                                 int separator_width = 2,
+                                 const std::optional<std::string>& metadata_comment = {});
 
     LFS_CORE_API bool save_img_data(const std::filesystem::path& p, const std::tuple<unsigned char*, int, int, int>& image_data);
 
@@ -111,13 +116,15 @@ namespace lfs::core::image_io {
         BatchImageSaver& operator=(BatchImageSaver&&) = delete;
 
         // Queue image for asynchronous saving
-        void queue_save(const std::filesystem::path& path, lfs::core::Tensor image);
+        void queue_save(const std::filesystem::path& path, lfs::core::Tensor image,
+                        const std::optional<std::string>& metadata_comment = {});
 
         // Queue multiple images for side-by-side saving
         void queue_save_multiple(const std::filesystem::path& path,
                                  const std::vector<lfs::core::Tensor>& images,
                                  bool horizontal = true,
-                                 int separator_width = 2);
+                                 int separator_width = 2,
+                                 const std::optional<std::string>& metadata_comment = {});
 
         // Wait for all pending saves to complete
         void wait_all();
@@ -141,6 +148,7 @@ namespace lfs::core::image_io {
             std::vector<lfs::core::Tensor> images;
             bool horizontal = true;
             int separator_width = 2;
+            std::optional<std::string> metadata_comment;
         };
 
         void worker_thread();
@@ -161,15 +169,18 @@ namespace lfs::core::image_io {
     };
 
     // Convenience functions that use the singleton
-    inline void save_image_async(const std::filesystem::path& path, lfs::core::Tensor image) {
-        BatchImageSaver::instance().queue_save(path, image);
+    inline void save_image_async(const std::filesystem::path& path, lfs::core::Tensor image,
+                                 const std::optional<std::string>& metadata_comment = {}) {
+        BatchImageSaver::instance().queue_save(path, image, metadata_comment);
     }
 
     inline void save_images_async(const std::filesystem::path& path,
                                   const std::vector<lfs::core::Tensor>& images,
                                   bool horizontal = true,
-                                  int separator_width = 2) {
-        BatchImageSaver::instance().queue_save_multiple(path, images, horizontal, separator_width);
+                                  int separator_width = 2,
+                                  const std::optional<std::string>& metadata_comment = {}) {
+        BatchImageSaver::instance().queue_save_multiple(path, images, horizontal, separator_width,
+                                                        metadata_comment);
     }
 
     inline void wait_for_pending_saves() {

@@ -36,6 +36,14 @@
     margin-top: 6dp;
 }
 
+.account-verification-url {
+    display: block;
+    margin: 6dp 0 2dp 0;
+    font-size: 11dp;
+    opacity: 0.75;
+    text-align: center;
+}
+
 .account-user-code {
     display: block;
     margin: 12dp 0 4dp 0;

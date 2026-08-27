@@ -10,12 +10,14 @@
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "io/formats/ply.hpp"
+#include "lfs/training/joint_adam_codec.hpp"
 #include "rasterization/fastgs/utils/utils.h"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
-#include <array>
-#include <bit>
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <cuda_runtime.h>
 #include <filesystem>
 #include <gtest/gtest.h>
@@ -23,6 +25,8 @@
 #include <random>
 #include <stdexcept>
 #include <torch/torch.h>
+#include <unordered_set>
+#include <vector>
 
 using namespace lfs::training;
 using namespace lfs::core;
@@ -40,46 +44,128 @@ namespace {
         return *state;
     }
 
+    // Recover gradients from the first Adam moment after one fused step from
+    // zero moments: m = (1-beta1)*g, so g ≈ m/(1-beta1). Joint moments must
+    // be decoded through their codec.
     Tensor adam_moment(const AdamOptimizer& opt, ParamType type) {
         const auto& state = adam_state(opt, type);
         if (state.exp_avg.dtype() == DataType::Float32) {
             return state.exp_avg;
         }
 
-        auto q_cpu = state.exp_avg.to(Device::CPU);
-        auto scale_cpu = state.exp_avg_scale.to(Device::CPU);
-        const auto& shape = state.exp_avg.shape();
-        const size_t rows = shape[0];
-        const size_t row_size = rows == 0 ? 0 : state.exp_avg.numel() / rows;
-        const auto* q = q_cpu.ptr<std::uint8_t>();
-        const auto* scales = scale_cpu.ptr<float>();
-        std::vector<float> dequant(state.exp_avg.numel(), 0.0f);
-        for (size_t row = 0; row < rows; ++row) {
-            const float scale = scales[row];
-            for (size_t col = 0; col < row_size; ++col) {
-                const size_t idx = row * row_size + col;
-                dequant[idx] = scale == 0.0f ? 0.0f : (static_cast<int>(q[idx]) - 128) * scale;
+        // --- Joint (u, log_s) codec (default ON since 2.2) ---
+        if (state.is_joint()) {
+            if (!state.joint_bounds.is_valid()) {
+                throw std::runtime_error("Joint Adam state missing joint_bounds");
             }
+            const int bits = state.joint_bits;
+            const int bpc = joint_adam::bytes_per_cell(bits);
+            if (bpc <= 0) {
+                throw std::runtime_error("Joint Adam: unsupported joint_bits");
+            }
+
+            auto packed_cpu = state.exp_avg.to(Device::CPU);
+            auto bounds_cpu = state.joint_bounds.to(Device::CPU);
+            const auto* packed = packed_cpu.ptr<std::uint8_t>();
+            const auto* bounds = bounds_cpu.ptr<float>();
+            const size_t n_bounds = bounds_cpu.shape()[0];
+
+            // Contiguous params: packed [N, n_attr * bpc] → dequant [N, n_attr] (or [N] if n_attr==1
+            // and original param was rank-1). Recover shape from packed layout.
+            if (state.exp_avg.ndim() >= 2) {
+                const size_t n_prim = state.exp_avg.shape()[0];
+                const size_t packed_row = state.exp_avg.shape()[1];
+                if (packed_row % static_cast<size_t>(bpc) != 0) {
+                    throw std::runtime_error("Joint packed row not divisible by bytes_per_cell");
+                }
+                const size_t n_attr = packed_row / static_cast<size_t>(bpc);
+                std::vector<float> dequant(n_prim * n_attr, 0.0f);
+
+                auto decode_cell = [&](std::size_t cell, float umin, float umax, float smin, float smax,
+                                       float& g1, float& g2) {
+                    if (bits == 16) {
+                        joint_adam::Codec16::decode_g1g2(packed, cell, umin, umax, smin, smax, g1, g2);
+                    } else {
+                        joint_adam::Codec8::decode_g1g2(packed, cell, umin, umax, smin, smax, g1, g2);
+                    }
+                };
+
+                for (size_t p = 0; p < n_prim; ++p) {
+                    const size_t bidx = p / static_cast<size_t>(joint_adam::kBlockSize);
+                    if (bidx >= n_bounds) {
+                        throw std::runtime_error("Joint bounds undersized for primitive index");
+                    }
+                    const float umin = bounds[bidx * 4 + 0];
+                    const float umax = bounds[bidx * 4 + 1];
+                    const float smin = bounds[bidx * 4 + 2];
+                    const float smax = bounds[bidx * 4 + 3];
+                    for (size_t a = 0; a < n_attr; ++a) {
+                        const size_t cell = p * n_attr + a;
+                        float g1 = 0.0f, g2 = 0.0f;
+                        decode_cell(cell, umin, umax, smin, smax, g1, g2);
+                        dequant[cell] = g1;
+                    }
+                }
+
+                // Match param layouts used by numerical grads: sh0 [N,1,3], opacity [N], else [N,C].
+                TensorShape out_shape;
+                if (type == ParamType::Sh0 && n_attr == 3) {
+                    out_shape = TensorShape({n_prim, size_t{1}, size_t{3}});
+                } else if (n_attr == 1) {
+                    out_shape = TensorShape({n_prim});
+                } else {
+                    out_shape = TensorShape({n_prim, n_attr});
+                }
+                return Tensor::from_blob(dequant.data(), out_shape, Device::CPU, DataType::Float32)
+                    .clone()
+                    .to(Device::CUDA);
+            }
+
+            // Swizzled shN: 1D packed cells (one cell per swizzled float).
+            // Bounds are per 256-primitive block. When only one bounds row exists (N<=256),
+            // every cell shares bounds[0] — sufficient for crop-damping N=1 and small fuzz.
+            const size_t n_cells = state.exp_avg.numel() / static_cast<size_t>(bpc);
+            if (n_bounds != 1) {
+                throw std::runtime_error(
+                    "adam_moment joint 1D (shN) multi-block decode needs swizzle→prim map");
+            }
+            std::vector<float> dequant(n_cells, 0.0f);
+            const float umin = bounds[0], umax = bounds[1], smin = bounds[2], smax = bounds[3];
+            for (size_t cell = 0; cell < n_cells; ++cell) {
+                float g1 = 0.0f, g2 = 0.0f;
+                if (bits == 16) {
+                    joint_adam::Codec16::decode_g1g2(packed, cell, umin, umax, smin, smax, g1, g2);
+                } else {
+                    joint_adam::Codec8::decode_g1g2(packed, cell, umin, umax, smin, smax, g1, g2);
+                }
+                dequant[cell] = g1;
+            }
+            return Tensor::from_blob(dequant.data(), TensorShape({n_cells}), Device::CPU, DataType::Float32)
+                .clone()
+                .to(Device::CUDA);
         }
-        return Tensor::from_blob(dequant.data(), shape, Device::CPU, DataType::Float32).clone().to(state.exp_avg.device());
+
+        throw std::runtime_error("Legacy Adam moment codec is unsupported");
     }
 
     void expect_adam_state_finite(const AdamOptimizer& opt, ParamType type) {
         const auto& state = adam_state(opt, type);
-        if (state.exp_avg_scale.is_valid()) {
-            auto scales = state.exp_avg_scale.to(Device::CPU);
-            auto* ptr = scales.ptr<float>();
-            for (size_t i = 0; i < scales.numel(); ++i) {
+        if (state.is_joint()) {
+            ASSERT_TRUE(state.joint_bounds.is_valid());
+            auto bounds = state.joint_bounds.to(Device::CPU);
+            auto* ptr = bounds.ptr<float>();
+            for (size_t i = 0; i < bounds.numel(); ++i) {
                 EXPECT_TRUE(std::isfinite(ptr[i]));
             }
+            // Packed uint8 codes are always finite by construction.
+            return;
         }
-        if (state.exp_avg_sq_scale.is_valid()) {
-            auto scales = state.exp_avg_sq_scale.to(Device::CPU);
-            auto* ptr = scales.ptr<float>();
-            for (size_t i = 0; i < scales.numel(); ++i) {
-                EXPECT_TRUE(std::isfinite(ptr[i]));
-            }
-        }
+    }
+
+    // L1 of decoded first moment m (joint or legacy). Proxy for "moments moved".
+    float first_moment_l1(const AdamOptimizer& opt, ParamType type) {
+        auto m = adam_moment(opt, type);
+        return m.abs().sum().item<float>();
     }
 
     Tensor recovered_fused_grad(const AdamOptimizer& opt, ParamType type, float beta1 = 0.9f) {
@@ -594,471 +680,6 @@ TEST_F(FastGSKernelTest, Optimizer_AdamStep) {
     EXPECT_GT(diff, 0.0f);
 }
 
-namespace {
-    enum class QuantizedAdamLayout {
-        Contiguous,
-        Swizzled,
-    };
-
-    class FastGSFrozenAdamTest : public ::testing::TestWithParam<QuantizedAdamLayout> {
-    protected:
-        static constexpr int ROW_SIZE = 4;
-        static constexpr float LR = 0.01f;
-
-        void SetUp() override {
-            if (!torch::cuda::is_available()) {
-                GTEST_SKIP() << "CUDA not available";
-            }
-        }
-
-        static Tensor float_tensor(std::vector<float>& values, const int n_rows) {
-            return Tensor::from_blob(
-                       values.data(),
-                       {static_cast<size_t>(n_rows), static_cast<size_t>(ROW_SIZE)},
-                       Device::CPU,
-                       DataType::Float32)
-                .clone()
-                .to(Device::CUDA);
-        }
-
-        static Tensor uint8_tensor(std::vector<std::uint8_t>& values, const int n_rows) {
-            return Tensor::from_blob(
-                       values.data(),
-                       {static_cast<size_t>(n_rows), static_cast<size_t>(ROW_SIZE)},
-                       Device::CPU,
-                       DataType::UInt8)
-                .clone()
-                .to(Device::CUDA);
-        }
-
-        template <size_t N>
-        static Tensor bool_tensor(std::array<bool, N>& values) {
-            return Tensor::from_blob(values.data(), {N}, Device::CPU, DataType::Bool)
-                .clone()
-                .to(Device::CUDA);
-        }
-
-        void launch(
-            Tensor& param,
-            Tensor& exp_avg_q,
-            Tensor& exp_avg_scale,
-            Tensor& exp_avg_sq_q,
-            Tensor& exp_avg_sq_scale,
-            Tensor& grad,
-            const Tensor& frozen_mask,
-            const float frozen_lr_scale,
-            const int n_rows,
-            const Tensor* crop_damping_mask = nullptr,
-            const float cropbox_lr_scale = 1.0f) {
-            constexpr float BETA1 = 0.0f;
-            constexpr float BETA2 = 0.0f;
-            constexpr float EPS = 0.0f;
-            constexpr float BIAS_CORRECTION1_RCP = 1.0f;
-            constexpr float BIAS_CORRECTION2_SQRT_RCP = 1.0f;
-
-            if (GetParam() == QuantizedAdamLayout::Contiguous) {
-                fast_lfs::optimizer::adam_step_quantized_raw(
-                    param.ptr<float>(),
-                    exp_avg_q.ptr<std::uint8_t>(),
-                    exp_avg_scale.ptr<float>(),
-                    exp_avg_sq_q.ptr<std::uint8_t>(),
-                    exp_avg_sq_scale.ptr<float>(),
-                    grad.ptr<float>(),
-                    frozen_mask.ptr<bool>(),
-                    n_rows,
-                    frozen_lr_scale,
-                    crop_damping_mask ? crop_damping_mask->ptr<bool>() : nullptr,
-                    crop_damping_mask ? static_cast<int>(crop_damping_mask->numel()) : 0,
-                    cropbox_lr_scale,
-                    n_rows,
-                    ROW_SIZE,
-                    LR,
-                    BETA1,
-                    BETA2,
-                    EPS,
-                    BIAS_CORRECTION1_RCP,
-                    BIAS_CORRECTION2_SQRT_RCP);
-            } else {
-                fast_lfs::optimizer::adam_step_quantized_swizzled_raw(
-                    param.ptr<float>(),
-                    exp_avg_q.ptr<std::uint8_t>(),
-                    exp_avg_scale.ptr<float>(),
-                    exp_avg_sq_q.ptr<std::uint8_t>(),
-                    exp_avg_sq_scale.ptr<float>(),
-                    grad.ptr<float>(),
-                    frozen_mask.ptr<bool>(),
-                    n_rows,
-                    frozen_lr_scale,
-                    crop_damping_mask ? crop_damping_mask->ptr<bool>() : nullptr,
-                    crop_damping_mask ? static_cast<int>(crop_damping_mask->numel()) : 0,
-                    cropbox_lr_scale,
-                    n_rows,
-                    1,
-                    LR,
-                    BETA1,
-                    BETA2,
-                    EPS,
-                    BIAS_CORRECTION1_RCP,
-                    BIAS_CORRECTION2_SQRT_RCP);
-            }
-            ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
-        }
-    };
-
-    TEST_P(FastGSFrozenAdamTest, ZeroScalePreservesFrozenParameterAndMomentsBitExactly) {
-        std::vector<float> param_values{1.25f, -2.5f, 0.125f, 8.0f};
-        std::vector<float> grad_values{0.5f, -1.0f, 2.0f, -4.0f};
-        std::vector<std::uint8_t> exp_avg_values{129, 7, 255, 128};
-        std::vector<std::uint8_t> exp_avg_sq_values{3, 17, 254, 1};
-        std::vector<float> exp_avg_scale_values{0.25f};
-        std::vector<float> exp_avg_sq_scale_values{0.5f};
-        std::array<bool, 1> frozen_values{true};
-
-        auto param = float_tensor(param_values, 1);
-        auto grad = float_tensor(grad_values, 1);
-        auto exp_avg_q = uint8_tensor(exp_avg_values, 1);
-        auto exp_avg_sq_q = uint8_tensor(exp_avg_sq_values, 1);
-        auto exp_avg_scale = Tensor::from_vector(exp_avg_scale_values, {1}, Device::CUDA);
-        auto exp_avg_sq_scale = Tensor::from_vector(exp_avg_sq_scale_values, {1}, Device::CUDA);
-        auto frozen_mask = bool_tensor(frozen_values);
-
-        launch(
-            param,
-            exp_avg_q,
-            exp_avg_scale,
-            exp_avg_sq_q,
-            exp_avg_sq_scale,
-            grad,
-            frozen_mask,
-            0.0f,
-            1);
-
-        const auto param_cpu = param.to(Device::CPU);
-        const auto exp_avg_q_cpu = exp_avg_q.to(Device::CPU);
-        const auto exp_avg_sq_q_cpu = exp_avg_sq_q.to(Device::CPU);
-        const auto exp_avg_scale_cpu = exp_avg_scale.to(Device::CPU);
-        const auto exp_avg_sq_scale_cpu = exp_avg_sq_scale.to(Device::CPU);
-        for (int i = 0; i < ROW_SIZE; ++i) {
-            EXPECT_EQ(std::bit_cast<std::uint32_t>(param_cpu.ptr<float>()[i]),
-                      std::bit_cast<std::uint32_t>(param_values[i]));
-            EXPECT_EQ(exp_avg_q_cpu.ptr<std::uint8_t>()[i], exp_avg_values[i]);
-            EXPECT_EQ(exp_avg_sq_q_cpu.ptr<std::uint8_t>()[i], exp_avg_sq_values[i]);
-        }
-        EXPECT_EQ(std::bit_cast<std::uint32_t>(exp_avg_scale_cpu.ptr<float>()[0]),
-                  std::bit_cast<std::uint32_t>(exp_avg_scale_values[0]));
-        EXPECT_EQ(std::bit_cast<std::uint32_t>(exp_avg_sq_scale_cpu.ptr<float>()[0]),
-                  std::bit_cast<std::uint32_t>(exp_avg_sq_scale_values[0]));
-    }
-
-    TEST_P(FastGSFrozenAdamTest, UnitScaleMatchesIdenticalUnfrozenRow) {
-        std::vector<float> param_values{
-            0.25f, -0.5f, 1.5f, -2.0f,
-            0.25f, -0.5f, 1.5f, -2.0f};
-        std::vector<float> grad_values{
-            0.5f, -1.0f, 2.0f, -4.0f,
-            0.5f, -1.0f, 2.0f, -4.0f};
-        std::vector<std::uint8_t> exp_avg_values(2 * ROW_SIZE, 128);
-        std::vector<std::uint8_t> exp_avg_sq_values(2 * ROW_SIZE, 0);
-        std::vector<float> scale_values(2, 0.0f);
-        std::array<bool, 2> frozen_values{true, false};
-
-        auto param = float_tensor(param_values, 2);
-        auto grad = float_tensor(grad_values, 2);
-        auto exp_avg_q = uint8_tensor(exp_avg_values, 2);
-        auto exp_avg_sq_q = uint8_tensor(exp_avg_sq_values, 2);
-        auto exp_avg_scale = Tensor::from_vector(scale_values, {2}, Device::CUDA);
-        auto exp_avg_sq_scale = Tensor::from_vector(scale_values, {2}, Device::CUDA);
-        auto frozen_mask = bool_tensor(frozen_values);
-
-        launch(
-            param,
-            exp_avg_q,
-            exp_avg_scale,
-            exp_avg_sq_q,
-            exp_avg_sq_scale,
-            grad,
-            frozen_mask,
-            1.0f,
-            2);
-
-        const auto param_cpu = param.to(Device::CPU);
-        const auto exp_avg_q_cpu = exp_avg_q.to(Device::CPU);
-        const auto exp_avg_sq_q_cpu = exp_avg_sq_q.to(Device::CPU);
-        const auto exp_avg_scale_cpu = exp_avg_scale.to(Device::CPU);
-        const auto exp_avg_sq_scale_cpu = exp_avg_sq_scale.to(Device::CPU);
-        for (int i = 0; i < ROW_SIZE; ++i) {
-            EXPECT_EQ(std::bit_cast<std::uint32_t>(param_cpu.ptr<float>()[i]),
-                      std::bit_cast<std::uint32_t>(param_cpu.ptr<float>()[ROW_SIZE + i]));
-            EXPECT_EQ(exp_avg_q_cpu.ptr<std::uint8_t>()[i],
-                      exp_avg_q_cpu.ptr<std::uint8_t>()[ROW_SIZE + i]);
-            EXPECT_EQ(exp_avg_sq_q_cpu.ptr<std::uint8_t>()[i],
-                      exp_avg_sq_q_cpu.ptr<std::uint8_t>()[ROW_SIZE + i]);
-        }
-        EXPECT_EQ(std::bit_cast<std::uint32_t>(exp_avg_scale_cpu.ptr<float>()[0]),
-                  std::bit_cast<std::uint32_t>(exp_avg_scale_cpu.ptr<float>()[1]));
-        EXPECT_EQ(std::bit_cast<std::uint32_t>(exp_avg_sq_scale_cpu.ptr<float>()[0]),
-                  std::bit_cast<std::uint32_t>(exp_avg_sq_scale_cpu.ptr<float>()[1]));
-    }
-
-    TEST_P(FastGSFrozenAdamTest, TenthScaleProducesExactTenthDeltaAndNormalMoments) {
-        std::vector<float> param_values(2 * ROW_SIZE, 0.0f);
-        std::vector<float> grad_values(2 * ROW_SIZE, 1.0f);
-        std::vector<std::uint8_t> exp_avg_values(2 * ROW_SIZE, 128);
-        std::vector<std::uint8_t> exp_avg_sq_values(2 * ROW_SIZE, 0);
-        std::vector<float> scale_values(2, 0.0f);
-        std::array<bool, 2> frozen_values{true, false};
-
-        auto param = float_tensor(param_values, 2);
-        auto grad = float_tensor(grad_values, 2);
-        auto exp_avg_q = uint8_tensor(exp_avg_values, 2);
-        auto exp_avg_sq_q = uint8_tensor(exp_avg_sq_values, 2);
-        auto exp_avg_scale = Tensor::from_vector(scale_values, {2}, Device::CUDA);
-        auto exp_avg_sq_scale = Tensor::from_vector(scale_values, {2}, Device::CUDA);
-        auto frozen_mask = bool_tensor(frozen_values);
-
-        launch(
-            param,
-            exp_avg_q,
-            exp_avg_scale,
-            exp_avg_sq_q,
-            exp_avg_sq_scale,
-            grad,
-            frozen_mask,
-            0.1f,
-            2);
-
-        const auto param_cpu = param.to(Device::CPU);
-        const auto exp_avg_q_cpu = exp_avg_q.to(Device::CPU);
-        const auto exp_avg_sq_q_cpu = exp_avg_sq_q.to(Device::CPU);
-        const auto exp_avg_scale_cpu = exp_avg_scale.to(Device::CPU);
-        const auto exp_avg_sq_scale_cpu = exp_avg_sq_scale.to(Device::CPU);
-        for (int i = 0; i < ROW_SIZE; ++i) {
-            const float expected_frozen = param_cpu.ptr<float>()[ROW_SIZE + i] * 0.1f;
-            EXPECT_EQ(std::bit_cast<std::uint32_t>(param_cpu.ptr<float>()[i]),
-                      std::bit_cast<std::uint32_t>(expected_frozen));
-            EXPECT_EQ(exp_avg_q_cpu.ptr<std::uint8_t>()[i],
-                      exp_avg_q_cpu.ptr<std::uint8_t>()[ROW_SIZE + i]);
-            EXPECT_EQ(exp_avg_sq_q_cpu.ptr<std::uint8_t>()[i],
-                      exp_avg_sq_q_cpu.ptr<std::uint8_t>()[ROW_SIZE + i]);
-        }
-        EXPECT_EQ(std::bit_cast<std::uint32_t>(exp_avg_scale_cpu.ptr<float>()[0]),
-                  std::bit_cast<std::uint32_t>(exp_avg_scale_cpu.ptr<float>()[1]));
-        EXPECT_EQ(std::bit_cast<std::uint32_t>(exp_avg_sq_scale_cpu.ptr<float>()[0]),
-                  std::bit_cast<std::uint32_t>(exp_avg_sq_scale_cpu.ptr<float>()[1]));
-    }
-
-    TEST_P(FastGSFrozenAdamTest, CropDampingZeroScalePreservesParameterAndMomentsBitExactly) {
-        std::vector<float> param_values{1.25f, -2.5f, 0.125f, 8.0f};
-        std::vector<float> grad_values{0.5f, -1.0f, 2.0f, -4.0f};
-        std::vector<std::uint8_t> exp_avg_values{129, 7, 255, 128};
-        std::vector<std::uint8_t> exp_avg_sq_values{3, 17, 254, 1};
-        std::vector<float> exp_avg_scale_values{0.25f};
-        std::vector<float> exp_avg_sq_scale_values{0.5f};
-        std::array<bool, 1> frozen_values{false};
-        std::array<bool, 1> crop_values{true};
-
-        auto param = float_tensor(param_values, 1);
-        auto grad = float_tensor(grad_values, 1);
-        auto exp_avg_q = uint8_tensor(exp_avg_values, 1);
-        auto exp_avg_sq_q = uint8_tensor(exp_avg_sq_values, 1);
-        auto exp_avg_scale = Tensor::from_vector(exp_avg_scale_values, {1}, Device::CUDA);
-        auto exp_avg_sq_scale = Tensor::from_vector(exp_avg_sq_scale_values, {1}, Device::CUDA);
-        auto frozen_mask = bool_tensor(frozen_values);
-        auto crop_mask = bool_tensor(crop_values);
-
-        launch(
-            param,
-            exp_avg_q,
-            exp_avg_scale,
-            exp_avg_sq_q,
-            exp_avg_sq_scale,
-            grad,
-            frozen_mask,
-            0.0f,
-            1,
-            &crop_mask,
-            0.0f);
-
-        const auto param_cpu = param.to(Device::CPU);
-        const auto exp_avg_q_cpu = exp_avg_q.to(Device::CPU);
-        const auto exp_avg_sq_q_cpu = exp_avg_sq_q.to(Device::CPU);
-        const auto exp_avg_scale_cpu = exp_avg_scale.to(Device::CPU);
-        const auto exp_avg_sq_scale_cpu = exp_avg_sq_scale.to(Device::CPU);
-        for (int i = 0; i < ROW_SIZE; ++i) {
-            EXPECT_EQ(std::bit_cast<std::uint32_t>(param_cpu.ptr<float>()[i]),
-                      std::bit_cast<std::uint32_t>(param_values[i]));
-            EXPECT_EQ(exp_avg_q_cpu.ptr<std::uint8_t>()[i], exp_avg_values[i]);
-            EXPECT_EQ(exp_avg_sq_q_cpu.ptr<std::uint8_t>()[i], exp_avg_sq_values[i]);
-        }
-        EXPECT_EQ(std::bit_cast<std::uint32_t>(exp_avg_scale_cpu.ptr<float>()[0]),
-                  std::bit_cast<std::uint32_t>(exp_avg_scale_values[0]));
-        EXPECT_EQ(std::bit_cast<std::uint32_t>(exp_avg_sq_scale_cpu.ptr<float>()[0]),
-                  std::bit_cast<std::uint32_t>(exp_avg_sq_scale_values[0]));
-    }
-
-    TEST_P(FastGSFrozenAdamTest, CropDampingUnitScaleMatchesUnmaskedRow) {
-        std::vector<float> param_values{
-            0.25f, -0.5f, 1.5f, -2.0f,
-            0.25f, -0.5f, 1.5f, -2.0f};
-        std::vector<float> grad_values{
-            0.5f, -1.0f, 2.0f, -4.0f,
-            0.5f, -1.0f, 2.0f, -4.0f};
-        std::vector<std::uint8_t> exp_avg_values(2 * ROW_SIZE, 128);
-        std::vector<std::uint8_t> exp_avg_sq_values(2 * ROW_SIZE, 0);
-        std::vector<float> scale_values(2, 0.0f);
-        std::array<bool, 2> frozen_values{false, false};
-        std::array<bool, 2> crop_values{true, false};
-
-        auto param = float_tensor(param_values, 2);
-        auto grad = float_tensor(grad_values, 2);
-        auto exp_avg_q = uint8_tensor(exp_avg_values, 2);
-        auto exp_avg_sq_q = uint8_tensor(exp_avg_sq_values, 2);
-        auto exp_avg_scale = Tensor::from_vector(scale_values, {2}, Device::CUDA);
-        auto exp_avg_sq_scale = Tensor::from_vector(scale_values, {2}, Device::CUDA);
-        auto frozen_mask = bool_tensor(frozen_values);
-        auto crop_mask = bool_tensor(crop_values);
-
-        launch(
-            param,
-            exp_avg_q,
-            exp_avg_scale,
-            exp_avg_sq_q,
-            exp_avg_sq_scale,
-            grad,
-            frozen_mask,
-            0.0f,
-            2,
-            &crop_mask,
-            1.0f);
-
-        const auto param_cpu = param.to(Device::CPU);
-        const auto exp_avg_q_cpu = exp_avg_q.to(Device::CPU);
-        const auto exp_avg_sq_q_cpu = exp_avg_sq_q.to(Device::CPU);
-        const auto exp_avg_scale_cpu = exp_avg_scale.to(Device::CPU);
-        const auto exp_avg_sq_scale_cpu = exp_avg_sq_scale.to(Device::CPU);
-        for (int i = 0; i < ROW_SIZE; ++i) {
-            EXPECT_EQ(std::bit_cast<std::uint32_t>(param_cpu.ptr<float>()[i]),
-                      std::bit_cast<std::uint32_t>(param_cpu.ptr<float>()[ROW_SIZE + i]));
-            EXPECT_EQ(exp_avg_q_cpu.ptr<std::uint8_t>()[i],
-                      exp_avg_q_cpu.ptr<std::uint8_t>()[ROW_SIZE + i]);
-            EXPECT_EQ(exp_avg_sq_q_cpu.ptr<std::uint8_t>()[i],
-                      exp_avg_sq_q_cpu.ptr<std::uint8_t>()[ROW_SIZE + i]);
-        }
-        EXPECT_EQ(std::bit_cast<std::uint32_t>(exp_avg_scale_cpu.ptr<float>()[0]),
-                  std::bit_cast<std::uint32_t>(exp_avg_scale_cpu.ptr<float>()[1]));
-        EXPECT_EQ(std::bit_cast<std::uint32_t>(exp_avg_sq_scale_cpu.ptr<float>()[0]),
-                  std::bit_cast<std::uint32_t>(exp_avg_sq_scale_cpu.ptr<float>()[1]));
-    }
-
-    TEST_P(FastGSFrozenAdamTest, CropDampingTenthScaleChangesOnlyFinalStep) {
-        std::vector<float> param_values(2 * ROW_SIZE, 0.0f);
-        std::vector<float> grad_values(2 * ROW_SIZE, 1.0f);
-        std::vector<std::uint8_t> exp_avg_values(2 * ROW_SIZE, 128);
-        std::vector<std::uint8_t> exp_avg_sq_values(2 * ROW_SIZE, 0);
-        std::vector<float> scale_values(2, 0.0f);
-        std::array<bool, 2> frozen_values{false, false};
-        std::array<bool, 2> crop_values{true, false};
-
-        auto param = float_tensor(param_values, 2);
-        auto grad = float_tensor(grad_values, 2);
-        auto exp_avg_q = uint8_tensor(exp_avg_values, 2);
-        auto exp_avg_sq_q = uint8_tensor(exp_avg_sq_values, 2);
-        auto exp_avg_scale = Tensor::from_vector(scale_values, {2}, Device::CUDA);
-        auto exp_avg_sq_scale = Tensor::from_vector(scale_values, {2}, Device::CUDA);
-        auto frozen_mask = bool_tensor(frozen_values);
-        auto crop_mask = bool_tensor(crop_values);
-
-        launch(
-            param,
-            exp_avg_q,
-            exp_avg_scale,
-            exp_avg_sq_q,
-            exp_avg_sq_scale,
-            grad,
-            frozen_mask,
-            0.0f,
-            2,
-            &crop_mask,
-            0.1f);
-
-        const auto param_cpu = param.to(Device::CPU);
-        const auto exp_avg_q_cpu = exp_avg_q.to(Device::CPU);
-        const auto exp_avg_sq_q_cpu = exp_avg_sq_q.to(Device::CPU);
-        const auto exp_avg_scale_cpu = exp_avg_scale.to(Device::CPU);
-        const auto exp_avg_sq_scale_cpu = exp_avg_sq_scale.to(Device::CPU);
-        for (int i = 0; i < ROW_SIZE; ++i) {
-            EXPECT_EQ(std::bit_cast<std::uint32_t>(param_cpu.ptr<float>()[i]),
-                      std::bit_cast<std::uint32_t>(param_cpu.ptr<float>()[ROW_SIZE + i] * 0.1f));
-            EXPECT_EQ(exp_avg_q_cpu.ptr<std::uint8_t>()[i],
-                      exp_avg_q_cpu.ptr<std::uint8_t>()[ROW_SIZE + i]);
-            EXPECT_EQ(exp_avg_sq_q_cpu.ptr<std::uint8_t>()[i],
-                      exp_avg_sq_q_cpu.ptr<std::uint8_t>()[ROW_SIZE + i]);
-        }
-        EXPECT_EQ(std::bit_cast<std::uint32_t>(exp_avg_scale_cpu.ptr<float>()[0]),
-                  std::bit_cast<std::uint32_t>(exp_avg_scale_cpu.ptr<float>()[1]));
-        EXPECT_EQ(std::bit_cast<std::uint32_t>(exp_avg_sq_scale_cpu.ptr<float>()[0]),
-                  std::bit_cast<std::uint32_t>(exp_avg_sq_scale_cpu.ptr<float>()[1]));
-    }
-
-    TEST_P(FastGSFrozenAdamTest, FreezeAndCropScalesMultiply) {
-        std::vector<float> param_values(2 * ROW_SIZE, 0.0f);
-        std::vector<float> grad_values(2 * ROW_SIZE, 1.0f);
-        std::vector<std::uint8_t> exp_avg_values(2 * ROW_SIZE, 128);
-        std::vector<std::uint8_t> exp_avg_sq_values(2 * ROW_SIZE, 0);
-        std::vector<float> scale_values(2, 0.0f);
-        std::array<bool, 2> frozen_values{true, false};
-        std::array<bool, 2> crop_values{true, false};
-
-        auto param = float_tensor(param_values, 2);
-        auto grad = float_tensor(grad_values, 2);
-        auto exp_avg_q = uint8_tensor(exp_avg_values, 2);
-        auto exp_avg_sq_q = uint8_tensor(exp_avg_sq_values, 2);
-        auto exp_avg_scale = Tensor::from_vector(scale_values, {2}, Device::CUDA);
-        auto exp_avg_sq_scale = Tensor::from_vector(scale_values, {2}, Device::CUDA);
-        auto frozen_mask = bool_tensor(frozen_values);
-        auto crop_mask = bool_tensor(crop_values);
-
-        launch(
-            param,
-            exp_avg_q,
-            exp_avg_scale,
-            exp_avg_sq_q,
-            exp_avg_sq_scale,
-            grad,
-            frozen_mask,
-            0.5f,
-            2,
-            &crop_mask,
-            0.2f);
-
-        const auto param_cpu = param.to(Device::CPU);
-        const auto exp_avg_q_cpu = exp_avg_q.to(Device::CPU);
-        const auto exp_avg_sq_q_cpu = exp_avg_sq_q.to(Device::CPU);
-        const auto exp_avg_scale_cpu = exp_avg_scale.to(Device::CPU);
-        const auto exp_avg_sq_scale_cpu = exp_avg_sq_scale.to(Device::CPU);
-        for (int i = 0; i < ROW_SIZE; ++i) {
-            EXPECT_EQ(std::bit_cast<std::uint32_t>(param_cpu.ptr<float>()[i]),
-                      std::bit_cast<std::uint32_t>(param_cpu.ptr<float>()[ROW_SIZE + i] * 0.1f));
-            EXPECT_EQ(exp_avg_q_cpu.ptr<std::uint8_t>()[i],
-                      exp_avg_q_cpu.ptr<std::uint8_t>()[ROW_SIZE + i]);
-            EXPECT_EQ(exp_avg_sq_q_cpu.ptr<std::uint8_t>()[i],
-                      exp_avg_sq_q_cpu.ptr<std::uint8_t>()[ROW_SIZE + i]);
-        }
-        EXPECT_EQ(std::bit_cast<std::uint32_t>(exp_avg_scale_cpu.ptr<float>()[0]),
-                  std::bit_cast<std::uint32_t>(exp_avg_scale_cpu.ptr<float>()[1]));
-        EXPECT_EQ(std::bit_cast<std::uint32_t>(exp_avg_sq_scale_cpu.ptr<float>()[0]),
-                  std::bit_cast<std::uint32_t>(exp_avg_sq_scale_cpu.ptr<float>()[1]));
-    }
-
-    INSTANTIATE_TEST_SUITE_P(
-        QuantizedLayouts,
-        FastGSFrozenAdamTest,
-        ::testing::Values(QuantizedAdamLayout::Contiguous, QuantizedAdamLayout::Swizzled),
-        [](const ::testing::TestParamInfo<QuantizedAdamLayout>& info) {
-            return info.param == QuantizedAdamLayout::Contiguous ? "Contiguous" : "Swizzled";
-        });
-} // namespace
-
 TEST(AdamCropDampingTest, SetterRequiresExactBooleanRowMaskAndCanClearIt) {
     if (!torch::cuda::is_available()) {
         GTEST_SKIP() << "CUDA not available";
@@ -1197,10 +818,9 @@ TEST(FastGSCropDampingTest, FusedBackwardZeroScaleSkipsContiguousAndSwizzledWrit
         result.opacity_delta =
             (splat.opacity_raw() - opacity_before).abs().sum().item<float>();
         result.shn_delta = (splat.shN() - shn_before).abs().sum().item<float>();
-        result.opacity_moment_scale =
-            adam_state(optimizer, ParamType::Opacity).exp_avg_scale.abs().sum().item<float>();
-        result.shn_moment_scale =
-            adam_state(optimizer, ParamType::ShN).exp_avg_scale.abs().sum().item<float>();
+        // Joint codec has no per-primitive moment scales — use decoded |m| L1.
+        result.opacity_moment_scale = first_moment_l1(optimizer, ParamType::Opacity);
+        result.shn_moment_scale = first_moment_l1(optimizer, ParamType::ShN);
         return result;
     };
 
@@ -1774,4 +1394,295 @@ TEST_F(FastGSDenseTileGradientTest, GradientDescent_DenseTile) {
     EXPECT_LT(loss_after, loss_before) << "Gradient descent should reduce loss";
     // Expect at least 10% reduction with 10 steps
     EXPECT_LT(loss_after, loss_before * 0.9f) << "Loss reduction too small - gradients may be wrong";
+}
+
+namespace {
+
+    // 1 LSB of (u, log_s) at the live block bounds, mapped through us_to_g1g2 at (0,0)+1LSB.
+    void joint_zero_decode_tol(const float* bb, const int bits, float& m_tol, float& v_tol) {
+        const float qmax = bits == 16 ? joint_adam::Codec16::kQMax : joint_adam::Codec8::kQMax;
+        const float du = (bb[1] - bb[0]) / qmax;
+        const float ds = (bb[3] - bb[2]) / qmax;
+        float m = 0.0f;
+        float v = 0.0f;
+        joint_adam::Codec16::us_to_g1g2(du, ds, m, v);
+        m_tol = std::max(std::abs(m) * 2.0f, 1e-6f);
+        v_tol = std::max(std::abs(v) * 2.0f, 1e-12f);
+    }
+
+    int64_t joint_sh_cell(const int p, const int k, const int c, const int slots) {
+        constexpr int R = 32;
+        const int slot = (p / R) * (slots * R) + k * R + (p % R);
+        return static_cast<int64_t>(slot) * 4 + c;
+    }
+
+    void fill_realistic_moments(std::vector<float>& m, std::vector<float>& v, const uint32_t seed) {
+        std::mt19937 rng(seed);
+        std::uniform_real_distribution<float> dm(-1e-3f, 1e-3f);
+        std::uniform_real_distribution<float> dv(1e-12f, 1e-4f);
+        for (size_t i = 0; i < m.size(); ++i) {
+            m[i] = dm(rng);
+            v[i] = dv(rng);
+        }
+    }
+
+    Tensor upload_u8(const std::vector<uint8_t>& host) {
+        auto t = Tensor::empty({host.size()}, Device::CPU, DataType::UInt8);
+        std::memcpy(t.ptr<uint8_t>(), host.data(), host.size());
+        return t.to(Device::CUDA);
+    }
+
+    Tensor upload_i64(const std::vector<int64_t>& host) {
+        auto t = Tensor::empty({host.size()}, Device::CPU, DataType::Int64);
+        std::memcpy(t.ptr<int64_t>(), host.data(), host.size() * sizeof(int64_t));
+        return t.to(Device::CUDA);
+    }
+
+    void expect_bounds_include_zero(const float* bb, const char* label) {
+        EXPECT_LE(bb[0], 0.0f) << label << " umin";
+        EXPECT_GE(bb[1], 0.0f) << label << " umax";
+        EXPECT_LE(bb[2], 0.0f) << label << " smin";
+        EXPECT_GE(bb[3], 0.0f) << label << " smax";
+    }
+
+    template <int BITS>
+    void expect_reset_cell_zero(const uint8_t* packed, const size_t cell, const float* bb,
+                                const char* label) {
+        float m = 0.0f;
+        float v = 0.0f;
+        joint_adam::Codec<BITS>::decode_g1g2(packed, cell, bb[0], bb[1], bb[2], bb[3], m, v);
+        float m_tol = 0.0f;
+        float v_tol = 0.0f;
+        joint_zero_decode_tol(bb, BITS, m_tol, v_tol);
+        EXPECT_NEAR(m, 0.0f, m_tol) << label << " cell=" << cell;
+        EXPECT_NEAR(v, 0.0f, v_tol) << label << " cell=" << cell;
+    }
+
+    template <int BITS>
+    void expect_live_cell_preserved(const uint8_t* packed, const size_t cell, const float* bb,
+                                    const float m0, const float v0, const char* label) {
+        float u0 = 0.0f;
+        float s0 = 0.0f;
+        joint_adam::Codec<BITS>::g1g2_to_us(m0, v0, u0, s0);
+        float u = 0.0f;
+        float s = 0.0f;
+        joint_adam::Codec<BITS>::decode_us(packed, cell, bb[0], bb[1], bb[2], bb[3], u, s);
+        const float qmax = joint_adam::Codec<BITS>::kQMax;
+        const float u_tol = 2.0f * (bb[1] - bb[0]) / qmax;
+        const float s_tol = 2.0f * (bb[3] - bb[2]) / qmax;
+        EXPECT_NEAR(u, u0, u_tol) << label << " cell=" << cell << " u";
+        EXPECT_NEAR(s, s0, s_tol) << label << " cell=" << cell << " log_s";
+    }
+
+} // namespace
+
+// fails when several threads re-encode the same 256-row block concurrently
+TEST(JointEncodeZero, Contiguous16BitMultiIndexSameBlock) {
+    constexpr int n_prims = 1024;
+    constexpr int n_attr = 3;
+    constexpr int bits = 16;
+    constexpr int kBS = joint_adam::kBlockSize;
+    const int n_blocks = static_cast<int>(joint_adam::n_bounds_for_prims(n_prims));
+    const int bpc = joint_adam::Codec16::kBytesPerCell;
+    const size_t n_cells = static_cast<size_t>(n_prims) * static_cast<size_t>(n_attr);
+
+    std::vector<float> m(n_cells);
+    std::vector<float> v(n_cells);
+    fill_realistic_moments(m, v, 20260816u);
+
+    std::vector<uint8_t> packed_h(n_cells * static_cast<size_t>(bpc), 0);
+    std::vector<float> bounds_h(static_cast<size_t>(n_blocks) * 4, 0.0f);
+    for (int b = 0; b < n_blocks; ++b) {
+        const int begin = b * kBS;
+        const int end = std::min(begin + kBS, n_prims);
+        const size_t n_block_cells = static_cast<size_t>(end - begin) * static_cast<size_t>(n_attr);
+        std::vector<float> g1(n_block_cells);
+        std::vector<float> g2(n_block_cells);
+        size_t t = 0;
+        for (int p = begin; p < end; ++p) {
+            for (int a = 0; a < n_attr; ++a) {
+                const size_t cell = static_cast<size_t>(p) * n_attr + static_cast<size_t>(a);
+                g1[t] = m[cell];
+                g2[t] = v[cell];
+                ++t;
+            }
+        }
+        float bb[4];
+        joint_adam::Codec16::reduce_bounds(g1.data(), g2.data(), n_block_cells, bb);
+        bounds_h[static_cast<size_t>(b) * 4 + 0] = bb[0];
+        bounds_h[static_cast<size_t>(b) * 4 + 1] = bb[1];
+        bounds_h[static_cast<size_t>(b) * 4 + 2] = bb[2];
+        bounds_h[static_cast<size_t>(b) * 4 + 3] = bb[3];
+        for (int p = begin; p < end; ++p) {
+            for (int a = 0; a < n_attr; ++a) {
+                const size_t cell = static_cast<size_t>(p) * n_attr + static_cast<size_t>(a);
+                joint_adam::Codec16::encode_g1g2(packed_h.data(), cell, m[cell], v[cell],
+                                                 bb[0], bb[1], bb[2], bb[3]);
+            }
+        }
+    }
+    const std::vector<uint8_t> packed_before = packed_h;
+    const std::vector<float> bounds_before = bounds_h;
+
+    std::vector<int64_t> indices;
+    indices.reserve(180);
+    for (int i = 0; i < 120; ++i)
+        indices.push_back(i);
+    for (int i = 0; i < 60; ++i)
+        indices.push_back(2 * kBS + i);
+    std::mt19937 shuf(424242u);
+    std::shuffle(indices.begin(), indices.end(), shuf);
+
+    auto packed = upload_u8(packed_h);
+    auto bounds = Tensor::from_vector(bounds_h,
+                                      {static_cast<size_t>(n_blocks), size_t{4}},
+                                      Device::CUDA);
+    auto idx = upload_i64(indices);
+
+    fast_lfs::optimizer::joint_encode_zero_rows_at_indices(
+        packed.ptr<uint8_t>(),
+        bounds.ptr<float>(),
+        idx.ptr<int64_t>(),
+        static_cast<int>(indices.size()),
+        n_attr,
+        bits,
+        n_prims,
+        nullptr);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    auto packed_cpu = packed.cpu();
+    auto bounds_cpu = bounds.cpu();
+    const auto* bytes = packed_cpu.ptr<uint8_t>();
+    const float* bb_all = bounds_cpu.ptr<float>();
+
+    const std::unordered_set<int64_t> reset(indices.begin(), indices.end());
+    for (int b : {0, 2}) {
+        const float* bb = bb_all + b * 4;
+        expect_bounds_include_zero(bb, "contiguous touched block");
+        const int begin = b * kBS;
+        const int end = begin + kBS;
+        for (int p = begin; p < end; ++p) {
+            for (int a = 0; a < n_attr; ++a) {
+                const size_t cell = static_cast<size_t>(p) * n_attr + static_cast<size_t>(a);
+                if (reset.count(p) != 0) {
+                    expect_reset_cell_zero<16>(bytes, cell, bb, "contiguous reset");
+                } else {
+                    expect_live_cell_preserved<16>(bytes, cell, bb, m[cell], v[cell],
+                                                   "contiguous live");
+                }
+            }
+        }
+    }
+
+    for (int b : {1, 3}) {
+        EXPECT_EQ(std::memcmp(bb_all + b * 4, bounds_before.data() + static_cast<size_t>(b) * 4,
+                              4 * sizeof(float)),
+                  0)
+            << "untouched bounds block " << b;
+        const size_t byte0 = static_cast<size_t>(b) * kBS * n_attr * static_cast<size_t>(bpc);
+        const size_t nbytes = static_cast<size_t>(kBS) * n_attr * static_cast<size_t>(bpc);
+        EXPECT_EQ(std::memcmp(bytes + byte0, packed_before.data() + byte0, nbytes), 0)
+            << "untouched packed block " << b;
+    }
+}
+
+// fails when several threads re-encode the same 256-row block concurrently
+TEST(JointEncodeZero, SwizzledShN8BitMultiIndexSameBlock) {
+    constexpr int n_prims = 512;
+    constexpr int slots = 2;
+    constexpr int bits = 8;
+    constexpr int kBS = joint_adam::kBlockSize;
+    const int n_blocks = static_cast<int>(joint_adam::n_bounds_for_prims(n_prims));
+    const int bpc = joint_adam::Codec8::kBytesPerCell;
+    const size_t n_cells = static_cast<size_t>(n_prims) * static_cast<size_t>(slots) * 4u;
+
+    std::vector<float> m(n_cells);
+    std::vector<float> v(n_cells);
+    fill_realistic_moments(m, v, 20260817u);
+
+    std::vector<uint8_t> packed_h(n_cells * static_cast<size_t>(bpc), 0);
+    std::vector<float> bounds_h(static_cast<size_t>(n_blocks) * 4, 0.0f);
+    for (int b = 0; b < n_blocks; ++b) {
+        const int begin = b * kBS;
+        const int end = std::min(begin + kBS, n_prims);
+        std::vector<float> g1;
+        std::vector<float> g2;
+        g1.reserve(static_cast<size_t>(end - begin) * slots * 4);
+        g2.reserve(g1.capacity());
+        for (int p = begin; p < end; ++p) {
+            for (int k = 0; k < slots; ++k) {
+                for (int c = 0; c < 4; ++c) {
+                    const size_t cell = static_cast<size_t>(joint_sh_cell(p, k, c, slots));
+                    g1.push_back(m[cell]);
+                    g2.push_back(v[cell]);
+                }
+            }
+        }
+        float bb[4];
+        joint_adam::Codec8::reduce_bounds(g1.data(), g2.data(), g1.size(), bb);
+        bounds_h[static_cast<size_t>(b) * 4 + 0] = bb[0];
+        bounds_h[static_cast<size_t>(b) * 4 + 1] = bb[1];
+        bounds_h[static_cast<size_t>(b) * 4 + 2] = bb[2];
+        bounds_h[static_cast<size_t>(b) * 4 + 3] = bb[3];
+        for (int p = begin; p < end; ++p) {
+            for (int k = 0; k < slots; ++k) {
+                for (int c = 0; c < 4; ++c) {
+                    const size_t cell = static_cast<size_t>(joint_sh_cell(p, k, c, slots));
+                    joint_adam::Codec8::encode_g1g2(packed_h.data(), cell, m[cell], v[cell],
+                                                    bb[0], bb[1], bb[2], bb[3]);
+                }
+            }
+        }
+    }
+
+    std::vector<int64_t> indices;
+    indices.reserve(120);
+    for (int i = 0; i < 100; ++i)
+        indices.push_back(i);
+    for (int i = 0; i < 20; ++i)
+        indices.push_back(kBS + i);
+    std::mt19937 shuf(434343u);
+    std::shuffle(indices.begin(), indices.end(), shuf);
+
+    auto packed = upload_u8(packed_h);
+    auto bounds = Tensor::from_vector(bounds_h,
+                                      {static_cast<size_t>(n_blocks), size_t{4}},
+                                      Device::CUDA);
+    auto idx = upload_i64(indices);
+
+    fast_lfs::optimizer::joint_encode_zero_shN_at_indices(
+        packed.ptr<uint8_t>(),
+        bounds.ptr<float>(),
+        idx.ptr<int64_t>(),
+        static_cast<int>(indices.size()),
+        slots,
+        bits,
+        n_prims,
+        nullptr);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    auto packed_cpu = packed.cpu();
+    auto bounds_cpu = bounds.cpu();
+    const auto* bytes = packed_cpu.ptr<uint8_t>();
+    const float* bb_all = bounds_cpu.ptr<float>();
+
+    const std::unordered_set<int64_t> reset(indices.begin(), indices.end());
+    for (int b : {0, 1}) {
+        const float* bb = bb_all + b * 4;
+        expect_bounds_include_zero(bb, "shN touched block");
+        const int begin = b * kBS;
+        const int end = begin + kBS;
+        for (int p = begin; p < end; ++p) {
+            for (int k = 0; k < slots; ++k) {
+                for (int c = 0; c < 4; ++c) {
+                    const size_t cell = static_cast<size_t>(joint_sh_cell(p, k, c, slots));
+                    if (reset.count(p) != 0) {
+                        expect_reset_cell_zero<8>(bytes, cell, bb, "shN reset");
+                    } else {
+                        expect_live_cell_preserved<8>(bytes, cell, bb, m[cell], v[cell], "shN live");
+                    }
+                }
+            }
+        }
+    }
 }

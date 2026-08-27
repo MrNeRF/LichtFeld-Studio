@@ -111,7 +111,6 @@ namespace lfs::app {
                     "training.resumed",
                     "training.completed",
                     "training.stopped",
-                    "checkpoint.saved",
                     "disk_space.save_failed",
                 });
             }

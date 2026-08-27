@@ -36,6 +36,12 @@ int main(int argc, char** argv) {
 
     const int result = RUN_ALL_TESTS();
 
+    // ordered GPU release (TLS caches, PPISP statics, mirror mults, …)
+    // then pool/arena/pinned shutdown while CUDA is still healthy. After that,
+    // do NOT return into C++ static/TLS destruction — those dtors re-enter
+    // freed pool storage / half-dead CUDA and produce SIGSEGV (exit 139) or
+    // host double-free (exit 134). Same contract as the app binary: teardown
+    // then process-terminate without running remaining static destructors.
     lfs::core::teardown_gpu_before_exit();
-    return result;
+    lfs::core::flush_and_exit(result);
 }

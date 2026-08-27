@@ -229,7 +229,7 @@ namespace lfs::core::prop {
         PropertyGroupBuilder& animatable_prop(AnimatableProperty<T> StructT::*member,
                                               const std::string& id,
                                               const std::string& name,
-                                              const T& default_val,
+                                              const T& /*default_val*/,
                                               const std::string& desc = "") {
             PropertyMeta meta;
             meta.id = id;

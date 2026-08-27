@@ -7,6 +7,10 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/provenance.hpp"
+#include "core/sh_value_quant.hpp"
+#include "core/sh_value_quant_kernels.hpp"
+#include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "io/error.hpp"
@@ -19,6 +23,9 @@
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <fstream>
@@ -86,7 +93,12 @@ namespace lfs::io {
         constexpr size_t VALIDATION_CANCEL_INTERVAL = 65536;
         constexpr size_t MAX_HEADER_BYTES = 1024 * 1024;
         constexpr float MIN_ROTATION_NORM_SQUARED = 1.0e-12f;
-        constexpr int MAX_DECODE_THREADS = 6;
+        constexpr float OPACITY_LOGIT_CLAMP = 20.0f;
+        // Load decode + save pack: cap below full HW concurrency to leave headroom
+        // for GPU driver / other workers, but allow more than the old 6-thread limit.
+        constexpr int MAX_DECODE_THREADS = 16;
+        constexpr size_t PLY_WRITE_IO_BUFFER_BYTES = 8 * 1024 * 1024;
+        constexpr size_t PLY_WRITE_PACK_CHUNK_VERTICES = 65536;
 
         // SIMD constants
         constexpr int SIMD_WIDTH = 8;
@@ -360,6 +372,7 @@ namespace lfs::io {
         size_t invalid_count = 0;
         size_t non_finite_value_count = 0;
         size_t zero_rotation_count = 0;
+        size_t repaired_opacity_count = 0;
 
         [[nodiscard]] size_t output_count(const size_t vertex_count) const {
             return valid_rows.empty() ? vertex_count : valid_rows.size();
@@ -533,8 +546,10 @@ namespace lfs::io {
             size_t line_len = line_end - line_start;
             lines_parsed++;
 
-            // Skip empty lines and comments
-            if (line_len == 0 || (line_len > 0 && line_start[0] == '#'))
+            // Skip empty lines and comments (# and spec PLY "comment" lines)
+            if (line_len == 0 || line_start[0] == '#')
+                continue;
+            if (line_len >= 7 && std::strncmp(line_start, "comment", 7) == 0)
                 continue;
 
             if (lines_parsed % 1000 == 0) {
@@ -785,6 +800,18 @@ namespace lfs::io {
         return value;
     }
 
+    [[nodiscard]] float repair_infinite_opacity_logit(
+        const float value,
+        size_t* const repair_count) {
+        if (std::isinf(value)) {
+            if (repair_count != nullptr) {
+                ++(*repair_count);
+            }
+            return std::copysign(ply_constants::OPACITY_LOGIT_CLAMP, value);
+        }
+        return value;
+    }
+
     [[nodiscard]] tbb::task_arena& ply_decode_arena() {
         static const int concurrency = std::max(
             1,
@@ -951,6 +978,15 @@ namespace lfs::io {
             }
             return value;
         };
+        const auto read_opacity = [&](const char* row, const size_t offset, bool& invalid) {
+            const float value = read_unaligned_float32(row + offset);
+            if (std::isnan(value)) {
+                invalid = true;
+                ++validation.non_finite_value_count;
+                return value;
+            }
+            return repair_infinite_opacity_logit(value, &validation.repaired_opacity_count);
+        };
 
         for (size_t i = 0; i < layout.vertex_count; ++i) {
             if ((i % ply_constants::VALIDATION_CANCEL_INTERVAL) == 0) {
@@ -965,7 +1001,7 @@ namespace lfs::io {
             (void)read_field(row, layout.pos_z_offset, invalid);
 
             if (layout.has_opacity()) {
-                (void)read_field(row, layout.opacity_offset, invalid);
+                (void)read_opacity(row, layout.opacity_offset, invalid);
             }
 
             if (layout.has_scaling()) {
@@ -1017,14 +1053,16 @@ namespace lfs::io {
             throw_ply_error(
                 lfs::ErrorCode::DataLoss,
                 std::format(
-                    "PLY contains no valid Gaussian splats after validation ({} invalid rows, {} non-finite values, {} zero-length rotations)",
+                    "PLY contains no valid Gaussian splats after validation ({} invalid rows, {} non-finite values, {} zero-length rotations, {} repaired opacity values)",
                     validation.invalid_count,
                     validation.non_finite_value_count,
-                    validation.zero_rotation_count),
+                    validation.zero_rotation_count,
+                    validation.repaired_opacity_count),
                 lfs::SmallFields{}
                     .add("invalid_rows", static_cast<std::int64_t>(validation.invalid_count))
                     .add("non_finite_values", static_cast<std::int64_t>(validation.non_finite_value_count))
                     .add("zero_rotations", static_cast<std::int64_t>(validation.zero_rotation_count))
+                    .add("repaired_opacity_values", static_cast<std::int64_t>(validation.repaired_opacity_count))
                     .add("vertex_count", static_cast<std::int64_t>(layout.vertex_count)));
         }
 
@@ -1248,7 +1286,8 @@ namespace lfs::io {
             const size_t row_capacity = capacity != 0
                                             ? capacity
                                             : (shape.rank() > 0 ? shape[0] : 0);
-            tensor = options.splat_tensor_allocator(shape, row_capacity, DataType::Float32, name);
+            tensor = options.splat_tensor_allocator(
+                shape, row_capacity, DataType::Float32, name);
         } else {
             tensor = Tensor::empty(shape, Device::CUDA, DataType::Float32);
         }
@@ -1344,6 +1383,20 @@ namespace lfs::io {
         const size_t stride = layout.vertex_stride;
         parallel_for_ply_rows(layout.vertex_count, rows, ply_constants::BLOCK_SIZE_LARGE, [&](const size_t output_row, const size_t source_row) {
             output[output_row] = read_unaligned_float32(vertex_data + source_row * stride + property_offset);
+        });
+    }
+
+    void extract_opacity_to_host(const char* vertex_data,
+                                 const FastPropertyLayout& layout,
+                                 const std::span<const size_t> rows,
+                                 float* output) {
+        if (!layout.has_opacity())
+            return;
+
+        const size_t stride = layout.vertex_stride;
+        parallel_for_ply_rows(layout.vertex_count, rows, ply_constants::BLOCK_SIZE_LARGE, [&](const size_t output_row, const size_t source_row) {
+            const float value = read_unaligned_float32(vertex_data + source_row * stride + layout.opacity_offset);
+            output[output_row] = repair_infinite_opacity_logit(value, nullptr);
         });
     }
 
@@ -1481,6 +1534,7 @@ namespace lfs::io {
         std::atomic<size_t> invalid_rows{0};
         std::atomic<size_t> non_finite_values{0};
         std::atomic<size_t> zero_rotations{0};
+        std::atomic<size_t> repaired_opacity{0};
 
         ply_decode_arena().execute([&] {
             tbb::parallel_for(
@@ -1492,6 +1546,7 @@ namespace lfs::io {
                     size_t local_invalid_rows = 0;
                     size_t local_non_finite_values = 0;
                     size_t local_zero_rotations = 0;
+                    size_t local_repaired_opacity = 0;
 
                     for (size_t row_index = range.begin(); row_index < range.end(); ++row_index) {
                         const char* const row = vertex_data + row_index * stride;
@@ -1509,13 +1564,25 @@ namespace lfs::io {
                             }
                             return value;
                         };
+                        const auto read_opacity = [&] {
+                            const float value =
+                                read_unaligned_float32(row + layout.opacity_offset);
+                            if (std::isnan(value)) {
+                                invalid = true;
+                                ++local_non_finite_values;
+                                return value;
+                            }
+                            return repair_infinite_opacity_logit(
+                                value,
+                                &local_repaired_opacity);
+                        };
 
                         host.means.ptr[row_index * 3 + 0] = read_field(layout.pos_x_offset);
                         host.means.ptr[row_index * 3 + 1] = read_field(layout.pos_y_offset);
                         host.means.ptr[row_index * 3 + 2] = read_field(layout.pos_z_offset);
 
                         host.opacity.ptr[row_index] = layout.has_opacity()
-                                                          ? read_field(layout.opacity_offset)
+                                                          ? read_opacity()
                                                           : 0.0f;
 
                         if (layout.has_scaling()) {
@@ -1598,6 +1665,8 @@ namespace lfs::io {
                     non_finite_values.fetch_add(local_non_finite_values,
                                                 std::memory_order_relaxed);
                     zero_rotations.fetch_add(local_zero_rotations, std::memory_order_relaxed);
+                    repaired_opacity.fetch_add(local_repaired_opacity,
+                                               std::memory_order_relaxed);
                 });
         });
 
@@ -1606,7 +1675,121 @@ namespace lfs::io {
             .invalid_count = invalid_rows.load(std::memory_order_relaxed),
             .non_finite_value_count = non_finite_values.load(std::memory_order_relaxed),
             .zero_rotation_count = zero_rotations.load(std::memory_order_relaxed),
+            .repaired_opacity_count = repaired_opacity.load(std::memory_order_relaxed),
         };
+    }
+
+    namespace {
+        constexpr std::size_t kDefaultPlyQ16BandPrims = std::size_t{1} << 20;
+        std::atomic<std::size_t> g_ply_q16_band_prims{kDefaultPlyQ16BandPrims};
+
+        [[nodiscard]] std::size_t ply_q16_band_prims() {
+            return g_ply_q16_band_prims.load(std::memory_order_relaxed);
+        }
+
+        [[noreturn]] void throw_cuda_ply(const cudaError_t status, const std::string_view what) {
+            throw_ply_error(
+                lfs::ErrorCode::ResourceExhausted,
+                std::format("PLY q16 encode failed ({}): {} ({})",
+                            what, cudaGetErrorName(status), cudaGetErrorString(status)),
+                {},
+                lfs::NativeError{
+                    .domain = lfs::ErrorDomain::CUDA,
+                    .code = static_cast<std::int64_t>(status),
+                    .name = cudaGetErrorName(status)});
+        }
+
+        struct CudaStreamOwner {
+            cudaStream_t stream = nullptr;
+
+            CudaStreamOwner() {
+                const cudaError_t status =
+                    cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+                if (status != cudaSuccess) {
+                    stream = nullptr;
+                    throw_cuda_ply(status, "cudaStreamCreateWithFlags");
+                }
+            }
+
+            ~CudaStreamOwner() {
+                if (stream) {
+                    (void)cudaStreamDestroy(stream);
+                }
+            }
+
+            CudaStreamOwner(const CudaStreamOwner&) = delete;
+            CudaStreamOwner& operator=(const CudaStreamOwner&) = delete;
+        };
+
+        void encode_host_shN_to_q16(const HostBuffer& host_shN,
+                                    Tensor& codes,
+                                    Tensor& bounds,
+                                    const size_t n_prims,
+                                    const std::uint32_t rest) {
+            if (n_prims == 0 || rest == 0) {
+                return;
+            }
+
+            const size_t band_prims = ply_q16_band_prims();
+            LFS_ASSERT_MSG(band_prims >= 256 && (band_prims % 256u) == 0,
+                           "PLY q16 band must be a multiple of 256");
+            const size_t staging_prims = std::min(band_prims, n_prims);
+            const size_t staging_floats =
+                lfs::core::sh_swizzled_float_count(staging_prims, rest);
+            CudaStreamOwner encode_stream;
+            const cudaStream_t stream = encode_stream.stream;
+            Tensor staging = Tensor::empty(
+                TensorShape({staging_floats}), Device::CUDA, DataType::Float32, false);
+            staging.set_name("ply.shN_q16_staging");
+
+            auto* const codes_u16 = static_cast<std::uint16_t*>(
+                lfs::core::resolve_exportable_device_ptr(codes));
+            auto* const bounds_f = static_cast<float*>(
+                lfs::core::resolve_exportable_device_ptr(bounds));
+            if (!codes_u16 || !bounds_f || staging.ptr<float>() == nullptr) {
+                throw_ply_error(lfs::ErrorCode::Internal,
+                                "PLY q16 encode missing device pointers");
+            }
+
+            for (size_t p0 = 0; p0 < n_prims; p0 += band_prims) {
+                const size_t n_band = std::min(band_prims, n_prims - p0);
+                const size_t src_off = lfs::core::sh_swizzled_float_count(p0, rest);
+                const size_t src_n = lfs::core::sh_swizzled_float_count(n_band, rest);
+                LFS_ASSERT_MSG(src_off + src_n <= host_shN.count,
+                               "PLY q16 band exceeds host shN staging");
+                const cudaError_t copy_status = cudaMemcpyAsync(
+                    staging.ptr<float>(),
+                    host_shN.ptr + src_off,
+                    src_n * sizeof(float),
+                    cudaMemcpyHostToDevice,
+                    stream);
+                if (copy_status != cudaSuccess) {
+                    throw_cuda_ply(copy_status, "cudaMemcpyAsync shN band");
+                }
+                lfs::core::sh_value_quant::encode_shN_float4_to_u16(
+                    staging.ptr<float>(),
+                    codes_u16 + lfs::core::sh_value_quant::sh_value_u16_count(p0, rest),
+                    bounds_f + lfs::core::sh_value_quant::n_bounds_for_prims(p0) * 2,
+                    n_band,
+                    rest,
+                    stream);
+            }
+
+            const cudaError_t sync_status = cudaStreamSynchronize(stream);
+            if (sync_status != cudaSuccess) {
+                throw_cuda_ply(sync_status, "cudaStreamSynchronize q16 encode");
+            }
+        }
+    } // namespace
+
+    void set_ply_q16_band_prims_for_tests(const std::size_t band_prims) {
+        if (band_prims == 0) {
+            g_ply_q16_band_prims.store(kDefaultPlyQ16BandPrims, std::memory_order_relaxed);
+            return;
+        }
+        LFS_ASSERT_MSG((band_prims % 256u) == 0,
+                       "PLY q16 test band must be a multiple of 256");
+        g_ply_q16_band_prims.store(band_prims, std::memory_order_relaxed);
     }
 
     // Main function - returns SplatData
@@ -1770,16 +1953,21 @@ namespace lfs::io {
                 LFS_ASSERT_MSG(
                     validation.invalid_count == fused_validation.invalid_count &&
                         validation.non_finite_value_count == fused_validation.non_finite_value_count &&
-                        validation.zero_rotation_count == fused_validation.zero_rotation_count,
+                        validation.zero_rotation_count == fused_validation.zero_rotation_count &&
+                        validation.repaired_opacity_count ==
+                            fused_validation.repaired_opacity_count,
                     std::format("PLY fused validation must match compaction validation "
                                 "(fused_invalid={}, compact_invalid={}, "
                                 "fused_non_finite={}, compact_non_finite={}, "
-                                "fused_zero_rotation={}, compact_zero_rotation={})",
+                                "fused_zero_rotation={}, compact_zero_rotation={}, "
+                                "fused_opacity_repairs={}, compact_opacity_repairs={})",
                                 fused_validation.invalid_count, validation.invalid_count,
                                 fused_validation.non_finite_value_count,
                                 validation.non_finite_value_count,
                                 fused_validation.zero_rotation_count,
-                                validation.zero_rotation_count));
+                                validation.zero_rotation_count,
+                                fused_validation.repaired_opacity_count,
+                                validation.repaired_opacity_count));
 
                 N = validation.output_count(layout.vertex_count);
                 // Do not hold the full-size fused staging allocation while creating
@@ -1821,8 +2009,8 @@ namespace lfs::io {
                 }
 
                 if (layout.has_opacity()) {
-                    extract_property_to_host(vertex_data, layout, rows_to_load,
-                                             layout.opacity_offset, host.opacity.ptr);
+                    extract_opacity_to_host(vertex_data, layout, rows_to_load,
+                                            host.opacity.ptr);
                 } else {
                     std::fill(host.opacity.ptr, host.opacity.ptr + host.opacity.count, 0.0f);
                 }
@@ -1871,6 +2059,19 @@ namespace lfs::io {
                                   .add("zero_rotations", static_cast<std::int64_t>(validation.zero_rotation_count)),
                 });
             }
+            if (validation.repaired_opacity_count > 0) {
+                warnings.push_back(Diagnostic{
+                    .code = lfs::ErrorCode::DataLoss,
+                    .message = std::format(
+                        "PLY validation repaired {} infinite opacity logit value(s) before import",
+                        validation.repaired_opacity_count),
+                    .fields = lfs::SmallFields{}
+                                  .add("repaired_opacity_values", static_cast<std::int64_t>(validation.repaired_opacity_count)),
+                });
+                LOG_WARN(
+                    "PLY validation repaired {} infinite opacity logit value(s) before import",
+                    validation.repaired_opacity_count);
+            }
             throw_if_load_cancel_requested(options, "PLY load cancelled");
             const auto decode_complete_at = std::chrono::steady_clock::now();
             LOG_INFO("Extracted {} Gaussians from PLY", N);
@@ -1881,6 +2082,12 @@ namespace lfs::io {
 
             LOG_DEBUG("Creating Tensor objects and uploading to CUDA");
 
+            const bool encode_shN_q16 =
+                options.shN_q16 &&
+                static_cast<bool>(options.splat_tensor_allocator) &&
+                layout_rest > 0 &&
+                host.shN_swizzled.count > 0;
+
             Tensor means = allocate_float_tensor(
                 host_span(host.means), {N, 3}, options, "SplatData.means");
             Tensor sh0 = allocate_float_tensor(
@@ -1888,12 +2095,31 @@ namespace lfs::io {
                 {N, static_cast<size_t>(sh0_dim1), static_cast<size_t>(sh0_dim2)},
                 options,
                 "SplatData.sh0");
-            Tensor shN = allocate_float_tensor(
-                host_span(host.shN_swizzled),
-                {host.shN_swizzled.count},
-                options,
-                "SplatData.shN",
-                host.shN_swizzled.count);
+            Tensor shN;
+            Tensor shN_bounds;
+            if (encode_shN_q16) {
+                const size_t cap = means.is_valid() ? std::max(means.capacity(), N) : N;
+                const size_t cells =
+                    lfs::core::sh_value_quant::sh_value_u16_count(cap, layout_rest);
+                const size_t bounds_n =
+                    lfs::core::sh_value_quant::n_bounds_for_prims(cap) * 2;
+                shN = options.splat_tensor_allocator(
+                    TensorShape({cells}), cells, DataType::Float16, "SplatData.shN");
+                shN.set_name("SplatData.shN");
+                shN_bounds = options.splat_tensor_allocator(
+                    TensorShape({bounds_n}),
+                    bounds_n,
+                    DataType::Float32,
+                    "SplatData.shN_value_bounds");
+                shN_bounds.set_name("SplatData.shN_value_bounds");
+            } else {
+                shN = allocate_float_tensor(
+                    host_span(host.shN_swizzled),
+                    {host.shN_swizzled.count},
+                    options,
+                    "SplatData.shN",
+                    host.shN_swizzled.count);
+            }
             Tensor scaling = allocate_float_tensor(
                 host_span(host.scaling), {N, 3}, options, "SplatData.scaling");
             Tensor rotation = allocate_float_tensor(
@@ -1904,11 +2130,17 @@ namespace lfs::io {
             CudaUploadBatch uploads(lfs::core::getCurrentCUDAStream());
             uploads.enqueue(means, host_span(host.means), "SplatData.means");
             uploads.enqueue(sh0, host_span(host.sh0), "SplatData.sh0");
-            uploads.enqueue(shN, host_span(host.shN_swizzled), "SplatData.shN");
+            if (!encode_shN_q16) {
+                uploads.enqueue(shN, host_span(host.shN_swizzled), "SplatData.shN");
+            }
             uploads.enqueue(scaling, host_span(host.scaling), "SplatData.scaling");
             uploads.enqueue(rotation, host_span(host.rotation), "SplatData.rotation");
             uploads.enqueue(opacity, host_span(host.opacity), "SplatData.opacity");
             uploads.wait();
+            if (encode_shN_q16) {
+                encode_host_shN_to_q16(
+                    host.shN_swizzled, shN, shN_bounds, N, layout_rest);
+            }
             const auto upload_complete_at = std::chrono::steady_clock::now();
 
             // Calculate SH degree
@@ -1925,6 +2157,9 @@ namespace lfs::io {
                 std::move(opacity),
                 ply_constants::SCENE_SCALE_FACTOR,
                 SplatData::ShNLayout::Swizzled);
+            if (encode_shN_q16) {
+                splat_data.set_active_sh_degree(sh_degree, std::move(shN_bounds));
+            }
 
             splat_data.set_tensor_allocator(options.splat_tensor_allocator);
 
@@ -2653,7 +2888,8 @@ namespace lfs::io {
         Result<void> write_ply_binary(const PointCloud& pc, const std::filesystem::path& output_path,
                                       bool binary = true,
                                       std::span<const PlyAttributeBlock> extra_attributes = {},
-                                      ExportProgressCallback progress_callback = nullptr) {
+                                      ExportProgressCallback progress_callback = nullptr,
+                                      const std::optional<core::ProvenanceStamp>& provenance = {}) {
             // Write using tinyply
             tinyply::PlyFile ply;
             const size_t N = pc.means.size(0);
@@ -2673,18 +2909,24 @@ namespace lfs::io {
                 attr_off += cols;
             };
 
-            append_builtin_block(pc.means.cpu().contiguous(), {"x", "y", "z"});
+            auto as_cpu_contiguous = [](const Tensor& tensor) -> Tensor {
+                if (tensor.device() == Device::CPU && tensor.is_contiguous())
+                    return tensor;
+                return tensor.cpu().contiguous();
+            };
+
+            append_builtin_block(as_cpu_contiguous(pc.means), {"x", "y", "z"});
 
             if (pc.normals.is_valid()) {
-                append_builtin_block(pc.normals.cpu().contiguous(), {"nx", "ny", "nz"});
+                append_builtin_block(as_cpu_contiguous(pc.normals), {"nx", "ny", "nz"});
             }
 
-            auto process_sh = [](const Tensor& sh) -> Tensor {
+            auto process_sh = [&](const Tensor& sh) -> Tensor {
                 if (sh.ndim() == 3) {
                     auto transposed = sh.transpose(1, 2).contiguous();
-                    return transposed.flatten(1).cpu().contiguous();
+                    return as_cpu_contiguous(transposed.flatten(1));
                 }
-                return sh.cpu().contiguous();
+                return as_cpu_contiguous(sh);
             };
 
             if (pc.sh0.is_valid()) {
@@ -2698,14 +2940,14 @@ namespace lfs::io {
                 append_builtin_block(std::move(t), make_indexed_names("f_rest_", cols));
             }
             if (pc.opacity.is_valid())
-                append_builtin_block(pc.opacity.cpu().contiguous(), {"opacity"});
+                append_builtin_block(as_cpu_contiguous(pc.opacity), {"opacity"});
             if (pc.scaling.is_valid()) {
-                auto t = pc.scaling.cpu().contiguous();
+                auto t = as_cpu_contiguous(pc.scaling);
                 const auto cols = static_cast<size_t>(t.size(1));
                 append_builtin_block(std::move(t), make_indexed_names("scale_", cols));
             }
             if (pc.rotation.is_valid()) {
-                auto t = pc.rotation.cpu().contiguous();
+                auto t = as_cpu_contiguous(pc.rotation);
                 const auto cols = static_cast<size_t>(t.size(1));
                 append_builtin_block(std::move(t), make_indexed_names("rot_", cols));
             }
@@ -2768,7 +3010,6 @@ namespace lfs::io {
                     tinyply::Type::INVALID, 0);
             }
 
-#ifndef NDEBUG
             const size_t expected_properties =
                 (colors_u8.is_valid() ? 3 : 0) +
                 std::accumulate(float_blocks.begin(), float_blocks.end(), size_t{0},
@@ -2778,12 +3019,233 @@ namespace lfs::io {
             const size_t expected_binary_stride =
                 (colors_u8.is_valid() ? 3 : 0) +
                 (expected_properties - (colors_u8.is_valid() ? 3 : 0)) * sizeof(float);
-#endif
 
             const auto temp_path = make_temp_output_path(output_path);
             ScopedTempOutputFile temp_file{temp_path};
 
+            // Fast binary path: parallel SoA→AoS pack + large buffered fwrite.
+            // tinyply is retained only for ASCII writes (!binary).
+            if (binary) {
+                struct FloatPackBlock {
+                    const float* data = nullptr;
+                    size_t cols = 0;
+                };
+
+                std::vector<FloatPackBlock> pack_blocks;
+                pack_blocks.reserve(float_blocks.size());
+                size_t floats_per_vertex = 0;
+                for (const auto& [t, attrs] : float_blocks) {
+                    (void)attrs;
+                    const size_t cols = static_cast<size_t>(t.size(1));
+                    pack_blocks.push_back(FloatPackBlock{t.ptr<float>(), cols});
+                    floats_per_vertex += cols;
+                }
+
+                const bool has_colors = colors_u8.is_valid();
+                const uint8_t* const colors_ptr =
+                    has_colors ? colors_u8.ptr<uint8_t>() : nullptr;
+                const size_t color_bytes = has_colors ? 3 : 0;
+                const size_t vertex_stride =
+                    color_bytes + floats_per_vertex * sizeof(float);
+                LFS_ASSERT_MSG(vertex_stride == expected_binary_stride,
+                               std::format("PLY pack stride mismatch: packed={} expected={}",
+                                           vertex_stride, expected_binary_stride));
+
+                // Header must match prior tinyply property order (format unchanged).
+                std::string header;
+                header.reserve(512 + expected_properties * 32);
+                header += "ply\nformat binary_little_endian 1.0\n";
+                if (provenance) {
+                    header += "comment lichtfeld_provenance ";
+                    header += core::provenance_to_json(*provenance);
+                    header += '\n';
+                }
+                header += std::format("element vertex {}\n", N);
+                if (has_colors) {
+                    header += "property uchar red\n"
+                              "property uchar green\n"
+                              "property uchar blue\n";
+                }
+                for (const auto& [t, attrs] : float_blocks) {
+                    (void)t;
+                    for (const auto& name : attrs) {
+                        header += "property float ";
+                        header += name;
+                        header += '\n';
+                    }
+                }
+                header += "end_header\n";
+
+                const size_t body_bytes = N * vertex_stride;
+                // Cap peak host RAM: full pack when body fits, else streaming chunks.
+                constexpr size_t kMaxFullBodyBytes = size_t{512} * 1024 * 1024;
+                const size_t pack_chunk_verts = std::max<size_t>(
+                    1, ply_constants::PLY_WRITE_PACK_CHUNK_VERTICES);
+
+#ifdef _WIN32
+                FILE* file = _wfopen(temp_path.wstring().c_str(), L"wb");
+#else
+                FILE* file = std::fopen(temp_path.c_str(), "wb");
+#endif
+                if (!file) {
+                    return make_error(ErrorCode::WRITE_FAILURE,
+                                      "Cannot open temporary file", temp_path);
+                }
+                // declare the stdio buffer BEFORE FileCloser so destruction order
+                // is fclose (via guard) first, then buffer free. Declaring the guard
+                // first made early cancel/error returns destroy the buffer while
+                // fclose still flushed through it (heap use-after-free).
+                std::vector<char> io_buffer(ply_constants::PLY_WRITE_IO_BUFFER_BYTES);
+                struct FileCloser {
+                    FILE* f = nullptr;
+                    ~FileCloser() {
+                        if (f)
+                            std::fclose(f);
+                    }
+                } file_guard{file};
+                std::setvbuf(file, io_buffer.data(), _IOFBF, io_buffer.size());
+
+                if (std::fwrite(header.data(), 1, header.size(), file) != header.size()) {
+                    return make_error(ErrorCode::WRITE_FAILURE, "Write failed", output_path);
+                }
+
+                size_t bytes_written = header.size();
+                size_t next_report_bytes = 16 * 1024 * 1024;
+                const auto report_progress = [&](const bool force) -> Result<void> {
+                    if (!progress_callback)
+                        return {};
+                    if (!force && bytes_written < next_report_bytes)
+                        return {};
+                    next_report_bytes = bytes_written + 16 * 1024 * 1024;
+                    const float ratio = force
+                                            ? 1.0f
+                                            : static_cast<float>(std::min(
+                                                  1.0,
+                                                  static_cast<double>(bytes_written) /
+                                                      static_cast<double>(std::max<size_t>(estimated_write_bytes, 1))));
+                    if (!progress_callback(ratio, "Writing PLY")) {
+                        return make_error(ErrorCode::CANCELLED,
+                                          "Export cancelled by user", output_path);
+                    }
+                    return {};
+                };
+
+                if (body_bytes <= kMaxFullBodyBytes && N > 0) {
+                    std::vector<uint8_t> body(body_bytes);
+                    ply_decode_arena().execute([&] {
+                        tbb::parallel_for(
+                            tbb::blocked_range<size_t>(0, N, pack_chunk_verts),
+                            [&](const tbb::blocked_range<size_t>& range) {
+                                for (size_t i = range.begin(); i < range.end(); ++i) {
+                                    uint8_t* dst = body.data() + i * vertex_stride;
+                                    size_t off = 0;
+                                    if (has_colors) {
+                                        std::memcpy(dst + off, colors_ptr + i * 3, 3);
+                                        off += 3;
+                                    }
+                                    for (const auto& blk : pack_blocks) {
+                                        const size_t nbytes = blk.cols * sizeof(float);
+                                        std::memcpy(dst + off, blk.data + i * blk.cols, nbytes);
+                                        off += nbytes;
+                                    }
+                                }
+                            });
+                    });
+
+                    constexpr size_t kWriteSlice = size_t{16} * 1024 * 1024;
+                    size_t offset = 0;
+                    while (offset < body_bytes) {
+                        const size_t chunk = std::min(kWriteSlice, body_bytes - offset);
+                        if (std::fwrite(body.data() + offset, 1, chunk, file) != chunk) {
+                            return make_error(ErrorCode::WRITE_FAILURE, "Write failed",
+                                              output_path);
+                        }
+                        offset += chunk;
+                        bytes_written += chunk;
+                        if (auto r = report_progress(false); !r)
+                            return r;
+                    }
+                } else if (N > 0) {
+                    // Streaming path for very large clouds: parallel pack per chunk.
+                    std::vector<uint8_t> chunk(pack_chunk_verts * vertex_stride);
+                    for (size_t begin = 0; begin < N; begin += pack_chunk_verts) {
+                        const size_t end = std::min(N, begin + pack_chunk_verts);
+                        const size_t count = end - begin;
+                        ply_decode_arena().execute([&] {
+                            tbb::parallel_for(
+                                tbb::blocked_range<size_t>(
+                                    begin, end, std::max<size_t>(1, pack_chunk_verts / 8)),
+                                [&](const tbb::blocked_range<size_t>& range) {
+                                    // Pack into chunk-local offsets.
+                                    for (size_t i = range.begin(); i < range.end(); ++i) {
+                                        uint8_t* dst =
+                                            chunk.data() + (i - begin) * vertex_stride;
+                                        size_t off = 0;
+                                        if (has_colors) {
+                                            std::memcpy(dst + off, colors_ptr + i * 3, 3);
+                                            off += 3;
+                                        }
+                                        for (const auto& blk : pack_blocks) {
+                                            const size_t nbytes = blk.cols * sizeof(float);
+                                            std::memcpy(dst + off, blk.data + i * blk.cols,
+                                                        nbytes);
+                                            off += nbytes;
+                                        }
+                                    }
+                                });
+                        });
+                        const size_t chunk_bytes = count * vertex_stride;
+                        if (std::fwrite(chunk.data(), 1, chunk_bytes, file) != chunk_bytes) {
+                            return make_error(ErrorCode::WRITE_FAILURE, "Write failed",
+                                              output_path);
+                        }
+                        bytes_written += chunk_bytes;
+                        if (auto r = report_progress(false); !r)
+                            return r;
+                    }
+                }
+
+                if (std::fflush(file) != 0) {
+                    return make_error(ErrorCode::WRITE_FAILURE, "Write failed", output_path);
+                }
+                if (auto r = report_progress(true); !r)
+                    return r;
+
+                if (std::fclose(file) != 0) {
+                    file_guard.f = nullptr;
+                    return make_error(ErrorCode::WRITE_FAILURE, "Write failed", output_path);
+                }
+                file_guard.f = nullptr;
+
+#ifndef NDEBUG
+                if (auto result = validate_written_ply_file(
+                        temp_path, binary, N, expected_properties, expected_binary_stride);
+                    !result) {
+                    return result;
+                }
+#endif
+
+                if (auto result = replace_output_file(temp_path, output_path); !result) {
+                    return std::unexpected(result.error());
+                }
+
+                temp_file.dismiss();
+                LOG_DEBUG("PLY fast write: {} verts, stride {} B, body {:.1f} MiB",
+                          N, vertex_stride, body_bytes / (1024.0 * 1024.0));
+                return {};
+            }
+
+            // ASCII path via tinyply (binary uses parallel-pack above).
+            if (provenance) {
+                ply.get_comments().push_back(
+                    "lichtfeld_provenance " + core::provenance_to_json(*provenance));
+            }
+
             std::filebuf fb;
+            // pubsetbuf before open — required for a portable large buffer.
+            std::vector<char> legacy_io_buffer(ply_constants::PLY_WRITE_IO_BUFFER_BYTES);
+            fb.pubsetbuf(legacy_io_buffer.data(),
+                         static_cast<std::streamsize>(legacy_io_buffer.size()));
 #ifdef _WIN32
             fb.open(temp_path.wstring(), std::ios::out | std::ios::binary);
 #else
@@ -3006,7 +3468,12 @@ namespace lfs::io {
         return attrs;
     }
 
-    Result<void> save_ply(const SplatData& splat_data, const PlySaveOptions& options) {
+    Result<void> save_ply(const SplatData& splat_data, const PlySaveOptions& options_in) {
+        PlySaveOptions options = options_in;
+        if (!options.provenance) {
+            options.provenance = core::make_minimal_provenance_stamp();
+        }
+
         if (!report_export_progress(options.progress_callback, 0.0f, "Preparing PLY"))
             return make_error(ErrorCode::CANCELLED, "Export cancelled by user", options.output_path);
 
@@ -3029,7 +3496,12 @@ namespace lfs::io {
         return save_ply(*pc, filtered_options);
     }
 
-    Result<void> save_ply(const PointCloud& point_cloud, const PlySaveOptions& options) {
+    Result<void> save_ply(const PointCloud& point_cloud, const PlySaveOptions& options_in) {
+        PlySaveOptions options = options_in;
+        if (!options.provenance) {
+            options.provenance = core::make_minimal_provenance_stamp();
+        }
+
         if (auto result = validate_point_cloud_for_ply_write(point_cloud, options.output_path); !result) {
             return result;
         }
@@ -3101,7 +3573,8 @@ namespace lfs::io {
                 std::async(std::launch::async, [pc = point_cloud, opts = options]() {
                     auto write_progress_callback = scale_export_progress(opts.progress_callback, 0.5f, 1.0f);
                     if (const auto result = write_ply_binary(
-                            pc, opts.output_path, opts.binary, opts.extra_attributes, write_progress_callback);
+                            pc, opts.output_path, opts.binary, opts.extra_attributes,
+                            write_progress_callback, opts.provenance);
                         !result) {
                         LOG_ERROR("PLY save failed: {}", result.error().format());
                     }
@@ -3112,7 +3585,8 @@ namespace lfs::io {
 
             auto write_progress_callback = scale_export_progress(options.progress_callback, 0.5f, 1.0f);
             if (const auto result = write_ply_binary(
-                    point_cloud, options.output_path, options.binary, options.extra_attributes, write_progress_callback);
+                    point_cloud, options.output_path, options.binary, options.extra_attributes,
+                    write_progress_callback, options.provenance);
                 !result) {
                 return std::unexpected(result.error());
             }

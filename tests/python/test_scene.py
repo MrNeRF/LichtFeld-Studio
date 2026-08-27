@@ -78,6 +78,18 @@ class TestSplatDataAfterLoad:
         # DC is (N, 1, 3) typically
         assert features_dc.shape[2] == 3
 
+    @pytest.mark.slow
+    def test_reserve_capacity_grows_plain_splat(self, loaded_splat):
+        """Plain (non-interop) SplatData can reserve extra capacity."""
+        n = loaded_splat.num_points
+        loaded_splat.reserve_capacity(n + 1024)
+        assert loaded_splat.num_points == n
+        assert loaded_splat.means_raw.shape[0] == n
+
+        # Renderer-backed (vulkan_external_buffer / splat.exportable) models
+        # must raise from Python. That assertion needs the GUI app and is
+        # skipped here.
+
 
 class TestTensorOperations:
     """Tests for tensor operations within scene context."""

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/failure_report.hpp"
+#include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "io/pipelined_image_loader.hpp"
 
@@ -15,6 +16,12 @@
 #include <set>
 #include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -40,8 +47,48 @@ namespace {
         return std::filesystem::path(TEST_DATA_DIR) / "bicycle/images_4/_DSC8744.JPG";
     }
 
+    std::uint64_t process_id() {
+#ifdef _WIN32
+        return static_cast<std::uint64_t>(_getpid());
+#else
+        return static_cast<std::uint64_t>(getpid());
+#endif
+    }
+
+    std::filesystem::path generated_mask_path() {
+        return std::filesystem::temp_directory_path() /
+               ("lfs_pipelined_loader_ledger_bicycle_mask_" +
+                std::to_string(process_id()) + ".png");
+    }
+
+    void create_generated_mask() {
+        const auto source = image_path();
+        ASSERT_TRUE(std::filesystem::is_regular_file(source)) << source;
+
+        auto [pixels, width, height, channels] = lfs::core::load_image(source);
+        const bool valid = pixels != nullptr && width > 0 && height > 0 && channels > 0;
+        ASSERT_TRUE(valid) << source;
+
+        lfs::core::Tensor mask = lfs::core::Tensor::empty(
+            {static_cast<size_t>(height), static_cast<size_t>(width), size_t{1}},
+            lfs::core::Device::CPU, lfs::core::DataType::UInt8);
+        auto* target = mask.ptr<uint8_t>();
+        for (size_t i = 0; i < static_cast<size_t>(width) * height; ++i) {
+            const size_t x = i % static_cast<size_t>(width);
+            target[i] = width > 1
+                            ? static_cast<uint8_t>((255u * x) /
+                                                   static_cast<size_t>(width - 1))
+                            : uint8_t{0};
+        }
+        lfs::core::free_image(pixels);
+
+        ASSERT_NO_THROW(lfs::core::save_image(generated_mask_path(), std::move(mask)));
+        ASSERT_TRUE(std::filesystem::is_regular_file(generated_mask_path()))
+            << generated_mask_path();
+    }
+
     std::filesystem::path mask_path() {
-        return std::filesystem::path(TEST_DATA_DIR) / "bicycle/masks/_DSC8744.png";
+        return generated_mask_path();
     }
 
     PipelinedLoaderConfig config() {
@@ -52,7 +99,6 @@ namespace {
         result.decoder_pool_size = 4;
         result.io_threads = 2;
         result.cold_process_threads = 2;
-        result.use_filesystem_cache = false;
         result.max_cache_bytes = 128ULL * 1024ULL * 1024ULL;
         return result;
     }
@@ -146,8 +192,18 @@ namespace {
 // (same requirement as PlyErrorTaxonomyTest).
 class PipelinedLoaderLedger : public ::testing::Test {
 protected:
+    static void SetUpTestSuite() {
+        create_generated_mask();
+    }
+
+    static void TearDownTestSuite() {
+        std::error_code ec;
+        std::filesystem::remove(generated_mask_path(), ec);
+    }
+
     void SetUp() override {
         lfs::core::reset_failure_report_dedup_for_testing();
+        ASSERT_TRUE(std::filesystem::is_regular_file(mask_path())) << mask_path();
     }
 };
 

@@ -14,12 +14,19 @@ namespace lfs::vis {
 
     class ViewportArtifactService;
 
+    enum class ViewportResizeRenderPolicy {
+        InteractivePreview,
+        FullResolution,
+    };
+
     class LFS_VIS_API ViewportFrameLifecycleService {
     public:
         struct ResizeResult {
             DirtyMask dirty = 0;
             bool completed = false;
-            bool render_interactive_frame = false;
+            bool render_resized_frame = false;
+            bool use_interactive_render_scale = false;
+            bool require_immediate_output_resize = false;
         };
 
         struct ModelChangeResult {
@@ -33,7 +40,9 @@ namespace lfs::vis {
         [[nodiscard]] DirtyMask requiredDirtyMask(bool has_viewport_output,
                                                   bool has_renderable_content,
                                                   SplitViewMode split_view_mode) const;
-        [[nodiscard]] DirtyMask setViewportResizeActive(bool active);
+        [[nodiscard]] DirtyMask setViewportResizeActive(
+            bool active,
+            ViewportResizeRenderPolicy render_policy = ViewportResizeRenderPolicy::InteractivePreview);
         [[nodiscard]] DirtyMask deferViewportRefresh();
         [[nodiscard]] bool hasPendingResizeSettle() const;
         [[nodiscard]] bool resizeSettleReady() const;
@@ -51,6 +60,8 @@ namespace lfs::vis {
         std::chrono::steady_clock::time_point last_training_render_{};
         std::chrono::steady_clock::time_point last_resize_change_{};
         std::atomic<bool> resize_active_{false};
+        std::atomic<ViewportResizeRenderPolicy> resize_render_policy_{
+            ViewportResizeRenderPolicy::InteractivePreview};
         bool resize_settle_pending_ = false;
     };
 

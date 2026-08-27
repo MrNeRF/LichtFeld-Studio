@@ -6,6 +6,7 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "core/exportable_storage.hpp"
 #include "gpu_object_census.hpp"
 #include "renderer_terminal_state.hpp"
 #include "rendering/vulkan_result.hpp"
@@ -121,12 +122,20 @@ namespace lfs::vis {
         struct ExternalBuffer {
             VkBuffer buffer = VK_NULL_HANDLE;
             VkDeviceMemory memory = VK_NULL_HANDLE;
+            std::vector<VkDeviceMemory> memories;
+            std::size_t bound_chunks = 0;
+            // Offsets already sparse-bound into this VkBuffer. grow() inserts
+            // per-region tails in the middle of ExportableBlock::chunks, so a
+            // prefix count is not a bound set.
+            std::vector<std::size_t> bound_chunk_offsets;
+            VkDeviceAddress device_address = 0;
             VkDeviceSize size = 0;
             VkDeviceSize allocation_size = 0;
             std::string diagnostic_scope;
             std::string diagnostic_label;
             ExternalNativeHandle native_handle = kInvalidExternalNativeHandle;
             bool census_counted = false;
+            bool sparse = false;
         };
 
         struct ExternalSemaphore {
@@ -190,7 +199,9 @@ namespace lfs::vis {
         [[nodiscard]] VkQueue graphicsQueue() const { return graphics_queue_; }
         [[nodiscard]] uint32_t graphicsQueueFamily() const { return graphics_queue_family_; }
         [[nodiscard]] VmaAllocator allocator() const { return allocator_; }
-        [[nodiscard]] std::size_t queryVmaUsedBytes() const;
+        [[nodiscard]] std::size_t queryVmaUsedBytes(
+            std::size_t additional_block_bytes = 0,
+            std::size_t additional_allocation_bytes = 0) const;
         [[nodiscard]] VkPipelineCache pipelineCache() const { return pipeline_cache_; }
         [[nodiscard]] VkFormat swapchainFormat() const { return swapchain_format_; }
         [[nodiscard]] VkFormat depthStencilFormat() const { return depth_stencil_format_; }
@@ -253,6 +264,11 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] bool beginFrame(const VkClearValue& clear_value, Frame& frame);
+        // Dynamic rendering must be closed while external-image layout barriers
+        // are recorded. These helpers bracket that interop window.
+        [[nodiscard]] bool finishActiveRendering(VkCommandBuffer command_buffer);
+        [[nodiscard]] bool restartActiveRendering(VkCommandBuffer command_buffer,
+                                                  const Frame& frame);
         [[nodiscard]] bool endFrame();
         [[nodiscard]] bool hasActiveFrame() const noexcept { return frame_active_; }
         [[nodiscard]] LFS_VIS_API std::expected<WindowCapture, std::string> captureAndEndActiveFrameRgba();
@@ -267,9 +283,6 @@ namespace lfs::vis {
         // Immediate vkQueueSubmit count for the current GUI frame (proof counter for #1575).
         // Accounting starts at resetImmediateSubmitsThisFrame (prepareFrame) and is logged
         // at endFrame; beginFrame must not clear it because prepare runs first.
-        [[nodiscard]] std::uint32_t immediateSubmitsThisFrame() const noexcept {
-            return immediate_submits_this_frame_;
-        }
         void resetImmediateSubmitsThisFrame() noexcept { immediate_submits_this_frame_ = 0; }
         // Highest serial S such that every graphics submit with serial <= S has
         // retired. Non-blocking (vkGetFenceStatus); serial-0 slots ignored.
@@ -289,9 +302,11 @@ namespace lfs::vis {
         [[nodiscard]] bool waitForRetiredFrameSubmitSerial(std::uint64_t serial);
         [[nodiscard]] bool waitForImmediateSubmits();
         [[nodiscard]] bool deviceWaitIdle();
-        // Returns false if the wait was rejected (frame inactive / mono violation);
-        // endFrame will refuse submit when any wait fails. Callers that commit
-        // layout optimistically must not do so on false (F2-2).
+        // Returns false if the wait was rejected (frame inactive / invalid edge);
+        // endFrame will refuse submit when any wait fails. A requested value that
+        // is already covered by a queued or submitted wait on the same semaphore
+        // is treated as already satisfied (success, no extra submit wait). Callers
+        // that commit layout optimistically must not do so on false.
         [[nodiscard]] bool addFrameTimelineWait(
             VkSemaphore semaphore,
             std::uint64_t value,
@@ -304,13 +319,7 @@ namespace lfs::vis {
                                                std::string_view diagnostic_label = {});
         void destroyExternalImage(ExternalImage& image);
         [[nodiscard]] ExternalNativeHandle releaseExternalImageNativeHandle(ExternalImage& image) const;
-        [[nodiscard]] bool createExternalBuffer(VkDeviceSize size,
-                                                VkBufferUsageFlags usage,
-                                                ExternalBuffer& out,
-                                                std::string_view diagnostic_scope = "vulkan.external.buffer",
-                                                std::string_view diagnostic_label = {});
         void destroyExternalBuffer(ExternalBuffer& buffer);
-        [[nodiscard]] ExternalNativeHandle releaseExternalBufferNativeHandle(ExternalBuffer& buffer) const;
         // Import a foreign-allocated external memory handle (e.g. from CUDA's
         // cuMemExportToShareableHandle) into Vulkan. The exporter retains ownership
         // of the handle; this method dup()'s on Linux and the imported VkDeviceMemory
@@ -325,6 +334,15 @@ namespace lfs::vis {
                                                 ExternalBuffer& out,
                                                 std::string_view diagnostic_scope = "vulkan.external.imported_buffer",
                                                 std::string_view diagnostic_label = {});
+        [[nodiscard]] bool importExportableBlock(const lfs::core::ExportableBlock& block,
+                                                 VkBufferUsageFlags usage,
+                                                 ExternalBuffer& out,
+                                                 std::string_view diagnostic_scope = "vulkan.external.imported_block",
+                                                 std::string_view diagnostic_label = {});
+        [[nodiscard]] bool bindNewChunks(ExternalBuffer& imported,
+                                         const lfs::core::ExportableBlock& block);
+        [[nodiscard]] bool sparseBindingEnabled() const { return sparse_binding_enabled_; }
+        [[nodiscard]] bool bufferDeviceAddressEnabled() const { return buffer_device_address_enabled_; }
         [[nodiscard]] bool createExternalTimelineSemaphore(
             std::uint64_t initial_value,
             ExternalSemaphore& out,
@@ -405,7 +423,6 @@ namespace lfs::vis {
         bool createDebugMessenger();
         bool createPipelineCache();
         bool recreateSwapchain();
-        bool finishActiveRendering(VkCommandBuffer command_buffer);
         void deferSwapchainResizeRecreate(bool requires_recreate = true,
                                           std::optional<bool> allow_headroom = std::nullopt);
         void requireSwapchainRecreateAfterOutOfDate();
@@ -500,7 +517,8 @@ namespace lfs::vis {
         std::vector<FrameTimelineWait> frame_timeline_waits_;
         bool frame_timeline_waits_valid_ = true;
         std::mutex timeline_value_tracker_mutex_;
-        std::unordered_map<VkSemaphore, std::uint64_t> last_frame_timeline_wait_values_;
+        std::unordered_map<VkSemaphore, lfs::rendering::FrameTimelineWaitCursor>
+            frame_timeline_wait_cursors_;
         std::unordered_map<VkSemaphore, std::uint64_t> last_immediate_timeline_wait_values_;
         std::unordered_map<VkSemaphore, std::uint64_t> last_immediate_timeline_signal_values_;
         // image_available_ is sized to swapchain image count (not framesInFlight). We must
@@ -551,6 +569,9 @@ namespace lfs::vis {
         bool external_memory_interop_enabled_ = false;
         bool external_semaphore_interop_enabled_ = false;
         bool external_memory_dedicated_allocation_enabled_ = false;
+        bool sparse_binding_enabled_ = false;
+        bool buffer_device_address_enabled_ = false;
+        std::mutex graphics_queue_mutex_;
         bool swapchain_maintenance1_enabled_ = false;
         bool swapchain_present_scaling_enabled_ = false;
         bool has_push_descriptor_ = false;

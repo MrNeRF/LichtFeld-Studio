@@ -10,6 +10,7 @@
 #include <istream>
 #include <ostream>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace lfs::training {
@@ -83,6 +84,12 @@ namespace lfs::training {
         /// Finalize registration and allocate tensors (must call after all register_frame calls)
         void finalize();
 
+        /// Write 0.5 * (ev - mean) into exposure_params_ for known UIDs. Moments unchanged.
+        void seed_exposure(const std::vector<std::pair<int, float>>& uid_ev);
+
+        /// Per-frame exposure in EV (same units as the optimiser).
+        [[nodiscard]] const lfs::core::Tensor& exposure_params() const { return exposure_params_; }
+
         /// Check if a frame UID is registered
         bool is_known_frame(int uid) const;
 
@@ -100,6 +107,12 @@ namespace lfs::training {
         /// @param uid Original frame UID (translated internally)
         lfs::core::Tensor apply(const lfs::core::Tensor& rgb, int camera_id, int uid,
                                 const PPISPRegion& region = {});
+
+        /// Same as apply(), but exposure comes from the argument instead of
+        /// exposure_params_[frame]. Camera-level vignetting/CRF come from camera_id;
+        /// per-frame colour is identity (held-out frames have no colour latent).
+        lfs::core::Tensor apply_with_exposure(const lfs::core::Tensor& rgb, int camera_id,
+                                              float exposure_ev, const PPISPRegion& region = {});
 
         /// Apply ISP with controller-predicted params (for novel view synthesis)
         /// @param rgb input image [C,H,W]
@@ -208,6 +221,10 @@ namespace lfs::training {
         int translate_camera(int camera_id) const;
         int translate_frame(int uid) const;
 
+        lfs::core::Tensor apply_forward(const lfs::core::Tensor& rgb, int camera_idx, int frame_idx,
+                                        const float* exposure, const float* color, int num_frames,
+                                        const PPISPRegion& region);
+
         void allocate_tensors();
         void init_color_pinv_block_diag();
 
@@ -238,6 +255,10 @@ namespace lfs::training {
         lfs::core::Tensor crf_exp_avg_;
         lfs::core::Tensor crf_exp_avg_sq_;
         lfs::core::Tensor crf_grad_;
+
+        // Scratch for apply_with_exposure: 1-element exposure + identity colour.
+        lfs::core::Tensor override_exposure_;
+        lfs::core::Tensor override_color_;
 
         // Scratch buffers for backward_with_controller_params (preallocated)
         lfs::core::Tensor ctrl_bwd_exposure_;

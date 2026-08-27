@@ -4,6 +4,7 @@
 #include "command_api.hpp"
 
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
@@ -129,6 +130,63 @@ namespace lfs::training {
         snapshot_.is_running = is_running;
         snapshot_.stop_requested = stop_requested;
         snapshot_.phase = phase;
+        if (ctx.trainer) {
+            snapshot_.session_hydrated = true;
+            if (ctx.trainer->isInitialized()) {
+                snapshot_.strategy = ctx.trainer->get_strategy().strategy_type();
+            }
+            const auto project =
+                ctx.trainer
+                    ->get_project_snapshot_metrics();
+            snapshot_.project_snapshot =
+                project.capture;
+            snapshot_.project_snapshot_path =
+                lfs::core::path_to_utf8(
+                    project.last_path);
+            snapshot_.project_snapshot_writer_error =
+                project.last_writer_error;
+            snapshot_.project_snapshot_pre_step_mean_ms =
+                project.pre_snapshot_step_mean_ms;
+            snapshot_.project_snapshot_post_step_mean_ms =
+                project.post_resume_step_mean_ms;
+            snapshot_
+                .project_snapshot_pre_step_first_iteration =
+                project
+                    .pre_snapshot_step_first_iteration;
+            snapshot_
+                .project_snapshot_pre_step_last_iteration =
+                project
+                    .pre_snapshot_step_last_iteration;
+            snapshot_
+                .project_snapshot_pre_step_samples =
+                project.pre_snapshot_step_samples;
+            snapshot_
+                .project_snapshot_post_step_first_iteration =
+                project
+                    .post_resume_step_first_iteration;
+            snapshot_
+                .project_snapshot_post_step_last_iteration =
+                project
+                    .post_resume_step_last_iteration;
+            snapshot_
+                .project_snapshot_step_regression_percent =
+                project
+                    .post_resume_step_regression_percent;
+            snapshot_
+                .project_snapshot_post_step_samples =
+                project.post_resume_step_samples;
+            snapshot_
+                .project_snapshot_step_regression_gate_evaluated =
+                project
+                    .step_regression_gate_evaluated;
+            snapshot_
+                .project_snapshot_step_regression_within_gate =
+                project
+                    .step_regression_within_gate;
+            snapshot_
+                .project_snapshot_writer_in_flight =
+                project.writer_in_flight;
+        }
 
         if (ctx.iteration > last_recorded_iteration_ && ctx.loss > 0.0f) {
             loss_history_.push_back({ctx.iteration, ctx.loss});
@@ -136,14 +194,29 @@ namespace lfs::training {
         }
     }
 
+    void CommandCenter::overlay_stored_session(std::string strategy, bool hydrated) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        snapshot_.strategy = std::move(strategy);
+        snapshot_.session_hydrated = hydrated;
+    }
+
+    void CommandCenter::reset_snapshot_locked() {
+        snapshot_ = {};
+        pending_commands_.clear();
+        phase_.store(TrainingPhase::Idle, std::memory_order_relaxed);
+    }
+
     void CommandCenter::clear_snapshot(const Trainer* trainer) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (snapshot_.trainer != trainer) {
             return;
         }
-        snapshot_ = {};
-        pending_commands_.clear();
-        phase_.store(TrainingPhase::Idle, std::memory_order_relaxed);
+        reset_snapshot_locked();
+    }
+
+    void CommandCenter::reset_snapshot() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        reset_snapshot_locked();
     }
 
     TrainingSnapshot CommandCenter::snapshot() const {
@@ -162,6 +235,16 @@ namespace lfs::training {
         std::lock_guard<std::mutex> lock(mutex_);
         loss_history_.clear();
         last_recorded_iteration_ = -1;
+    }
+
+    void CommandCenter::replace_loss_history(
+        std::vector<LossHistoryPoint> history) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        loss_history_ = std::move(history);
+        last_recorded_iteration_ =
+            loss_history_.empty()
+                ? -1
+                : loss_history_.back().iteration;
     }
 
     std::vector<OperationInfo> CommandCenter::operations(std::optional<CommandTarget> target) const {

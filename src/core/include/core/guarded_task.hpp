@@ -110,14 +110,14 @@ namespace lfs::core {
         // nullopt = no thread-affinity check. When set, run_guarded asserts
         // std::this_thread::get_id() == *expected_thread before invoking
         // body().
-        std::optional<std::thread::id> expected_thread;
+        std::optional<std::thread::id> expected_thread = {};
 
         // nullptr = run_guarded creates and owns a private TaskSettlement
         // for the duration of this one call (every single-shot call site in
         // this phase). Non-null = the caller (post_guarded_and_wait) shares
         // one TaskSettlement across two alternative run_guarded calls so
         // exactly one of them settles (spec Section 0.4).
-        std::shared_ptr<TaskSettlement> settlement;
+        std::shared_ptr<TaskSettlement> settlement = {};
     };
 
     template <class T>

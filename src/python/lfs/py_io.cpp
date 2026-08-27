@@ -18,14 +18,20 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/provenance.hpp"
 #include "core/splat_data.hpp"
+#include "core/user_paths.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
 #include "io/ply_export_internal.hpp"
+#include "io/project_chapters.hpp"
+#include "io/project_container.hpp"
+#include "io/project_document.hpp"
 #include "training/dataset.hpp"
 
 #include <filesystem>
 #include <format>
+#include <optional>
 
 namespace lfs::python {
 
@@ -177,6 +183,20 @@ namespace lfs::python {
             bool is_dataset() const { return !cameras.empty(); }
         };
 
+        struct PyProjectInspection {
+            std::string project_uuid;
+            std::string file_uuid;
+            std::string commit_uuid;
+            std::uint64_t generation = 0;
+            std::uint64_t created_at_unix_ns = 0;
+            std::uint64_t saved_at_unix_ns = 0;
+            std::uint64_t physical_file_size = 0;
+            io::project::ContainerRole role = io::project::ContainerRole::Master;
+            io::project::OpenState open_state = io::project::OpenState::HardFail;
+            bool has_preview = false;
+            std::string fallback_preview_path;
+        };
+
         core::Tensor tensor_from_python_attribute(const nb::handle& value) {
             if (nb::isinstance<PyTensor>(value)) {
                 return nb::cast<PyTensor>(value).tensor();
@@ -242,9 +262,265 @@ namespace lfs::python {
             return blocks;
         }
 
+        core::Uuid parse_reference_uuid(const std::string& value) {
+            const auto parsed = core::Uuid::from_string(value);
+            if (!parsed) {
+                throw_invalid_io_argument(std::format("Invalid reference UUID: {}", value));
+            }
+            return *parsed;
+        }
+
     } // namespace
 
     void register_io(nb::module_& m) {
+        namespace project = io::project;
+
+        nb::class_<project::Hash128>(m, "Hash128")
+            .def(nb::init<>())
+            .def_static(
+                "from_hex",
+                [](const std::string& value) {
+                    const auto parsed = project::Hash128::from_hex(value);
+                    if (!parsed) {
+                        throw_invalid_io_argument("Hash128 must contain exactly 32 hexadecimal characters");
+                    }
+                    return *parsed;
+                },
+                nb::arg("value"))
+            .def("to_hex", &project::Hash128::to_hex)
+            .def("__str__", &project::Hash128::to_hex);
+
+        nb::enum_<project::LocatorBase>(m, "LocatorBase")
+            .value("PROJECT", project::LocatorBase::Project)
+            .value("DATASET", project::LocatorBase::Dataset)
+            .value("ABSOLUTE", project::LocatorBase::Absolute)
+            .value("SEARCH_ROOT", project::LocatorBase::SearchRoot);
+
+        nb::class_<project::ReferenceLocator>(m, "ReferenceLocator")
+            .def(nb::init<>())
+            .def_rw("preferred", &project::ReferenceLocator::preferred)
+            .def_rw("base", &project::ReferenceLocator::base)
+            .def_rw("absolute_fallback", &project::ReferenceLocator::absolute_fallback);
+
+        nb::enum_<project::FingerprintKind>(m, "FingerprintKind")
+            .value("FILE", project::FingerprintKind::File)
+            .value("DIRECTORY", project::FingerprintKind::Directory);
+
+        nb::class_<project::ReferenceFingerprint>(m, "ReferenceFingerprint")
+            .def(nb::init<>())
+            .def_rw("kind", &project::ReferenceFingerprint::kind)
+            .def_rw("size", &project::ReferenceFingerprint::size)
+            .def_rw("mtime_unix_ns", &project::ReferenceFingerprint::mtime_unix_ns)
+            .def_rw("head_xxh3", &project::ReferenceFingerprint::head_xxh3)
+            .def_rw("tail_xxh3", &project::ReferenceFingerprint::tail_xxh3)
+            .def_rw("full_xxh3", &project::ReferenceFingerprint::full_xxh3);
+
+        nb::enum_<project::FingerprintDisposition>(m, "FingerprintDisposition")
+            .value("MATCH_FAST_PATH", project::FingerprintDisposition::MatchFastPath)
+            .value("MATCH_MTIME_REFRESHED", project::FingerprintDisposition::MatchMtimeRefreshed)
+            .value("MISSING", project::FingerprintDisposition::Missing)
+            .value("CONTENT_MISMATCH", project::FingerprintDisposition::ContentMismatch)
+            .value("TYPE_MISMATCH", project::FingerprintDisposition::TypeMismatch);
+
+        nb::class_<project::FingerprintCheck>(m, "FingerprintCheck")
+            .def_prop_ro("disposition", [](const project::FingerprintCheck& value) { return value.disposition; })
+            .def_prop_ro("observed", [](const project::FingerprintCheck& value) { return value.observed; })
+            .def_prop_ro("diagnostic", [](const project::FingerprintCheck& value) { return value.diagnostic; })
+            .def_prop_ro("matches", &project::FingerprintCheck::matches);
+
+        nb::class_<project::ReferenceRecord>(m, "ReferenceRecord")
+            .def(nb::init<>())
+            .def_prop_rw(
+                "uuid",
+                [](const project::ReferenceRecord& value) { return value.uuid.to_string(); },
+                [](project::ReferenceRecord& value, const std::string& uuid) { value.uuid = parse_reference_uuid(uuid); })
+            .def_rw("key", &project::ReferenceRecord::key)
+            .def_rw("kind", &project::ReferenceRecord::kind)
+            .def_rw("locator", &project::ReferenceRecord::locator)
+            .def_rw("fingerprint", &project::ReferenceRecord::fingerprint)
+            .def_rw("unresolved", &project::ReferenceRecord::unresolved);
+
+        nb::class_<project::ReferencesChapter>(m, "ReferencesChapter")
+            .def(nb::init<>())
+            .def_static(
+                "parse",
+                [](const std::string& value) { return unwrap(project::ReferencesChapter::parse(value)); },
+                nb::arg("value"))
+            .def(
+                "to_json",
+                [](const project::ReferencesChapter& value) {
+                    const auto bytes = value.to_bytes();
+                    return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+                })
+            .def("records", [](const project::ReferencesChapter& value) { return unwrap(value.records()); })
+            .def(
+                "find",
+                [](const project::ReferencesChapter& value, const std::string& uuid) {
+                    return unwrap(value.find(parse_reference_uuid(uuid)));
+                },
+                nb::arg("uuid"))
+            .def(
+                "upsert",
+                [](project::ReferencesChapter& value, const project::ReferenceRecord& record) {
+                    unwrap(value.upsert(record));
+                },
+                nb::arg("record"))
+            .def(
+                "remove",
+                [](project::ReferencesChapter& value, const std::string& uuid) {
+                    return unwrap(value.remove(parse_reference_uuid(uuid)));
+                },
+                nb::arg("uuid"))
+            .def(
+                "verify_and_refresh",
+                [](project::ReferencesChapter& value, const std::string& uuid,
+                   const std::filesystem::path& path) {
+                    const auto parsed = parse_reference_uuid(uuid);
+                    std::optional<lfs::Result<project::FingerprintCheck>> result;
+                    {
+                        nb::gil_scoped_release release;
+                        result = value.verify_and_refresh(parsed, path);
+                    }
+                    return unwrap(std::move(*result));
+                },
+                nb::arg("uuid"), nb::arg("path"))
+            .def(
+                "relink",
+                [](project::ReferencesChapter& value, const std::string& uuid,
+                   const project::ReferenceLocator& locator, const std::filesystem::path& path,
+                   const bool accept_content_change) {
+                    const auto parsed = parse_reference_uuid(uuid);
+                    lfs::Status result;
+                    {
+                        nb::gil_scoped_release release;
+                        result = value.relink(parsed, locator, path, accept_content_change);
+                    }
+                    unwrap(std::move(result));
+                },
+                nb::arg("uuid"), nb::arg("locator"), nb::arg("path"),
+                nb::arg("accept_content_change") = false);
+
+        m.def(
+            "fingerprint_path",
+            [](const std::filesystem::path& path, const bool include_full_hash) {
+                std::optional<lfs::Result<project::ReferenceFingerprint>> result;
+                {
+                    nb::gil_scoped_release release;
+                    result = project::fingerprint_path(path, include_full_hash);
+                }
+                return unwrap(std::move(*result));
+            },
+            nb::arg("path"), nb::arg("include_full_hash") = false,
+            "Fingerprint a file or directory for durable content identity.");
+
+        m.def(
+            "check_fingerprint",
+            [](const std::filesystem::path& path, const project::ReferenceFingerprint& expected) {
+                std::optional<lfs::Result<project::FingerprintCheck>> result;
+                {
+                    nb::gil_scoped_release release;
+                    result = project::check_fingerprint(path, expected);
+                }
+                return unwrap(std::move(*result));
+            },
+            nb::arg("path"), nb::arg("expected"),
+            "Compare a path with a previously stored content fingerprint.");
+
+        m.def(
+            "asset_library_dir",
+            []() {
+                return unwrap(core::UserPaths::resolve()).assetLibraryDir();
+            },
+            "Return the canonical user Asset Manager storage directory.");
+
+        nb::enum_<project::ContainerRole>(m, "ProjectContainerRole")
+            .value("MASTER", project::ContainerRole::Master)
+            .value("AUTOSAVE_SIDECAR", project::ContainerRole::AutosaveSidecar);
+
+        nb::enum_<project::OpenState>(m, "ProjectOpenState")
+            .value("OPEN", project::OpenState::Open)
+            .value("UNSUPPORTED_NEWER", project::OpenState::UnsupportedNewer)
+            .value("REPAIR_ONLY", project::OpenState::RepairOnly)
+            .value("HARD_FAIL", project::OpenState::HardFail);
+
+        nb::class_<PyProjectInspection>(m, "ProjectInspection")
+            .def_ro("project_uuid", &PyProjectInspection::project_uuid)
+            .def_ro("file_uuid", &PyProjectInspection::file_uuid)
+            .def_ro("commit_uuid", &PyProjectInspection::commit_uuid)
+            .def_ro("generation", &PyProjectInspection::generation)
+            .def_ro("created_at_unix_ns", &PyProjectInspection::created_at_unix_ns)
+            .def_ro("saved_at_unix_ns", &PyProjectInspection::saved_at_unix_ns)
+            .def_ro("physical_file_size", &PyProjectInspection::physical_file_size)
+            .def_ro("role", &PyProjectInspection::role)
+            .def_ro("open_state", &PyProjectInspection::open_state)
+            .def_ro("has_preview", &PyProjectInspection::has_preview)
+            .def_ro("fallback_preview_path", &PyProjectInspection::fallback_preview_path);
+
+        m.def(
+            "inspect_project",
+            [](const std::filesystem::path& path) {
+                project::ReaderOptions options;
+                options.allow_unsupported_inspection = true;
+                std::optional<lfs::Result<project::ProjectReader>> opened;
+                std::string fallback_preview_path;
+                {
+                    nb::gil_scoped_release release;
+                    opened = project::ProjectReader::open(path, options);
+                    if (opened && opened->has_value() &&
+                        !(**opened).preview().has_value()) {
+                        const auto& reader = **opened;
+                        const auto project_uuid =
+                            reader.superblock().project_uuid;
+                        const auto* proj = reader.find(
+                            project::FOURCC_PROJ, project_uuid);
+                        const auto* refs = reader.find(
+                            project::FOURCC_REFS, project_uuid);
+                        const auto* prms = reader.find(
+                            project::FOURCC_PRMS, project_uuid);
+                        if (proj && refs && prms) {
+                            auto proj_bytes = reader.read_chunk(*proj);
+                            auto refs_bytes = reader.read_chunk(*refs);
+                            auto prms_bytes = reader.read_chunk(*prms);
+                            if (proj_bytes && refs_bytes && prms_bytes) {
+                                auto project_chapter =
+                                    project::ProjectChapter::from_bytes(*proj_bytes);
+                                auto references_chapter =
+                                    project::ReferencesChapter::from_bytes(*refs_bytes);
+                                auto parameters_chapter =
+                                    project::ParametersChapter::from_bytes(*prms_bytes);
+                                if (project_chapter && references_chapter &&
+                                    parameters_chapter) {
+                                    if (const auto first =
+                                            project::first_dataset_image(
+                                                *project_chapter, *references_chapter,
+                                                *parameters_chapter,
+                                                reader.path().parent_path())) {
+                                        fallback_preview_path =
+                                            lfs::core::path_to_utf8(*first);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                auto reader = unwrap(std::move(*opened));
+                return PyProjectInspection{
+                    .project_uuid = reader.superblock().project_uuid.to_string(),
+                    .file_uuid = reader.superblock().file_uuid.to_string(),
+                    .commit_uuid = reader.commit().commit_uuid.to_string(),
+                    .generation = reader.commit().generation,
+                    .created_at_unix_ns = reader.superblock().creation_time_unix_ns,
+                    .saved_at_unix_ns = reader.commit().wallclock_unix_ns,
+                    .physical_file_size = reader.physical_file_size(),
+                    .role = reader.superblock().role,
+                    .open_state = reader.open_state(),
+                    .has_preview = reader.preview().has_value(),
+                    .fallback_preview_path = std::move(fallback_preview_path),
+                };
+            },
+            nb::arg("path"),
+            "Inspect validated .licht container metadata without reading project payloads.");
+
         nb::class_<PyLoadResult>(m, "LoadResult")
             .def_prop_ro("splat_data", &PyLoadResult::get_splat_data, "Loaded splat data, or None")
             .def_prop_ro(
@@ -332,11 +608,13 @@ namespace lfs::python {
         m.def(
             "save_ply",
             [](const PySplatData& data, const std::filesystem::path& path, bool binary,
-               nb::object progress, nb::object extra_attributes) {
+               nb::object progress, nb::object extra_attributes, bool include_provenance) {
                 io::PlySaveOptions options;
                 options.output_path = path;
                 options.binary = binary;
                 options.extra_attributes = parse_extra_ply_attributes(extra_attributes, path);
+                options.provenance = include_provenance ? core::make_provenance_stamp()
+                                                        : core::make_minimal_provenance_stamp();
 
                 if (progress && !progress.is_none()) {
                     PyExportProgressCallback py_progress{nb::cast<nb::object>(progress)};
@@ -351,32 +629,41 @@ namespace lfs::python {
             },
             nb::arg("data"), nb::arg("path"), nb::arg("binary") = true, nb::arg("progress") = nb::none(),
             nb::arg("extra_attributes") = nb::none(),
-            "Save splat data as PLY file with optional extra per-vertex float attributes");
+            nb::arg("include_provenance") = true,
+            "Save splat data as PLY file with optional extra per-vertex float attributes. "
+            "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.");
 
         m.def(
             "save_point_cloud_ply",
-            [](const PyPointCloud& pc, const std::filesystem::path& path, nb::object extra_attributes) {
+            [](const PyPointCloud& pc, const std::filesystem::path& path, nb::object extra_attributes,
+               bool include_provenance) {
                 if (!pc.data())
                     throw_invalid_io_argument("Point cloud data must not be null");
                 io::PlySaveOptions options;
                 options.output_path = path;
                 options.binary = true;
                 options.extra_attributes = parse_extra_ply_attributes(extra_attributes, path);
+                options.provenance = include_provenance ? core::make_provenance_stamp()
+                                                        : core::make_minimal_provenance_stamp();
                 auto result = io::save_ply(*pc.data(), options);
                 if (!result)
                     throw_io_error(result.error(), "Failed to save point cloud PLY");
             },
             nb::arg("point_cloud"), nb::arg("path"), nb::arg("extra_attributes") = nb::none(),
-            "Save a point cloud as PLY file (xyz + colors) with optional extra per-vertex float attributes");
+            nb::arg("include_provenance") = true,
+            "Save a point cloud as PLY file (xyz + colors) with optional extra per-vertex float attributes. "
+            "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.");
 
         m.def(
             "save_sog",
             [](const PySplatData& data, const std::filesystem::path& path, int kmeans_iterations, bool use_gpu,
-               nb::object progress) {
+               nb::object progress, bool include_provenance) {
                 io::SogSaveOptions options;
                 options.output_path = path;
                 options.kmeans_iterations = kmeans_iterations;
                 options.use_gpu = use_gpu;
+                options.provenance = include_provenance ? core::make_provenance_stamp()
+                                                        : core::make_minimal_provenance_stamp();
 
                 if (progress && !progress.is_none()) {
                     PyExportProgressCallback py_progress{nb::cast<nb::object>(progress)};
@@ -391,53 +678,72 @@ namespace lfs::python {
             },
             nb::arg("data"), nb::arg("path"), nb::arg("kmeans_iterations") = 10, nb::arg("use_gpu") = true,
             nb::arg("progress") = nb::none(),
-            "Save splat data as SOG compressed file");
+            nb::arg("include_provenance") = true,
+            "Save splat data as SOG compressed file. "
+            "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.");
 
         m.def(
             "save_spz",
-            [](const PySplatData& data, const std::filesystem::path& path) {
+            [](const PySplatData& data, const std::filesystem::path& path, int version, bool include_provenance) {
                 io::SpzSaveOptions options;
                 options.output_path = path;
+                options.version = version;
+                options.provenance = include_provenance ? core::make_provenance_stamp()
+                                                        : core::make_minimal_provenance_stamp();
 
                 auto result = io::save_spz(*data.data(), options);
                 if (!result)
                     throw_io_error(result.error(), "Failed to save SPZ");
             },
-            nb::arg("data"), nb::arg("path"),
-            "Save splat data as SPZ compressed file");
+            nb::arg("data"), nb::arg("path"), nb::arg("version") = 4,
+            nb::arg("include_provenance") = true,
+            "Save splat data as SPZ compressed file.\n\n"
+            "version: SPZ container version, 4 (zstd, default) or 3 (legacy gzip).\n"
+            "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded. Ignored for SPZ v3.");
 
         m.def(
             "save_usd",
-            [](const PySplatData& data, const std::filesystem::path& path) {
+            [](const PySplatData& data, const std::filesystem::path& path, bool include_provenance) {
                 io::UsdSaveOptions options;
                 options.output_path = path;
+                options.provenance = include_provenance ? core::make_provenance_stamp()
+                                                        : core::make_minimal_provenance_stamp();
 
                 auto result = io::save_usd(*data.data(), options);
                 if (!result)
                     throw_io_error(result.error(), "Failed to save USD");
             },
             nb::arg("data"), nb::arg("path"),
-            "Save splat data as OpenUSD gaussian file");
+            nb::arg("include_provenance") = true,
+            "Save splat data as OpenUSD gaussian file. "
+            "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.");
 
         m.def(
             "save_nurec_usdz",
-            [](const PySplatData& data, const std::filesystem::path& path) {
+            [](const PySplatData& data, const std::filesystem::path& path, bool include_provenance) {
                 io::NurecUsdzSaveOptions options;
                 options.output_path = path;
+                options.provenance = include_provenance ? core::make_provenance_stamp()
+                                                        : core::make_minimal_provenance_stamp();
 
                 auto result = io::save_nurec_usdz(*data.data(), options);
                 if (!result)
                     throw_io_error(result.error(), "Failed to save NuRec USDZ");
             },
             nb::arg("data"), nb::arg("path"),
-            "Save splat data as NuRec USDZ compatible with PLY_to_USD / Omniverse");
+            nb::arg("include_provenance") = true,
+            "Save splat data as NuRec USDZ compatible with PLY_to_USD / Omniverse. "
+            "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.");
 
         m.def(
             "export_html",
-            [](const PySplatData& data, const std::filesystem::path& path, int kmeans_iterations, nb::object progress) {
+            [](const PySplatData& data, const std::filesystem::path& path, int kmeans_iterations, nb::object progress,
+               bool include_provenance) {
                 io::HtmlExportOptions options;
                 options.output_path = path;
                 options.kmeans_iterations = kmeans_iterations;
+                options.provenance = include_provenance ? core::make_provenance_stamp()
+                                                        : core::make_minimal_provenance_stamp();
 
                 if (progress && !progress.is_none()) {
                     PyExportProgressCallback py_progress{nb::cast<nb::object>(progress)};
@@ -451,7 +757,9 @@ namespace lfs::python {
                     throw_io_error(result.error(), "Failed to export HTML");
             },
             nb::arg("data"), nb::arg("path"), nb::arg("kmeans_iterations") = 10, nb::arg("progress") = nb::none(),
-            "Export splat data as self-contained HTML viewer");
+            nb::arg("include_provenance") = true,
+            "Export splat data as self-contained HTML viewer. "
+            "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.");
 
         m.def(
             "is_dataset_path",
@@ -481,12 +789,17 @@ namespace lfs::python {
 
         m.def(
             "save_image",
-            [](const std::filesystem::path& path, const PyTensor& image) {
+            [](const std::filesystem::path& path, const PyTensor& image, bool include_provenance) {
                 auto t = image.tensor().contiguous().cpu();
-                core::save_image(path, std::move(t));
+                const auto comment = core::provenance_to_json(
+                    include_provenance ? core::make_provenance_stamp()
+                                       : core::make_minimal_provenance_stamp());
+                core::save_image(path, std::move(t), comment);
             },
             nb::arg("path"), nb::arg("image"),
-            "Save image tensor to file (PNG, JPG, TIFF, EXR). Accepts [H,W,C] or [C,H,W] float [0,1].");
+            nb::arg("include_provenance") = true,
+            "Save image tensor to file (PNG, JPG, TIFF, EXR). Accepts [H,W,C] or [C,H,W] float [0,1]. "
+            "include_provenance (default true) writes a full Comment stamp on PNG and JPEG; when false, a minimal build stamp is still embedded.");
     }
 
 } // namespace lfs::python

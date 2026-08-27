@@ -6,8 +6,7 @@ This scanner is deliberately lexical/regex-based and is NOT an AST checker. It
 masks comments and literals, then applies conservative source-text heuristics;
 inactive preprocessor branches are still visible and some expression shapes are
 intentionally under-counted to avoid false positives. A real AST-based
-``clang-tidy`` project check is a later phase described in
-``.codex_tmp/error-architecture-analysis.md`` section 5.12.
+``clang-tidy`` project check is a later phase.
 
 CUDA driver API calls (the lowercase ``cu*`` family) are outside Phase 0. CUDA
 status checking only recognizes bare CUDA runtime statements, and the
@@ -1027,8 +1026,6 @@ CUDA check can satisfy the launch window; and result-in-cu only recognizes
 .cu/.cuh extensions, not CMake LANGUAGE CUDA overrides. The intentional
 cudaGetLastError/cudaPeekAtLastError carve-out is never reported.
 
-See .codex_tmp/error-architecture-analysis.md section 5.12 for the full
-rationale and the later AST-based clang-tidy project-check plan.
 """
 
 

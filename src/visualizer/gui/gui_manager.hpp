@@ -7,8 +7,6 @@
 #include "core/error_bus.hpp"
 #include "core/events.hpp"
 #include "core/export.hpp"
-#include "core/parameters.hpp"
-#include "core/path_utils.hpp"
 #include "gui/async_task_manager.hpp"
 #include "gui/gizmo_manager.hpp"
 #include "gui/global_context_menu.hpp"
@@ -16,6 +14,7 @@
 #include "gui/panel_layout.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/panels/menu_bar.hpp"
+#include "gui/perf_sampler.hpp"
 #include "gui/rml_menu_bar.hpp"
 #include "gui/rml_modal_overlay.hpp"
 #include "gui/rml_right_panel.hpp"
@@ -24,6 +23,7 @@
 #include "gui/rml_toast_overlay.hpp"
 #include "gui/rml_viewport_overlay.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
+#include "gui/scene_tree_session.hpp"
 #include "gui/sequencer_ui_manager.hpp"
 #include "gui/sequencer_ui_state.hpp"
 #include "gui/startup_overlay.hpp"
@@ -36,30 +36,49 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <filesystem>
 #include <future>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <string>
-#include <thread>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 #include <vulkan/vulkan.h>
 
 struct SDL_Cursor;
 
-namespace lfs::core {
-    class Tensor;
-}
-
 namespace lfs::vis {
     class VisualizerImpl;
-    class VulkanContext;
     class WindowManager;
+    class VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
+    class VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
+    class VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
+    class VisualizerImplResetTest_RecoveredProjectSwitchDeletesTempOnlyAfterReplacement_Test;
+    class VisualizerImplResetTest_FailedNewProjectKeepsRecoveredSessionTemp_Test;
+    class VisualizerImplResetTest_RecoveredCloseDeletesTempAfterDocumentTeardown_Test;
+    class VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
+    class VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
+    class VisualizerImplResetTest_UiVisibilityWaitsForMatchingFrame_Test;
+    class VisualizerImplResetTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
+    class VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
+    class VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
+    class VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
+    class VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
+    class VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
+    class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
+    class VisualizerImplResetTest_StartupPrunesOlderUnlockedScratchFilesAfterOffer_Test;
+    class VisualizerImplResetTest_StartupScansLegacyRecoveryDirectory_Test;
+    class VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;
+    class VisualizerImplResetTest_RecoverLegacyScratchThenSaveAsRemovesLegacyFile_Test;
 
     namespace gui {
+        class NativeScenePanel;
+
+        LFS_VIS_API void openPreferencesPanel(std::string section = {});
+        [[nodiscard]] LFS_VIS_API std::string consumePreferencesSectionRequest();
+
         struct GuiHitTestResult {
             bool blocks_pointer = false;
             bool blocks_mouse_button = false;
@@ -80,6 +99,9 @@ namespace lfs::vis {
             // Lifecycle
             void init();
             void shutdown();
+            // Drop viewport-pass GPU objects (descriptor sets that sample external
+            // scene image views) while the Vulkan context is still alive.
+            void shutdownVulkanViewportPass();
             void render();
             void updateInteractiveTransitions();
             [[nodiscard]] bool isInteractiveTransitionSettling() const;
@@ -91,6 +113,10 @@ namespace lfs::vis {
             [[nodiscard]] AsyncTaskManager& asyncTasks() { return async_tasks_; }
             [[nodiscard]] const AsyncTaskManager& asyncTasks() const { return async_tasks_; }
             void enqueueModal(lfs::core::ModalRequest request);
+            [[nodiscard]] RmlModalOverlay* modalOverlay() { return rml_modal_overlay_.get(); }
+            [[nodiscard]] const RmlModalOverlay* modalOverlay() const {
+                return rml_modal_overlay_.get();
+            }
             void enqueueToast(ToastRequest request);
             [[nodiscard]] GizmoManager& gizmo() { return gizmo_manager_; }
             [[nodiscard]] const GizmoManager& gizmo() const { return gizmo_manager_; }
@@ -100,6 +126,9 @@ namespace lfs::vis {
 
             // State queries
             bool needsAnimationFrame() const;
+            // Min finite scheduled GUI animation/update delay (seconds). Used by the
+            // idle wait path so CSS transitions / timers wake on time without spinning.
+            [[nodiscard]] std::optional<double> secondsUntilNextAnimationFrame() const;
             [[nodiscard]] bool isViewportExportLocked() const;
 
             // Window visibility
@@ -108,6 +137,9 @@ namespace lfs::vis {
             // Viewport region access
             glm::vec2 getViewportPos() const;
             glm::vec2 getViewportSize() const;
+            glm::vec2 getSceneRenderViewportPos() const;
+            glm::vec2 getSceneRenderViewportSize() const;
+            void commitUiVisibilityTransitionIfFrameReady(bool frame_ready);
             bool isViewportFocused() const;
             bool isPositionInViewport(double x, double y) const;
             bool isPositionOverFloatingPanel(double x, double y) const;
@@ -127,8 +159,30 @@ namespace lfs::vis {
 
             [[nodiscard]] VisualizerImpl* getViewer() const { return viewer_; }
             [[nodiscard]] std::unordered_map<std::string, bool>* getWindowStates() { return &window_states_; }
+            [[nodiscard]] const std::unordered_map<std::string, bool>&
+            getWindowStates() const {
+                return window_states_;
+            }
+            [[nodiscard]] std::string scenePanelActiveTab() const;
+            void setScenePanelActiveTab(std::string_view tab);
+            [[nodiscard]] bool selectAllSceneNodesIfFocused();
+            [[nodiscard]] bool toggleSceneSelectionVisibilityIfFocused();
+            [[nodiscard]] bool toggleSceneSelectionTrainingIfFocused();
+            [[nodiscard]] bool requestDeleteSceneSelectionIfAvailable();
+            [[nodiscard]] SceneTreeSessionChrome captureSceneTreeChrome(
+                const lfs::core::Scene& scene) const;
+            void applySceneTreeChrome(const SceneTreeSessionChrome& chrome);
+            void resetSceneTreeChrome();
+            [[nodiscard]] float tabStripScroll() const;
+            void setTabStripScroll(float value);
 
-            void requestExitConfirmation();
+            void requestExitConfirmation(
+                bool training_in_progress = false);
+            void openPreferences();
+            [[nodiscard]] std::expected<void, std::string> resetLayout();
+            [[nodiscard]] std::expected<void, std::string> resetWindowState();
+            void dismissExitConfirmation();
+            void noteExitPopupMirror(bool open);
             bool isExitConfirmationPending() const;
 
             bool isCapturingInput() const;
@@ -136,6 +190,7 @@ namespace lfs::vis {
             [[nodiscard]] bool passiveMouseMoveNeedsRender(float mouse_x, float mouse_y) const;
             [[nodiscard]] std::optional<double> secondsUntilTooltipReveal() const;
             [[nodiscard]] bool isStartupVisible() const { return startup_overlay_.isVisible(); }
+            void dismissStartupOverlay() { startup_overlay_.dismiss(); }
             [[nodiscard]] bool isStartupBlockingInput() const {
                 return startup_overlay_.blocksUnderlayInput();
             }
@@ -165,6 +220,26 @@ namespace lfs::vis {
             void renderViewportDecorations();
 
         private:
+            friend class lfs::vis::VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
+            friend class lfs::vis::VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
+            friend class lfs::vis::VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
+            friend class lfs::vis::VisualizerImplResetTest_RecoveredProjectSwitchDeletesTempOnlyAfterReplacement_Test;
+            friend class lfs::vis::VisualizerImplResetTest_FailedNewProjectKeepsRecoveredSessionTemp_Test;
+            friend class lfs::vis::VisualizerImplResetTest_RecoveredCloseDeletesTempAfterDocumentTeardown_Test;
+            friend class lfs::vis::VisualizerImplResetTest_StartupOffersRecoveryAfterUncleanShutdown_Test;
+            friend class lfs::vis::VisualizerImplResetTest_StartupWithCleanLastSessionLeavesBlankSession_Test;
+            friend class lfs::vis::VisualizerImplResetTest_UiVisibilityWaitsForMatchingFrame_Test;
+            friend class lfs::vis::VisualizerImplResetTest_UiVisibilityTimeoutCommitsRequestedLayout_Test;
+            friend class lfs::vis::VisualizerImplResetTest_RecoveryDismissalPersistsAndNewerCandidateIsOffered_Test;
+            friend class lfs::vis::VisualizerImplResetTest_RecoverThenCleanQuitDoesNotReoffer_Test;
+            friend class lfs::vis::VisualizerImplResetTest_RecoverThenDiscardExitRemovesMasterSidecar_Test;
+            friend class lfs::vis::VisualizerImplResetTest_RecoverThenCrashStillOffersRecovery_Test;
+            friend class lfs::vis::VisualizerImplResetTest_StartupOffersScratchRecoveryAsUntitled_Test;
+            friend class lfs::vis::VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
+            friend class lfs::vis::VisualizerImplResetTest_StartupPrunesOlderUnlockedScratchFilesAfterOffer_Test;
+            friend class lfs::vis::VisualizerImplResetTest_StartupScansLegacyRecoveryDirectory_Test;
+            friend class lfs::vis::VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;
+            friend class lfs::vis::VisualizerImplResetTest_RecoverLegacyScratchThenSaveAsRemovesLegacyFile_Test;
             [[nodiscard]] bool isPositionOverRightPanelResizeEdge(double x, double y) const;
             [[nodiscard]] VulkanViewportPassParams buildVulkanViewportParams(VkExtent2D extent,
                                                                              std::size_t frame_slot) const;
@@ -203,6 +278,7 @@ namespace lfs::vis {
 
             [[nodiscard]] bool isVramHudOverlayVisible() const;
             [[nodiscard]] bool isVramHudPublishDue(std::chrono::steady_clock::time_point now) const;
+            [[nodiscard]] PanelAnimationVisibility panelAnimationVisibility() const;
             [[nodiscard]] bool drainVulkanFramesForInteractiveTransition(
                 lfs::vis::WindowManager& window_manager,
                 const char* transition_name);
@@ -213,10 +289,15 @@ namespace lfs::vis {
             void queueUiVisibilityToggle();
             void requestUiVisibilityToggle();
             void updateUiVisibilityTransition();
+            void commitUiVisibilityTransition(bool matched_frame);
             void queueFullscreenToggle();
             void requestFullscreenToggle();
             void updateFullscreenTransition();
-            void beginInteractiveTransitionGuard();
+            enum class InteractiveTransitionTrainingPolicy {
+                KeepRunning,
+                PauseAndResume,
+            };
+            void beginInteractiveTransitionGuard(InteractiveTransitionTrainingPolicy training_policy);
             void updateInteractiveTransitionGuard();
             void endInteractiveTransitionGuard();
 
@@ -247,11 +328,19 @@ namespace lfs::vis {
             // UI state only
             std::unordered_map<std::string, bool> window_states_;
             bool show_main_panel_ = true;
-            bool show_vram_hud_ = true;
+            bool show_vram_hud_ = false;
+            bool perf_hud_expanded_ = true;
             bool vram_hud_visible_published_ = false;
+            bool perf_hud_visible_published_ = false;
             std::chrono::steady_clock::time_point next_vram_hud_publish_{};
+            PerfSampler perf_sampler_;
             std::chrono::steady_clock::time_point ui_toggle_next_allowed_at_{};
             bool ui_toggle_pending_ = false;
+            bool ui_visibility_resize_active_ = false;
+            bool ui_visibility_layout_committed_ = false;
+            bool ui_visibility_target_ready_ = false;
+            bool ui_visibility_target_hidden_ = false;
+            ViewportLayout ui_visibility_target_layout_{};
             std::chrono::steady_clock::time_point fullscreen_toggle_next_allowed_at_{};
             std::chrono::steady_clock::time_point interactive_transition_guard_until_{};
             bool fullscreen_toggle_pending_ = false;
@@ -267,6 +356,8 @@ namespace lfs::vis {
             ViewportLayout viewport_layout_;
             float menu_toolbar_right_edge_ = 0.0f;
             bool force_exit_ = false;
+            bool exit_confirmation_requested_ = false;
+            bool exit_confirmation_dismissed_ = false;
 
             std::unique_ptr<MenuBar> menu_bar_;
 
@@ -321,6 +412,8 @@ namespace lfs::vis {
 
             // Native panel wrapper storage (registered with PanelRegistry)
             std::vector<std::shared_ptr<IPanel>> native_panel_storage_;
+            std::shared_ptr<NativeScenePanel> native_scene_panel_;
+            SceneTreeSessionChrome pending_scene_tree_chrome_;
             uint64_t panel_frame_serial_ = 0;
             uint8_t ui_layout_settle_frames_ = 0;
             EditorContextUpdateStamp last_editor_context_update_stamp_;

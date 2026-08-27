@@ -5,8 +5,10 @@
 #include "core/device_fault.hpp"
 #include "internal/cub_workspace.hpp"
 #include "internal/cuda_memory_guard.hpp"
+#include "internal/gpu_config.hpp"
 #include "internal/tensor_functors.hpp"
 #include "internal/tensor_ops.hpp"
+#include "internal/tensor_vectorized_ops.cuh"
 #include <cfloat>
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>
@@ -61,7 +63,7 @@ namespace lfs::core::tensor_ops {
             auto mask_ptr = thrust::device_pointer_cast(mask);
             auto begin = thrust::make_zip_iterator(thrust::make_tuple(data_ptr, mask_ptr));
             auto end = thrust::make_zip_iterator(thrust::make_tuple(data_ptr + n, mask_ptr + n));
-            thrust::transform(thrust::cuda::par.on(stream), begin, end, data_ptr,
+            thrust::transform(thrust::cuda::par_nosync.on(stream), begin, end, data_ptr,
                               ops::masked_fill_op<T>(val));
         }
 
@@ -195,21 +197,21 @@ namespace lfs::core::tensor_ops {
     void launch_compare_scalar_eq(const float* a, float val, unsigned char* r, size_t n, cudaStream_t s) {
         auto a_ptr = thrust::device_pointer_cast(a);
         auto r_ptr = thrust::device_pointer_cast(r);
-        thrust::transform(thrust::cuda::par.on(s), a_ptr, a_ptr + n, r_ptr,
+        thrust::transform(thrust::cuda::par_nosync.on(s), a_ptr, a_ptr + n, r_ptr,
                           ops::equal_scalar_op<float>(val));
     }
 
     void launch_compare_scalar_lt(const float* a, float val, unsigned char* r, size_t n, cudaStream_t s) {
         auto a_ptr = thrust::device_pointer_cast(a);
         auto r_ptr = thrust::device_pointer_cast(r);
-        thrust::transform(thrust::cuda::par.on(s), a_ptr, a_ptr + n, r_ptr,
+        thrust::transform(thrust::cuda::par_nosync.on(s), a_ptr, a_ptr + n, r_ptr,
                           ops::less_scalar_op<float>(val));
     }
 
     void launch_compare_scalar_gt(const float* a, float val, unsigned char* r, size_t n, cudaStream_t s) {
         auto a_ptr = thrust::device_pointer_cast(a);
         auto r_ptr = thrust::device_pointer_cast(r);
-        thrust::transform(thrust::cuda::par.on(s), a_ptr, a_ptr + n, r_ptr,
+        thrust::transform(thrust::cuda::par_nosync.on(s), a_ptr, a_ptr + n, r_ptr,
                           ops::greater_scalar_op<float>(val));
     }
 
@@ -292,8 +294,22 @@ namespace lfs::core::tensor_ops {
     void launch_logical_not(const unsigned char* a, unsigned char* r, size_t n, cudaStream_t s) {
         auto a_ptr = thrust::device_pointer_cast(a);
         auto r_ptr = thrust::device_pointer_cast(r);
-        thrust::transform(thrust::cuda::par.on(s), a_ptr, a_ptr + n, r_ptr,
+        thrust::transform(thrust::cuda::par_nosync.on(s), a_ptr, a_ptr + n, r_ptr,
                           ops::logical_not_op());
+    }
+
+    // Same-shape contiguous compares: float4 vectorized path when 16B-aligned.
+    template <typename Op>
+    inline bool try_launch_vectorized_compare(const float* a, const float* b, unsigned char* c,
+                                              size_t n, Op op, cudaStream_t stream) {
+        const bool a_aligned = (reinterpret_cast<uintptr_t>(a) % 16) == 0;
+        const bool b_aligned = (reinterpret_cast<uintptr_t>(b) % 16) == 0;
+        const bool c_aligned = (reinterpret_cast<uintptr_t>(c) % 4) == 0;
+        if (a_aligned && b_aligned && c_aligned && n > kVectorizedMinElems) {
+            launch_vectorized_comparison(a, b, c, n, op, stream);
+            return true;
+        }
+        return false;
     }
 
     // ============= Launch Functions for Comparison/Logical Ops =============
@@ -304,15 +320,22 @@ namespace lfs::core::tensor_ops {
         LFS_ASSERT_MSG(a_rank <= MAX_TENSOR_RANK && b_rank <= MAX_TENSOR_RANK &&
                            c_rank <= MAX_TENSOR_RANK,
                        "comparison broadcast rank exceeds MAX_TENSOR_RANK");
+
+        const bool fast_path = (a_rank == c_rank && b_rank == c_rank &&
+                                std::equal(a_shape, a_shape + a_rank, c_shape) &&
+                                std::equal(b_shape, b_shape + b_rank, c_shape));
+        if (fast_path &&
+            try_launch_vectorized_compare(a, b, c, c_elements, ops::equal_op{}, stream)) {
+            return;
+        }
+
         const auto shapes = pack_binary_broadcast_shapes(
             a_shape, b_shape, c_shape, a_rank, b_rank, c_rank);
-
-        bool fast_path = (a_rank == c_rank && b_rank == c_rank &&
-                          std::equal(a_shape, a_shape + a_rank, c_shape) &&
-                          std::equal(b_shape, b_shape + b_rank, c_shape));
         size_t info = a_rank | (b_rank << 5) | (c_rank << 10) | (fast_path << 15);
 
-        int blocks = (c_elements + 255) / 256;
+        int blocks = static_cast<int>((c_elements + 255) / 256);
+        if (blocks < 1)
+            blocks = 1;
         compare_eq_kernel<<<blocks, 256, 0, stream>>>(a, b, c, shapes, info, c_elements);
         LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.compare_eq");
     }
@@ -324,15 +347,22 @@ namespace lfs::core::tensor_ops {
         LFS_ASSERT_MSG(a_rank <= MAX_TENSOR_RANK && b_rank <= MAX_TENSOR_RANK &&
                            c_rank <= MAX_TENSOR_RANK,
                        "comparison broadcast rank exceeds MAX_TENSOR_RANK");
+
+        const bool fast_path = (a_rank == c_rank && b_rank == c_rank &&
+                                std::equal(a_shape, a_shape + a_rank, c_shape) &&
+                                std::equal(b_shape, b_shape + b_rank, c_shape));
+        if (fast_path &&
+            try_launch_vectorized_compare(a, b, c, c_elements, ops::less_op{}, stream)) {
+            return;
+        }
+
         const auto shapes = pack_binary_broadcast_shapes(
             a_shape, b_shape, c_shape, a_rank, b_rank, c_rank);
-
-        bool fast_path = (a_rank == c_rank && b_rank == c_rank &&
-                          std::equal(a_shape, a_shape + a_rank, c_shape) &&
-                          std::equal(b_shape, b_shape + b_rank, c_shape));
         size_t info = a_rank | (b_rank << 5) | (c_rank << 10) | (fast_path << 15);
 
-        int blocks = (c_elements + 255) / 256;
+        int blocks = static_cast<int>((c_elements + 255) / 256);
+        if (blocks < 1)
+            blocks = 1;
         compare_lt_kernel<<<blocks, 256, 0, stream>>>(a, b, c, shapes, info, c_elements);
         LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.compare_lt");
     }
@@ -344,15 +374,22 @@ namespace lfs::core::tensor_ops {
         LFS_ASSERT_MSG(a_rank <= MAX_TENSOR_RANK && b_rank <= MAX_TENSOR_RANK &&
                            c_rank <= MAX_TENSOR_RANK,
                        "comparison broadcast rank exceeds MAX_TENSOR_RANK");
+
+        const bool fast_path = (a_rank == c_rank && b_rank == c_rank &&
+                                std::equal(a_shape, a_shape + a_rank, c_shape) &&
+                                std::equal(b_shape, b_shape + b_rank, c_shape));
+        if (fast_path &&
+            try_launch_vectorized_compare(a, b, c, c_elements, ops::greater_op{}, stream)) {
+            return;
+        }
+
         const auto shapes = pack_binary_broadcast_shapes(
             a_shape, b_shape, c_shape, a_rank, b_rank, c_rank);
-
-        bool fast_path = (a_rank == c_rank && b_rank == c_rank &&
-                          std::equal(a_shape, a_shape + a_rank, c_shape) &&
-                          std::equal(b_shape, b_shape + b_rank, c_shape));
         size_t info = a_rank | (b_rank << 5) | (c_rank << 10) | (fast_path << 15);
 
-        int blocks = (c_elements + 255) / 256;
+        int blocks = static_cast<int>((c_elements + 255) / 256);
+        if (blocks < 1)
+            blocks = 1;
         compare_gt_kernel<<<blocks, 256, 0, stream>>>(a, b, c, shapes, info, c_elements);
         LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.compare_gt");
     }
@@ -573,42 +610,16 @@ namespace lfs::core::tensor_ops {
         }
     }
 
-    // ============= Count Nonzero =============
-    void launch_count_nonzero_bool(const unsigned char* data, size_t* count, size_t n, cudaStream_t stream) {
-        if (n == 0) {
-            LFS_CUDA_CHECK(cudaMemsetAsync(count, 0, sizeof(size_t), stream));
-            return;
-        }
-
-        auto data_ptr = thrust::device_pointer_cast(data);
-
-        // Thrust count_if returns to host, so we get it first
-        size_t result = thrust::count_if(thrust::cuda::par.on(stream),
-                                         data_ptr, data_ptr + n,
-                                         ops::is_nonzero_bool_op());
-
-        // Write to device memory (use sync copy since result is stack variable)
-        // OPTIMIZATION: cudaMemcpy (blocking) is more efficient than cudaMemcpyAsync + cudaStreamSynchronize
-        LFS_CUDA_CHECK(cudaMemcpy(count, &result, sizeof(size_t), cudaMemcpyHostToDevice));
+    // ============= Count Nonzero (device-side multi-block; no host round-trip) =============
+    // Reuse the optimized multi-block float4 path from tensor_dot_optimized.cu.
+    void launch_count_nonzero_bool(const unsigned char* data, size_t* count, size_t n,
+                                   cudaStream_t stream) {
+        launch_count_nonzero_scalar_bool(data, count, n, stream);
     }
 
-    void launch_count_nonzero_float(const float* data, size_t* count, size_t n, cudaStream_t stream) {
-        if (n == 0) {
-            LFS_CUDA_CHECK(cudaMemsetAsync(count, 0, sizeof(size_t), stream));
-            return;
-        }
-
-        auto data_ptr = thrust::device_pointer_cast(data);
-
-        // Thrust count_if returns to host, so we get it first
-        size_t result = thrust::count_if(thrust::cuda::par.on(stream),
-                                         data_ptr, data_ptr + n,
-                                         ops::is_nonzero_op<float>());
-
-        // Then write to device memory
-        // Write to device memory (use sync copy since result is stack variable)
-        // OPTIMIZATION: cudaMemcpy (blocking) is more efficient than cudaMemcpyAsync + cudaStreamSynchronize
-        LFS_CUDA_CHECK(cudaMemcpy(count, &result, sizeof(size_t), cudaMemcpyHostToDevice));
+    void launch_count_nonzero_float(const float* data, size_t* count, size_t n,
+                                    cudaStream_t stream) {
+        launch_count_nonzero_scalar_float(data, count, n, stream);
     }
 
     // ============= Index Operations =============
@@ -968,8 +979,8 @@ namespace lfs::core::tensor_ops {
         if (total == 0) {
             return;
         }
-        CudaDeviceMemory<size_t> d_in_shape(rank);
-        CudaDeviceMemory<size_t> d_idx_shape(rank);
+        CudaDeviceMemory<size_t> d_in_shape(rank, stream);
+        CudaDeviceMemory<size_t> d_idx_shape(rank, stream);
         LFS_CUDA_CHECK(d_in_shape.copy_from_host(in_shape, rank));
         LFS_CUDA_CHECK(d_idx_shape.copy_from_host(idx_shape, rank));
 
@@ -988,8 +999,8 @@ namespace lfs::core::tensor_ops {
         if (total == 0) {
             return;
         }
-        CudaDeviceMemory<size_t> d_in_shape(rank);
-        CudaDeviceMemory<size_t> d_idx_shape(rank);
+        CudaDeviceMemory<size_t> d_in_shape(rank, stream);
+        CudaDeviceMemory<size_t> d_idx_shape(rank, stream);
         LFS_CUDA_CHECK(d_in_shape.copy_from_host(in_shape, rank));
         LFS_CUDA_CHECK(d_idx_shape.copy_from_host(idx_shape, rank));
 
@@ -1030,7 +1041,7 @@ namespace lfs::core::tensor_ops {
         auto permuted_view = thrust::make_permutation_iterator(in_ptr, clamped_idx);
 
         // Single fused kernel: gather + unary operation!
-        thrust::transform(thrust::cuda::par.on(stream),
+        thrust::transform(thrust::cuda::par_nosync.on(stream),
                           permuted_view, permuted_view + out_size,
                           out_ptr,
                           op);
@@ -1120,9 +1131,9 @@ namespace lfs::core::tensor_ops {
     void launch_index_fill(T* data, const int* idx, T val,
                            const size_t* shape, size_t rank, int dim,
                            size_t n_idx, cudaStream_t stream) {
-        CudaDeviceMemory<T> val_buffer(n_idx);
+        CudaDeviceMemory<T> val_buffer(n_idx, stream);
         auto val_ptr = thrust::device_pointer_cast(val_buffer.get());
-        thrust::fill(thrust::cuda::par.on(stream), val_ptr, val_ptr + n_idx, val);
+        thrust::fill(thrust::cuda::par_nosync.on(stream), val_ptr, val_ptr + n_idx, val);
 
         size_t in_shape[MAX_TENSOR_RANK] = {0};
         std::copy(shape, shape + rank, in_shape);
@@ -1221,7 +1232,7 @@ namespace lfs::core::tensor_ops {
             thrust::make_tuple(out1_ptr, out2_ptr));
 
         // Single gather operation copies both tensors!
-        thrust::copy(thrust::cuda::par.on(stream),
+        thrust::copy(thrust::cuda::par_nosync.on(stream),
                      gathered, gathered + index_size,
                      zipped_output);
     }
@@ -1260,7 +1271,7 @@ namespace lfs::core::tensor_ops {
             thrust::make_tuple(out1_ptr, out2_ptr, out3_ptr));
 
         // Single gather for all three tensors!
-        thrust::copy(thrust::cuda::par.on(stream),
+        thrust::copy(thrust::cuda::par_nosync.on(stream),
                      gathered, gathered + index_size,
                      zipped_output);
     }

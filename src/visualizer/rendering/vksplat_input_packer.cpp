@@ -4,6 +4,8 @@
 
 #include "vksplat_input_packer.hpp"
 
+#include "core/logger.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "rendering/rasterizer/vulkan/src/config.h"
@@ -399,34 +401,85 @@ namespace lfs::vis::vksplat {
             layout_rest,
             lfs::core::sh_rest_coefficients_for_degree(effective_upload_sh_degree));
         const bool omit_shN_upload = upload_layout_rest == 0;
-        const std::size_t resident_shN_bytes =
-            lfs::core::sh_swizzled_float_count(n, layout_rest) * sizeof(float);
-        const std::size_t upload_shN_bytes =
-            lfs::core::sh_swizzled_float_count(n, upload_layout_rest) * sizeof(float);
-        const std::size_t shN_bytes = omit_shN_upload
-                                          ? sizeof(float4)
-                                          : upload_shN_bytes;
+        // The raw split path accepts three resident SH formats:
+        // - pad-dropped q16 with u16 cells and float2 bounds
+        // - IEEE f16 float4-swizzle with the same topology as fp32
+        // - fp32 float4-swizzle
+        const bool shN_q16 = splat_data.shN_value_quantized() && !omit_shN_upload;
+        const bool shN_f16 = splat_data.shN_ieee_f16() && !omit_shN_upload && !shN_q16;
+        const std::uint32_t n_cells =
+            shN_q16 ? lfs::core::sh_value_quant::n_value_cells_per_prim(upload_layout_rest) : 0u;
+        std::size_t shN_bytes = sizeof(float4);
+        std::size_t element_bytes = sizeof(float);
+        std::size_t bounds_bytes = 0;
+        if (!omit_shN_upload) {
+            if (shN_q16) {
+                element_bytes = sizeof(std::uint16_t);
+                shN_bytes = lfs::core::sh_value_quant::sh_value_u16_count(n, upload_layout_rest) *
+                            sizeof(std::uint16_t);
+                bounds_bytes = lfs::core::sh_value_quant::n_bounds_for_prims(n) * 2u * sizeof(float);
+            } else {
+                element_bytes = shN_f16 ? sizeof(std::uint16_t) : sizeof(float);
+                shN_bytes = lfs::core::sh_swizzled_byte_count_for_element(
+                    n, upload_layout_rest, element_bytes);
+            }
+        }
         if (!omit_shN_upload && shN_raw.is_valid() && shN_raw.numel() > 0) {
             if (shN_raw.ndim() != 1) {
                 return std::unexpected("VkSplat expected swizzled SH rest coefficients as a 1D tensor");
             }
-            if (static_cast<std::size_t>(shN_raw.numel()) * sizeof(float) < resident_shN_bytes) {
+            const std::size_t src_elem =
+                shN_raw.dtype() == DataType::Float16 ? sizeof(std::uint16_t) : sizeof(float);
+            const std::size_t resident_bytes =
+                shN_q16
+                    ? lfs::core::sh_value_quant::sh_value_u16_count(n, layout_rest) *
+                          sizeof(std::uint16_t)
+                    : lfs::core::sh_swizzled_byte_count_for_element(n, layout_rest, element_bytes);
+            if (static_cast<std::size_t>(shN_raw.numel()) * src_elem < resident_bytes) {
                 return std::unexpected("VkSplat swizzled SH rest tensor is smaller than expected");
+            }
+            if (shN_q16) {
+                const auto& bounds = splat_data.shN_value_bounds();
+                const std::size_t need_bounds =
+                    lfs::core::sh_value_quant::n_bounds_for_prims(n) * 2u;
+                if (!bounds.is_valid() || static_cast<std::size_t>(bounds.numel()) < need_bounds) {
+                    return std::unexpected(
+                        "VkSplat q16 SH rest requires per-256 float2 bounds");
+                }
             }
         } else if (!omit_shN_upload && splat_data.max_sh_coeffs_rest() > 0) {
             return std::unexpected("VkSplat expected swizzled SH rest coefficients for max SH degree");
         }
 
+        // Non-SH display attrs: IEEE f16 when exportable/allocator forces half
+        // for rotation + scaling + opacity (means stay fp32). Byte sizes match
+        // lodq pool packing so projection can reuse the quant-style f16tof32
+        // loads (rot uint2, scale uint2 with pad, opacity packed halfs).
+        const bool attrs_f16 = splat_data.non_sh_attrs_f16();
+        const std::size_t rotations_bytes =
+            attrs_f16 ? n * 8u : n * 4u * sizeof(float);
+        const std::size_t scaling_bytes =
+            attrs_f16 ? n * 8u : n * 3u * sizeof(float);
+        const std::size_t opacity_bytes =
+            attrs_f16 ? n * 2u : n * sizeof(float);
+        const std::size_t xyz_bytes = n * 3u * sizeof(float);
         return RawDeviceInputLayout{
             .num_splats = n,
-            .xyz_bytes = n * 3 * sizeof(float),
+            .xyz_bytes = xyz_bytes,
             .sh0_bytes = n * 3 * sizeof(float),
             .shN_bytes = shN_bytes,
-            .rotations_bytes = n * 4 * sizeof(float),
-            .scaling_bytes = n * 3 * sizeof(float),
-            .opacity_bytes = n * sizeof(float),
+            .rotations_bytes = rotations_bytes,
+            .scaling_bytes = scaling_bytes,
+            .opacity_bytes = opacity_bytes,
             .shN_layout_rest = upload_layout_rest,
             .omits_shN = omit_shN_upload,
+            .shN_f16 = shN_f16,
+            .shN_q16 = shN_q16,
+            .shN_element_bytes = omit_shN_upload ? sizeof(float) : element_bytes,
+            .shN_n_cells = n_cells,
+            .shN_bounds_bytes = bounds_bytes,
+            .attrs_f16 = attrs_f16,
+            .non_sh_bytes = xyz_bytes + rotations_bytes + scaling_bytes + opacity_bytes,
         };
     }
 
@@ -456,26 +509,45 @@ namespace lfs::vis::vksplat {
 
         if (splat_data.has_deleted_mask()) {
             const Tensor& deleted = splat_data.deleted();
-            if (deleted.dtype() != DataType::Bool ||
-                deleted.device() != Device::CUDA ||
-                !deleted.is_contiguous() ||
-                static_cast<std::size_t>(deleted.numel()) != n) {
-                return std::unexpected(
-                    "VkSplat deleted mask must be a contiguous CUDA bool tensor of size N");
+            const bool contract_ok =
+                deleted.dtype() == DataType::Bool &&
+                deleted.device() == Device::CUDA &&
+                deleted.is_contiguous() &&
+                static_cast<std::size_t>(deleted.numel()) == n;
+            if (!contract_ok) {
+                // a single stale frame (N-mutating densify/compact race)
+                // must not hard-fail permanently. Soft-skip the bake and copy raw
+                // opacity; writers reconcile the mask so subsequent frames recover.
+                // has_deleted_mask() with a broken contract is treated like no mask
+                // for this upload only — never latch degraded mode on a 1-frame race.
+                static thread_local std::uint64_t last_stale_log_version = 0;
+                const auto ver = splat_data.deleted_mask_version();
+                if (ver != last_stale_log_version) {
+                    last_stale_log_version = ver;
+                    LOG_WARN(
+                        "VkSplat soft-skipping stale deleted mask (dtype={}, device={}, "
+                        "contiguous={}, numel={}, N={}); raw opacity used this frame",
+                        static_cast<int>(deleted.dtype()),
+                        deleted.device() == Device::CUDA ? "CUDA" : "CPU",
+                        deleted.is_contiguous(),
+                        deleted.numel(),
+                        n);
+                }
+            } else {
+                if (auto ok = synchronizeInputStream(stream, deleted, "deleted"); !ok) {
+                    return std::unexpected(ok.error());
+                }
+                const cudaError_t status = detail::launchPackOpacityMaskingDeleted(
+                    opacity_raw.ptr<float>(),
+                    deleted.ptr<bool>(),
+                    static_cast<float*>(opacity_dst),
+                    n,
+                    stream);
+                if (status != cudaSuccess) {
+                    return std::unexpected(cudaErrorMessage("launchPackOpacityMaskingDeleted", status));
+                }
+                return {};
             }
-            if (auto ok = synchronizeInputStream(stream, deleted, "deleted"); !ok) {
-                return std::unexpected(ok.error());
-            }
-            const cudaError_t status = detail::launchPackOpacityMaskingDeleted(
-                opacity_raw.ptr<float>(),
-                deleted.ptr<bool>(),
-                static_cast<float*>(opacity_dst),
-                n,
-                stream);
-            if (status != cudaSuccess) {
-                return std::unexpected(cudaErrorMessage("launchPackOpacityMaskingDeleted", status));
-            }
-            return {};
         }
 
         const cudaError_t status = cudaMemcpyAsync(

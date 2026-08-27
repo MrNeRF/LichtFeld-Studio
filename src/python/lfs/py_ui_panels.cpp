@@ -9,6 +9,7 @@
 #include "python_panel_adapter.hpp"
 #include "rml_im_mode_panel_adapter.hpp"
 #include "rml_python_panel_adapter.hpp"
+#include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/gui/rmlui/rml_theme.hpp"
 
@@ -478,11 +479,6 @@ namespace lfs::python {
         info.initial_width = initial_width;
         info.initial_height = initial_height;
 
-        const bool default_closed =
-            (options & static_cast<uint32_t>(gui::PanelOption::DEFAULT_CLOSED)) &&
-            (info.space == gui::PanelSpace::Floating);
-        info.enabled = !default_closed;
-
         if (!gui::PanelRegistry::instance().register_panel(std::move(info))) {
             throw_value_error(
                 std::string("register_panel: runtime rejected panel '") + panel_id + "'");
@@ -623,6 +619,26 @@ namespace lfs::python {
                 gui::PanelRegistry::instance().set_panel_enabled(panel_id, enabled);
             },
             nb::arg("panel_id"), nb::arg("enabled"), "Enable or disable a panel by id");
+
+        m.def(
+            "reset_layout", []() -> std::string {
+                auto* const gui_manager = get_gui_manager();
+                if (!gui_manager)
+                    return "GUI manager is unavailable";
+                const auto result = gui_manager->resetLayout();
+                return result ? std::string{} : result.error();
+            },
+            "Reset the saved UI layout and apply the default dock arrangement immediately.");
+
+        m.def(
+            "reset_window_state", []() -> std::string {
+                auto* const gui_manager = get_gui_manager();
+                if (!gui_manager)
+                    return "GUI manager is unavailable";
+                const auto result = gui_manager->resetWindowState();
+                return result ? std::string{} : result.error();
+            },
+            "Reset persisted window geometry and apply the default geometry immediately.");
 
         m.def(
             "is_panel_enabled", [](const std::string& panel_id) {

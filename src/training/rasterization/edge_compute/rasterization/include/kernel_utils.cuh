@@ -41,13 +41,34 @@ namespace edge_compute::rasterization::kernels {
         return static_cast<uint>(min(max(tile, static_cast<int>(min_tile)), static_cast<int>(max_tile)));
     }
 
+    // Exclusive end of a closed interval. floor+1, not ceil: an exact tile-
+    // boundary hit must include the pixel center that lives on that boundary.
     __device__ inline uint ceil_tile_clamped(
         const float coord,
         const uint min_tile,
         const uint max_tile,
         const uint tile_size) {
-        const int tile = __float2int_ru(coord / static_cast<float>(tile_size));
+        const int tile = __float2int_rd(coord / static_cast<float>(tile_size)) + 1;
         return static_cast<uint>(min(max(tile, static_cast<int>(min_tile)), static_cast<int>(max_tile)));
+    }
+
+    __device__ inline uint4 compute_screen_tile_bounds(
+        const float2 mean2d,
+        const float extent_x,
+        const float extent_y,
+        const uint grid_width,
+        const uint grid_height) {
+        const float tw = static_cast<float>(config::tile_width);
+        const float th = static_cast<float>(config::tile_height);
+        const int x_min = max(0, __float2int_ru((mean2d.x - extent_x) / tw) - 1);
+        const int x_max = max(0, __float2int_rd((mean2d.x + extent_x) / tw) + 1);
+        const int y_min = max(0, __float2int_ru((mean2d.y - extent_y) / th) - 1);
+        const int y_max = max(0, __float2int_rd((mean2d.y + extent_y) / th) + 1);
+        return make_uint4(
+            min(grid_width, static_cast<uint>(x_min)),
+            min(grid_width, static_cast<uint>(x_max)),
+            min(grid_height, static_cast<uint>(y_min)),
+            min(grid_height, static_cast<uint>(y_max)));
     }
 
     __device__ inline uint compute_exact_n_touched_tiles(
@@ -61,7 +82,7 @@ namespace edge_compute::rasterization::kernels {
 
         const float2 mean2d_shifted = mean2d - 0.5f;
         const float radius_sq = 2.0f * power_threshold;
-        if (radius_sq <= 0.0f)
+        if (radius_sq < 0.0f)
             return 0;
 
         uint n_touched_tiles = 0;
@@ -76,7 +97,7 @@ namespace edge_compute::rasterization::kernels {
                 const float2 bound = ellipse_range_bound(conic, radius_sq, y0, y1);
                 const uint min_x = floor_tile_clamped(bound.x + mean2d_shifted.x, screen_bounds.x, screen_bounds.y, config::tile_width);
                 const uint max_x = ceil_tile_clamped(bound.y + mean2d_shifted.x, screen_bounds.x, screen_bounds.y, config::tile_width);
-                n_touched_tiles += max_x - min_x;
+                n_touched_tiles += max_x >= min_x ? max_x - min_x : 0;
             }
         } else {
             const float3 conic_transposed = make_float3(conic.z, conic.y, conic.x);
@@ -86,7 +107,7 @@ namespace edge_compute::rasterization::kernels {
                 const float2 bound = ellipse_range_bound(conic_transposed, radius_sq, x0, x1);
                 const uint min_y = floor_tile_clamped(bound.x + mean2d_shifted.y, screen_bounds.z, screen_bounds.w, config::tile_height);
                 const uint max_y = ceil_tile_clamped(bound.y + mean2d_shifted.y, screen_bounds.z, screen_bounds.w, config::tile_height);
-                n_touched_tiles += max_y - min_y;
+                n_touched_tiles += max_y >= min_y ? max_y - min_y : 0;
             }
         }
 

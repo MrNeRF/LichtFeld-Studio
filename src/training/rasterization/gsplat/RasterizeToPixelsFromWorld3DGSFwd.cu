@@ -7,9 +7,9 @@
 
 #include "Cameras.cuh"
 #include "Common.h"
+#include "FromWorldRay.cuh"
 #include "Rasterization.h"
 #include "Utils.cuh"
-#include "core/cuda_safe_format.hpp"
 
 namespace gsplat_lfs {
 
@@ -19,7 +19,7 @@ namespace gsplat_lfs {
     // Forward Kernel
     ////////////////////////////////////////////////////////////////
 
-    template <uint32_t CDIM, typename scalar_t>
+    template <uint32_t CDIM, typename scalar_t, bool kPerfectPinhole>
     __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         const uint32_t C,
         const uint32_t N,
@@ -52,7 +52,7 @@ namespace gsplat_lfs {
         // intersections
         const int32_t* __restrict__ tile_offsets, // [C, tile_height, tile_width]
         const int32_t* __restrict__ flatten_ids,  // [n_isects]
-        scalar_t* __restrict__ render_colors,     // [C, image_height, image_width, CDIM]
+        scalar_t* __restrict__ render_colors,     // [C, CDIM, image_height, image_width]
         scalar_t* __restrict__ render_alphas,     // [C, image_height, image_width, 1]
         int32_t* __restrict__ last_ids            // [C, image_height, image_width]
     ) {
@@ -84,94 +84,10 @@ namespace gsplat_lfs {
         float py = (float)i + 0.5f;
         int32_t pix_id = i * image_width + j;
 
-        // Create rolling shutter parameter
-        auto rs_params = RollingShutterParameters(
-            viewmats0 + cid * 16,
-            viewmats1 == nullptr ? nullptr : viewmats1 + cid * 16);
-        // shift pointers to the current camera. note that glm is colume-major.
-        const vec2 focal_length = {Ks[cid * 9 + 0], Ks[cid * 9 + 4]};
-        const vec2 principal_point = {Ks[cid * 9 + 2], Ks[cid * 9 + 5]};
-
-        // Create ray from pixel
-        WorldRay ray;
-        if (camera_model_type == CameraModelType::PINHOLE) {
-            if (radial_coeffs == nullptr && tangential_coeffs == nullptr && thin_prism_coeffs == nullptr) {
-                PerfectPinholeCameraModel::Parameters cm_params = {};
-                cm_params.resolution = {image_width, image_height};
-                cm_params.shutter_type = rs_type;
-                cm_params.principal_point = {principal_point.x, principal_point.y};
-                cm_params.focal_length = {focal_length.x, focal_length.y};
-                PerfectPinholeCameraModel camera_model(cm_params);
-                ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
-            } else {
-                OpenCVPinholeCameraModel<>::Parameters cm_params = {};
-                cm_params.resolution = {image_width, image_height};
-                cm_params.shutter_type = rs_type;
-                cm_params.principal_point = {principal_point.x, principal_point.y};
-                cm_params.focal_length = {focal_length.x, focal_length.y};
-                if (radial_coeffs != nullptr) {
-                    cm_params.radial_coeffs = make_array<float, 6>(radial_coeffs + cid * 6);
-                }
-                if (tangential_coeffs != nullptr) {
-                    cm_params.tangential_coeffs = make_array<float, 2>(tangential_coeffs + cid * 2);
-                }
-                if (thin_prism_coeffs != nullptr) {
-                    cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + cid * 4);
-                }
-                OpenCVPinholeCameraModel camera_model(cm_params);
-                ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
-            }
-        } else if (camera_model_type == CameraModelType::FISHEYE) {
-            OpenCVFisheyeCameraModel<>::Parameters cm_params = {};
-            cm_params.resolution = {image_width, image_height};
-            cm_params.shutter_type = rs_type;
-            cm_params.principal_point = {principal_point.x, principal_point.y};
-            cm_params.focal_length = {focal_length.x, focal_length.y};
-            if (radial_coeffs != nullptr) {
-                cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + cid * 4);
-            }
-            OpenCVFisheyeCameraModel camera_model(cm_params);
-            ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
-        } else if (camera_model_type == CameraModelType::EQUIRECTANGULAR) {
-            // For equirectangular cameras in tile mode, the K matrix encodes tile information:
-            //   K[0][0] (focal_length.x) = full_image_width
-            //   K[1][1] (focal_length.y) = full_image_height
-            //   K[0][2] (principal_point.x) = tile_x_offset
-            //   K[1][2] (principal_point.y) = tile_y_offset
-            // This avoids changing all function interfaces for a camera-specific fix.
-            const uint32_t full_image_width = static_cast<uint32_t>(focal_length.x);
-            const uint32_t full_image_height = static_cast<uint32_t>(focal_length.y);
-            const float tile_x_offset = principal_point.x;
-            const float tile_y_offset = principal_point.y;
-
-            EquirectangularCameraModel::Parameters cm_params = {};
-            cm_params.resolution = {full_image_width, full_image_height};
-            cm_params.shutter_type = rs_type;
-            EquirectangularCameraModel camera_model(cm_params);
-
-            // Convert tile-local pixel coords to full image coords for correct angular mapping
-            const float px_full = px + tile_x_offset;
-            const float py_full = py + tile_y_offset;
-            ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px_full, py_full), rs_params);
-        } else if (camera_model_type == CameraModelType::THIN_PRISM_FISHEYE) {
-            ThinPrismFisheyeCameraModel<>::Parameters cm_params = {};
-            cm_params.resolution = {image_width, image_height};
-            cm_params.shutter_type = rs_type;
-            cm_params.principal_point = {principal_point.x, principal_point.y};
-            cm_params.focal_length = {focal_length.x, focal_length.y};
-            if (radial_coeffs != nullptr) {
-                cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + cid * 4);
-            }
-            if (thin_prism_coeffs != nullptr) {
-                cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + cid * 4);
-            }
-            ThinPrismFisheyeCameraModel camera_model(cm_params);
-            ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
-        } else {
-            // should never reach here
-            assert(false);
-            return;
-        }
+        const WorldRay ray = from_world_pixel_ray<kPerfectPinhole>(
+            camera_model_type, rs_type, image_width, image_height, px, py,
+            viewmats0, viewmats1, Ks, cid,
+            radial_coeffs, tangential_coeffs, thin_prism_coeffs);
         const vec3 ray_d = ray.ray_dir;
         const vec3 ray_o = ray.ray_org;
 
@@ -192,7 +108,7 @@ namespace gsplat_lfs {
                 } else if (backgrounds != nullptr) {
                     bg_val = backgrounds[k];
                 }
-                render_colors[pix_id * CDIM + k] = bg_val;
+                render_colors[chw_pix(k, pix_id, image_height, image_width)] = bg_val;
             }
             return;
         }
@@ -201,20 +117,19 @@ namespace gsplat_lfs {
         // first collect gaussians between range.x and range.y in batches
         // which gaussians to look through in this tile
         int32_t range_start = tile_offsets[tile_id];
-        int32_t range_end =
-            (cid == C - 1) && (tile_id == tile_width * tile_height - 1)
-                ? n_isects
-                : tile_offsets[tile_id + 1];
+        int32_t range_end = tile_offsets[tile_id + 1];
         const uint32_t block_size = block.size();
+        const uint32_t stage_n =
+            (CDIM == 3 && block_size == 256u) ? 128u : block_size;
         uint32_t num_batches =
-            (range_end - range_start + block_size - 1) / block_size;
+            (range_end - range_start + stage_n - 1) / stage_n;
 
         extern __shared__ int s[];
-        int32_t* id_batch = (int32_t*)s; // [block_size]
-        vec4* xyz_opacity_batch =
-            reinterpret_cast<vec4*>(&id_batch[block_size]); // [block_size]
+        vec4* xyz_opacity_batch = reinterpret_cast<vec4*>(s); // [stage_n]
         mat3* iscl_rot_batch =
-            reinterpret_cast<mat3*>(&xyz_opacity_batch[block_size]); // [block_size]
+            reinterpret_cast<mat3*>(&xyz_opacity_batch[stage_n]); // [stage_n]
+        float* rgbs_batch =
+            reinterpret_cast<float*>(&iscl_rot_batch[stage_n]); // [stage_n * CDIM]
 
         // current visibility left to render
         // transmittance is gonna be used in the backward pass which requires a high
@@ -239,19 +154,16 @@ namespace gsplat_lfs {
 
             // each thread fetch 1 gaussian from front to back
             // index of gaussian to load
-            uint32_t batch_start = range_start + block_size * b;
+            uint32_t batch_start = range_start + stage_n * b;
             uint32_t idx = batch_start + tr;
-            if (idx < range_end) {
-                // TODO: only support 1 camera for now so it is ok to abuse the index.
+            if (tr < stage_n && idx < range_end) {
                 int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
-                id_batch[tr] = g;
-                const vec3 xyz = means[g];
-                const float opac = opacities[g];
-                xyz_opacity_batch[tr] = {xyz.x, xyz.y, xyz.z, opac};
+                const float3 xyz_f = load_float3(reinterpret_cast<const float*>(&means[g]));
+                const float opac = activated_opacity(opacities[g]);
+                xyz_opacity_batch[tr] = {xyz_f.x, xyz_f.y, xyz_f.z, opac};
 
                 const vec4 quat = quats[g];
-                vec3 scale = scales[g];
-
+                vec3 scale = activated_scale(scales[g]);
                 mat3 R = quat_to_rotmat(quat);
                 mat3 S = mat3(
                     1.0f / scale[0],
@@ -263,19 +175,35 @@ namespace gsplat_lfs {
                     0.f,
                     0.f,
                     1.0f / scale[2]);
-                mat3 iscl_rot = S * glm::transpose(R);
-                iscl_rot_batch[tr] = iscl_rot;
+                iscl_rot_batch[tr] = S * glm::transpose(R);
+                if constexpr (CDIM == 3) {
+                    const float3 c = load_float3(colors + g * 3);
+                    rgbs_batch[tr * 3u + 0] = c.x;
+                    rgbs_batch[tr * 3u + 1] = c.y;
+                    rgbs_batch[tr * 3u + 2] = c.z;
+                } else if constexpr (CDIM == 4) {
+                    const float4 c = load_float4(colors + g * 4);
+                    rgbs_batch[tr * 4u + 0] = c.x;
+                    rgbs_batch[tr * 4u + 1] = c.y;
+                    rgbs_batch[tr * 4u + 2] = c.z;
+                    rgbs_batch[tr * 4u + 3] = c.w;
+                } else {
+#pragma unroll
+                    for (uint32_t k = 0; k < CDIM; ++k) {
+                        rgbs_batch[tr * CDIM + k] = colors[g * CDIM + k];
+                    }
+                }
             }
 
             // wait for other threads to collect the gaussians in batch
             block.sync();
 
             // process gaussians in the current batch for this pixel
-            uint32_t batch_size = min(block_size, range_end - batch_start);
+            uint32_t batch_size = min(stage_n, range_end - batch_start);
             for (uint32_t t = 0; (t < batch_size) && !done; ++t) {
-                const vec4 xyz_opac = xyz_opacity_batch[t];
-                const float opac = xyz_opac[3];
-                const vec3 xyz = {xyz_opac[0], xyz_opac[1], xyz_opac[2]};
+                const float4 xyz_opac = load_float4(reinterpret_cast<const float*>(&xyz_opacity_batch[t]));
+                const float opac = xyz_opac.w;
+                const vec3 xyz = {xyz_opac.x, xyz_opac.y, xyz_opac.z};
                 const mat3 iscl_rot = iscl_rot_batch[t];
 
                 const vec3 gro = iscl_rot * (ray_o - xyz);
@@ -295,12 +223,23 @@ namespace gsplat_lfs {
                     break;
                 }
 
-                int32_t g = id_batch[t];
                 const float vis = alpha * T;
-                const float* c_ptr = colors + g * CDIM;
+                if constexpr (CDIM == 3) {
+                    const float3 c = load_float3(&rgbs_batch[t * 3u]);
+                    pix_out[0] += c.x * vis;
+                    pix_out[1] += c.y * vis;
+                    pix_out[2] += c.z * vis;
+                } else if constexpr (CDIM == 4) {
+                    const float4 c = load_float4(&rgbs_batch[t * 4u]);
+                    pix_out[0] += c.x * vis;
+                    pix_out[1] += c.y * vis;
+                    pix_out[2] += c.z * vis;
+                    pix_out[3] += c.w * vis;
+                } else {
 #pragma unroll
-                for (uint32_t k = 0; k < CDIM; ++k) {
-                    pix_out[k] += c_ptr[k] * vis;
+                    for (uint32_t k = 0; k < CDIM; ++k) {
+                        pix_out[k] += rgbs_batch[t * CDIM + k] * vis;
+                    }
                 }
                 cur_idx = batch_start + t;
 
@@ -324,7 +263,7 @@ namespace gsplat_lfs {
                 } else if (backgrounds != nullptr) {
                     bg_val = backgrounds[k];
                 }
-                render_colors[pix_id * CDIM + k] = pix_out[k] + T * bg_val;
+                render_colors[chw_pix(k, pix_id, image_height, image_width)] = pix_out[k] + T * bg_val;
             }
             // index in bin of last gaussian in this pixel
             last_ids[pix_id] = static_cast<int32_t>(cur_idx);
@@ -375,9 +314,15 @@ namespace gsplat_lfs {
         dim3 threads = {tile_size, tile_size, 1};
         dim3 grid = {C, tile_height, tile_width};
 
+        const bool global_shutter = is_global_shutter_launch(rs_type, viewmats1);
+        const bool perfect_pinhole = is_perfect_pinhole_launch(
+            camera_model, radial_coeffs, tangential_coeffs, thin_prism_coeffs);
+
+        const uint32_t n_stage =
+            (CDIM == 3 && tile_size == 16) ? 128u : (tile_size * tile_size);
         int64_t shmem_size =
-            tile_size * tile_size *
-            (sizeof(int32_t) + sizeof(vec4) + sizeof(mat3));
+            n_stage *
+            (sizeof(vec4) + sizeof(mat3) + sizeof(float) * CDIM);
 
         if (n_isects == 0) {
             // Skip kernel launch if no intersections
@@ -397,22 +342,10 @@ namespace gsplat_lfs {
             return;
         }
 
-        auto err = cudaFuncSetAttribute(
-            rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float>,
-            cudaFuncAttributeMaxDynamicSharedMemorySize,
-            shmem_size);
-        if (err != cudaSuccess) {
-            lfs::core::ensure_cuda_success(
-                err, "cudaFuncSetAttribute(gsplat forward shared memory)",
-                lfs::core::detail::format_cuda_safe(
-                    "requested_bytes={}, try lowering tile_size", shmem_size),
-                LFS_SOURCE_SITE_CURRENT(),
-                lfs::core::CudaFailureDisposition::LogOnly);
-            return;
-        }
-
-        rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float>
-            <<<grid, threads, shmem_size, stream>>>(
+        auto launch = [&](auto kernel) {
+            set_kernel_max_dynamic_smem(
+                kernel, static_cast<int>(shmem_size), "gsplat forward");
+            kernel<<<grid, threads, shmem_size, stream>>>(
                 C,
                 N,
                 n_isects,
@@ -444,7 +377,16 @@ namespace gsplat_lfs {
                 renders,
                 alphas,
                 last_ids);
-        LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.rasterize_to_pixels_fwd");
+            LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.rasterize_to_pixels_fwd");
+        };
+
+        if constexpr (CDIM == 3) {
+            if (global_shutter && perfect_pinhole) {
+                launch(rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float, true>);
+                return;
+            }
+        }
+        launch(rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float, false>);
     }
 
     ////////////////////////////////////////////////////////////////

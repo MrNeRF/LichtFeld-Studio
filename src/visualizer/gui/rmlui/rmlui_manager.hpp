@@ -5,6 +5,7 @@
 #pragma once
 
 #include "config.h"
+#include "core/export.hpp"
 
 #include <RmlUi/Core/Types.h>
 
@@ -12,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -78,10 +80,18 @@ namespace lfs::vis::gui {
         RmlRect clip;
     };
 
+    struct RmlDragPayload {
+        std::uint64_t token = 0;
+        std::string type;
+        std::string data;
+        std::string label;
+        bool released = false;
+    };
+
     class RmlUIManager {
     public:
-        RmlUIManager();
-        ~RmlUIManager();
+        LFS_VIS_API RmlUIManager();
+        LFS_VIS_API ~RmlUIManager();
 
         bool initVulkan(SDL_Window* window, lfs::vis::VulkanContext& vulkan_context, float dp_ratio = 1.0f);
         void shutdown();
@@ -126,7 +136,7 @@ namespace lfs::vis::gui {
         void renderQueuedVulkanContexts(bool foreground);
         void endVulkanFrame();
 
-        void beginFrameCursorTracking();
+        LFS_VIS_API void beginFrameCursorTracking();
         void trackContextFrame(const Rml::Context* context, int window_x, int window_y,
                                std::optional<RmlRect> active_overlay = std::nullopt);
         void setContextNeedsPassiveMouseMoveFrames(const Rml::Context* context, bool needs_frames);
@@ -140,7 +150,8 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::optional<double> secondsUntilTooltipReveal() const;
         RmlCursorRequest consumeCursorRequest();
         [[nodiscard]] bool passiveMouseMoveNeedsRender(float window_x, float window_y) const;
-        [[nodiscard]] bool activeOverlayContainsPoint(float window_x, float window_y) const;
+        [[nodiscard]] LFS_VIS_API bool activeOverlayContainsPoint(float window_x,
+                                                                  float window_y) const;
         [[nodiscard]] bool activeOverlayOccludesContext(const Rml::Context* context,
                                                         float window_x,
                                                         float window_y) const;
@@ -151,6 +162,15 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool wantsTextInput() const;
         [[nodiscard]] bool anyItemActive() const;
         bool refreshLocalizedDocuments();
+
+        LFS_VIS_API std::uint64_t beginDragPayload(std::string type,
+                                                   std::string data,
+                                                   std::string label = {});
+        LFS_VIS_API bool endDragPayload(std::uint64_t token);
+        LFS_VIS_API bool cancelDragPayload(std::uint64_t token);
+        LFS_VIS_API void cancelDragPayload();
+        [[nodiscard]] LFS_VIS_API std::optional<RmlDragPayload> dragPayload() const;
+        LFS_VIS_API std::optional<RmlDragPayload> takeReleasedDragPayload();
 
     private:
         struct VulkanContextCommand {
@@ -213,6 +233,9 @@ namespace lfs::vis::gui {
         VkExtent2D vulkan_frame_extent_{};
         bool initialized_ = false;
         std::uint64_t tracked_context_order_ = 0;
+        mutable std::mutex drag_payload_mutex_;
+        std::optional<RmlDragPayload> drag_payload_;
+        std::uint64_t next_drag_payload_token_ = 1;
     };
 
 } // namespace lfs::vis::gui

@@ -285,13 +285,20 @@ class _GizmoToolbarController:
         import lichtfeld as lf
         from .op_context import get_context
 
+        restore_guard_getter = getattr(
+            lf.ui, "consume_tool_restore_guard", None
+        )
+        restore_guard = (
+            restore_guard_getter() if callable(restore_guard_getter) else False
+        )
+        ToolRegistry.sync_native_active()
         crop_enable_buttons = self._build_crop_enable_records()
         crop_settings_buttons = self._build_crop_settings_records(
             crop_roi_settings_open
         )
         hidden = RuntimeState.trainer_state.value in _TOOLBAR_HIDDEN_STATES
         if hidden:
-            if not self._was_hidden:
+            if not self._was_hidden and not restore_guard:
                 ToolRegistry.clear_active()
             self._was_hidden = True
             return {
@@ -329,7 +336,7 @@ class _GizmoToolbarController:
         # actually be used on an empty scene.
         get_content_type = getattr(lf.ui, "get_content_type", None)
         if callable(get_content_type) and get_content_type() == "empty":
-            if not self._was_empty:
+            if not self._was_empty and not restore_guard:
                 ToolRegistry.clear_active()
             self._was_empty = True
         else:
@@ -1190,7 +1197,8 @@ class _GizmoToolbarController:
 
 
 class _UtilityToolbarController:
-    _INPUT_SETTINGS_PANEL_ID = "lfs.input_settings"
+    _ASSET_MANAGER_PANEL_ID = "lfs.asset_manager"
+    _PREFERENCES_PANEL_ID = "lfs.preferences"
     _PLUGIN_MARKETPLACE_PANEL_ID = "lfs.plugin_marketplace"
     _CAMERA_MODE_SPECS = (
         ("camera-orbit", "orbit", "toolbar.orbit_camera", "Orbit Camera"),
@@ -1263,13 +1271,13 @@ class _UtilityToolbarController:
 
         utility_extra_buttons = [
             _button_record(
-                "util-input-settings",
+                "util-preferences",
                 "toggle_panel",
-                self._INPUT_SETTINGS_PANEL_ID,
+                self._PREFERENCES_PANEL_ID,
                 _icon_src("settings"),
-                tooltip_key="window.input_settings",
-                tooltip_text="Input Settings",
-                selected=_panel_enabled(self._INPUT_SETTINGS_PANEL_ID),
+                tooltip_key="window.preferences",
+                tooltip_text="Preferences",
+                selected=_panel_enabled(self._PREFERENCES_PANEL_ID),
             ),
             _button_record(
                 "util-viewport-export",
@@ -1279,6 +1287,15 @@ class _UtilityToolbarController:
                 tooltip_key="toolbar.viewport_export",
                 tooltip_text="Viewport Export",
                 selected=self._is_viewport_export_visible(),
+            ),
+            _button_record(
+                "util-asset-manager",
+                "toggle_panel",
+                self._ASSET_MANAGER_PANEL_ID,
+                _icon_src("archive"),
+                tooltip_key="toolbar.asset_manager",
+                tooltip_text="Asset Manager",
+                selected=_panel_enabled(self._ASSET_MANAGER_PANEL_ID),
             ),
             _button_record(
                 "util-plugin-marketplace",
@@ -1812,11 +1829,18 @@ class _ViewportToolbarController:
         can_transform_selection = bool(
             call(False, getattr(lf, "can_transform_selection", None))
         )
-        input_settings_enabled = bool(
+        preferences_enabled = bool(
             call(
                 False,
                 getattr(lf.ui, "is_panel_enabled", None),
-                _UtilityToolbarController._INPUT_SETTINGS_PANEL_ID,
+                _UtilityToolbarController._PREFERENCES_PANEL_ID,
+            )
+        )
+        asset_manager_enabled = bool(
+            call(
+                False,
+                getattr(lf.ui, "is_panel_enabled", None),
+                _UtilityToolbarController._ASSET_MANAGER_PANEL_ID,
             )
         )
         plugin_marketplace_enabled = bool(
@@ -1850,7 +1874,8 @@ class _ViewportToolbarController:
             self._viewport_export_controls.visible,
             bool(call(False, getattr(lf.ui, "is_sequencer_visible", None))),
             bool(histogram_mode_available(ui_context)) if ui_context is not None else False,
-            input_settings_enabled,
+            preferences_enabled,
+            asset_manager_enabled,
             plugin_marketplace_enabled,
             bool(call(False, getattr(lf.ui, "is_panel_enabled", None), "lfs.histogram")),
         )

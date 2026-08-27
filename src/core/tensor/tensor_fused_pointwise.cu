@@ -3,16 +3,20 @@
 
 #include "core/cuda_error.hpp"
 #include "internal/gpu_config.hpp"
+#include "internal/lazy_config.hpp"
 #include "internal/lazy_executor.hpp"
 #include "internal/tensor_impl.hpp"
 #include "internal/tensor_ops.hpp"
 #include "internal/warp_reduce.cuh"
+#include <atomic>
 #include <cassert>
 #include <cfloat>
 #include <cuda_runtime.h>
 #include <limits>
 
 static_assert(static_cast<uint8_t>(lfs::core::internal::LazyPointwiseOpKind::AddScalar) == 0);
+static_assert(static_cast<uint8_t>(lfs::core::internal::LazyPointwiseOpKind::AddTensor) == 4);
+static_assert(static_cast<uint8_t>(lfs::core::internal::LazyPointwiseOpKind::MulTensor) == 6);
 static_assert(static_cast<uint8_t>(lfs::core::internal::LazyPointwiseOpKind::Abs) == 10);
 static_assert(static_cast<uint8_t>(lfs::core::internal::LazyPointwiseOpKind::Round) == 24);
 
@@ -21,6 +25,25 @@ namespace lfs::core::tensor_ops {
     namespace {
 
         constexpr int BLOCK_SIZE = 256;
+
+        std::atomic<uint64_t> g_tensor_kernel_launch_count{0};
+
+    } // namespace
+
+    void reset_tensor_kernel_launch_count() noexcept {
+        g_tensor_kernel_launch_count.store(0, std::memory_order_relaxed);
+    }
+
+    uint64_t tensor_kernel_launch_count() noexcept {
+        return g_tensor_kernel_launch_count.load(std::memory_order_relaxed);
+    }
+
+    void record_tensor_kernel_launch(uint64_t n) noexcept {
+        g_tensor_kernel_launch_count.fetch_add(n, std::memory_order_relaxed);
+        internal::telemetry_record_kernel_launch(n);
+    }
+
+    namespace {
 
         __global__ void affine_transform_vec4_kernel(const float* __restrict__ input,
                                                      float* __restrict__ output,
@@ -78,12 +101,17 @@ namespace lfs::core::tensor_ops {
 
     namespace {
 
-        __device__ __forceinline__ float apply_pointwise_op(float x, const FusedPointwiseOp& op) {
+        __device__ __forceinline__ float apply_pointwise_op(float x, const FusedPointwiseOp& op,
+                                                            size_t idx) {
             switch (op.kind) {
             case 0: return x + op.scalar;                  // AddScalar
             case 1: return x - op.scalar;                  // SubScalar
             case 2: return x * op.scalar;                  // MulScalar
             case 3: return x / op.scalar;                  // DivScalar
+            case 4: return x + op.rhs[idx];                // AddTensor
+            case 5: return x - op.rhs[idx];                // SubTensor
+            case 6: return x * op.rhs[idx];                // MulTensor
+            case 7: return x / op.rhs[idx];                // DivTensor
             case 10: return fabsf(x);                      // Abs
             case 11: return -x;                            // Neg
             case 12: return expf(x);                       // Exp
@@ -103,9 +131,10 @@ namespace lfs::core::tensor_ops {
             }
         }
 
-        __device__ __forceinline__ float apply_chain(float x, const FusedPointwiseOpChain& chain) {
+        __device__ __forceinline__ float apply_chain(float x, const FusedPointwiseOpChain& chain,
+                                                     size_t idx) {
             for (int i = 0; i < chain.num_ops; ++i) {
-                x = apply_pointwise_op(x, chain.ops[i]);
+                x = apply_pointwise_op(x, chain.ops[i], idx);
             }
             return x;
         }
@@ -118,14 +147,14 @@ namespace lfs::core::tensor_ops {
 
             if (idx + 3 < n) {
                 float4 vals = reinterpret_cast<const float4*>(input)[vec_idx];
-                vals.x = apply_chain(vals.x, chain);
-                vals.y = apply_chain(vals.y, chain);
-                vals.z = apply_chain(vals.z, chain);
-                vals.w = apply_chain(vals.w, chain);
+                vals.x = apply_chain(vals.x, chain, idx);
+                vals.y = apply_chain(vals.y, chain, idx + 1);
+                vals.z = apply_chain(vals.z, chain, idx + 2);
+                vals.w = apply_chain(vals.w, chain, idx + 3);
                 reinterpret_cast<float4*>(output)[vec_idx] = vals;
             } else if (idx < n) {
                 for (size_t i = idx; i < n; ++i) {
-                    output[i] = apply_chain(input[i], chain);
+                    output[i] = apply_chain(input[i], chain, i);
                 }
             }
         }
@@ -135,7 +164,7 @@ namespace lfs::core::tensor_ops {
                                                       size_t n, FusedPointwiseOpChain chain) {
             const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
             if (idx < n) {
-                output[idx] = apply_chain(input[idx], chain);
+                output[idx] = apply_chain(input[idx], chain, idx);
             }
         }
 
@@ -150,10 +179,19 @@ namespace lfs::core::tensor_ops {
         assert(output != nullptr);
         assert(chain.num_ops > 0 && chain.num_ops <= FUSED_POINTWISE_MAX_OPS);
 
+        // Vec4 path remains valid with tensor-rhs stages as long as all pointers are 16B-aligned.
         const bool src_aligned = (reinterpret_cast<uintptr_t>(input) % 16) == 0;
         const bool dst_aligned = (reinterpret_cast<uintptr_t>(output) % 16) == 0;
+        bool rhs_aligned = true;
+        for (int i = 0; i < chain.num_ops; ++i) {
+            if (chain.ops[i].rhs != nullptr &&
+                (reinterpret_cast<uintptr_t>(chain.ops[i].rhs) % 16) != 0) {
+                rhs_aligned = false;
+                break;
+            }
+        }
 
-        if (src_aligned && dst_aligned && n >= 4) {
+        if (src_aligned && dst_aligned && rhs_aligned && n >= 4) {
             const size_t vec_n = (n + 3) / 4;
             const int grid = static_cast<int>((vec_n + BLOCK_SIZE - 1) / BLOCK_SIZE);
             pointwise_chain_vec4_kernel<<<grid, BLOCK_SIZE, 0, stream>>>(input, output, n, chain);
@@ -163,6 +201,7 @@ namespace lfs::core::tensor_ops {
             pointwise_chain_scalar_kernel<<<grid, BLOCK_SIZE, 0, stream>>>(input, output, n, chain);
             LFS_CUDA_LAUNCH_CHECK(stream, "tensor.fused_pointwise.chain_scalar");
         }
+        record_tensor_kernel_launch(1);
     }
 
     // ============= Fused Transform-Reduce Kernels =============
@@ -250,24 +289,25 @@ namespace lfs::core::tensor_ops {
                 for (size_t vec_idx = blockIdx.x * blockDim.x + threadIdx.x;
                      vec_idx < vec_n;
                      vec_idx += total_threads) {
+                    const size_t base = vec_idx * 4;
                     float4 vals = reinterpret_cast<const float4*>(input)[vec_idx];
-                    acc = reduce_combine(acc, apply_chain(vals.x, chain), reduce_op_int);
-                    acc = reduce_combine(acc, apply_chain(vals.y, chain), reduce_op_int);
-                    acc = reduce_combine(acc, apply_chain(vals.z, chain), reduce_op_int);
-                    acc = reduce_combine(acc, apply_chain(vals.w, chain), reduce_op_int);
+                    acc = reduce_combine(acc, apply_chain(vals.x, chain, base), reduce_op_int);
+                    acc = reduce_combine(acc, apply_chain(vals.y, chain, base + 1), reduce_op_int);
+                    acc = reduce_combine(acc, apply_chain(vals.z, chain, base + 2), reduce_op_int);
+                    acc = reduce_combine(acc, apply_chain(vals.w, chain, base + 3), reduce_op_int);
                 }
                 // Handle tail elements
                 const size_t tail_start = vec_n * 4;
                 for (size_t i = tail_start + blockIdx.x * blockDim.x + threadIdx.x;
                      i < n;
                      i += total_threads) {
-                    acc = reduce_combine(acc, apply_chain(input[i], chain), reduce_op_int);
+                    acc = reduce_combine(acc, apply_chain(input[i], chain, i), reduce_op_int);
                 }
             } else {
                 for (size_t i = blockIdx.x * blockDim.x + threadIdx.x;
                      i < n;
                      i += total_threads) {
-                    acc = reduce_combine(acc, apply_chain(input[i], chain), reduce_op_int);
+                    acc = reduce_combine(acc, apply_chain(input[i], chain, i), reduce_op_int);
                 }
             }
 
@@ -326,10 +366,12 @@ namespace lfs::core::tensor_ops {
         fused_reduce_stage2_kernel<<<1, BLOCK_SIZE, 0, stream>>>(
             partial, output, grid_size, reduce_op_int);
         LFS_CUDA_LAUNCH_CHECK(stream, "tensor.fused_pointwise.transform_reduce_stage2");
+        record_tensor_kernel_launch(2);
 
         if (reduce_op == ReduceOp::Mean) {
             const float scale = 1.0f / static_cast<float>(n);
             launch_fused_affine_transform(output, output, 1, scale, 0.0f, stream);
+            record_tensor_kernel_launch(1);
         }
 
         LFS_CUDA_CHECK_MSG(cudaFreeAsync(partial, stream),
@@ -355,22 +397,31 @@ namespace lfs::core::tensor_ops {
 
                 const bool is_aligned = (reinterpret_cast<uintptr_t>(seg_input) % 16) == 0;
 
+                // Global element index for tensor-rhs stages = seg * segment_size + local
+                const size_t seg_base = seg * segment_size;
                 if (is_aligned && segment_size >= 4) {
                     const size_t vec_n = segment_size / 4;
                     for (size_t vec_idx = threadIdx.x; vec_idx < vec_n; vec_idx += blockDim.x) {
+                        const size_t local = vec_idx * 4;
                         float4 vals = reinterpret_cast<const float4*>(seg_input)[vec_idx];
-                        acc = reduce_combine(acc, apply_chain(vals.x, chain), reduce_op_int);
-                        acc = reduce_combine(acc, apply_chain(vals.y, chain), reduce_op_int);
-                        acc = reduce_combine(acc, apply_chain(vals.z, chain), reduce_op_int);
-                        acc = reduce_combine(acc, apply_chain(vals.w, chain), reduce_op_int);
+                        acc = reduce_combine(acc, apply_chain(vals.x, chain, seg_base + local),
+                                             reduce_op_int);
+                        acc = reduce_combine(acc, apply_chain(vals.y, chain, seg_base + local + 1),
+                                             reduce_op_int);
+                        acc = reduce_combine(acc, apply_chain(vals.z, chain, seg_base + local + 2),
+                                             reduce_op_int);
+                        acc = reduce_combine(acc, apply_chain(vals.w, chain, seg_base + local + 3),
+                                             reduce_op_int);
                     }
                     const size_t tail_start = vec_n * 4;
                     for (size_t i = tail_start + threadIdx.x; i < segment_size; i += blockDim.x) {
-                        acc = reduce_combine(acc, apply_chain(seg_input[i], chain), reduce_op_int);
+                        acc = reduce_combine(acc, apply_chain(seg_input[i], chain, seg_base + i),
+                                             reduce_op_int);
                     }
                 } else {
                     for (size_t i = threadIdx.x; i < segment_size; i += blockDim.x) {
-                        acc = reduce_combine(acc, apply_chain(seg_input[i], chain), reduce_op_int);
+                        acc = reduce_combine(acc, apply_chain(seg_input[i], chain, seg_base + i),
+                                             reduce_op_int);
                     }
                 }
 
@@ -411,6 +462,7 @@ namespace lfs::core::tensor_ops {
         fused_segmented_transform_reduce_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
             input, output, num_segments, segment_size, chain, reduce_op_int);
         LFS_CUDA_LAUNCH_CHECK(stream, "tensor.fused_pointwise.segmented_transform_reduce");
+        record_tensor_kernel_launch(1);
     }
 
 } // namespace lfs::core::tensor_ops

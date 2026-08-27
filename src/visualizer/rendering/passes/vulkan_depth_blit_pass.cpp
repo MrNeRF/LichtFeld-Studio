@@ -717,6 +717,7 @@ namespace lfs::vis {
                                          "depth_blit.image[{}x{}]",
                                          w,
                                          h);
+            vmaSetAllocationName(allocator, image_alloc, "Depth-blit image");
             image_vram_label = std::format("r32_float:{}x{}", w, h);
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.depth_blit.image",
@@ -884,15 +885,15 @@ namespace lfs::vis {
             si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
             si.commandBufferCount = 1;
             si.pCommandBuffers = &transfer_cmd;
-            if (si.commandBufferCount != 1 || si.pCommandBuffers == nullptr ||
-                si.pCommandBuffers[0] == VK_NULL_HANDLE || transfer_fence == VK_NULL_HANDLE ||
+            // transfer_cmd address is never null; validate the handles themselves.
+            if (transfer_cmd == VK_NULL_HANDLE || transfer_fence == VK_NULL_HANDLE ||
                 graphics_queue == VK_NULL_HANDLE) {
                 return replaceTransferFenceSignaled("Depth-blit submit integrity check",
                                                     VK_ERROR_INITIALIZATION_FAILED);
             }
             // Async submit: in-order queue execution makes the upload visible to the
             // viewport pass that samples this image right after on the same queue.
-            result = vkQueueSubmit(graphics_queue, 1, &si, transfer_fence);
+            result = lfs::rendering::vk_queue_submit_synced(graphics_queue, 1, &si, transfer_fence);
             if (result != VK_SUCCESS) {
                 return replaceTransferFenceSignaled("vkQueueSubmit", result);
             }

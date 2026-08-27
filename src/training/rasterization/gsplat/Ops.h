@@ -45,13 +45,15 @@ namespace gsplat_lfs {
 
     struct IntersectTileResult {
         int32_t* tiles_per_gauss; // [C, N] - output buffer provided by caller
-        int64_t* isect_ids;       // [n_isects] - allocated internally
-        int32_t* flatten_ids;     // [n_isects] - allocated internally
-        int32_t n_isects;         // Total number of intersections
+        int64_t* isect_ids;       // [n_sort] sorted keys (sentinel-padded)
+        int32_t* flatten_ids;     // [n_sort] sorted ids (sentinel-padded)
+        int32_t n_isects;         // Exact intersection count for this frame
+        int32_t n_sort;           // Sorted key count (high-water capacity)
     };
 
-    // Note: isect_ids and flatten_ids are allocated internally
-    // Caller must free them with cudaFree when done
+    // isect_ids / flatten_ids point into a thread-local grow-only cache.
+    // Do NOT cudaFree them; release via release_intersect_thread_local_cache()
+    // only at thread/training shutdown.
     IntersectTileResult intersect_tile(
         const float* means2d,        // [C, N, 2]
         const int32_t* radii,        // [C, N, 2]
@@ -65,7 +67,8 @@ namespace gsplat_lfs {
         uint32_t tile_height,
         bool sort,
         int32_t* tiles_per_gauss_out, // [C, N] pre-allocated output
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        int32_t* isect_offsets = nullptr); // [C * tile_h * tile_w + 1]
 
     bool release_intersect_thread_local_cache() noexcept;
 
@@ -270,10 +273,11 @@ namespace gsplat_lfs {
         int32_t* tile_offsets;    // [C, tile_height, tile_width]
         int32_t* last_ids;        // [C, H, W]
         float* compensations;     // [C, N] optional (can be nullptr)
-        // These are allocated internally - caller must free with cudaFree:
+        // Borrowed from TLS high-water isect cache — do NOT cudaFree.
         int64_t* isect_ids;   // [n_isects]
-        int32_t* flatten_ids; // [n_isects]
+        int32_t* flatten_ids; // [n_sort]
         int32_t n_isects;
+        int32_t n_sort = 0;
     };
 
     void rasterize_from_world_with_sh_fwd(

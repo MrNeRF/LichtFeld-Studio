@@ -10,31 +10,102 @@ body {
 
 #content-wrap {
     min-width: 0;
-    height: 0;
-    flex-grow: 1;
+    min-height: 0;
+    flex: 1;
     padding: 6dp;
     overflow-x: hidden;
-    overflow-y: auto;
+    overflow-y: hidden;
 }
 
 #content {
     min-width: 0;
+    min-height: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
 }
 
-.training-search-row {
+.training-panel-layout {
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+#controls {
+    flex-shrink: 0;
+}
+
+#training-search-container {
     display: flex;
     align-items: center;
-    gap: 4dp;
-    margin: 6dp 0 2dp;
+    box-sizing: border-box;
+    padding: 4dp 6dp;
+    margin: 6dp 0 4dp;
+    border-width: 1dp;
+    flex-shrink: 0;
 }
 
-.training-search-input {
+.training-scroll-region {
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding-bottom: 6dp;
+}
+
+/* Keep the scroll position legible without taking meaningful panel width. */
+.training-scroll-region scrollbarvertical {
+    width: 4dp;
+}
+
+.training-scroll-region scrollbarvertical sliderbar {
+    min-height: 12dp;
+}
+
+.training-telemetry {
+    min-width: 0;
+    flex-shrink: 0;
+}
+
+#training-search-input {
     flex-grow: 1;
     min-width: 0;
+    background-color: transparent;
+    border-width: 0;
+    padding: 0;
 }
 
-.training-search-clear {
+#training-search-input:focus,
+#training-search-input:focus-visible {
+    background-color: transparent;
+    border-width: 0;
+    box-shadow: none;
+}
+
+#training-search-icon {
+    width: 13dp;
+    height: 13dp;
+    margin-right: 4dp;
     flex-shrink: 0;
+}
+
+#training-search-clear {
+    width: 12dp;
+    height: 12dp;
+    margin-left: 4dp;
+    padding: 0;
+    background-color: transparent;
+    border-width: 0;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+#training-search-clear img {
+    width: 12dp;
+    height: 12dp;
 }
 
 .training-panel-title {

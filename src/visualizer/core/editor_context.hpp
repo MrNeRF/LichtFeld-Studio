@@ -99,6 +99,12 @@ namespace lfs::vis {
         // Active tool management (legacy - will be removed)
         void setActiveTool(ToolType tool);
         [[nodiscard]] ToolType getActiveTool() const { return active_tool_; }
+        void armToolRestoreGuard() { tool_restore_guard_ = true; }
+        [[nodiscard]] bool consumeToolRestoreGuard() {
+            const bool armed = tool_restore_guard_;
+            tool_restore_guard_ = false;
+            return armed;
+        }
 
         // String-based operator system (Blender-style)
         void setActiveOperator(const std::string& id, const std::string& gizmo_type);
@@ -138,6 +144,7 @@ namespace lfs::vis {
         bool has_editable_splat_selection_ = false;
         bool has_editable_align_selection_ = false;
         bool has_locked_align_selection_ = false;
+        bool tool_restore_guard_ = false;
         std::string transform_selection_error_;
 
         // String-based operator system

@@ -9,19 +9,51 @@
 
 namespace lfs::core {
 
+    namespace {
+
+        /// Build expand/broadcast strides aligned from the right (NumPy / PyTorch).
+        /// Broadcast dims (src size 1 → target > 1, or missing leading dims) get stride 0.
+        std::vector<size_t> expand_strides(const Tensor& src, const TensorShape& target) {
+            const auto src_dims = src.shape().dims();
+            const auto& src_strides = src.strides();
+            const auto target_dims = target.dims();
+            const size_t src_rank = src_dims.size();
+            const size_t tgt_rank = target_dims.size();
+
+            std::vector<size_t> out(tgt_rank, 0);
+            // Align from the right
+            for (size_t i = 0; i < tgt_rank; ++i) {
+                const size_t t_i = tgt_rank - 1 - i;
+                if (i < src_rank) {
+                    const size_t s_i = src_rank - 1 - i;
+                    const size_t sd = src_dims[s_i];
+                    const size_t td = target_dims[t_i];
+                    if (sd == td) {
+                        out[t_i] = src_strides[s_i];
+                    } else if (sd == 1) {
+                        out[t_i] = 0; // broadcast
+                    } else {
+                        // Should have been rejected by can_broadcast
+                        out[t_i] = 0;
+                    }
+                } else {
+                    // New leading dimension: always broadcast
+                    out[t_i] = 0;
+                }
+            }
+            return out;
+        }
+
+    } // namespace
+
     Tensor broadcast_to(const Tensor& src, const TensorShape& target) {
         LFS_ASSERT_MSG(src.is_valid(),
                        "Cannot broadcast an invalid tensor");
-        const bool supported_dtype =
-            src.dtype() == DataType::Float32 || src.dtype() == DataType::Bool ||
-            (src.device() == Device::CPU && src.dtype() == DataType::Int32);
-        LFS_ASSERT_MSG(supported_dtype,
-                       std::format("broadcast_to does not support {} on {}",
-                                   dtype_name(src.dtype()), device_name(src.device())));
 
         // An empty dimension vector represents a scalar, not an incompatibility.
         if (src.shape() == target) {
-            return src.clone();
+            // Same shape: return a shallow handle (no clone).
+            return src;
         }
 
         // Check if shapes are compatible for broadcasting
@@ -37,100 +69,11 @@ namespace lfs::core {
             return Tensor::empty(target, src.device(), src.dtype());
         }
 
-        Tensor result;
-        if (src.device() == Device::CUDA) {
-            const cudaStream_t execution_stream = prepare_inputs_for_stream({&src});
-            CUDAStreamGuard guard(execution_stream);
-            result = Tensor::empty(target, src.device(), src.dtype());
-        } else {
-            result = Tensor::empty(target, src.device(), src.dtype());
-        }
-
-        if (src.device() == Device::CUDA) {
-            pin_operands({&src});
-            const auto& src_strides = src.strides();
-            const bool strided = !src.is_contiguous();
-
-            if (src.dtype() == DataType::Bool) {
-                if (strided) {
-                    tensor_ops::launch_broadcast_strided_bool(
-                        src.ptr<unsigned char>(), result.ptr<unsigned char>(),
-                        src_dims.data(), src_strides.data(), target_dims.data(),
-                        src_dims.size(), target_dims.size(), result.numel(), result.stream());
-                } else {
-                    tensor_ops::launch_broadcast_bool(
-                        src.ptr<unsigned char>(), result.ptr<unsigned char>(),
-                        src_dims.data(), target_dims.data(),
-                        src_dims.size(), target_dims.size(), result.numel(), result.stream());
-                }
-            } else if (src.dtype() == DataType::Float32) {
-                if (strided) {
-                    tensor_ops::launch_broadcast_strided(
-                        src.ptr<float>(), result.ptr<float>(),
-                        src_dims.data(), src_strides.data(), target_dims.data(),
-                        src_dims.size(), target_dims.size(), result.numel(), result.stream());
-                } else {
-                    tensor_ops::launch_broadcast(
-                        src.ptr<float>(), result.ptr<float>(),
-                        src_dims.data(), target_dims.data(),
-                        src_dims.size(), target_dims.size(), result.numel(), result.stream());
-                }
-            } else {
-                LFS_ASSERT_MSG(false,
-                               "Unsupported dtype reached CUDA broadcast dispatch");
-            }
-        } else {
-            if (!src.is_contiguous())
-                return broadcast_to(src.contiguous(), target);
-            if (src.dtype() == DataType::Bool) {
-                const unsigned char* src_data = src.ptr<unsigned char>();
-                unsigned char* dst_data = result.ptr<unsigned char>();
-                for (size_t i = 0; i < result.numel(); ++i) {
-                    size_t src_idx = broadcast::index(i, target_dims, src_dims);
-                    LFS_DEBUG_ASSERT_MSG(src_idx < src.numel(),
-                                         std::format("broadcast source index must be in range "
-                                                     "(source_index={}, source_numel={}, "
-                                                     "output_index={}, output_numel={}, "
-                                                     "source_shape={}, target_shape={})",
-                                                     src_idx, src.numel(), i, result.numel(),
-                                                     src.shape().str(), target.str()));
-                    dst_data[i] = src_data[src_idx];
-                }
-            } else if (src.dtype() == DataType::Float32) {
-                const float* src_data = src.ptr<float>();
-                float* dst_data = result.ptr<float>();
-                for (size_t i = 0; i < result.numel(); ++i) {
-                    size_t src_idx = broadcast::index(i, target_dims, src_dims);
-                    LFS_DEBUG_ASSERT_MSG(src_idx < src.numel(),
-                                         std::format("broadcast source index must be in range "
-                                                     "(source_index={}, source_numel={}, "
-                                                     "output_index={}, output_numel={}, "
-                                                     "source_shape={}, target_shape={})",
-                                                     src_idx, src.numel(), i, result.numel(),
-                                                     src.shape().str(), target.str()));
-                    dst_data[i] = src_data[src_idx];
-                }
-            } else if (src.dtype() == DataType::Int32) {
-                const int* src_data = src.ptr<int>();
-                int* dst_data = result.ptr<int>();
-                for (size_t i = 0; i < result.numel(); ++i) {
-                    size_t src_idx = broadcast::index(i, target_dims, src_dims);
-                    LFS_DEBUG_ASSERT_MSG(src_idx < src.numel(),
-                                         std::format("broadcast source index must be in range "
-                                                     "(source_index={}, source_numel={}, "
-                                                     "output_index={}, output_numel={}, "
-                                                     "source_shape={}, target_shape={})",
-                                                     src_idx, src.numel(), i, result.numel(),
-                                                     src.shape().str(), target.str()));
-                    dst_data[i] = src_data[src_idx];
-                }
-            } else {
-                LFS_ASSERT_MSG(false,
-                               "Unsupported dtype reached CPU broadcast dispatch");
-            }
-        }
-
-        return result;
+        // zero-stride expand view — no device allocation.
+        // Consumers that are not on the zero_stride allowlist materialize via
+        // contiguous_read / contiguous() / dense-for-kernel at their boundary.
+        auto new_strides = expand_strides(src, target);
+        return src.create_broadcast_view(target, std::move(new_strides));
     }
 
 } // namespace lfs::core

@@ -66,6 +66,7 @@ class BugReportPanel(Panel):
     label = "Report a bug"
     space = lf.ui.PanelSpace.FLOATING
     order = 96
+    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
     template = "rmlui/bug_report_panel.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (520, 0)
@@ -136,7 +137,6 @@ class BugReportPanel(Panel):
         model.bind_func("show_error_detail", lambda: bool(self._error_detail()))
         model.bind_func("can_submit", self._can_submit)
         model.bind_func("validation_hint", self._validation_hint)
-        model.bind_func("submitting", lambda: bool(self._report_state().get("submitting")))
         model.bind_func("submit_label", self._submit_label)
         model.bind_func("show_training", lambda: bool(self._training_rows()))
         model.bind_func("show_previous_log", lambda: self._previous_log_available)

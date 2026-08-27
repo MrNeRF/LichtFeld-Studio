@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import threading
+import urllib.parse
 from datetime import datetime, timezone
 
 import lichtfeld as lf
@@ -57,6 +58,7 @@ class AccountPanel(Panel):
     label = "Account"
     space = lf.ui.PanelSpace.FLOATING
     order = 95
+    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
     template = "rmlui/account_panel.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (440, 0)
@@ -91,6 +93,7 @@ class AccountPanel(Panel):
         model.bind_func("show_error", lambda: bool(snapshot().error))
         model.bind_func("error_message", lambda: _localized_error_message(snapshot().error))
         model.bind_func("user_code", lambda: snapshot().user_code)
+        model.bind_func("verification_display_url", self._verification_display_url)
         model.bind_func("countdown", self._countdown_text)
         model.bind_func("display_name", lambda: snapshot().display_name or "—")
         model.bind_func("email", lambda: snapshot().email or "—")
@@ -115,6 +118,7 @@ class AccountPanel(Panel):
 
         self._add_click_listener(doc, "account-sign-in", lambda _ev: self._service.start_device_flow())
         self._add_click_listener(doc, "account-open-link", self._open_verification_uri)
+        self._add_click_listener(doc, "account-copy-link", self._copy_verification_uri)
         self._add_click_listener(doc, "account-copy-code", self._copy_user_code)
         self._add_click_listener(doc, "account-cancel", lambda _ev: self._service.cancel_device_flow())
         self._add_click_listener(doc, "account-open-portal", lambda _ev: lf.ui.open_url(self._service.portal_url))
@@ -132,6 +136,15 @@ class AccountPanel(Panel):
     def _countdown_text(self) -> str:
         remaining = self._service.snapshot().countdown_seconds
         return f"{remaining // 60}:{remaining % 60:02d}"
+
+    def _verification_display_url(self) -> str:
+        uri = self._service.snapshot().verification_uri
+        if not uri:
+            return ""
+        parts = urllib.parse.urlsplit(uri)
+        if not parts.netloc:
+            return uri
+        return f"{parts.netloc}{parts.path or '/'}"
 
     @staticmethod
     def _add_click_listener(doc, element_id: str, callback) -> None:
@@ -179,6 +192,11 @@ class AccountPanel(Panel):
                 request_redraw()
             except Exception:
                 pass
+
+    def _copy_verification_uri(self, _event) -> None:
+        uri = self._service.snapshot().verification_uri_complete
+        if uri:
+            lf.ui.set_clipboard_text(uri)
 
     def _copy_user_code(self, _event) -> None:
         code = self._service.snapshot().user_code

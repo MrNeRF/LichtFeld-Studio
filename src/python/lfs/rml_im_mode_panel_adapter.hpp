@@ -13,6 +13,7 @@
 #include <nanobind/nanobind.h>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace nb = nanobind;
 
@@ -26,24 +27,31 @@ namespace lfs::vis::gui {
 
         void draw(const PanelDrawContext& ctx) override;
         bool poll(const PanelDrawContext& ctx) override;
-        bool supportsDirectDraw() const override { return true; }
-        void preloadDirect(float w, float h, const PanelDrawContext& ctx,
-                           float clip_y_min, float clip_y_max,
-                           const PanelInputState* input) override;
-        void drawDirect(float x, float y, float w, float h, const PanelDrawContext& ctx) override;
-        bool drawDirectCached(float x, float y, float w, float h,
-                              const PanelDrawContext& ctx) override;
-        float getDirectDrawHeight() const override;
-        void setInputClipY(float y_min, float y_max) override;
-        void setInput(const PanelInputState* input) override;
-        void setForcedHeight(float h) override;
-        void setPanelSpace(PanelSpace space) override;
+        PanelRenderCapabilities renderCapabilities() const override {
+            return {.direct = true};
+        }
+        PanelDirectRenderResult renderDirect(const PanelDirectRenderRequest& request,
+                                             const PanelDrawContext& ctx) override;
         bool needsAnimationFrame() const override;
+        std::optional<double> nextScheduledAnimationDelay() const override;
         void reloadRmlResources() override;
+        [[nodiscard]] std::string captureChromeJson() const override;
+        void applyChromeJson(std::string_view json) override;
 
     private:
         void ensureHost();
         void drawLayout(const PanelDrawContext* ctx);
+        void preloadDirect(float w, float h, const PanelDrawContext& ctx,
+                           float clip_y_min, float clip_y_max,
+                           const PanelInputState* input);
+        void drawDirect(float x, float y, float w, float h, const PanelDrawContext& ctx);
+        bool drawDirectCached(float x, float y, float w, float h,
+                              const PanelDrawContext& ctx);
+        float getDirectDrawHeight() const;
+        void setInput(const PanelInputState* input);
+        void setInputClipY(float y_min, float y_max);
+        void setForcedHeight(float h);
+        void setPanelSpace(PanelSpace space);
 
         void* host_ = nullptr;
         void* manager_;

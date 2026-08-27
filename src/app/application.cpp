@@ -3,23 +3,31 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "app/application.hpp"
+#include "app/headless_recovery_document.hpp"
 #include "app/headless_run_coordinator.hpp"
 #include "control/command_api.hpp"
 #include "core/checkpoint_format.hpp"
 #include "core/crash_handler.hpp"
 #include "core/cuda_version.hpp"
+#include "core/environment.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/image_loader.hpp"
+#include "core/legacy_settings_migration.hpp"
 #include "core/logger.hpp"
+#include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/pinned_memory_allocator.hpp"
+#include "core/provenance.hpp"
 #include "core/scene.hpp"
 #include "core/session_breadcrumb.hpp"
 #include "core/tensor.hpp"
+#include "core/user_paths.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "io/cache_image_loader.hpp"
+#include "io/project_document.hpp"
+#include "io/project_recovery.hpp"
 #include "tcp/include/tcp_publisher.hpp"
 #include "tcp/include/tcp_responder.hpp"
 #include "training/trainer.hpp"
@@ -36,9 +44,12 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "sequencer/timeline.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
+#include "visualizer/gui/layout_state.hpp"
 #include "visualizer/gui/panels/python_scripts_panel.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer/gui/windows/video_extractor_dialog.hpp"
+#include "visualizer/input/input_bindings.hpp"
+#include "visualizer/preferences.hpp"
 #include <cmath>
 #include <condition_variable>
 #include <cuda_runtime.h>
@@ -46,6 +57,7 @@
 #include <mutex>
 #include <print>
 #include <rasterization_api.h>
+#include <string>
 #include <string_view>
 
 #ifdef WIN32
@@ -59,6 +71,35 @@
 namespace lfs::app {
 
     namespace {
+
+        struct HeadlessPluginSignalGuard {
+            HeadlessPluginSignalGuard() {
+                python::set_plugin_preload_completion_hook(
+                    &HeadlessRunCoordinator::install_signal_handlers);
+            }
+
+            ~HeadlessPluginSignalGuard() {
+                python::set_plugin_preload_completion_hook(nullptr);
+            }
+
+            HeadlessPluginSignalGuard(const HeadlessPluginSignalGuard&) = delete;
+            HeadlessPluginSignalGuard& operator=(
+                const HeadlessPluginSignalGuard&) = delete;
+        };
+
+        [[nodiscard]] lfs::Error training_project_error(
+            const lfs::ErrorCode code,
+            std::string detail,
+            const lfs::core::SourceSite source) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = code,
+                .domain = lfs::ErrorDomain::App,
+                .user_message =
+                    "The training project could not be restored.",
+                .detail = std::move(detail),
+                .detection = source,
+            });
+        }
 
         std::expected<core::param::TrainingParameters, std::string> loadCheckpointParams(const core::param::TrainingParameters& params, core::Scene& scene) {
             LOG_INFO("Resuming from checkpoint: {}", core::path_to_utf8(*params.resume_checkpoint));
@@ -75,6 +116,21 @@ namespace lfs::app {
                 checkpoint_params.dataset.output_path = params.dataset.output_path;
             if (!params.dataset.output_name.empty())
                 checkpoint_params.dataset.output_name = params.dataset.output_name;
+
+            // Runtime-only CLI controls are not part of the serialized
+            // training state. Preserve them when a resume is requested so
+            // --perf-bench (and its warmup) still applies to the resumed run.
+            checkpoint_params.optimization.perf_bench = params.optimization.perf_bench;
+            checkpoint_params.optimization.perf_bench_warmup = params.optimization.perf_bench_warmup;
+            checkpoint_params.cli_iterations_set = params.cli_iterations_set;
+            checkpoint_params.cli_bg_color_set = params.cli_bg_color_set;
+            if (params.cli_iterations_set)
+                checkpoint_params.optimization.iterations = params.optimization.iterations;
+            if (params.cli_bg_color_set)
+                checkpoint_params.optimization.bg_color = params.optimization.bg_color;
+            checkpoint_params.overrides = params.overrides;
+            core::param::apply_explicit_training_overrides(
+                checkpoint_params, checkpoint_params.overrides);
 
             if (checkpoint_params.dataset.data_path.empty()) {
                 return std::unexpected("Checkpoint has no dataset path and none provided via --data-path");
@@ -104,27 +160,288 @@ namespace lfs::app {
             }
 
             auto splat_data = std::make_unique<core::SplatData>(std::move(*splat_result));
-            scene.addSplat("Model", std::move(splat_data), core::NULL_NODE);
-            scene.setTrainingModelNode("Model");
+            const auto model_id = scene.addSplat("Model", std::move(splat_data), core::NULL_NODE);
+            if (model_id == core::NULL_NODE) {
+                return std::unexpected("Failed to add checkpoint training model to scene");
+            }
+            scene.setTrainingModelNode(model_id);
 
             checkpoint_params.resume_checkpoint = *params.resume_checkpoint;
             return checkpoint_params;
         }
 
+        struct LoadedTrainingProject {
+            detail::HeadlessRecoveryDocument document;
+            core::param::TrainingParameters params;
+            core::Uuid checkpoint_uuid;
+            int iteration = 0;
+        };
+
+        lfs::Result<LoadedTrainingProject>
+        loadTrainingProject(
+            const core::param::TrainingParameters& cli_params,
+            core::Scene& scene) {
+            if (!cli_params.resume_project) {
+                return training_project_error(
+                    lfs::ErrorCode::InvalidArgument,
+                    "No .licht resume project was provided",
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+            const auto& path =
+                *cli_params.resume_project;
+            std::filesystem::path open_path = path;
+            std::optional<
+                io::project::RecoverySession>
+                recovery_session;
+            LOG_INFO(
+                "Opening training project: {}",
+                core::path_to_utf8(path));
+
+            auto recovery =
+                io::project::inspect_autosave_recovery(
+                    path);
+            if (!recovery) {
+                return std::move(recovery)
+                    .error()
+                    .with_context(
+                        "inspect training project autosave",
+                        LFS_SOURCE_SITE_CURRENT());
+            }
+            if (recovery->disposition ==
+                    io::project::RecoveryDisposition::Offer &&
+                recovery->selected_path) {
+                auto session =
+                    io::project::
+                        begin_recovery_session(
+                            path,
+                            *recovery
+                                 ->selected_path);
+                if (!session) {
+                    return std::move(session)
+                        .error()
+                        .with_context(
+                            "hold headless recovery master lock",
+                            LFS_SOURCE_SITE_CURRENT());
+                }
+                open_path = io::project::
+                    recovery_session_temp_path(
+                        path);
+                auto materialized =
+                    io::project::
+                        materialize_recovered_project(
+                            path,
+                            *recovery
+                                 ->selected_path,
+                            open_path, *session);
+                if (!materialized) {
+                    return std::move(
+                               materialized)
+                        .error()
+                        .with_context(
+                            "materialize headless autosave recovery",
+                            LFS_SOURCE_SITE_CURRENT());
+                }
+                recovery_session.emplace(
+                    std::move(*session));
+                LOG_INFO(
+                    "Automatically recovering autosave sequence {} for headless project open",
+                    recovery
+                        ->autosave_sequence);
+            }
+
+            auto document =
+                io::project::ProjectDocument::open(
+                    open_path);
+            if (!document) {
+                if (recovery_session) {
+                    static_cast<void>(
+                        recovery_session
+                            ->release());
+                }
+                return std::move(document)
+                    .error()
+                    .with_context(
+                        "open training project",
+                        LFS_SOURCE_SITE_CURRENT());
+            }
+            detail::HeadlessRecoveryDocument
+                recovery_document(
+                    std::move(*document),
+                    std::move(recovery_session));
+            const auto checkpoint_uuids =
+                recovery_document.document()
+                    .checkpoint_uuids();
+            if (checkpoint_uuids.size() != 1) {
+                return training_project_error(
+                    lfs::ErrorCode::DataLoss,
+                    std::format(
+                        "Training project must contain exactly one CKPT "
+                        "instance (found {})",
+                        checkpoint_uuids.size()),
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+            const auto checkpoint_uuid =
+                checkpoint_uuids.front();
+            const auto* checkpoint =
+                recovery_document.document()
+                    .find_checkpoint(checkpoint_uuid);
+            if (!checkpoint) {
+                return training_project_error(
+                    lfs::ErrorCode::ContractViolation,
+                    "Training project CKPT handle disappeared",
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+
+            std::optional<
+                core::CheckpointParametersLoadResult>
+                parsed_params;
+            auto visited =
+                checkpoint->visit_stream(
+                    [&](std::istream& source,
+                        const std::uint64_t bytes)
+                        -> lfs::Result<void> {
+                        parsed_params =
+                            core::load_checkpoint_params(
+                                source, bytes);
+                        return {};
+                    });
+            if (!visited) {
+                return std::move(visited)
+                    .error()
+                    .with_context(
+                        "stream CKPT parameters",
+                        LFS_SOURCE_SITE_CURRENT());
+            }
+            if (!parsed_params ||
+                !*parsed_params) {
+                return training_project_error(
+                    lfs::ErrorCode::DataLoss,
+                    parsed_params
+                        ? std::format(
+                              "Failed to parse CKPT parameters: {}",
+                              parsed_params->error())
+                        : "CKPT parameter visitor did not run",
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+            auto checkpoint_params =
+                std::move(**parsed_params);
+
+            if (!cli_params.dataset.data_path.empty()) {
+                checkpoint_params.dataset.data_path =
+                    cli_params.dataset.data_path;
+            }
+            if (!cli_params.dataset.output_path.empty()) {
+                checkpoint_params.dataset.output_path =
+                    cli_params.dataset.output_path;
+            }
+            if (!cli_params.dataset.output_name.empty()) {
+                checkpoint_params.dataset.output_name =
+                    cli_params.dataset.output_name;
+            }
+            if (cli_params.cli_iterations_set) {
+                checkpoint_params.optimization.iterations =
+                    cli_params.optimization.iterations;
+            }
+            checkpoint_params.optimization.headless =
+                cli_params.optimization.headless;
+            checkpoint_params.optimization.auto_train =
+                cli_params.optimization.auto_train;
+            checkpoint_params.optimization.no_splash =
+                cli_params.optimization.no_splash;
+            checkpoint_params.server =
+                cli_params.server;
+            checkpoint_params.python_scripts =
+                cli_params.python_scripts;
+            checkpoint_params.resume_checkpoint.reset();
+            checkpoint_params.resume_project = path;
+            checkpoint_params.save_project_at_iteration =
+                cli_params.save_project_at_iteration;
+            checkpoint_params.save_project_path =
+                cli_params.save_project_path;
+            checkpoint_params.cli_iterations_set =
+                cli_params.cli_iterations_set;
+            checkpoint_params.cli_bg_color_set =
+                cli_params.cli_bg_color_set;
+            checkpoint_params.overrides = cli_params.overrides;
+            core::param::apply_explicit_training_overrides(
+                checkpoint_params, checkpoint_params.overrides);
+
+            auto hydration =
+                recovery_document.document()
+                    .hydrate(scene);
+            if (!hydration) {
+                return std::move(hydration)
+                    .error()
+                    .with_context(
+                        "hydrate training project display state",
+                        LFS_SOURCE_SITE_CURRENT());
+            }
+            if (!hydration->trainer_state_pending ||
+                !hydration->checkpoint_uuid ||
+                *hydration->checkpoint_uuid !=
+                    checkpoint_uuid ||
+                !hydration->checkpoint_header) {
+                return training_project_error(
+                    lfs::ErrorCode::ContractViolation,
+                    "Project hydration did not preserve the lazy CKPT "
+                    "trainer-state barrier",
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+            if (hydration->checkpoint_header->iteration < 0) {
+                return training_project_error(
+                    lfs::ErrorCode::DataLoss,
+                    "Project CKPT iteration is negative",
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+
+            return LoadedTrainingProject{
+                .document =
+                    std::move(recovery_document),
+                .params =
+                    std::move(checkpoint_params),
+                .checkpoint_uuid =
+                    checkpoint_uuid,
+                .iteration =
+                    hydration
+                        ->checkpoint_header
+                        ->iteration,
+            };
+        }
+
         int runHeadlessWithTCP(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
-            if (params->dataset.data_path.empty() && !params->resume_checkpoint) {
+            if (params->dataset.data_path.empty() &&
+                !params->resume_checkpoint &&
+                !params->resume_project) {
                 LOG_ERROR("Headless with TCP mode requires --data-path or --resume");
                 return 1;
             }
 
             lfs::event::CommandCenterBridge::instance().set(&lfs::training::CommandCenter::instance());
             HeadlessRunCoordinator coordinator;
+            HeadlessPluginSignalGuard plugin_signals;
 
             {
                 core::Scene scene;
                 std::optional<core::param::TrainingParameters> checkpoint_params{std::nullopt};
+                std::optional<LoadedTrainingProject>
+                    training_project;
 
-                if (params->resume_checkpoint) {
+                if (params->resume_project) {
+                    auto loaded =
+                        loadTrainingProject(
+                            *params, scene);
+                    if (!loaded) {
+                        LOG_ERROR(
+                            "Failed to load training project: {}",
+                            lfs::format_for_developer(
+                                loaded.error()));
+                        return 1;
+                    }
+                    checkpoint_params =
+                        loaded->params;
+                    training_project.emplace(
+                        std::move(*loaded));
+                } else if (params->resume_checkpoint) {
                     const auto ckpt_params_result = loadCheckpointParams(*params, scene);
                     if (!ckpt_params_result) {
                         LOG_ERROR("Failed to load checkpoint: {}", ckpt_params_result.error());
@@ -147,15 +464,69 @@ namespace lfs::app {
 
                 auto manager = std::make_shared<vis::TrainerManager>();
                 {
-                    auto trainer = std::make_unique<training::Trainer>(scene);
+                    const auto& effective_params =
+                        checkpoint_params
+                            ? *checkpoint_params
+                            : *params;
 
-                    if (!params->python_scripts.empty()) {
-                        trainer->set_python_scripts(params->python_scripts);
-                        vis::gui::panels::PythonScriptManagerState::getInstance().setScripts(params->python_scripts);
+                    if (!effective_params.python_scripts.empty()) {
+                        vis::gui::panels::PythonScriptManagerState::getInstance().setScripts(effective_params.python_scripts);
                     }
 
-                    trainer->setParams(checkpoint_params ? *checkpoint_params : *params); // Load checkpoint into trainer is called internally
-                    manager->setTrainer(std::move(trainer));
+                    if (training_project) {
+                        std::optional<
+                            io::project::RecoverySession>
+                            recovery_session;
+                        if (const auto* session =
+                                training_project->document
+                                    .recovery_session()) {
+                            recovery_session = *session;
+                        }
+                        auto installed =
+                            training::
+                                installTrainerFromProjectCheckpoint(
+                                    scene,
+                                    training_project
+                                        ->document
+                                        .document(),
+                                    training_project
+                                        ->checkpoint_uuid,
+                                    effective_params,
+                                    core::path_to_utf8(
+                                        *params
+                                             ->resume_project),
+                                    training_project
+                                        ->iteration,
+                                    recovery_session);
+                        if (!installed) {
+                            LOG_ERROR(
+                                "Failed to complete project CKPT "
+                                "hydration before TCP training: {}",
+                                installed.error());
+                            return 1;
+                        }
+                        training::grant_headless_project_saves(
+                            *installed->trainer,
+                            effective_params,
+                            *params->resume_project);
+                        manager->setTrainer(
+                            std::move(installed->trainer));
+                    } else {
+                        // Legacy .resume auto-load remains unchanged.
+                        auto trainer =
+                            std::make_unique<training::Trainer>(
+                                scene);
+                        if (!effective_params.python_scripts
+                                 .empty()) {
+                            trainer->set_python_scripts(
+                                effective_params
+                                    .python_scripts);
+                        }
+                        trainer->setParams(effective_params);
+                        training::grant_headless_project_saves(
+                            *trainer, effective_params);
+                        manager->setTrainer(std::move(trainer));
+                    }
                 }
 
                 core::Tensor::trim_memory_pool();
@@ -248,6 +619,19 @@ namespace lfs::app {
                     return 1;
                 }
 
+                if (training_project) {
+                    if (auto rebound =
+                            training_project->document
+                                .rebind_after_durable_merge();
+                        !rebound) {
+                        LOG_ERROR(
+                            "Headless TCP recovery merge could not rebind the live project document: {}",
+                            lfs::format_for_developer(
+                                rebound.error()));
+                        return 1;
+                    }
+                }
+
                 LOG_INFO("Headless with TCP training completed");
             }
 
@@ -262,18 +646,116 @@ namespace lfs::app {
         }
 
         int runHeadless(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
-            if (params->dataset.data_path.empty() && !params->resume_checkpoint) {
+            if (params->dataset.data_path.empty() &&
+                !params->resume_checkpoint &&
+                !params->resume_project) {
                 LOG_ERROR("Headless mode requires --data-path or --resume");
                 return 1;
             }
 
             lfs::event::CommandCenterBridge::instance().set(&lfs::training::CommandCenter::instance());
             HeadlessRunCoordinator coordinator;
+            HeadlessPluginSignalGuard plugin_signals;
 
             {
                 core::Scene scene;
 
-                if (params->resume_checkpoint) {
+                if (params->resume_project) {
+                    auto project =
+                        loadTrainingProject(
+                            *params, scene);
+                    if (!project) {
+                        LOG_ERROR(
+                            "Failed to load training project: {}",
+                            lfs::format_for_developer(
+                                project.error()));
+                        return 1;
+                    }
+
+                    if (!project->params
+                             .python_scripts
+                             .empty()) {
+                        vis::gui::panels::
+                            PythonScriptManagerState::
+                                getInstance()
+                                    .setScripts(
+                                        project->params
+                                            .python_scripts);
+                    }
+                    if (!project->params
+                             .python_scripts
+                             .empty() &&
+                        !python::ensure_plugins_loaded(
+                            true)) {
+                        LOG_ERROR(
+                            "Failed to load plugins before running "
+                            "headless Python scripts");
+                        return 1;
+                    }
+                    std::optional<
+                        io::project::RecoverySession>
+                        recovery_session;
+                    if (const auto* session =
+                            project->document
+                                .recovery_session()) {
+                        recovery_session = *session;
+                    }
+                    auto installed =
+                        training::
+                            installTrainerFromProjectCheckpoint(
+                                scene,
+                                project->document
+                                    .document(),
+                                project
+                                    ->checkpoint_uuid,
+                                project->params,
+                                core::path_to_utf8(
+                                    *params
+                                         ->resume_project),
+                                project->iteration,
+                                recovery_session);
+                    if (!installed) {
+                        LOG_ERROR(
+                            "Failed to restore project trainer state: {}",
+                            installed.error());
+                        return 1;
+                    }
+                    auto trainer =
+                        std::move(installed->trainer);
+                    training::grant_headless_project_saves(
+                        *trainer, project->params,
+                        *params->resume_project);
+                    LOG_INFO(
+                        "Project display hydration complete; full "
+                        "trainer state restored at iteration {}",
+                        project->iteration);
+
+                    core::Tensor::trim_memory_pool();
+                    if (const auto result =
+                            trainer->train(
+                                coordinator
+                                    .stop_token());
+                        !result) {
+                        LOG_ERROR(
+                            "Training error: {}",
+                            lfs::format_for_developer(
+                                result.error()));
+                        return 1;
+                    }
+                    if (auto rebound =
+                            project->document
+                                .rebind_after_durable_merge();
+                        !rebound) {
+                        LOG_ERROR(
+                            "Headless recovery merge could not rebind the live project document: {}",
+                            lfs::format_for_developer(
+                                rebound.error()));
+                        return 1;
+                    }
+                    trainer->shutdown();
+                    static_cast<void>(
+                        trainer.release());
+                } else if (params->resume_checkpoint) {
                     const auto ckpt_params_result = loadCheckpointParams(*params, scene);
                     if (!ckpt_params_result) {
                         LOG_ERROR("Failed to load checkpoint: {}", ckpt_params_result.error());
@@ -296,6 +778,8 @@ namespace lfs::app {
                         LOG_ERROR("Failed to initialize trainer: {}", result.error());
                         return 1;
                     }
+                    training::grant_headless_project_saves(
+                        *trainer, *ckpt_params_result);
 
                     const auto ckpt_result = trainer->load_checkpoint(*params->resume_checkpoint);
                     if (!ckpt_result) {
@@ -346,6 +830,8 @@ namespace lfs::app {
                         LOG_ERROR("Failed to initialize trainer: {}", result.error());
                         return 1;
                     }
+                    training::grant_headless_project_saves(
+                        *trainer, *params);
 
                     core::Tensor::trim_memory_pool();
 
@@ -362,7 +848,8 @@ namespace lfs::app {
                     static_cast<void>(trainer.release());
                 }
 
-                LOG_INFO("Headless training completed");
+                LOG_INFO("Headless training {}",
+                         coordinator.interrupted() ? "stopped by user" : "completed");
                 core::teardown_gpu_before_exit();
                 core::mark_clean_exit();
                 core::flush_and_exit(0);
@@ -432,6 +919,8 @@ namespace lfs::app {
             options.height = cfg.height;
             options.framerate = cfg.fps;
             options.crf = cfg.crf;
+            options.provenance = cfg.include_provenance ? core::make_provenance_stamp()
+                                                        : core::make_minimal_provenance_stamp();
             if (const auto open_result = encoder.open(cfg.output_path, options); !open_result) {
                 LOG_ERROR("Failed to open video encoder: {}", open_result.error());
                 return 1;
@@ -601,6 +1090,55 @@ namespace lfs::app {
         }
 
         int runGui(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
+            const bool safe_mode = params->safe_mode ||
+                                   lfs::core::environment::flag("LFS_SAFE_MODE", false);
+            python::set_user_plugin_loading_enabled(!safe_mode);
+            vis::gui::LayoutState::setPersistenceEnabled(!safe_mode);
+            vis::input::InputBindings::setPersistenceEnabled(!safe_mode);
+            if (const auto paths = lfs::core::UserPaths::resolve()) {
+                if (!safe_mode) {
+                    if (const auto migration = lfs::core::migrateLegacySettings(*paths); !migration)
+                        LOG_WARN("Unable to migrate legacy user settings: {}",
+                                 lfs::format_for_developer(migration.error()));
+                }
+                const auto reset_file = [&paths](const bool requested, const char* const label,
+                                                 const auto& reset) {
+                    if (!requested)
+                        return;
+                    const auto result = reset();
+                    if (!result) {
+                        LOG_ERROR("Unable to reset {}: {}", label,
+                                  lfs::format_for_developer(result.error()));
+                    } else if (*result) {
+                        LOG_INFO("Reset {}. Backup saved to {}", label,
+                                 lfs::core::path_to_utf8(**result));
+                    } else {
+                        LOG_INFO("Reset {}. No existing settings file required a backup", label);
+                    }
+                };
+                const bool reset_preferences = params->reset_preferences || params->reset_all_settings;
+                const bool reset_layout = params->reset_layout || params->reset_all_settings;
+                reset_file(reset_preferences, "preferences", [&paths] { return paths->resetPreferences(); });
+                reset_file(reset_layout, "layout", [&paths] { return paths->resetLayout(); });
+                reset_file(reset_layout, "UI preferences", [&paths] { return paths->resetUiPreferences(); });
+                reset_file(params->reset_all_settings, "window", [&paths] { return paths->resetWindowState(); });
+                reset_file(params->reset_all_settings, "project lifecycle", [&paths] {
+                    return paths->resetProjectLifecycle();
+                });
+
+            } else {
+                LOG_WARN("Unable to resolve user settings path: {}",
+                         lfs::format_for_developer(paths.error()));
+            }
+
+            if (safe_mode) {
+                LOG_WARN("Safe mode active: user plugin loading is disabled for this process");
+            }
+
+            const std::string window_title = safe_mode
+                                                 ? "LichtFeld Studio (Safe Mode)"
+                                                 : "LichtFeld Studio";
+
             if (!params->python_scripts.empty()) {
                 vis::gui::panels::PythonScriptManagerState::getInstance().setScripts(params->python_scripts);
             }
@@ -629,14 +1167,67 @@ namespace lfs::app {
             });
 
             constexpr auto graphics_backend = lfs::vis::GraphicsBackend::Vulkan;
+            mcp::McpHttpServer mcp_http({.enable_resources = true});
+            const auto mcp_preferences = vis::loadMcpPreferences();
+            const auto mcp_port_override = params->mcp_port;
+            const auto startup_project =
+                params->project_path
+                    ? params->project_path
+                    : params->resume_project;
             auto viewer = vis::Visualizer::create({
-                .title = "LichtFeld Studio",
+                .title = window_title,
                 .width = 1280,
                 .height = 720,
                 .antialiasing = false,
                 .show_startup_overlay = !disable_splash,
+                .safe_mode = safe_mode,
+                .mcp_status_provider = [] {
+                    const auto status = mcp::activeMcpHttpStatus();
+                    return vis::RuntimeServiceStatus{
+                        .enabled = status.enabled,
+                        .running = status.running,
+                        .phase = [&] {
+                            switch (status.phase) {
+                            case mcp::McpHttpPhase::Disabled:
+                                return vis::RuntimeServicePhase::Disabled;
+                            case mcp::McpHttpPhase::Starting:
+                                return vis::RuntimeServicePhase::Starting;
+                            case mcp::McpHttpPhase::Running:
+                                return vis::RuntimeServicePhase::Running;
+                            case mcp::McpHttpPhase::Stopping:
+                                return vis::RuntimeServicePhase::Stopping;
+                            case mcp::McpHttpPhase::Failed:
+                                return vis::RuntimeServicePhase::Failed;
+                            }
+                            return vis::RuntimeServicePhase::Failed; }(),
+                        .network_exposed = status.expose_network,
+                        .port = status.port,
+                        .request_count = status.request_count,
+                        .success_count = status.success_count,
+                        .error_count = status.error_count,
+                        .endpoints = status.endpoints,
+                        .request_logging = status.request_logging,
+                        .log_file = status.log_file,
+                        .error = status.error,
+                        .error_kind = [&] {
+                            switch (status.error_kind) {
+                            case mcp::McpHttpErrorKind::None:
+                                return vis::RuntimeServiceErrorKind::None;
+                            case mcp::McpHttpErrorKind::InvalidPort:
+                                return vis::RuntimeServiceErrorKind::InvalidPort;
+                            case mcp::McpHttpErrorKind::BindFailed:
+                                return vis::RuntimeServiceErrorKind::BindFailed;
+                            case mcp::McpHttpErrorKind::ListenerFailed:
+                                return vis::RuntimeServiceErrorKind::RuntimeFailure;
+                            }
+                            return vis::RuntimeServiceErrorKind::RuntimeFailure; }(),
+                        .error_address = status.error_address,
+                        .error_port = status.error_port,
+                    };
+                },
                 .gut = params->optimization.gut,
                 .graphics_backend = graphics_backend,
+                .startup_project = startup_project,
             });
 
             viewer->setParameters(*params);
@@ -652,7 +1243,9 @@ namespace lfs::app {
                 return 1;
             }
 
-            if (params->import_cameras_path || params->resume_checkpoint) {
+            if (params->import_cameras_path ||
+                params->resume_checkpoint ||
+                startup_project) {
                 if (auto& fut = cudaWarmupFuture(); fut.valid())
                     fut.wait();
             }
@@ -673,20 +1266,74 @@ namespace lfs::app {
             register_gui_scene_tools(viewer.get());
             register_gui_scene_resources(viewer.get());
 
-            mcp::McpHttpServer mcp_http({.enable_resources = true});
+            mcp::setActiveMcpHttpServer(&mcp_http);
+            vis::setRuntimeServiceControls({
+                .toggle_mcp_enabled = [safe_mode, mcp_port_override] {
+                    if (safe_mode)
+                        return false;
+                    const auto status = mcp::activeMcpHttpStatus();
+                    const auto mcp_preferences = vis::loadMcpPreferences();
+                    const mcp::McpHttpConfig config{
+                        .enabled = !status.enabled,
+                        .expose_network = status.expose_network,
+                        .port = mcp_port_override.value_or(mcp_preferences.port),
+                        .request_logging = status.request_logging,
+                    };
+                    if (!mcp::applyActiveMcpHttpConfig(config))
+                        return false;
+                    vis::saveMcpPreferences({
+                        .enabled = config.enabled,
+                        .expose_network = config.expose_network,
+                        .port = mcp_preferences.port,
+                        .request_logging = config.request_logging,
+                    });
+                    return true; },
+                .toggle_mcp_binding = [safe_mode, mcp_port_override] {
+                    if (safe_mode)
+                        return false;
+                    const auto status = mcp::activeMcpHttpStatus();
+                    const auto mcp_preferences = vis::loadMcpPreferences();
+                    const mcp::McpHttpConfig config{
+                        .enabled = status.enabled,
+                        .expose_network = !status.expose_network,
+                        .port = mcp_port_override.value_or(mcp_preferences.port),
+                        .request_logging = status.request_logging,
+                    };
+                    if (!mcp::applyActiveMcpHttpConfig(config))
+                        return false;
+                    vis::saveMcpPreferences({
+                        .enabled = config.enabled,
+                        .expose_network = config.expose_network,
+                        .port = mcp_preferences.port,
+                        .request_logging = config.request_logging,
+                    });
+                    return true; },
+            });
             viewer->setShutdownRequestedCallback([&mcp_http]() {
+                vis::setRuntimeServiceControls({});
+                mcp::setActiveMcpHttpServer(nullptr);
                 mcp_http.stop();
             });
-            if (!mcp_http.start())
+            if (!mcp_http.start({
+                    .enabled = mcp_preferences.enabled,
+                    .expose_network = mcp_preferences.expose_network,
+                    .port = mcp_port_override.value_or(mcp_preferences.port),
+                    .request_logging = mcp_preferences.request_logging,
+                }))
                 LOG_ERROR("Failed to start MCP HTTP server");
 
             viewer->run();
 
+            vis::setRuntimeServiceControls({});
+            mcp::setActiveMcpHttpServer(nullptr);
             mcp_http.stop();
 
-            python::finalize();
-
+            // GuiManager drains scheduled Python UI work while tearing down the
+            // viewer. Keep the runtime/GIL available until that work and the
+            // Python-backed UI resources have been released.
             viewer.reset();
+
+            python::finalize();
 
             core::teardown_gpu_before_exit();
 
@@ -716,9 +1363,7 @@ namespace lfs::app {
         // lfs_visualizer.dll, giving each its own CacheLoader singleton.
         // The callback below executes in the exe's context, so the exe's
         // copy must be initialized before it is invoked.
-        lfs::io::CacheLoader::getInstance(
-            params->dataset.loading_params.use_cpu_memory,
-            params->dataset.loading_params.use_fs_cache);
+        lfs::io::CacheLoader::getInstance(params->dataset.loading_params.use_cpu_memory);
 
         lfs::core::set_image_loader([](const lfs::core::ImageLoadParams& p) {
             return lfs::io::CacheLoader::getInstance().load_cached_image(

@@ -164,9 +164,8 @@ namespace lfs::tcp {
         } else if (command == "stop") {
             trainer_manager_->stopTraining();
             response["success"] = true;
-        } else if (command == "save_checkpoint") {
-            trainer_manager_->requestSaveCheckpoint();
-            response["success"] = true;
+        } else if (command == "save_project") {
+            response["success"] = trainer_manager_->requestSaveProject();
         } else {
             lfs::Error error = lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::NotFound,

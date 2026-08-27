@@ -7,11 +7,13 @@
 #include "core/export.hpp"
 #include "core/tensor.hpp"
 #include "io/error.hpp"
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -63,10 +65,22 @@ namespace lfs::io {
         std::string images_folder = "images";
         int min_track_length = 0;
         bool validate_only = false;
+        // Sidecars are opt-in so dataset loading does not inspect or cache
+        // auxiliary folders that the active training configuration will not use.
+        bool load_masks = false;
+        bool load_depths = false;
+        bool load_normals = false;
+        // When true, a normal map that fails the size contract is ignored (one
+        // warning naming the file) so auto-generate can overwrite it. When false,
+        // the load fails with NORMAL_SIZE_MISMATCH as before.
+        bool normal_auto_generate = false;
         CentralizeDataset centralize = CentralizeDataset::Off;
         ProgressCallback progress = nullptr;
         CancelCallback cancel_requested = nullptr;
         SplatTensorAllocator splat_tensor_allocator = {};
+        // When true, and splat_tensor_allocator is set, PLY SH-rest is encoded to
+        // q16 on the way in (no float32 SplatData.shN GPU workspace).
+        bool shN_q16 = false;
     };
 
     class LoadCancelledError : public std::runtime_error {
@@ -77,6 +91,8 @@ namespace lfs::io {
     // Re-home a splat's tensors into the Vulkan-external allocator the renderer requires (it
     // rejects an input-copy fallback). No-op if already allocator-backed or allocator is empty.
     // The loader runs this for file imports; in-memory callers (e.g. the Python API) must too.
+    [[nodiscard]] LFS_IO_API bool splatTensorsRendererReady(const SplatData& model);
+
     [[nodiscard]] LFS_IO_API Result<void> migrateSplatTensorsToAllocator(
         SplatData& model, const SplatTensorAllocator& allocator);
 
@@ -96,6 +112,22 @@ namespace lfs::io {
         std::shared_ptr<PointCloud> point_cloud;
     };
 
+    enum class ImportWorldOriginProvenance : std::uint8_t {
+        None,
+        CentralizeByPointCloud,
+        CentralizeByCameras,
+        User,
+        Import,
+    };
+
+    struct ImportGeoreference {
+        std::optional<std::string> crs;
+        std::array<double, 3> world_origin{};
+        double world_unit_scale = 1.0;
+        ImportWorldOriginProvenance world_origin_provenance =
+            ImportWorldOriginProvenance::None;
+    };
+
     struct LoadResult {
         std::variant<std::shared_ptr<SplatData>, LoadedScene, std::shared_ptr<MeshData>> data;
         Tensor scene_center;
@@ -103,6 +135,7 @@ namespace lfs::io {
         std::string loader_used;
         std::chrono::milliseconds load_time{0};
         std::vector<std::string> warnings;
+        std::optional<ImportGeoreference> georeference;
     };
 
     /**

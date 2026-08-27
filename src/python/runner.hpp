@@ -78,12 +78,24 @@ namespace lfs::python {
     void ensure_builtin_ui_registered();
 
     /**
+     * @brief Allow or deny loading user plugins for this process.
+     *
+     * Safe mode sets this to false before the visualizer reaches its first
+     * frame. Built-in Python UI remains available in both modes.
+     */
+    void set_user_plugin_loading_enabled(bool enabled) noexcept;
+
+    /**
      * @brief Load user plugins configured for startup.
      *        This requires a ready Python runtime.
      * @param wait_for_completion Allow a headless caller to wait even when
      *        the Python UI module identified the current thread as graphics.
      */
     [[nodiscard]] bool ensure_plugins_loaded(bool wait_for_completion = false);
+
+    // Invoked from finish_plugin_preload after load becomes terminal.
+    // Headless training reasserts SIGINT/SIGTERM here. nullptr clears.
+    void set_plugin_preload_completion_hook(void (*hook)());
 
     /**
      * @brief Schedule plugin autoload after startup.

@@ -3,6 +3,7 @@
 """Plugin template generator for scaffolding new plugins."""
 
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -149,7 +150,7 @@ def create_plugin(name: str, target_dir: Optional[Path] = None) -> Path:
 
     Args:
         name: Plugin name (used for directory and module)
-        target_dir: Optional target directory (defaults to ~/.lichtfeld/plugins)
+        target_dir: Optional target directory (defaults to the resolved user plugin directory)
 
     Returns:
         Path to created plugin directory
@@ -158,7 +159,12 @@ def create_plugin(name: str, target_dir: Optional[Path] = None) -> Path:
         FileExistsError: If plugin directory already exists
     """
     if target_dir is None:
-        target_dir = Path.home() / ".lichtfeld" / "plugins"
+        target_dir = Path(
+            os.environ.get(
+                "LFS_RESOLVED_PLUGIN_DIR",
+                Path.home() / ".lichtfeld" / "plugins",
+            )
+        )
 
     plugin_dir = target_dir / name
     if plugin_dir.exists():

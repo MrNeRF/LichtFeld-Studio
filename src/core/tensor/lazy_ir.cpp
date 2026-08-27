@@ -6,6 +6,7 @@
 #include "internal/lazy_config.hpp"
 #include "internal/tensor_impl.hpp"
 #include <algorithm>
+#include <atomic>
 #include <mutex>
 #include <optional>
 #include <unordered_map>
@@ -40,6 +41,17 @@ namespace lfs::core::internal {
         LazyIrRuntime& lazy_ir_runtime() {
             static LazyIrRuntime runtime;
             return runtime;
+        }
+
+        // -1 = unset (read env once), 0 = off, 1 = on
+        struct LazyIrActiveState {
+            std::atomic<int> override_enabled{-1};
+            std::atomic<int> env_cached{-1};
+        };
+
+        LazyIrActiveState& lazy_ir_active_state() {
+            static LazyIrActiveState state;
+            return state;
         }
 
         constexpr size_t kDefaultLazyIrNodeLimit = 65'536;
@@ -187,7 +199,22 @@ namespace lfs::core::internal {
     }
 
     bool lazy_ir_active() {
-        return true;
+        auto& state = lazy_ir_active_state();
+        const int override_enabled = state.override_enabled.load(std::memory_order_acquire);
+        // Production default OFF. Only lazy_ir_set_active_for_testing() can enable.
+        if (override_enabled >= 0) {
+            return override_enabled != 0;
+        }
+        return false;
+    }
+
+    void lazy_ir_set_active_for_testing(const std::optional<bool> enabled) {
+        auto& state = lazy_ir_active_state();
+        if (enabled.has_value()) {
+            state.override_enabled.store(*enabled ? 1 : 0, std::memory_order_release);
+            return;
+        }
+        state.override_enabled.store(-1, std::memory_order_release);
     }
 
     void clear_lazy_ir_for_testing() {
@@ -286,7 +313,8 @@ namespace lfs::core::internal {
     }
 
     bool lazy_ir_set_node_inputs(uint64_t node_id, const std::vector<uint64_t>& input_ids) {
-        if (!lazy_ir_active() || node_id == 0) {
+        // Allowed whenever a deferred/fusion node exists (not gated by eager IR flag).
+        if (node_id == 0) {
             return false;
         }
 
@@ -410,9 +438,8 @@ namespace lfs::core::internal {
     uint64_t lazy_ir_record_deferred(const Tensor& output,
                                      std::string_view op_name,
                                      const std::vector<uint64_t>& input_ids) {
-        if (!lazy_ir_active()) {
-            return 0;
-        }
+        // Always record deferred nodes: the fusion/materializer registries key by
+        // node_id. Eager IR recording remains gated by lazy_ir_active().
         if (output.debug_id() == 0) {
             return 0;
         }

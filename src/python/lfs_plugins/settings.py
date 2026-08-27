@@ -4,6 +4,7 @@
 
 import json
 import logging
+import os
 import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -107,7 +108,12 @@ class SettingsManager:
     _lock = threading.Lock()
 
     def __init__(self):
-        self._settings_dir = Path.home() / ".lichtfeld" / "plugins"
+        self._settings_dir = Path(
+            os.environ.get(
+                "LFS_RESOLVED_PLUGIN_DIR",
+                Path.home() / ".lichtfeld" / "plugins",
+            )
+        )
         self._cache: Dict[str, PluginSettings] = {}
         self._cache_lock = threading.Lock()
 

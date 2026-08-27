@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "input/frame_input_buffer.hpp"
 #include "input/input_router.hpp"
 #include "visualizer/visualizer.hpp"
@@ -11,6 +12,7 @@
 #include <filesystem>
 #include <glm/glm.hpp>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -22,8 +24,16 @@ namespace lfs::vis {
     class InputController;
     class VulkanContext;
 
-    class WindowManager {
+    class LFS_VIS_API WindowManager {
     public:
+        struct PersistentWindowState {
+            int x = 0;
+            int y = 0;
+            int width = 1280;
+            int height = 720;
+            bool maximized = false;
+        };
+
         enum class ResizeIntent {
             Interactive,
             Exact,
@@ -46,6 +56,10 @@ namespace lfs::vis {
         WindowManager& operator=(const WindowManager&) = delete;
 
         bool init();
+
+        void setInitialWindowState(PersistentWindowState state);
+        [[nodiscard]] PersistentWindowState persistentWindowState() const;
+        [[nodiscard]] bool resetPersistentWindowState();
 
         void showWindow();
         void updateWindowSize(const char* reason = "manual",
@@ -124,6 +138,7 @@ namespace lfs::vis {
         bool is_borderless_maximized_ = false;
         glm::ivec2 borderless_restore_pos_{0, 0};
         glm::ivec2 borderless_restore_size_{1280, 720};
+        std::optional<PersistentWindowState> initial_window_state_;
         bool should_close_ = false;
 
         static void* callback_handler_;

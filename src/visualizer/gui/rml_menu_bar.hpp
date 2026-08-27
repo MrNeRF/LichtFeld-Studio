@@ -40,6 +40,7 @@ namespace lfs::vis::gui {
         std::string label;
         std::string operator_id;
         std::string shortcut;
+        std::string tooltip;
         bool enabled = true;
         bool selected = false;
         int callback_index = -1;
@@ -73,6 +74,7 @@ namespace lfs::vis::gui {
         std::string operator_id;
         std::string shortcut;
         std::string checkmark;
+        std::string tooltip;
         bool enabled = true;
         bool separator_before = false;
         bool has_shortcut = false;
@@ -88,6 +90,7 @@ namespace lfs::vis::gui {
         std::string operator_id;
         std::string shortcut;
         std::string checkmark;
+        std::string tooltip;
         bool enabled = true;
         bool separator_before = false;
         bool has_shortcut = false;
@@ -125,6 +128,7 @@ namespace lfs::vis::gui {
         void openDropdown(int index);
         void closeDropdown();
         void rebuildDropdownDOM();
+        void sizeOpenDropdowns();
         void setOpenSubmenu(int index);
         Rml::Element* dropdownElementAtPoint(float x, float y) const;
         int submenuIndexForElement(Rml::Element* element) const;

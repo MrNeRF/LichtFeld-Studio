@@ -22,8 +22,13 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         core/frame_state_machine.cpp
         core/data_loading_service.cpp
         core/editor_context.cpp
+        core/job_registry.cpp
         core/parameter_manager.cpp
         core/services.cpp
+
+        # Project session chapters
+        project/session_state.cpp
+        project/project_lifecycle.cpp
 
         # Window management
         window/window_manager.cpp
@@ -42,6 +47,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/rendering_manager_events.cpp
         rendering/rendering_manager_vulkan.cpp
         rendering/rendering_manager_viewport.cpp
+        rendering/scene_upscaler_registry.cpp
         rendering/lod_page_cache.cpp
         rendering/lod_upload_engine.cpp
         rendering/spark_lod_controller.cpp
@@ -60,7 +66,8 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/passes/vulkan_split_view_pass.cpp
         rendering/framerate_controller.cpp
 
-        # Theme system
+        # Preferences and theme system
+        preferences.cpp
         theme/theme.cpp
 
         # GUI system
@@ -85,6 +92,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rml_shell_frame.cpp
         gui/rml_viewport_overlay.cpp
         gui/vram_hud_overlay.cpp
+        gui/perf_sampler.cpp
         gui/rml_status_bar.cpp
         gui/gpu_memory_query.cpp
         gui/line_renderer.cpp
@@ -119,6 +127,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         # Scene management
         scene/scene_manager.cpp
         scene/selection_state.cpp
+        scene/viewer_splat_quantize.cpp
 
         # Input handling
         input/input_controller.cpp
@@ -289,6 +298,7 @@ set(LFS_VIEWPORT_SHADER_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/shader
 target_include_directories(lfs_visualizer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/shaders")
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/screen_quad.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/screen_quad.vert.spv.h" kScreenQuadVertSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/scene.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/scene.frag.spv.h" kSceneFragSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/scene_spatial.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/scene_spatial.frag.spv.h" kSceneSpatialFragSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/vignette.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/vignette.frag.spv.h" kVignetteFragSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/grid.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/grid.vert.spv.h" kGridVertSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/grid.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/grid.frag.spv.h" kGridFragSpv)

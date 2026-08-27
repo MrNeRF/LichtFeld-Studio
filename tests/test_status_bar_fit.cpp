@@ -4,6 +4,7 @@
  */
 
 #include "gui/rml_status_bar.hpp"
+#include "gui/rmlui/rmlui_manager.hpp"
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
@@ -13,6 +14,7 @@
 
 #include <cassert>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <sstream>
@@ -37,6 +39,19 @@ namespace lfs::vis::gui {
         static int fit(RmlStatusBar& status_bar, const bool allow_expand = false) {
             status_bar.fitToAvailableWidth(allow_expand);
             return status_bar.fit_level_;
+        }
+
+        static void setMcpExpanded(RmlStatusBar& status_bar, const bool expanded) {
+            status_bar.model_.mcp_details_expanded = expanded;
+        }
+
+        static void trackRenderedFrame(RmlStatusBar& status_bar,
+                                       RmlUIManager& manager,
+                                       const float bar_x,
+                                       const float bar_y) {
+            status_bar.rml_manager_ = &manager;
+            status_bar.trackRenderedContextFrame(bar_x, bar_y,
+                                                 status_bar.overlayHeight());
         }
     };
 
@@ -74,6 +89,8 @@ namespace {
     };
 
     struct StatusBarModel {
+        bool safe_mode = false;
+        std::string safe_mode_text = "Safe Mode";
         std::string mode_text = "Training (Default/3DGS)";
         std::string mode_color = "#ffffff";
         bool show_training = true;
@@ -122,6 +139,17 @@ namespace {
         std::string fps_color = "#ffffff";
         std::string fps_label = " FPS";
         std::string git_commit = "abcdef12";
+        bool mcp_details_expanded = false;
+        std::string mcp_summary = "MCP Local";
+        std::string mcp_details = "http://127.0.0.1:45677/mcp";
+        std::string mcp_tooltip = "MCP is listening only on this computer";
+        std::string mcp_color = "#ffffff";
+        std::string mcp_preferences_label = "Edit";
+        bool mcp_server_enabled = true;
+        std::string mcp_toggle_label = "Turn off";
+        std::string mcp_total_text = "2 requests";
+        std::string mcp_success_text = "2 successful";
+        std::string mcp_error_text = "0 errors";
         bool show_status_message = false;
         std::string status_message_text = "A long transient status message that must remain on one line";
         std::string status_message_color = "#ffffff";
@@ -187,6 +215,8 @@ namespace {
             auto constructor = context_->CreateDataModel("status_bar");
             ASSERT_TRUE(static_cast<bool>(constructor));
             bool bound = true;
+            bound &= constructor.Bind("safe_mode", &model_.safe_mode);
+            bound &= constructor.Bind("safe_mode_text", &model_.safe_mode_text);
             bound &= constructor.Bind("mode_text", &model_.mode_text);
             bound &= constructor.Bind("mode_color", &model_.mode_color);
             bound &= constructor.Bind("show_training", &model_.show_training);
@@ -235,10 +265,22 @@ namespace {
             bound &= constructor.Bind("fps_color", &model_.fps_color);
             bound &= constructor.Bind("fps_label", &model_.fps_label);
             bound &= constructor.Bind("git_commit", &model_.git_commit);
+            bound &= constructor.Bind("mcp_details_expanded", &model_.mcp_details_expanded);
+            bound &= constructor.Bind("mcp_summary", &model_.mcp_summary);
+            bound &= constructor.Bind("mcp_details", &model_.mcp_details);
+            bound &= constructor.Bind("mcp_tooltip", &model_.mcp_tooltip);
+            bound &= constructor.Bind("mcp_color", &model_.mcp_color);
+            bound &= constructor.Bind("mcp_preferences_label", &model_.mcp_preferences_label);
+            bound &= constructor.Bind("mcp_server_enabled", &model_.mcp_server_enabled);
+            bound &= constructor.Bind("mcp_toggle_label", &model_.mcp_toggle_label);
+            bound &= constructor.Bind("mcp_total_text", &model_.mcp_total_text);
+            bound &= constructor.Bind("mcp_success_text", &model_.mcp_success_text);
+            bound &= constructor.Bind("mcp_error_text", &model_.mcp_error_text);
             bound &= constructor.Bind("show_status_message", &model_.show_status_message);
             bound &= constructor.Bind("status_message_text", &model_.status_message_text);
             bound &= constructor.Bind("status_message_color", &model_.status_message_color);
             ASSERT_TRUE(bound);
+            model_handle_ = constructor.GetModelHandle();
 
             const auto document_path = std::filesystem::path(PROJECT_ROOT_PATH) /
                                        "src/visualizer/gui/rmlui/resources/statusbar.rml";
@@ -258,6 +300,7 @@ namespace {
         }
 
         void TearDown() override {
+            model_handle_ = {};
             ASSERT_TRUE(Rml::RemoveContext("status_bar_fit"));
             context_ = nullptr;
             document_ = nullptr;
@@ -266,6 +309,7 @@ namespace {
         inline static StubRenderInterface render_interface_;
         Rml::Context* context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
+        Rml::DataModelHandle model_handle_;
         StatusBarModel model_;
         lfs::vis::gui::RmlStatusBar status_bar_;
     };
@@ -295,6 +339,68 @@ namespace {
         EXPECT_LT(expanded_fit_level, previous_fit_level);
         assertNoVerticalOverflow(document_);
         assertFlexSiblingsDoNotOverlap(document_);
+    }
+
+    TEST_F(StatusBarFitTest, McpDetailsReserveOnlyTheirMeasuredOverlayArea) {
+        EXPECT_EQ(status_bar_.overlayHeight(), 0.0f);
+        EXPECT_FALSE(status_bar_.isOverlayPoint(2300.0f, -20.0f, 2400.0f));
+
+        lfs::vis::gui::RmlStatusBarTestAccess::setMcpExpanded(status_bar_, true);
+        model_.mcp_details_expanded = true;
+        model_handle_.DirtyVariable("mcp_details_expanded");
+        context_->SetDimensions({2400, static_cast<int>(22.0f + status_bar_.overlayHeight())});
+        ASSERT_TRUE(document_->SetProperty(
+            "height", std::format("{}px", 22.0f + status_bar_.overlayHeight())));
+        context_->Update();
+
+        auto* const popup = document_->GetElementById("mcp-popup");
+        ASSERT_NE(popup, nullptr);
+        const auto offset = popup->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const float center_x = offset.x + popup->GetOffsetWidth() * 0.5f;
+        const float center_y = offset.y + popup->GetOffsetHeight() * 0.5f -
+                               status_bar_.overlayHeight();
+        EXPECT_TRUE(status_bar_.isOverlayPoint(center_x, center_y, 2400.0f));
+        EXPECT_FALSE(status_bar_.isOverlayPoint(100.0f, -20.0f, 2400.0f));
+
+        lfs::vis::gui::RmlUIManager manager;
+        manager.beginFrameCursorTracking();
+        constexpr float bar_x = 30.0f;
+        constexpr float bar_y = 700.0f;
+        lfs::vis::gui::RmlStatusBarTestAccess::trackRenderedFrame(
+            status_bar_, manager, bar_x, bar_y);
+        const float context_y = bar_y - status_bar_.overlayHeight();
+        EXPECT_TRUE(manager.activeOverlayContainsPoint(
+            bar_x + center_x,
+            context_y + offset.y + popup->GetOffsetHeight() * 0.5f));
+        EXPECT_FALSE(manager.activeOverlayContainsPoint(bar_x + 100.0f,
+                                                        context_y + 5.0f));
+
+        lfs::vis::gui::RmlStatusBarTestAccess::setMcpExpanded(status_bar_, false);
+        EXPECT_EQ(status_bar_.overlayHeight(), 0.0f);
+    }
+
+    TEST(RuntimeServiceControlsTest, DispatchesMcpActionsThroughVisualizerBoundary) {
+        const auto initial_revision = lfs::vis::runtimeServiceRevision();
+        int enabled_toggles = 0;
+        int binding_toggles = 0;
+        lfs::vis::setRuntimeServiceControls({
+            .toggle_mcp_enabled = [&] {
+                ++enabled_toggles;
+                return true; },
+            .toggle_mcp_binding = [&] {
+                ++binding_toggles;
+                return true; },
+        });
+
+        EXPECT_TRUE(lfs::vis::toggleMcpRuntimeEnabled());
+        EXPECT_TRUE(lfs::vis::toggleMcpRuntimeBinding());
+        EXPECT_EQ(enabled_toggles, 1);
+        EXPECT_EQ(binding_toggles, 1);
+        EXPECT_EQ(lfs::vis::runtimeServiceRevision(), initial_revision + 2);
+
+        lfs::vis::setRuntimeServiceControls({});
+        EXPECT_FALSE(lfs::vis::toggleMcpRuntimeEnabled());
+        EXPECT_FALSE(lfs::vis::toggleMcpRuntimeBinding());
     }
 
 } // namespace

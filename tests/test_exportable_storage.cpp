@@ -1,20 +1,112 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda/sh_layout.cuh"
 #include "core/cuda_error.hpp"
 #include "core/exportable_storage.hpp"
+#include "core/parameters.hpp"
+#include "core/point_cloud.hpp"
+#include "core/scene.hpp"
+#include "core/sh_value_quant.hpp"
+#include "core/shareable_allocation_limit.hpp"
+#include "core/splat_data.hpp"
+#include "core/splat_exportable_storage.hpp"
+#include "core/tensor.hpp"
+#include "diagnostics/vram_profiler.hpp"
+#include "io/loader.hpp"
+#include "training/optimizer/adam_optimizer.hpp"
+#include "training/training_setup.hpp"
 
 #include <cuda_runtime.h>
+#include <glm/mat4x4.hpp>
 #include <gtest/gtest.h>
-#include <utility>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <vector>
 
 using namespace lfs::core;
 
-TEST(ExportableStorageTest, ImmediateDestroyLeavesCudaUsable) {
-    int device_count = 0;
-    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-        GTEST_SKIP() << "CUDA device unavailable";
+namespace {
+
+    void require_cuda() {
+        int device_count = 0;
+        if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
     }
+
+    std::size_t align_up_for_test(std::size_t value, std::size_t alignment) {
+        return ((value + alignment - 1) / alignment) * alignment;
+    }
+
+    void fill_device_pattern(void* device_ptr, std::size_t floats, float base) {
+        std::vector<float> host(floats);
+        for (std::size_t i = 0; i < floats; ++i) {
+            host[i] = base + static_cast<float>(i);
+        }
+        ASSERT_EQ(cudaMemcpy(device_ptr, host.data(), floats * sizeof(float), cudaMemcpyHostToDevice),
+                  cudaSuccess);
+    }
+
+    void expect_device_pattern(const void* device_ptr, std::size_t floats, float base) {
+        std::vector<float> host(floats);
+        ASSERT_EQ(cudaMemcpy(host.data(), device_ptr, floats * sizeof(float), cudaMemcpyDeviceToHost),
+                  cudaSuccess);
+        for (std::size_t i = 0; i < floats; ++i) {
+            EXPECT_FLOAT_EQ(host[i], base + static_cast<float>(i)) << "index " << i;
+        }
+    }
+
+    // SH1 pad-dropped q16 cells (9/prim) != IEEE-f16 floats (12/prim). N is not a
+    // reorder multiple so padding is also exercised. Matches the #1678 prune size class.
+    constexpr std::size_t kQ16Sh1N = 33;
+    constexpr int kQ16Sh1Degree = 1;
+
+    [[nodiscard]] uint32_t q16_sh1_rest() {
+        return static_cast<uint32_t>(sh_rest_coefficients_for_degree(kQ16Sh1Degree));
+    }
+
+    SplatData make_direct_q16_sh1(const bool with_bounds, const int active_sh) {
+        const auto rest = q16_sh1_rest();
+        const size_t cells = sh_value_quant::sh_value_u16_count(kQ16Sh1N, rest);
+        const size_t bounds_n = sh_value_quant::n_bounds_for_prims(kQ16Sh1N) * 2u;
+        Tensor means = Tensor::zeros({kQ16Sh1N, 3}, Device::CUDA);
+        Tensor sh0 = Tensor::zeros({kQ16Sh1N, 1, 3}, Device::CUDA);
+        Tensor scaling = Tensor::zeros({kQ16Sh1N, 3}, Device::CUDA);
+        Tensor rotation = Tensor::zeros({kQ16Sh1N, 4}, Device::CUDA);
+        Tensor opacity = Tensor::zeros({kQ16Sh1N, 1}, Device::CUDA);
+        Tensor shN = Tensor::zeros_direct(
+            TensorShape({cells}), cells, Device::CUDA, DataType::Float16);
+        Tensor bounds = Tensor::zeros({bounds_n}, Device::CUDA, DataType::Float32);
+        SplatData model(kQ16Sh1Degree,
+                        std::move(means),
+                        std::move(sh0),
+                        std::move(shN),
+                        std::move(scaling),
+                        std::move(rotation),
+                        std::move(opacity),
+                        1.0f,
+                        SplatData::ShNLayout::Swizzled);
+        if (with_bounds) {
+            model.set_active_sh_degree(active_sh, std::move(bounds));
+        }
+        return model;
+    }
+
+} // namespace
+
+TEST(ExportableStorageTest, ImmediateDestroyLeavesCudaUsable) {
+    require_cuda();
 
     constexpr std::size_t BLOCK_BYTES = 1 << 20;
     auto block_result = allocateExportableDeviceBlock(BLOCK_BYTES, 0, false);
@@ -65,4 +157,1962 @@ TEST(ExportableStorageTest, ImmediateDestroyLeavesCudaUsable) {
         static_cast<const void*>(nullptr),
         probe,
         PROBE_BYTES);
+}
+
+// ---------------------------------------------------------------------------
+// exportable splat block grows with live N
+// ---------------------------------------------------------------------------
+
+TEST(SplatExportableStorageTest, CreateTracksLiveCapacityNotMaxCap) {
+    require_cuda();
+
+    constexpr std::size_t kLive = 1024;
+    constexpr std::size_t kMaxCap = 5'000'000;
+    constexpr int kShDegree = 3;
+
+    const std::size_t live_bytes = SplatExportableStorage::layoutBytes(kLive, kShDegree);
+    const std::size_t max_bytes = SplatExportableStorage::layoutBytes(kMaxCap, kShDegree);
+    ASSERT_GT(max_bytes, live_bytes);
+    ASSERT_GT(max_bytes - live_bytes, 100ull << 20); // hundreds of MiB at 5M SH3
+
+    auto storage_result = SplatExportableStorage::create(kLive, kShDegree, 0, kMaxCap);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+    ASSERT_TRUE(storage.valid());
+    EXPECT_EQ(storage.capacity(), kLive);
+    EXPECT_EQ(storage.reservedCapacity(), kMaxCap);
+    EXPECT_GE(storage.block->reserved_bytes, max_bytes);
+    std::size_t live_region_bytes = 0;
+    for (std::size_t b : storage.region_bytes) {
+        live_region_bytes += b;
+    }
+    EXPECT_GE(storage.block->committed_bytes, live_region_bytes);
+    EXPECT_LT(storage.block->committed_bytes, max_bytes / 4);
+
+    const auto snap = lfs::diagnostics::VramProfiler::instance().snapshot();
+    EXPECT_EQ(snap.process.exportable_splat_bytes, storage.block->committed_bytes);
+    EXPECT_LT(snap.process.exportable_splat_bytes, max_bytes / 4);
+}
+
+TEST(SplatExportableStorageTest, LayoutBytesRejectsRegionSizeOverflow) {
+    constexpr std::size_t kPerPrimitiveBytes = 3 * sizeof(float);
+    const std::size_t overflowing_capacity =
+        std::numeric_limits<std::size_t>::max() / kPerPrimitiveBytes + 1;
+
+    try {
+        (void)SplatExportableStorage::layoutBytes(overflowing_capacity, /*sh_degree=*/0);
+        FAIL() << "overflowing exportable region size was accepted";
+    } catch (const std::runtime_error& error) {
+        EXPECT_NE(std::string_view(error.what()).find("exportable splat region"),
+                  std::string_view::npos);
+    }
+}
+
+TEST(SplatExportableStorageTest, GrowPreservesDataAndTracksBytes) {
+    require_cuda();
+
+    constexpr std::size_t kInitial = 256;
+    constexpr std::size_t kGrown = 512;
+    constexpr std::size_t kReserve = 4096;
+    constexpr int kShDegree = 3;
+
+    auto storage_result = SplatExportableStorage::create(kInitial, kShDegree, 0, kReserve);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+    ASSERT_TRUE(storage.valid());
+    const void* const stable_ptr = storage.block->device_ptr;
+    const std::size_t bytes_before = storage.block->committed_bytes;
+    const auto gen_before = storage.generation();
+
+    // Write a known pattern into the means region (first kInitial * 3 floats).
+    constexpr std::size_t kMeansFloats = kInitial * 3;
+    fill_device_pattern(storage.block->device_ptr, kMeansFloats, 10.0f);
+
+    // Also stamp scaling region so relocation is tested for a non-zero offset.
+    void* scaling_ptr =
+        static_cast<char*>(storage.block->device_ptr) + storage.region_offsets[SplatExportableStorage::Scaling];
+    constexpr std::size_t kScalingFloats = kInitial * 3;
+    fill_device_pattern(scaling_ptr, kScalingFloats, 100.0f);
+
+    auto grew = storage.grow(kGrown);
+    if (!grew) {
+        FAIL() << grew.error();
+    }
+    ASSERT_TRUE(*grew);
+    EXPECT_EQ(storage.capacity(), kGrown);
+    EXPECT_EQ(storage.block->device_ptr, stable_ptr) << "device_ptr must stay stable across grow";
+    EXPECT_GT(storage.generation(), gen_before);
+    EXPECT_GE(storage.block->committed_bytes, bytes_before);
+    EXPECT_EQ(storage.region_offsets[SplatExportableStorage::Scaling],
+              static_cast<std::size_t>(static_cast<const char*>(scaling_ptr) -
+                                       static_cast<const char*>(storage.block->device_ptr)));
+
+    const auto snap = lfs::diagnostics::VramProfiler::instance().snapshot();
+    EXPECT_EQ(snap.process.exportable_splat_bytes, storage.block->committed_bytes);
+    std::size_t live_region_bytes = 0;
+    for (std::size_t b : storage.region_bytes) {
+        live_region_bytes += b;
+    }
+    EXPECT_GE(snap.process.exportable_splat_bytes, live_region_bytes);
+
+    expect_device_pattern(storage.block->device_ptr, kMeansFloats, 10.0f);
+    void* scaling_after =
+        static_cast<char*>(storage.block->device_ptr) + storage.region_offsets[SplatExportableStorage::Scaling];
+    expect_device_pattern(scaling_after, kScalingFloats, 100.0f);
+
+    // Idempotent: grow to same capacity is a no-op.
+    auto grew_again = storage.grow(kGrown);
+    ASSERT_TRUE(grew_again.has_value());
+    EXPECT_FALSE(*grew_again);
+}
+
+TEST(SplatExportableStorageTest, GrowBeyondReserveFailsCleanly) {
+    require_cuda();
+
+    constexpr std::size_t kInitial = 128;
+    constexpr std::size_t kReserve = 256;
+    constexpr int kShDegree = 3;
+
+    auto storage_result = SplatExportableStorage::create(kInitial, kShDegree, 0, kReserve);
+    ASSERT_TRUE(storage_result.has_value()) << storage_result.error();
+    auto storage = std::move(*storage_result);
+    const auto old_offsets = storage.region_offsets;
+    const auto old_bytes = storage.region_bytes;
+    const auto old_generation = storage.generation();
+    const auto old_committed = storage.block->committed_bytes;
+
+    fill_device_pattern(storage.block->device_ptr, kInitial * 3, 7.0f);
+
+    const auto grew = storage.grow(kReserve + 1);
+    ASSERT_FALSE(grew.has_value());
+    EXPECT_NE(grew.error().find("exceeds reserved"), std::string::npos) << grew.error();
+    EXPECT_TRUE(storage.valid());
+    EXPECT_FALSE(storage.poisoned());
+    EXPECT_EQ(storage.capacity(), kInitial);
+    EXPECT_EQ(storage.generation(), old_generation);
+    EXPECT_EQ(storage.region_offsets, old_offsets);
+    EXPECT_EQ(storage.region_bytes, old_bytes);
+    EXPECT_EQ(storage.block->committed_bytes, old_committed);
+    expect_device_pattern(storage.block->device_ptr, kInitial * 3, 7.0f);
+}
+
+TEST(SplatExportableStorageTest, TensorViewsValidAfterGrowViaRebind) {
+    require_cuda();
+
+    constexpr std::size_t kInitial = 128;
+    constexpr std::size_t kGrown = 256;
+    constexpr int kShDegree = 0; // no shN rest; keeps the fixture minimal
+
+    auto storage_result = SplatExportableStorage::create(kInitial, kShDegree, 0, kGrown * 2);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+    auto allocator = storage.make_allocator();
+
+    // Build a tiny SplatData backed by exportable storage.
+    const size_t n = 64;
+    Tensor means = allocator(TensorShape({n, 3}), kInitial, DataType::Float32, "SplatData.means");
+    Tensor scaling = allocator(TensorShape({n, 3}), kInitial, DataType::Float32, "SplatData.scaling");
+    Tensor rotation = allocator(TensorShape({n, 4}), kInitial, DataType::Float32, "SplatData.rotation");
+    Tensor opacity = allocator(TensorShape({n, 1}), kInitial, DataType::Float32, "SplatData.opacity");
+    Tensor sh0 = allocator(TensorShape({n, 1, 3}), kInitial, DataType::Float32, "SplatData.sh0");
+    Tensor shN; // degree 0: empty rest
+
+    {
+        std::vector<float> host(n * 3);
+        for (size_t i = 0; i < n * 3; ++i)
+            host[i] = static_cast<float>(i + 1);
+        ASSERT_EQ(cudaMemcpy(means.ptr<float>(), host.data(), host.size() * sizeof(float),
+                             cudaMemcpyHostToDevice),
+                  cudaSuccess);
+    }
+
+    EXPECT_EQ(means.capacity(), kInitial);
+    EXPECT_EQ(means.external_storage_kind(), "splat.exportable");
+
+    // Grow storage (region offsets for non-means change).
+    auto grew = storage.grow(kGrown);
+    if (!grew) {
+        FAIL() << grew.error();
+    }
+    ASSERT_TRUE(*grew);
+
+    // Rebuild tensor views via rebind API (c).
+    SplatData model(/*max_sh_degree=*/kShDegree,
+                    std::move(means),
+                    std::move(sh0),
+                    std::move(shN),
+                    std::move(scaling),
+                    std::move(rotation),
+                    std::move(opacity),
+                    /*scene_scale=*/1.0f,
+                    SplatData::ShNLayout::Swizzled);
+
+    auto rebound = storage.rebindSplatData(model);
+    if (!rebound) {
+        FAIL() << rebound.error();
+    }
+
+    EXPECT_EQ(model.means_raw().capacity(), kGrown);
+    EXPECT_EQ(model.means_raw().external_storage_kind(), "splat.exportable");
+    EXPECT_EQ(model.scaling_raw().capacity(), kGrown);
+
+    // Means data preserved.
+    {
+        std::vector<float> host(n * 3);
+        ASSERT_EQ(cudaMemcpy(host.data(), model.means_raw().ptr<float>(), host.size() * sizeof(float),
+                             cudaMemcpyDeviceToHost),
+                  cudaSuccess);
+        for (size_t i = 0; i < n * 3; ++i) {
+            EXPECT_FLOAT_EQ(host[i], static_cast<float>(i + 1));
+        }
+    }
+
+    // Allocator after grow hands out views at new capacity.
+    Tensor means2 = storage.make_allocator()(
+        TensorShape({n, 3}), /*requested max_cap-like*/ kGrown * 10, DataType::Float32, "SplatData.means");
+    EXPECT_EQ(means2.capacity(), kGrown) << "allocator must clamp to committed capacity";
+}
+
+TEST(SplatExportableStorageTest, GrowthCapacityHelper) {
+    EXPECT_EQ(SplatExportableStorage::growthCapacity(100), 150u);
+    EXPECT_EQ(SplatExportableStorage::growthCapacity(100, 120), 120u);
+    EXPECT_EQ(SplatExportableStorage::growthCapacity(100, 50), 50u);
+    EXPECT_EQ(SplatExportableStorage::growthCapacity(0, 5'000'000), 1u);
+}
+
+// ---------------------------------------------------------------------------
+// VRAM audit — multi-grow must plateau (no VMM physical chunk leak)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+    struct CudaMemSnapshot {
+        std::size_t free_bytes = 0;
+        std::size_t total_bytes = 0;
+    };
+
+    CudaMemSnapshot cuda_mem_snapshot() {
+        CudaMemSnapshot s;
+        EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        EXPECT_EQ(cudaMemGetInfo(&s.free_bytes, &s.total_bytes), cudaSuccess);
+        return s;
+    }
+
+    // Allow a small absolute slack for driver fragmentation / other threads.
+    constexpr std::size_t kVramSlackBytes = 16ull << 20; // 16 MiB
+
+} // namespace
+
+TEST(SplatExportableStorageTest, ManyGrowCyclesCudaMemGetInfoPlateaus) {
+    require_cuda();
+
+    constexpr std::size_t kInitial = 256;
+    constexpr std::size_t kReserve = 200'000; // enough virtual headroom for steps
+    constexpr int kShDegree = 3;
+    // Capacities that force physical growth at several granularities.
+    const std::vector<std::size_t> steps = {512, 1024, 2048, 4096, 8192, 16384, 32768};
+
+    auto storage_result = SplatExportableStorage::create(kInitial, kShDegree, 0, kReserve);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+    ASSERT_TRUE(storage.valid());
+    const void* const stable_ptr = storage.block->device_ptr;
+
+    std::size_t free_at_plateau = 0;
+    std::size_t block_at_plateau = 0;
+    for (std::size_t cap : steps) {
+        auto grew = storage.grow(cap);
+        if (!grew) {
+            FAIL() << grew.error();
+        }
+        EXPECT_EQ(storage.block->device_ptr, stable_ptr);
+        EXPECT_EQ(storage.capacity(), cap);
+        const auto snap = cuda_mem_snapshot();
+        free_at_plateau = snap.free_bytes;
+        block_at_plateau = storage.block->committed_bytes;
+    }
+
+    // Further grows to the same capacity are no-ops; free VRAM must not keep dropping.
+    for (int i = 0; i < 12; ++i) {
+        auto grew = storage.grow(steps.back());
+        ASSERT_TRUE(grew.has_value()) << grew.error();
+        EXPECT_FALSE(*grew) << "idempotent grow must not re-commit physical";
+        EXPECT_EQ(storage.block->committed_bytes, block_at_plateau);
+        const auto snap = cuda_mem_snapshot();
+        // free may jitter slightly; it must not systematically fall.
+        EXPECT_GE(snap.free_bytes + kVramSlackBytes, free_at_plateau)
+            << "cudaMemGetInfo free dropped after plateau grow #" << i
+            << " free_plateau=" << free_at_plateau << " free_now=" << snap.free_bytes
+            << " (possible VMM physical chunk leak)";
+        free_at_plateau = std::max(free_at_plateau, snap.free_bytes);
+    }
+
+    // Destroy storage: free VRAM must return near pre-allocation baseline of a probe.
+    // Measure residual after destroy vs a fresh identical allocation's delta.
+    const auto before_destroy = cuda_mem_snapshot();
+    const std::size_t committed = storage.block->committed_bytes;
+    storage = SplatExportableStorage{}; // dtor teardown
+    const auto after_destroy = cuda_mem_snapshot();
+    EXPECT_GE(after_destroy.free_bytes + kVramSlackBytes, before_destroy.free_bytes + committed)
+        << "destroy did not return committed exportable bytes (before_free="
+        << before_destroy.free_bytes << " after_free=" << after_destroy.free_bytes
+        << " committed=" << committed << ")";
+}
+
+TEST(SplatExportableStorageTest, RepeatedCreateGrowDestroyDoesNotLeakVmm) {
+    require_cuda();
+
+    constexpr std::size_t kInitial = 512;
+    constexpr std::size_t kGrown = 8192;
+    constexpr std::size_t kReserve = 100'000;
+    constexpr int kShDegree = 3;
+    constexpr int kCycles = 24;
+
+    // Warm CUDA allocator / context so first-touch noise is out of the way.
+    {
+        auto warm = SplatExportableStorage::create(kInitial, kShDegree, 0, kReserve);
+        ASSERT_TRUE(warm.has_value()) << warm.error();
+        ASSERT_TRUE(warm->grow(kGrown).has_value());
+    }
+    const auto baseline = cuda_mem_snapshot();
+
+    for (int cycle = 0; cycle < kCycles; ++cycle) {
+        auto storage_result = SplatExportableStorage::create(kInitial, kShDegree, 0, kReserve);
+        if (!storage_result) {
+            FAIL() << "cycle " << cycle << ": " << storage_result.error();
+        }
+        auto storage = std::move(*storage_result);
+        for (std::size_t cap : {std::size_t{1024}, std::size_t{2048}, std::size_t{4096}, kGrown}) {
+            auto grew = storage.grow(cap);
+            if (!grew) {
+                FAIL() << "cycle " << cycle << " grow " << cap << ": " << grew.error();
+            }
+        }
+        // Explicit destroy each cycle.
+        storage = SplatExportableStorage{};
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    }
+
+    const auto after = cuda_mem_snapshot();
+    // Across many create/grow/destroy cycles free VRAM must return to baseline.
+    EXPECT_GE(after.free_bytes + kVramSlackBytes, baseline.free_bytes)
+        << "VMM physical leaked across " << kCycles << " create/grow/destroy cycles"
+        << " baseline_free=" << baseline.free_bytes << " after_free=" << after.free_bytes
+        << " delta_MiB="
+        << (static_cast<long long>(baseline.free_bytes) - static_cast<long long>(after.free_bytes)) /
+               (1024 * 1024);
+
+    const auto snap = lfs::diagnostics::VramProfiler::instance().snapshot();
+    EXPECT_EQ(snap.process.exportable_splat_bytes, 0u);
+}
+
+// Simulates the importer-lifetime protocol without a full Vulkan context:
+// an "importer" holds a shared_ptr to the ExportableBlock (like
+// VulkanExternalTensorStorage::extra_owner_). grow() must leave the block
+// object + stable VA intact; consumers that still hold the block after grow
+// see the new size/handle. The real Vulkan fix is to drop VkDeviceMemory
+// BEFORE grow (see TrainerManager::installExportableCapacityEnsure).
+TEST(SplatExportableStorageTest, GrowKeepsStableVaWhileImportersHoldBlock) {
+    require_cuda();
+
+    auto storage_result = SplatExportableStorage::create(256, /*sh=*/0, 0, 4096);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+
+    // Simulated Vulkan import lifetime anchor (same type as extra_owner_).
+    std::shared_ptr<void> importer_hold = storage.block;
+    const void* const va = storage.block->device_ptr;
+    const auto chunks_before = storage.block->chunks;
+    const std::size_t old_size = storage.block->committed_bytes;
+
+    auto grew = storage.grow(1024);
+    if (!grew) {
+        FAIL() << grew.error();
+    }
+    ASSERT_TRUE(*grew);
+    EXPECT_EQ(storage.block->device_ptr, va);
+    EXPECT_GE(storage.block->committed_bytes, old_size);
+    ASSERT_GE(storage.block->chunks.size(), chunks_before.size());
+    // Identity is by offset: per-region grow may insert new slices between
+    // existing tails, so the vector prefix is not stable.
+    for (const auto& old_chunk : chunks_before) {
+        const auto it = std::find_if(
+            storage.block->chunks.begin(),
+            storage.block->chunks.end(),
+            [&](const ExportableChunk& chunk) { return chunk.offset == old_chunk.offset; });
+        ASSERT_NE(it, storage.block->chunks.end()) << "lost chunk at offset " << old_chunk.offset;
+        EXPECT_EQ(it->bytes, old_chunk.bytes);
+        EXPECT_EQ(it->handle, old_chunk.handle);
+    }
+    EXPECT_GT(storage.generation(), 1u);
+    EXPECT_EQ(importer_hold.get(), storage.block.get());
+    EXPECT_EQ(static_cast<ExportableBlock*>(importer_hold.get())->device_ptr, va);
+
+    // Drop importer, then storage — no crash / CUDA death.
+    importer_hold.reset();
+    storage = SplatExportableStorage{};
+    void* probe = nullptr;
+    ASSERT_EQ(cudaMalloc(&probe, 4096), cudaSuccess);
+    ASSERT_EQ(cudaFree(probe), cudaSuccess);
+}
+
+// Post-grow rebind must not copy from stale pre-grow views. The sequence mirrors
+// TrainerManager::growExportableForDensify:
+//   rebind(make_allocator) -> grow -> rebind(make_allocator)
+// grow() relocates every region; a copying rebind overwrites correct new-offset
+// data with garbage from old offsets (means@0 survives; scaling/rot/opacity die).
+TEST(SplatExportableStorageTest, RebindGrowRebindPreservesAllRegionPatterns) {
+    require_cuda();
+
+    constexpr std::size_t kInitial = 128;
+    constexpr std::size_t kGrown = 256;
+    constexpr std::size_t kLiveN = 64;
+    constexpr std::size_t kReserve = 1024;
+    constexpr int kShDegree = 3;
+
+    auto storage_result = SplatExportableStorage::create(kInitial, kShDegree, 0, kReserve);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+    auto allocator = storage.make_allocator();
+
+    Tensor means = allocator(TensorShape({kLiveN, 3}), kInitial, DataType::Float32, "SplatData.means");
+    Tensor scaling = allocator(TensorShape({kLiveN, 3}), kInitial, DataType::Float32, "SplatData.scaling");
+    Tensor rotation = allocator(TensorShape({kLiveN, 4}), kInitial, DataType::Float32, "SplatData.rotation");
+    Tensor opacity = allocator(TensorShape({kLiveN, 1}), kInitial, DataType::Float32, "SplatData.opacity");
+    Tensor sh0 = allocator(TensorShape({kLiveN, 1, 3}), kInitial, DataType::Float32, "SplatData.sh0");
+    const auto rest = static_cast<std::uint32_t>(sh_rest_coefficients_for_degree(kShDegree));
+    // Exportable ShN is pad-dropped q16 (u16 cells) + float2 bounds / 256.
+    const size_t shN_cells = sh_value_quant::sh_value_u16_count(kLiveN, rest);
+    const size_t shN_cap = sh_value_quant::sh_value_u16_count(kInitial, rest);
+    const size_t bounds_n = sh_value_quant::n_bounds_for_prims(kLiveN) * 2u;
+    const size_t bounds_cap = sh_value_quant::n_bounds_for_prims(kInitial) * 2u;
+    Tensor shN = allocator(TensorShape({shN_cells}), shN_cap, DataType::Float16, "SplatData.shN");
+    Tensor shN_bounds =
+        allocator(TensorShape({bounds_n}), bounds_cap, DataType::Float32, "SplatData.shN_value_bounds");
+    ASSERT_EQ(shN.dtype(), DataType::Float16);
+
+    // Stamp raw u16 bit patterns via Float16 storage (values 0..63 as half).
+    auto f16_val = [](float base, size_t i) {
+        return base + static_cast<float>(i % 64u);
+    };
+    auto stamp = [&](Tensor& t, float base) {
+        const size_t n = t.numel();
+        if (t.dtype() == DataType::Float16) {
+            Tensor host_f = Tensor::empty({n}, Device::CPU, DataType::Float32);
+            float* hp = host_f.ptr<float>();
+            for (size_t i = 0; i < n; ++i) {
+                hp[i] = f16_val(base, i);
+            }
+            Tensor half = host_f.to(DataType::Float16).cuda();
+            ASSERT_EQ(cudaMemcpy(t.data_ptr(), half.data_ptr(), n * sizeof(std::uint16_t),
+                                 cudaMemcpyDeviceToDevice),
+                      cudaSuccess);
+            return;
+        }
+        std::vector<float> host(n);
+        for (size_t i = 0; i < n; ++i) {
+            host[i] = base + static_cast<float>(i);
+        }
+        ASSERT_EQ(cudaMemcpy(t.ptr<float>(), host.data(), n * sizeof(float), cudaMemcpyHostToDevice),
+                  cudaSuccess);
+    };
+    auto expect_pattern = [&](const Tensor& t, float base, const char* label) {
+        const size_t n = t.numel();
+        if (t.dtype() == DataType::Float16) {
+            Tensor fp32 = t.to(DataType::Float32).cpu();
+            const float* host = fp32.ptr<float>();
+            for (size_t i = 0; i < n; ++i) {
+                EXPECT_FLOAT_EQ(host[i], f16_val(base, i))
+                    << label << " index " << i << " (post-grow rebind integrity, q16 bits)";
+            }
+            return;
+        }
+        std::vector<float> host(n);
+        ASSERT_EQ(cudaMemcpy(host.data(), t.ptr<float>(), n * sizeof(float), cudaMemcpyDeviceToHost),
+                  cudaSuccess);
+        for (size_t i = 0; i < n; ++i) {
+            EXPECT_FLOAT_EQ(host[i], base + static_cast<float>(i))
+                << label << " index " << i << " (post-grow rebind integrity)";
+        }
+    };
+
+    stamp(means, 10.0f);
+    stamp(scaling, 100.0f);
+    stamp(rotation, 200.0f);
+    stamp(opacity, 300.0f);
+    stamp(sh0, 400.0f);
+    stamp(shN, 1.0f);
+    stamp(shN_bounds, 0.5f);
+
+    SplatData model(kShDegree,
+                    std::move(means),
+                    std::move(sh0),
+                    std::move(shN),
+                    std::move(scaling),
+                    std::move(rotation),
+                    std::move(opacity),
+                    /*scene_scale=*/1.0f,
+                    SplatData::ShNLayout::Swizzled);
+    model.shN_value_bounds() = std::move(shN_bounds);
+    model.set_tensor_allocator(storage.make_allocator());
+
+    // pre-grow rebind (GUI drops Vulkan import → CUDA-only views).
+    // Self-alias into the same block at current offsets — must preserve patterns.
+    {
+        auto ok = storage.rebindSplatData(model, storage.make_allocator());
+        ASSERT_TRUE(ok.has_value()) << ok.error();
+    }
+    expect_pattern(model.means_raw(), 10.0f, "means after pre-grow rebind");
+    expect_pattern(model.scaling_raw(), 100.0f, "scaling after pre-grow rebind");
+    expect_pattern(model.rotation_raw(), 200.0f, "rotation after pre-grow rebind");
+    expect_pattern(model.opacity_raw(), 300.0f, "opacity after pre-grow rebind");
+    expect_pattern(model.sh0_raw(), 400.0f, "sh0 after pre-grow rebind");
+    expect_pattern(model.shN_raw(), 1.0f, "shN after pre-grow rebind");
+    expect_pattern(model.shN_value_bounds(), 0.5f, "shN_bounds after pre-grow rebind");
+
+    const auto gen_before = storage.generation();
+    const std::size_t scaling_off_before = storage.region_offsets[SplatExportableStorage::Scaling];
+
+    auto grew = storage.grow(kGrown);
+    ASSERT_TRUE(grew.has_value()) << grew.error();
+    ASSERT_TRUE(*grew);
+    EXPECT_GT(storage.generation(), gen_before);
+    EXPECT_EQ(storage.region_offsets[SplatExportableStorage::Scaling], scaling_off_before)
+        << "region offsets are constant across grow";
+
+    // Patterns intact at NEW offsets inside the block (grow did its job).
+    expect_device_pattern(
+        static_cast<const char*>(storage.block->device_ptr) +
+            storage.region_offsets[SplatExportableStorage::Means],
+        kLiveN * 3, 10.0f);
+    expect_device_pattern(
+        static_cast<const char*>(storage.block->device_ptr) +
+            storage.region_offsets[SplatExportableStorage::Scaling],
+        kLiveN * 3, 100.0f);
+    expect_device_pattern(
+        static_cast<const char*>(storage.block->device_ptr) +
+            storage.region_offsets[SplatExportableStorage::Rotation],
+        kLiveN * 4, 200.0f);
+    expect_device_pattern(
+        static_cast<const char*>(storage.block->device_ptr) +
+            storage.region_offsets[SplatExportableStorage::Opacity],
+        kLiveN * 1, 300.0f);
+
+    // Install views at the new offsets without copying stale pre-grow views.
+    {
+        auto ok = storage.rebindSplatData(model, storage.make_allocator());
+        ASSERT_TRUE(ok.has_value()) << ok.error();
+    }
+
+    EXPECT_EQ(model.means_raw().capacity(), kGrown);
+    EXPECT_EQ(model.scaling_raw().capacity(), kGrown);
+    EXPECT_EQ(model.means_raw().external_storage_kind(), "splat.exportable");
+
+    // All attributes must survive at new offsets through the model tensors.
+    expect_pattern(model.means_raw(), 10.0f, "means after post-grow rebind");
+    expect_pattern(model.scaling_raw(), 100.0f, "scaling after post-grow rebind");
+    expect_pattern(model.rotation_raw(), 200.0f, "rotation after post-grow rebind");
+    expect_pattern(model.opacity_raw(), 300.0f, "opacity after post-grow rebind");
+    expect_pattern(model.sh0_raw(), 400.0f, "sh0 after post-grow rebind");
+    expect_pattern(model.shN_raw(), 1.0f, "shN after post-grow rebind");
+    expect_pattern(model.shN_value_bounds(), 0.5f, "shN_bounds after post-grow rebind");
+    EXPECT_TRUE(model.shN_value_quantized());
+}
+
+// Grown slack rows must be non-renderable (opacity → sigmoid(−∞)≈0,
+// identity quaternion) so an accidental stale-row read remains dark.
+TEST(SplatExportableStorageTest, GrowSlackRowsAreNonRenderable) {
+    require_cuda();
+
+    constexpr std::size_t kInitial = 64;
+    constexpr std::size_t kGrown = 128;
+    constexpr int kShDegree = 0;
+
+    auto storage_result = SplatExportableStorage::create(kInitial, kShDegree, 0, kGrown * 2);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+    ASSERT_TRUE(storage.grow(kGrown).value_or(false));
+
+    // Slack rows [kInitial, kGrown): opacity raw must be −inf (or ≤ −20),
+    // rotation identity (1,0,0,0).
+    std::vector<float> opacity(kGrown - kInitial);
+    std::vector<float> rotation((kGrown - kInitial) * 4);
+    void* op_ptr = static_cast<char*>(storage.block->device_ptr) +
+                   storage.region_offsets[SplatExportableStorage::Opacity] +
+                   kInitial * sizeof(float);
+    void* rot_ptr = static_cast<char*>(storage.block->device_ptr) +
+                    storage.region_offsets[SplatExportableStorage::Rotation] +
+                    kInitial * 4 * sizeof(float);
+    ASSERT_EQ(cudaMemcpy(opacity.data(), op_ptr, opacity.size() * sizeof(float),
+                         cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(rotation.data(), rot_ptr, rotation.size() * sizeof(float),
+                         cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    for (size_t i = 0; i < opacity.size(); ++i) {
+        EXPECT_LE(opacity[i], -20.0f) << "slack opacity[" << i << "] must be non-renderable";
+    }
+    for (size_t i = 0; i < kGrown - kInitial; ++i) {
+        EXPECT_FLOAT_EQ(rotation[i * 4 + 0], 1.0f) << "slack quat w row " << i;
+        EXPECT_FLOAT_EQ(rotation[i * 4 + 1], 0.0f) << "slack quat x row " << i;
+        EXPECT_FLOAT_EQ(rotation[i * 4 + 2], 0.0f) << "slack quat y row " << i;
+        EXPECT_FLOAT_EQ(rotation[i * 4 + 3], 0.0f) << "slack quat z row " << i;
+    }
+}
+
+TEST(SplatExportableStorageTest, UnboundChunkIndicesSkipsBoundOffsetsNotPrefixCount) {
+    const std::vector<ExportableChunk> chunks = {
+        {.offset = 0, .bytes = 100, .handle = {}},
+        {.offset = 50, .bytes = 10, .handle = {}},
+        {.offset = 200, .bytes = 100, .handle = {}},
+    };
+    const std::vector<std::size_t> bound = {0, 200};
+    const auto unbound = unboundExportableChunkIndices(chunks, bound);
+    ASSERT_EQ(unbound.size(), 1u);
+    EXPECT_EQ(unbound[0], 1u);
+    EXPECT_EQ(chunks[unbound[0]].offset, 50u);
+    // Prefix-count bind with bound_count==2 would only see chunks[2] (offset 200).
+    EXPECT_EQ(chunks[2].offset, 200u);
+}
+
+// Packed multi-region grow commits each region's tail, so new VMM slices
+// land between existing chunks in the offset-sorted vector. A prefix-count
+// importer (bind chunks[bound_count:]) misses those insertions — that is
+// the GUI giant-sphere / tile-instance overflow: CUDA densify writes live
+// rows the viewport's sparse VkBuffer never bound.
+TEST(SplatExportableStorageTest, GrowInsertsChunksBetweenRegionsSoPrefixBindMisses) {
+    require_cuda();
+
+    const std::size_t gran = std::max<std::size_t>(exportable_allocation_granularity(0), 1);
+    // Means are 12 B/row. Start under one granule, grow past two so at least
+    // one region tail overflows into a new slice between later regions.
+    const std::size_t kInitial = std::max<std::size_t>(gran / 24, 2048);
+    const std::size_t kGen2 = kInitial * 3;
+    const std::size_t kGen3 = kInitial * 5;
+    const std::size_t kReserve = kInitial * 16;
+    constexpr int kShDegree = 3;
+
+    auto storage_result = SplatExportableStorage::create(kInitial, kShDegree, 0, kReserve);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+
+    std::vector<std::size_t> bound_offsets;
+    bound_offsets.reserve(storage.block->chunks.size());
+    for (const auto& chunk : storage.block->chunks) {
+        bound_offsets.push_back(chunk.offset);
+    }
+    ASSERT_FALSE(bound_offsets.empty());
+    const std::size_t initial_chunk_count = bound_offsets.size();
+
+    ASSERT_TRUE(storage.grow(kGen2).value_or(false));
+    ASSERT_TRUE(storage.grow(kGen3).value_or(false));
+    EXPECT_EQ(storage.capacity(), kGen3);
+
+    const auto& chunks = storage.block->chunks;
+    ASSERT_GT(chunks.size(), initial_chunk_count) << "two grows past granule must add slices";
+
+    const auto unbound = unboundExportableChunkIndices(chunks, bound_offsets);
+    ASSERT_FALSE(unbound.empty());
+
+    std::size_t max_initial_offset = 0;
+    for (const std::size_t off : bound_offsets) {
+        max_initial_offset = std::max(max_initial_offset, off);
+    }
+    bool mid_insert = false;
+    for (const std::size_t idx : unbound) {
+        if (chunks[idx].offset < max_initial_offset) {
+            mid_insert = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(mid_insert)
+        << "expected a new slice between existing region tails, not only after the last region";
+
+    // Old importer: bind chunks[initial_count:].
+    std::vector<std::size_t> prefix_new_offsets;
+    for (std::size_t i = initial_chunk_count; i < chunks.size(); ++i) {
+        prefix_new_offsets.push_back(chunks[i].offset);
+    }
+    std::size_t prefix_misses = 0;
+    for (const std::size_t idx : unbound) {
+        const std::size_t off = chunks[idx].offset;
+        if (std::find(prefix_new_offsets.begin(), prefix_new_offsets.end(), off) ==
+            prefix_new_offsets.end()) {
+            ++prefix_misses;
+        }
+    }
+    EXPECT_GT(prefix_misses, 0u)
+        << "prefix-count bind must miss at least one mid-list insertion (the GUI overflow)";
+
+    const auto after_offset_bind = unboundExportableChunkIndices(chunks, [&] {
+        std::vector<std::size_t> all = bound_offsets;
+        for (const std::size_t idx : unbound) {
+            all.push_back(chunks[idx].offset);
+        }
+        return all;
+    }());
+    EXPECT_TRUE(after_offset_bind.empty()) << "offset-set bind must cover every chunk";
+}
+
+// densify past the initial live-N commit must grow the exportable
+// block via capacity_ensure (storage layer, no GUI). Mirrors
+// TrainerManager::growExportableForDensify: work lives outside the std::function
+// so rebind can replace SplatData mid-grow without destroying the active frame.
+TEST(SplatExportableStorageTest, CapacityEnsureGrowsPastInitialCommit) {
+    require_cuda();
+
+    constexpr std::size_t kInitialCap = 128;
+    constexpr std::size_t kLiveN = 64;
+    constexpr std::size_t kNeed = 200; // past initial commit
+    constexpr std::size_t kReserve = 4096;
+    constexpr int kShDegree = 0;
+
+    auto storage_result = SplatExportableStorage::create(kInitialCap, kShDegree, 0, kReserve);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::make_shared<SplatExportableStorage>(std::move(*storage_result));
+    auto allocator = storage->make_allocator();
+
+    Tensor means = allocator(TensorShape({kLiveN, 3}), kInitialCap, DataType::Float32, "SplatData.means");
+    Tensor scaling = allocator(TensorShape({kLiveN, 3}), kInitialCap, DataType::Float32, "SplatData.scaling");
+    Tensor rotation = allocator(TensorShape({kLiveN, 4}), kInitialCap, DataType::Float32, "SplatData.rotation");
+    Tensor opacity = allocator(TensorShape({kLiveN, 1}), kInitialCap, DataType::Float32, "SplatData.opacity");
+    Tensor sh0 = allocator(TensorShape({kLiveN, 1, 3}), kInitialCap, DataType::Float32, "SplatData.sh0");
+    Tensor shN;
+
+    SplatData model(/*max_sh_degree=*/kShDegree,
+                    std::move(means),
+                    std::move(sh0),
+                    std::move(shN),
+                    std::move(scaling),
+                    std::move(rotation),
+                    std::move(opacity),
+                    /*scene_scale=*/1.0f,
+                    SplatData::ShNLayout::Swizzled);
+    model.set_tensor_allocator(storage->make_allocator());
+
+    const void* const stable_va = storage->block->device_ptr;
+    ASSERT_EQ(model.means_raw().capacity(), kInitialCap);
+    ASSERT_LT(model.means_raw().capacity(), kNeed);
+
+    struct GrowHook {
+        std::shared_ptr<SplatExportableStorage> storage;
+        SplatData* model = nullptr;
+        void install() {
+            model->set_capacity_ensure([this](std::size_t needed_rows) { return grow(needed_rows); });
+        }
+        bool grow(std::size_t needed_rows) {
+            if (storage->capacity() >= needed_rows &&
+                model->means_raw().capacity() >= needed_rows) {
+                return true;
+            }
+            const std::size_t want =
+                SplatExportableStorage::growthCapacity(needed_rows, storage->reservedCapacity());
+            auto grew = storage->grow(want);
+            if (!grew || storage->capacity() < needed_rows) {
+                return false;
+            }
+            // rebind assigns into *model and drops the trampoline; reinstall after.
+            if (auto ok = storage->rebindSplatData(*model, storage->make_allocator()); !ok) {
+                return false;
+            }
+            install();
+            return model->means_raw().capacity() >= needed_rows;
+        }
+    } hook{storage, &model};
+    hook.install();
+
+    ASSERT_TRUE(model.has_capacity_ensure());
+    ASSERT_TRUE(model.ensure_param_capacity(kNeed))
+        << "capacity_ensure must grow exportable block past initial commit";
+    EXPECT_GE(storage->capacity(), kNeed);
+    EXPECT_GE(model.means_raw().capacity(), kNeed);
+    EXPECT_EQ(storage->block->device_ptr, stable_va);
+    EXPECT_EQ(model.means_raw().external_storage_kind(), "splat.exportable");
+    EXPECT_TRUE(model.has_capacity_ensure()) << "hook must be reinstalled after grow+rebind";
+}
+
+// Migration must retain the capacity-ensure callback even when committed
+// exportable headroom is below max_cap.
+TEST(SplatExportableStorageTest, MigratePreservesCapacityEnsureUnderMaxCap) {
+    require_cuda();
+
+    constexpr std::size_t kInitialCap = 128;
+    constexpr std::size_t kLiveN = 64;
+    constexpr std::size_t kMaxCap = 5'000'000; // GUI default
+    constexpr std::size_t kNeed = 200;
+    constexpr int kShDegree = 0;
+
+    auto storage_result = SplatExportableStorage::create(kInitialCap, kShDegree, 0, kMaxCap);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::make_shared<SplatExportableStorage>(std::move(*storage_result));
+    auto allocator = storage->make_allocator();
+
+    Tensor means = allocator(TensorShape({kLiveN, 3}), kInitialCap, DataType::Float32, "SplatData.means");
+    Tensor scaling = allocator(TensorShape({kLiveN, 3}), kInitialCap, DataType::Float32, "SplatData.scaling");
+    Tensor rotation = allocator(TensorShape({kLiveN, 4}), kInitialCap, DataType::Float32, "SplatData.rotation");
+    Tensor opacity = allocator(TensorShape({kLiveN, 1}), kInitialCap, DataType::Float32, "SplatData.opacity");
+    Tensor sh0 = allocator(TensorShape({kLiveN, 1, 3}), kInitialCap, DataType::Float32, "SplatData.sh0");
+    Tensor shN;
+
+    SplatData model(kShDegree,
+                    std::move(means),
+                    std::move(sh0),
+                    std::move(shN),
+                    std::move(scaling),
+                    std::move(rotation),
+                    std::move(opacity),
+                    1.0f,
+                    SplatData::ShNLayout::Swizzled);
+    model.set_tensor_allocator(storage->make_allocator());
+
+    int ensure_calls = 0;
+    struct GrowHook {
+        std::shared_ptr<SplatExportableStorage> storage;
+        SplatData* model = nullptr;
+        int* ensure_calls = nullptr;
+        void install() {
+            model->set_capacity_ensure([this](std::size_t needed_rows) { return grow(needed_rows); });
+        }
+        bool grow(std::size_t needed_rows) {
+            ++(*ensure_calls);
+            if (storage->capacity() >= needed_rows &&
+                model->means_raw().capacity() >= needed_rows) {
+                return true;
+            }
+            const std::size_t want =
+                SplatExportableStorage::growthCapacity(needed_rows, storage->reservedCapacity());
+            auto grew = storage->grow(want);
+            if (!grew || storage->capacity() < needed_rows) {
+                return false;
+            }
+            if (auto ok = storage->rebindSplatData(*model, storage->make_allocator()); !ok) {
+                return false;
+            }
+            install();
+            return model->means_raw().capacity() >= needed_rows;
+        }
+    } hook{storage, &model, &ensure_calls};
+    hook.install();
+
+    lfs::core::param::TrainingParameters params;
+    params.optimization.sh_degree = kShDegree;
+    params.optimization.max_cap = static_cast<int>(kMaxCap);
+
+    // Repeated migrates must be no-ops (ready under live-N commit) and must not
+    // drop the densify grow hook — this is the GUI strategy-step path.
+    for (int i = 0; i < 3; ++i) {
+        auto result = lfs::training::migrateTrainingModelToAllocator(
+            params, model, storage->make_allocator());
+        ASSERT_TRUE(result.has_value()) << result.error() << " iter=" << i;
+        ASSERT_TRUE(model.has_capacity_ensure())
+            << "migrate wiped capacity_ensure at iter=" << i;
+        EXPECT_EQ(model.means_raw().capacity(), kInitialCap);
+        EXPECT_EQ(model.means_raw().external_storage_kind(), "splat.exportable");
+    }
+
+    // Force remigrate still preserves the hook.
+    {
+        auto result = lfs::training::migrateTrainingModelToAllocator(
+            params, model, storage->make_allocator(), /*force_reallocation=*/true);
+        ASSERT_TRUE(result.has_value()) << result.error();
+        ASSERT_TRUE(model.has_capacity_ensure())
+            << "forced migration wiped capacity_ensure";
+    }
+
+    ASSERT_TRUE(model.ensure_param_capacity(kNeed))
+        << "after migrate, densify capacity_ensure must still grow the block";
+    EXPECT_GE(ensure_calls, 1);
+    EXPECT_GE(model.means_raw().capacity(), kNeed);
+    EXPECT_EQ(model.means_raw().external_storage_kind(), "splat.exportable");
+}
+
+// SH1/SH3 float-swizzled shN at live-N == capacity exceeds the pad-dropped
+// q16 region (12 vs 9 / 48 vs 45 cells per primitive); migrate used to abort
+// with "shape for 'SplatData.shN' needs ... bytes". It must fall back to the
+// float workspace and land q16-encoded.
+TEST(SplatExportableStorageTest, MigrateFloatSwizzledShNFallsBackToQ16AtFullCapacity) {
+    require_cuda();
+
+    constexpr std::size_t kCap = 1000;
+
+    for (int sh_degree : {1, 2, 3}) {
+        auto storage_result = SplatExportableStorage::create(kCap, sh_degree, 0, kCap);
+        if (!storage_result) {
+            FAIL() << storage_result.error();
+        }
+        auto storage = std::move(*storage_result);
+
+        const auto rest = sh_rest_coefficients_for_degree(sh_degree);
+        Tensor means = Tensor::zeros({kCap, 3}, Device::CUDA);
+        Tensor sh0 = Tensor::zeros({kCap, 1, 3}, Device::CUDA);
+        Tensor scaling = Tensor::zeros({kCap, 3}, Device::CUDA);
+        Tensor rotation = Tensor::zeros({kCap, 4}, Device::CUDA);
+        Tensor opacity = Tensor::zeros({kCap, 1}, Device::CUDA);
+        Tensor shN = Tensor::zeros_direct(
+            TensorShape({sh_swizzled_float_count(kCap, rest)}),
+            sh_swizzled_float_count(kCap, rest),
+            Device::CUDA);
+
+        SplatData model(sh_degree,
+                        std::move(means),
+                        std::move(sh0),
+                        std::move(shN),
+                        std::move(scaling),
+                        std::move(rotation),
+                        std::move(opacity),
+                        1.0f,
+                        SplatData::ShNLayout::Swizzled);
+
+        lfs::core::param::TrainingParameters params;
+        params.optimization.sh_degree = sh_degree;
+        params.optimization.max_cap = static_cast<int>(kCap);
+
+        auto result = lfs::training::migrateTrainingModelToAllocator(
+            params, model, storage.make_allocator());
+        ASSERT_TRUE(result.has_value()) << result.error() << " sh_degree=" << sh_degree;
+        EXPECT_TRUE(model.shN_value_quantized());
+        EXPECT_EQ(model.means_raw().external_storage_kind(), "splat.exportable");
+        EXPECT_EQ(static_cast<std::size_t>(model.shN_raw().capacity()),
+                  sh_value_quant::sh_value_u16_count(kCap, rest));
+    }
+}
+
+// The reported failure: dataset init with init_points > 0.75 x max_cap and
+// SH degree 1 threw from the exportable allocator inside
+// init_model_from_pointcloud. The float shN must come back as an
+// out-of-block workspace instead.
+TEST(SplatExportableStorageTest, InitModelFromPointcloudSucceedsAtFullExportableCapacitySh1) {
+    require_cuda();
+
+    constexpr std::size_t kCap = 1000;
+
+    auto storage_result = SplatExportableStorage::create(kCap, /*sh_degree=*/1, 0, kCap);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+
+    Tensor means = Tensor::rand({kCap, 3}, Device::CPU);
+    Tensor colors = Tensor::zeros({kCap, 3}, Device::CPU, DataType::UInt8);
+    PointCloud pcd(std::move(means), std::move(colors));
+
+    lfs::core::param::TrainingParameters params;
+    params.optimization.sh_degree = 1;
+    params.optimization.max_cap = static_cast<int>(kCap);
+    params.optimization.random = false;
+
+    auto model = init_model_from_pointcloud(params,
+                                            Tensor::zeros({3}, Device::CPU),
+                                            pcd,
+                                            static_cast<int>(kCap),
+                                            storage.make_allocator());
+    ASSERT_TRUE(model.has_value()) << model.error();
+    EXPECT_EQ(model->size(), kCap);
+    EXPECT_EQ(model->shN_raw().dtype(), DataType::Float32);
+    EXPECT_EQ(static_cast<std::size_t>(model->shN_raw().numel()),
+              sh_swizzled_float_count(kCap, sh_rest_coefficients_for_degree(1)));
+    EXPECT_EQ(model->means_raw().external_storage_kind(), "splat.exportable");
+}
+
+// A failed capacity ensure must abort before mutation and leave all parameter
+// row counts unchanged.
+TEST(SplatExportableStorageTest, ForcedGrowFailureLeavesModelUntouched) {
+    require_cuda();
+
+    constexpr std::size_t kInitialCap = 64;
+    constexpr std::size_t kLiveN = 32;
+    constexpr std::size_t kNeed = 200; // past initial commit → ensure required
+    constexpr int kShDegree = 0;
+
+    auto storage_result = SplatExportableStorage::create(kInitialCap, kShDegree, 0, kInitialCap);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    // reservedCapacity == kInitialCap: growth past initial commit cannot expand
+    // the virtual reservation, so ensure fails (pathological forced failure).
+    auto storage = std::make_shared<SplatExportableStorage>(std::move(*storage_result));
+    auto allocator = storage->make_allocator();
+
+    Tensor means = allocator(TensorShape({kLiveN, 3}), kInitialCap, DataType::Float32, "SplatData.means");
+    Tensor scaling = allocator(TensorShape({kLiveN, 3}), kInitialCap, DataType::Float32, "SplatData.scaling");
+    Tensor rotation = allocator(TensorShape({kLiveN, 4}), kInitialCap, DataType::Float32, "SplatData.rotation");
+    Tensor opacity = allocator(TensorShape({kLiveN, 1}), kInitialCap, DataType::Float32, "SplatData.opacity");
+    Tensor sh0 = allocator(TensorShape({kLiveN, 1, 3}), kInitialCap, DataType::Float32, "SplatData.sh0");
+    Tensor shN;
+
+    SplatData model(kShDegree,
+                    std::move(means),
+                    std::move(sh0),
+                    std::move(shN),
+                    std::move(scaling),
+                    std::move(rotation),
+                    std::move(opacity),
+                    1.0f,
+                    SplatData::ShNLayout::Swizzled);
+    model.set_tensor_allocator(storage->make_allocator());
+
+    int ensure_calls = 0;
+    model.set_capacity_ensure([&](std::size_t needed_rows) {
+        ++ensure_calls;
+        // Force failure: never grow (simulates VRAM OOM / reservation ceiling).
+        return model.means_raw().capacity() >= needed_rows;
+    });
+
+    lfs::training::AdamOptimizer opt(model, lfs::training::AdamConfig{});
+    const std::size_t size_before = static_cast<std::size_t>(model.size());
+    const std::size_t means_cap_before = model.means_raw().capacity();
+    const std::size_t scaling_cap_before = model.scaling_raw().capacity();
+    const std::size_t means_rows_before = model.means_raw().shape()[0];
+    const std::size_t scaling_rows_before = model.scaling_raw().shape()[0];
+
+    const size_t n_new = kNeed - kLiveN;
+    ASSERT_FALSE(opt.preflight_grow_capacity(n_new))
+        << "forced failure must reject preflight";
+    EXPECT_GE(ensure_calls, 1);
+
+    // No param mutation: row counts and capacities unchanged.
+    EXPECT_EQ(static_cast<std::size_t>(model.size()), size_before);
+    EXPECT_EQ(model.means_raw().shape()[0], means_rows_before);
+    EXPECT_EQ(model.scaling_raw().shape()[0], scaling_rows_before);
+    EXPECT_EQ(model.means_raw().capacity(), means_cap_before);
+    EXPECT_EQ(model.scaling_raw().capacity(), scaling_cap_before);
+
+    // add_new_params must also throw without mutating when ensure fails.
+    auto new_means = Tensor::zeros({n_new, 3}, Device::CUDA);
+    EXPECT_THROW(
+        opt.add_new_params(lfs::training::ParamType::Means, new_means, true),
+        std::runtime_error);
+    EXPECT_EQ(model.means_raw().shape()[0], means_rows_before);
+    EXPECT_EQ(model.scaling_raw().shape()[0], scaling_rows_before);
+    EXPECT_EQ(static_cast<std::size_t>(model.size()), size_before);
+}
+
+TEST(ExportableStorageTest, GrowWhileImporterHoldsBlockKeepsStableVa) {
+    require_cuda();
+
+    auto block_result = allocateExportableDeviceBlock(1 << 20, 0, false, 8 << 20);
+    if (!block_result) {
+        FAIL() << block_result.error();
+    }
+    auto block = std::move(*block_result);
+    ASSERT_NE(block, nullptr);
+    const void* const va = block->device_ptr;
+    const std::size_t old_size = block->committed_bytes;
+    const auto chunks_before = block->chunks;
+
+    std::shared_ptr<void> importer_hold = block;
+    auto grew = growExportableDeviceBlock(block, old_size * 2);
+    if (!grew) {
+        FAIL() << grew.error();
+    }
+    ASSERT_TRUE(*grew);
+    EXPECT_EQ(block->device_ptr, va) << "VA must stay stable across grow";
+    EXPECT_GE(block->committed_bytes, old_size * 2);
+    ASSERT_GE(block->chunks.size(), chunks_before.size());
+    for (std::size_t i = 0; i < chunks_before.size(); ++i) {
+        EXPECT_EQ(block->chunks[i].handle, chunks_before[i].handle);
+        EXPECT_EQ(block->chunks[i].offset, chunks_before[i].offset);
+        EXPECT_EQ(block->chunks[i].bytes, chunks_before[i].bytes);
+    }
+
+    importer_hold.reset();
+    block.reset();
+    void* probe = nullptr;
+    ASSERT_EQ(cudaMalloc(&probe, 4096), cudaSuccess);
+    ASSERT_EQ(cudaFree(probe), cudaSuccess);
+}
+
+// shape that overruns the packed region must fail loud (not silent OOB view).
+TEST(SplatExportableStorageTest, AllocatorRejectsShapeOverrunRegion) {
+    require_cuda();
+
+    constexpr std::size_t kCap = 64;
+    constexpr int kShDegree = 1;
+    auto storage_result = SplatExportableStorage::create(kCap, kShDegree, 0, kCap);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+    auto allocator = storage.make_allocator();
+
+    // Request means with more logical rows than the region can hold.
+    const std::size_t too_many = kCap * 4;
+    EXPECT_THROW(
+        {
+            (void)allocator(TensorShape({too_many, 3}), too_many, DataType::Float32,
+                            "SplatData.means");
+        },
+        std::runtime_error);
+
+    // q16 codes: request more u16 cells than ShN region bytes.
+    const auto rest = static_cast<std::uint32_t>(sh_rest_coefficients_for_degree(kShDegree));
+    const size_t max_cells = sh_value_quant::sh_value_u16_count(kCap, rest);
+    EXPECT_THROW(
+        {
+            (void)allocator(TensorShape({max_cells * 8}), max_cells * 8, DataType::Float16,
+                            "SplatData.shN");
+        },
+        std::runtime_error);
+}
+
+// partially-constructed storage (no control) must refuse make_allocator
+// no by-value snapshot flavor that hands out offsets which go stale on grow.
+TEST(SplatExportableStorageTest, MakeAllocatorRequiresControlBlock) {
+    require_cuda();
+    SplatExportableStorage empty{};
+    EXPECT_FALSE(empty.valid());
+    EXPECT_THROW((void)empty.make_allocator(), std::runtime_error);
+}
+
+// Generation-checked resolve: holding a Tensor across grow sees live pointer via
+// resolve_exportable_device_ptr (baked storage_ptr is stale after grow).
+TEST(SplatExportableStorageTest, ResolveUsesLivePointerAfterGrow) {
+    require_cuda();
+
+    constexpr std::size_t kInitial = 128;
+    constexpr std::size_t kGrown = 512;
+    constexpr std::size_t kLiveN = 32;
+    constexpr int kShDegree = 1;
+
+    auto storage_result = SplatExportableStorage::create(kInitial, kShDegree, 0, kGrown * 2);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+    auto allocator = storage.make_allocator();
+
+    const auto rest = static_cast<std::uint32_t>(sh_rest_coefficients_for_degree(kShDegree));
+    const size_t cells = sh_value_quant::sh_value_u16_count(kLiveN, rest);
+    const size_t cap_cells = sh_value_quant::sh_value_u16_count(kInitial, rest);
+    const size_t bounds_n = sh_value_quant::n_bounds_for_prims(kLiveN) * 2u;
+    const size_t bounds_cap = sh_value_quant::n_bounds_for_prims(kInitial) * 2u;
+
+    Tensor shN = allocator(TensorShape({cells}), cap_cells, DataType::Float16, "SplatData.shN");
+    Tensor bounds =
+        allocator(TensorShape({bounds_n}), bounds_cap, DataType::Float32, "SplatData.shN_value_bounds");
+    ASSERT_TRUE(shN.has_exportable_provenance());
+    ASSERT_TRUE(bounds.has_exportable_provenance());
+
+    void* const shN_before = shN.storage_ptr();
+    void* const bounds_before = bounds.storage_ptr();
+    void* const shN_resolved_before = resolve_exportable_device_ptr(shN);
+    EXPECT_EQ(shN_resolved_before, shN_before);
+
+    const auto gen_before = storage.generation();
+    auto grew = storage.grow(kGrown);
+    if (!grew) {
+        FAIL() << grew.error();
+    }
+    ASSERT_TRUE(*grew);
+    EXPECT_GT(storage.generation(), gen_before);
+
+    void* const shN_live = resolve_exportable_device_ptr(shN);
+    void* const bounds_live = resolve_exportable_device_ptr(bounds);
+    EXPECT_EQ(shN_live, storage.live_region_ptr(SplatExportableStorage::ShN));
+    EXPECT_EQ(bounds_live, storage.live_region_ptr(SplatExportableStorage::ShNBounds));
+    EXPECT_EQ(shN_live, shN_before) << "region offsets are constant across grow";
+    EXPECT_EQ(bounds_live, bounds_before);
+
+    // Fresh allocator views match live control.
+    auto alloc2 = storage.make_allocator();
+    const size_t cells2 = sh_value_quant::sh_value_u16_count(kLiveN, rest);
+    const size_t cap2 = sh_value_quant::sh_value_u16_count(kGrown, rest);
+    Tensor shN2 = alloc2(TensorShape({cells2}), cap2, DataType::Float16, "SplatData.shN");
+    EXPECT_EQ(shN2.storage_ptr(), shN_live);
+    EXPECT_EQ(shN2.exportable_bound_generation(), storage.generation());
+}
+
+// Stale held view + resolve pair for q16 codes/bounds must agree on generation
+// when rebound, and survive a grow under a held Tensor without illegal address.
+TEST(SplatExportableStorageTest, Q16BindPtrsSurviveGrowUnderHeldView) {
+    require_cuda();
+
+    constexpr std::size_t kInitial = 256;
+    constexpr std::size_t kGrown = 1024;
+    constexpr std::size_t kLiveN = 64;
+    constexpr int kShDegree = 2;
+
+    auto storage_result = SplatExportableStorage::create(kInitial, kShDegree, 0, kGrown * 2);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+    auto allocator = storage.make_allocator();
+
+    Tensor means = allocator(TensorShape({kLiveN, 3}), kInitial, DataType::Float32, "SplatData.means");
+    Tensor scaling = allocator(TensorShape({kLiveN, 3}), kInitial, DataType::Float32, "SplatData.scaling");
+    Tensor rotation = allocator(TensorShape({kLiveN, 4}), kInitial, DataType::Float32, "SplatData.rotation");
+    Tensor opacity = allocator(TensorShape({kLiveN, 1}), kInitial, DataType::Float32, "SplatData.opacity");
+    Tensor sh0 = allocator(TensorShape({kLiveN, 1, 3}), kInitial, DataType::Float32, "SplatData.sh0");
+    const auto rest = static_cast<std::uint32_t>(sh_rest_coefficients_for_degree(kShDegree));
+    const size_t cells = sh_value_quant::sh_value_u16_count(kLiveN, rest);
+    const size_t cap_cells = sh_value_quant::sh_value_u16_count(kInitial, rest);
+    const size_t bounds_n = sh_value_quant::n_bounds_for_prims(kLiveN) * 2u;
+    const size_t bounds_cap = sh_value_quant::n_bounds_for_prims(kInitial) * 2u;
+    Tensor shN = allocator(TensorShape({cells}), cap_cells, DataType::Float16, "SplatData.shN");
+    Tensor shN_bounds =
+        allocator(TensorShape({bounds_n}), bounds_cap, DataType::Float32, "SplatData.shN_value_bounds");
+
+    SplatData model(kShDegree,
+                    std::move(means),
+                    std::move(sh0),
+                    std::move(shN),
+                    std::move(scaling),
+                    std::move(rotation),
+                    std::move(opacity),
+                    1.0f,
+                    SplatData::ShNLayout::Swizzled);
+    model.shN_value_bounds() = std::move(shN_bounds);
+    model.set_tensor_allocator(allocator);
+    model.set_active_sh_degree(kShDegree);
+    ASSERT_TRUE(model.shN_value_quantized());
+
+    // Hold raw pointers to model a consumer that does not rebind after growth.
+    Tensor held_codes = model.shN_raw();
+    Tensor held_bounds = model.shN_value_bounds();
+    void* const baked_codes = held_codes.storage_ptr();
+
+    auto grew = storage.grow(kGrown);
+    if (!grew) {
+        FAIL() << grew.error();
+    }
+    ASSERT_TRUE(*grew);
+
+    // Without rebind, resolve still returns LIVE region bases (no illegal address).
+    void* const live_codes = resolve_exportable_device_ptr(held_codes);
+    void* const live_bounds = resolve_exportable_device_ptr(held_bounds);
+    EXPECT_EQ(live_codes, storage.live_region_ptr(SplatExportableStorage::ShN));
+    EXPECT_EQ(live_bounds, storage.live_region_ptr(SplatExportableStorage::ShNBounds));
+    EXPECT_EQ(live_codes, baked_codes);
+
+    // After rebind, model views are generation-fresh and resolve_q16 agrees.
+    ASSERT_TRUE(storage.rebindSplatData(model, storage.make_allocator()).has_value());
+    model.set_tensor_allocator(storage.make_allocator());
+    ASSERT_TRUE(model.shN_value_quantized());
+    const auto q16 = resolve_q16_bind_ptrs(model);
+    ASSERT_NE(q16.codes, nullptr);
+    ASSERT_NE(q16.bounds, nullptr);
+    EXPECT_EQ(static_cast<const void*>(q16.codes),
+              storage.live_region_ptr(SplatExportableStorage::ShN));
+    EXPECT_TRUE(q16.generation_checked);
+    EXPECT_EQ(q16.generation, storage.generation());
+}
+
+// #1678: pad-dropped q16 codes whose cell count differs from IEEE-f16 floats
+// (SH1) must not be treated as corrupted when bounds are installed with the
+// degree setter. One-arg set_active_sh_degree is the tripwire; the two-arg
+// helper attaches bounds first.
+TEST(SplatExportableStorageTest, SetActiveShDegreeInstallsQ16BoundsBeforeValidation) {
+    require_cuda();
+
+    const auto rest = q16_sh1_rest();
+    ASSERT_NE(sh_value_quant::sh_value_u16_count(kQ16Sh1N, rest),
+              sh_swizzled_float_count(kQ16Sh1N, rest));
+
+    {
+        SplatData missing_bounds = make_direct_q16_sh1(/*with_bounds=*/false, /*active_sh=*/1);
+        ASSERT_TRUE(missing_bounds.shN_raw().is_valid());
+        ASSERT_EQ(missing_bounds.shN_raw().dtype(), DataType::Float16);
+        ASSERT_EQ(static_cast<size_t>(missing_bounds.shN_raw().numel()),
+                  sh_value_quant::sh_value_u16_count(kQ16Sh1N, rest));
+        ASSERT_FALSE(missing_bounds.shN_value_quantized());
+        EXPECT_THROW(missing_bounds.set_active_sh_degree(1), std::runtime_error);
+    }
+
+    SplatData model = make_direct_q16_sh1(/*with_bounds=*/true, /*active_sh=*/0);
+    EXPECT_EQ(model.get_active_sh_degree(), 0);
+    EXPECT_TRUE(model.shN_value_quantized());
+    EXPECT_NO_THROW(model.set_active_sh_degree(1));
+    EXPECT_EQ(model.get_active_sh_degree(), 1);
+}
+
+// Post-prune path: q16 lives on cuda.direct allocations, then
+// migrateTrainingModelToAllocator copies codes+bounds into exportable storage
+// and restores the active degree. Previously set_active_sh_degree ran before
+// bounds were attached and threw "q16 codes without bounds".
+TEST(SplatExportableStorageTest, MigrateQ16Sh1DirectAllocationsAppliesDegree) {
+    require_cuda();
+
+    const auto rest = q16_sh1_rest();
+    ASSERT_NE(sh_value_quant::sh_value_u16_count(kQ16Sh1N, rest),
+              sh_swizzled_float_count(kQ16Sh1N, rest));
+
+    constexpr std::size_t kCap = 128;
+    constexpr int kActiveSh = 0;
+
+    SplatData model = make_direct_q16_sh1(/*with_bounds=*/true, kActiveSh);
+    ASSERT_TRUE(model.shN_value_quantized());
+    ASSERT_EQ(model.get_active_sh_degree(), kActiveSh);
+    ASSERT_NE(model.means_raw().external_storage_kind(), "splat.exportable");
+
+    auto storage_result = SplatExportableStorage::create(kCap, kQ16Sh1Degree, 0, kCap);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+
+    lfs::core::param::TrainingParameters params;
+    params.optimization.sh_degree = kQ16Sh1Degree;
+    params.optimization.max_cap = static_cast<int>(kCap);
+
+    auto result = lfs::training::migrateTrainingModelToAllocator(
+        params, model, storage.make_allocator());
+    ASSERT_TRUE(result.has_value()) << result.error();
+    EXPECT_EQ(model.get_active_sh_degree(), kActiveSh);
+    EXPECT_TRUE(model.shN_value_quantized());
+    EXPECT_EQ(model.means_raw().external_storage_kind(), "splat.exportable");
+    EXPECT_EQ(static_cast<std::size_t>(model.shN_raw().capacity()),
+              sh_value_quant::sh_value_u16_count(kCap, rest));
+}
+
+namespace {
+
+    class ScopedShareableAllocLimit {
+    public:
+        explicit ScopedShareableAllocLimit(const char* value) {
+            if (const char* previous = std::getenv(kShareableAllocLimitEnvName)) {
+                previous_ = previous;
+            }
+            set(value);
+            reset_shareable_allocation_limit_for_tests();
+        }
+
+        ~ScopedShareableAllocLimit() {
+            set(previous_ ? previous_->c_str() : nullptr);
+            reset_shareable_allocation_limit_for_tests();
+        }
+
+        ScopedShareableAllocLimit(const ScopedShareableAllocLimit&) = delete;
+        ScopedShareableAllocLimit& operator=(const ScopedShareableAllocLimit&) = delete;
+
+    private:
+        static void set(const char* value) {
+#ifdef _WIN32
+            (void)_putenv_s(kShareableAllocLimitEnvName, value ? value : "");
+#else
+            if (value) {
+                (void)setenv(kShareableAllocLimitEnvName, value, 1);
+            } else {
+                (void)unsetenv(kShareableAllocLimitEnvName);
+            }
+#endif
+        }
+
+        std::optional<std::string> previous_;
+    };
+
+    class ScopedShareableChunkBytes {
+    public:
+        explicit ScopedShareableChunkBytes(const char* value) {
+            if (const char* previous = std::getenv(kShareableChunkBytesEnvName)) {
+                previous_ = previous;
+            }
+            set(value);
+            reset_shareable_allocation_limit_for_tests();
+        }
+
+        ~ScopedShareableChunkBytes() {
+            set(previous_ ? previous_->c_str() : nullptr);
+            reset_shareable_allocation_limit_for_tests();
+        }
+
+        ScopedShareableChunkBytes(const ScopedShareableChunkBytes&) = delete;
+        ScopedShareableChunkBytes& operator=(const ScopedShareableChunkBytes&) = delete;
+
+    private:
+        static void set(const char* value) {
+#ifdef _WIN32
+            (void)_putenv_s(kShareableChunkBytesEnvName, value ? value : "");
+#else
+            if (value) {
+                (void)setenv(kShareableChunkBytesEnvName, value, 1);
+            } else {
+                (void)unsetenv(kShareableChunkBytesEnvName);
+            }
+#endif
+        }
+
+        std::optional<std::string> previous_;
+    };
+
+} // namespace
+
+TEST(ExportableStorageTest, AllocateSplitsIntoShareableChunks) {
+    require_cuda();
+    ScopedShareableAllocLimit limit("16777216"); // 16 MiB chunks
+
+    size_t free_before = 0;
+    size_t total = 0;
+    ASSERT_EQ(cudaMemGetInfo(&free_before, &total), cudaSuccess);
+
+    constexpr std::size_t kBytes = 100ull << 20;
+    auto block_result = allocateExportableDeviceBlock(kBytes, 0, false, 160ull << 20);
+    ASSERT_TRUE(block_result.has_value()) << block_result.error();
+    auto block = std::move(*block_result);
+    ASSERT_NE(block->device_ptr, nullptr);
+    EXPECT_GE(block->committedPrefixBytes(), kBytes);
+    ASSERT_FALSE(block->chunks.empty());
+    std::size_t covered = 0;
+    for (const auto& chunk : block->chunks) {
+        EXPECT_LE(chunk.bytes, 16777216u);
+        EXPECT_EQ(chunk.offset, covered);
+        covered += chunk.bytes;
+        EXPECT_TRUE(chunk.handle.valid());
+    }
+    EXPECT_GE(covered, kBytes);
+
+    std::vector<std::uint8_t> host(kBytes);
+    for (std::size_t i = 0; i < kBytes; ++i) {
+        host[i] = static_cast<std::uint8_t>(i * 17u);
+    }
+    ASSERT_EQ(cudaMemcpy(block->device_ptr, host.data(), kBytes, cudaMemcpyHostToDevice), cudaSuccess);
+    std::vector<std::uint8_t> back(kBytes);
+    ASSERT_EQ(cudaMemcpy(back.data(), block->device_ptr, kBytes, cudaMemcpyDeviceToHost), cudaSuccess);
+    EXPECT_EQ(back, host);
+
+    const auto chunks_before = block->chunks;
+    auto grew = growExportableDeviceBlock(block, 150ull << 20);
+    ASSERT_TRUE(grew.has_value()) << grew.error();
+    ASSERT_TRUE(*grew);
+    EXPECT_GE(block->committedPrefixBytes(), 150ull << 20);
+    ASSERT_GE(block->chunks.size(), chunks_before.size());
+    for (std::size_t i = 0; i < chunks_before.size(); ++i) {
+        EXPECT_EQ(block->chunks[i].offset, chunks_before[i].offset);
+        EXPECT_EQ(block->chunks[i].bytes, chunks_before[i].bytes);
+        EXPECT_EQ(block->chunks[i].handle, chunks_before[i].handle);
+    }
+    ASSERT_EQ(cudaMemcpy(back.data(), block->device_ptr, kBytes, cudaMemcpyDeviceToHost), cudaSuccess);
+    EXPECT_EQ(back, host);
+
+    const std::size_t gran = exportable_allocation_granularity(0);
+    const std::size_t hole_off = align_up_for_test(block->committedPrefixBytes() + gran, gran);
+    ASSERT_TRUE(commitExportableDeviceRange(block, hole_off, gran).has_value());
+    EXPECT_LT(block->committedPrefixBytes(), hole_off);
+    EXPECT_GE(block->committed_bytes, block->committedPrefixBytes() + gran);
+
+    block.reset();
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    size_t free_after = 0;
+    ASSERT_EQ(cudaMemGetInfo(&free_after, &total), cudaSuccess);
+    EXPECT_GE(free_after + gran, free_before);
+}
+
+TEST(ExportableStorageTest, GrowAppendsChunksUnderSmallLimit) {
+    require_cuda();
+    ScopedShareableAllocLimit limit("4194304"); // 4 MiB chunks
+
+    auto block_result = allocateExportableDeviceBlock(1ull << 20, 0, false, 16ull << 20);
+    ASSERT_TRUE(block_result.has_value()) << block_result.error();
+    auto block = std::move(*block_result);
+    const auto chunks_before = block->chunks;
+
+    auto grew = growExportableDeviceBlock(block, 8ull << 20);
+    ASSERT_TRUE(grew.has_value()) << grew.error();
+    ASSERT_TRUE(*grew);
+    EXPECT_GE(block->committedPrefixBytes(), 8ull << 20);
+    ASSERT_GT(block->chunks.size(), chunks_before.size());
+    for (const auto& chunk : block->chunks) {
+        EXPECT_LE(chunk.bytes, 4ull << 20);
+    }
+}
+
+TEST(SplatExportableStorageTest, ReservedLayoutOffsetsStayPutAcrossGrow) {
+    require_cuda();
+
+    constexpr std::size_t kInitial = 1000;
+    constexpr std::size_t kReserve = 200000;
+    constexpr std::size_t kGrown = 5000;
+    constexpr int kShDegree = 3;
+    const std::size_t gran = exportable_allocation_granularity(0);
+
+    auto storage_result = SplatExportableStorage::create(kInitial, kShDegree, 0, kReserve);
+    ASSERT_TRUE(storage_result.has_value()) << storage_result.error();
+    auto storage = std::move(*storage_result);
+    const auto offsets_before = storage.region_offsets;
+    for (std::size_t i = 0; i < SplatExportableStorage::Count; ++i) {
+        EXPECT_EQ(storage.region_offsets[i] % gran, 0u) << "region " << i;
+    }
+
+    std::array<std::vector<float>, SplatExportableStorage::ShN> patterns{};
+    for (std::size_t i = 0; i < SplatExportableStorage::ShN; ++i) {
+        const std::size_t floats = storage.region_bytes[i] / sizeof(float);
+        if (floats == 0) {
+            continue;
+        }
+        patterns[i].resize(floats);
+        for (std::size_t j = 0; j < floats; ++j) {
+            patterns[i][j] = static_cast<float>(i * 1000 + j);
+        }
+        ASSERT_EQ(cudaMemcpy(static_cast<char*>(storage.block->device_ptr) + storage.region_offsets[i],
+                             patterns[i].data(),
+                             patterns[i].size() * sizeof(float),
+                             cudaMemcpyHostToDevice),
+                  cudaSuccess);
+    }
+
+    auto means_view = storage.make_allocator()(
+        TensorShape({kInitial, 3}), kInitial, DataType::Float32, "SplatData.means");
+    void* const means_ptr_before = means_view.storage_ptr();
+
+    const auto gen_before = storage.generation();
+    auto grew = storage.grow(kGrown);
+    ASSERT_TRUE(grew.has_value()) << grew.error();
+    ASSERT_TRUE(*grew);
+    EXPECT_EQ(storage.capacity(), kGrown);
+    EXPECT_EQ(storage.region_offsets, offsets_before);
+    EXPECT_GT(storage.generation(), gen_before);
+    EXPECT_GT(storage.region_bytes[SplatExportableStorage::Means], patterns[0].size() * sizeof(float));
+
+    for (std::size_t i = 0; i < SplatExportableStorage::ShN; ++i) {
+        if (patterns[i].empty()) {
+            continue;
+        }
+        std::vector<float> back(patterns[i].size());
+        ASSERT_EQ(cudaMemcpy(back.data(),
+                             static_cast<char*>(storage.block->device_ptr) + storage.region_offsets[i],
+                             back.size() * sizeof(float),
+                             cudaMemcpyDeviceToHost),
+                  cudaSuccess);
+        EXPECT_EQ(back, patterns[i]) << "region " << i;
+    }
+
+    std::vector<float> opacity_slack(kGrown - kInitial);
+    ASSERT_EQ(cudaMemcpy(opacity_slack.data(),
+                         static_cast<char*>(storage.block->device_ptr) +
+                             storage.region_offsets[SplatExportableStorage::Opacity] +
+                             kInitial * sizeof(float),
+                         opacity_slack.size() * sizeof(float),
+                         cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    for (float v : opacity_slack) {
+        EXPECT_EQ(v, -std::numeric_limits<float>::infinity());
+    }
+    std::vector<float> rotation_slack((kGrown - kInitial) * 4);
+    ASSERT_EQ(cudaMemcpy(rotation_slack.data(),
+                         static_cast<char*>(storage.block->device_ptr) +
+                             storage.region_offsets[SplatExportableStorage::Rotation] +
+                             kInitial * 4 * sizeof(float),
+                         rotation_slack.size() * sizeof(float),
+                         cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    for (std::size_t i = 0; i < kGrown - kInitial; ++i) {
+        EXPECT_FLOAT_EQ(rotation_slack[i * 4 + 0], 1.0f);
+        EXPECT_FLOAT_EQ(rotation_slack[i * 4 + 1], 0.0f);
+        EXPECT_FLOAT_EQ(rotation_slack[i * 4 + 2], 0.0f);
+        EXPECT_FLOAT_EQ(rotation_slack[i * 4 + 3], 0.0f);
+    }
+
+    auto means_after = storage.make_allocator()(
+        TensorShape({kInitial, 3}), kGrown, DataType::Float32, "SplatData.means");
+    EXPECT_EQ(means_after.storage_ptr(), means_ptr_before);
+
+    auto over = storage.grow(kReserve + 1);
+    ASSERT_FALSE(over.has_value());
+    EXPECT_EQ(storage.capacity(), kGrown);
+}
+
+// Block half of makeVulkanExternalTensor (allocateExportableDeviceBlock with
+// reserve==size and track=false). No Vulkan context fixture, so import is not
+// exercised here.
+TEST(ExportableStorageTest, MakeVulkanExternalTensorShapedBlockSplitsChunksAndIsZeroFilled) {
+    require_cuda();
+    ScopedShareableChunkBytes limit("16777216");
+
+    constexpr std::size_t kBytes = 100ull << 20;
+    const std::size_t chunk_limit = shareable_chunk_bytes(0);
+    ASSERT_LE(chunk_limit, 16777216u);
+    ASSERT_LT(chunk_limit, kBytes);
+
+    auto block_result = allocateExportableDeviceBlock(kBytes, 0, false, kBytes);
+    ASSERT_TRUE(block_result.has_value()) << block_result.error();
+    auto block = std::move(*block_result);
+    ASSERT_NE(block->device_ptr, nullptr);
+    EXPECT_GE(block->committedPrefixBytes(), kBytes);
+    EXPECT_GE(block->committed_bytes, kBytes);
+    EXPECT_GE(block->reserved_bytes, kBytes);
+    ASSERT_FALSE(block->chunks.empty());
+    EXPECT_GE(block->chunks.size(), (kBytes + chunk_limit - 1) / chunk_limit);
+    for (const auto& chunk : block->chunks) {
+        EXPECT_GT(chunk.bytes, 0u);
+        EXPECT_LE(chunk.bytes, chunk_limit);
+        EXPECT_TRUE(chunk.handle.valid());
+    }
+
+    std::vector<std::uint8_t> zeros(kBytes, 0xFF);
+    ASSERT_EQ(cudaMemcpy(zeros.data(), block->device_ptr, kBytes, cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    EXPECT_TRUE(std::all_of(zeros.begin(), zeros.end(), [](const std::uint8_t b) {
+        return b == 0;
+    }));
+
+    auto tensor = Tensor::from_external_owner(
+        block->device_ptr,
+        TensorShape({kBytes}),
+        Device::CUDA,
+        DataType::UInt8,
+        std::shared_ptr<void>(block),
+        kBytes,
+        nullptr,
+        "vulkan_external_buffer");
+    EXPECT_EQ(tensor.bytes(), kBytes);
+    EXPECT_EQ(tensor.external_storage_kind(), "vulkan_external_buffer");
+
+    const std::size_t boundary = block->chunks.front().bytes;
+    ASSERT_LT(boundary, kBytes);
+    std::vector<std::uint8_t> pattern(kBytes);
+    for (std::size_t i = 0; i < kBytes; ++i) {
+        pattern[i] = static_cast<std::uint8_t>(i * 17u);
+    }
+    ASSERT_EQ(cudaMemcpy(block->device_ptr, pattern.data(), kBytes, cudaMemcpyHostToDevice),
+              cudaSuccess);
+    std::vector<std::uint8_t> back(kBytes);
+    ASSERT_EQ(cudaMemcpy(back.data(), block->device_ptr, kBytes, cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    EXPECT_EQ(back, pattern);
+    EXPECT_EQ(back[boundary - 1], pattern[boundary - 1]);
+    EXPECT_EQ(back[boundary], pattern[boundary]);
+    EXPECT_EQ(back[boundary + 1], pattern[boundary + 1]);
+}
+
+namespace {
+
+    std::unique_ptr<SplatData> make_cuda_sh_splat(const size_t n,
+                                                  const int sh_degree,
+                                                  const float shN_fill) {
+        const auto rest = static_cast<size_t>(sh_rest_coefficients_for_degree(sh_degree));
+        Tensor means = Tensor::zeros({n, size_t{3}}, Device::CUDA);
+        Tensor sh0 = Tensor::zeros({n, size_t{1}, size_t{3}}, Device::CUDA);
+        Tensor shN = rest > 0 ? Tensor::zeros({n, rest, size_t{3}}, Device::CUDA)
+                              : Tensor::zeros({0}, Device::CUDA);
+        Tensor scaling = Tensor::zeros({n, size_t{3}}, Device::CUDA);
+        Tensor rotation = Tensor::zeros({n, size_t{4}}, Device::CUDA);
+        Tensor opacity = Tensor::zeros({n, size_t{1}}, Device::CUDA);
+
+        std::vector<float> host_means(n * 3, 0.0f);
+        std::vector<float> host_rot(n * 4, 0.0f);
+        for (size_t i = 0; i < n; ++i) {
+            host_means[i * 3] = static_cast<float>(i);
+            host_rot[i * 4] = 1.0f;
+        }
+        EXPECT_EQ(cudaMemcpy(means.ptr<float>(), host_means.data(),
+                             host_means.size() * sizeof(float), cudaMemcpyHostToDevice),
+                  cudaSuccess);
+        EXPECT_EQ(cudaMemcpy(rotation.ptr<float>(), host_rot.data(),
+                             host_rot.size() * sizeof(float), cudaMemcpyHostToDevice),
+                  cudaSuccess);
+        if (rest > 0 && shN.is_valid()) {
+            shN.fill_(shN_fill);
+        }
+
+        return std::make_unique<SplatData>(sh_degree,
+                                           std::move(means),
+                                           std::move(sh0),
+                                           std::move(shN),
+                                           std::move(scaling),
+                                           std::move(rotation),
+                                           std::move(opacity),
+                                           1.0f);
+    }
+
+    void expect_exportable_q16(const SplatData& model, const size_t expected_n) {
+        EXPECT_EQ(static_cast<size_t>(model.size()), expected_n);
+        ASSERT_TRUE(model.shN_raw().is_valid());
+        EXPECT_GT(model.shN_raw().numel(), 0u);
+        EXPECT_TRUE(model.shN_value_quantized());
+        EXPECT_TRUE(model.shN_raw().has_exportable_provenance());
+        EXPECT_TRUE(model.shN_value_bounds().has_exportable_provenance());
+        EXPECT_EQ(model.shN_raw().external_storage_kind(), "splat.exportable");
+        EXPECT_EQ(model.shN_value_bounds().external_storage_kind(), "splat.exportable");
+        EXPECT_EQ(model.means_raw().external_storage_kind(), "splat.exportable");
+        EXPECT_TRUE(model.means_raw().has_exportable_provenance());
+    }
+
+    void expect_exportable_float_shN(const SplatData& model, const size_t expected_n) {
+        EXPECT_EQ(static_cast<size_t>(model.size()), expected_n);
+        ASSERT_TRUE(model.shN_raw().is_valid());
+        EXPECT_GT(model.shN_raw().numel(), 0u);
+        EXPECT_EQ(model.shN_raw().dtype(), DataType::Float32);
+        EXPECT_FALSE(model.shN_value_quantized());
+        EXPECT_TRUE(model.shN_raw().has_exportable_provenance());
+        EXPECT_EQ(model.shN_raw().external_storage_kind(), "splat.exportable");
+        EXPECT_EQ(model.means_raw().external_storage_kind(), "splat.exportable");
+        EXPECT_TRUE(model.means_raw().has_exportable_provenance());
+        ASSERT_TRUE(model.shN_canonical().is_valid());
+        EXPECT_EQ(static_cast<size_t>(model.shN_canonical().size(0)), expected_n);
+    }
+
+} // namespace
+
+TEST(SplatExportableStorageTest, ConsolidateTwoModelsKeepsExportableQ16ShN) {
+    require_cuda();
+    sh_value_quant::set_enabled_for_testing(true);
+
+    constexpr size_t kN0 = 32;
+    constexpr size_t kN1 = 48;
+    constexpr size_t kTotal = kN0 + kN1;
+    constexpr int kShDegree = 1;
+
+    Scene scene;
+    scene.addSplat("A", make_cuda_sh_splat(kN0, kShDegree, 0.25f));
+    scene.addSplat("B", make_cuda_sh_splat(kN1, kShDegree, 0.50f));
+
+    auto storage_result = SplatExportableStorage::create(kTotal, kShDegree, 0, kTotal);
+    if (!storage_result) {
+        sh_value_quant::set_enabled_for_testing(std::nullopt);
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::make_shared<SplatExportableStorage>(std::move(*storage_result));
+    scene.setCombinedModelAllocator(storage->make_allocator());
+
+    ASSERT_EQ(scene.consolidateNodeModels(), 2u);
+    ASSERT_TRUE(scene.isConsolidated());
+
+    const auto* combined = scene.getCombinedModel();
+    ASSERT_NE(combined, nullptr);
+    expect_exportable_q16(*combined, kTotal);
+
+    sh_value_quant::set_enabled_for_testing(std::nullopt);
+}
+
+TEST(SplatExportableStorageTest, CompactConsolidatedSnapshotKeepsExportableQ16ShN) {
+    require_cuda();
+    sh_value_quant::set_enabled_for_testing(true);
+
+    constexpr size_t kN0 = 32;
+    constexpr size_t kN1 = 48;
+    constexpr size_t kTotal = kN0 + kN1;
+    constexpr int kShDegree = 1;
+
+    Scene scene;
+    scene.addSplat("A", make_cuda_sh_splat(kN0, kShDegree, 0.25f));
+    scene.addSplat("B", make_cuda_sh_splat(kN1, kShDegree, 0.50f));
+
+    auto storage_result = SplatExportableStorage::create(kTotal, kShDegree, 0, kTotal);
+    if (!storage_result) {
+        sh_value_quant::set_enabled_for_testing(std::nullopt);
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::make_shared<SplatExportableStorage>(std::move(*storage_result));
+    scene.setCombinedModelAllocator(storage->make_allocator());
+    ASSERT_EQ(scene.consolidateNodeModels(), 2u);
+
+    scene.removeNode("A");
+    auto snapshot = scene.captureConsolidatedCompaction();
+    ASSERT_TRUE(snapshot.has_value());
+
+    auto compact_storage_result = SplatExportableStorage::create(kN1, kShDegree, 0, kN1);
+    if (!compact_storage_result) {
+        sh_value_quant::set_enabled_for_testing(std::nullopt);
+        FAIL() << compact_storage_result.error();
+    }
+    auto compact_storage =
+        std::make_shared<SplatExportableStorage>(std::move(*compact_storage_result));
+    snapshot->allocator = compact_storage->make_allocator();
+
+    std::vector<Scene::ConsolidatedNodeSlot> compacted_slots;
+    auto compacted = Scene::compactConsolidatedSnapshot(*snapshot, compacted_slots);
+    ASSERT_NE(compacted, nullptr);
+    expect_exportable_q16(*compacted, kN1);
+    ASSERT_EQ(compacted_slots.size(), 1u);
+
+    sh_value_quant::set_enabled_for_testing(std::nullopt);
+}
+
+TEST(SplatExportableStorageTest, MigrateMergedModelsEncodesExportableQ16ShN) {
+    require_cuda();
+    sh_value_quant::set_enabled_for_testing(true);
+
+    constexpr size_t kN0 = 32;
+    constexpr size_t kN1 = 48;
+    constexpr size_t kTotal = kN0 + kN1;
+    constexpr int kShDegree = 1;
+
+    auto a = make_cuda_sh_splat(kN0, kShDegree, 0.25f);
+    auto b = make_cuda_sh_splat(kN1, kShDegree, 0.50f);
+    auto merged = Scene::mergeSplatsWithTransforms(
+        {{a.get(), glm::mat4{1.0f}}, {b.get(), glm::mat4{1.0f}}});
+    ASSERT_NE(merged, nullptr);
+    ASSERT_EQ(static_cast<size_t>(merged->size()), kTotal);
+    EXPECT_FALSE(merged->shN_value_quantized());
+
+    auto storage_result = SplatExportableStorage::create(kTotal, kShDegree, 0, kTotal);
+    if (!storage_result) {
+        sh_value_quant::set_enabled_for_testing(std::nullopt);
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::make_shared<SplatExportableStorage>(std::move(*storage_result));
+    const auto migrated = lfs::io::migrateSplatTensorsToAllocator(*merged, storage->make_allocator());
+    ASSERT_TRUE(migrated.has_value()) << migrated.error().format();
+    expect_exportable_q16(*merged, kTotal);
+
+    sh_value_quant::set_enabled_for_testing(std::nullopt);
+}
+
+TEST(SplatExportableStorageTest, ApplyDeletedKeepsExportableQ16ModelConsistent) {
+    require_cuda();
+    sh_value_quant::set_enabled_for_testing(true);
+
+    constexpr size_t kN = 96;
+    constexpr int kShDegree = 1;
+
+    auto model = make_cuda_sh_splat(kN, kShDegree, 0.25f);
+    auto storage_result = SplatExportableStorage::create(kN, kShDegree, 0, kN * 2);
+    if (!storage_result) {
+        sh_value_quant::set_enabled_for_testing(std::nullopt);
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::make_shared<SplatExportableStorage>(std::move(*storage_result));
+    const auto migrated = lfs::io::migrateSplatTensorsToAllocator(*model, storage->make_allocator());
+    ASSERT_TRUE(migrated.has_value()) << migrated.error().format();
+    expect_exportable_q16(*model, kN);
+
+    std::vector<uint8_t> host_mask(kN, 0);
+    for (size_t i = 0; i < kN; i += 2) {
+        host_mask[i] = 1;
+    }
+    Tensor mask = Tensor::from_blob(host_mask.data(), {kN}, Device::CPU, DataType::Bool).to(Device::CUDA);
+    model->soft_delete(mask);
+    ASSERT_TRUE(model->has_deleted_mask());
+
+    const size_t removed = model->apply_deleted();
+    EXPECT_EQ(removed, kN / 2);
+    EXPECT_EQ(static_cast<size_t>(model->size()), kN / 2);
+    EXPECT_FALSE(model->has_deleted_mask());
+    EXPECT_EQ(model->sh0_raw().size(0), kN / 2);
+    EXPECT_EQ(model->scaling_raw().size(0), kN / 2);
+    EXPECT_EQ(model->rotation_raw().size(0), kN / 2);
+    EXPECT_EQ(model->opacity_raw().size(0), kN / 2);
+    expect_exportable_q16(*model, kN / 2);
+
+    const auto means_host = model->means_raw().to_vector();
+    ASSERT_EQ(means_host.size(), (kN / 2) * 3);
+    for (size_t i = 0; i < kN / 2; ++i) {
+        EXPECT_FLOAT_EQ(means_host[i * 3], static_cast<float>(2 * i + 1)) << "row " << i;
+    }
+
+    sh_value_quant::set_enabled_for_testing(std::nullopt);
+}
+
+TEST(SplatExportableStorageTest, ApplyDeletedThenMergeKeepsMaskLengthConsistent) {
+    require_cuda();
+    sh_value_quant::set_enabled_for_testing(true);
+
+    constexpr size_t kN = 64;
+    constexpr int kShDegree = 1;
+
+    auto model = make_cuda_sh_splat(kN, kShDegree, 0.25f);
+    auto storage_result = SplatExportableStorage::create(kN, kShDegree, 0, kN * 2);
+    if (!storage_result) {
+        sh_value_quant::set_enabled_for_testing(std::nullopt);
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::make_shared<SplatExportableStorage>(std::move(*storage_result));
+    const auto migrated = lfs::io::migrateSplatTensorsToAllocator(*model, storage->make_allocator());
+    ASSERT_TRUE(migrated.has_value()) << migrated.error().format();
+    expect_exportable_q16(*model, kN);
+
+    std::vector<uint8_t> host_mask(kN, 0);
+    for (size_t i = 0; i < kN / 2; ++i) {
+        host_mask[i] = 1;
+    }
+    Tensor mask = Tensor::from_blob(host_mask.data(), {kN}, Device::CPU, DataType::Bool).to(Device::CUDA);
+    model->soft_delete(mask);
+    ASSERT_TRUE(model->has_deleted_mask());
+
+    const size_t removed = model->apply_deleted();
+    EXPECT_EQ(removed, kN / 2);
+    EXPECT_EQ(static_cast<size_t>(model->size()), kN / 2);
+    EXPECT_FALSE(model->has_deleted_mask());
+    EXPECT_EQ(static_cast<size_t>(model->means_raw().size(0)), kN / 2);
+    EXPECT_EQ(static_cast<size_t>(model->sh0_raw().size(0)), kN / 2);
+    EXPECT_EQ(static_cast<size_t>(model->scaling_raw().size(0)), kN / 2);
+    EXPECT_EQ(static_cast<size_t>(model->rotation_raw().size(0)), kN / 2);
+    EXPECT_EQ(static_cast<size_t>(model->opacity_raw().size(0)), kN / 2);
+    expect_exportable_q16(*model, kN / 2);
+
+    const auto means_host = model->means_raw().to_vector();
+    ASSERT_EQ(means_host.size(), (kN / 2) * 3);
+    for (size_t i = 0; i < kN / 2; ++i) {
+        EXPECT_FLOAT_EQ(means_host[i * 3], static_cast<float>(kN / 2 + i)) << "row " << i;
+    }
+
+    auto merged = Scene::mergeSplatsWithTransforms({{model.get(), glm::mat4{1.0f}}});
+    ASSERT_NE(merged, nullptr);
+    EXPECT_EQ(static_cast<size_t>(merged->size()), kN / 2);
+    EXPECT_FALSE(merged->has_deleted_mask());
+
+    sh_value_quant::set_enabled_for_testing(std::nullopt);
+}
+
+TEST(SplatExportableStorageTest, ApplyDeletedKeepsExportableFloatShNWhenQ16Disabled) {
+    require_cuda();
+    sh_value_quant::set_enabled_for_testing(false);
+    struct QuantFlagRestorer {
+        ~QuantFlagRestorer() { sh_value_quant::set_enabled_for_testing(std::nullopt); }
+    } restore_flag;
+
+    constexpr size_t kN = 96;
+    constexpr int kShDegree = 1;
+    constexpr float kShNFill = 0.25f;
+
+    auto model = make_cuda_sh_splat(kN, kShDegree, kShNFill);
+    auto storage_result = SplatExportableStorage::create(kN, kShDegree, 0, kN * 2);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::make_shared<SplatExportableStorage>(std::move(*storage_result));
+    const auto migrated = lfs::io::migrateSplatTensorsToAllocator(*model, storage->make_allocator());
+    ASSERT_TRUE(migrated.has_value()) << migrated.error().format();
+    expect_exportable_float_shN(*model, kN);
+
+    std::vector<uint8_t> host_mask(kN, 0);
+    for (size_t i = 0; i < kN; i += 2) {
+        host_mask[i] = 1;
+    }
+    Tensor mask = Tensor::from_blob(host_mask.data(), {kN}, Device::CPU, DataType::Bool).to(Device::CUDA);
+    model->soft_delete(mask);
+    ASSERT_TRUE(model->has_deleted_mask());
+
+    const size_t removed = model->apply_deleted();
+    EXPECT_EQ(removed, kN / 2);
+    EXPECT_EQ(static_cast<size_t>(model->size()), kN / 2);
+    EXPECT_FALSE(model->has_deleted_mask());
+    EXPECT_EQ(model->sh0_raw().size(0), kN / 2);
+    EXPECT_EQ(model->scaling_raw().size(0), kN / 2);
+    EXPECT_EQ(model->rotation_raw().size(0), kN / 2);
+    EXPECT_EQ(model->opacity_raw().size(0), kN / 2);
+    expect_exportable_float_shN(*model, kN / 2);
+
+    const auto means_host = model->means_raw().to_vector();
+    ASSERT_EQ(means_host.size(), (kN / 2) * 3);
+    for (size_t i = 0; i < kN / 2; ++i) {
+        EXPECT_FLOAT_EQ(means_host[i * 3], static_cast<float>(2 * i + 1)) << "row " << i;
+    }
+
+    const auto shN_host = model->shN_canonical().to_vector();
+    const auto rest = static_cast<size_t>(sh_rest_coefficients_for_degree(kShDegree));
+    ASSERT_EQ(shN_host.size(), (kN / 2) * rest * 3);
+    for (size_t i = 0; i < shN_host.size(); ++i) {
+        EXPECT_FLOAT_EQ(shN_host[i], kShNFill) << "shN canonical element " << i;
+    }
 }

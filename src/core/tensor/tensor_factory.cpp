@@ -80,6 +80,7 @@ namespace lfs::core {
         t.device_ = device;
         t.dtype_ = dtype;
         t.is_view_ = false;
+        t.ensure_state();
         t.state_->capacity = effective_capacity;
         t.state_->logical_size = t.shape_.rank() > 0 ? t.shape_[0] : 0;
         t.state_->stream = stream;

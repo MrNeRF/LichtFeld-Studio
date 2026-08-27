@@ -2257,43 +2257,44 @@ TEST_F(UnicodePathTest, OpenFileHelpers_AppendMode) {
 }
 
 // ============================================================================
-// Test 41: Checkpoint Save/Load Simulation with Unicode Paths
+// Test 41: Atomic project.licht save/load under Unicode output paths
+// Catches: CJK multi-script output paths that cannot open/write/rename/read a
+// binary project file; leftover .tmp after replace; sequential saves leaving
+// more than one project file under the output directory.
 // ============================================================================
 
 TEST_F(UnicodePathTest, CheckpointSaveLoad) {
-    // Simulate checkpoint operations from checkpoint.cpp
+    // Simulate product-default project save: <output>/project.licht with atomic replace
     auto output_dir = test_root_ / "出力_output_輸出_출력";
-    auto checkpoints_dir = output_dir / "checkpoints";
-    fs::create_directories(checkpoints_dir);
+    fs::create_directories(output_dir);
 
-    // Checkpoint header structure simulation
-    struct MockCheckpointHeader {
+    // Mock project header (path-encoding + atomic replace only; not a format parser)
+    struct MockProjectHeader {
         uint32_t magic = 0x4C465343; // "LFSC"
         uint32_t version = 1;
         uint32_t iteration;
         uint32_t num_gaussians;
     };
 
-    const auto checkpoint_path = checkpoints_dir / "checkpoint.resume";
-    auto temp_checkpoint_path = checkpoint_path;
-    temp_checkpoint_path += ".tmp";
+    const auto project_path = output_dir / "project.licht";
+    auto temp_project_path = project_path;
+    temp_project_path += ".tmp";
 
-    // Test repeated checkpoint saves to the same file
-    std::vector<std::pair<int, int>> checkpoints = {
+    // Test repeated atomic project saves to the same file
+    std::vector<std::pair<int, int>> project_saves = {
         {1000, 50000},
         {5000, 75000},
         {10000, 100000},
     };
 
-    for (const auto& [iteration, num_gaussians] : checkpoints) {
-        // Simulate save_checkpoint
+    for (const auto& [iteration, num_gaussians] : project_saves) {
         {
             std::ofstream file;
-            EXPECT_TRUE(open_file_for_write(temp_checkpoint_path, std::ios::binary, file))
-                << "Failed to open checkpoint for writing: " << path_to_utf8(temp_checkpoint_path);
+            EXPECT_TRUE(open_file_for_write(temp_project_path, std::ios::binary, file))
+                << "Failed to open project.licht.tmp for writing: " << path_to_utf8(temp_project_path);
 
             if (file.is_open()) {
-                MockCheckpointHeader header;
+                MockProjectHeader header;
                 header.iteration = iteration;
                 header.num_gaussians = num_gaussians;
                 file.write(reinterpret_cast<const char*>(&header), sizeof(header));
@@ -2307,20 +2308,19 @@ TEST_F(UnicodePathTest, CheckpointSaveLoad) {
         }
 
         std::error_code ec;
-        fs::remove(checkpoint_path, ec);
-        EXPECT_FALSE(ec) << "Failed to remove checkpoint: " << ec.message();
+        fs::remove(project_path, ec);
+        EXPECT_FALSE(ec) << "Failed to remove project.licht: " << ec.message();
 
-        fs::rename(temp_checkpoint_path, checkpoint_path, ec);
-        EXPECT_FALSE(ec) << "Failed to replace checkpoint: " << ec.message();
+        fs::rename(temp_project_path, project_path, ec);
+        EXPECT_FALSE(ec) << "Failed to replace project.licht: " << ec.message();
 
-        // Simulate load_checkpoint
         {
             std::ifstream file;
-            EXPECT_TRUE(open_file_for_read(checkpoint_path, std::ios::binary, file))
-                << "Failed to open checkpoint for reading: " << path_to_utf8(checkpoint_path);
+            EXPECT_TRUE(open_file_for_read(project_path, std::ios::binary, file))
+                << "Failed to open project.licht for reading: " << path_to_utf8(project_path);
 
             if (file.is_open()) {
-                MockCheckpointHeader header;
+                MockProjectHeader header;
                 file.read(reinterpret_cast<char*>(&header), sizeof(header));
                 EXPECT_EQ(header.magic, 0x4C465343u);
                 EXPECT_EQ(header.iteration, static_cast<uint32_t>(iteration));
@@ -2328,11 +2328,11 @@ TEST_F(UnicodePathTest, CheckpointSaveLoad) {
             }
         }
 
-        EXPECT_TRUE(fs::exists(checkpoint_path))
-            << "Checkpoint file missing: " << path_to_utf8(checkpoint_path);
-        EXPECT_FALSE(fs::exists(temp_checkpoint_path))
-            << "Temporary checkpoint file not cleaned up: " << path_to_utf8(temp_checkpoint_path);
-        EXPECT_EQ(std::distance(fs::directory_iterator(checkpoints_dir), fs::directory_iterator()), 1);
+        EXPECT_TRUE(fs::exists(project_path))
+            << "Project file missing: " << path_to_utf8(project_path);
+        EXPECT_FALSE(fs::exists(temp_project_path))
+            << "Temporary project file not cleaned up: " << path_to_utf8(temp_project_path);
+        EXPECT_EQ(std::distance(fs::directory_iterator(output_dir), fs::directory_iterator()), 1);
     }
 }
 
@@ -2766,13 +2766,14 @@ TEST_F(UnicodePathTest, CacheFileOperations) {
 // ============================================================================
 
 TEST_F(UnicodePathTest, CompleteExportWorkflow) {
-    // Simulate a complete training + export workflow with Unicode paths
+    // Simulate a complete training + export workflow with Unicode paths.
+    // Catches: multi-step export fails when intermediate project.licht lives
+    // under Unicode project/output path components.
     auto project_dir = test_root_ / "プロジェクト_project_项目_프로젝트";
     auto output_dir = project_dir / "出力_output";
-    auto checkpoints_dir = output_dir / "checkpoints";
     auto exports_dir = output_dir / "exports";
 
-    fs::create_directories(checkpoints_dir);
+    fs::create_directories(output_dir);
     fs::create_directories(exports_dir);
 
     // 1. Save training config
@@ -2785,15 +2786,15 @@ TEST_F(UnicodePathTest, CompleteExportWorkflow) {
         EXPECT_TRUE(fs::exists(config_path));
     }
 
-    // 2. Save checkpoints at intervals
+    // 2. Save product-default project.licht at intervals (single file, overwritten)
     for (int iter : {10000, 20000, 30000}) {
-        auto cp_path = checkpoints_dir / "checkpoint.resume";
+        auto project_path = output_dir / "project.licht";
         std::ofstream file;
-        EXPECT_TRUE(open_file_for_write(cp_path, std::ios::binary, file));
+        EXPECT_TRUE(open_file_for_write(project_path, std::ios::binary, file));
         uint32_t header[4] = {0x4C465343, 1, static_cast<uint32_t>(iter), 100000};
         file.write(reinterpret_cast<const char*>(header), sizeof(header));
         file.close();
-        EXPECT_TRUE(fs::exists(cp_path));
+        EXPECT_TRUE(fs::exists(project_path));
     }
 
     // 3. Save metrics
@@ -2836,7 +2837,7 @@ TEST_F(UnicodePathTest, CompleteExportWorkflow) {
     }
 
     // Verify complete workflow succeeded
-    EXPECT_EQ(std::distance(fs::directory_iterator(checkpoints_dir), fs::directory_iterator()), 1);
+    EXPECT_TRUE(fs::exists(output_dir / "project.licht"));
     EXPECT_EQ(fs::directory_iterator(exports_dir) != fs::directory_iterator(), true);
 }
 
@@ -2985,24 +2986,24 @@ TEST_F(UnicodePathTest, Utf8ToPathHandlesUnicodeWithEmbeddedNulls) {
     fs::path converted = utf8_to_path(buffer);
     EXPECT_EQ(converted, unicode_dir);
 
-    // Test path append with checkpoint-like structure
-    fs::path checkpoint_dir = converted / "checkpoints";
-    fs::path checkpoint_file = checkpoint_dir / "checkpoint.resume";
+    // Test path append with product-default project layout
+    fs::path project_file = converted / "project.licht";
 
     // Verify path operations worked (not truncated by embedded nulls)
-    std::string checkpoint_str = path_to_utf8(checkpoint_file);
-    EXPECT_TRUE(checkpoint_str.find("日本語_output") != std::string::npos);
-    EXPECT_TRUE(checkpoint_str.find("checkpoints") != std::string::npos);
-    EXPECT_TRUE(checkpoint_str.find("checkpoint.resume") != std::string::npos);
+    std::string project_str = path_to_utf8(project_file);
+    EXPECT_TRUE(project_str.find("日本語_output") != std::string::npos);
+    EXPECT_TRUE(project_str.find("project.licht") != std::string::npos);
 
     // Create the structure
-    fs::create_directories(checkpoint_dir);
-    EXPECT_TRUE(fs::exists(checkpoint_dir));
+    fs::create_directories(converted);
+    EXPECT_TRUE(fs::exists(converted));
 }
 
 // ============================================================================
-// Test 55: Checkpoint path construction with buffer-padded paths
-// Simulates the exact scenario that was failing: SaveDirectoryPopup → Trainer
+// Test 55: project.licht path construction with buffer-padded paths
+// Simulates SaveDirectoryPopup buffer padding → utf8_to_path → project path.
+// Catches: buffer padding corrupts utf8_to_path so appending project.licht or
+// creating/writing under Unicode output fails.
 // ============================================================================
 
 TEST_F(UnicodePathTest, CheckpointPathConstructionWithBufferPadding) {
@@ -3026,33 +3027,31 @@ TEST_F(UnicodePathTest, CheckpointPathConstructionWithBufferPadding) {
         std::string buffer = path_to_utf8(base_dir);
         buffer.resize(BUFFER_SIZE); // This was causing the bug!
 
-        // This is what Trainer::save_checkpoint receives
         fs::path output_path = utf8_to_path(buffer);
 
-        // This is what checkpoint.cpp does
-        fs::path checkpoint_dir = output_path / "checkpoints";
-        fs::path checkpoint_file = checkpoint_dir / "checkpoint.resume";
+        // Product default: <output>/project.licht
+        fs::path project_file = output_path / "project.licht";
 
         // Verify the paths are correctly constructed
-        EXPECT_NE(checkpoint_dir, output_path)
+        EXPECT_NE(project_file, output_path)
             << "Path append failed for: " << name;
-        EXPECT_TRUE(checkpoint_dir.string().length() > output_path.string().length())
-            << "Checkpoint dir not longer than output path for: " << name;
+        EXPECT_TRUE(project_file.string().length() > output_path.string().length())
+            << "Project path not longer than output path for: " << name;
 
         // Verify we can create and use these paths
         std::error_code ec;
-        fs::create_directories(checkpoint_dir, ec);
-        EXPECT_FALSE(ec) << "Failed to create checkpoint dir for: " << name << " - " << ec.message();
-        EXPECT_TRUE(fs::exists(checkpoint_dir)) << "Checkpoint dir doesn't exist for: " << name;
+        fs::create_directories(output_path, ec);
+        EXPECT_FALSE(ec) << "Failed to create output dir for: " << name << " - " << ec.message();
+        EXPECT_TRUE(fs::exists(output_path)) << "Output dir doesn't exist for: " << name;
 
-        // Write a test file to the checkpoint path
+        // Write a test file to the project path
         std::ofstream file;
-        open_file_for_write(checkpoint_file, std::ios::binary, file);
-        EXPECT_TRUE(file.is_open()) << "Failed to open checkpoint file for: " << name;
+        open_file_for_write(project_file, std::ios::binary, file);
+        EXPECT_TRUE(file.is_open()) << "Failed to open project.licht for: " << name;
         if (file.is_open()) {
-            file << "test checkpoint data";
+            file << "test project data";
             file.close();
-            EXPECT_TRUE(fs::exists(checkpoint_file)) << "Checkpoint file doesn't exist for: " << name;
+            EXPECT_TRUE(fs::exists(project_file)) << "project.licht doesn't exist for: " << name;
         }
     }
 }

@@ -19,6 +19,24 @@ TEST(RenderSettingsDefaults, CameraFrustumsAreDisabledByDefault) {
     EXPECT_FLOAT_EQ(proxy_settings.camera_frustum_scale, 0.25f);
 }
 
+TEST(RenderSettingsDefaults, SceneReconstructionIsDisabledByDefault) {
+    const lfs::vis::RenderSettings render_settings;
+    const lfs::vis::RenderSettingsProxy proxy_settings;
+
+    EXPECT_EQ(render_settings.scene_upscaler, "native");
+    EXPECT_EQ(render_settings.scene_upscaler_preset, "native");
+    EXPECT_FLOAT_EQ(render_settings.scene_upscaler_scale, 1.0f);
+    EXPECT_EQ(proxy_settings.scene_upscaler, "native");
+    EXPECT_EQ(proxy_settings.scene_upscaler_preset, "native");
+    EXPECT_FLOAT_EQ(proxy_settings.scene_upscaler_scale, 1.0f);
+}
+
+TEST(RenderSettingsDefaults, SceneReconstructionScaleComposesWithBaseScale) {
+    EXPECT_FLOAT_EQ(lfs::vis::effectiveSceneRenderScale(0.8f, 0.5f, true), 0.4f);
+    EXPECT_FLOAT_EQ(lfs::vis::effectiveSceneRenderScale(0.8f, 0.5f, false), 0.8f);
+    EXPECT_FLOAT_EQ(lfs::vis::effectiveSceneRenderScale(1.0f, 0.1f, true), 0.25f);
+}
+
 TEST(RenderSettingsProxy, DepthFilterTransformRoundTrips) {
     lfs::vis::RenderSettings render_settings;
     const glm::quat rotation = glm::normalize(glm::quat(0.9f, 0.1f, -0.2f, 0.3f));
@@ -47,6 +65,45 @@ TEST(RenderSettingsProxy, DepthFilterTransformRoundTrips) {
     EXPECT_FLOAT_EQ(roundtrip_translation.x, translation.x);
     EXPECT_FLOAT_EQ(roundtrip_translation.y, translation.y);
     EXPECT_FLOAT_EQ(roundtrip_translation.z, translation.z);
+}
+
+TEST(RenderSettingsProxy, SceneReconstructionFieldsRoundTrip) {
+    lfs::vis::RenderSettings settings;
+    settings.scene_upscaler = "spatial";
+    settings.scene_upscaler_preset = "performance";
+    settings.scene_upscaler_scale = 0.5f;
+
+    const auto proxy = lfs::vis::to_proxy(settings);
+    EXPECT_EQ(proxy.scene_upscaler, "spatial");
+    EXPECT_EQ(proxy.scene_upscaler_preset, "performance");
+    EXPECT_FLOAT_EQ(proxy.scene_upscaler_scale, 0.5f);
+
+    lfs::vis::RenderSettings roundtrip;
+    lfs::vis::apply_proxy(roundtrip, proxy);
+    EXPECT_EQ(roundtrip.scene_upscaler, "spatial");
+    EXPECT_EQ(roundtrip.scene_upscaler_preset, "performance");
+    EXPECT_FLOAT_EQ(roundtrip.scene_upscaler_scale, 0.5f);
+}
+
+TEST(RenderSettingsProxy, DepthViewSplitOffsetAndLodFieldsRoundTrip) {
+    lfs::vis::RenderSettings settings;
+    settings.depth_view = true;
+    settings.split_view_offset = 3;
+    settings.lod_auto_enable_rad = true;
+    settings.lod_behind_camera_penalty = 0.55f;
+
+    const auto proxy = lfs::vis::to_proxy(settings);
+    EXPECT_TRUE(proxy.depth_view);
+    EXPECT_EQ(proxy.split_view_offset, 3u);
+    EXPECT_TRUE(proxy.lod_auto_enable_rad);
+    EXPECT_FLOAT_EQ(proxy.lod_behind_camera_penalty, 0.55f);
+
+    lfs::vis::RenderSettings roundtrip;
+    lfs::vis::apply_proxy(roundtrip, proxy);
+    EXPECT_TRUE(roundtrip.depth_view);
+    EXPECT_EQ(roundtrip.split_view_offset, 3u);
+    EXPECT_TRUE(roundtrip.lod_auto_enable_rad);
+    EXPECT_FLOAT_EQ(roundtrip.lod_behind_camera_penalty, 0.55f);
 }
 
 TEST(RenderSettingsBackendNormalization, Explicit3dgsBackendBeatsStaleGutMirror) {

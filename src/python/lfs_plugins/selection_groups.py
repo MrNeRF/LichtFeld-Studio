@@ -39,6 +39,16 @@ class SelectionGroupsPanel(Panel):
         self._last_visible = None
         self._reactive_binding = PanelStateBinding()
 
+    def capture_chrome(self):
+        return {"collapsed": bool(self._collapsed)}
+
+    def apply_chrome(self, payload):
+        self._collapsed = True
+        if isinstance(payload, dict) and "collapsed" in payload:
+            self._collapsed = bool(payload.get("collapsed"))
+        if self._handle:
+            self._handle.dirty_all()
+
     @classmethod
     def poll(cls, context):
         del context

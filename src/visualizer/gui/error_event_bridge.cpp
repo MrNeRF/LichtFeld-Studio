@@ -192,10 +192,7 @@ namespace lfs::vis::gui {
         if (e.is_disk_space_error) {
             return std::nullopt; // the native GuiManager rich disk-space modal owns this case
         }
-        std::string message =
-            e.is_checkpoint
-                ? LOCF("runtime.checkpoint_save_failed", e.iteration, e.error)
-                : LOCF("runtime.export_failed", e.error);
+        std::string message = LOCF("runtime.export_failed", e.error);
         return makeNotification(lfs::ErrorCode::Internal, lfs::ErrorDomain::IO, lfs::Severity::Error,
                                 std::move(message), error_op::kSave, LFS_SOURCE_SITE_CURRENT());
     }

@@ -4,16 +4,24 @@
 
 #include "html.hpp"
 #include "core/base64.hpp"
+#include "core/executable_path.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
-#include "html_viewer_resources.hpp"
+#include "core/provenance.hpp"
+#include "core/splat_data_transform.hpp"
 #include "io/atomic_output.hpp"
 #include "io/error.hpp"
 #include "sogs.hpp"
 
 #include <cmath>
+#include <filesystem>
 #include <fstream>
+#include <iomanip>
+#include <optional>
 #include <sstream>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace lfs::io {
 
@@ -30,6 +38,89 @@ namespace lfs::io {
             std::vector<uint8_t> buffer(size);
             file.read(reinterpret_cast<char*>(buffer.data()), size);
             return buffer;
+        }
+
+        // Viewer export resources (template/css/js/gizmo/measure-tool) are read
+        // from disk at export time, so editing them needs no rebuild.
+        Result<std::string> read_text_file(const std::filesystem::path& path) {
+            std::ifstream file;
+            if (!lfs::core::open_file_for_read(path, std::ios::binary, file)) {
+                return make_error(ErrorCode::READ_FAILURE, "Failed to open HTML viewer resource", path);
+            }
+            std::ostringstream contents;
+            contents << file.rdbuf();
+            if (file.bad()) {
+                return make_error(ErrorCode::READ_FAILURE, "Failed to read HTML viewer resource", path);
+            }
+            return contents.str();
+        }
+
+        // Strips a trailing `export { ... };` statement (only whitespace may
+        // follow it) so the source can be concatenated into a plain IIFE
+        // instead of a real ES module. Missing or non-trailing `export` is an
+        // error: inside the IIFE it is a SyntaxError and the viewer never starts.
+        Result<std::string> strip_trailing_export(std::string_view js, std::string_view export_statement,
+                                                  const std::filesystem::path& path) {
+            std::string result(js);
+            const size_t pos = result.rfind(export_statement);
+            if (pos == std::string::npos) {
+                return make_error(ErrorCode::CORRUPTED_DATA,
+                                  "HTML viewer resource has no trailing export statement", path);
+            }
+            const size_t after = pos + export_statement.size();
+            if (result.find_first_not_of(" \t\r\n", after) != std::string::npos) {
+                return make_error(ErrorCode::CORRUPTED_DATA,
+                                  "HTML viewer resource has no trailing export statement", path);
+            }
+            result.erase(pos);
+            return result;
+        }
+
+        // Vendored gizmo.js + measure-tool.js, wrapped in an IIFE so their
+        // top-level declarations can't collide with index.js's own (they
+        // share index.js's classes/constants only via closure), and exposed
+        // via a single `window` hook the template calls after `main()` resolves.
+        Result<std::string> build_measure_tool_script(const std::string& gizmo_js,
+                                                      const std::string& measure_tool_js,
+                                                      const std::filesystem::path& gizmo_path,
+                                                      const std::filesystem::path& measure_tool_path) {
+            auto gizmo_body = strip_trailing_export(gizmo_js, "export { Gizmo, TranslateGizmo };", gizmo_path);
+            if (!gizmo_body) {
+                return std::unexpected(gizmo_body.error());
+            }
+            auto measure_body = strip_trailing_export(measure_tool_js, "export { initMeasureTool };",
+                                                      measure_tool_path);
+            if (!measure_body) {
+                return std::unexpected(measure_body.error());
+            }
+
+            std::string wrapped;
+            wrapped.reserve(gizmo_body->size() + measure_body->size() + 128);
+            wrapped += "\n(function () {\n";
+            wrapped += *gizmo_body;
+            wrapped += "\n";
+            wrapped += *measure_body;
+            wrapped += "\nwindow.__lfsInitMeasureTool = initMeasureTool;\n})();\n";
+            return wrapped;
+        }
+
+        Result<std::filesystem::path> resolve_viewer_resources_dir() {
+            std::vector<std::filesystem::path> candidates;
+            candidates.push_back(lfs::core::getViewerResourcesDir());
+#ifdef LFS_DEV_VIEWER_SOURCE_DIR
+            candidates.push_back(lfs::core::utf8_to_path(LFS_DEV_VIEWER_SOURCE_DIR));
+#endif
+            for (const auto& dir : candidates) {
+                if (std::filesystem::exists(dir / "viewer_template.html")) {
+                    return dir;
+                }
+            }
+
+            std::string error_msg = "Cannot find HTML viewer resources.\nSearched in:\n";
+            for (const auto& dir : candidates) {
+                error_msg += "  - " + lfs::core::path_to_utf8(dir) + "\n";
+            }
+            return make_error(ErrorCode::PATH_NOT_FOUND, error_msg);
         }
 
         std::string replace_placeholder(std::string_view input, std::string_view placeholder, std::string_view replacement) {
@@ -68,10 +159,40 @@ namespace lfs::io {
             return result;
         }
 
-        std::string generate_html(const std::string& base64_sog) {
-            const auto tmpl = get_viewer_template();
-            const auto css = get_viewer_css();
-            const auto js = get_viewer_js();
+        Result<std::string> generate_html(const std::string& base64_sog,
+                                          const glm::vec3& camera_position,
+                                          const glm::vec3& camera_target,
+                                          const std::optional<core::ProvenanceStamp>& provenance) {
+            auto resource_dir_result = resolve_viewer_resources_dir();
+            if (!resource_dir_result)
+                return std::unexpected(resource_dir_result.error());
+            const auto& resource_dir = *resource_dir_result;
+
+            auto tmpl_result = read_text_file(resource_dir / "viewer_template.html");
+            if (!tmpl_result)
+                return std::unexpected(tmpl_result.error());
+            auto css_result = read_text_file(resource_dir / "index.css");
+            if (!css_result)
+                return std::unexpected(css_result.error());
+            auto js_result = read_text_file(resource_dir / "index.js");
+            if (!js_result)
+                return std::unexpected(js_result.error());
+            auto gizmo_result = read_text_file(resource_dir / "gizmo.js");
+            if (!gizmo_result)
+                return std::unexpected(gizmo_result.error());
+            auto measure_tool_result = read_text_file(resource_dir / "measure-tool.js");
+            if (!measure_tool_result)
+                return std::unexpected(measure_tool_result.error());
+
+            auto measure_script_result = build_measure_tool_script(*gizmo_result, *measure_tool_result,
+                                                                   resource_dir / "gizmo.js",
+                                                                   resource_dir / "measure-tool.js");
+            if (!measure_script_result)
+                return std::unexpected(measure_script_result.error());
+
+            const auto& tmpl = *tmpl_result;
+            const auto& css = *css_result;
+            const std::string js = *js_result + *measure_script_result;
 
             std::string html{tmpl};
 
@@ -83,8 +204,10 @@ namespace lfs::io {
             html = replace_placeholder(html, js_import, js);
 
             const std::string settings_fetch = "settings: fetch(settingsUrl).then(response => response.json())";
-            const std::string inline_settings = R"(settings: {"camera":{"fov":50,"position":[2,2,-2],"target":[0,0,0],"startAnim":"none"},"background":{"color":[0,0,0]},"animTracks":[]})";
-            html = replace_placeholder(html, settings_fetch, inline_settings);
+            std::ostringstream settings_stream;
+            settings_stream << std::fixed << std::setprecision(6);
+            settings_stream << "settings:{\"camera\":{\"fov\":50,\"position\":[" << camera_position.x << "," << camera_position.y << "," << camera_position.z << "],\"target\":[" << camera_target.x << "," << camera_target.y << "," << camera_target.z << "],\"startAnim\":\"none\"},\"background\":{\"color\":[0,0,0]},\"animTracks\":[]}";
+            html = replace_placeholder(html, settings_fetch, settings_stream.str());
 
             const std::string content_fetch = "fetch(contentUrl)";
             const std::string base64_fetch = "fetch(\"data:application/octet-stream;base64," + base64_sog + "\")";
@@ -92,12 +215,33 @@ namespace lfs::io {
 
             html = replace_placeholder(html, ".compressed.ply", ".sog");
 
+            if (provenance) {
+                const std::string json = core::provenance_to_json(*provenance);
+                std::string escaped;
+                escaped.reserve(json.size());
+                for (const char c : json) {
+                    if (c == '<')
+                        escaped += "\\u003c";
+                    else
+                        escaped += c;
+                }
+                const std::string script =
+                    "<script type=\"application/json\" id=\"lichtfeld-provenance\">" + escaped +
+                    "</script>\n    </head>";
+                html = replace_placeholder(html, "</head>", script);
+            }
+
             return html;
         }
 
     } // anonymous namespace
 
-    Result<void> export_html(const SplatData& splat_data, const HtmlExportOptions& options) {
+    Result<void> export_html(const SplatData& splat_data, const HtmlExportOptions& options_in) {
+        HtmlExportOptions options = options_in;
+        if (!options.provenance) {
+            options.provenance = core::make_minimal_provenance_stamp();
+        }
+
         if (!report_export_progress(options.progress_callback, 0.0f, "Exporting SOG...")) {
             return make_error(ErrorCode::CANCELLED, "HTML export cancelled", options.output_path);
         }
@@ -129,7 +273,8 @@ namespace lfs::io {
             .use_gpu = true,
             .progress_callback = [&](float p, const std::string& stage) {
                 return report_export_progress(options.progress_callback, p * 0.5f, stage);
-            }};
+            },
+            .provenance = options.provenance};
 
         if (auto result = save_sog(splat_data, sog_options); !result) {
             // Propagate the SOG error with context
@@ -155,7 +300,44 @@ namespace lfs::io {
             return make_error(ErrorCode::CANCELLED, "HTML export cancelled", options.output_path);
         }
 
-        const auto html = generate_html(base64_data);
+        // Compute bounding box and derive camera position for a 30° elevation view
+        glm::vec3 min_bounds{0.f, 0.f, 0.f};
+        glm::vec3 max_bounds{0.f, 0.f, 0.f};
+        if (!compute_bounds(splat_data, min_bounds, max_bounds, 0.0f, false)) {
+            return make_error(ErrorCode::CORRUPTED_DATA,
+                              "Failed to compute model bounds for camera setup", options.output_path);
+        }
+
+        const glm::vec3 extent = max_bounds - min_bounds;
+        const float max_extent = std::max({extent.x, extent.y, extent.z});
+        const glm::vec3 center = (min_bounds + max_bounds) * 0.5f;
+
+        // The web viewer's SOG loader (index.js `loadGsplat`) always attaches the
+        // gsplat entity with a fixed 180° rotation about Z, while the camera entity
+        // itself is left unrotated. That negates X and Y for the model as actually
+        // rendered, so the camera's look-at target/position must be computed in that
+        // same rotated space (otherwise the orbit pivots around a point away from the
+        // model whenever its center isn't near X=0, Y=0).
+        const glm::vec3 render_center{-center.x, -center.y, center.z};
+
+        // Distance to fit model in 50° FOV with 1.5× margin
+        const float fov_rad = glm::radians(50.0f);
+        const float distance = max_extent / std::tan(fov_rad * 0.5f) * 1.5f;
+
+        // 30° elevation angle from horizontal, looking from +X,+Z diagonal
+        const float elev_rad = glm::radians(30.0f);
+        const float horiz_dist = distance * std::cos(elev_rad);
+        const float vert_dist = distance * std::sin(elev_rad);
+        const float diag = horiz_dist * 0.70710678118f;
+
+        const glm::vec3 camera_position{render_center.x + diag, render_center.y + vert_dist, render_center.z - diag};
+        const glm::vec3 camera_target{render_center.x, render_center.y, render_center.z};
+
+        auto html_result = generate_html(base64_data, camera_position, camera_target, options.provenance);
+        if (!html_result) {
+            return std::unexpected(html_result.error());
+        }
+        const auto& html = *html_result;
 
         if (!report_export_progress(options.progress_callback, 0.9f, "Writing HTML...")) {
             return make_error(ErrorCode::CANCELLED, "HTML export cancelled", options.output_path);

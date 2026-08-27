@@ -47,7 +47,7 @@ namespace lfs::python {
 
         plugins.def(
             "discover", []() { return get_plugin_manager().attr("discover")(); },
-            "Discover plugins in ~/.lichtfeld/plugins/");
+            "Discover plugins in the resolved user plugin directory");
 
         plugins.def(
             "load", [](const std::string& name) { return nb::cast<bool>(get_plugin_manager().attr("load")(name)); },

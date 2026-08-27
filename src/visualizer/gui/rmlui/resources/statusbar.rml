@@ -2,8 +2,10 @@
 <head>
     <link type="text/rcss" href="statusbar.rcss"/>
 </head>
-<body id="body" data-model="status_bar">
+<body id="body" data-model="status_bar" data-class-safe-mode="safe_mode">
+  <div id="status-row">
     <div id="status-left">
+        <span id="safe-mode-badge" class="hidden" data-class-hidden="!safe_mode" data-attr-title="safe_mode_text">{{ safe_mode_text }}</span>
         <span id="mode-text" data-style-color="mode_color">{{ mode_text }}</span>
         <div id="training-section" class="hidden" data-class-hidden="!show_training">
             <span class="separator section-sep">|</span>
@@ -62,12 +64,32 @@
         </div>
     </div>
     <div id="status-right">
+        <div id="mcp-chip" data-attr-title="mcp_tooltip" data-style-color="mcp_color" data-class-expanded="mcp_details_expanded">
+            <span>{{ mcp_summary }}</span>
+            <div id="mcp-popup" class="hidden" data-class-hidden="!mcp_details_expanded">
+                <div id="mcp-popup-header">
+                    <div id="mcp-popup-title" data-style-color="mcp_color">{{ mcp_summary }}</div>
+                    <button id="mcp-toggle" data-class-is-on="mcp_server_enabled" data-attr-title="mcp_toggle_label" data-attrif-disabled="safe_mode" data-class-disabled="safe_mode">
+                        <span class="mcp-switch-track"><span class="mcp-switch-knob"></span></span>
+                    </button>
+                </div>
+                <div id="mcp-details">{{ mcp_details }}</div>
+                <div id="mcp-counters">
+                    <span>{{ mcp_total_text }}</span>
+                    <span class="mcp-success">{{ mcp_success_text }}</span>
+                    <span class="mcp-error">{{ mcp_error_text }}</span>
+                </div>
+                <div id="mcp-actions">
+                    <button id="mcp-preferences" class="btn btn--primary mcp-edit-button">{{ mcp_preferences_label }}</button>
+                </div>
+            </div>
+        </div>
         <div id="account-chip" data-class-warning="account_membership_required" data-attr-title="account_tooltip" data-style-color="account_color">
             <span id="account-label">{{ account_label }}</span>
             <span id="account-tier" class="hidden" data-class-hidden="!account_show_tier">{{ account_tier }}</span>
         </div>
         <span id="gpu-model" class="dim hidden" data-class-hidden="!show_gpu_model">{{ gpu_model_text }}</span>
-        <img id="gpu-icon" data-class-active="gpu_panel_active" src="../icon/gpu.png" />
+        <img id="gpu-icon" data-class-active="gpu_panel_active" title="@tr:ui.perf_hud_tooltip" src="../icon/gpu.png" />
         <div id="lfs-mem-group" class="status-item">
             <span id="lfs-mem" data-style-color="lfs_mem_color">{{ lfs_mem_text }}</span>
             <span class="separator thin">|</span>
@@ -79,5 +101,6 @@
         </div>
         <span id="git-commit" class="dim">{{ git_commit }}</span>
     </div>
+  </div>
 </body>
 </rml>

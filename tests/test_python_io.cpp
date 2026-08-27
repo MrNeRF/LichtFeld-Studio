@@ -5,18 +5,25 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <future>
 #include <gtest/gtest.h>
 #include <iterator>
 #include <limits>
 #include <nlohmann/json.hpp>
+#include <numbers>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include "core/camera_types.h"
+#include "core/error.hpp"
 #include "core/image_io.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
@@ -27,6 +34,11 @@
 #include "io/loader.hpp"
 #include "io/nvcodec_image_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
+#include "io/project_container.hpp"
+#include "io/project_document.hpp"
+#include "licht_test_support.hpp"
+#include "python/gil.hpp"
+#include "python/runner.hpp"
 #include "tinyply.hpp"
 
 namespace fs = std::filesystem;
@@ -86,23 +98,95 @@ protected:
         }
     }
 
-    void write_png(const fs::path& path) const {
-        static const std::vector<unsigned char> png_1x1 = {
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-            0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
-            0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41,
-            0x54, 0x78, 0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0xF0,
-            0x1F, 0x00, 0x05, 0x00, 0x01, 0xFF, 0x89, 0x99,
-            0x3D, 0x1D, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
-            0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82};
+    void write_png(const fs::path& path, int width = 1, int height = 1) const {
+        ASSERT_GT(width, 0);
+        ASSERT_GT(height, 0);
+
+        // Minimal solid-color RGBA PNG for the given dimensions (no external deps).
+        auto crc32 = [](const unsigned char* data, size_t len) -> uint32_t {
+            uint32_t crc = 0xFFFFFFFFu;
+            for (size_t i = 0; i < len; ++i) {
+                crc ^= data[i];
+                for (int b = 0; b < 8; ++b) {
+                    const uint32_t mask = -(crc & 1u);
+                    crc = (crc >> 1) ^ (0xEDB88320u & mask);
+                }
+            }
+            return ~crc;
+        };
+        auto append_be32 = [](std::vector<unsigned char>& out, uint32_t value) {
+            out.push_back(static_cast<unsigned char>((value >> 24) & 0xFF));
+            out.push_back(static_cast<unsigned char>((value >> 16) & 0xFF));
+            out.push_back(static_cast<unsigned char>((value >> 8) & 0xFF));
+            out.push_back(static_cast<unsigned char>(value & 0xFF));
+        };
+        auto append_chunk = [&](std::vector<unsigned char>& out, const char type[4],
+                                const std::vector<unsigned char>& data) {
+            append_be32(out, static_cast<uint32_t>(data.size()));
+            const size_t type_offset = out.size();
+            out.insert(out.end(), type, type + 4);
+            out.insert(out.end(), data.begin(), data.end());
+            append_be32(out, crc32(out.data() + type_offset, 4 + data.size()));
+        };
+
+        std::vector<unsigned char> raw;
+        raw.reserve(static_cast<size_t>(height) * (1u + static_cast<size_t>(width) * 4u));
+        for (int y = 0; y < height; ++y) {
+            raw.push_back(0); // filter: None
+            for (int x = 0; x < width; ++x) {
+                raw.push_back(0);
+                raw.push_back(0);
+                raw.push_back(0);
+                raw.push_back(255);
+            }
+        }
+
+        // Stored (uncompressed) deflate blocks — valid zlib stream for any size.
+        std::vector<unsigned char> zlib_data;
+        zlib_data.push_back(0x78);
+        zlib_data.push_back(0x01);
+        size_t offset = 0;
+        const size_t raw_size = raw.size();
+        while (offset < raw_size) {
+            const size_t chunk = std::min<size_t>(65535, raw_size - offset);
+            const bool final_block = (offset + chunk) >= raw_size;
+            zlib_data.push_back(final_block ? 0x01 : 0x00);
+            zlib_data.push_back(static_cast<unsigned char>(chunk & 0xFF));
+            zlib_data.push_back(static_cast<unsigned char>((chunk >> 8) & 0xFF));
+            const uint16_t nlen = static_cast<uint16_t>(~chunk);
+            zlib_data.push_back(static_cast<unsigned char>(nlen & 0xFF));
+            zlib_data.push_back(static_cast<unsigned char>((nlen >> 8) & 0xFF));
+            zlib_data.insert(zlib_data.end(), raw.begin() + static_cast<std::ptrdiff_t>(offset),
+                             raw.begin() + static_cast<std::ptrdiff_t>(offset + chunk));
+            offset += chunk;
+        }
+        // Adler-32 of the raw scanline data
+        uint32_t s1 = 1, s2 = 0;
+        for (unsigned char byte : raw) {
+            s1 = (s1 + byte) % 65521;
+            s2 = (s2 + s1) % 65521;
+        }
+        append_be32(zlib_data, (s2 << 16) | s1);
+
+        std::vector<unsigned char> png = {
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
+        std::vector<unsigned char> ihdr;
+        append_be32(ihdr, static_cast<uint32_t>(width));
+        append_be32(ihdr, static_cast<uint32_t>(height));
+        ihdr.push_back(8); // bit depth
+        ihdr.push_back(6); // RGBA
+        ihdr.push_back(0);
+        ihdr.push_back(0);
+        ihdr.push_back(0);
+        append_chunk(png, "IHDR", ihdr);
+        append_chunk(png, "IDAT", zlib_data);
+        append_chunk(png, "IEND", {});
 
         fs::create_directories(path.parent_path());
         std::ofstream out(path, std::ios::binary);
         ASSERT_TRUE(out.is_open()) << "Failed to open " << path;
-        out.write(reinterpret_cast<const char*>(png_1x1.data()),
-                  static_cast<std::streamsize>(png_1x1.size()));
+        out.write(reinterpret_cast<const char*>(png.data()),
+                  static_cast<std::streamsize>(png.size()));
         out.close();
         ASSERT_TRUE(out.good()) << "Failed to write " << path;
     }
@@ -495,6 +579,7 @@ end_header
 
 TEST_F(PythonIOTest, LoadTransformsDatasetCanBeCancelled) {
     const fs::path dataset_dir = temp_dir / "cancelled_transforms_dataset";
+    write_png(dataset_dir / "frame_0001.png");
     write_text_file(
         dataset_dir / "transforms_train.json",
         R"json({
@@ -570,6 +655,323 @@ TEST_F(PythonIOTest, RejectsMalformedTransformsCameraContractsBeforeCameraConstr
     invalid = valid;
     invalid["frames"][0]["transform_matrix"][3] = nlohmann::json::array({0.0, 0.0, 1.0, 1.0});
     expect_rejected(std::move(invalid));
+}
+
+TEST_F(PythonIOTest, LoadTransformsPerFrameIntrinsics) {
+    const fs::path dataset_dir = temp_dir / "per_frame_intrinsics";
+    write_png(dataset_dir / "frame_a.png", 64, 48);
+    write_png(dataset_dir / "frame_b.png", 128, 96);
+
+    const nlohmann::json identity_matrix = {
+        {1.0, 0.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0, 0.0},
+        {0.0, 0.0, 1.0, 0.0},
+        {0.0, 0.0, 0.0, 1.0},
+    };
+    nlohmann::json transforms = {
+        {"frames", nlohmann::json::array({
+                       {
+                           {"file_path", "frame_a.png"},
+                           {"w", 64},
+                           {"h", 48},
+                           {"fl_x", 50.0},
+                           {"fl_y", 45.0},
+                           {"cx", 32.0},
+                           {"cy", 24.0},
+                           {"camera_model", "OPENCV"},
+                           {"k1", 0.01},
+                           {"k2", -0.02},
+                           {"k3", 0.003},
+                           {"p1", 0.0001},
+                           {"p2", -0.0002},
+                           {"k4", 0.001},
+                           {"b1", 0.0003},
+                           {"b2", -0.0004},
+                           {"transform_matrix", identity_matrix},
+                       },
+                       {
+                           {"file_path", "frame_b.png"},
+                           {"w", 128},
+                           {"h", 96},
+                           {"fl_x", 90.0},
+                           {"fl_y", 88.0},
+                           {"cx", 64.0},
+                           {"cy", 48.0},
+                           {"camera_model", "OPENCV"},
+                           {"k1", 0.05},
+                           {"k2", -0.04},
+                           {"k3", 0.006},
+                           {"p1", 0.0005},
+                           {"p2", -0.0006},
+                           {"k4", 0.002},
+                           {"b1", 0.0007},
+                           {"b2", -0.0008},
+                           {"transform_matrix", identity_matrix},
+                       },
+                   })},
+    };
+    write_text_file(dataset_dir / "transforms.json", transforms.dump());
+
+    auto [cameras, center, splits] = read_transforms_cameras_and_images(dataset_dir / "transforms.json", {});
+    (void)center;
+    (void)splits;
+    ASSERT_EQ(cameras.size(), 2u);
+
+    EXPECT_EQ(cameras[0]._width, 64);
+    EXPECT_EQ(cameras[0]._height, 48);
+    EXPECT_FLOAT_EQ(cameras[0]._focal_x, 50.0f);
+    EXPECT_FLOAT_EQ(cameras[0]._focal_y, 45.0f);
+    EXPECT_FLOAT_EQ(cameras[0]._center_x, 32.0f);
+    EXPECT_FLOAT_EQ(cameras[0]._center_y, 24.0f);
+    EXPECT_EQ(cameras[0]._camera_model_type, CameraModelType::PINHOLE);
+    ASSERT_EQ(cameras[0]._radial_distortion.numel(), 3u);
+    ASSERT_EQ(cameras[0]._tangential_distortion.numel(), 2u);
+    {
+        const auto* radial = cameras[0]._radial_distortion.ptr<float>();
+        const auto* tangential = cameras[0]._tangential_distortion.ptr<float>();
+        EXPECT_FLOAT_EQ(radial[0], 0.01f);
+        EXPECT_FLOAT_EQ(radial[1], -0.02f);
+        EXPECT_FLOAT_EQ(radial[2], 0.003f);
+        EXPECT_FLOAT_EQ(tangential[0], 0.0001f);
+        EXPECT_FLOAT_EQ(tangential[1], -0.0002f);
+    }
+
+    EXPECT_EQ(cameras[1]._width, 128);
+    EXPECT_EQ(cameras[1]._height, 96);
+    EXPECT_FLOAT_EQ(cameras[1]._focal_x, 90.0f);
+    EXPECT_FLOAT_EQ(cameras[1]._focal_y, 88.0f);
+    EXPECT_FLOAT_EQ(cameras[1]._center_x, 64.0f);
+    EXPECT_FLOAT_EQ(cameras[1]._center_y, 48.0f);
+    EXPECT_EQ(cameras[1]._camera_model_type, CameraModelType::PINHOLE);
+    ASSERT_EQ(cameras[1]._radial_distortion.numel(), 3u);
+    ASSERT_EQ(cameras[1]._tangential_distortion.numel(), 2u);
+    {
+        const auto* radial = cameras[1]._radial_distortion.ptr<float>();
+        const auto* tangential = cameras[1]._tangential_distortion.ptr<float>();
+        EXPECT_FLOAT_EQ(radial[0], 0.05f);
+        EXPECT_FLOAT_EQ(radial[1], -0.04f);
+        EXPECT_FLOAT_EQ(radial[2], 0.006f);
+        EXPECT_FLOAT_EQ(tangential[0], 0.0005f);
+        EXPECT_FLOAT_EQ(tangential[1], -0.0006f);
+    }
+
+    // Distinct per-frame values prove resolution is not root-only.
+    EXPECT_NE(cameras[0]._focal_x, cameras[1]._focal_x);
+    EXPECT_NE(cameras[0]._width, cameras[1]._width);
+}
+
+TEST_F(PythonIOTest, LoadTransformsRootIntrinsicsFrameOverride) {
+    const fs::path dataset_dir = temp_dir / "root_override_intrinsics";
+    write_png(dataset_dir / "frame_0.png", 100, 80);
+    write_png(dataset_dir / "frame_1.png", 100, 80);
+
+    const nlohmann::json identity_matrix = {
+        {1.0, 0.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0, 0.0},
+        {0.0, 0.0, 1.0, 0.0},
+        {0.0, 0.0, 0.0, 1.0},
+    };
+    nlohmann::json transforms = {
+        {"w", 100},
+        {"h", 80},
+        {"fl_x", 70.0},
+        {"fl_y", 65.0},
+        {"cx", 50.0},
+        {"cy", 40.0},
+        {"camera_model", "PINHOLE"},
+        {"frames", nlohmann::json::array({
+                       {
+                           {"file_path", "frame_0.png"},
+                           {"transform_matrix", identity_matrix},
+                       },
+                       {
+                           {"file_path", "frame_1.png"},
+                           {"fl_x", 110.0},
+                           {"fl_y", 105.0},
+                           {"cx", 49.0},
+                           {"cy", 39.0},
+                           {"transform_matrix", identity_matrix},
+                       },
+                   })},
+    };
+    write_text_file(dataset_dir / "transforms.json", transforms.dump());
+
+    auto [cameras, center, splits] = read_transforms_cameras_and_images(dataset_dir / "transforms.json", {});
+    (void)center;
+    (void)splits;
+    ASSERT_EQ(cameras.size(), 2u);
+
+    EXPECT_FLOAT_EQ(cameras[0]._focal_x, 70.0f);
+    EXPECT_FLOAT_EQ(cameras[0]._focal_y, 65.0f);
+    EXPECT_FLOAT_EQ(cameras[0]._center_x, 50.0f);
+    EXPECT_FLOAT_EQ(cameras[0]._center_y, 40.0f);
+
+    EXPECT_FLOAT_EQ(cameras[1]._focal_x, 110.0f);
+    EXPECT_FLOAT_EQ(cameras[1]._focal_y, 105.0f);
+    EXPECT_FLOAT_EQ(cameras[1]._center_x, 49.0f);
+    EXPECT_FLOAT_EQ(cameras[1]._center_y, 39.0f);
+}
+
+TEST_F(PythonIOTest, TransformsIdentityFrameYieldsIdentityExtrinsics) {
+    const fs::path dataset_dir = temp_dir / "identity_extrinsics";
+    write_png(dataset_dir / "frame.png", 32, 32);
+
+    const nlohmann::json identity_matrix = {
+        {1.0, 0.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0, 0.0},
+        {0.0, 0.0, 1.0, 0.0},
+        {0.0, 0.0, 0.0, 1.0},
+    };
+    nlohmann::json transforms = {
+        {"w", 32},
+        {"h", 32},
+        {"fl_x", 20.0},
+        {"fl_y", 20.0},
+        {"frames", nlohmann::json::array({
+                       {
+                           {"file_path", "frame.png"},
+                           {"transform_matrix", identity_matrix},
+                       },
+                   })},
+    };
+    write_text_file(dataset_dir / "transforms.json", transforms.dump());
+
+    auto [cameras, center, splits] = read_transforms_cameras_and_images(dataset_dir / "transforms.json", {});
+    (void)center;
+    (void)splits;
+    ASSERT_EQ(cameras.size(), 1u);
+
+    ASSERT_EQ(cameras[0]._R.ndim(), 2u);
+    ASSERT_EQ(cameras[0]._R.size(0), 3u);
+    ASSERT_EQ(cameras[0]._R.size(1), 3u);
+    ASSERT_EQ(cameras[0]._T.numel(), 3u);
+
+    auto R = cameras[0]._R.cpu().contiguous();
+    auto T = cameras[0]._T.cpu().contiguous();
+    auto R_acc = R.accessor<float, 2>();
+    const auto* T_ptr = T.ptr<float>();
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j) {
+            EXPECT_NEAR(R_acc(i, j), (i == j) ? 1.0f : 0.0f, 1e-5f)
+                << "R(" << i << "," << j << ")";
+        }
+        EXPECT_NEAR(T_ptr[i], 0.0f, 1e-5f) << "T[" << i << "]";
+    }
+}
+
+TEST_F(PythonIOTest, TransformsTranslationFrameMatchesFlippedWorld) {
+    const fs::path dataset_dir = temp_dir / "translation_extrinsics";
+    write_png(dataset_dir / "frame.png", 32, 32);
+
+    const nlohmann::json transform_matrix = {
+        {1.0, 0.0, 0.0, 1.0},
+        {0.0, 1.0, 0.0, 2.0},
+        {0.0, 0.0, 1.0, 3.0},
+        {0.0, 0.0, 0.0, 1.0},
+    };
+    nlohmann::json transforms = {
+        {"w", 32},
+        {"h", 32},
+        {"fl_x", 20.0},
+        {"fl_y", 20.0},
+        {"frames", nlohmann::json::array({
+                       {
+                           {"file_path", "frame.png"},
+                           {"transform_matrix", transform_matrix},
+                       },
+                   })},
+    };
+    write_text_file(dataset_dir / "transforms.json", transforms.dump());
+
+    auto [cameras, center, splits] = read_transforms_cameras_and_images(dataset_dir / "transforms.json", {});
+    (void)center;
+    (void)splits;
+    ASSERT_EQ(cameras.size(), 1u);
+
+    auto R = cameras[0]._R.cpu().contiguous();
+    auto T = cameras[0]._T.cpu().contiguous();
+    auto R_acc = R.accessor<float, 2>();
+    const auto* T_ptr = T.ptr<float>();
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j) {
+            EXPECT_NEAR(R_acc(i, j), (i == j) ? 1.0f : 0.0f, 1e-5f)
+                << "R(" << i << "," << j << ")";
+        }
+    }
+    EXPECT_NEAR(T_ptr[0], -1.0f, 1e-5f);
+    EXPECT_NEAR(T_ptr[1], 2.0f, 1e-5f);
+    EXPECT_NEAR(T_ptr[2], 3.0f, 1e-5f);
+}
+
+TEST_F(PythonIOTest, LoadTransformsCrlfFile) {
+    const fs::path dataset_dir = temp_dir / "crlf_transforms";
+    write_png(dataset_dir / "frame.png", 16, 16);
+
+    std::string json = R"json({
+  "w": 16,
+  "h": 16,
+  "fl_x": 10.0,
+  "fl_y": 10.0,
+  "frames": [
+    {
+      "file_path": "frame.png",
+      "transform_matrix": [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0]
+      ]
+    }
+  ]
+})json";
+    for (size_t pos = 0; (pos = json.find('\n', pos)) != std::string::npos;) {
+        json.replace(pos, 1, "\r\n");
+        pos += 2;
+    }
+    write_text_file(dataset_dir / "transforms.json", json);
+
+    auto [cameras, center, splits] = read_transforms_cameras_and_images(dataset_dir / "transforms.json", {});
+    (void)center;
+    (void)splits;
+    ASSERT_EQ(cameras.size(), 1u);
+    EXPECT_EQ(cameras[0]._width, 16);
+    EXPECT_EQ(cameras[0]._height, 16);
+    EXPECT_FLOAT_EQ(cameras[0]._focal_x, 10.0f);
+}
+
+TEST_F(PythonIOTest, TransformsCameraAngleXPerFrame) {
+    const fs::path dataset_dir = temp_dir / "camera_angle_x_frame";
+    constexpr int resolution = 100;
+    write_png(dataset_dir / "frame.png", resolution, resolution);
+
+    const nlohmann::json identity_matrix = {
+        {1.0, 0.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0, 0.0},
+        {0.0, 0.0, 1.0, 0.0},
+        {0.0, 0.0, 0.0, 1.0},
+    };
+    nlohmann::json transforms = {
+        {"w", resolution},
+        {"h", resolution},
+        {"frames", nlohmann::json::array({
+                       {
+                           {"file_path", "frame.png"},
+                           {"camera_angle_x", std::numbers::pi_v<double> / 2.0},
+                           {"transform_matrix", identity_matrix},
+                       },
+                   })},
+    };
+    write_text_file(dataset_dir / "transforms.json", transforms.dump());
+
+    auto [cameras, center, splits] = read_transforms_cameras_and_images(dataset_dir / "transforms.json", {});
+    (void)center;
+    (void)splits;
+    ASSERT_EQ(cameras.size(), 1u);
+
+    const float expected = 0.5f * static_cast<float>(resolution) /
+                           std::tan(static_cast<float>(std::numbers::pi_v<float> / 4.0f));
+    EXPECT_NEAR(cameras[0]._focal_x, expected, 1e-4f);
+    EXPECT_NEAR(cameras[0]._focal_y, expected, 1e-4f);
 }
 
 // Test loading COLMAP dataset
@@ -1028,6 +1430,12 @@ TEST_F(PythonIOTest, HtmlExport) {
     EXPECT_TRUE(content.find("<!DOCTYPE html>") != std::string::npos ||
                 content.find("<html") != std::string::npos)
         << "Should be valid HTML";
+    EXPECT_TRUE(content.find("window.__lfsInitMeasureTool") != std::string::npos)
+        << "Should embed the measure tool init hook";
+    EXPECT_TRUE(content.find("export { Gizmo, TranslateGizmo };") == std::string::npos)
+        << "Gizmo export statement should be stripped";
+    EXPECT_TRUE(content.find("export { initMeasureTool };") == std::string::npos)
+        << "Measure-tool export statement should be stripped";
 }
 
 TEST_F(PythonIOTest, HtmlExportCancellationKeepsExistingTarget) {
@@ -1484,7 +1892,6 @@ TEST_F(PythonIOTest, PipelinedLoaderStatsRemainResponsiveDuringCompletions) {
     config.output_queue_size = 64;
     config.io_threads = 2;
     config.cold_process_threads = 2;
-    config.use_filesystem_cache = false;
 
     PipelinedImageLoader loader(config);
     LoadParams params{.resize_factor = 1, .max_width = 0};
@@ -1519,7 +1926,6 @@ TEST_F(PythonIOTest, PipelinedLoaderReportsPrimaryImageFailure) {
     config.output_queue_size = 1;
     config.io_threads = 1;
     config.cold_process_threads = 1;
-    config.use_filesystem_cache = false;
 
     PipelinedImageLoader loader(config);
     const auto missing_path = temp_dir / "missing_training_image.png";
@@ -1554,7 +1960,6 @@ TEST_F(PythonIOTest, PipelinedLoaderShutdownReleasesQueuedGpuTensorsBeforeDecode
     config.output_queue_size = 1;
     config.io_threads = 1;
     config.cold_process_threads = 1;
-    config.use_filesystem_cache = false;
 
     PipelinedImageLoader loader(config);
     loader.prefetch(0, image_path, LoadParams{});
@@ -1585,4 +1990,306 @@ TEST_F(PythonIOTest, PipelinedLoaderShutdownReleasesQueuedGpuTensorsBeforeDecode
     ASSERT_EQ(cudaMallocAsync(&probe, 4096, nullptr), cudaSuccess);
     ASSERT_EQ(cudaFreeAsync(probe, nullptr), cudaSuccess);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+}
+
+namespace {
+    bool containsLichtfeldModule(const fs::path& dir) {
+        std::error_code ec;
+        if (!fs::exists(dir, ec)) {
+            return false;
+        }
+        for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+            std::error_code file_ec;
+            if (!it->is_regular_file(file_ec) || file_ec) {
+                continue;
+            }
+            const auto filename = it->path().filename().string();
+            const auto ext = it->path().extension().string();
+            if ((ext == ".so" || ext == ".pyd") && filename.rfind("lichtfeld", 0) == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    fs::path findPythonModuleDir() {
+        std::error_code ec;
+        const auto cwd = fs::current_path(ec);
+        const auto project_root = fs::path(PROJECT_ROOT_PATH);
+        for (const auto& candidate : {
+                 cwd / "src" / "python",
+                 cwd.parent_path() / "src" / "python",
+                 project_root / "build" / "src" / "python",
+             }) {
+            if (containsLichtfeldModule(candidate)) {
+                return candidate;
+            }
+        }
+        return {};
+    }
+
+    void prependPythonPath(const fs::path& path) {
+        const auto value = path.string();
+        const char* existing = std::getenv("PYTHONPATH");
+#ifdef _WIN32
+        const char separator = ';';
+#else
+        const char separator = ':';
+#endif
+        const std::string combined =
+            existing && *existing ? value + separator + std::string(existing) : value;
+#ifdef _WIN32
+        _putenv_s("PYTHONPATH", combined.c_str());
+#else
+        setenv("PYTHONPATH", combined.c_str(), 1);
+#endif
+    }
+
+    std::string consumePythonError() {
+        if (!PyErr_Occurred()) {
+            return "unknown Python error";
+        }
+        PyObject* type = nullptr;
+        PyObject* value = nullptr;
+        PyObject* traceback = nullptr;
+        PyErr_Fetch(&type, &value, &traceback);
+        PyErr_NormalizeException(&type, &value, &traceback);
+        std::string message = "unknown Python error";
+        if (value) {
+            PyObject* as_str = PyObject_Str(value);
+            if (as_str) {
+                if (const char* utf8 = PyUnicode_AsUTF8(as_str)) {
+                    message = utf8;
+                }
+                Py_DECREF(as_str);
+            }
+        }
+        Py_XDECREF(type);
+        Py_XDECREF(value);
+        Py_XDECREF(traceback);
+        return message;
+    }
+} // namespace
+
+TEST_F(PythonIOTest, InspectProjectFromTwoThreadsReturnsSameUuid) {
+    using namespace lfs::io::project;
+    using namespace lfs::test::licht;
+
+    const auto container_path = temp_dir / "concurrent_inspect.licht";
+    const auto project_uuid = fixed_uuid(11);
+    const auto payload = byte_vector("inspect-concurrency");
+    {
+        auto created = ProjectWriter::create(
+            container_path,
+            CreateOptions{
+                .project_uuid = project_uuid,
+                .file_uuid = fixed_uuid(12),
+                .role = ContainerRole::Master,
+                .creation_time_unix_ns = 1'735'689'600'000'000'000,
+                .index_compression = IndexCompression::StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+            });
+        ASSERT_TRUE(created) << lfs::format_for_developer(created.error());
+        auto writer = std::move(*created);
+        auto planned = writer.plan_commit(CommitOptions{
+            .kind = CommitKind::Explicit,
+            .commit_uuid = fixed_uuid(13),
+            .snapshot_uuid = fixed_uuid(14),
+            .wallclock_unix_ns = 1'735'689'601'000'000'000,
+        });
+        ASSERT_TRUE(planned) << lfs::format_for_developer(planned.error());
+        auto preflighted = writer.preflight(payload.size());
+        ASSERT_TRUE(preflighted) << lfs::format_for_developer(preflighted.error());
+        auto written = writer.write_chunk(fixed_key("TEST", 15), payload);
+        ASSERT_TRUE(written) << lfs::format_for_developer(written.error());
+        auto committed = writer.commit();
+        ASSERT_TRUE(committed) << lfs::format_for_developer(committed.error());
+    }
+
+    const auto module_dir = findPythonModuleDir();
+    ASSERT_FALSE(module_dir.empty()) << "Could not locate built lichtfeld module";
+    prependPythonPath(module_dir);
+    const auto init = lfs::python::ensure_initialized();
+    ASSERT_TRUE(init) << lfs::format_for_developer(init.error());
+
+    const auto script = std::format(R"PY(
+import threading
+import lichtfeld as lf
+path = r"{}"
+uuids = [None, None]
+errors = [None, None]
+
+def worker(index):
+    try:
+        uuids[index] = lf.io.inspect_project(path).project_uuid
+    except Exception as exc:
+        errors[index] = repr(exc)
+
+threads = [
+    threading.Thread(target=worker, args=(0,)),
+    threading.Thread(target=worker, args=(1,)),
+]
+for thread in threads:
+    thread.start()
+for thread in threads:
+    thread.join(timeout=30)
+result_alive = any(thread.is_alive() for thread in threads)
+result_errors = [error for error in errors if error is not None]
+result_uuid_a = uuids[0]
+result_uuid_b = uuids[1]
+)PY",
+                                    container_path.generic_string());
+
+    const lfs::python::GilAcquire gil;
+    PyObject* namespace_dict = PyDict_New();
+    ASSERT_TRUE(namespace_dict);
+    PyDict_SetItemString(namespace_dict, "__builtins__", PyEval_GetBuiltins());
+    PyObject* exec_result =
+        PyRun_String(script.c_str(), Py_file_input, namespace_dict, namespace_dict);
+    if (!exec_result) {
+        const auto python_error = consumePythonError();
+        Py_DECREF(namespace_dict);
+        FAIL() << python_error;
+    }
+    Py_DECREF(exec_result);
+
+    auto* const alive_obj = PyDict_GetItemString(namespace_dict, "result_alive");
+    auto* const errors_obj = PyDict_GetItemString(namespace_dict, "result_errors");
+    auto* const uuid_a_obj = PyDict_GetItemString(namespace_dict, "result_uuid_a");
+    auto* const uuid_b_obj = PyDict_GetItemString(namespace_dict, "result_uuid_b");
+    ASSERT_TRUE(alive_obj);
+    ASSERT_TRUE(errors_obj);
+    ASSERT_TRUE(uuid_a_obj);
+    ASSERT_TRUE(uuid_b_obj);
+    EXPECT_FALSE(PyObject_IsTrue(alive_obj)) << "inspect_project hung on a worker thread";
+    EXPECT_EQ(PyList_Size(errors_obj), 0);
+    ASSERT_TRUE(PyUnicode_Check(uuid_a_obj));
+    ASSERT_TRUE(PyUnicode_Check(uuid_b_obj));
+    const std::string uuid_a = PyUnicode_AsUTF8(uuid_a_obj);
+    const std::string uuid_b = PyUnicode_AsUTF8(uuid_b_obj);
+    EXPECT_EQ(uuid_a, uuid_b);
+    EXPECT_EQ(uuid_a, project_uuid.to_string());
+
+    Py_DECREF(namespace_dict);
+}
+
+TEST_F(PythonIOTest, InspectProjectFallbackPreviewPath) {
+    using namespace lfs::io::project;
+    using namespace lfs::test::licht;
+
+    const auto dataset_root = temp_dir / "fallback_dataset";
+    const auto images_dir = dataset_root / "images";
+    const auto container_path = temp_dir / "fallback_inspect.licht";
+    fs::create_directories(dataset_root);
+
+    auto document = make_empty_document(fixed_uuid(21), 100);
+    auto snapshot = require_result(document->parameters().snapshot());
+    snapshot.dataset.images = "images";
+    require_status(document->edit_parameters().set_snapshot(snapshot));
+    const auto dataset_uuid = require_result(upsert_path_reference(
+        document->edit_references(), {}, dataset_root, "dataset.root", "dataset"));
+    require_status(document->edit_project().set_dataset_reference(dataset_uuid));
+    auto options = deterministic_document_save_options(0x70000000, 22, 300);
+    auto saved = document->save(container_path, options);
+    ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+
+    fs::create_directories(images_dir);
+    write_png(images_dir / "zulu.png", 8, 8);
+    write_png(images_dir / "alpha.png", 8, 8);
+
+    const auto module_dir = findPythonModuleDir();
+    ASSERT_FALSE(module_dir.empty()) << "Could not locate built lichtfeld module";
+    prependPythonPath(module_dir);
+    const auto init = lfs::python::ensure_initialized();
+    ASSERT_TRUE(init) << lfs::format_for_developer(init.error());
+
+    const auto script = std::format(R"PY(
+import lichtfeld as lf
+i = lf.io.inspect_project(r"{}")
+result_has_preview = i.has_preview
+result_fallback = i.fallback_preview_path
+)PY",
+                                    container_path.generic_string());
+
+    const lfs::python::GilAcquire gil;
+    PyObject* namespace_dict = PyDict_New();
+    ASSERT_TRUE(namespace_dict);
+    PyDict_SetItemString(namespace_dict, "__builtins__", PyEval_GetBuiltins());
+    PyObject* exec_result =
+        PyRun_String(script.c_str(), Py_file_input, namespace_dict, namespace_dict);
+    if (!exec_result) {
+        const auto python_error = consumePythonError();
+        Py_DECREF(namespace_dict);
+        FAIL() << python_error;
+    }
+    Py_DECREF(exec_result);
+
+    auto* const has_preview_obj = PyDict_GetItemString(namespace_dict, "result_has_preview");
+    auto* const fallback_obj = PyDict_GetItemString(namespace_dict, "result_fallback");
+    ASSERT_TRUE(has_preview_obj);
+    ASSERT_TRUE(fallback_obj);
+    EXPECT_FALSE(PyObject_IsTrue(has_preview_obj));
+    ASSERT_TRUE(PyUnicode_Check(fallback_obj));
+    const fs::path fallback = PyUnicode_AsUTF8(fallback_obj);
+    EXPECT_EQ(fallback.filename(), "alpha.png");
+    EXPECT_TRUE(fs::equivalent(fallback, images_dir / "alpha.png"));
+    Py_DECREF(namespace_dict);
+}
+
+TEST_F(PythonIOTest, InspectProjectFallbackEmptyWhenPreviewEmbedded) {
+    using namespace lfs::io::project;
+    using namespace lfs::test::licht;
+
+    const auto dataset_root = temp_dir / "embedded_dataset";
+    const auto images_dir = dataset_root / "images";
+    fs::create_directories(images_dir);
+    write_png(images_dir / "scene.png", 16, 16);
+
+    const auto container_path = temp_dir / "embedded_inspect.licht";
+    auto document = make_empty_document(fixed_uuid(31), 100);
+    auto snapshot = require_result(document->parameters().snapshot());
+    snapshot.dataset.images = "images";
+    require_status(document->edit_parameters().set_snapshot(snapshot));
+    const auto dataset_uuid = require_result(upsert_path_reference(
+        document->edit_references(), {}, dataset_root, "dataset.root", "dataset"));
+    require_status(document->edit_project().set_dataset_reference(dataset_uuid));
+    auto options = deterministic_document_save_options(0x70000000, 32, 300);
+    auto saved = document->save(container_path, options);
+    ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+
+    const auto module_dir = findPythonModuleDir();
+    ASSERT_FALSE(module_dir.empty()) << "Could not locate built lichtfeld module";
+    prependPythonPath(module_dir);
+    const auto init = lfs::python::ensure_initialized();
+    ASSERT_TRUE(init) << lfs::format_for_developer(init.error());
+
+    const auto script = std::format(R"PY(
+import lichtfeld as lf
+i = lf.io.inspect_project(r"{}")
+result_has_preview = i.has_preview
+result_fallback = i.fallback_preview_path
+)PY",
+                                    container_path.generic_string());
+
+    const lfs::python::GilAcquire gil;
+    PyObject* namespace_dict = PyDict_New();
+    ASSERT_TRUE(namespace_dict);
+    PyDict_SetItemString(namespace_dict, "__builtins__", PyEval_GetBuiltins());
+    PyObject* exec_result =
+        PyRun_String(script.c_str(), Py_file_input, namespace_dict, namespace_dict);
+    if (!exec_result) {
+        const auto python_error = consumePythonError();
+        Py_DECREF(namespace_dict);
+        FAIL() << python_error;
+    }
+    Py_DECREF(exec_result);
+
+    auto* const has_preview_obj = PyDict_GetItemString(namespace_dict, "result_has_preview");
+    auto* const fallback_obj = PyDict_GetItemString(namespace_dict, "result_fallback");
+    ASSERT_TRUE(has_preview_obj);
+    ASSERT_TRUE(fallback_obj);
+    EXPECT_TRUE(PyObject_IsTrue(has_preview_obj));
+    ASSERT_TRUE(PyUnicode_Check(fallback_obj));
+    EXPECT_STREQ(PyUnicode_AsUTF8(fallback_obj), "");
+    Py_DECREF(namespace_dict);
 }

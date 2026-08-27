@@ -21,6 +21,9 @@
       <div id="link-x" class="social-link" data-url="https://x.com/janusch_patas">
         <img class="social-icon" src="../icon/x-twitter.png" /><span>@janusch_patas</span>
       </div>
+      <div id="link-youtube" class="social-link" data-url="https://www.youtube.com/@LichtFeldStudio">
+        <img class="social-icon" src="../icon/youtube.png" /><span>@LichtFeldStudio</span>
+      </div>
       <div id="link-donate" class="social-link" data-url="https://lichtfeld.io/#support-the-project">
         <img class="social-icon heart-icon" src="../icon/heart.png" /><span id="donate-link"></span>
       </div>

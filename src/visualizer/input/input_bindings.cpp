@@ -6,8 +6,10 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/user_paths.hpp"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -15,19 +17,14 @@
 #include <ranges>
 #include <unordered_map>
 
-#ifdef _WIN32
-#include <shlobj.h>
-#else
-#include <pwd.h>
-#include <unistd.h>
-#endif
-
 namespace lfs::vis::input {
 
     namespace {
 
-        constexpr int PROFILE_VERSION = 19; // Version 19 adds cut selection.
-        constexpr Action LAST_ACTION = Action::CUT_SELECTION;
+        std::atomic<bool> g_persistence_enabled{true};
+
+        constexpr int PROFILE_VERSION = 25; // Version 25 finalizes Scene Graph selection actions.
+        constexpr Action LAST_ACTION = Action::TOGGLE_SCENE_SELECTION_TRAINING;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -210,9 +207,11 @@ namespace lfs::vis::input {
 
     InputBindings::InputBindings() {
         const auto config_dir = getConfigDir();
-        const auto saved_path = config_dir / "Default.json";
-        if (std::filesystem::exists(saved_path) && loadProfileFromFile(saved_path)) {
-            return;
+        if (g_persistence_enabled.load(std::memory_order_acquire) &&
+            config_dir) {
+            const auto saved_path = *config_dir / "Default.json";
+            if (std::filesystem::exists(saved_path) && loadProfileFromFile(saved_path))
+                return;
         }
 
         auto profile = createDefaultProfile();
@@ -222,8 +221,20 @@ namespace lfs::vis::input {
     }
 
     void InputBindings::loadProfile(const std::string& name) {
+        if (!g_persistence_enabled.load(std::memory_order_acquire)) {
+            auto profile = createDefaultProfile();
+            current_profile_name_ = profile.name;
+            bindings_ = std::move(profile.bindings);
+            rebuildLookupMaps();
+            notifyBindingsChanged();
+            return;
+        }
         const auto config_dir = getConfigDir();
-        const auto path = config_dir / (name + ".json");
+        if (!config_dir) {
+            LOG_WARN("Cannot load input profile '{}': user keymap directory is unavailable", name);
+            return;
+        }
+        const auto path = *config_dir / (name + ".json");
         if (std::filesystem::exists(path) && loadProfileFromFile(path)) {
             return;
         }
@@ -241,35 +252,28 @@ namespace lfs::vis::input {
     }
 
     void InputBindings::saveProfile(const std::string& name) const {
+        if (!g_persistence_enabled.load(std::memory_order_acquire))
+            return;
         const auto config_dir = getConfigDir();
-        std::filesystem::create_directories(config_dir);
-        const auto path = config_dir / (name + ".json");
+        if (!config_dir) {
+            LOG_WARN("Cannot save input profile '{}': user keymap directory is unavailable", name);
+            return;
+        }
+        const auto path = *config_dir / (name + ".json");
         saveProfileToFile(path);
     }
 
-    std::filesystem::path InputBindings::getConfigDir() {
-        std::filesystem::path config_dir;
-#ifdef _WIN32
-        wchar_t path[MAX_PATH];
-        if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, path))) {
-            config_dir = std::filesystem::path(path) / "LichtFeldStudio" / "input_profiles";
-        } else {
-            config_dir = std::filesystem::current_path() / "config" / "input_profiles";
-        }
-#else
-        const char* home = getenv("HOME");
-        if (!home) {
-            struct passwd* pw = getpwuid(getuid());
-            if (pw)
-                home = pw->pw_dir;
-        }
-        if (home) {
-            config_dir = std::filesystem::path(home) / ".config" / "LichtFeldStudio" / "input_profiles";
-        } else {
-            config_dir = std::filesystem::current_path() / "config" / "input_profiles";
-        }
-#endif
-        return config_dir;
+    std::optional<std::filesystem::path> InputBindings::getConfigDir() {
+        const auto paths = lfs::core::UserPaths::resolve();
+        if (paths)
+            return paths->keymapDir();
+        LOG_WARN("Unable to resolve input profile path: {}; persistence is disabled",
+                 lfs::format_for_developer(paths.error()));
+        return std::nullopt;
+    }
+
+    void InputBindings::setPersistenceEnabled(const bool enabled) noexcept {
+        g_persistence_enabled.store(enabled, std::memory_order_release);
     }
 
     bool InputBindings::saveProfileToFile(const std::filesystem::path& path) const {
@@ -320,12 +324,13 @@ namespace lfs::vis::input {
         j["bindings"] = bindings_array;
 
         try {
-            std::ofstream file;
-            if (!lfs::core::open_file_for_write(path, file)) {
-                LOG_ERROR("Failed to open file for writing: {}", lfs::core::path_to_utf8(path));
+            const auto written = lfs::core::writeTextFileAtomically(path, j.dump(4) + '\n');
+            if (!written) {
+                LOG_ERROR("Failed to save profile '{}': {}",
+                          lfs::core::path_to_utf8(path),
+                          lfs::format_for_developer(written.error()));
                 return false;
             }
-            file << j.dump(4);
             return true;
         } catch (const std::exception& e) {
             LOG_ERROR("Failed to save profile: {}", e.what());
@@ -344,6 +349,7 @@ namespace lfs::vis::input {
             }
 
             const json j = json::parse(file);
+            file.close();
             const int version = j.value("version", 0);
             const std::string profile_name = j.value("name", "Custom");
 
@@ -357,6 +363,19 @@ namespace lfs::vis::input {
             for (const auto& b : j["bindings"]) {
                 const int mode_value = b.value("mode", 0);
                 const int action_value = b["action"].get<int>();
+                const std::string stored_description = b.value("description", "");
+                const bool transient_scene_graph_binding =
+                    version == 24 &&
+                    (stored_description == "Select Scene Hierarchy" ||
+                     stored_description == "Select All Scene Nodes" ||
+                     stored_description == "Toggle Scene Cursor Selection" ||
+                     stored_description == "Toggle Scene Selection Visibility" ||
+                     stored_description == "Toggle Scene Selection Training");
+                if (transient_scene_graph_binding) {
+                    LOG_INFO("Replacing transient version 24 Scene Graph binding: '{}'",
+                             stored_description);
+                    continue;
+                }
                 if (mode_value == REMOVED_TOOL_MODE_2 ||
                     action_value == REMOVED_ACTION_39 ||
                     action_value == REMOVED_ACTION_66) {
@@ -452,9 +471,13 @@ namespace lfs::vis::input {
             // the migration still applies in memory.
             if (migrated > 0 && version < PROFILE_VERSION) {
                 std::error_code ec;
-                const auto config_default = getConfigDir() / "Default.json";
-                if (std::filesystem::equivalent(path, config_default, ec)) {
-                    saveProfileToFile(config_default);
+                const auto config_dir = getConfigDir();
+                const auto config_default = config_dir
+                                                ? std::optional<std::filesystem::path>(*config_dir / "Default.json")
+                                                : std::nullopt;
+                if (g_persistence_enabled.load(std::memory_order_acquire) &&
+                    config_default && std::filesystem::equivalent(path, *config_default, ec)) {
+                    saveProfileToFile(*config_default);
                 }
             }
             notifyBindingsChanged();
@@ -502,7 +525,16 @@ namespace lfs::vis::input {
                 (version < 16 && def.action == Action::TOGGLE_CAMERA_FRUSTUMS) ||
                 (version < 17 && def.action == Action::SELECTION_INTERSECT) ||
                 (version < 18 && selection_volume_shortcut) ||
-                (version < 19 && def.action == Action::CUT_SELECTION);
+                (version < 19 && def.action == Action::CUT_SELECTION) ||
+                (version < 20 && def.action == Action::TOGGLE_PERFORMANCE_HUD) ||
+                (version < 21 && def.action == Action::OPEN_PREFERENCES) ||
+                (version < 22 && def.action == Action::TOGGLE_MCP_SERVER) ||
+                (version < 22 && def.action == Action::TOGGLE_MCP_BINDING) ||
+                (version < 23 && def.action == Action::TOGGLE_GRID) ||
+                (version < 25 &&
+                 (def.action == Action::SELECT_ALL_SCENE_NODES ||
+                  def.action == Action::TOGGLE_SCENE_SELECTION_VISIBILITY ||
+                  def.action == Action::TOGGLE_SCENE_SELECTION_TRAINING));
             if (!should_add) {
                 continue;
             }
@@ -609,9 +641,12 @@ namespace lfs::vis::input {
     std::vector<std::string> InputBindings::getAvailableProfiles() const {
         std::vector<std::string> profiles = {"Default"};
 
+        if (!g_persistence_enabled.load(std::memory_order_acquire))
+            return profiles;
+
         const auto config_dir = getConfigDir();
-        if (std::filesystem::exists(config_dir)) {
-            for (const auto& entry : std::filesystem::directory_iterator(config_dir)) {
+        if (config_dir && std::filesystem::exists(*config_dir)) {
+            for (const auto& entry : std::filesystem::directory_iterator(*config_dir)) {
                 if (entry.path().extension() == ".json") {
                     const std::string name = lfs::core::path_to_utf8(entry.path().stem());
                     if (name != "Default") {
@@ -948,7 +983,7 @@ namespace lfs::vis::input {
         struct BaseBind {
             InputTrigger trigger;
             Action action;
-            const char* desc;
+            std::string desc;
         };
         const std::vector<BaseBind> global = {
             // Camera
@@ -981,6 +1016,7 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_V, MODIFIER_SHIFT}, Action::TOGGLE_INDEPENDENT_SPLIT_VIEW, "Independent split"},
             {KeyTrigger{KEY_G, MODIFIER_NONE}, Action::TOGGLE_GT_COMPARISON, "GT comparison"},
             {KeyTrigger{KEY_C, MODIFIER_ALT}, Action::TOGGLE_CAMERA_FRUSTUMS, "Camera frustums"},
+            {KeyTrigger{KEY_G, MODIFIER_ALT}, Action::TOGGLE_GRID, "Grid"},
             {KeyTrigger{KEY_T, MODIFIER_NONE}, Action::CYCLE_PLY, "Cycle PLY"},
             // Editing (Delete is mode-specific, added below)
             {KeyTrigger{KEY_Z, MODIFIER_CTRL}, Action::UNDO, "Undo"},
@@ -1005,6 +1041,18 @@ namespace lfs::vis::input {
             // UI
             {KeyTrigger{KEY_F12, MODIFIER_NONE}, Action::TOGGLE_UI, "Hide UI"},
             {KeyTrigger{KEY_F11, MODIFIER_NONE}, Action::TOGGLE_FULLSCREEN, "Fullscreen"},
+            {KeyTrigger{KEY_F10, MODIFIER_NONE}, Action::TOGGLE_PERFORMANCE_HUD, "Performance HUD"},
+            {KeyTrigger{KEY_COMMA, MODIFIER_CTRL}, Action::OPEN_PREFERENCES, "Preferences"},
+            {KeyTrigger{KEY_A, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::SELECT_ALL_SCENE_NODES,
+             getActionName(Action::SELECT_ALL_SCENE_NODES)},
+            {KeyTrigger{KEY_H, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::TOGGLE_SCENE_SELECTION_VISIBILITY,
+             getActionName(Action::TOGGLE_SCENE_SELECTION_VISIBILITY)},
+            {KeyTrigger{KEY_T, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::TOGGLE_SCENE_SELECTION_TRAINING,
+             getActionName(Action::TOGGLE_SCENE_SELECTION_TRAINING)},
+            {KeyTrigger{KEY_M, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::TOGGLE_MCP_SERVER,
+             getActionName(Action::TOGGLE_MCP_SERVER)},
+            {KeyTrigger{KEY_N, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::TOGGLE_MCP_BINDING,
+             getActionName(Action::TOGGLE_MCP_BINDING)},
             {MouseScrollTrigger{MODIFIER_CTRL}, Action::HISTOGRAM_ZOOM_MARKED, "Zoom histogram at cursor"},
             // Sequencer
             {KeyTrigger{KEY_K, MODIFIER_NONE}, Action::SEQUENCER_ADD_KEYFRAME, "Add keyframe"},
@@ -1153,6 +1201,7 @@ namespace lfs::vis::input {
         case Action::NODE_RECT_SELECT: return "Rectangle Select Nodes";
         case Action::TOGGLE_UI: return "Toggle UI";
         case Action::TOGGLE_FULLSCREEN: return "Toggle Fullscreen";
+        case Action::TOGGLE_PERFORMANCE_HUD: return "Toggle Performance HUD";
         case Action::SEQUENCER_ADD_KEYFRAME: return "Add Keyframe";
         case Action::SEQUENCER_UPDATE_KEYFRAME: return "Update Keyframe";
         case Action::SEQUENCER_PLAY_PAUSE: return "Play/Pause";
@@ -1165,6 +1214,13 @@ namespace lfs::vis::input {
         case Action::PIE_MENU: return "Pie Menu";
         case Action::HISTOGRAM_ZOOM_MARKED: return "Zoom Histogram at Cursor";
         case Action::TOGGLE_CAMERA_FRUSTUMS: return "Toggle Camera Frustums";
+        case Action::OPEN_PREFERENCES: return "Open Preferences";
+        case Action::TOGGLE_MCP_SERVER: return "Toggle MCP Server";
+        case Action::TOGGLE_MCP_BINDING: return "Toggle MCP Local/Network Binding";
+        case Action::TOGGLE_GRID: return "Toggle Grid";
+        case Action::SELECT_ALL_SCENE_NODES: return "Select All Scene Nodes";
+        case Action::TOGGLE_SCENE_SELECTION_VISIBILITY: return "Toggle Scene Selection Visibility";
+        case Action::TOGGLE_SCENE_SELECTION_TRAINING: return "Toggle Scene Selection Training";
         default: return "Unknown";
         }
     }
@@ -1234,6 +1290,7 @@ namespace lfs::vis::input {
         case Action::NODE_RECT_SELECT: return "node_rect_select";
         case Action::TOGGLE_UI: return "toggle_ui";
         case Action::TOGGLE_FULLSCREEN: return "toggle_fullscreen";
+        case Action::TOGGLE_PERFORMANCE_HUD: return "toggle_performance_hud";
         case Action::SEQUENCER_ADD_KEYFRAME: return "sequencer_add_keyframe";
         case Action::SEQUENCER_UPDATE_KEYFRAME: return "sequencer_update_keyframe";
         case Action::SEQUENCER_PLAY_PAUSE: return "sequencer_play_pause";
@@ -1246,6 +1303,13 @@ namespace lfs::vis::input {
         case Action::PIE_MENU: return "pie_menu";
         case Action::HISTOGRAM_ZOOM_MARKED: return "histogram_zoom_marked";
         case Action::TOGGLE_CAMERA_FRUSTUMS: return "toggle_camera_frustums";
+        case Action::OPEN_PREFERENCES: return "open_preferences";
+        case Action::TOGGLE_MCP_SERVER: return "toggle_mcp_server";
+        case Action::TOGGLE_MCP_BINDING: return "toggle_mcp_binding";
+        case Action::TOGGLE_GRID: return "toggle_grid";
+        case Action::SELECT_ALL_SCENE_NODES: return "select_all_scene_nodes";
+        case Action::TOGGLE_SCENE_SELECTION_VISIBILITY: return "toggle_scene_selection_visibility";
+        case Action::TOGGLE_SCENE_SELECTION_TRAINING: return "toggle_scene_selection_training";
         default: return {};
         }
     }
@@ -1864,6 +1928,7 @@ namespace lfs::vis::input {
         case Action::TOGGLE_INDEPENDENT_SPLIT_VIEW:
         case Action::TOGGLE_GT_COMPARISON:
         case Action::TOGGLE_CAMERA_FRUSTUMS:
+        case Action::TOGGLE_GRID:
         case Action::CYCLE_PLY:
         case Action::CYCLE_SELECTION_VIS:
             return d_view_global_key;
@@ -1925,6 +1990,13 @@ namespace lfs::vis::input {
 
         case Action::TOGGLE_UI:
         case Action::TOGGLE_FULLSCREEN:
+        case Action::TOGGLE_PERFORMANCE_HUD:
+        case Action::OPEN_PREFERENCES:
+        case Action::TOGGLE_MCP_SERVER:
+        case Action::TOGGLE_MCP_BINDING:
+        case Action::SELECT_ALL_SCENE_NODES:
+        case Action::TOGGLE_SCENE_SELECTION_VISIBILITY:
+        case Action::TOGGLE_SCENE_SELECTION_TRAINING:
             return d_ui_key;
         case Action::HISTOGRAM_ZOOM_MARKED:
             return d_ui_scroll;
@@ -1950,44 +2022,9 @@ namespace lfs::vis::input {
 
     ShortcutScope shortcutScopeForAction(const Action action) {
         switch (action) {
-        case Action::TOOL_SELECT:
-        case Action::TOOL_TRANSLATE:
-        case Action::TOOL_ROTATE:
-        case Action::TOOL_SCALE:
-        case Action::TOOL_MIRROR:
-        case Action::TOOL_ALIGN:
-        case Action::TOGGLE_UI:
-        case Action::TOGGLE_FULLSCREEN:
-        case Action::SELECT_MODE_CENTERS:
-        case Action::SELECT_MODE_RECTANGLE:
-        case Action::SELECT_MODE_POLYGON:
-        case Action::SELECT_MODE_LASSO:
-        case Action::SELECT_MODE_RINGS:
-        case Action::SELECT_MODE_COLOR:
-        case Action::SELECT_MODE_BOX:
-        case Action::SELECT_MODE_SPHERE:
-        case Action::UNDO:
-        case Action::REDO:
-        case Action::DELETE_SELECTED:
-        case Action::DELETE_NODE:
-        case Action::INVERT_SELECTION:
-        case Action::DESELECT_ALL:
-        case Action::SELECT_ALL:
-        case Action::COPY_SELECTION:
-        case Action::CUT_SELECTION:
-        case Action::PASTE_SELECTION:
-        case Action::TOGGLE_DEPTH_MODE:
-        case Action::TOGGLE_SELECTION_DEPTH_FILTER:
-        case Action::TOGGLE_SELECTION_CROP_FILTER:
-        case Action::SEQUENCER_ADD_KEYFRAME:
-        case Action::SEQUENCER_UPDATE_KEYFRAME:
-        case Action::SEQUENCER_PLAY_PAUSE:
-        case Action::TOGGLE_SPLIT_VIEW:
-        case Action::TOGGLE_INDEPENDENT_SPLIT_VIEW:
-        case Action::TOGGLE_GT_COMPARISON:
-        case Action::TOGGLE_CAMERA_FRUSTUMS:
-        case Action::CYCLE_SELECTION_VIS:
-            return ShortcutScope::GlobalWhenNotTextEditing;
+        case Action::TOGGLE_MCP_SERVER:
+        case Action::TOGGLE_MCP_BINDING:
+            return ShortcutScope::Global;
 
         case Action::CAMERA_MOVE_FORWARD:
         case Action::CAMERA_MOVE_BACKWARD:
@@ -2009,7 +2046,8 @@ namespace lfs::vis::input {
             return ShortcutScope::Viewport;
 
         default:
-            return ShortcutScope::Global;
+            // Scene, tool, and edit key shortcuts yield to a focused text widget.
+            return ShortcutScope::GlobalWhenNotTextEditing;
         }
     }
 

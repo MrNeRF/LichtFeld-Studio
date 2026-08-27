@@ -1,9 +1,12 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/camera.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
+#include "core/path_utils.hpp"
+#include "core/scene.hpp"
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -13,6 +16,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cuda_runtime.h>
 #include <filesystem>
 #include <gtest/gtest.h>
 #include <memory>
@@ -488,4 +492,78 @@ TEST_F(SceneGraphIdentityTest, PlyPathRestoredToFreshIdByTopologyUndo) {
     const auto restored_path = scene_manager_->getPlyPath(restored->id);
     ASSERT_TRUE(restored_path.has_value());
     EXPECT_EQ(*restored_path, source_path);
+}
+
+TEST(SceneCameraAssetPathTest, RebaseRewritesUnderOldRootAndRefreshesNodeMirrors) {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count <= 0) {
+        GTEST_SKIP() << "CUDA device unavailable";
+    }
+
+    const auto old_root = std::filesystem::temp_directory_path() / "lfs-rebase-old";
+    const auto new_root = std::filesystem::temp_directory_path() / "lfs-rebase-new";
+    const auto outside = std::filesystem::temp_directory_path() / "lfs-rebase-elsewhere" / "photo.jpg";
+
+    auto make_camera = [](const std::string& name,
+                          const std::filesystem::path& image,
+                          const std::filesystem::path& mask,
+                          const std::filesystem::path& depth,
+                          const std::filesystem::path& normal,
+                          const int uid) {
+        return std::make_shared<lfs::core::Camera>(
+            Tensor::eye(3, Device::CPU),
+            Tensor::zeros({3}, Device::CPU),
+            100.0f, 100.0f, 32.0f, 32.0f,
+            Tensor(), Tensor(), lfs::core::CameraModelType::PINHOLE,
+            name, image, mask, 64, 64, uid, 0, depth, normal);
+    };
+
+    lfs::core::Scene scene;
+    const auto group = scene.addCameraGroup("Training", scene.addGroup("Cameras"), 2);
+    scene.addCamera(
+        "inside.png", group,
+        make_camera("inside.png",
+                    old_root / "images" / "inside.png",
+                    old_root / "masks" / "inside.png",
+                    old_root / "depth" / "inside.exr",
+                    old_root / "normals" / "inside.png",
+                    1));
+    scene.addCamera(
+        "outside.png", group,
+        make_camera("outside.png", outside, {}, {}, {}, 2));
+
+    EXPECT_EQ(scene.rebaseCameraAssetPaths(old_root / "", new_root), 2u);
+
+    const auto cameras = scene.getAllCameras();
+    ASSERT_EQ(cameras.size(), 2u);
+
+    std::shared_ptr<lfs::core::Camera> inside;
+    std::shared_ptr<lfs::core::Camera> outside_cam;
+    for (const auto& cam : cameras) {
+        if (cam->image_name() == "inside.png") {
+            inside = cam;
+        } else if (cam->image_name() == "outside.png") {
+            outside_cam = cam;
+        }
+    }
+    ASSERT_NE(inside, nullptr);
+    ASSERT_NE(outside_cam, nullptr);
+
+    EXPECT_EQ(inside->image_path(), new_root / "images" / "inside.png");
+    EXPECT_EQ(inside->mask_path(), new_root / "masks" / "inside.png");
+    EXPECT_EQ(inside->depth_path(), new_root / "depth" / "inside.exr");
+    EXPECT_EQ(inside->normal_path(), new_root / "normals" / "inside.png");
+    EXPECT_EQ(outside_cam->image_path(), outside);
+    EXPECT_TRUE(outside_cam->mask_path().empty());
+
+    const auto* inside_node = scene.getNode("inside.png");
+    ASSERT_NE(inside_node, nullptr);
+    EXPECT_EQ(inside_node->image_path, lfs::core::path_to_utf8(new_root / "images" / "inside.png"));
+    EXPECT_EQ(inside_node->mask_path, lfs::core::path_to_utf8(new_root / "masks" / "inside.png"));
+    EXPECT_EQ(inside_node->depth_path, lfs::core::path_to_utf8(new_root / "depth" / "inside.exr"));
+
+    const auto* outside_node = scene.getNode("outside.png");
+    ASSERT_NE(outside_node, nullptr);
+    EXPECT_EQ(outside_node->image_path, lfs::core::path_to_utf8(outside));
+    EXPECT_TRUE(outside_node->mask_path.empty());
 }

@@ -35,7 +35,8 @@ body.vulkan-compat #overlay-box {
 }
 
 #link-discord .social-icon,
-#link-x .social-icon {
+#link-x .social-icon,
+#link-youtube .social-icon {
     image-color: @{text_dim};
 }
 

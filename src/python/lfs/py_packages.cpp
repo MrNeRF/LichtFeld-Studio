@@ -35,7 +35,7 @@ namespace lfs::python {
                 update_python_path();
                 return lfs::core::path_to_utf8(pm.venv_dir());
             },
-            "Initialize venv at ~/.lichtfeld/venv");
+            "Initialize the resolved per-user virtual environment");
 
         pkg.def(
             "install",

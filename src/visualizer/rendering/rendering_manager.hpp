@@ -18,6 +18,7 @@
 #include "passes/vulkan_split_view_pass.hpp"
 #include "render_animation_state.hpp"
 #include "rendering/rendering.hpp"
+#include "rendering/scene_upscaler_registry.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
 #include "rendering_types.hpp"
 #include "spark_lod_controller.hpp"
@@ -42,8 +43,6 @@
 #include <optional>
 #include <string>
 #include <thread>
-#include <tuple>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 #include <vulkan/vulkan.h>
@@ -104,6 +103,10 @@ namespace lfs::vis {
             glm::ivec2 size{0, 0};       // valid/logical viewport extent
             glm::ivec2 alloc_size{0, 0}; // bucketed image extent (0 = treat as size)
             bool flip_y = false;
+            // True only when this output was rendered for the logical viewport
+            // extent in the current request. Internal reconstruction resolution
+            // may differ from that extent.
+            bool matches_viewport_extent = false;
 
             // Split-view right panel. The left panel reuses the `image` slot above
             // (rideshares the existing scene-image interop). When this is set, the
@@ -120,6 +123,7 @@ namespace lfs::vis {
         // Initialize rendering resources
         void initialize();
         bool isInitialized() const { return initialized_; }
+        void releaseSceneModelResources();
 
         // Main render function
         VulkanFrameResult renderVulkanFrame(const RenderContext& context);
@@ -253,6 +257,11 @@ namespace lfs::vis {
         void updateSettings(const RenderSettings& settings);
         void updateSettings(const RenderSettings& settings, DirtyMask dirty_flags);
         RenderSettings getSettings() const;
+        // The presentation pass reports its actual runtime choice after pipeline
+        // preparation. Rendering uses this feedback on the next frame so a failed
+        // reconstruction pipeline never receives a reduced-resolution image.
+        void reportSceneUpscalerRuntimeSelection(SceneUpscalerSelection selection);
+        [[nodiscard]] SceneUpscalerSelection sceneUpscalerRuntimeSelection() const;
 
         // Toggle orthographic mode, calculating ortho_scale to preserve size at pivot
         void setOrthographic(bool enabled, float viewport_height, float distance_to_pivot);
@@ -266,6 +275,10 @@ namespace lfs::vis {
         [[nodiscard]] bool isSplitViewActive() const;
         [[nodiscard]] bool isGTComparisonActive() const;
         [[nodiscard]] bool isIndependentSplitViewActive() const;
+        // Project restore may only enter/leave split modes through the service
+        // transition path; it must never assign RenderSettings::split_view_mode.
+        void restoreSplitViewMode(SplitViewMode mode,
+                                  Viewport& primary_viewport);
         [[nodiscard]] float getSplitPosition() const;
         [[nodiscard]] std::optional<float> getSplitDividerScreenX(const glm::vec2& viewport_pos,
                                                                   const glm::vec2& viewport_size) const;
@@ -277,6 +290,14 @@ namespace lfs::vis {
                                                      SplitViewPanelId panel = SplitViewPanelId::Left);
         [[nodiscard]] const Viewport& resolvePanelViewport(const Viewport& primary_viewport,
                                                            SplitViewPanelId panel = SplitViewPanelId::Left) const;
+        // Project VIEW owns both panel cameras even while split view is
+        // disabled; unlike resolvePanelViewport this never aliases primary.
+        [[nodiscard]] Viewport& projectSecondaryViewport() {
+            return split_view_service_.secondaryViewport();
+        }
+        [[nodiscard]] const Viewport& projectSecondaryViewport() const {
+            return split_view_service_.secondaryViewport();
+        }
         [[nodiscard]] Viewport& resolveFocusedViewport(Viewport& primary_viewport);
         [[nodiscard]] const Viewport& resolveFocusedViewport(const Viewport& primary_viewport) const;
 
@@ -357,8 +378,13 @@ namespace lfs::vis {
 
         void clearLatestCameraMetrics();
 
-        // FPS monitoring
+        // FPS monitoring (scene renders vs. swapchain-presented GUI frames)
         float getAverageFPS() const { return framerate_controller_.getAverageFPS(); }
+        float getPresentedAverageFPS() const {
+            return presented_framerate_controller_.getAverageFPS();
+        }
+        // Measurement only — does not affect scene render pacing/limiting.
+        void notePresentedFrame() { presented_framerate_controller_.beginFrame(); }
 
         // Access to the auxiliary rendering engine used by point-cloud, mesh, and readback paths.
         lfs::rendering::RenderingEngine* getRenderingEngine();
@@ -555,7 +581,9 @@ namespace lfs::vis {
         void setEllipsoidGizmoActive(bool active) { viewport_overlay_service_.setEllipsoidActive(active); }
         [[nodiscard]] GizmoState getGizmoState() const { return viewport_overlay_service_.makeFrameGizmoState(); }
 
-        void setViewportResizeActive(bool active);
+        void setViewportResizeActive(
+            bool active,
+            ViewportResizeRenderPolicy render_policy = ViewportResizeRenderPolicy::InteractivePreview);
         [[nodiscard]] bool isViewportResizeDeferring() const {
             return frame_lifecycle_service_.isResizeDeferring();
         }
@@ -718,7 +746,6 @@ namespace lfs::vis {
             std::string error,
             std::chrono::steady_clock::time_point now);
         void gtComparisonImageWorkerLoop(std::stop_token stop_token);
-        void releaseSceneModelResources();
         void releaseSceneRenderResources();
         void setupEventHandlers();
         void handleToggleSplitView();
@@ -747,6 +774,9 @@ namespace lfs::vis {
         std::unique_ptr<lfs::rendering::RenderingEngine> engine_;
         lfs::rendering::ScreenOverlayRenderer screen_overlay_renderer_;
         mutable FramerateController framerate_controller_;
+        // Parallel presented-frame counter (GUI-only frames included). Does not
+        // drive pacing — scene path still uses framerate_controller_ alone.
+        mutable FramerateController presented_framerate_controller_;
 
         std::shared_ptr<const lfs::core::Tensor> vulkan_viewport_image_;
         std::uint64_t vulkan_viewport_image_generation_ = 0;
@@ -792,6 +822,7 @@ namespace lfs::vis {
         std::function<void()> wake_callback_;
         glm::ivec2 vulkan_viewport_image_size_{0, 0};
         glm::ivec2 vulkan_viewport_image_alloc_size_{0, 0};
+        glm::ivec2 vulkan_viewport_coordinate_size_{0, 0};
         bool vulkan_viewport_image_flip_y_ = false;
         glm::ivec2 vulkan_gt_comparison_content_size_{0, 0};
         struct GTComparisonImageCacheEntry {
@@ -849,6 +880,7 @@ namespace lfs::vis {
 
         // Settings
         RenderSettings settings_;
+        SceneUpscalerSelection scene_upscaler_runtime_selection_{};
         std::array<int, 2> panel_grid_planes_{{1, 1}};
         mutable std::mutex settings_mutex_;
         mutable std::mutex camera_metrics_mutex_;

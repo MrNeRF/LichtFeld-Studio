@@ -5,18 +5,16 @@
 #include "core/session_breadcrumb.hpp"
 
 #include "core/logger.hpp"
+#include "core/user_paths.hpp"
+#include "core/utc_time.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
-#include <chrono>
 #include <cstdio>
-#include <ctime>
 #include <filesystem>
 #include <fstream>
-#include <iomanip>
 #include <mutex>
-#include <sstream>
 #include <string_view>
 
 #ifdef _WIN32
@@ -37,11 +35,17 @@ namespace lfs::core {
         std::optional<SessionBreadcrumb> current_record;
 
         fs::path breadcrumb_path() {
-            return lichtfeld_home_directory() / ".lichtfeld" / "logs" / "last_session.json";
+            const auto paths = UserPaths::resolve();
+            return (paths ? paths->logDir()
+                          : lichtfeld_home_directory() / ".lichtfeld" / "logs") /
+                   "last_session.json";
         }
 
         fs::path snapshot_path() {
-            return lichtfeld_home_directory() / ".lichtfeld" / "logs" / "previous_session.log";
+            const auto paths = UserPaths::resolve();
+            return (paths ? paths->logDir()
+                          : lichtfeld_home_directory() / ".lichtfeld" / "logs") /
+                   "previous_session.log";
         }
 
         std::uint64_t process_id() {
@@ -50,20 +54,6 @@ namespace lfs::core {
 #else
             return static_cast<std::uint64_t>(getpid());
 #endif
-        }
-
-        std::string utc_now() {
-            const auto now = std::chrono::system_clock::now();
-            const std::time_t timestamp = std::chrono::system_clock::to_time_t(now);
-            std::tm utc{};
-#ifdef _WIN32
-            gmtime_s(&utc, &timestamp);
-#else
-            gmtime_r(&timestamp, &utc);
-#endif
-            std::ostringstream output;
-            output << std::put_time(&utc, "%Y-%m-%dT%H:%M:%SZ");
-            return output.str();
         }
 
         std::optional<SessionBreadcrumb> decode_record(const fs::path& path) {
@@ -87,36 +77,8 @@ namespace lfs::core {
             }
         }
 
-        bool replace_file(const fs::path& source, const fs::path& destination) {
-#ifdef _WIN32
-            return MoveFileExW(source.c_str(), destination.c_str(),
-                               MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
-#else
-            return std::rename(source.c_str(), destination.c_str()) == 0;
-#endif
-        }
-
         bool write_atomically(const fs::path& path, const std::string_view contents) {
-            std::error_code ec;
-            fs::create_directories(path.parent_path(), ec);
-            if (ec)
-                return false;
-
-            fs::path temporary = path;
-            temporary += ".tmp." + std::to_string(process_id());
-            {
-                std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-                if (!output)
-                    return false;
-                output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
-                output.flush();
-                if (!output)
-                    return false;
-            }
-            if (replace_file(temporary, path))
-                return true;
-            fs::remove(temporary, ec);
-            return false;
+            return writeTextFileAtomically(path, std::string(contents)).has_value();
         }
 
         bool write_record(const fs::path& path, const SessionBreadcrumb& record) {
@@ -182,10 +144,15 @@ namespace lfs::core {
                 previous_record->log_path.clear();
             }
 
+            const auto paths = UserPaths::resolve();
+            const auto live_log_path =
+                (paths ? paths->logDir()
+                       : lichtfeld_home_directory() / ".lichtfeld" / "logs") /
+                "lichtfeld.log";
             current_record = SessionBreadcrumb{
                 .pid = process_id(),
                 .started_at = utc_now(),
-                .log_path = Logger::default_log_file_path(),
+                .log_path = live_log_path.string(),
                 .clean_exit = false,
             };
             static_cast<void>(write_record(breadcrumb_path(), *current_record));

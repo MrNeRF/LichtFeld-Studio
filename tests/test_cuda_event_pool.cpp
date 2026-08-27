@@ -107,3 +107,30 @@ TEST_F(CudaEventPoolTest, WaitOrdersCrossStreamWork) {
     cudaStreamDestroy(producer);
     cudaStreamDestroy(consumer);
 }
+
+TEST_F(CudaEventPoolTest, EventAcquireFailureSynchronizesProducerFallback) {
+    cudaStream_t producer, consumer;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&producer, cudaStreamNonBlocking), cudaSuccess);
+    ASSERT_EQ(cudaStreamCreateWithFlags(&consumer, cudaStreamNonBlocking), cudaSuccess);
+
+    constexpr size_t kBytes = 1ull * 1024 * 1024;
+    void* buffer = nullptr;
+    ASSERT_EQ(cudaMalloc(&buffer, kBytes), cudaSuccess);
+    ASSERT_EQ(cudaMemsetAsync(buffer, 0x6d, kBytes, producer), cudaSuccess);
+
+    set_cuda_event_acquire_failure_for_testing(true);
+    bridgeStreams(producer, consumer);
+    set_cuda_event_acquire_failure_for_testing(false);
+
+    std::vector<unsigned char> host(kBytes);
+    ASSERT_EQ(cudaMemcpyAsync(host.data(), buffer, kBytes, cudaMemcpyDeviceToHost, consumer),
+              cudaSuccess);
+    ASSERT_EQ(cudaStreamSynchronize(consumer), cudaSuccess);
+    EXPECT_EQ(host.front(), 0x6d);
+    EXPECT_EQ(host[kBytes / 2], 0x6d);
+    EXPECT_EQ(host.back(), 0x6d);
+
+    cudaFree(buffer);
+    cudaStreamDestroy(producer);
+    cudaStreamDestroy(consumer);
+}

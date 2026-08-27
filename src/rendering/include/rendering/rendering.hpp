@@ -164,6 +164,10 @@ namespace lfs::rendering {
         GaussianMarkerOverlayState markers;
         GaussianCursorOverlayState cursor;
         GaussianEmphasisOverlayState emphasis;
+        // Host-side non-empty committed selection for this frame snapshot.
+        // Independent of emphasis.mask pointer validity so an empty/stale mask
+        // tensor cannot keep the slow overlay raster path pinned.
+        bool has_selection = false;
         std::array<glm::vec4, kSelectionColorTableCount> selection_colors = defaultSelectionColorTable();
     };
 
@@ -217,7 +221,7 @@ namespace lfs::rendering {
         uint64_t lod_generation = 0;
         const uint32_t* lod_touched_chunks = nullptr;
         size_t lod_touched_chunk_count = 0;
-        GaussianLodGpuTraversalState lod_gpu_traversal;
+        GaussianLodGpuTraversalState lod_gpu_traversal = {};
         bool lod_debug_mode = false;
     };
 

@@ -369,9 +369,9 @@ namespace lfs::vis {
             bool submitted = false;
             bool wait_ready = false;
             if (r == VK_SUCCESS) {
-                r = vkQueueSubmit(graphics_queue, 1, &submit, fence);
+                r = lfs::rendering::vk_queue_submit_synced(graphics_queue, 1, &submit, fence);
                 if (r != VK_SUCCESS) {
-                    failed_expression = "vkQueueSubmit(graphics_queue, 1, &submit, fence)";
+                    failed_expression = "lfs::rendering::vk_queue_submit_synced(graphics_queue, 1, &submit, fence)";
                     failed_context = std::format(
                         "Mesh one-shot submission failed (queue={:#x}, command_buffer={:#x}, command_buffer_count=1, wait_semaphore_count=0, signal_semaphore_count=0, fence={:#x})",
                         vkHandleValue(graphics_queue),
@@ -733,6 +733,8 @@ namespace lfs::vis {
                                              resolution);
             }
             out.vram_label = std::format("shadow:{}x{}@{}", resolution, resolution, static_cast<const void*>(&out));
+            vmaSetAllocationName(allocator, out.alloc,
+                                 is_dummy ? "Mesh shadow dummy depth" : "Mesh shadow depth");
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.mesh.shadow_image",
                 out.vram_label,
@@ -1107,6 +1109,7 @@ namespace lfs::vis {
                                          w,
                                          h);
             out.vram_label = std::format("{}:{}x{}@{}", label, w, h, static_cast<const void*>(&out));
+            vmaSetAllocationName(allocator, out.alloc, "Mesh texture image");
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.mesh.texture",
                 out.vram_label,
