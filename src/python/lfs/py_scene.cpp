@@ -9,6 +9,7 @@
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
 #include "io/loader.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/operation/undo_entry.hpp"
@@ -411,6 +412,15 @@ namespace lfs::python {
                 throw std::runtime_error("Failed to prepare splat tensors for rendering: " +
                                          migrated.error().format());
             }
+
+            // Migration moves the base splat tensors into Vulkan-external storage but,
+            // when SH quantization is enabled, deliberately leaves float32 SH-rest in a
+            // temporary CUDA workspace. VkSplat cannot bind that workspace, so we need to
+            // convert SH-rest into Vulkan-visible q16 codes and bounds before rendering.
+            // This conversion is a no-op when quantization is disabled or already applied
+            // (checked in lfs::training::sh_value::apply_shN_value_quant)
+            (void)lfs::training::sh_value::apply_shN_value_quant(*splat);
+
             scene_->setCombinedModelAllocator(std::move(allocator));
         }
 
