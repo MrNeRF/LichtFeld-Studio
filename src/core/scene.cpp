@@ -3150,7 +3150,7 @@ namespace lfs::core {
         const Uuid restored_uuid = node->uuid;
         const NodeId id = insertNode(std::move(node), true);
         if (id != NULL_NODE) {
-            LOG_DEBUG("Restored node '{}' (id={}, uuid={})",
+            LOG_TRACE("Restored node '{}' (id={}, uuid={})",
                       restored_name,
                       id,
                       restored_uuid.to_string());
@@ -3196,7 +3196,7 @@ namespace lfs::core {
         selection_group_counts_dirty_ = false;
     }
 
-    void Scene::commitRestoreStage(
+    std::unique_ptr<Scene> Scene::commitRestoreStage(
         std::unique_ptr<Scene> staged) noexcept {
         assert(staged);
         assert(staged->restore_staging_);
@@ -3249,6 +3249,7 @@ namespace lfs::core {
 
         pending_mutations_ = 0;
         transaction_depth_ = 0;
+        return staged;
     }
 
     Scene::PayloadHydrationCommitReport

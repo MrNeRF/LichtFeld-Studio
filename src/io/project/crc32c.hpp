@@ -14,6 +14,11 @@ namespace lfs::io::project {
     // the previous return value.
     [[nodiscard]] std::uint32_t crc32c(std::uint32_t crc, const void* data, std::size_t size);
 
+    // CRC of A||B from crc(A), crc(B), and len(B). len_b == 0 returns crc_a.
+    [[nodiscard]] std::uint32_t crc32c_combine(std::uint32_t crc_a,
+                                               std::uint32_t crc_b,
+                                               std::uint64_t len_b);
+
     [[nodiscard]] std::uint32_t crc32c_software(std::uint32_t crc,
                                                 const void* data,
                                                 std::size_t size);

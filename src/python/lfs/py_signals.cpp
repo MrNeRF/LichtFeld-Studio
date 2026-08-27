@@ -32,6 +32,16 @@ namespace lfs::python {
         nb::object g_app_state;
         bool g_initialized = false;
 
+        template <typename Fn>
+        void with_signal_gil(Fn&& fn) {
+            if (PyGILState_Check()) {
+                fn();
+                return;
+            }
+            nb::gil_scoped_acquire gil;
+            fn();
+        }
+
         template <typename T>
         void set_signal_value(const char* signal_name, T value) {
             if (!g_initialized || !g_app_state) {
@@ -59,10 +69,10 @@ namespace lfs::python {
                 return;
             }
 
-            nb::gil_scoped_acquire gil;
-
-            set_signal_value("is_training", is_training);
-            set_signal_value("trainer_state", state);
+            with_signal_gil([&] {
+                set_signal_value("is_training", is_training);
+                set_signal_value("trainer_state", state);
+            });
         }
 
         void do_trainer_loaded(const bool has_trainer, const int max_iterations, const int initial_iteration) {
@@ -73,13 +83,13 @@ namespace lfs::python {
             g_training = TrainingBuffer{};
             g_training.iteration = initial_iteration;
 
-            nb::gil_scoped_acquire gil;
-
-            set_signal_value("has_trainer", has_trainer);
-            set_signal_value("max_iterations", max_iterations);
-            set_signal_value("iteration", initial_iteration);
-            set_signal_value("loss", 0.0f);
-            set_signal_value("num_gaussians", 0);
+            with_signal_gil([&] {
+                set_signal_value("has_trainer", has_trainer);
+                set_signal_value("max_iterations", max_iterations);
+                set_signal_value("iteration", initial_iteration);
+                set_signal_value("loss", 0.0f);
+                set_signal_value("num_gaussians", 0);
+            });
         }
 
         void do_psnr(float psnr) {
@@ -146,14 +156,14 @@ namespace lfs::python {
                 return;
             }
 
-            nb::gil_scoped_acquire gil;
+            with_signal_gil([&] {
+                set_signal_value("iteration", g_training.iteration);
+                set_signal_value("loss", g_training.loss);
+                set_signal_value("num_gaussians", static_cast<int>(g_training.num_gaussians));
 
-            set_signal_value("iteration", g_training.iteration);
-            set_signal_value("loss", g_training.loss);
-            set_signal_value("num_gaussians", static_cast<int>(g_training.num_gaussians));
-
-            g_training.last_update = now;
-            g_training.dirty = false;
+                g_training.last_update = now;
+                g_training.dirty = false;
+            });
         }
 
         void init_bridge() {

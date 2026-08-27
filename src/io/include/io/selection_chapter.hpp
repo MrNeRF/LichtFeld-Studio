@@ -114,6 +114,9 @@ namespace lfs::io::project {
     [[nodiscard]] LFS_IO_API lfs::Result<std::vector<std::byte>>
     encode_selection_chapter(const SelectionChapter& chapter);
 
+    [[nodiscard]] LFS_IO_API lfs::Result<void>
+    validate_selection_chapter(const SelectionChapter& chapter);
+
     [[nodiscard]] LFS_IO_API lfs::Result<SelectionChapter>
     decode_selection_chapter(std::span<const std::byte> payload);
 

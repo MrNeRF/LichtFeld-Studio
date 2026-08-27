@@ -316,12 +316,14 @@ namespace lfs::core {
         // A restore stage owns a complete replacement scene but binds node
         // observables to target. Building and populating it is fallible and
         // must happen before commit. commitRestoreStage is a move-only,
-        // allocation-free state exchange and therefore cannot fail.
+        // allocation-free state exchange and therefore cannot fail. The
+        // returned unique_ptr holds the outgoing scene graph after the swap.
         [[nodiscard]] static std::unique_ptr<Scene>
         createRestoreStage(Scene& target);
         void installRestoreSelectionState(
             RestoreSelectionState state) noexcept;
-        void commitRestoreStage(std::unique_ptr<Scene> staged) noexcept;
+        std::unique_ptr<Scene>
+        commitRestoreStage(std::unique_ptr<Scene> staged) noexcept;
         // Attach staged heavy payloads by stable node UUID without replacing
         // the live shell. Deleted/replaced/previously hydrated nodes are
         // invalidated independently, so an edit to one unit cannot discard

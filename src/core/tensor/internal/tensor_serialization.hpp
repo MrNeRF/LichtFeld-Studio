@@ -37,6 +37,34 @@ namespace lfs::core {
         // Consume one serialized tensor without allocating host or device storage.
         // Uses a seek over the payload so framed .licht streams do not decompress it.
         LFS_CORE_API void skip_serialized_tensor(std::istream& is);
+
+        struct TensorLoadTiming {
+            double alloc_ms = 0.0;
+            double read_ms = 0.0;
+        };
+
+        class TensorLoadTimingScope {
+        public:
+            LFS_CORE_API explicit TensorLoadTimingScope(TensorLoadTiming& timing) noexcept;
+            TensorLoadTimingScope(const TensorLoadTimingScope&) = delete;
+            TensorLoadTimingScope& operator=(const TensorLoadTimingScope&) = delete;
+            LFS_CORE_API ~TensorLoadTimingScope();
+
+        private:
+            TensorLoadTiming* previous_ = nullptr;
+        };
+
+        // Public operator>> always pins. Splat deserialize uses this sibling so
+        // host tensors at or above 256 MiB skip cudaHostAlloc / the pinned cache.
+        LFS_CORE_API void read_serialized_tensor(std::istream& is, Tensor& tensor,
+                                                 bool use_pinned);
+        LFS_CORE_API void read_serialized_tensor_pageable_if_large(std::istream& is,
+                                                                   Tensor& tensor);
+        // When `is` is backed by a contiguous memory streambuf, copies the
+        // payload with cudaMemcpyAsync into a device tensor on `stream`.
+        // Otherwise falls back to read_serialized_tensor_pageable_if_large.
+        LFS_CORE_API void read_serialized_tensor_device_from_span_or_host(
+            std::istream& is, Tensor& tensor, cudaStream_t stream);
     } // namespace serialization_detail
 
     LFS_CORE_API std::ostream& operator<<(std::ostream& os, const Tensor& tensor);
