@@ -3101,8 +3101,7 @@ namespace lfs::python {
                     self.image_uv(tex.texture_id(), size, {0.0f, 0.0f}, tex.uv1(), std::move(tint));
                 },
                 nb::arg("texture"), nb::arg("size"), nb::arg("tint") = nb::none(), "Draw a DynamicTexture with automatic UV scaling")
-            .def(
-                "image_tensor", [](PyUILayout& self, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
+            .def("image_tensor", [](PyUILayout& self, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
                     PyDynamicTexture* tex_ptr = nullptr;
                     {
                         std::lock_guard lock(g_dynamic_textures_mutex);
@@ -4261,32 +4260,27 @@ namespace lfs::python {
 
         m.def(
             "apply_align",
-            []() {
+            []() -> bool {
+                if (!lfs::vis::op::operators().hasModalOperator()) {
+                    return false;
+                }
                 lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::Apply);
                 lfs::vis::op::ModalEvent evt{};
-                evt.type = lfs::vis::op::ModalEvent::Type::KEY;
-                evt.data = lfs::vis::KeyEvent{
-                    .key = lfs::vis::input::KEY_ENTER,
-                    .scancode = 0,
-                    .action = lfs::vis::input::ACTION_PRESS,
-                    .mods = 0,
-                };
+                evt.type = lfs::vis::op::ModalEvent::Type::NONE;
                 lfs::vis::op::operators().dispatchModalEvent(evt);
+                return true;
             },
             "Request the running align modal to apply the current triangle");
 
         m.def(
             "clear_align_points",
             []() {
+                if (!lfs::vis::op::operators().hasModalOperator()) {
+                    return;
+                }
                 lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::Clear);
                 lfs::vis::op::ModalEvent evt{};
-                evt.type = lfs::vis::op::ModalEvent::Type::KEY;
-                evt.data = lfs::vis::KeyEvent{
-                    .key = lfs::vis::input::KEY_BACKSPACE,
-                    .scancode = 0,
-                    .action = lfs::vis::input::ACTION_PRESS,
-                    .mods = 0,
-                };
+                evt.type = lfs::vis::op::ModalEvent::Type::NONE;
                 lfs::vis::op::operators().dispatchModalEvent(evt);
             },
             "Request the running align modal to clear all picked points");

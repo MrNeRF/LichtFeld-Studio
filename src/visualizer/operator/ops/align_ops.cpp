@@ -20,7 +20,9 @@
 #include "visualizer_impl.hpp"
 #include <algorithm>
 #include <cmath>
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <limits>
 #include <unordered_set>
 
 namespace lfs::vis::op {
@@ -28,6 +30,12 @@ namespace lfs::vis::op {
     namespace {
         constexpr double kClickDragThresholdPx = 4.0;
         constexpr double kMarkerHitRadiusPx = 8.0;
+        constexpr float kDepthAgreeTolerance = 0.05f;
+
+        struct AlignmentTargetMask {
+            std::vector<bool> mask;
+            bool excludes_visible_nodes = false;
+        };
 
         [[nodiscard]] bool isAlignTransformTarget(const core::SceneNode& node) {
             return cap::isAlignTransformTargetType(node.type);
@@ -35,16 +43,26 @@ namespace lfs::vis::op {
 
         [[nodiscard]] core::NodeId resolveAlignTargetId(const core::Scene& scene,
                                                         const core::SceneNode& node) {
+            core::NodeId target_id = core::NULL_NODE;
             if ((node.type == core::NodeType::CROPBOX ||
                  node.type == core::NodeType::ELLIPSOID) &&
                 node.parent_id != core::NULL_NODE) {
                 const auto* const parent = scene.getNodeById(node.parent_id);
                 if (parent && isAlignTransformTarget(*parent)) {
-                    return parent->id;
+                    target_id = parent->id;
                 }
             }
-
-            return isAlignTransformTarget(node) ? node.id : core::NULL_NODE;
+            if (target_id == core::NULL_NODE && isAlignTransformTarget(node)) {
+                target_id = node.id;
+            }
+            if (target_id == core::NULL_NODE) {
+                return core::NULL_NODE;
+            }
+            const auto* const target = scene.getNodeById(target_id);
+            if (!target || static_cast<bool>(target->locked)) {
+                return core::NULL_NODE;
+            }
+            return target_id;
         }
 
         [[nodiscard]] bool hasTargetAncestor(const core::Scene& scene,
@@ -82,8 +100,12 @@ namespace lfs::vis::op {
             } else {
                 for (const auto node_id : scene.getRootNodes()) {
                     const auto* const node = scene.getNodeById(node_id);
-                    if (node && isAlignTransformTarget(*node) && seen.insert(node_id).second) {
-                        target_ids.push_back(node_id);
+                    if (!node) {
+                        continue;
+                    }
+                    const core::NodeId target_id = resolveAlignTargetId(scene, *node);
+                    if (target_id != core::NULL_NODE && seen.insert(target_id).second) {
+                        target_ids.push_back(target_id);
                     }
                 }
             }
@@ -111,10 +133,11 @@ namespace lfs::vis::op {
             return false;
         }
 
-        [[nodiscard]] std::vector<bool> buildAlignmentTargetNodeMask(const core::Scene& scene,
-                                                                     const std::vector<core::NodeId>& target_ids) {
+        [[nodiscard]] AlignmentTargetMask buildAlignmentTargetNodeMask(const core::Scene& scene,
+                                                                       const std::vector<core::NodeId>& target_ids) {
+            AlignmentTargetMask result;
             if (target_ids.empty()) {
-                return {};
+                return result;
             }
 
             const std::unordered_set<core::NodeId> target_set(target_ids.begin(), target_ids.end());
@@ -123,32 +146,35 @@ namespace lfs::vis::op {
             // Indices must match transform_indices / model_transforms for VkSplat node culling.
             const auto scene_mask = scene.getNodeVisibilityMask();
             if (!scene_mask.empty()) {
-                std::vector<bool> mask(scene_mask.size(), false);
+                result.mask.assign(scene_mask.size(), false);
                 for (const auto* const node : scene.getNodes()) {
-                    if (!node || !node->model || !isTargetOrDescendant(scene, node->id, target_set)) {
+                    if (!node || !node->model) {
                         continue;
                     }
+                    const bool in_target = isTargetOrDescendant(scene, node->id, target_set);
                     const int index = scene.getVisibleNodeIndex(node->id);
-                    if (index >= 0 && static_cast<size_t>(index) < mask.size()) {
-                        mask[static_cast<size_t>(index)] = true;
+                    if (index < 0 || static_cast<size_t>(index) >= result.mask.size()) {
+                        continue;
+                    }
+                    if (in_target) {
+                        result.mask[static_cast<size_t>(index)] = true;
+                    } else {
+                        result.excludes_visible_nodes = true;
                     }
                 }
-                return mask;
+                return result;
             }
 
-            std::vector<bool> mask;
             for (const auto* const node : scene.getNodes()) {
                 if (node && node->model && scene.isNodeEffectivelyVisible(node->id)) {
-                    mask.push_back(isTargetOrDescendant(scene, node->id, target_set));
+                    const bool in_target = isTargetOrDescendant(scene, node->id, target_set);
+                    result.mask.push_back(in_target);
+                    if (!in_target) {
+                        result.excludes_visible_nodes = true;
+                    }
                 }
             }
-            return mask;
-        }
-
-        [[nodiscard]] bool hasVisibleAlignmentTarget(const std::vector<bool>& mask) {
-            return std::any_of(mask.begin(), mask.end(), [](const bool enabled) {
-                return enabled;
-            });
+            return result;
         }
     } // namespace
 
@@ -177,6 +203,7 @@ namespace lfs::vis::op {
         drag_active_ = false;
         drag_point_index_ = -1;
         logged_masked_depth_fallback_ = false;
+        (void)services().takeAlignUiAction();
         pick_button_ = props.get_or<int>("button", static_cast<int>(lfs::vis::input::AppMouseButton::LEFT));
 
         // First press enters the modal; the point is placed on release if the
@@ -216,8 +243,9 @@ namespace lfs::vis::op {
     }
 
     OperatorResult AlignPickPointOperator::modal(OperatorContext& ctx, OperatorProperties& /*props*/) {
+        OperatorResult ui_result = OperatorResult::RUNNING_MODAL;
         if (services().hasAlignUiAction()) {
-            const OperatorResult ui_result = handlePendingUiAction(ctx);
+            ui_result = handlePendingUiAction(ctx);
             if (ui_result != OperatorResult::RUNNING_MODAL) {
                 return ui_result;
             }
@@ -228,9 +256,17 @@ namespace lfs::vis::op {
             return OperatorResult::RUNNING_MODAL;
         }
 
+        if (event->type == ModalEvent::Type::NONE) {
+            return ui_result;
+        }
+
         if (event->type == ModalEvent::Type::MOUSE_MOVE) {
             const auto* mm = event->as<MouseMoveEvent>();
             if (!mm) {
+                return OperatorResult::PASS_THROUGH;
+            }
+
+            if (event->over_gui && !drag_active_) {
                 return OperatorResult::PASS_THROUGH;
             }
 
@@ -248,7 +284,8 @@ namespace lfs::vis::op {
             if (drag_active_ && drag_point_index_ >= 0 &&
                 static_cast<size_t>(drag_point_index_) < picked_points_.size()) {
                 SplitViewPanelId panel = SplitViewPanelId::Left;
-                const glm::vec3 world_pos = unprojectScreenPoint(ctx, mm->position.x, mm->position.y, &panel);
+                const glm::vec3 world_pos =
+                    unprojectScreenPoint(ctx, mm->position.x, mm->position.y, &panel, false);
                 if (Viewport::isValidWorldPosition(world_pos)) {
                     picked_points_[static_cast<size_t>(drag_point_index_)] = world_pos;
                     if (!pick_panel_) {
@@ -272,11 +309,12 @@ namespace lfs::vis::op {
             }
 
             const bool is_pick_button = mb->button == pick_button_;
-            const bool is_right_button =
-                mb->button == static_cast<int>(lfs::vis::input::AppMouseButton::RIGHT);
 
             if (mb->action == lfs::vis::input::ACTION_PRESS) {
-                if (is_pick_button || is_right_button) {
+                if (event->over_gui) {
+                    return OperatorResult::PASS_THROUGH;
+                }
+                if (is_pick_button) {
                     press_active_ = true;
                     press_button_ = mb->button;
                     press_pos_ = mb->position;
@@ -284,14 +322,12 @@ namespace lfs::vis::op {
                     drag_active_ = false;
                     drag_point_index_ = -1;
 
-                    if (is_pick_button) {
-                        press_point_index_ = hitTestPoint(mb->position.x, mb->position.y);
-                        if (press_point_index_) {
-                            selected_point_ = press_point_index_;
-                            services().setAlignSelectedPoint(selected_point_);
-                            if (services().renderingOrNull()) {
-                                services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY);
-                            }
+                    press_point_index_ = hitTestPoint(mb->position.x, mb->position.y);
+                    if (press_point_index_) {
+                        selected_point_ = press_point_index_;
+                        services().setAlignSelectedPoint(selected_point_);
+                        if (services().renderingOrNull()) {
+                            services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY);
                         }
                     }
                 }
@@ -304,10 +340,23 @@ namespace lfs::vis::op {
             }
 
             if (drag_active_ && is_pick_button) {
+                const int idx = drag_point_index_;
                 drag_active_ = false;
                 drag_point_index_ = -1;
                 press_active_ = false;
                 press_point_index_.reset();
+                if (idx >= 0 && static_cast<size_t>(idx) < picked_points_.size()) {
+                    SplitViewPanelId panel = SplitViewPanelId::Left;
+                    const glm::vec3 world_pos =
+                        unprojectScreenPoint(ctx, mb->position.x, mb->position.y, &panel, true);
+                    if (Viewport::isValidWorldPosition(world_pos)) {
+                        picked_points_[static_cast<size_t>(idx)] = world_pos;
+                        if (!pick_panel_) {
+                            pick_panel_ = panel;
+                        }
+                        syncPickedPointsToServices();
+                    }
+                }
                 return OperatorResult::RUNNING_MODAL;
             }
 
@@ -344,11 +393,6 @@ namespace lfs::vis::op {
             if (move_dist > kClickDragThresholdPx) {
                 press_point_index_.reset();
                 return OperatorResult::PASS_THROUGH;
-            }
-
-            if (is_right_button && !is_pick_button) {
-                removeLastPoint();
-                return OperatorResult::RUNNING_MODAL;
             }
 
             if (is_pick_button) {
@@ -552,7 +596,7 @@ namespace lfs::vis::op {
         const glm::vec2 click_screen(static_cast<float>(x), static_cast<float>(y));
 
         std::optional<int> best;
-        float best_dist = static_cast<float>(kMarkerHitRadiusPx);
+        float best_dist = std::numeric_limits<float>::max();
 
         for (size_t i = 0; i < picked_points_.size(); ++i) {
             const auto projected = lfs::rendering::projectWorldPoint(
@@ -570,8 +614,18 @@ namespace lfs::vis::op {
                 panel_info->x + projected->x * screen_scale_x,
                 panel_info->y + projected->y * screen_scale_y,
             };
+            const float marker_radius = alignMarkerScreenRadius(
+                picked_points_[i],
+                projection_viewport.getViewMatrix(),
+                projection_viewport.getProjectionMatrix(render_settings.focal_length_mm),
+                static_cast<float>(projection_viewport.windowSize.y),
+                render_settings.orthographic,
+                render_settings.ortho_scale,
+                screen_scale_x,
+                screen_scale_y);
+            const float hit_radius = std::max(static_cast<float>(kMarkerHitRadiusPx), marker_radius);
             const float dist = glm::length(screen_pos - click_screen);
-            if (dist <= best_dist) {
+            if (dist <= hit_radius && dist < best_dist) {
                 best_dist = dist;
                 best = static_cast<int>(i);
             }
@@ -603,7 +657,8 @@ namespace lfs::vis::op {
     glm::vec3 AlignPickPointOperator::unprojectScreenPoint(const OperatorContext& ctx,
                                                            const double x,
                                                            const double y,
-                                                           SplitViewPanelId* out_panel) const {
+                                                           SplitViewPanelId* out_panel,
+                                                           const bool precise) const {
         auto* rm = services().renderingOrNull();
         auto* gm = services().guiOrNull();
         if (!rm || !gm || !gm->getViewer()) {
@@ -638,56 +693,49 @@ namespace lfs::vis::op {
         const int depth_x = static_cast<int>(render_x);
         const int depth_y = static_cast<int>(render_y);
 
-        // Commit picks (placement / drag re-pick) use the exact depth-capture path so HiGS
-        // interactive leading-batch depth cannot bias the surface. Hover preview stays on
-        // getDepthAtPixel in align_tool.cpp (cheap per-frame sample).
-        float depth = -1.0f;
-        if (ctx.hasSelection()) {
-            const auto target_ids = resolveAlignmentTargets(ctx);
-            const auto target_mask = buildAlignmentTargetNodeMask(ctx.scene().getScene(), target_ids);
-            if (!hasVisibleAlignmentTarget(target_mask)) {
-                return glm::vec3(Viewport::INVALID_WORLD_POS);
+        // Interactive first-hit is the pick source of truth. Trust masked T=0.5 only when
+        // an unselected visible model exists and full-scene capture agrees within 5%.
+        const float interactive = rm->getDepthAtPixel(depth_x, depth_y, panel_info->panel);
+        if (interactive <= 0.0f) {
+            return glm::vec3(Viewport::INVALID_WORLD_POS);
+        }
+
+        float depth = interactive;
+        if (precise) {
+            AlignmentTargetMask target_mask;
+            if (ctx.hasSelection()) {
+                const auto target_ids = resolveAlignmentTargets(ctx);
+                target_mask = buildAlignmentTargetNodeMask(ctx.scene().getScene(), target_ids);
             }
-            depth = rm->renderDepthAtPixelForNodeMask(
-                &ctx.scene(),
-                projection_viewport,
-                {panel_info->render_width, panel_info->render_height},
-                depth_x,
-                depth_y,
-                target_mask);
-            if (depth <= 0.0f) {
-                if (!logged_masked_depth_fallback_) {
-                    LOG_INFO(
-                        "Align pick: masked node depth failed; falling back to full-scene exact depth for this session");
-                    logged_masked_depth_fallback_ = true;
-                }
-                depth = rm->renderMedianDepthAtPixel(
+            const bool needs_mask = !target_mask.mask.empty() && target_mask.excludes_visible_nodes;
+            if (needs_mask) {
+                const float masked = rm->renderDepthAtPixelForNodeMask(
                     &ctx.scene(),
                     projection_viewport,
                     {panel_info->render_width, panel_info->render_height},
                     depth_x,
                     depth_y,
-                    panel_info->panel);
+                    target_mask.mask);
+                if (masked <= 0.0f) {
+                    if (!logged_masked_depth_fallback_) {
+                        LOG_INFO(
+                            "Align pick: masked node depth failed; falling back to interactive depth for this session");
+                        logged_masked_depth_fallback_ = true;
+                    }
+                } else {
+                    const float full = rm->renderMedianDepthAtPixel(
+                        &ctx.scene(),
+                        projection_viewport,
+                        {panel_info->render_width, panel_info->render_height},
+                        depth_x,
+                        depth_y,
+                        panel_info->panel);
+                    if (full > 0.0f &&
+                        std::abs(full - interactive) <= kDepthAgreeTolerance * interactive) {
+                        depth = masked;
+                    }
+                }
             }
-        } else {
-            depth = rm->renderMedianDepthAtPixel(
-                &ctx.scene(),
-                projection_viewport,
-                {panel_info->render_width, panel_info->render_height},
-                depth_x,
-                depth_y,
-                panel_info->panel);
-        }
-        if (depth <= 0.0f) {
-            if (!logged_exact_depth_fallback_) {
-                LOG_INFO(
-                    "Align pick: exact depth capture failed; falling back to interactive depth for this session");
-                logged_exact_depth_fallback_ = true;
-            }
-            depth = rm->getDepthAtPixel(depth_x, depth_y, panel_info->panel);
-        }
-        if (depth <= 0.0f) {
-            return glm::vec3(Viewport::INVALID_WORLD_POS);
         }
 
         return projection_viewport.unprojectPixel(
@@ -724,48 +772,21 @@ namespace lfs::vis::op {
         auto entry = std::make_unique<SceneSnapshot>(ctx.scene(), "transform.align");
         entry->captureTransforms(node_names);
 
-        const glm::vec3& p0 = picked_points_[0];
-        const glm::vec3& p1 = picked_points_[1];
-        const glm::vec3& p2 = picked_points_[2];
+        AlignTransformInputs inputs;
+        inputs.p0 = picked_points_[0];
+        inputs.p1 = picked_points_[1];
+        inputs.p2 = picked_points_[2];
+        inputs.camera_pos = resolvePickPanelCameraPosition();
+        if (services().getAlignAxisSnapEnabled()) {
+            inputs.snap_node_world = resolveAlignSnapTargetWorld(ctx.scene());
+        }
+        inputs.edge_to_world_x = services().getAlignEdgeToAxisEnabled();
 
-        const glm::vec3 v01 = p1 - p0;
-        const glm::vec3 v02 = p2 - p0;
-        const glm::vec3 cross_v = glm::cross(v01, v02);
-        const float cross_len = glm::length(cross_v);
-        if (cross_len <= 1e-6f) {
+        const auto visualizer_transform = computeAlignTransform(inputs);
+        if (!visualizer_transform) {
             setStatus(lichtfeld::Strings::Align::STATUS_COLINEAR, 2.0);
             return false;
         }
-        glm::vec3 normal = cross_v / cross_len;
-        const glm::vec3 center = (p0 + p1 + p2) / 3.0f;
-
-        constexpr glm::vec3 kTargetUp(0.0f, 1.0f, 0.0f);
-        const glm::vec3 camera_pos = resolvePickPanelCameraPosition();
-        faceNormalTowardCamera(normal, center, camera_pos);
-
-        if (services().getAlignAxisSnapEnabled()) {
-            const glm::mat4 primary_world =
-                vis::scene_coords::nodeVisualizerWorldTransform(scene, target_ids.front());
-            (void)snapAlignNormalToNodeAxes(normal, primary_world);
-        }
-
-        const glm::vec3 axis = glm::cross(normal, kTargetUp);
-        const float axis_len = glm::length(axis);
-
-        glm::mat4 rotation(1.0f);
-        if (axis_len > 1e-6f) {
-            const float angle = acos(glm::clamp(glm::dot(normal, kTargetUp), -1.0f, 1.0f));
-            rotation = glm::rotate(glm::mat4(1.0f), angle, glm::normalize(axis));
-        }
-
-        if (services().getAlignEdgeToAxisEnabled()) {
-            rotation = alignEdgeToWorldXRotation(rotation, p0, p1) * rotation;
-        }
-
-        const glm::mat4 to_origin = glm::translate(glm::mat4(1.0f), -center);
-        const glm::mat4 from_origin =
-            glm::translate(glm::mat4(1.0f), center - glm::dot(center, kTargetUp) * kTargetUp);
-        const glm::mat4 visualizer_transform = from_origin * rotation * to_origin;
 
         for (const auto node_id : target_ids) {
             const auto* const node = scene.getNodeById(node_id);
@@ -774,7 +795,7 @@ namespace lfs::vis::op {
             }
 
             const glm::mat4 old_visualizer_world = vis::scene_coords::nodeVisualizerWorldTransform(scene, node_id);
-            const glm::mat4 new_visualizer_world = visualizer_transform * old_visualizer_world;
+            const glm::mat4 new_visualizer_world = *visualizer_transform * old_visualizer_world;
             const auto new_local =
                 vis::scene_coords::nodeLocalTransformFromVisualizerWorld(scene, node_id, new_visualizer_world);
             if (!new_local) {
@@ -839,6 +860,89 @@ namespace lfs::vis::op {
 
         normal = best_axis * static_cast<float>(best_sign);
         return true;
+    }
+
+    std::optional<glm::mat4> computeAlignTransform(const AlignTransformInputs& in) {
+        const glm::vec3 v01 = in.p1 - in.p0;
+        const glm::vec3 v02 = in.p2 - in.p0;
+        const glm::vec3 cross_v = glm::cross(v01, v02);
+        const float cross_len = glm::length(cross_v);
+        if (cross_len <= 1e-6f) {
+            return std::nullopt;
+        }
+
+        glm::vec3 normal = cross_v / cross_len;
+        const glm::vec3 center = (in.p0 + in.p1 + in.p2) / 3.0f;
+        faceNormalTowardCamera(normal, center, in.camera_pos);
+
+        if (in.snap_node_world) {
+            (void)snapAlignNormalToNodeAxes(normal, *in.snap_node_world);
+        }
+
+        constexpr glm::vec3 kTargetUp(0.0f, 1.0f, 0.0f);
+        glm::mat4 rotation(1.0f);
+        const float up_dot = glm::dot(normal, kTargetUp);
+        if (up_dot < -1.0f + 1e-6f) {
+            rotation = glm::rotate(glm::mat4(1.0f), glm::pi<float>(), glm::vec3(1.0f, 0.0f, 0.0f));
+        } else {
+            const glm::vec3 axis = glm::cross(normal, kTargetUp);
+            const float axis_len = glm::length(axis);
+            if (axis_len > 1e-6f) {
+                const float angle = std::acos(glm::clamp(up_dot, -1.0f, 1.0f));
+                rotation = glm::rotate(glm::mat4(1.0f), angle, axis / axis_len);
+            }
+        }
+
+        if (in.edge_to_world_x) {
+            rotation = alignEdgeToWorldXRotation(rotation, in.p0, in.p1) * rotation;
+        }
+
+        const glm::mat4 to_origin = glm::translate(glm::mat4(1.0f), -center);
+        const glm::mat4 from_origin =
+            glm::translate(glm::mat4(1.0f), center - glm::dot(center, kTargetUp) * kTargetUp);
+        return from_origin * rotation * to_origin;
+    }
+
+    std::optional<glm::mat4> resolveAlignSnapTargetWorld(const SceneManager& scene_manager) {
+        const auto& scene = scene_manager.getScene();
+        for (const auto& name : scene_manager.getSelectedNodeNames()) {
+            const auto* const node = scene.getNode(name);
+            if (!node) {
+                continue;
+            }
+            const core::NodeId target_id = resolveAlignTargetId(scene, *node);
+            if (target_id == core::NULL_NODE) {
+                continue;
+            }
+            return vis::scene_coords::nodeVisualizerWorldTransform(scene, target_id);
+        }
+        return std::nullopt;
+    }
+
+    float alignMarkerScreenRadius(const glm::vec3& world_pos,
+                                  const glm::mat4& view,
+                                  const glm::mat4& projection,
+                                  const float window_height,
+                                  const bool orthographic,
+                                  const float ortho_scale,
+                                  const float screen_scale_x,
+                                  const float screen_scale_y) {
+        const glm::vec4 view_pos = view * glm::vec4(world_pos, 1.0f);
+        const float depth = -view_pos.z;
+        if (depth <= 0.0f) {
+            return 0.0f;
+        }
+
+        float radius_render = 0.0f;
+        if (orthographic) {
+            if (!std::isfinite(ortho_scale) || ortho_scale <= 0.0f) {
+                return 0.0f;
+            }
+            radius_render = kAlignMarkerWorldRadius * ortho_scale;
+        } else {
+            radius_render = (kAlignMarkerWorldRadius * projection[1][1] * window_height) / (2.0f * depth);
+        }
+        return glm::clamp(radius_render * glm::min(screen_scale_x, screen_scale_y), 5.0f, 50.0f);
     }
 
     glm::mat4 alignEdgeToWorldXRotation(const glm::mat4& up_rotation,

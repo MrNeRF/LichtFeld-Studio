@@ -14,8 +14,6 @@
 #include "rendering/screen_overlay_renderer.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
-#include "visualizer/gui_capabilities.hpp"
-#include "visualizer/scene_coordinate_utils.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cmath>
@@ -79,10 +77,16 @@ namespace lfs::vis::tools {
     }
 
     void AlignTool::update(const ToolContext& ctx) {
+        auto* const rm = ctx.getRenderingManager();
+        const bool has_status = services().getAlignStatusMessage() != nullptr;
+        if (had_align_status_ && !has_status && rm) {
+            rm->markDirty(DirtyFlag::OVERLAY);
+        }
+        had_align_status_ = has_status;
+
         if (!isEnabled() || !grid_override_active_ || user_changed_grid_) {
             return;
         }
-        auto* const rm = ctx.getRenderingManager();
         if (!rm) {
             return;
         }
@@ -190,25 +194,6 @@ namespace lfs::vis::tools {
 
         [[nodiscard]] glm::vec2 projectToScreen(const PanelProjection& proj, const glm::vec3& world_pos) {
             return projectToScreenChecked(proj, world_pos).pos;
-        }
-
-        [[nodiscard]] std::optional<glm::mat4> resolvePrimaryAlignTargetWorld(const ToolContext& ctx) {
-            auto* const sm = ctx.getSceneManager();
-            if (!sm) {
-                return std::nullopt;
-            }
-            const auto& scene = sm->getScene();
-            for (const auto& name : sm->getSelectedNodeNames()) {
-                const auto* const node = scene.getNode(name);
-                if (!node || !cap::isAlignTransformTargetType(node->type)) {
-                    continue;
-                }
-                if (static_cast<bool>(node->locked)) {
-                    continue;
-                }
-                return vis::scene_coords::nodeVisualizerWorldTransform(scene, node->id);
-            }
-            return std::nullopt;
         }
 
         void drawEdgeLengthLabels(lfs::rendering::ScreenOverlayRenderer& overlay,
@@ -342,26 +327,16 @@ namespace lfs::vis::tools {
         }
     } // namespace
 
-    static float calculateScreenRadius(const glm::vec3& world_pos,
-                                       const float world_radius,
-                                       const PanelProjection& panel_proj) {
-        const glm::mat4 view = panel_proj.viewport.getViewMatrix();
-        const glm::vec4 view_pos = view * glm::vec4(world_pos, 1.0f);
-        const float depth = -view_pos.z;
-
-        if (depth <= 0.0f)
-            return 0.0f;
-
-        if (panel_proj.orthographic) {
-            if (!std::isfinite(panel_proj.ortho_scale) || panel_proj.ortho_scale <= 0.0f) {
-                return 0.0f;
-            }
-            return world_radius * panel_proj.ortho_scale;
-        }
-
-        const glm::mat4 proj = panel_proj.viewport.getProjectionMatrix(panel_proj.focal_length_mm);
-        const float screen_radius = (world_radius * proj[1][1] * panel_proj.viewport.windowSize.y) / (2.0f * depth);
-        return screen_radius;
+    [[nodiscard]] static float markerScreenRadius(const glm::vec3& world_pos, const PanelProjection& panel_proj) {
+        return op::alignMarkerScreenRadius(
+            world_pos,
+            panel_proj.viewport.getViewMatrix(),
+            panel_proj.viewport.getProjectionMatrix(panel_proj.focal_length_mm),
+            static_cast<float>(panel_proj.viewport.windowSize.y),
+            panel_proj.orthographic,
+            panel_proj.ortho_scale,
+            panel_proj.screen_scale_x,
+            panel_proj.screen_scale_y);
     }
 
     void AlignTool::renderUI([[maybe_unused]] const lfs::vis::gui::UIContext& ui_ctx,
@@ -426,9 +401,10 @@ namespace lfs::vis::tools {
             {bounds.x, bounds.y},
             {bounds.x + bounds.width, bounds.y + bounds.height});
 
-        constexpr float SPHERE_RADIUS = 0.05f;
         constexpr lfs::rendering::OverlayColor kShadow{0.0f, 0.0f, 0.0f, 180.0f / 255.0f};
         const auto& t = theme();
+        const float ui_scale = t.fonts.base_size / 13.0f;
+        const float info_x = bounds.x + 56.0f * ui_scale;
         const auto SPHERE_COLOR = toOverlay(t.palette.error);
         const auto SPHERE_OUTLINE = toOverlay(t.overlay.text);
         const auto SELECTED_OUTLINE = toOverlay(t.palette.primary);
@@ -440,14 +416,13 @@ namespace lfs::vis::tools {
         const auto selected_point = services().getAlignSelectedPoint();
         const bool in_review = picked_points.size() == 3;
         const glm::vec3 camera_pos = panel_proj.viewport.camera.t;
-        const auto snap_target_world = resolvePrimaryAlignTargetWorld(*tool_context_);
+        auto* const sm = tool_context_->getSceneManager();
+        const auto snap_target_world =
+            sm ? op::resolveAlignSnapTargetWorld(*sm) : std::optional<glm::mat4>{};
 
         for (size_t i = 0; i < picked_points.size(); ++i) {
             const glm::vec2 screen_pos = projectToScreen(panel_proj, picked_points[i]);
-            const float radius_render = calculateScreenRadius(
-                picked_points[i], SPHERE_RADIUS, panel_proj);
-            const float screen_radius =
-                glm::clamp(radius_render * glm::min(panel_proj.screen_scale_x, panel_proj.screen_scale_y), 5.0f, 50.0f);
+            const float screen_radius = markerScreenRadius(picked_points[i], panel_proj);
 
             const bool is_selected = selected_point && *selected_point == static_cast<int>(i);
             overlay->addCircleFilled(screen_pos, screen_radius, SPHERE_COLOR, 32);
@@ -498,10 +473,7 @@ namespace lfs::vis::tools {
                 panel_proj.ortho_scale);
             if (Viewport::isValidWorldPosition(preview_point)) {
                 const glm::vec2 screen_pos = projectToScreen(panel_proj, preview_point);
-                const float radius_render = calculateScreenRadius(
-                    preview_point, SPHERE_RADIUS, panel_proj);
-                const float screen_radius = glm::clamp(
-                    radius_render * glm::min(panel_proj.screen_scale_x, panel_proj.screen_scale_y), 5.0f, 50.0f);
+                const float screen_radius = markerScreenRadius(preview_point, panel_proj);
 
                 overlay->addCircleFilled(screen_pos, screen_radius, PREVIEW_COLOR, 32);
                 overlay->addCircle(screen_pos, screen_radius, toOverlay(t.palette.text, 0.6f), 32, 1.5f);
@@ -533,24 +505,24 @@ namespace lfs::vis::tools {
         default: break;
         }
         if (instruction_key) {
-            overlay->addText({mouse_pos.x + 15.0f, mouse_pos.y - 10.0f},
-                             LOC(instruction_key), CROSSHAIR_COLOR, label_size);
+            overlay->addTextWithShadow({mouse_pos.x + 15.0f, mouse_pos.y - 10.0f},
+                                       LOC(instruction_key), toOverlay(t.overlay.text), kShadow, label_size);
         }
 
         const std::size_t point_count = picked_points.size();
         const std::string count_text = LOCF(lichtfeld::Strings::Align::POINTS_COUNT, point_count);
-        overlay->addTextWithShadow({bounds.x + 10.0f, bounds.y + 40.0f},
+        overlay->addTextWithShadow({info_x, bounds.y + 40.0f},
                                    count_text.c_str(), toOverlay(t.overlay.text), kShadow,
                                    t.fonts.large_size);
 
         const char* const hint_key = in_review ? lichtfeld::Strings::Align::HINT_REVIEW
                                                : lichtfeld::Strings::Align::HINT_PICKING;
-        overlay->addTextWithShadow({bounds.x + 10.0f, bounds.y + 40.0f + t.fonts.large_size + 6.0f},
+        overlay->addTextWithShadow({info_x, bounds.y + 40.0f + t.fonts.large_size + 6.0f},
                                    LOC(hint_key), toOverlay(t.overlay.text, 0.85f), kShadow,
                                    t.fonts.base_size);
 
         if (const std::string* const status = services().getAlignStatusMessage()) {
-            overlay->addTextWithShadow({bounds.x + 10.0f, bounds.y + 40.0f + 2.0f * t.fonts.large_size + 12.0f},
+            overlay->addTextWithShadow({info_x, bounds.y + 40.0f + 2.0f * t.fonts.large_size + 12.0f},
                                        status->c_str(), toOverlay(t.palette.warning, 0.95f), kShadow,
                                        t.fonts.base_size);
         }

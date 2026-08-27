@@ -34,10 +34,10 @@ namespace lfs::vis::op {
         std::optional<int> selected_point_;
         std::optional<SplitViewPanelId> pick_panel_;
         mutable bool logged_masked_depth_fallback_ = false;
-        mutable bool logged_exact_depth_fallback_ = false;
 
         [[nodiscard]] glm::vec3 unprojectScreenPoint(const OperatorContext& ctx, double x, double y,
-                                                     SplitViewPanelId* out_panel = nullptr) const;
+                                                     SplitViewPanelId* out_panel = nullptr,
+                                                     bool precise = true) const;
         [[nodiscard]] std::optional<int> hitTestPoint(double x, double y) const;
         [[nodiscard]] glm::vec3 resolvePickPanelCameraPosition() const;
         void syncPickedPointsToServices();
@@ -70,5 +70,30 @@ namespace lfs::vis::op {
     [[nodiscard]] glm::mat4 alignEdgeToWorldXRotation(const glm::mat4& up_rotation,
                                                       const glm::vec3& p0,
                                                       const glm::vec3& p1);
+
+    struct AlignTransformInputs {
+        glm::vec3 p0{};
+        glm::vec3 p1{};
+        glm::vec3 p2{};
+        glm::vec3 camera_pos{};
+        std::optional<glm::mat4> snap_node_world;
+        bool edge_to_world_x = false;
+    };
+
+    // Visualizer-world transform mapping the picked plane normal (camera-facing, optionally
+    // snapped) onto +Y with the triangle centroid moved to y = 0, or nullopt if degenerate.
+    [[nodiscard]] std::optional<glm::mat4> computeAlignTransform(const AlignTransformInputs& in);
+
+    [[nodiscard]] std::optional<glm::mat4> resolveAlignSnapTargetWorld(const SceneManager& scene);
+
+    inline constexpr float kAlignMarkerWorldRadius = 0.05f;
+    [[nodiscard]] float alignMarkerScreenRadius(const glm::vec3& world_pos,
+                                                const glm::mat4& view,
+                                                const glm::mat4& projection,
+                                                float window_height,
+                                                bool orthographic,
+                                                float ortho_scale,
+                                                float screen_scale_x,
+                                                float screen_scale_y);
 
 } // namespace lfs::vis::op

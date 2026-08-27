@@ -31,9 +31,9 @@ def test_alignment_projection_and_unprojection_respect_orthographic_settings():
     assert "proj.orthographic = settings.orthographic" in align_tool
     assert "proj.ortho_scale = settings.ortho_scale" in align_tool
     assert "proj.orthographic,\n                proj.ortho_scale" in align_tool
-    assert "world_radius * panel_proj.ortho_scale" in align_tool
 
     align_ops = _read("src/visualizer/operator/ops/align_ops.cpp")
+    assert "kAlignMarkerWorldRadius * ortho_scale" in align_ops
     assert "render_settings.orthographic" in align_ops
     assert "render_settings.ortho_scale" in align_ops
 
@@ -105,7 +105,8 @@ def test_masked_gaussian_depth_pick_is_implemented():
     align_ops = _read("src/visualizer/operator/ops/align_ops.cpp")
     align_ops_h = _read("src/visualizer/operator/ops/align_ops.hpp")
     assert "logged_masked_depth_fallback_" in align_ops or "logged_masked_depth_fallback_" in align_ops_h
-    assert "logged_exact_depth_fallback_" in align_ops or "logged_exact_depth_fallback_" in align_ops_h
+    assert "logged_exact_depth_fallback_" not in align_ops and "logged_exact_depth_fallback_" not in align_ops_h
+    assert "over_gui" in align_ops
     assert "renderMedianDepthAtPixel" in align_ops
     assert "falling back to full-scene exact depth" in align_ops or "falling back to interactive depth" in align_ops
     assert "getNodeVisibilityMask" in align_ops
@@ -113,7 +114,7 @@ def test_masked_gaussian_depth_pick_is_implemented():
 
 
 def test_align_commit_picks_use_exact_depth_capture():
-    """Commit placement/re-pick uses exact capture; hover stays on interactive sample."""
+    """Interactive depth is the pick source of truth; masked capture is gated by agreement."""
     align_ops = _read("src/visualizer/operator/ops/align_ops.cpp")
     unproject = align_ops[
         align_ops.index("AlignPickPointOperator::unprojectScreenPoint") :
@@ -121,7 +122,8 @@ def test_align_commit_picks_use_exact_depth_capture():
     ]
     assert "renderMedianDepthAtPixel" in unproject
     assert "renderDepthAtPixelForNodeMask" in unproject
-    assert "getDepthAtPixel" in unproject  # fallback only
+    assert "getDepthAtPixel" in unproject
+    assert "kDepthAgreeTolerance" in unproject
     assert "panel_info->panel" in unproject
     # Point-cloud fallback must forward the panel (panel-local coords under split view).
     viewport = _read("src/visualizer/rendering/rendering_manager_viewport.cpp")

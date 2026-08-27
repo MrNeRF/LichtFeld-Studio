@@ -1903,3 +1903,46 @@ def test_toolbar_tool_action_refreshes_button_records_immediately(toolbar_module
         if button["value"] == "builtin.rotate"
     )
     assert rotate_button["selected"] is True
+
+
+def test_align_toolbar_signature_tracks_can_apply(toolbar_module):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    controller = module._ViewportToolbarController()
+
+    lf_stub.ui.get_active_tool = lambda: "builtin.align"
+    can_apply = {"value": False}
+    lf_stub.ui.can_apply_align = lambda: can_apply["value"]
+    lf_stub.ui.get_align_axis_snap = lambda: True
+    lf_stub.ui.get_align_edge_to_axis = lambda: False
+
+    signature_disabled = controller._toolbar_signature(None)
+    can_apply["value"] = True
+    signature_enabled = controller._toolbar_signature(None)
+    assert signature_disabled != signature_enabled
+    assert signature_disabled[-3:] == (False, True, False)
+    assert signature_enabled[-3:] == (True, True, False)
+
+    lf_stub.ui.get_active_tool = lambda: "builtin.select"
+    signature_other_tool = controller._toolbar_signature(None)
+    assert signature_other_tool[-3:] == (False, True, False)
+
+
+def test_align_toolbar_actions_route_to_gizmo_dispatch(toolbar_module):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    controller = module._ViewportToolbarController()
+
+    calls = []
+    lf_stub.ui.get_active_tool = lambda: "builtin.align"
+    lf_stub.ui.get_align_axis_snap = lambda: True
+    lf_stub.ui.set_align_axis_snap = lambda enabled: calls.append(("snap", enabled))
+    lf_stub.ui.get_align_edge_to_axis = lambda: False
+    lf_stub.ui.set_align_edge_to_axis = lambda enabled: calls.append(("edge", enabled))
+    lf_stub.ui.apply_align = lambda: calls.append(("apply", None))
+    lf_stub.ui.clear_align_points = lambda: calls.append(("clear", None))
+
+    for action in ("align_toggle_snap", "align_toggle_edge_to_axis", "align_apply", "align_clear"):
+        controller._on_toolbar_action(None, None, [action, ""])
+
+    assert calls == [("snap", False), ("edge", True), ("apply", None), ("clear", None)]

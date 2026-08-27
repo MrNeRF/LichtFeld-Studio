@@ -1850,6 +1850,14 @@ class _ViewportToolbarController:
                 _UtilityToolbarController._PLUGIN_MARKETPLACE_PANEL_ID,
             )
         )
+        if active_tool == "builtin.align":
+            align_can_apply = bool(call(False, getattr(lf.ui, "can_apply_align", None)))
+            align_axis_snap = bool(call(True, getattr(lf.ui, "get_align_axis_snap", None)))
+            align_edge_to_axis = bool(call(False, getattr(lf.ui, "get_align_edge_to_axis", None)))
+        else:
+            align_can_apply = False
+            align_axis_snap = True
+            align_edge_to_axis = False
         return (
             language_generation,
             trainer_state,
@@ -1878,6 +1886,9 @@ class _ViewportToolbarController:
             asset_manager_enabled,
             plugin_marketplace_enabled,
             bool(call(False, getattr(lf.ui, "is_panel_enabled", None), "lfs.histogram")),
+            align_can_apply,
+            align_axis_snap,
+            align_edge_to_axis,
         )
 
     def _on_toolbar_action(self, _handle, _event, args):
@@ -1917,6 +1928,10 @@ class _ViewportToolbarController:
             "crop_apply",
             "crop_delete",
             "crop_toggle_enabled",
+            "align_apply",
+            "align_clear",
+            "align_toggle_snap",
+            "align_toggle_edge_to_axis",
         }:
             self._viewport_export_controls.close(notify=False)
             self._gizmo.dispatch(action, value)

@@ -2230,7 +2230,7 @@ def apply_crop_tool() -> None:
 def can_apply_align() -> bool:
     """True when the align tool has 3 non-degenerate points ready to apply"""
 
-def apply_align() -> None:
+def apply_align() -> bool:
     """Request the running align modal to apply the current triangle"""
 
 def clear_align_points() -> None:

@@ -145,6 +145,7 @@ namespace lfs::vis {
                                  double x, double y, const bool over_gui) {
             op::ModalEvent evt{};
             evt.type = op::ModalEvent::Type::KEY;
+            evt.over_gui = over_gui;
             evt.data = KeyEvent{key, scancode, action, mods};
 
             if (op::operators().hasModalOperator()) {
@@ -170,6 +171,7 @@ namespace lfs::vis {
                                          double x, double y, const bool over_gui) {
             op::ModalEvent evt{};
             evt.type = op::ModalEvent::Type::MOUSE_BUTTON;
+            evt.over_gui = over_gui;
             evt.data = MouseButtonEvent{button, action, mods, {x, y}};
 
             if (op::operators().hasModalOperator()) {
@@ -195,6 +197,7 @@ namespace lfs::vis {
                                        [[maybe_unused]] int mods, const bool over_gui) {
             op::ModalEvent evt{};
             evt.type = op::ModalEvent::Type::MOUSE_MOVE;
+            evt.over_gui = over_gui;
             evt.data = MouseMoveEvent{{x, y}, {delta_x, delta_y}};
 
             if (op::operators().hasModalOperator()) {
@@ -219,6 +222,7 @@ namespace lfs::vis {
                                     [[maybe_unused]] int mods, const bool over_gui) {
             op::ModalEvent evt{};
             evt.type = op::ModalEvent::Type::MOUSE_SCROLL;
+            evt.over_gui = over_gui;
             evt.data = MouseScrollEvent{xoff, yoff};
 
             if (op::operators().hasModalOperator()) {
