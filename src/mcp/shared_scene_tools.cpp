@@ -45,6 +45,22 @@ namespace lfs::mcp {
         std::expected<void, std::string> apply_dataset_load_arguments(
             const json& args,
             core::param::TrainingParameters& params) {
+            std::string resolved_strategy = params.optimization.strategy;
+            if (args.contains("strategy")) {
+                const auto requested = args["strategy"].get<std::string>();
+                if (requested != kDefaultStrategyAlias) {
+                    if (const auto canonical = core::param::canonical_strategy_name(requested); !canonical.empty()) {
+                        resolved_strategy = std::string(canonical);
+                    } else {
+                        return std::unexpected(std::format(
+                            "Invalid strategy '{}'. Use one of: default, mcmc, mrnf, igs+",
+                            requested));
+                    }
+                }
+            }
+
+            params.optimization = core::param::OptimizationParameters::defaults_for_strategy(resolved_strategy);
+
             if (args.contains("images_folder"))
                 params.dataset.images = args["images_folder"].get<std::string>();
             if (args.contains("max_iterations"))
@@ -60,22 +76,7 @@ namespace lfs::mcp {
             if (params.dataset.output_path.empty())
                 params.dataset.output_path = core::param::default_dataset_output_path(params.dataset.data_path);
 
-            if (!args.contains("strategy"))
-                return {};
-
-            const auto requested = args["strategy"].get<std::string>();
-            if (requested == kDefaultStrategyAlias) {
-                return {};
-            }
-
-            if (const auto canonical = core::param::canonical_strategy_name(requested); !canonical.empty()) {
-                params.optimization.strategy = std::string(canonical);
-                return {};
-            }
-
-            return std::unexpected(std::format(
-                "Invalid strategy '{}'. Use one of: default, mcmc, mrnf, igs+",
-                requested));
+            return {};
         }
 
     } // namespace
