@@ -3698,11 +3698,10 @@ namespace lfs::io::project {
             };
             if (row.compression == Compression::ZstdFramed) {
                 LOG_DEBUG(
-                    "Project chunk read stages: chunk={} stored_bytes={} uncompressed_bytes={} compression={} resolve={:.3f} ms read_crc={:.3f} ms stored_read={:.3f} ms decompress={:.3f} ms unshuffle=0.000 ms total={:.3f} ms",
+                    "Project chunk read stages: chunk={} stored_bytes={} uncompressed_bytes={} compression={} resolve={:.3f} ms stored_read={:.3f} ms decompress={:.3f} ms unshuffle=0.000 ms total={:.3f} ms",
                     row.key_string(), row.stored_bytes, row.uncompressed_bytes,
                     static_cast<std::uint16_t>(row.compression),
                     milliseconds(read_started, resolved_at),
-                    milliseconds(resolved_at, stored_read_at),
                     milliseconds(resolved_at, stored_read_at),
                     milliseconds(workers_started, decompressed_at),
                     milliseconds(read_started, decompressed_at));
@@ -3715,11 +3714,10 @@ namespace lfs::io::project {
             auto unshuffled = unbyte_plane_f32_words(decoded);
             const auto unshuffled_at = std::chrono::steady_clock::now();
             LOG_DEBUG(
-                "Project chunk read stages: chunk={} stored_bytes={} uncompressed_bytes={} compression={} resolve={:.3f} ms read_crc={:.3f} ms stored_read={:.3f} ms decompress={:.3f} ms unshuffle={:.3f} ms total={:.3f} ms",
+                "Project chunk read stages: chunk={} stored_bytes={} uncompressed_bytes={} compression={} resolve={:.3f} ms stored_read={:.3f} ms decompress={:.3f} ms unshuffle={:.3f} ms total={:.3f} ms",
                 row.key_string(), row.stored_bytes, row.uncompressed_bytes,
                 static_cast<std::uint16_t>(row.compression),
                 milliseconds(read_started, resolved_at),
-                milliseconds(resolved_at, stored_read_at),
                 milliseconds(resolved_at, stored_read_at),
                 milliseconds(workers_started, decompressed_at),
                 milliseconds(decompressed_at, unshuffled_at),
@@ -3792,12 +3790,11 @@ namespace lfs::io::project {
             };
         if (row.compression == Compression::Stored) {
             LOG_DEBUG(
-                "Project chunk read stages: chunk={} stored_bytes={} uncompressed_bytes={} compression={} resolve={:.3f} ms read_crc={:.3f} ms stored_read={:.3f} ms decompress=0.000 ms unshuffle=0.000 ms total={:.3f} ms",
+                "Project chunk read stages: chunk={} stored_bytes={} uncompressed_bytes={} compression={} resolve={:.3f} ms stored_read={:.3f} ms decompress=0.000 ms unshuffle=0.000 ms total={:.3f} ms",
                 row.key_string(), row.stored_bytes,
                 row.uncompressed_bytes,
                 static_cast<std::uint16_t>(row.compression),
                 milliseconds(read_started, resolved_at),
-                milliseconds(resolved_at, stored_read_at),
                 milliseconds(resolved_at, stored_read_at),
                 milliseconds(read_started, stored_read_at));
             return stored;
@@ -4042,6 +4039,8 @@ namespace lfs::io::project {
                 ++plane;
             }
         }
+
+        std::atomic<std::uint64_t> g_framed_record_decode_calls{0};
 
         // Logical (decoded / unshuffled) view of a framed payload. Resident
         // decoded records are capped: ZstdFramed keeps current + one
@@ -4404,6 +4403,32 @@ namespace lfs::io::project {
                 return nullptr;
             }
 
+            [[nodiscard]] CachedRecord* find_ready_cached(const std::size_t index) {
+                if (index >= records_.size()) {
+                    return nullptr;
+                }
+                CachedRecord* cached = find_cached(index);
+                if (cached == nullptr || cached->bytes.size() != records_[index].ub) {
+                    return nullptr;
+                }
+                return cached;
+            }
+
+            void copy_cached_zstd_range(char* dest, const std::uint64_t start,
+                                        const std::uint64_t end,
+                                        const FramedRecord& record,
+                                        const CachedRecord& cached) const {
+                const std::uint64_t lo = std::max(record.uo, start);
+                const std::uint64_t hi = std::min(record.uo + record.ub, end);
+                if (lo >= hi) {
+                    return;
+                }
+                std::memcpy(dest + static_cast<std::size_t>(lo - start),
+                            cached.bytes.data() +
+                                static_cast<std::size_t>(lo - record.uo),
+                            static_cast<std::size_t>(hi - lo));
+            }
+
             bool prefetch_stored_records(const std::vector<std::size_t>& indices) {
                 if (indices.empty()) {
                     return true;
@@ -4469,6 +4494,7 @@ namespace lfs::io::project {
                 if (frame_size != record.ub) {
                     return false;
                 }
+                g_framed_record_decode_calls.fetch_add(1, std::memory_order_relaxed);
                 const auto result = ZSTD_decompress(dest, dest_bytes, stored.data(),
                                                     stored.size());
                 return !ZSTD_isError(result) && result == record.ub;
@@ -4651,6 +4677,27 @@ namespace lfs::io::project {
                              cache_.end());
             }
 
+            void append_shuffle_boundary_records(const std::uint64_t pos,
+                                                 std::vector<std::size_t>& keep) const {
+                if (pos >= size_ || size_ % 4 != 0) {
+                    return;
+                }
+                const std::uint64_t n_words = size_ / 4;
+                for (std::uint64_t plane = 0; plane < 4; ++plane) {
+                    const std::uint64_t word =
+                        first_plane_word(plane, pos, size_, n_words);
+                    if (word == kNpos) {
+                        continue;
+                    }
+                    const auto index =
+                        record_index_containing(plane * n_words + word);
+                    if (index != kNpos &&
+                        std::find(keep.begin(), keep.end(), index) == keep.end()) {
+                        keep.push_back(index);
+                    }
+                }
+            }
+
             void prune_cache_after_bulk() {
                 if (position_ >= size_ || !table_ready_) {
                     cache_.clear();
@@ -4662,21 +4709,7 @@ namespace lfs::io::project {
                         cache_.clear();
                         return;
                     }
-                    const std::uint64_t n_words = size_ / 4;
-                    for (std::uint64_t plane = 0; plane < 4; ++plane) {
-                        const std::uint64_t word =
-                            first_plane_word(plane, position_, size_, n_words);
-                        if (word == kNpos) {
-                            continue;
-                        }
-                        const auto index =
-                            record_index_containing(plane * n_words + word);
-                        if (index != kNpos &&
-                            std::find(keep.begin(), keep.end(), index) ==
-                                keep.end()) {
-                            keep.push_back(index);
-                        }
-                    }
+                    append_shuffle_boundary_records(position_, keep);
                 } else {
                     const auto index = record_index_containing(position_);
                     if (index != kNpos) {
@@ -4717,6 +4750,13 @@ namespace lfs::io::project {
                     for (std::size_t index = batch_begin; index < batch_end;
                          ++index) {
                         const FramedRecord& record = records_[index];
+                        // Cache hits must bypass decode.
+                        const CachedRecord* cached = find_ready_cached(index);
+                        if (cached != nullptr) {
+                            copy_cached_zstd_range(dest, start, end, record,
+                                                   *cached);
+                            continue;
+                        }
                         const bool full = record.uo >= start &&
                                           record.uo + record.ub <= end;
                         DecodeItem item;
@@ -4744,16 +4784,7 @@ namespace lfs::io::project {
                             position_ = std::max(start, record.uo);
                             return false;
                         }
-                        const std::uint64_t lo = std::max(record.uo, start);
-                        const std::uint64_t hi =
-                            std::min(record.uo + record.ub, end);
-                        if (lo < hi) {
-                            std::memcpy(
-                                dest + static_cast<std::size_t>(lo - start),
-                                cached->bytes.data() +
-                                    static_cast<std::size_t>(lo - record.uo),
-                                static_cast<std::size_t>(hi - lo));
-                        }
+                        copy_cached_zstd_range(dest, start, end, record, *cached);
                     }
                 }
                 position_ = end;
@@ -4835,11 +4866,12 @@ namespace lfs::io::project {
                         if (index >= status.size()) {
                             continue;
                         }
-                        if (status[index] == 1 || find_cached(index) != nullptr) {
-                            status[index] = 1;
+                        if (status[index] == 2) {
                             continue;
                         }
-                        if (status[index] == 2) {
+                        // Cache hits must bypass decode.
+                        if (find_ready_cached(index) != nullptr) {
+                            status[index] = 1;
                             continue;
                         }
                         items.push_back(DecodeItem{index, nullptr});
@@ -4923,13 +4955,22 @@ namespace lfs::io::project {
                         static_cast<std::size_t>(stripe_end - logical), cursors);
                     logical = stripe_end;
 
-                    cache_.erase(
-                        std::remove_if(cache_.begin(), cache_.end(),
-                                       [&](const CachedRecord& cached) {
-                                           return !shuffle_record_covers(
-                                               cached.index, logical, end);
-                                       }),
-                        cache_.end());
+                    if (logical < end) {
+                        std::vector<std::size_t> keep;
+                        append_shuffle_boundary_records(end, keep);
+                        cache_.erase(
+                            std::remove_if(
+                                cache_.begin(), cache_.end(),
+                                [&](const CachedRecord& cached) {
+                                    if (shuffle_record_covers(cached.index,
+                                                              logical, end)) {
+                                        return false;
+                                    }
+                                    return std::find(keep.begin(), keep.end(),
+                                                     cached.index) == keep.end();
+                                }),
+                            cache_.end());
+                    }
                 }
                 position_ = end;
                 return true;
@@ -5161,6 +5202,16 @@ namespace lfs::io::project {
         };
 
     } // namespace
+
+    namespace detail {
+        void reset_framed_record_decode_calls_for_testing() {
+            g_framed_record_decode_calls.store(0, std::memory_order_relaxed);
+        }
+
+        std::uint64_t framed_record_decode_calls_for_testing() {
+            return g_framed_record_decode_calls.load(std::memory_order_relaxed);
+        }
+    } // namespace detail
 
     struct BoundedInputStream::Impl {
         Impl(std::unique_ptr<std::streambuf> owned_buffer,

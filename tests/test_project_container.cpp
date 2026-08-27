@@ -49,6 +49,11 @@
 #include <unistd.h>
 #endif
 
+namespace lfs::io::project::detail {
+    void reset_framed_record_decode_calls_for_testing();
+    std::uint64_t framed_record_decode_calls_for_testing();
+} // namespace lfs::io::project::detail
+
 namespace {
 
     namespace fs = std::filesystem;
@@ -1239,6 +1244,52 @@ namespace {
             stream.read(reinterpret_cast<char*>(&probe), 1);
             EXPECT_EQ(stream.gcount(), 0) << name;
             EXPECT_TRUE(stream.fail()) << name;
+        };
+        check(Compression::ZstdFramed, "zstd-framed");
+        check(Compression::ByteShuffleZstdFramed, "byteshuffle-framed");
+    }
+
+    TEST(ProjectContainerReader, BoundedStreamSmallReadsDoNotRedecodeFramedRecords) {
+        constexpr std::size_t kBytes =
+            2ull * 64ull * 1024ull * 1024ull + 32ull * 1024ull * 1024ull;
+        const auto payload = patterned_payload(kBytes);
+        const auto check = [&](const Compression compression,
+                               const std::string_view name) {
+            TemporaryDirectory temporary;
+            const fs::path path =
+                temporary.path / (std::string(name) + "-small-reads.licht");
+            write_framed_fixture(path, FOURCC_CKPT, 1130, payload, compression,
+                                 true, true, 1130);
+            ProjectReader reader = require_result(ProjectReader::open(path));
+            const ChunkInfo& chunk = reader.chunks().front();
+            EXPECT_EQ(chunk.compression, compression) << name;
+            const auto records = read_framed_table(path, chunk);
+            ASSERT_GE(records.size(), 3u) << name;
+            const auto materialized = require_result(reader.read_chunk(chunk));
+            ASSERT_EQ(materialized, payload) << name;
+
+            auto bounded = reader.open_bounded_stream(chunk);
+            ASSERT_TRUE(bounded) << lfs::format_for_developer(bounded.error());
+            std::streambuf* buf = bounded->stream().rdbuf();
+            ASSERT_NE(buf, nullptr) << name;
+            const auto step = std::max<std::uint64_t>(
+                records.front().decoded_bytes / 4, 1);
+            detail::reset_framed_record_decode_calls_for_testing();
+            std::vector<std::byte> got(payload.size());
+            std::size_t filled = 0;
+            while (filled < got.size()) {
+                const auto want = std::min<std::size_t>(
+                    static_cast<std::size_t>(step), got.size() - filled);
+                const auto n = buf->sgetn(
+                    reinterpret_cast<char*>(got.data() + filled),
+                    static_cast<std::streamsize>(want));
+                ASSERT_GT(n, 0) << name << " @" << filled;
+                filled += static_cast<std::size_t>(n);
+            }
+            EXPECT_EQ(got, materialized) << name;
+            EXPECT_EQ(detail::framed_record_decode_calls_for_testing(),
+                      records.size())
+                << name;
         };
         check(Compression::ZstdFramed, "zstd-framed");
         check(Compression::ByteShuffleZstdFramed, "byteshuffle-framed");
