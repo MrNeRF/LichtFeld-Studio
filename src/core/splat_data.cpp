@@ -640,6 +640,105 @@ namespace {
         shN = std::move(resized);
     }
 
+    // Host deswizzle of a 1D float4-packed buffer into canonical [N, K, 3].
+    // Shared by the fp32 shN_canonical_cpu path and IEEE-f16 host decode.
+    [[nodiscard]] lfs::core::Tensor unpack_swizzled_floats_to_canonical_cpu(
+        const float* src,
+        const size_t src_floats,
+        const size_t n,
+        const size_t k) {
+        using namespace lfs::core;
+        Tensor out = Tensor::empty({n, k, SH_CHANNELS}, Device::CPU, DataType::Float32);
+        auto* const dst = out.ptr<float>();
+        const size_t active_floats = k * SH_CHANNELS;
+        tbb::parallel_for(
+            tbb::blocked_range<size_t>(0, n),
+            [&](const tbb::blocked_range<size_t>& range) {
+                for (size_t p = range.begin(); p != range.end(); ++p) {
+                    float* const dst_row = dst + p * active_floats;
+                    for (size_t offset = 0; offset < active_floats; ++offset) {
+                        const auto slot = static_cast<std::uint32_t>(offset / 4u);
+                        const auto component = static_cast<std::uint32_t>(offset % 4u);
+                        const size_t src_offset =
+                            static_cast<size_t>(sh_swizzled_index(
+                                static_cast<std::uint32_t>(p), slot, static_cast<uint32_t>(k))) *
+                                4u +
+                            component;
+                        dst_row[offset] = src_offset < src_floats ? src[src_offset] : 0.0f;
+                    }
+                }
+            });
+        return out;
+    }
+
+    // Host q16 dequant into canonical [N, K, 3]. Math matches the previous
+    // single-threaded loop in shN_canonical() (lo/hi/kInvQ + cell-linear index).
+    [[nodiscard]] lfs::core::Tensor dequant_q16_to_canonical_cpu(
+        const std::uint16_t* codes,
+        const float* bounds,
+        const size_t n,
+        const size_t k) {
+        using namespace lfs::core;
+        Tensor out = Tensor::zeros({n, k, SH_CHANNELS}, Device::CPU, DataType::Float32);
+        auto* const dst = out.ptr<float>();
+        const std::uint32_t n_cells =
+            sh_value_quant::n_value_cells_per_prim(static_cast<std::uint32_t>(k));
+        constexpr float kInvQ = 1.0f / 65535.0f;
+        tbb::parallel_for(
+            tbb::blocked_range<size_t>(0, n),
+            [&](const tbb::blocked_range<size_t>& range) {
+                for (size_t p = range.begin(); p != range.end(); ++p) {
+                    const size_t bidx = p / 256u;
+                    const float lo = bounds[bidx * 2 + 0];
+                    const float hi = bounds[bidx * 2 + 1];
+                    float* row = dst + p * k * SH_CHANNELS;
+                    for (std::uint32_t c = 0; c < n_cells && c < k * SH_CHANNELS; ++c) {
+                        // cell-linear swizzle: block * (n_cells * R) + c * R + lane
+                        const std::uint32_t block = static_cast<std::uint32_t>(p) / kShReorderSize;
+                        const std::uint32_t lane = static_cast<std::uint32_t>(p) % kShReorderSize;
+                        const size_t idx = static_cast<size_t>(block) * n_cells * kShReorderSize +
+                                           static_cast<size_t>(c) * kShReorderSize + lane;
+                        const auto q = codes[idx];
+                        row[c] = lo + (hi - lo) * (static_cast<float>(q) * kInvQ);
+                    }
+                }
+            });
+        return out;
+    }
+
+    // Host-only Float16 → canonical [N, K, 3]. D2H of the compact codes is the
+    // only device traffic; no CUDA destination is allocated here.
+    [[nodiscard]] lfs::core::Tensor canonical_shN_from_f16_cpu(
+        const lfs::core::Tensor& shN,
+        const lfs::core::Tensor& bounds,
+        const size_t n,
+        const size_t k) {
+        using namespace lfs::core;
+        if (n == 0 || k == 0) {
+            return Tensor::zeros({n, k, SH_CHANNELS}, Device::CPU);
+        }
+        const Tensor codes_cpu = shN.cpu().contiguous();
+        if (bounds.is_valid() && bounds.numel() > 0) {
+            const Tensor bounds_cpu = bounds.cpu().contiguous();
+            return dequant_q16_to_canonical_cpu(
+                reinterpret_cast<const std::uint16_t*>(codes_cpu.data_ptr()),
+                bounds_cpu.ptr<float>(),
+                n,
+                k);
+        }
+        const Tensor fp32_swizzled = codes_cpu.to(DataType::Float32);
+        if (!fp32_swizzled.is_valid() || fp32_swizzled.numel() == 0) {
+            Tensor out = Tensor::empty({n, k, SH_CHANNELS}, Device::CPU, DataType::Float32);
+            out.zero_();
+            return out;
+        }
+        return unpack_swizzled_floats_to_canonical_cpu(
+            fp32_swizzled.ptr<float>(),
+            static_cast<size_t>(fp32_swizzled.numel()),
+            n,
+            k);
+    }
+
 } // anonymous namespace
 
 namespace lfs::core {
@@ -935,51 +1034,16 @@ namespace lfs::core {
         if (n == 0 || k == 0) {
             return Tensor::zeros({n, k, SH_CHANNELS}, dst_device);
         }
-        // Quantized path: materialise float4-swizzled temp via host/device dequant helper.
-        // Full GPU dequant is in training::sh_value::decode_shN_u16_to_float4; for core we
-        // fall back to a float temporary when the resident tensor is Float16 — callers that
-        // zero float swizzled buffer then leave dequant to higher layers when quant is on
-        // without bounds (bounds required for correct decode).
+        // Float16 resident SH (q16 codes + bounds, or IEEE-f16 swizzle) decodes on the
+        // host. Device cost is only the returned canonical tensor when dst is CUDA.
         if (_shN.dtype() == DataType::Float16) {
-            // IEEE f16 float4-swizzle (exportable): cast half→float then deswizzle.
-            if (!_shN_value_bounds.is_valid() || _shN_value_bounds.numel() == 0) {
-                Tensor fp32 = _shN.to(DataType::Float32);
-                if (fp32.device() != Device::CUDA)
-                    fp32 = fp32.cuda();
-                Tensor out = Tensor::empty({n, k, SH_CHANNELS}, Device::CUDA);
-                undo_reorder_sh_from_swizzled(fp32.ptr<float>(),
-                                              out.ptr<float>(),
-                                              n,
-                                              static_cast<uint32_t>(k),
-                                              static_cast<uint32_t>(k));
-                return dst_device == Device::CUDA ? out : out.cpu();
+            // q16 and IEEE-f16 decode on the host (parallel), then upload the
+            // canonical tensor once when the resident buffer lives on CUDA.
+            Tensor out = canonical_shN_from_f16_cpu(_shN, _shN_value_bounds, n, k);
+            if (dst_device == Device::CUDA) {
+                return out.to(Device::CUDA);
             }
-            // Host-side q16 dequant (avoids core→training link). Fine for export/I/O paths.
-            Tensor out = Tensor::zeros({n, k, SH_CHANNELS}, Device::CPU, DataType::Float32);
-            const Tensor codes_cpu = _shN.cpu().contiguous();
-            const Tensor bounds_cpu = _shN_value_bounds.cpu().contiguous();
-            const auto* codes = reinterpret_cast<const std::uint16_t*>(codes_cpu.data_ptr());
-            const auto* bounds = bounds_cpu.ptr<float>();
-            auto* dst = out.ptr<float>();
-            const std::uint32_t n_cells =
-                sh_value_quant::n_value_cells_per_prim(static_cast<std::uint32_t>(k));
-            constexpr float kInvQ = 1.0f / 65535.0f;
-            for (size_t p = 0; p < n; ++p) {
-                const size_t bidx = p / 256u;
-                const float lo = bounds[bidx * 2 + 0];
-                const float hi = bounds[bidx * 2 + 1];
-                float* row = dst + p * k * SH_CHANNELS;
-                for (std::uint32_t c = 0; c < n_cells && c < k * SH_CHANNELS; ++c) {
-                    // cell-linear swizzle: block * (n_cells * R) + c * R + lane
-                    const std::uint32_t block = static_cast<std::uint32_t>(p) / kShReorderSize;
-                    const std::uint32_t lane = static_cast<std::uint32_t>(p) % kShReorderSize;
-                    const size_t idx = static_cast<size_t>(block) * n_cells * kShReorderSize +
-                                       static_cast<size_t>(c) * kShReorderSize + lane;
-                    const auto q = codes[idx];
-                    row[c] = lo + (hi - lo) * (static_cast<float>(q) * kInvQ);
-                }
-            }
-            return out.to(dst_device);
+            return out;
         }
         Tensor out = Tensor::empty({n, k, SH_CHANNELS}, dst_device);
         undo_reorder_sh_from_swizzled(_shN.ptr<float>(),
@@ -1008,41 +1072,24 @@ namespace lfs::core {
             return Tensor::zeros({n, k, SH_CHANNELS}, Device::CPU);
         }
 
-        // Quantized path: host dequant to [N,K,3] on CPU (export/checkpoint bit-compat).
+        // Quantized / IEEE-f16 path: host dequant to [N,K,3] on CPU (export/checkpoint
+        // bit-compat). Must not allocate a CUDA destination.
         if (_shN.is_valid() && _shN.dtype() == DataType::Float16) {
-            Tensor t = shN_canonical();
-            return t.device() == Device::CPU ? t : t.cpu();
+            return canonical_shN_from_f16_cpu(_shN, _shN_value_bounds, n, k);
         }
 
-        Tensor out = Tensor::empty({n, k, SH_CHANNELS}, Device::CPU, DataType::Float32);
         if (!_shN.is_valid() || _shN.numel() == 0) {
+            Tensor out = Tensor::empty({n, k, SH_CHANNELS}, Device::CPU, DataType::Float32);
             out.zero_();
             return out;
         }
 
         const Tensor shN_cpu = _shN.cpu().contiguous();
-        const auto* const src = shN_cpu.ptr<float>();
-        auto* const dst = out.ptr<float>();
-        const size_t src_floats = shN_cpu.numel();
-        const size_t active_floats = k * SH_CHANNELS;
-
-        tbb::parallel_for(
-            tbb::blocked_range<size_t>(0, n),
-            [&](const tbb::blocked_range<size_t>& range) {
-                for (size_t p = range.begin(); p != range.end(); ++p) {
-                    float* const dst_row = dst + p * active_floats;
-                    for (size_t offset = 0; offset < active_floats; ++offset) {
-                        const auto slot = static_cast<std::uint32_t>(offset / 4u);
-                        const auto component = static_cast<std::uint32_t>(offset % 4u);
-                        const size_t src_offset =
-                            static_cast<size_t>(sh_swizzled_index(static_cast<std::uint32_t>(p), slot, static_cast<uint32_t>(k))) * 4u +
-                            component;
-                        dst_row[offset] = src_offset < src_floats ? src[src_offset] : 0.0f;
-                    }
-                }
-            });
-
-        return out;
+        return unpack_swizzled_floats_to_canonical_cpu(
+            shN_cpu.ptr<float>(),
+            static_cast<size_t>(shN_cpu.numel()),
+            n,
+            k);
     }
 
     void SplatData::shN_set_from_canonical(const Tensor& canonical, size_t capacity) {
