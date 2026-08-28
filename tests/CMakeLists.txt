@@ -388,6 +388,8 @@ set(TEST_FILES
     test_expanded_tensor_ops.cpp
     test_bool_any_all.cpp
     test_fused_l1_ssim.cpp
+    test_densify_error_map.cpp
+    test_screen_share.cpp
     test_loss_workspace_union.cpp
     test_image_kernels.cpp
     test_add_new_gs_tensor_ops.cpp

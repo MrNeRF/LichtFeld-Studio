@@ -768,6 +768,11 @@ namespace lfs::training {
             n,
             _splat_data->means().device(),
             densification_row_count());
+        if (_params) {
+            const size_t cap = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
+            ensure_max_screen_share_shape(*_splat_data, n, cap);
+            publish_screen_share_cap(_optimizer.get(), *_splat_data, *_params);
+        }
     }
 
     int MRNF::edge_target_samples_per_refine_window() const {
@@ -1120,6 +1125,8 @@ namespace lfs::training {
 
         if (iter == static_cast<int>(_params->stop_refine)) {
             _splat_data->_densification_info = Tensor::empty({0});
+            _splat_data->_max_screen_share = Tensor::empty({0});
+            publish_screen_share_cap(_optimizer.get(), *_splat_data, *_params);
             _precomputed_edge_scores = Tensor();
             _edge_precompute_valid = false;
             reset_edge_accumulator();
@@ -1244,6 +1251,35 @@ namespace lfs::training {
 
         const size_t n = static_cast<size_t>(_splat_data->size());
 
+        if (_splat_data->_max_screen_share.is_valid() &&
+            _splat_data->_max_screen_share.numel() > 0) {
+            LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(),
+                               "wait fused adam before screen-share mutate");
+        }
+
+        if (_params && screen_share_cap_active(_params->max_screen_share) &&
+            _splat_data->_max_screen_share.is_valid() &&
+            _splat_data->_max_screen_share.numel() == n) {
+            auto& log_scales_clip = _splat_data->scaling_raw();
+            assert(log_scales_clip.shape()[0] == n && log_scales_clip.shape()[1] == 3);
+            const bool* frozen = nullptr;
+            size_t frozen_n = 0;
+            if (_optimizer) {
+                const auto& mask = _optimizer->frozen_mask();
+                if (mask.is_valid()) {
+                    frozen = mask.ptr<bool>();
+                    frozen_n = mask.numel();
+                }
+            }
+            kernels::launch_clip_log_scale_by_screen_share(
+                log_scales_clip.ptr<float>(),
+                _splat_data->_max_screen_share.ptr<float>(),
+                frozen,
+                frozen_n,
+                _params->max_screen_share,
+                n);
+        }
+
         auto raw_opacities = _splat_data->opacity_raw();
         if (raw_opacities.ndim() == 2 && raw_opacities.shape()[1] == 1)
             raw_opacities = raw_opacities.squeeze(-1);
@@ -1361,6 +1397,10 @@ namespace lfs::training {
         }
         ensure_densification_info_shape();
         _splat_data->_densification_info.zero_();
+        if (_splat_data->_max_screen_share.is_valid() &&
+            _splat_data->_max_screen_share.numel() > 0) {
+            _splat_data->_max_screen_share.zero_();
+        }
 
         // Always-commit q16 after every refine (exportable + headless). The
         // multi-iter exportable float densify window is deleted: Scene cache
@@ -2391,6 +2431,14 @@ namespace lfs::training {
             Tensor dest = Tensor::zeros(TensorShape(dims), info.device(), info.dtype());
             info.index_select_into(dest, 1, valid_indices, BoundaryMode::Assert);
             _splat_data->_densification_info = std::move(dest);
+        }
+        if (_splat_data->_max_screen_share.is_valid() &&
+            _splat_data->_max_screen_share.numel() == old_size) {
+            Tensor dest = Tensor::zeros({new_size}, _splat_data->_max_screen_share.device(),
+                                        _splat_data->_max_screen_share.dtype());
+            _splat_data->_max_screen_share.index_select_into(
+                dest, 0, valid_indices, BoundaryMode::Assert);
+            _splat_data->_max_screen_share = std::move(dest);
         }
         // deleted mask must track the new live N for VkSplat. Compact
         // when sized to the pre-compact N; otherwise rebuild/clear so a stale

@@ -50,6 +50,10 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--cropbox-loss-weight", "cropbox_loss_weight", Float},
             OptimizationCliBinding{"--steps-scaler", "steps_scaler", Float},
             OptimizationCliBinding{"--no-error-map", "use_error_map", Bool, true},
+            OptimizationCliBinding{"--densify-error-map", "densify_error_map", Enum, false,
+                                   "; values: ssim, ssim_cs"},
+            OptimizationCliBinding{"--max-screen-share", "max_screen_share", Float},
+            OptimizationCliBinding{"--screen-share-penalty", "screen_share_penalty", Float},
             OptimizationCliBinding{"--no-edge-map", "use_edge_map", Bool, true},
             OptimizationCliBinding{"--no-background-improvements", "background_improvements", Bool, true},
             OptimizationCliBinding{"--no-growth-ratio-rank", "growth_ratio_rank", Bool, true},
@@ -452,6 +456,15 @@ namespace {
             ::args::ValueFlag<float> cropbox_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--cropbox-loss-weight"), {"cropbox-loss-weight"});
             ::args::ValueFlag<float> steps_scaler(training_group, "steps_scaler", lfs::core::args::optimization_cli_help("--steps-scaler"), {"steps-scaler"});
             ::args::Flag no_error_map(training_group, "no_error_map", lfs::core::args::optimization_cli_help("--no-error-map"), {"no-error-map"});
+            ::args::MapFlag<std::string, lfs::core::param::DensifyErrorMap> densify_error_map(
+                training_group, "densify_error_map",
+                lfs::core::args::optimization_cli_help("--densify-error-map"),
+                {"densify-error-map"},
+                std::unordered_map<std::string, lfs::core::param::DensifyErrorMap>{
+                    {"ssim", lfs::core::param::DensifyErrorMap::Ssim},
+                    {"ssim_cs", lfs::core::param::DensifyErrorMap::SsimCs}});
+            ::args::ValueFlag<float> max_screen_share(training_group, "max_screen_share", lfs::core::args::optimization_cli_help("--max-screen-share"), {"max-screen-share"});
+            ::args::ValueFlag<float> screen_share_penalty(training_group, "screen_share_penalty", lfs::core::args::optimization_cli_help("--screen-share-penalty"), {"screen-share-penalty"});
             ::args::Flag no_edge_map(training_group, "no_edge_map", lfs::core::args::optimization_cli_help("--no-edge-map"), {"no-edge-map"});
             ::args::Flag no_background_improvements(training_group, "no_background_improvements", lfs::core::args::optimization_cli_help("--no-background-improvements"), {"no-background-improvements"});
             ::args::Flag no_growth_ratio_rank(training_group, "no_growth_ratio_rank", lfs::core::args::optimization_cli_help("--no-growth-ratio-rank"), {"no-growth-ratio-rank"});
@@ -1128,6 +1141,15 @@ namespace {
                                         use_normal_loss_flag = bool(use_normal_loss),
                                         no_normal_auto_generate_flag = bool(no_normal_auto_generate),
                                         no_error_map_flag = bool(no_error_map),
+                                        densify_error_map_val = cli_option_present({"--densify-error-map"})
+                                                                    ? std::optional<lfs::core::param::DensifyErrorMap>(::args::get(densify_error_map))
+                                                                    : std::optional<lfs::core::param::DensifyErrorMap>(),
+                                        max_screen_share_val = cli_option_present({"--max-screen-share"})
+                                                                   ? std::optional<float>(::args::get(max_screen_share))
+                                                                   : std::optional<float>(),
+                                        screen_share_penalty_val = cli_option_present({"--screen-share-penalty"})
+                                                                       ? std::optional<float>(::args::get(screen_share_penalty))
+                                                                       : std::optional<float>(),
                                         no_edge_map_flag = bool(no_edge_map),
                                         no_background_improvements_flag = bool(no_background_improvements),
                                         no_growth_ratio_rank_flag = bool(no_growth_ratio_rank),
@@ -1273,6 +1295,9 @@ namespace {
                 setFlag(enable_sparsity_flag, opt.enable_sparsity);
                 if (no_error_map_flag)
                     opt.use_error_map = false;
+                setVal(densify_error_map_val, opt.densify_error_map);
+                setVal(max_screen_share_val, opt.max_screen_share);
+                setVal(screen_share_penalty_val, opt.screen_share_penalty);
                 if (no_edge_map_flag)
                     opt.use_edge_map = false;
                 if (no_background_improvements_flag)
@@ -1382,6 +1407,9 @@ namespace {
                 note_opt("undistort", undistort_flag);
                 note_opt("enable_sparsity", enable_sparsity_flag);
                 note_opt("use_error_map", no_error_map_flag);
+                note_opt("densify_error_map", densify_error_map_val.has_value());
+                note_opt("max_screen_share", max_screen_share_val.has_value());
+                note_opt("screen_share_penalty", screen_share_penalty_val.has_value());
                 note_opt("use_edge_map", no_edge_map_flag);
                 note_opt("background_improvements", no_background_improvements_flag);
                 note_opt("growth_ratio_rank", no_growth_ratio_rank_flag);

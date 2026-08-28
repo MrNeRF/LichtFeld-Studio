@@ -1905,6 +1905,11 @@ class MaskMode(enum.Enum):
 
     ALPHA_CONSISTENT = 4
 
+class DensifyErrorMap(enum.Enum):
+    SSIM = 0
+
+    SSIM_CS = 1
+
 class NormalLossSpace(enum.Enum):
     AUTO = 0
 
@@ -2117,6 +2122,29 @@ class OptimizationParams:
 
     @far_seed_dose.setter
     def far_seed_dose(self, arg: int, /) -> None: ...
+
+    @property
+    def densify_error_map(self) -> DensifyErrorMap:
+        """Densification error map: full SSIM or contrast-structure only"""
+
+    @densify_error_map.setter
+    def densify_error_map(self, arg: DensifyErrorMap, /) -> None: ...
+
+    @property
+    def max_screen_share(self) -> float:
+        """
+        Shrink Gaussians that cover more than this share of the view; 0 or 1 disables
+        """
+
+    @max_screen_share.setter
+    def max_screen_share(self, arg: float, /) -> None: ...
+
+    @property
+    def screen_share_penalty(self) -> float:
+        """Soft hinge weight on log-scale for Gaussians over the screen-share cap"""
+
+    @screen_share_penalty.setter
+    def screen_share_penalty(self, arg: float, /) -> None: ...
 
     @property
     def steps_scaler(self) -> float:

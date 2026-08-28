@@ -31,6 +31,31 @@ namespace lfs::core {
             AlphaConsistent   // Enforce exact alpha values from mask
         };
 
+        enum class DensifyErrorMap {
+            Ssim,   // full SSIM (luminance × contrast × structure)
+            SsimCs, // contrast × structure only (luminance excluded)
+        };
+
+        [[nodiscard]] inline constexpr std::string_view densify_error_map_name(
+            const DensifyErrorMap mode) noexcept {
+            switch (mode) {
+            case DensifyErrorMap::Ssim:
+                return "ssim";
+            case DensifyErrorMap::SsimCs:
+                return "ssim_cs";
+            }
+            return "ssim_cs";
+        }
+
+        [[nodiscard]] inline constexpr std::optional<DensifyErrorMap> densify_error_map_from_string(
+            const std::string_view value) noexcept {
+            if (value == "ssim")
+                return DensifyErrorMap::Ssim;
+            if (value == "ssim_cs")
+                return DensifyErrorMap::SsimCs;
+            return std::nullopt;
+        }
+
         enum class NormalLossSpace {
             Auto,
             CameraOpenCV,
@@ -239,6 +264,10 @@ namespace lfs::core {
             float means_noise_weight = 50.0f;
             float bounds_percentile = 0.8f;
             bool use_error_map = true;
+            DensifyErrorMap densify_error_map = DensifyErrorMap::SsimCs;
+            // Dimensionless on-screen share cap. <=0 or >=1 disables the cap.
+            float max_screen_share = 0.3f;
+            float screen_share_penalty = 1.0f;
             bool use_edge_map = true;
             bool background_improvements = false;
             float far_scene_min_fraction = 0.01f; // min deep-far splat fraction that activates far-field (0 = always on); mrnf_defaults() overrides to 0.0

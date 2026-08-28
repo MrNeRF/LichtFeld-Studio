@@ -2,6 +2,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/assert.hpp"
 #include "core/cuda_error.hpp"
 #include "densification_kernels.hpp"
 #include "lfs/training/refine_scratch.hpp"
@@ -666,6 +667,49 @@ namespace lfs::training::kernels {
         cudaFreeAsync(d_sorted, stream);
         cudaFreeAsync(d_selected, stream);
         cudaFreeAsync(d_count, stream);
+    }
+
+    namespace {
+        __global__ void clip_log_scale_by_screen_share_kernel(
+            float* __restrict__ log_scales,
+            const float* __restrict__ max_share,
+            const bool* __restrict__ frozen_mask,
+            size_t frozen_n,
+            float limit,
+            size_t n) {
+            const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            if (i >= n)
+                return;
+            if (frozen_mask != nullptr && i < frozen_n && frozen_mask[i])
+                return;
+            const float share = max_share[i];
+            if (!(share > limit))
+                return;
+            const float delta = fminf(logf(share / limit), logf(1.5f));
+            log_scales[i * 3 + 0] -= delta;
+            log_scales[i * 3 + 1] -= delta;
+            log_scales[i * 3 + 2] -= delta;
+        }
+    } // namespace
+
+    void launch_clip_log_scale_by_screen_share(
+        float* log_scales,
+        const float* max_share,
+        const bool* frozen_mask,
+        size_t frozen_n,
+        float limit,
+        size_t n,
+        cudaStream_t stream) {
+        LFS_ASSERT_MSG(log_scales != nullptr && max_share != nullptr,
+                       "screen-share clip requires log_scales and max_share");
+        if (n == 0 || !(limit > 0.0f) || !(limit < 1.0f))
+            return;
+        stream = lfs::resolve_stream(stream);
+        constexpr int kBlock = 256;
+        const int blocks = static_cast<int>((n + kBlock - 1) / kBlock);
+        clip_log_scale_by_screen_share_kernel<<<blocks, kBlock, 0, stream>>>(
+            log_scales, max_share, frozen_mask, frozen_n, limit, n);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.clip_screen_share");
     }
 
 } // namespace lfs::training::kernels

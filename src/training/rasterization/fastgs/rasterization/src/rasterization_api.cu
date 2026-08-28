@@ -226,7 +226,8 @@ namespace fast_lfs::rasterization {
         cudaStream_t stream,
         const float* sh_value_bounds_ptr,
         unsigned int sh_value_n_cells,
-        unsigned int sh_value_bits) {
+        unsigned int sh_value_bits,
+        float* max_screen_share_ptr) {
 
         if (stream == nullptr) {
             stream = lfs::core::getCurrentCUDAStream();
@@ -375,7 +376,8 @@ namespace fast_lfs::rasterization {
                                                    near_plane,
                                                    far_plane,
                                                    mip_filter,
-                                                   stream);
+                                                   stream,
+                                                   max_screen_share_ptr);
 
             // Verify allocations happened
             if (forward_result.n_instances > 0 && !forward_result.sorted_primitive_indices) {

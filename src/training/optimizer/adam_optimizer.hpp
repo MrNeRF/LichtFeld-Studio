@@ -95,6 +95,10 @@ namespace lfs::training {
         float step_size = 0.0f;
         float bias_correction2_sqrt_rcp = 1.0f;
         bool enabled = false;
+        const float* screen_share_max = nullptr;
+        int screen_share_n = 0;
+        float screen_share_limit = 0.0f;
+        float screen_share_penalty = 0.0f;
     };
 
     struct FastGSFusedAdamState {
@@ -141,6 +145,8 @@ namespace lfs::training {
                                      float r_min,
                                      float r_max);
         void set_mean_step_far_mask(const bool* mask, int n);
+        void set_screen_share_cap(const float* max_share, int n, float limit, float penalty);
+        void refresh_screen_share_buffer();
         [[nodiscard]] bool per_splat_mean_step() const noexcept { return per_splat_mean_step_; }
         [[nodiscard]] const bool* mean_step_far_mask() const noexcept {
             return mean_step_far_mask_;
@@ -224,6 +230,10 @@ namespace lfs::training {
         float mean_step_r_max_ = 300.0f;
         const bool* mean_step_far_mask_ = nullptr;
         int mean_step_far_mask_n_ = 0;
+        const float* screen_share_max_ = nullptr;
+        int screen_share_n_ = 0;
+        float screen_share_limit_ = 0.0f;
+        float screen_share_penalty_ = 0.0f;
         int64_t fused_step_iteration_ = -1;
         bool last_step_zeroed_gradients_ = false;
 

@@ -142,4 +142,14 @@ namespace lfs::training::kernels {
         cudaStream_t stream = nullptr,
         lfs::training::PositiveMedianScratch* scratch = nullptr);
 
+    /// Subtract min(log(share/limit), log(1.5)) from all three log-scales when share > limit.
+    void launch_clip_log_scale_by_screen_share(
+        float* log_scales, // [N, 3]
+        const float* max_share,
+        const bool* frozen_mask,
+        size_t frozen_n,
+        float limit,
+        size_t n,
+        cudaStream_t stream = nullptr);
+
 } // namespace lfs::training::kernels

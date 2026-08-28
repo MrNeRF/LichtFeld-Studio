@@ -410,6 +410,8 @@ namespace lfs::core {
                 return std::format("mask_opacity_penalty_power must be finite and positive (got {})", mask_opacity_penalty_power);
             if (!std::isfinite(steps_scaler))
                 return std::format("steps_scaler must be finite (got {})", steps_scaler);
+            if (!std::isfinite(max_screen_share))
+                return std::format("max_screen_share must be finite (got {})", max_screen_share);
             if (ppisp_warmup_steps < 0)
                 return std::format("ppisp_warmup_steps must be nonnegative (got {})", ppisp_warmup_steps);
             if (debug_python && (debug_python_port <= 0 || debug_python_port > 65535))
@@ -435,6 +437,7 @@ namespace lfs::core {
                 std::pair{"growth_grad_threshold", growth_grad_threshold},
                 std::pair{"means_noise_weight", means_noise_weight},
                 std::pair{"init_rho", init_rho},
+                std::pair{"screen_share_penalty", screen_share_penalty},
             };
             for (const auto& [name, value] : nonnegative_fields) {
                 if (auto error = invalid_nonnegative(value, name); !error.empty())

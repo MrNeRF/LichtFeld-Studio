@@ -45,6 +45,7 @@
 #include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/perf_bench.hpp"
+#include "lfs/training/screen_share.cuh"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/vram_ledger.hpp"
 #include "losses/losses.hpp"
@@ -7064,26 +7065,37 @@ namespace lfs::training {
                             LOG_VRAM_DIFF("train.densification_error_map");
                             if (use_ssim_error && params_.optimization.lambda_dssim > 0.0f) {
                                 lfs::core::Tensor ssim_map;
+                                lfs::core::Tensor cs_map;
                                 if (used_masked_fused && raw_loss_input.is_valid()) {
                                     ssim_map = photometric_loss_.arena().masked_decoupled().ssim_map;
+                                    cs_map = photometric_loss_.arena().masked_decoupled().cs_map;
                                 } else if (used_masked_fused) {
                                     ssim_map = photometric_loss_.arena().masked_fused().ssim_map;
+                                    cs_map = photometric_loss_.arena().masked_fused().cs_map;
                                 } else if (raw_loss_input.is_valid()) {
                                     ssim_map = photometric_loss_.arena().decoupled().ssim_map;
+                                    cs_map = photometric_loss_.arena().decoupled().cs_map;
                                 } else if (params_.optimization.lambda_dssim < 1.0f) {
                                     ssim_map = photometric_loss_.fused_workspace().ssim_map;
+                                    cs_map = photometric_loss_.fused_workspace().cs_map;
                                 } else {
                                     ssim_map = photometric_loss_.ssim_workspace().ssim_map;
+                                    cs_map = photometric_loss_.ssim_workspace().cs_map;
                                 }
-                                if (ssim_map.shape()[0] == 1 && ssim_map.shape()[1] == 1 &&
-                                    ssim_map.is_contiguous()) {
-                                    const size_t H = ssim_map.shape()[2];
-                                    const size_t W = ssim_map.shape()[3];
-                                    tile_error_map = ssim_map.reshape({static_cast<int>(H), static_cast<int>(W)});
-                                    lfs::training::kernels::launch_ssim_to_error_map(ssim_map, tile_error_map);
+                                const bool use_cs =
+                                    params_.optimization.densify_error_map ==
+                                        lfs::core::param::DensifyErrorMap::SsimCs &&
+                                    cs_map.is_valid();
+                                const lfs::core::Tensor& densify_src = use_cs ? cs_map : ssim_map;
+                                if (densify_src.shape()[0] == 1 && densify_src.shape()[1] == 1 &&
+                                    densify_src.is_contiguous()) {
+                                    const size_t H = densify_src.shape()[2];
+                                    const size_t W = densify_src.shape()[3];
+                                    tile_error_map = densify_src.reshape({static_cast<int>(H), static_cast<int>(W)});
+                                    lfs::training::kernels::launch_ssim_to_error_map(densify_src, tile_error_map);
                                 } else {
-                                    const size_t H = ssim_map.shape()[2];
-                                    const size_t W = ssim_map.shape()[3];
+                                    const size_t H = densify_src.shape()[2];
+                                    const size_t W = densify_src.shape()[3];
                                     if (!densification_error_map_.is_valid() ||
                                         densification_error_map_.shape()[0] != H ||
                                         densification_error_map_.shape()[1] != W) {
@@ -7091,7 +7103,8 @@ namespace lfs::training {
                                             {static_cast<size_t>(H), static_cast<size_t>(W)},
                                             core::Device::CUDA);
                                     }
-                                    lfs::training::kernels::launch_ssim_to_error_map(ssim_map, densification_error_map_);
+                                    lfs::training::kernels::launch_ssim_to_error_map(
+                                        densify_src, densification_error_map_);
                                     tile_error_map = densification_error_map_;
                                 }
                             } else if (use_ssim_error) {
@@ -7103,8 +7116,11 @@ namespace lfs::training {
                                     pred_chw = pred_chw.permute({2, 0, 1}).contiguous();
                                     gt_chw = gt_chw.permute({2, 0, 1}).contiguous();
                                 }
+                                const bool use_cs = params_.optimization.densify_error_map ==
+                                                    lfs::core::param::DensifyErrorMap::SsimCs;
                                 lfs::training::kernels::ssim_error_map_forward(
-                                    pred_chw, gt_chw, densification_ssim_workspace_, densification_error_map_);
+                                    pred_chw, gt_chw, densification_ssim_workspace_,
+                                    densification_error_map_, use_cs);
                                 tile_error_map = densification_error_map_;
                             } else {
                                 const auto gt_for_error = gt_tile.dtype() == lfs::core::DataType::UInt8
@@ -7659,6 +7675,20 @@ namespace lfs::training {
                                      n, k, n - k);
                         }
                         LOG_INFO("{}", metrics.to_string());
+                        if (strategy_) {
+                            auto& splat = strategy_->get_model();
+                            const float configured = params_.optimization.max_screen_share;
+                            const float limit = lfs::training::screen_share_cap_active(configured)
+                                                    ? configured
+                                                    : 0.3f;
+                            int n_over_share = 0;
+                            if (splat._max_screen_share.is_valid() &&
+                                splat._max_screen_share.numel() > 0) {
+                                auto over = splat._max_screen_share.gt(limit).to(lfs::core::DataType::Int32).sum();
+                                n_over_share = over.template item<int>();
+                            }
+                            LOG_INFO("n_over_share={} strategy={}", n_over_share, strategy_->strategy_type());
+                        }
                         if (ppisp_ && params_.optimization.ppisp_active() && ppisp_->isFinalized()) {
                             ppisp_->log_eval_diagnostics();
                         }

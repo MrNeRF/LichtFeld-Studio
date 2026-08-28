@@ -530,6 +530,34 @@ namespace lfs::core::param {
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
             .all_strategies()
+            .enum_prop(&OptimizationParameters::densify_error_map,
+                       "densify_error_map", "Densify Error Map", d.densify_error_map,
+                       {{"Ssim", DensifyErrorMap::Ssim, "training.options.densify_error_map.ssim", "ssim"},
+                        {"SsimCs", DensifyErrorMap::SsimCs, "training.options.densify_error_map.ssim_cs", "ssim_cs"}},
+                       "Densification error map: full SSIM or contrast-structure only")
+            .locale("training.advanced.densify_error_map")
+            .tooltip("training.tooltip.densify_error_map")
+            .flags(PROP_ADVANCED)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::max_screen_share,
+                        "max_screen_share", "Max Screen Share", d.max_screen_share, 0.0f, 1.0f,
+                        "Shrink splats that cover more than this share of the view; 0 or 1 disables")
+            .locale("training.advanced.max_screen_share")
+            .tooltip("training.tooltip.max_screen_share")
+            .precision(3)
+            .ui_step(0.05)
+            .flags(PROP_ADVANCED)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::screen_share_penalty,
+                        "screen_share_penalty", "Screen Share Penalty", d.screen_share_penalty,
+                        0.0f, std::numeric_limits<float>::infinity(),
+                        "Soft hinge weight on log-scale for splats over the screen-share cap")
+            .locale("training.advanced.screen_share_penalty")
+            .tooltip("training.tooltip.screen_share_penalty")
+            .precision(2)
+            .ui_step(0.1)
+            .flags(PROP_ADVANCED)
+            .all_strategies()
             .bool_prop(&OptimizationParameters::use_edge_map,
                        "use_edge_map", "Edge Map", d.use_edge_map,
                        "Weight MRNF refine signal by Canny edge map on GT images")
