@@ -79,6 +79,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--prune-ratio", "prune_ratio", Float},
             OptimizationCliBinding{"--enable-mip", "mip_filter", Bool},
             OptimizationCliBinding{"--bilateral-grid", "use_bilateral_grid", Bool},
+            OptimizationCliBinding{"--exposure-correction", "use_exposure_correction", Bool},
             OptimizationCliBinding{"--ppisp", "ppisp", Bool},
             OptimizationCliBinding{"--no-ppisp-exif-exposure", "ppisp_exposure_from_exif", Bool, true},
             OptimizationCliBinding{"--ppisp-controller", "ppisp_use_controller", Bool},
@@ -545,6 +546,7 @@ namespace {
             ::args::Group rendering_group(parser, "RENDERING OPTIONS:");
             ::args::Flag enable_mip(rendering_group, "enable_mip", lfs::core::args::optimization_cli_help("--enable-mip"), {"enable-mip"});
             ::args::Flag use_bilateral_grid(rendering_group, "bilateral_grid", lfs::core::args::optimization_cli_help("--bilateral-grid"), {"bilateral-grid"});
+            ::args::Flag use_exposure_correction(rendering_group, "exposure_correction", lfs::core::args::optimization_cli_help("--exposure-correction"), {"exposure-correction"});
             ::args::Flag use_ppisp(rendering_group, "ppisp", lfs::core::args::optimization_cli_help("--ppisp"), {"ppisp"});
             ::args::Flag no_ppisp_exif_exposure(rendering_group, "no_ppisp_exif_exposure", lfs::core::args::optimization_cli_help("--no-ppisp-exif-exposure"), {"no-ppisp-exif-exposure"});
             ::args::Flag ppisp_controller(rendering_group, "ppisp_controller", lfs::core::args::optimization_cli_help("--ppisp-controller"), {"ppisp-controller"});
@@ -1091,6 +1093,7 @@ namespace {
                                         // Capture flag states
                                         enable_mip_flag = bool(enable_mip),
                                         use_bilateral_grid_flag = bool(use_bilateral_grid),
+                                        use_exposure_correction_flag = bool(use_exposure_correction),
                                         use_ppisp_flag = bool(use_ppisp),
                                         no_ppisp_exif_exposure_flag = bool(no_ppisp_exif_exposure),
                                         ppisp_controller_flag = bool(ppisp_controller),
@@ -1227,6 +1230,7 @@ namespace {
 
                 setFlag(enable_mip_flag, opt.mip_filter);
                 setFlag(use_bilateral_grid_flag, opt.use_bilateral_grid);
+                setFlag(use_exposure_correction_flag, opt.use_exposure_correction);
                 setFlag(use_ppisp_flag, opt.use_ppisp);
                 if (no_ppisp_exif_exposure_flag)
                     opt.ppisp_exposure_from_exif = false;
@@ -1356,6 +1360,7 @@ namespace {
                 note_opt("profile_stop_iter", profile_stop_val.has_value());
                 note_opt("mip_filter", enable_mip_flag);
                 note_opt("use_bilateral_grid", use_bilateral_grid_flag);
+                note_opt("use_exposure_correction", use_exposure_correction_flag);
                 note_opt("use_ppisp", use_ppisp_flag || ppisp_controller_flag ||
                                           ppisp_freeze_from_sidecar_flag);
                 note_opt("ppisp_use_controller", ppisp_controller_flag);

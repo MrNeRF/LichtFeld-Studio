@@ -2139,6 +2139,20 @@ class OptimizationParams:
     def gut(self, arg: bool, /) -> None: ...
 
     @property
+    def use_exposure_correction(self) -> bool:
+        """Enable combined per-photo exposure correction"""
+
+    @use_exposure_correction.setter
+    def use_exposure_correction(self, arg: bool, /) -> None: ...
+
+    @property
+    def exposure_correction_grid_start_iter(self) -> int:
+        """Iteration at which the local residual grid starts training"""
+
+    @exposure_correction_grid_start_iter.setter
+    def exposure_correction_grid_start_iter(self, arg: int, /) -> None: ...
+
+    @property
     def use_bilateral_grid(self) -> bool:
         """Enable bilateral grid color correction"""
 

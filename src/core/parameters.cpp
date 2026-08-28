@@ -476,6 +476,12 @@ namespace lfs::core {
                                    bilateral_grid_X, bilateral_grid_Y, bilateral_grid_W);
             if (gut && canonical_strategy_name(strategy) == kStrategyIGSPlus)
                 return "GUT and igs+ strategy cannot be used together";
+            if (use_exposure_correction &&
+                (use_bilateral_grid || use_ppisp || ppisp_use_controller || ppisp_freeze_from_sidecar)) {
+                return "use_exposure_correction cannot be combined with use_bilateral_grid, "
+                       "use_ppisp, ppisp_use_controller, or ppisp_freeze_from_sidecar; "
+                       "exposure correction replaces the standalone bilateral grid and PPISP options";
+            }
             if (ppisp_freeze_from_sidecar && !use_ppisp)
                 return "PPISP sidecar freeze requires PPISP enabled";
             if (depth_loss_mode != "ssi" && depth_loss_mode != "ssi-disparity" && depth_loss_mode != "ssi-depth")

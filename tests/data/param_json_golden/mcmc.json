@@ -23,6 +23,7 @@
     7000,
     30000
   ],
+  "exposure_correction_grid_start_iter": 1000,
   "far_scene_min_fraction": 0.009999999776482582,
   "far_seed_dose": 0,
   "fill_pacing_iter": 0,
@@ -101,6 +102,7 @@
   "use_depth_loss": false,
   "use_edge_map": true,
   "use_error_map": true,
+  "use_exposure_correction": false,
   "use_normal_loss": false,
   "use_ppisp": false
 }

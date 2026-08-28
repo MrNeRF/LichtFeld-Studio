@@ -47,6 +47,7 @@ NUMBER_PROPS = (
     "bilateral_grid_y",
     "bilateral_grid_w",
     "bilateral_grid_lr",
+    "exposure_correction_grid_start_iter",
     "mask_opacity_penalty_weight",
     "mask_opacity_penalty_power",
     "mask_threshold",
@@ -70,6 +71,7 @@ NUMBER_PROPS = (
 )
 
 BOOL_PROPS = (
+    "use_exposure_correction",
     "use_bilateral_grid",
     "invert_masks",
     "use_alpha_as_mask",
@@ -110,6 +112,11 @@ BESPOKE_OR_HIDDEN = {
 
 AUTO_ADVANCED_RUN_ID = "advanced_registry"
 
+# Per-row visibility inside a run (auto-advanced rows have no run-level condition).
+PROP_VISIBILITY_CONDITION_IDS = {
+    "ppisp_reg_weight": "dep_show_ppisp_reg_weight",
+}
+
 
 def _run(
     run_id,
@@ -129,8 +136,17 @@ BASIC_RUNS = (
     _run("basic_struct", "iterations", "max_cap"),
     _run("basic_background", "background_improvements", visibility_condition_id="dep_mrnf"),
     _run(
-        "basic_live_start",
+        "basic_exposure_correction",
+        "use_exposure_correction",
+        visibility_condition_id="dep_show_exposure_correction",
+    ),
+    _run(
+        "basic_bilateral_toggle",
         "use_bilateral_grid",
+        visibility_condition_id="dep_show_standalone_grid",
+    ),
+    _run(
+        "basic_live_start",
         "mask_mode",
         "use_depth_loss",
     ),
@@ -170,10 +186,19 @@ BASIC_RUNS = (
     ),
     _run("basic_sparsity_toggle", "enable_sparsity"),
     _run("basic_gut", "gut", disabled_condition_id="gut_disabled"),
-    _run("basic_after_gut", "undistort", "mip_filter", "ppisp"),
+    _run("basic_after_gut", "undistort", "mip_filter"),
+    _run(
+        "basic_ppisp_toggle",
+        "ppisp",
+        visibility_condition_id="dep_show_standalone_ppisp",
+    ),
+    _run(
+        "ppisp_exif",
+        "ppisp_exposure_from_exif",
+        visibility_condition_id="dep_ppisp_params",
+    ),
     _run(
         "ppisp_freeze",
-        "ppisp_exposure_from_exif",
         "ppisp_freeze_from_sidecar",
         visibility_condition_id="dep_ppisp",
     ),
@@ -238,6 +263,11 @@ BILATERAL_RUNS = (
         "bilateral_grid_w",
         "bilateral_grid_lr",
         visibility_condition_id="dep_bilateral",
+    ),
+    _run(
+        "exposure_grid_start",
+        "exposure_correction_grid_start_iter",
+        visibility_condition_id="dep_exposure_correction",
     ),
 )
 
@@ -782,6 +812,10 @@ class SectionBinding:
             allowed_strategies = row.get("strategies", ())
             if allowed_strategies and active_strategy not in allowed_strategies:
                 continue
+            prop_condition = PROP_VISIBILITY_CONDITION_IDS.get(row["id"])
+            if prop_condition and callable(self._visibility_predicate):
+                if not bool(self._visibility_predicate(prop_condition)):
+                    continue
             label = _localized(row["label_key"], row["name"])
             if not row_matches_query(row["id"], label, query):
                 continue

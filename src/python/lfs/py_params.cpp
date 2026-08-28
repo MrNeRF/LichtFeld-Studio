@@ -967,6 +967,18 @@ namespace lfs::python {
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.gut = v; }); },
                 "Enable Gaussian Unscented Transform")
             .def_prop_rw(
+                "use_exposure_correction",
+                [](PyOptimizationParams& self) { return self.params().use_exposure_correction; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.use_exposure_correction = v; }); },
+                "Enable combined per-photo exposure correction")
+            .def_prop_rw(
+                "exposure_correction_grid_start_iter",
+                [](PyOptimizationParams& self) { return self.params().exposure_correction_grid_start_iter; },
+                [](PyOptimizationParams&, int v) {
+                    modify_params([v](auto& p) { p.exposure_correction_grid_start_iter = v; });
+                },
+                "Iteration at which the local residual grid starts training")
+            .def_prop_rw(
                 "use_bilateral_grid",
                 [](PyOptimizationParams& self) { return self.params().use_bilateral_grid; },
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.use_bilateral_grid = v; }); },

@@ -199,6 +199,17 @@ namespace lfs::core {
             float bilateral_grid_lr = 2e-3f;
             float tv_loss_weight = 10.f;
 
+            // Combined per-photo exposure + residual grid (replaces standalone grid/PPISP)
+            bool use_exposure_correction = false;
+            int exposure_correction_grid_start_iter = 1000;
+
+            [[nodiscard]] bool bilateral_grid_active() const {
+                return use_bilateral_grid || use_exposure_correction;
+            }
+            [[nodiscard]] bool ppisp_active() const {
+                return use_ppisp || use_exposure_correction;
+            }
+
             // PPISP (Physically-Plausible ISP) parameters
             bool use_ppisp = false;
             bool ppisp_exposure_from_exif = true;

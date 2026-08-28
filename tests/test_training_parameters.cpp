@@ -312,6 +312,42 @@ namespace {
         EXPECT_THROW((void)OptimizationParameters::from_json(json), nlohmann::json::out_of_range);
     }
 
+    TEST_F(TrainingParametersTest, ExposureCorrectionJsonRoundTripAndConflicts) {
+        auto params = OptimizationParameters::mcmc_defaults();
+        EXPECT_FALSE(params.use_exposure_correction);
+        EXPECT_EQ(params.exposure_correction_grid_start_iter, 1000);
+        EXPECT_FALSE(params.bilateral_grid_active());
+        EXPECT_FALSE(params.ppisp_active());
+        EXPECT_TRUE(params.validate().empty());
+
+        params.use_exposure_correction = true;
+        EXPECT_TRUE(params.bilateral_grid_active());
+        EXPECT_TRUE(params.ppisp_active());
+        EXPECT_TRUE(params.validate().empty());
+
+        const auto json = params.to_json();
+        EXPECT_TRUE(json.at("use_exposure_correction").get<bool>());
+        EXPECT_EQ(json.at("exposure_correction_grid_start_iter").get<int>(), 1000);
+        const auto restored = OptimizationParameters::from_json(json);
+        EXPECT_TRUE(restored.use_exposure_correction);
+        EXPECT_EQ(restored.exposure_correction_grid_start_iter, 1000);
+
+        const auto conflict_message =
+            "exposure correction replaces the standalone bilateral grid and PPISP options";
+        auto conflict = params;
+        conflict.use_bilateral_grid = true;
+        EXPECT_NE(conflict.validate().find(conflict_message), std::string::npos);
+        conflict = params;
+        conflict.use_ppisp = true;
+        EXPECT_NE(conflict.validate().find(conflict_message), std::string::npos);
+        conflict = params;
+        conflict.ppisp_use_controller = true;
+        EXPECT_NE(conflict.validate().find(conflict_message), std::string::npos);
+        conflict = params;
+        conflict.ppisp_freeze_from_sidecar = true;
+        EXPECT_NE(conflict.validate().find(conflict_message), std::string::npos);
+    }
+
     TEST_F(TrainingParametersTest, PpispExposureFromExifRoundTripsThroughJson) {
         auto params = OptimizationParameters::mrnf_defaults();
         EXPECT_TRUE(params.ppisp_exposure_from_exif);

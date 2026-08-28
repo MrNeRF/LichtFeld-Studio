@@ -489,8 +489,16 @@ class TrainingPanel(Panel):
             "dep_depth_loss": params.use_depth_loss,
             "dep_normal_loss": params.use_normal_loss,
             "dep_ppisp": params.ppisp,
+            "dep_ppisp_params": params.ppisp or params.use_exposure_correction,
+            "dep_show_ppisp_reg_weight": params.ppisp and not params.use_exposure_correction,
             "dep_ppisp_controller": params.ppisp and params.ppisp_use_controller,
-            "dep_bilateral": params.use_bilateral_grid,
+            "dep_bilateral": params.use_bilateral_grid or params.use_exposure_correction,
+            "dep_exposure_correction": params.use_exposure_correction,
+            "dep_show_exposure_correction": not (
+                params.use_bilateral_grid or params.ppisp
+            ),
+            "dep_show_standalone_grid": not params.use_exposure_correction,
+            "dep_show_standalone_ppisp": not params.use_exposure_correction,
             "dep_mrnf": _is_mrnf_strategy(params.strategy),
             "dep_igs": params.strategy == "igs+",
             "dep_sparsity": params.enable_sparsity,
@@ -600,6 +608,23 @@ class TrainingPanel(Panel):
             "dep_ppisp", lambda: p() is not None and p().has_params() and p().ppisp
         )
         model.bind_func(
+            "dep_ppisp_params",
+            lambda: (
+                p() is not None
+                and p().has_params()
+                and (p().ppisp or p().use_exposure_correction)
+            ),
+        )
+        model.bind_func(
+            "dep_show_ppisp_reg_weight",
+            lambda: (
+                p() is not None
+                and p().has_params()
+                and p().ppisp
+                and not p().use_exposure_correction
+            ),
+        )
+        model.bind_func(
             "dep_ppisp_frozen_sidecar",
             lambda: (
                 p() is not None
@@ -634,7 +659,39 @@ class TrainingPanel(Panel):
         )
         model.bind_func(
             "dep_bilateral",
-            lambda: p() is not None and p().has_params() and p().use_bilateral_grid,
+            lambda: (
+                p() is not None
+                and p().has_params()
+                and (p().use_bilateral_grid or p().use_exposure_correction)
+            ),
+        )
+        model.bind_func(
+            "dep_exposure_correction",
+            lambda: p() is not None and p().has_params() and p().use_exposure_correction,
+        )
+        model.bind_func(
+            "dep_show_exposure_correction",
+            lambda: (
+                p() is not None
+                and p().has_params()
+                and not (p().use_bilateral_grid or p().ppisp)
+            ),
+        )
+        model.bind_func(
+            "dep_show_standalone_grid",
+            lambda: (
+                p() is not None
+                and p().has_params()
+                and not p().use_exposure_correction
+            ),
+        )
+        model.bind_func(
+            "dep_show_standalone_ppisp",
+            lambda: (
+                p() is not None
+                and p().has_params()
+                and not p().use_exposure_correction
+            ),
         )
         model.bind_func(
             "dep_mrnf",

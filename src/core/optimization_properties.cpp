@@ -358,6 +358,23 @@ namespace lfs::core::param {
 
             // Bilateral grid
             .all_strategies()
+            .bool_prop(&OptimizationParameters::use_exposure_correction,
+                       "use_exposure_correction", "Exposure correction", d.use_exposure_correction,
+                       "Combine a per-photo exposure/white-balance model with a local residual grid")
+            .locale("training_params.exposure_correction")
+            .tooltip("training.tooltip.exposure_correction")
+            .flags(PROP_NEEDS_RESTART)
+            .all_strategies()
+            .int_prop(&OptimizationParameters::exposure_correction_grid_start_iter,
+                      "exposure_correction_grid_start_iter", "Grid start iteration",
+                      d.exposure_correction_grid_start_iter, 0, 100000,
+                      "Iteration at which the local residual grid starts training")
+            .locale("training_params.exposure_correction_grid_start")
+            .tooltip("training.tooltip.exposure_correction_grid_start")
+            .precision(0)
+            .ui_step(100)
+            .flags(PROP_ADVANCED)
+            .all_strategies()
             .bool_prop(&OptimizationParameters::use_bilateral_grid,
                        "use_bilateral_grid", "Bilateral Grid", d.use_bilateral_grid,
                        "Enable bilateral grid color correction")
@@ -599,7 +616,7 @@ namespace lfs::core::param {
             .flags(PROP_ADVANCED)
             .all_strategies()
             .float_prop(&OptimizationParameters::ppisp_reg_weight,
-                        "ppisp_reg_weight", "PPISP Regularization", d.ppisp_reg_weight, 0.0f, 0.1f,
+                        "ppisp_reg_weight", "PPISP Regularization", d.ppisp_reg_weight, 0.0f, 2.0f,
                         "Regularization weight for PPISP parameters")
             .locale("training_params.ppisp_reg")
             .tooltip("training.tooltip.ppisp_reg")
