@@ -29,6 +29,7 @@ LichtFeld Studio lets you train new scenes from COLMAP datasets, resume checkpoi
 
 <img src="docs/viewer_demo.gif" alt="LichtFeld Studio viewer" width="85%"/>
 
+[**See It in Action**](#see-it-in-action) •
 [**Why LichtFeld**](#why-lichtfeld-studio) •
 [**Who It Is For**](#who-it-is-for) •
 [**Capabilities**](#capabilities) •
@@ -37,6 +38,18 @@ LichtFeld Studio lets you train new scenes from COLMAP datasets, resume checkpoi
 [**Community**](#community) •
 [**Contributing**](#contributing) •
 [**License**](#license)
+
+</div>
+
+## See It in Action
+
+<div align="center">
+
+<a href="https://www.youtube.com/watch?v=i-04z4_eqiU">
+  <img src="https://img.youtube.com/vi/i-04z4_eqiU/maxresdefault.jpg" alt="LichtFeld Studio — Everything it can do today" width="85%">
+</a>
+
+[**▶ Watch on YouTube — Everything LichtFeld Studio can do today**](https://www.youtube.com/watch?v=i-04z4_eqiU)
 
 </div>
 
