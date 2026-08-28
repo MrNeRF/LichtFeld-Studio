@@ -10240,6 +10240,159 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
+           LightAutosaveRebasesWhenSnapshotCountersMissNewMaster) {
+        // Training restart creates a new snapshot service
+        // whose completed_snapshots can match the previous
+        // run's adopted count, so adoptSettled skips. Disk
+        // already has the new master commit. Light autosave
+        // must rebase before binding the sidecar.
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "restart-autosave-base.licht";
+        const auto sidecar =
+            lfs::io::project::autosave_sidecar_path(
+                project_path);
+        write_empty_project(project_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    const auto info =
+                        viewer.projectGetInfo();
+                    return info &&
+                           info->hydration_state ==
+                               "complete";
+                }));
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_NE(lifecycle->document_, nullptr);
+            const auto stale_commit =
+                lifecycle->document_
+                    ->source_commit_uuid();
+            ASSERT_TRUE(stale_commit.has_value());
+
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<
+                    lfs::training::Trainer>(scene));
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            auto& state_machine =
+                const_cast<TrainingStateMachine&>(
+                    viewer.getTrainerManager()
+                        ->getStateMachine());
+            if (state_machine.getState() ==
+                TrainingState::Idle) {
+                ASSERT_TRUE(state_machine.transitionTo(
+                    TrainingState::Ready));
+            }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Running));
+
+            append_view_marker_generation(
+                project_path, "generation-3");
+            auto disk =
+                lfs::io::project::ProjectReader::open(
+                    project_path);
+            ASSERT_TRUE(disk)
+                << lfs::format_for_developer(
+                       disk.error());
+            const auto published_commit =
+                disk->commit().commit_uuid;
+            EXPECT_NE(
+                published_commit, *stale_commit);
+            EXPECT_EQ(
+                *lifecycle->document_
+                     ->source_commit_uuid(),
+                *stale_commit);
+
+            ASSERT_NE(
+                trainer->project_snapshot_service_,
+                nullptr);
+            trainer->last_project_snapshot_path_ =
+                project_path;
+            trainer->last_project_writer_error_
+                .clear();
+            trainer->project_snapshot_service_
+                ->testing_advance_completed_snapshots(
+                    1);
+            lifecycle->adopted_training_snapshot_count_ =
+                trainer->get_project_snapshot_metrics()
+                    .capture.completed_snapshots;
+            ASSERT_EQ(
+                lifecycle
+                    ->adopted_training_snapshot_count_,
+                trainer->get_project_snapshot_metrics()
+                    .capture.completed_snapshots);
+            EXPECT_GT(
+                lifecycle
+                    ->adopted_training_snapshot_count_,
+                0u);
+
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Light dirty after unadopted publish"),
+                lfs::core::NULL_NODE);
+            auto started = lifecycle->startAutosave();
+            ASSERT_TRUE(started)
+                << lfs::format_for_developer(
+                       started.error());
+            EXPECT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_,
+                viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_TRUE(
+                lifecycle->last_project_write_error_
+                    .empty())
+                << lifecycle->last_project_write_error_;
+            EXPECT_TRUE(
+                std::filesystem::is_regular_file(
+                    sidecar));
+            ASSERT_NE(lifecycle->document_, nullptr);
+            ASSERT_TRUE(
+                lifecycle->document_
+                    ->source_commit_uuid());
+            EXPECT_EQ(
+                *lifecycle->document_
+                     ->source_commit_uuid(),
+                published_commit);
+            auto overlay =
+                lfs::io::project::ProjectReader::open(
+                    sidecar);
+            ASSERT_TRUE(overlay)
+                << lfs::format_for_developer(
+                       overlay.error());
+            EXPECT_EQ(
+                overlay->superblock()
+                    .base_explicit_commit_uuid,
+                published_commit);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
            ExplicitSaveAfterUnadoptedTrainerAppendUsesCurrentHead) {
         // Ctrl+S after a trainer-like append that the
         // lifecycle has not adopted. Idle explicit save
