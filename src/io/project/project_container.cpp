@@ -3097,6 +3097,7 @@ namespace lfs::io::project {
                         "payload CRC buffer allocation failed", state.path,
                         row.payload_offset, "payload.verify"));
                 } catch (const std::exception& exception) {
+                    // LFS-CENSUS-OK(empty-catch): propagate the CRC exception as a project error
                     return status_failure(detail::project_error(
                         lfs::ErrorCode::Internal,
                         "The project payload CRC could not be verified.",
@@ -3122,6 +3123,7 @@ namespace lfs::io::project {
                                         "payload.verify");
                                 }
                             } catch (const std::exception& exception) {
+                                // LFS-CENSUS-OK(empty-catch): record the CRC worker exception as the first payload error
                                 std::scoped_lock lock(mutex);
                                 if (!error) {
                                     error = detail::project_error(
@@ -3131,6 +3133,7 @@ namespace lfs::io::project {
                                         row.payload_offset, "payload.verify");
                                 }
                             } catch (...) {
+                                // LFS-CENSUS-OK(empty-catch): record an unknown CRC worker exception as the first payload error
                                 std::scoped_lock lock(mutex);
                                 if (!error) {
                                     error = detail::project_error(
@@ -3143,6 +3146,7 @@ namespace lfs::io::project {
                         });
                     }
                 } catch (const std::exception& exception) {
+                    // LFS-CENSUS-OK(empty-catch): propagate CRC worker construction failure as a project error
                     workers.clear();
                     return status_failure(detail::project_error(
                         lfs::ErrorCode::Internal,
@@ -3294,11 +3298,13 @@ namespace lfs::io::project {
                         "There is not enough memory to decode this project region.",
                         "framed decode worker allocation failed");
                 } catch (const std::exception& exception) {
+                    // LFS-CENSUS-OK(empty-catch): record the single-record decode exception as a worker error
                     publish_worker_error(
                         lfs::ErrorCode::Internal,
                         "The framed project payload could not be decoded.",
                         exception.what());
                 } catch (...) {
+                    // LFS-CENSUS-OK(empty-catch): record an unknown single-record decode exception as a worker error
                     publish_worker_error(
                         lfs::ErrorCode::Internal,
                         "The framed project payload could not be decoded.",
@@ -3905,6 +3911,7 @@ namespace lfs::io::project {
                         "payload block buffer allocation failed", path,
                         row.payload_offset, "payload.read"));
                 } catch (const std::exception& exception) {
+                    // LFS-CENSUS-OK(empty-catch): propagate the payload-read exception as a project error
                     return status_failure(detail::project_error(
                         lfs::ErrorCode::Internal,
                         "The project payload could not be read.", exception.what(),
@@ -3956,6 +3963,7 @@ namespace lfs::io::project {
                                     "payload block worker allocation failed", path,
                                     row.payload_offset, "payload.read"));
                         } catch (const std::exception& exception) {
+                            // LFS-CENSUS-OK(empty-catch): record the payload-read worker exception as the first read error
                             record_error(
                                 std::numeric_limits<std::size_t>::max(),
                                 detail::project_error(
@@ -3964,6 +3972,7 @@ namespace lfs::io::project {
                                     exception.what(), path, row.payload_offset,
                                     "payload.read"));
                         } catch (...) {
+                            // LFS-CENSUS-OK(empty-catch): record an unknown payload-read worker exception as the first read error
                             record_error(
                                 std::numeric_limits<std::size_t>::max(),
                                 detail::project_error(
@@ -3975,6 +3984,7 @@ namespace lfs::io::project {
                     });
                 }
             } catch (const std::exception& exception) {
+                // LFS-CENSUS-OK(empty-catch): propagate payload-read worker construction failure as a project error
                 workers.clear();
                 return status_failure(detail::project_error(
                     lfs::ErrorCode::Internal,
