@@ -56,6 +56,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--screen-share-penalty", "screen_share_penalty", Float},
             OptimizationCliBinding{"--oversize-split-fraction", "oversize_split_fraction", Float},
             OptimizationCliBinding{"--no-edge-map", "use_edge_map", Bool, true},
+            OptimizationCliBinding{"--background-improvements", "background_improvements", Bool},
             OptimizationCliBinding{"--no-background-improvements", "background_improvements", Bool, true},
             OptimizationCliBinding{"--no-growth-ratio-rank", "growth_ratio_rank", Bool, true},
             OptimizationCliBinding{"--bg-mode", "bg_mode", Enum, false,
@@ -468,6 +469,7 @@ namespace {
             ::args::ValueFlag<float> screen_share_penalty(training_group, "screen_share_penalty", lfs::core::args::optimization_cli_help("--screen-share-penalty"), {"screen-share-penalty"});
             ::args::ValueFlag<float> oversize_split_fraction(training_group, "oversize_split_fraction", lfs::core::args::optimization_cli_help("--oversize-split-fraction"), {"oversize-split-fraction"});
             ::args::Flag no_edge_map(training_group, "no_edge_map", lfs::core::args::optimization_cli_help("--no-edge-map"), {"no-edge-map"});
+            ::args::Flag background_improvements(training_group, "background_improvements", lfs::core::args::optimization_cli_help("--background-improvements"), {"background-improvements"});
             ::args::Flag no_background_improvements(training_group, "no_background_improvements", lfs::core::args::optimization_cli_help("--no-background-improvements"), {"no-background-improvements"});
             ::args::Flag no_growth_ratio_rank(training_group, "no_growth_ratio_rank", lfs::core::args::optimization_cli_help("--no-growth-ratio-rank"), {"no-growth-ratio-rank"});
             ::args::ValueFlag<float> far_scene_min_fraction(training_group, "fraction", lfs::core::args::optimization_cli_help("--far-scene-min-fraction"), {"far-scene-min-fraction"});
@@ -1156,6 +1158,7 @@ namespace {
                                                                           ? std::optional<float>(::args::get(oversize_split_fraction))
                                                                           : std::optional<float>(),
                                         no_edge_map_flag = bool(no_edge_map),
+                                        background_improvements_flag = bool(background_improvements),
                                         no_background_improvements_flag = bool(no_background_improvements),
                                         no_growth_ratio_rank_flag = bool(no_growth_ratio_rank),
                                         far_scene_min_fraction_val = cli_option_present({"--far-scene-min-fraction"}) ? std::optional<float>(::args::get(far_scene_min_fraction)) : std::optional<float>(),
@@ -1306,6 +1309,8 @@ namespace {
                 setVal(oversize_split_fraction_val, opt.oversize_split_fraction);
                 if (no_edge_map_flag)
                     opt.use_edge_map = false;
+                if (background_improvements_flag)
+                    opt.background_improvements = true;
                 if (no_background_improvements_flag)
                     opt.background_improvements = false;
                 if (no_growth_ratio_rank_flag)
@@ -1418,7 +1423,7 @@ namespace {
                 note_opt("screen_share_penalty", screen_share_penalty_val.has_value());
                 note_opt("oversize_split_fraction", oversize_split_fraction_val.has_value());
                 note_opt("use_edge_map", no_edge_map_flag);
-                note_opt("background_improvements", no_background_improvements_flag);
+                note_opt("background_improvements", background_improvements_flag || no_background_improvements_flag);
                 note_opt("growth_ratio_rank", no_growth_ratio_rank_flag);
                 note_opt("far_scene_min_fraction", far_scene_min_fraction_val.has_value());
                 note_opt("growth_ratio_pow", growth_ratio_pow_val.has_value());
