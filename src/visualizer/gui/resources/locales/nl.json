@@ -1936,7 +1936,7 @@
     "go_to_last_keyframe": "Naar laatste keyframe",
     "loop_on": "Lus: AAN",
     "loop_off": "Lus: UIT",
-    "edit_time": "Tijd bewerken...",
+    "edit_time": "Tijd instellen...",
     "easing_tooltip": "Easing regelt de uitgaande beweging\n(Laatste keyframe heeft geen uitgaand segment)",
     "time_seconds": "Tijd (s)",
     "loop_point_tooltip": "Luspunt @ {} (keert terug naar begin)",

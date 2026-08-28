@@ -1936,7 +1936,7 @@
     "go_to_last_keyframe": "마지막 키프레임으로 이동",
     "loop_on": "반복: ON",
     "loop_off": "반복: OFF",
-    "edit_time": "시간 편집...",
+    "edit_time": "시간 설정...",
     "easing_tooltip": "이집은 나가는 움직임을 제어합니다\n(마지막 키프레임에는 나가는 구간이 없습니다)",
     "time_seconds": "시간 (s)",
     "loop_point_tooltip": "반복 지점 @ {} (시작으로 돌아감)",

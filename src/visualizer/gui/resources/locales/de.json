@@ -1935,7 +1935,7 @@
     "go_to_last_keyframe": "Zum letzten Keyframe",
     "loop_on": "Schleife: EIN",
     "loop_off": "Schleife: AUS",
-    "edit_time": "Zeit bearbeiten...",
+    "edit_time": "Zeit setzen...",
     "easing_tooltip": "Easing steuert die ausgehende Bewegung\n(Letzter Keyframe hat kein ausgehendes Segment)",
     "time_seconds": "Zeit (s)",
     "loop_point_tooltip": "Schleifenpunkt @ {} (kehrt zum Anfang zurück)",

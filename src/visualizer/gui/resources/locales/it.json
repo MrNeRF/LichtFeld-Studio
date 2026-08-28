@@ -1936,7 +1936,7 @@
     "go_to_last_keyframe": "Vai all'ultimo fotogramma chiave",
     "loop_on": "Ciclo: ON",
     "loop_off": "Ciclo: OFF",
-    "edit_time": "Modifica tempo...",
+    "edit_time": "Imposta tempo...",
     "easing_tooltip": "L'easing controlla il movimento in uscita\n(L'ultimo fotogramma chiave non ha un segmento in uscita)",
     "time_seconds": "Tempo (s)",
     "loop_point_tooltip": "Punto di ciclo @ {} (torna all'inizio)",

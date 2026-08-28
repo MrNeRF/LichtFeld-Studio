@@ -1936,7 +1936,7 @@
     "go_to_last_keyframe": "Przejdź do ostatniej klatki kluczowej",
     "loop_on": "Pętla: WŁ",
     "loop_off": "Pętla: WYŁ",
-    "edit_time": "Edytuj czas...",
+    "edit_time": "Ustaw czas...",
     "easing_tooltip": "Easing kontroluje ruch wychodzący\n(Ostatnia klatka kluczowa nie ma segmentu wychodzącego)",
     "time_seconds": "Czas (s)",
     "loop_point_tooltip": "Punkt pętli @ {} (powrót do początku)",

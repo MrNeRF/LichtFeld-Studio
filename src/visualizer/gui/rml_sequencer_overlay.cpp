@@ -311,6 +311,14 @@ namespace lfs::vis::gui {
             html += fmt::format(
                 R"(<div class="context-menu-item" id="ctx-focal">{}</div>)",
                 LOC(Sequencer::EDIT_FOCAL_LENGTH));
+            if (is_first)
+                html += fmt::format(
+                    R"(<div class="context-menu-item disabled" id="ctx-set-time-disabled">{}</div>)",
+                    LOC(Sequencer::SET_TIME));
+            else
+                html += fmt::format(
+                    R"(<div class="context-menu-item" id="ctx-set-time">{}</div>)",
+                    LOC(Sequencer::SET_TIME));
             html += R"(<div class="context-menu-separator"></div>)";
 
             const bool translate_active = edit_mode == SequencerViewportEditMode::Translate;
@@ -796,6 +804,14 @@ namespace lfs::vis::gui {
                      *overlay->context_menu_keyframe_, 0, 0.0f});
             }
             overlay->hideContextMenu();
+        } else if (id == "ctx-set-time") {
+            const auto kf_index = overlay->context_menu_keyframe_;
+            overlay->hideContextMenu();
+            if (kf_index) {
+                const auto* const kf = overlay->controller_.timeline().getKeyframe(*kf_index);
+                if (kf && *kf_index > 0 && !kf->is_loop_point)
+                    overlay->showTimeEdit(*kf_index, kf->time);
+            }
         } else if (id == "ctx-translate") {
             if (overlay->context_menu_keyframe_) {
                 overlay->pending_actions_.push_back(

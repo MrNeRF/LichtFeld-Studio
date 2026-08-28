@@ -1936,7 +1936,7 @@
     "go_to_last_keyframe": "转到最后一个关键帧",
     "loop_on": "循环：开",
     "loop_off": "循环：关",
-    "edit_time": "编辑时间...",
+    "edit_time": "设置时间...",
     "easing_tooltip": "缓动控制离去运动\n（最后一个关键帧没有离去段）",
     "time_seconds": "时间 (秒)",
     "loop_point_tooltip": "循环点 @ {}（返回起点）",
