@@ -129,7 +129,7 @@
         </div>
         <div id="header">
             <div id="timeline">
-                <div id="ruler"></div>
+                <div id="ruler" data-tooltip="tooltip.seq_ruler"></div>
                 <div id="track-area">
                     <div id="track-bar">
                         <span id="hint"></span>
@@ -139,7 +139,7 @@
                     <div id="playhead">
                         <div id="playhead-handle"></div>
                     </div>
-                    <div id="timeline-scrollbar">
+                    <div id="timeline-scrollbar" data-tooltip="tooltip.seq_timeline_scroll">
                         <div id="timeline-scrollbar-thumb"></div>
                     </div>
                 </div>
