@@ -106,6 +106,22 @@ namespace lfs::vis {
             void initPipPreview();
             void renderKeyframePreview(const UIContext& ctx);
             void syncPipPreviewWindow(const ViewportLayout& viewport);
+
+            struct PipPreviewKey {
+                std::optional<sequencer::KeyframeId> selected_id;
+                uint64_t timeline_revision = 0;
+                float playhead = 0.0f;
+                glm::vec3 position{0.0f};
+                glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
+                float focal_length_mm = 0.0f;
+                bool equirectangular = false;
+                int width = 0;
+                int height = 0;
+
+                bool operator==(const PipPreviewKey&) const = default;
+            };
+
+            [[nodiscard]] PipPreviewKey currentPipPreviewKey() const;
             void beginViewportKeyframeEdit(size_t keyframe_index);
             void endViewportKeyframeEdit();
             [[nodiscard]] sequencer::CameraState currentViewportCameraState() const;
@@ -134,10 +150,9 @@ namespace lfs::vis {
             static constexpr float PREVIEW_TARGET_FPS = 30.0f;
             VulkanUiTexture pip_texture_;
             bool pip_initialized_ = false;
-            std::optional<size_t> pip_last_keyframe_;
+            std::optional<PipPreviewKey> pip_last_key_;
+            // Rml reload / GPU reset are not encoded in model state.
             bool pip_needs_update_ = true;
-            int last_pip_output_width_ = -1;
-            int last_pip_output_height_ = -1;
             int pip_render_width_ = 320;
             int pip_render_height_ = 180;
             bool last_equirectangular_ = false;
