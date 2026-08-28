@@ -138,12 +138,10 @@ BASIC_RUNS = (
     _run(
         "basic_exposure_correction",
         "use_exposure_correction",
-        visibility_condition_id="dep_show_exposure_correction",
     ),
     _run(
         "basic_bilateral_toggle",
         "use_bilateral_grid",
-        visibility_condition_id="dep_show_standalone_grid",
     ),
     _run(
         "basic_live_start",
@@ -190,7 +188,6 @@ BASIC_RUNS = (
     _run(
         "basic_ppisp_toggle",
         "ppisp",
-        visibility_condition_id="dep_show_standalone_ppisp",
     ),
     _run(
         "ppisp_exif",
@@ -339,6 +336,8 @@ _ENUM_OPTION_TOOLTIP_KEYS = {
     ("mask_mode", 2): "training.tooltip.opt.mask_mode.ignore",
     ("mask_mode", 3): "training.tooltip.opt.mask_mode.segment_and_ignore",
     ("mask_mode", 4): "training.tooltip.opt.mask_mode.alpha_consistent",
+    ("densify_error_map", 0): "training.tooltip.opt.densify_error_map.ssim",
+    ("densify_error_map", 1): "training.tooltip.opt.densify_error_map.ssim_cs",
     ("bg_mode", 0): "training.tooltip.opt.bg_mode.color",
     ("bg_mode", 1): "training.tooltip.opt.bg_mode.modulation",
     ("bg_mode", 2): "training.tooltip.opt.bg_mode.image",

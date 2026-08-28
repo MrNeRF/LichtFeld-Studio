@@ -270,6 +270,9 @@
     "advanced.means_noise_weight": "Means Noise Weight:",
     "advanced.bounds_percentile": "Bounds Percentile:",
     "advanced.use_error_map": "Use Error Map:",
+    "advanced.densify_error_map": "Densify Error Map:",
+    "advanced.max_screen_share": "Max Screen Share:",
+    "advanced.screen_share_penalty": "Screen Share Penalty:",
     "advanced.use_edge_map": "Use Edge Map:",
     "advanced.far_scene_min_fraction": "Far Scene Min Fraction:",
     "advanced.growth_ratio_rank": "Growth Ratio Rank:",
@@ -288,6 +291,9 @@
     "tooltip.means_noise_weight": "Exploration noise multiplier for MRNF position updates",
     "tooltip.bounds_percentile": "Percentile used for MRNF bounds computation",
     "tooltip.use_error_map": "Weight MRNF refinement by the per-pixel SSIM error map",
+    "tooltip.densify_error_map": "Densify from full SSIM or from contrast-structure only (ignores brightness-only mismatches such as empty sky)",
+    "tooltip.max_screen_share": "Shrink Gaussians that cover more than this share of the view; 0 or 1 disables the cap",
+    "tooltip.screen_share_penalty": "Soft log-scale hinge weight for Gaussians over the screen-share cap; balanced against photometric error so a needed large splat can stay large",
     "tooltip.use_edge_map": "Weight MRNF refinement by Canny edges in ground-truth images",
     "tooltip.background_improvements": "원거리 배경 재구성을 개선합니다 (MRNF): 원거리 시드와 분할, 감쇠 완화, 성장 상한, 스플랫별 위치 스텝, 가시성 정규화 성장 순위, 단계적 용량 채우기. 끄면 기본 MRNF.",
     "tooltip.far_scene_min_fraction": "원거리 기능을 켜는 deep-far 스플랫 최소 비율(0 = 항상 활성)",
@@ -446,6 +452,8 @@
     "options.mask.ignore": "무시",
     "options.mask.segment_and_ignore": "세그먼트 + 무시",
     "options.mask.alpha_consistent": "알파 일관",
+    "options.densify_error_map.ssim": "SSIM",
+    "options.densify_error_map.ssim_cs": "SSIM Contrast-Structure",
     "options.normal_loss_space.auto": "Auto",
     "options.normal_loss_space.camera_opencv": "Camera (OpenCV)",
     "options.normal_loss_space.camera_opengl": "Camera (OpenGL)",
@@ -502,6 +510,10 @@
           "segment_and_ignore": "세그먼트와 무시의 조합",
           "alpha_consistent": "마스크와의 알파 일관성 적용"
         },
+        "densify_error_map": {
+          "ssim": "Full SSIM densify error, including brightness mismatches",
+          "ssim_cs": "Contrast and structure only; ignore brightness-only mismatches"
+        },
         "bg_mode": {
           "color": "고정 배경색 사용",
           "modulation": "재구성된 알파로 배경 변조",
@@ -515,7 +527,16 @@
           "4": "4분의 1 이미지 해상도로 훈련",
           "8": "8분의 1 이미지 해상도로 훈련"
         }
-      }
+      },
+      "exposure_correction": "사진별 노출·화이트밸런스 보정과 국소 잔차 그리드의 조합입니다. 학습 중 사진 간 조명 차이를 흡수하고 모델을 색 중립으로 유지하여 새 시점에 색 편향이 생기지 않습니다. Bilateral Grid와 PPISP를 대체하며, 켜면 둘은 꺼집니다.",
+      "exposure_correction_grid_start": "국소 잔차 그리드 학습을 시작하는 반복 횟수. 전역 노출과 화이트밸런스를 먼저 학습하고, 그리드는 공간적으로 변하는 잔차만 담당합니다.",
+      "bilateral_grid": "위치와 밝기에 따른 사진별 색 보정 그리드. 학습 중에만 노출 차이를 흡수하며 새 시점에는 적용되지 않습니다. Exposure Correction이 이를 대체하며, 켜면 이 옵션은 꺼집니다.",
+      "ppisp": "사진·카메라별로 학습되는 물리 기반 카메라 모델(노출, 비네팅, 화이트밸런스, 톤 커브). Exposure Correction이 이를 대체하며, 켜면 이 옵션은 꺼집니다.",
+      "ppisp_warmup": "PPISP 학습률 워밍업 스텝 수. 학습은 즉시 시작되고 학습률이 이 스텝에 걸쳐 상승합니다.",
+      "ppisp_reg": "단독 PPISP의 정규화 가중치로, 평균 노출과 색을 중립으로 당깁니다. Exposure Correction이 켜져 있으면 중립이 정확히 강제되므로 사용되지 않습니다.",
+      "densify_error_map": "밀집화를 이끄는 오차 신호. 대비-구조는 밝기만 다른 불일치(밝은 하늘과 빈 영역 등)를 무시해 가우시안을 낭비하지 않습니다. SSIM은 이전 동작입니다.",
+      "max_screen_share": "화면에서 이 비율 이상을 덮는 가우시안을 축소합니다. 가짜 하늘 장막 같은 카메라 근처의 큰 덩어리를 방지합니다. 0 또는 1이면 비활성화됩니다.",
+      "screen_share_penalty": "화면 점유 상한을 넘은 가우시안에 적용되는 점진적 축소의 강도. 이미지 오차와 균형을 이루므로 정말 필요한 큰 가우시안은 크게 유지될 수 있습니다."
     },
     "section.masking": "마스크 설정",
     "section.thresholds": "임계값",
@@ -1005,7 +1026,6 @@
     "save_steps": "저장/평가 단계",
     "new_step": "새 단계",
     "mrnf_params": "MRNF Parameters",
-
     "loading_session": "학습 세션을 불러오는 중(반복 {n})…",
     "session_restore_failed": "학습 세션을 불러올 수 없습니다",
     "edit_mode_discards_session_title": "학습 세션을 나갈까요?",

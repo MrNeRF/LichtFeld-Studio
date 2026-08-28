@@ -494,11 +494,6 @@ class TrainingPanel(Panel):
             "dep_ppisp_controller": params.ppisp and params.ppisp_use_controller,
             "dep_bilateral": params.use_bilateral_grid or params.use_exposure_correction,
             "dep_exposure_correction": params.use_exposure_correction,
-            "dep_show_exposure_correction": not (
-                params.use_bilateral_grid or params.ppisp
-            ),
-            "dep_show_standalone_grid": not params.use_exposure_correction,
-            "dep_show_standalone_ppisp": not params.use_exposure_correction,
             "dep_mrnf": _is_mrnf_strategy(params.strategy),
             "dep_igs": params.strategy == "igs+",
             "dep_sparsity": params.enable_sparsity,
@@ -668,30 +663,6 @@ class TrainingPanel(Panel):
         model.bind_func(
             "dep_exposure_correction",
             lambda: p() is not None and p().has_params() and p().use_exposure_correction,
-        )
-        model.bind_func(
-            "dep_show_exposure_correction",
-            lambda: (
-                p() is not None
-                and p().has_params()
-                and not (p().use_bilateral_grid or p().ppisp)
-            ),
-        )
-        model.bind_func(
-            "dep_show_standalone_grid",
-            lambda: (
-                p() is not None
-                and p().has_params()
-                and not p().use_exposure_correction
-            ),
-        )
-        model.bind_func(
-            "dep_show_standalone_ppisp",
-            lambda: (
-                p() is not None
-                and p().has_params()
-                and not p().use_exposure_correction
-            ),
         )
         model.bind_func(
             "dep_mrnf",
@@ -2093,6 +2064,22 @@ class TrainingPanel(Panel):
         if binding is not None and binding.cancel_edit(str(args[0])):
             event.stop_propagation()
 
+    # Exposure correction replaces the standalone bilateral grid and PPISP
+    # (validation rejects the combination), so checking one side unchecks
+    # the other instead of surfacing the conflict at training start.
+    _APPEARANCE_EXCLUSIVE = {
+        "use_exposure_correction": (
+            "use_bilateral_grid",
+            "ppisp",
+            "ppisp_controller",
+            "ppisp_freeze",
+        ),
+        "use_bilateral_grid": ("use_exposure_correction",),
+        "ppisp": ("use_exposure_correction",),
+        "ppisp_controller": ("use_exposure_correction",),
+        "ppisp_freeze": ("use_exposure_correction",),
+    }
+
     def _on_pv_value_change(self, _handle, _event, args):
         if len(args) < 2:
             return
@@ -2100,6 +2087,11 @@ class TrainingPanel(Panel):
         binding = self._pv_binding_by_prop.get(prop)
         if binding is not None:
             binding.set_value(prop, args[1])
+            if bool(args[1]):
+                for other in self._APPEARANCE_EXCLUSIVE.get(prop, ()):
+                    other_binding = self._pv_binding_by_prop.get(other)
+                    if other_binding is not None:
+                        other_binding.set_value(other, False)
 
     def _on_pv_search_clear(self, *_args):
         self._set_property_search_query("")

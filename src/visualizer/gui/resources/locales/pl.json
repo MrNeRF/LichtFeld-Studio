@@ -270,6 +270,9 @@
     "advanced.means_noise_weight": "Means Noise Weight:",
     "advanced.bounds_percentile": "Bounds Percentile:",
     "advanced.use_error_map": "Use Error Map:",
+    "advanced.densify_error_map": "Densify Error Map:",
+    "advanced.max_screen_share": "Max Screen Share:",
+    "advanced.screen_share_penalty": "Screen Share Penalty:",
     "advanced.use_edge_map": "Use Edge Map:",
     "advanced.far_scene_min_fraction": "Far Scene Min Fraction:",
     "advanced.growth_ratio_rank": "Growth Ratio Rank:",
@@ -288,6 +291,9 @@
     "tooltip.means_noise_weight": "Exploration noise multiplier for MRNF position updates",
     "tooltip.bounds_percentile": "Percentile used for MRNF bounds computation",
     "tooltip.use_error_map": "Weight MRNF refinement by the per-pixel SSIM error map",
+    "tooltip.densify_error_map": "Densify from full SSIM or from contrast-structure only (ignores brightness-only mismatches such as empty sky)",
+    "tooltip.max_screen_share": "Shrink Gaussians that cover more than this share of the view; 0 or 1 disables the cap",
+    "tooltip.screen_share_penalty": "Soft log-scale hinge weight for Gaussians over the screen-share cap; balanced against photometric error so a needed large splat can stay large",
     "tooltip.use_edge_map": "Weight MRNF refinement by Canny edges in ground-truth images",
     "tooltip.background_improvements": "Poprawia rekonstrukcję odległego tła (MRNF): dalekie seedy i podziały, złagodzenie zaniku, limit wzrostu, kroki pozycji per splat, ranking wzrostu znormalizowany widocznością, stopniowe wypełnianie pojemności. Wyłączone = zwykłe MRNF.",
     "tooltip.far_scene_min_fraction": "Minimalna część splatów deep-far włączająca funkcje dalekiego pola (0 = zawsze włączone)",
@@ -446,6 +452,8 @@
     "options.mask.ignore": "Ignoruj",
     "options.mask.segment_and_ignore": "Segment + Ignoruj",
     "options.mask.alpha_consistent": "Spójne z alfa",
+    "options.densify_error_map.ssim": "SSIM",
+    "options.densify_error_map.ssim_cs": "SSIM Contrast-Structure",
     "options.normal_loss_space.auto": "Auto",
     "options.normal_loss_space.camera_opencv": "Camera (OpenCV)",
     "options.normal_loss_space.camera_opengl": "Camera (OpenGL)",
@@ -502,6 +510,10 @@
           "segment_and_ignore": "Kombinacja Segmentu i Ignorowania",
           "alpha_consistent": "Wymuś spójność alfa z maską"
         },
+        "densify_error_map": {
+          "ssim": "Full SSIM densify error, including brightness mismatches",
+          "ssim_cs": "Contrast and structure only; ignore brightness-only mismatches"
+        },
         "bg_mode": {
           "color": "Użyj stałego koloru tła",
           "modulation": "Moduluj tło zrekonstruowaną alfą",
@@ -515,7 +527,16 @@
           "4": "Trenuj w ćwierć rozdzielczości obrazu",
           "8": "Trenuj w jednej ósmej rozdzielczości obrazu"
         }
-      }
+      },
+      "exposure_correction": "Korekcja ekspozycji i balansu bieli dla kazdego zdjecia plus lokalna siatka resztkowa. Pochlania roznice oswietlenia miedzy zdjeciami podczas treningu i utrzymuje model neutralny kolorystycznie, bez przebarwien w nowych widokach. Zastepuje Bilateral Grid i PPISP; wlaczenie wylacza tamte opcje.",
+      "exposure_correction_grid_start": "Iteracja, od ktorej lokalna siatka resztkowa zaczyna trening. Najpierw uczone sa globalna ekspozycja i balans bieli; siatka przejmuje tylko reszty zmienne przestrzennie.",
+      "bilateral_grid": "Siatka korekcji koloru dla kazdego zdjecia, zalezna od pozycji i jasnosci. Pochlania roznice ekspozycji tylko podczas treningu; nie jest stosowana w nowych widokach. Zastapiona przez Exposure Correction; jej wlaczenie wylacza te opcje.",
+      "ppisp": "Fizyczny model kamery uczony dla zdjecia i kamery: ekspozycja, winietowanie, balans bieli i krzywa tonalna. Zastapiony przez Exposure Correction; jej wlaczenie wylacza te opcje.",
+      "ppisp_warmup": "Kroki rozgrzewki wspolczynnika uczenia PPISP. Trening zaczyna sie od razu; wspolczynnik rosnie przez te liczbe krokow.",
+      "ppisp_reg": "Waga regularyzacji samodzielnego PPISP: przyciaga srednia ekspozycje i kolor do neutralnych. Bez efektu przy wlaczonej Exposure Correction, ktora wymusza neutralnosc dokladnie.",
+      "densify_error_map": "Sygnal bledu sterujacy zageszczaniem. Kontrast-struktura ignoruje roznice samej jasnosci, jak puste niebo na tle jasnego zdjecia, i nie marnuje tam gaussianow. SSIM przywraca poprzednie zachowanie.",
+      "max_screen_share": "Zmniejsza kazdy gaussian pokrywajacy wiecej niz ten udzial ekranu. Zapobiega duzym plamom blisko kamery, jak falszywa zaslona nieba. 0 lub 1 wylacza limit.",
+      "screen_share_penalty": "Sila stopniowego zmniejszania gaussianow ponad limitem udzialu ekranu. Rownowazona z bledem obrazu, wiec naprawde potrzebny duzy gaussian moze pozostac duzy."
     },
     "section.masking": "Ustawienia Maski",
     "section.thresholds": "Progi",
@@ -1005,7 +1026,6 @@
     "save_steps": "Kroki Zapisu/Evaluacji",
     "new_step": "Nowy Krok",
     "mrnf_params": "MRNF Parameters",
-
     "loading_session": "Wczytywanie sesji treningowej (iteracja {n})…",
     "session_restore_failed": "Nie udało się wczytać sesji treningowej",
     "edit_mode_discards_session_title": "Opuścić sesję treningową?",

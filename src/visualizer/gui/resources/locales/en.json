@@ -270,6 +270,9 @@
     "advanced.means_noise_weight": "Means Noise Weight:",
     "advanced.bounds_percentile": "Bounds Percentile:",
     "advanced.use_error_map": "Use Error Map:",
+    "advanced.densify_error_map": "Densify Error Map:",
+    "advanced.max_screen_share": "Max Screen Share:",
+    "advanced.screen_share_penalty": "Screen Share Penalty:",
     "advanced.use_edge_map": "Use Edge Map:",
     "advanced.far_scene_min_fraction": "Far Scene Min Fraction:",
     "advanced.growth_ratio_rank": "Growth Ratio Rank:",
@@ -288,6 +291,9 @@
     "tooltip.means_noise_weight": "Exploration noise multiplier for MRNF position updates",
     "tooltip.bounds_percentile": "Percentile used for MRNF bounds computation",
     "tooltip.use_error_map": "Weight MRNF refinement by the per-pixel SSIM error map",
+    "tooltip.densify_error_map": "Densify from full SSIM or from contrast-structure only (ignores brightness-only mismatches such as empty sky)",
+    "tooltip.max_screen_share": "Shrink Gaussians that cover more than this share of the view; 0 or 1 disables the cap",
+    "tooltip.screen_share_penalty": "Soft log-scale hinge weight for Gaussians over the screen-share cap; balanced against photometric error so a needed large splat can stay large",
     "tooltip.use_edge_map": "Weight MRNF refinement by Canny edges in ground-truth images",
     "tooltip.background_improvements": "Improve distant background reconstruction (MRNF): far-field seeding and splits, decay relief, growth cap, per-splat position steps, visibility-ratio growth ranking, paced capacity fill. Off restores plain MRNF.",
     "tooltip.far_scene_min_fraction": "Minimum deep-far splat fraction that activates far-field features (0 = always on)",
@@ -446,6 +452,8 @@
     "options.mask.ignore": "Ignore",
     "options.mask.segment_and_ignore": "Segment + Ignore",
     "options.mask.alpha_consistent": "Alpha Consistent",
+    "options.densify_error_map.ssim": "SSIM",
+    "options.densify_error_map.ssim_cs": "SSIM Contrast-Structure",
     "options.normal_loss_space.auto": "Auto",
     "options.normal_loss_space.camera_opencv": "Camera (OpenCV)",
     "options.normal_loss_space.camera_opengl": "Camera (OpenGL)",
@@ -502,6 +510,10 @@
           "segment_and_ignore": "Combination of Segment and Ignore",
           "alpha_consistent": "Enforce alpha consistency with the mask"
         },
+        "densify_error_map": {
+          "ssim": "Full SSIM densify error, including brightness mismatches",
+          "ssim_cs": "Contrast and structure only; ignore brightness-only mismatches"
+        },
         "bg_mode": {
           "color": "Use a fixed background color",
           "modulation": "Modulate background with reconstructed alpha",
@@ -515,7 +527,16 @@
           "4": "Train at quarter image resolution",
           "8": "Train at one-eighth image resolution"
         }
-      }
+      },
+      "exposure_correction": "Per-photo exposure and white-balance correction plus a local residual grid. Absorbs lighting differences between photos during training and keeps the trained model color-neutral, so novel views show no color cast. Replaces Bilateral Grid and PPISP; turning it on switches them off.",
+      "exposure_correction_grid_start": "Iteration at which the local residual grid starts training. Global exposure and white balance are learned first, so the grid only picks up spatially varying residue.",
+      "bilateral_grid": "Per-photo color correction grid, varying over position and brightness. Absorbs exposure differences between photos during training only; it is not applied to novel views. Superseded by Exposure Correction; turning that on switches this off.",
+      "ppisp": "Physically based camera model learned per photo and camera: exposure, vignetting, white balance and tone curve. Superseded by Exposure Correction; turning that on switches this off.",
+      "ppisp_warmup": "Learning-rate warmup steps for PPISP. Training starts immediately; the learning rate ramps up over this many steps.",
+      "ppisp_reg": "Regularization weight for standalone PPISP: anchors the average exposure and color toward neutral. Unused when Exposure Correction is on, which enforces neutrality exactly.",
+      "densify_error_map": "Error signal that steers densification. Contrast-structure ignores brightness-only mismatches, such as empty sky against a bright photo, so no Gaussians are wasted there. SSIM restores the previous behavior.",
+      "max_screen_share": "Shrinks any Gaussian covering more than this share of the screen. Prevents large near-camera blobs such as a false sky canopy. 0 or 1 disables the cap.",
+      "screen_share_penalty": "Strength of the gradual shrink applied to Gaussians over the screen-share cap. Balanced against image error, so a genuinely needed large Gaussian can stay large."
     },
     "section.masking": "Mask Settings",
     "section.thresholds": "Thresholds",

@@ -270,6 +270,9 @@
     "advanced.means_noise_weight": "Means Noise Weight:",
     "advanced.bounds_percentile": "Bounds Percentile:",
     "advanced.use_error_map": "Use Error Map:",
+    "advanced.densify_error_map": "Densify Error Map:",
+    "advanced.max_screen_share": "Max Screen Share:",
+    "advanced.screen_share_penalty": "Screen Share Penalty:",
     "advanced.use_edge_map": "Use Edge Map:",
     "advanced.far_scene_min_fraction": "Far Scene Min Fraction:",
     "advanced.growth_ratio_rank": "Growth Ratio Rank:",
@@ -288,6 +291,9 @@
     "tooltip.means_noise_weight": "Exploration noise multiplier for MRNF position updates",
     "tooltip.bounds_percentile": "Percentile used for MRNF bounds computation",
     "tooltip.use_error_map": "Weight MRNF refinement by the per-pixel SSIM error map",
+    "tooltip.densify_error_map": "Densify from full SSIM or from contrast-structure only (ignores brightness-only mismatches such as empty sky)",
+    "tooltip.max_screen_share": "Shrink Gaussians that cover more than this share of the view; 0 or 1 disables the cap",
+    "tooltip.screen_share_penalty": "Soft log-scale hinge weight for Gaussians over the screen-share cap; balanced against photometric error so a needed large splat can stay large",
     "tooltip.use_edge_map": "Weight MRNF refinement by Canny edges in ground-truth images",
     "tooltip.background_improvements": "Verbetert de reconstructie van de verre achtergrond (MRNF): verre-veld-seeds en -splits, vervalverlichting, groeiplafond, positiestappen per splat, zichtbaarheidsgenormaliseerde groeirangschikking, gelijkmatige capaciteitsvulling. Uit = gewoon MRNF.",
     "tooltip.far_scene_min_fraction": "Minimale deep-far-splatfractie die ver-veldfeatures activeert (0 = altijd aan)",
@@ -446,6 +452,8 @@
     "options.mask.ignore": "Negeren",
     "options.mask.segment_and_ignore": "Segmenteren + Negeren",
     "options.mask.alpha_consistent": "Alpha-consistent",
+    "options.densify_error_map.ssim": "SSIM",
+    "options.densify_error_map.ssim_cs": "SSIM Contrast-Structure",
     "options.normal_loss_space.auto": "Auto",
     "options.normal_loss_space.camera_opencv": "Camera (OpenCV)",
     "options.normal_loss_space.camera_opengl": "Camera (OpenGL)",
@@ -502,6 +510,10 @@
           "segment_and_ignore": "Combinatie van Segmenteren en Negeren",
           "alpha_consistent": "Alpha-consistentie met masker afdwingen"
         },
+        "densify_error_map": {
+          "ssim": "Full SSIM densify error, including brightness mismatches",
+          "ssim_cs": "Contrast and structure only; ignore brightness-only mismatches"
+        },
         "bg_mode": {
           "color": "Gebruik een vaste achtergrondkleur",
           "modulation": "Achtergrond moduleren met gereconstrueerde alpha",
@@ -515,7 +527,16 @@
           "4": "Trainen op kwart afbeeldingsresolutie",
           "8": "Trainen op een achtste afbeeldingsresolutie"
         }
-      }
+      },
+      "exposure_correction": "Belichtings- en witbalanscorrectie per foto plus een lokaal restrooster. Vangt lichtverschillen tussen foto's op tijdens de training en houdt het model kleurneutraal, zodat nieuwe weergaven geen kleurzweem tonen. Vervangt Bilateral Grid en PPISP; inschakelen zet die uit.",
+      "exposure_correction_grid_start": "Iteratie waarop het lokale restrooster begint te trainen. Globale belichting en witbalans worden eerst geleerd; het rooster vangt alleen ruimtelijk varierende resten op.",
+      "bilateral_grid": "Kleurcorrectierooster per foto, afhankelijk van positie en helderheid. Vangt belichtingsverschillen alleen tijdens de training op; wordt niet toegepast op nieuwe weergaven. Vervangen door Exposure Correction; die inschakelen zet dit uit.",
+      "ppisp": "Fysisch gebaseerd cameramodel, geleerd per foto en camera: belichting, vignettering, witbalans en tooncurve. Vervangen door Exposure Correction; die inschakelen zet dit uit.",
+      "ppisp_warmup": "Opwarmstappen van de leersnelheid voor PPISP. De training start direct; de leersnelheid loopt over dit aantal stappen op.",
+      "ppisp_reg": "Regularisatiegewicht voor los PPISP: trekt gemiddelde belichting en kleur richting neutraal. Zonder effect als Exposure Correction aanstaat, die neutraliteit exact afdwingt.",
+      "densify_error_map": "Foutsignaal dat de verdichting stuurt. Contrast-structuur negeert verschillen in alleen helderheid, zoals lege lucht tegen een lichte foto, en verspilt daar geen Gaussians. SSIM herstelt het oude gedrag.",
+      "max_screen_share": "Verkleint elke Gaussian die meer dan dit deel van het scherm bedekt. Voorkomt grote vlekken dicht bij de camera, zoals een vals hemelgordijn. 0 of 1 schakelt de limiet uit.",
+      "screen_share_penalty": "Sterkte van de geleidelijke verkleining boven de schermaandeel-limiet. In balans met de beeldfout, zodat een echt nodige grote Gaussian groot kan blijven."
     },
     "section.masking": "Maskerinstellingen",
     "section.thresholds": "Drempelwaarden",
@@ -1005,7 +1026,6 @@
     "save_steps": "Bewaar/Eval Stappen",
     "new_step": "Nieuwe Stap",
     "mrnf_params": "MRNF Parameters",
-
     "loading_session": "Trainingssessie laden (iteratie {n})…",
     "session_restore_failed": "De trainingssessie kon niet worden geladen",
     "edit_mode_discards_session_title": "Trainingssessie verlaten?",

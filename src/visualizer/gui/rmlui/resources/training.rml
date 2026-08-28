@@ -161,14 +161,12 @@
     <!-- Params that follow the main training edit lock -->
     <div data-class-disabled-overlay="live_disabled">
       <div class="setting-row" data-for="row : pv_basic_exposure_correction_rows"
-           data-if="dep_show_exposure_correction"
            data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
       </div>
       <div class="setting-row" data-for="row : pv_basic_bilateral_toggle_rows"
-           data-if="dep_show_standalone_grid"
            data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
@@ -293,7 +291,6 @@
                data-event-click="pv_value_change(row.id, !row.checked)" />
       </div>
       <div class="setting-row" data-for="row : pv_basic_ppisp_toggle_rows"
-           data-if="dep_show_standalone_ppisp"
            data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
