@@ -180,6 +180,66 @@ body {
     margin-left: 2dp;
 }
 
+#resolution-field {
+    position: relative;
+    display: flex;
+    align-items: center;
+    padding: 0 4dp;
+    min-height: 18dp;
+    border-width: 1dp;
+    border-color: transparent;
+    border-radius: 4dp;
+    cursor: pointer;
+    transition: border-color 0.12s quadratic-out, background-color 0.12s quadratic-out;
+}
+
+#resolution-field:hover,
+#resolution-field.is-editing {
+    border-color: #45475a;
+    background-color: #313244;
+}
+
+#resolution-field.is-editing {
+    cursor: text;
+    opacity: 1;
+}
+
+#resolution-info,
+#resolution-input {
+    font-family: "JetBrains Mono";
+    font-size: 12dp;
+    color: #cdd6f4;
+}
+
+#resolution-info {
+    white-space: nowrap;
+}
+
+#resolution-input {
+    display: none;
+    width: 80dp;
+    padding: 0;
+    margin: 0;
+    min-height: 0;
+    background-color: transparent;
+    border-width: 0;
+    box-shadow: none;
+}
+
+#resolution-field.is-editing #resolution-info {
+    display: none;
+}
+
+#resolution-field.is-editing #resolution-input {
+    display: block;
+}
+
+#resolution-input:focus,
+#resolution-input:focus-visible {
+    border-width: 0;
+    box-shadow: none;
+}
+
 .transport-sep {
     width: 1dp;
     height: 20dp;

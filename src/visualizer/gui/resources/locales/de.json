@@ -1069,6 +1069,7 @@
     "seq_load_sequence": "Ordner mit PLY-Frames als Sequencer-Clip laden",
     "seq_sequence_fps": "PLY-Sequenz-Wiedergabe-FPS (Klick zum Bearbeiten)",
     "seq_format": "Export-Formatvorlage (Rechtsklick für Optionen)",
+    "seq_resolution": "Ausgabeauflösung (zum Bearbeiten klicken, z. B. 1920x1080)",
     "seq_quality": "CRF-Qualität (niedriger = bessere Qualität, größere Datei)",
     "seq_export": "Video aus Kamerapfad exportieren",
     "seq_clear": "Alle Keyframes löschen",

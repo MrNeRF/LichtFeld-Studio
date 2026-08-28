@@ -531,9 +531,19 @@ namespace lfs::vis::gui {
             preview_source_ = texture_src;
         }
 
-        el_preview_window_->SetProperty("left", fmt::format("{:.1f}px", left));
-        el_preview_window_->SetProperty("top", fmt::format("{:.1f}px", top));
-        el_preview_window_->SetProperty("width", fmt::format("{:.1f}px", width + 8.0f));
+        constexpr float CHROME_HEIGHT = 26.0f;
+        const float win_w = width + 8.0f;
+        const float win_h = height + CHROME_HEIGHT;
+        float left_px = left;
+        float top_px = top;
+        if (width_ > 0)
+            left_px = std::clamp(left_px, 0.0f, std::max(0.0f, static_cast<float>(width_) - win_w));
+        if (height_ > 0)
+            top_px = std::clamp(top_px, 0.0f, std::max(0.0f, static_cast<float>(height_) - win_h));
+
+        el_preview_window_->SetProperty("left", fmt::format("{:.1f}px", left_px));
+        el_preview_window_->SetProperty("top", fmt::format("{:.1f}px", top_px));
+        el_preview_window_->SetProperty("width", fmt::format("{:.1f}px", win_w));
         el_preview_title_->SetInnerRML(title);
         el_preview_window_->SetClass("playing", playing);
         el_preview_image_->SetProperty("width", fmt::format("{:.1f}px", width));

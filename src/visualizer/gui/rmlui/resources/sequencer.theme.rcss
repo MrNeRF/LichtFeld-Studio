@@ -35,6 +35,7 @@
 
 .ruler-label,
 #duration,
+#resolution-info,
 .transport-info,
 .speed-text,
 .dropdown-arrow,
