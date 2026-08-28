@@ -394,7 +394,8 @@ __device__ __forceinline__ void ppisp_apply_color_correction_bwd(const float3& r
     float3 rgi_in = make_float3(rgb_in.x, rgb_in.y, intensity);
     float3 rgi_out = H * rgi_in;
 
-    float norm_factor = __fdividef(intensity, rgi_out.z + 1.0e-5f);
+    const float z_safe = fmaxf(rgi_out.z, 0.0f);
+    float norm_factor = __fdividef(intensity, z_safe + 1.0e-5f);
 
     float3 grad_rgi_out_norm;
     grad_rgi_out_norm.x = grad_rgb_out.x - grad_rgb_out.z;
@@ -403,7 +404,11 @@ __device__ __forceinline__ void ppisp_apply_color_correction_bwd(const float3& r
 
     float3 grad_rgi_out = grad_rgi_out_norm * norm_factor;
     float grad_norm_factor = ppisp_dot(grad_rgi_out_norm, rgi_out);
-    float grad_rgi_out_z_norm = -grad_norm_factor * norm_factor / (rgi_out.z + 1.0e-5f);
+    // d(norm_factor)/d(rgi_out.z) is zero on the clamped (z <= 0) side.
+    float grad_rgi_out_z_norm = 0.0f;
+    if (rgi_out.z > 0.0f) {
+        grad_rgi_out_z_norm = -grad_norm_factor * norm_factor / (rgi_out.z + 1.0e-5f);
+    }
     grad_rgi_out.z = grad_rgi_out.z + grad_rgi_out_z_norm;
 
     float3x3 grad_H;
