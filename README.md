@@ -14,6 +14,7 @@ LichtFeld Studio lets you train new scenes from COLMAP datasets, resume checkpoi
 [![Discord](https://img.shields.io/badge/Discord-Join%20Us-7289DA?logo=discord&logoColor=white)](https://discord.gg/TbxJST2BbC)
 [![Website](https://img.shields.io/badge/Website-LichtFeld%20Studio-blue)](https://lichtfeld.io)
 [![X](https://img.shields.io/badge/X-Follow-111111?logo=x&logoColor=white)](https://twitter.com/janusch_patas)
+[![YouTube](https://img.shields.io/badge/YouTube-Subscribe-FF0000?logo=youtube&logoColor=white)](https://www.youtube.com/@lichtfeldstudio)
 [![Papers](https://img.shields.io/badge/Papers-Awesome%203DGS-orange)](https://mrnerf.github.io/awesome-3D-gaussian-splatting/)
 
 [![GitHub Sponsors](https://img.shields.io/badge/GitHub%20Sponsors-Support-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/MrNeRF)
@@ -123,6 +124,7 @@ Current project notes:
 - [Discord](https://discord.gg/TbxJST2BbC) for support, discussion, and showcase posts
 - [Website](https://mrnerf.com) for project updates and related work
 - [Twitter / X](https://twitter.com/janusch_patas) for announcements
+- [YouTube](https://www.youtube.com/@lichtfeldstudio) for video tours and feature demos
 
 ## Contributing
 
