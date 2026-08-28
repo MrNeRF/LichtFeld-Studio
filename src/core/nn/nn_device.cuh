@@ -96,6 +96,30 @@ namespace lfs::core::nn::device {
 #endif
     }
 
+    // src_bytes is 0 or 16. 0 writes zeros to smem and does not touch gmem, so
+    // K/N/M tails stay on the cp.async path instead of a scalar fallback.
+    template <bool kCacheGlobal>
+    __device__ __forceinline__ void cp_async16_pred(void* smem_addr, const void* glob_addr,
+                                                    const bool pred) {
+#if __CUDA_ARCH__ >= 800
+        const unsigned smem = __cvta_generic_to_shared(smem_addr);
+        const unsigned sz = pred ? 16u : 0u;
+        if constexpr (kCacheGlobal) {
+            asm volatile("cp.async.cg.shared.global [%0], [%1], 16, %2;\n" ::"r"(smem),
+                         "l"(glob_addr), "r"(sz));
+        } else {
+            asm volatile("cp.async.ca.shared.global [%0], [%1], 16, %2;\n" ::"r"(smem),
+                         "l"(glob_addr), "r"(sz));
+        }
+#else
+        if (pred) {
+            *reinterpret_cast<uint4*>(smem_addr) = *reinterpret_cast<const uint4*>(glob_addr);
+        } else {
+            *reinterpret_cast<uint4*>(smem_addr) = uint4{0, 0, 0, 0};
+        }
+#endif
+    }
+
     __device__ __forceinline__ void cp_async_commit() {
 #if __CUDA_ARCH__ >= 800
         asm volatile("cp.async.commit_group;\n");

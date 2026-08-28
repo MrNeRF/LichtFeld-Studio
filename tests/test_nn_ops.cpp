@@ -135,36 +135,42 @@ namespace {
     }
 
     std::vector<float> cpu_attention(const std::vector<float>& q, const std::vector<float>& k,
-                                     const std::vector<float>& v, int b, int h, int n, int d) {
+                                     const std::vector<float>& v, int b, int h, int n_q, int n_k,
+                                     int d) {
         const float scale = 1.0f / std::sqrt(static_cast<float>(d));
-        std::vector<float> o(q.size(), 0.0f);
-        std::vector<float> scores(static_cast<std::size_t>(n) * n);
+        std::vector<float> o(static_cast<std::size_t>(b) * h * n_q * d, 0.0f);
+        std::vector<float> scores(static_cast<std::size_t>(n_q) * n_k);
         for (int bh = 0; bh < b * h; ++bh) {
-            const float* qh = q.data() + static_cast<std::size_t>(bh) * n * d;
-            const float* kh = k.data() + static_cast<std::size_t>(bh) * n * d;
-            const float* vh = v.data() + static_cast<std::size_t>(bh) * n * d;
-            float* oh = o.data() + static_cast<std::size_t>(bh) * n * d;
-            for (int i = 0; i < n; ++i) {
-                for (int j = 0; j < n; ++j) {
+            const float* qh = q.data() + static_cast<std::size_t>(bh) * n_q * d;
+            const float* kh = k.data() + static_cast<std::size_t>(bh) * n_k * d;
+            const float* vh = v.data() + static_cast<std::size_t>(bh) * n_k * d;
+            float* oh = o.data() + static_cast<std::size_t>(bh) * n_q * d;
+            for (int i = 0; i < n_q; ++i) {
+                for (int j = 0; j < n_k; ++j) {
                     float dot = 0.0f;
                     for (int t = 0; t < d; ++t) {
                         dot += qh[i * d + t] * kh[j * d + t];
                     }
-                    scores[i * n + j] = dot * scale;
+                    scores[i * n_k + j] = dot * scale;
                 }
             }
-            auto p = cpu_softmax(scores, n, n);
-            for (int i = 0; i < n; ++i) {
+            auto p = cpu_softmax(scores, n_q, n_k);
+            for (int i = 0; i < n_q; ++i) {
                 for (int t = 0; t < d; ++t) {
                     float sum = 0.0f;
-                    for (int j = 0; j < n; ++j) {
-                        sum += p[i * n + j] * vh[j * d + t];
+                    for (int j = 0; j < n_k; ++j) {
+                        sum += p[i * n_k + j] * vh[j * d + t];
                     }
                     oh[i * d + t] = sum;
                 }
             }
         }
         return o;
+    }
+
+    std::vector<float> cpu_attention(const std::vector<float>& q, const std::vector<float>& k,
+                                     const std::vector<float>& v, int b, int h, int n, int d) {
+        return cpu_attention(q, k, v, b, h, n, n, d);
     }
 
     std::vector<float> cpu_conv2d(const std::vector<float>& in, const std::vector<float>& w,
@@ -288,6 +294,94 @@ TEST_F(NnOpsTest, LinearMatchesGemmNT) {
     EXPECT_TRUE(all_close(host_f32(y), ref, kF32Rtol, kF32Atol));
 }
 
+TEST_F(NnOpsTest, GemmAlignedNtResidualScaleGelu) {
+    const int shapes[][3] = {
+        {128, 112, 112},
+        {256, 336, 112},
+        {192, 128, 64},
+        {1370, 768, 768},
+        {160, 80, 48}};
+    std::mt19937 rng(2);
+    std::uniform_real_distribution<float> dist(-0.4f, 0.4f);
+    for (const auto& mnk : shapes) {
+        const int m = mnk[0], n = mnk[1], k = mnk[2];
+        std::vector<float> a(static_cast<std::size_t>(m) * k);
+        std::vector<float> b(static_cast<std::size_t>(n) * k);
+        std::vector<float> bias(static_cast<std::size_t>(n));
+        std::vector<float> scale(static_cast<std::size_t>(n));
+        std::vector<float> residual(static_cast<std::size_t>(m) * n);
+        for (auto& v : a) {
+            v = dist(rng);
+        }
+        for (auto& v : b) {
+            v = dist(rng);
+        }
+        for (auto& v : bias) {
+            v = dist(rng);
+        }
+        for (auto& v : scale) {
+            v = 0.75f + dist(rng);
+        }
+        for (auto& v : residual) {
+            v = dist(rng);
+        }
+        auto ref = cpu_gemm(a, b, m, n, k, true, bias.data(), 3);
+        for (int i = 0; i < m; ++i) {
+            for (int j = 0; j < n; ++j) {
+                const int idx = i * n + j;
+                ref[static_cast<std::size_t>(idx)] =
+                    ref[static_cast<std::size_t>(idx)] * scale[static_cast<std::size_t>(j)] +
+                    residual[static_cast<std::size_t>(idx)];
+            }
+        }
+        auto A = upload(a, {static_cast<std::size_t>(m), static_cast<std::size_t>(k)},
+                        lfs::core::DataType::Float16);
+        auto B = upload(b, {static_cast<std::size_t>(n), static_cast<std::size_t>(k)},
+                        lfs::core::DataType::Float16);
+        auto Bs = upload(bias, {static_cast<std::size_t>(n)}, lfs::core::DataType::Float16);
+        auto Sc = upload(scale, {static_cast<std::size_t>(n)}, lfs::core::DataType::Float16);
+        auto R = upload(residual, {static_cast<std::size_t>(m), static_cast<std::size_t>(n)},
+                        lfs::core::DataType::Float16);
+        auto C = lfs::core::nn::gemm(A, B, false, true, &Bs, lfs::core::nn::Activation::GeluErf, &R,
+                                     &Sc);
+        EXPECT_TRUE(all_close(host_f32(C), ref, kF16Rtol, kF16Atol))
+            << "m=" << m << " n=" << n << " k=" << k;
+    }
+}
+
+TEST_F(NnOpsTest, LinearResidualMatchesAdd) {
+    const int m = 192, n = 112, k = 112;
+    std::mt19937 rng(3);
+    std::uniform_real_distribution<float> dist(-0.5f, 0.5f);
+    std::vector<float> x(static_cast<std::size_t>(m) * k);
+    std::vector<float> w(static_cast<std::size_t>(n) * k);
+    std::vector<float> bias(static_cast<std::size_t>(n));
+    std::vector<float> residual(static_cast<std::size_t>(m) * n);
+    for (auto& v : x) {
+        v = dist(rng);
+    }
+    for (auto& v : w) {
+        v = dist(rng);
+    }
+    for (auto& v : bias) {
+        v = dist(rng);
+    }
+    for (auto& v : residual) {
+        v = dist(rng);
+    }
+    for (const auto dtype : {lfs::core::DataType::Float32, lfs::core::DataType::Float16}) {
+        auto X = upload(x, {2, 96, static_cast<std::size_t>(k)}, dtype);
+        auto W = upload(w, {static_cast<std::size_t>(n), static_cast<std::size_t>(k)}, dtype);
+        auto B = upload(bias, {static_cast<std::size_t>(n)}, dtype);
+        auto R = upload(residual, {2, 96, static_cast<std::size_t>(n)}, dtype);
+        auto fused = lfs::core::nn::linear(X, W, &B, lfs::core::nn::Activation::None, &R);
+        auto composed = lfs::core::nn::linear(X, W, &B, lfs::core::nn::Activation::None).add(R);
+        const float rtol = dtype == lfs::core::DataType::Float16 ? kF16Rtol : kF32Rtol;
+        const float atol = dtype == lfs::core::DataType::Float16 ? kF16Atol : kF32Atol;
+        EXPECT_TRUE(all_close(host_f32(fused), host_f32(composed), rtol, atol));
+    }
+}
+
 TEST_F(NnOpsTest, LayerNormAndRmsNorm) {
     const int rows = 6, cols = 17;
     std::vector<float> x(rows * cols), w(cols, 1.2f), b(cols, -0.3f);
@@ -345,6 +439,45 @@ TEST_F(NnOpsTest, AttentionWmmaTileParity) {
     auto V = upload(v, shape, lfs::core::DataType::Float16);
     auto O = lfs::core::nn::attention(Q, K, V);
     EXPECT_TRUE(all_close(host_f32(O), ref, kF16Rtol, kF16Atol));
+}
+
+TEST_F(NnOpsTest, AttentionD56RectangularParity) {
+    std::mt19937 rng(23);
+    std::uniform_real_distribution<float> dist(-0.6f, 0.6f);
+    const auto run = [&](int b, int h, int n_q, int n_k, int d) {
+        std::vector<float> q(static_cast<std::size_t>(b) * h * n_q * d);
+        std::vector<float> k(static_cast<std::size_t>(b) * h * n_k * d);
+        std::vector<float> v(k.size());
+        for (auto& val : q) {
+            val = dist(rng);
+        }
+        for (auto& val : k) {
+            val = dist(rng);
+        }
+        for (auto& val : v) {
+            val = dist(rng);
+        }
+        const auto ref = cpu_attention(q, k, v, b, h, n_q, n_k, d);
+        auto q_shape = std::vector<std::size_t>{static_cast<std::size_t>(b),
+                                                static_cast<std::size_t>(h),
+                                                static_cast<std::size_t>(n_q),
+                                                static_cast<std::size_t>(d)};
+        auto kv_shape = std::vector<std::size_t>{static_cast<std::size_t>(b),
+                                                 static_cast<std::size_t>(h),
+                                                 static_cast<std::size_t>(n_k),
+                                                 static_cast<std::size_t>(d)};
+        auto Q = upload(q, q_shape, lfs::core::DataType::Float16);
+        auto K = upload(k, kv_shape, lfs::core::DataType::Float16);
+        auto V = upload(v, kv_shape, lfs::core::DataType::Float16);
+        auto O = lfs::core::nn::attention(Q, K, V);
+        EXPECT_TRUE(all_close(host_f32(O), ref, kF16Rtol, kF16Atol))
+            << "b=" << b << " h=" << h << " n_q=" << n_q << " n_k=" << n_k << " d=" << d;
+    };
+    run(1, 1, 17, 17, 56);
+    run(1, 2, 49, 196, 56);
+    run(2, 8, 12, 40, 56);
+    run(1, 8, 128, 128, 56);
+    run(1, 1, 64, 64, 32);
 }
 
 TEST_F(NnOpsTest, AttentionVsExplicitSoftmax) {
@@ -515,6 +648,116 @@ TEST_F(NnOpsTest, Conv2dFp16Large3x3MatchesRef) {
     const auto refr = cpu_conv2d(in, wt, &bias, n, cin, h, w, cout, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1);
     auto OutR = lfs::core::nn::conv2d(In, W, &B, p);
     EXPECT_TRUE(all_close(host_f32(OutR), refr, kF16Rtol, kF16Atol)) << "3x3 replicate";
+}
+
+TEST_F(NnOpsTest, SplitQkvWindow2dMatchesComposed) {
+    const int b = 1, h = 16, w = 16, heads = 2, d = 8, ws = 8;
+    std::vector<float> qkv(static_cast<std::size_t>(b) * h * w * 3 * heads * d);
+    for (int i = 0; i < static_cast<int>(qkv.size()); ++i) {
+        qkv[static_cast<std::size_t>(i)] = 0.01f * (i - 40);
+    }
+    for (const auto dtype : {lfs::core::DataType::Float32, lfs::core::DataType::Float16}) {
+        auto QKV = upload(qkv,
+                          {static_cast<std::size_t>(b), static_cast<std::size_t>(h),
+                           static_cast<std::size_t>(w), static_cast<std::size_t>(3 * heads * d)},
+                          dtype);
+        auto part = lfs::core::nn::window_partition_2d(QKV, ws);
+        auto packed = part.windows.reshape(lfs::core::TensorShape(std::vector<std::size_t>{
+            part.windows.shape()[0],
+            part.windows.shape()[1] * part.windows.shape()[2],
+            part.windows.shape()[3]}));
+        auto ref = lfs::core::nn::split_qkv(packed, heads);
+        auto got = lfs::core::nn::split_qkv_window_2d(QKV, heads, ws);
+        const float rtol = dtype == lfs::core::DataType::Float16 ? kF16Rtol : kF32Rtol;
+        const float atol = dtype == lfs::core::DataType::Float16 ? kF16Atol : kF32Atol;
+        EXPECT_TRUE(all_close(host_f32(got[0]), host_f32(ref[0]), rtol, atol)) << "Q";
+        EXPECT_TRUE(all_close(host_f32(got[1]), host_f32(ref[1]), rtol, atol)) << "K";
+        EXPECT_TRUE(all_close(host_f32(got[2]), host_f32(ref[2]), rtol, atol)) << "V";
+    }
+
+    const int hp = 14, wp = 14;
+    std::vector<float> qkvp(static_cast<std::size_t>(b) * hp * wp * 3 * heads * d);
+    for (int i = 0; i < static_cast<int>(qkvp.size()); ++i) {
+        qkvp[static_cast<std::size_t>(i)] = 0.02f * (i - 9);
+    }
+    auto QKVp = upload(qkvp,
+                       {1, static_cast<std::size_t>(hp), static_cast<std::size_t>(wp),
+                        static_cast<std::size_t>(3 * heads * d)},
+                       lfs::core::DataType::Float16);
+    auto partp = lfs::core::nn::window_partition_2d(QKVp, ws);
+    auto packedp = partp.windows.reshape(lfs::core::TensorShape(std::vector<std::size_t>{
+        partp.windows.shape()[0], partp.windows.shape()[1] * partp.windows.shape()[2],
+        partp.windows.shape()[3]}));
+    auto refp = lfs::core::nn::split_qkv(packedp, heads);
+    auto gotp = lfs::core::nn::split_qkv_window_2d(QKVp, heads, ws);
+    EXPECT_TRUE(all_close(host_f32(gotp[0]), host_f32(refp[0]), kF16Rtol, kF16Atol)) << "Q pad";
+}
+
+TEST_F(NnOpsTest, MergeHeadsUnwindow2dMatchesComposed) {
+    const int b = 1, h = 16, w = 16, heads = 2, d = 8, ws = 8;
+    const int nwin = (h / ws) * (w / ws);
+    const int seq = ws * ws;
+    std::vector<float> ctx(static_cast<std::size_t>(b) * nwin * heads * seq * d);
+    for (int i = 0; i < static_cast<int>(ctx.size()); ++i) {
+        ctx[static_cast<std::size_t>(i)] = 0.015f * (i - 11);
+    }
+    auto Ctx = upload(ctx,
+                      {static_cast<std::size_t>(b * nwin), static_cast<std::size_t>(heads),
+                       static_cast<std::size_t>(seq), static_cast<std::size_t>(d)},
+                      lfs::core::DataType::Float16);
+    auto merged = lfs::core::nn::merge_heads(Ctx);
+    auto spatial = merged.reshape(lfs::core::TensorShape(std::vector<std::size_t>{
+        static_cast<std::size_t>(b * nwin), static_cast<std::size_t>(ws),
+        static_cast<std::size_t>(ws), static_cast<std::size_t>(heads * d)}));
+    auto ref = lfs::core::nn::window_unpartition_2d(spatial, ws, 0, 0, h, w);
+    auto got = lfs::core::nn::merge_heads_unwindow_2d(Ctx, ws, h, w);
+    EXPECT_TRUE(all_close(host_f32(got), host_f32(ref), kF16Rtol, kF16Atol));
+}
+
+TEST_F(NnOpsTest, MaxPoolHeads2dMatchesComposed) {
+    const int b = 2, heads = 4, hh = 8, ww = 8, d = 8;
+    std::vector<float> q(static_cast<std::size_t>(b) * heads * hh * ww * d);
+    for (int i = 0; i < static_cast<int>(q.size()); ++i) {
+        q[static_cast<std::size_t>(i)] = std::sin(0.03f * i);
+    }
+    auto Q = upload(q,
+                    {static_cast<std::size_t>(b), static_cast<std::size_t>(heads),
+                     static_cast<std::size_t>(hh * ww), static_cast<std::size_t>(d)},
+                    lfs::core::DataType::Float16);
+    auto qmap = Q.permute({0, 2, 1, 3})
+                    .contiguous()
+                    .reshape(lfs::core::TensorShape(std::vector<std::size_t>{
+                        static_cast<std::size_t>(b), static_cast<std::size_t>(hh),
+                        static_cast<std::size_t>(ww),
+                        static_cast<std::size_t>(heads * d)}));
+    auto nchw = qmap.permute({0, 3, 1, 2}).contiguous();
+    auto pooled = lfs::core::nn::max_pool2d(nchw, 2, 2, 2, 2, 0, 0);
+    auto bhwc = pooled.permute({0, 2, 3, 1}).contiguous();
+    auto ref = bhwc
+                   .reshape(lfs::core::TensorShape(std::vector<std::size_t>{
+                       static_cast<std::size_t>(b), static_cast<std::size_t>((hh / 2) * (ww / 2)),
+                       static_cast<std::size_t>(heads), static_cast<std::size_t>(d)}))
+                   .permute({0, 2, 1, 3})
+                   .contiguous();
+    auto got = lfs::core::nn::max_pool_heads_2d(Q, hh, ww);
+    EXPECT_TRUE(all_close(host_f32(got), host_f32(ref), kF16Rtol, kF16Atol));
+}
+
+TEST_F(NnOpsTest, MaxPool2dBhwcMatchesComposed) {
+    const int b = 1, h = 8, w = 8, c = 16;
+    std::vector<float> x(static_cast<std::size_t>(b) * h * w * c);
+    for (int i = 0; i < static_cast<int>(x.size()); ++i) {
+        x[static_cast<std::size_t>(i)] = std::cos(0.02f * i);
+    }
+    auto X = upload(x,
+                    {static_cast<std::size_t>(b), static_cast<std::size_t>(h),
+                     static_cast<std::size_t>(w), static_cast<std::size_t>(c)},
+                    lfs::core::DataType::Float16);
+    auto nchw = X.permute({0, 3, 1, 2}).contiguous();
+    auto pooled = lfs::core::nn::max_pool2d(nchw, 2, 2, 2, 2, 0, 0);
+    auto ref = pooled.permute({0, 2, 3, 1}).contiguous();
+    auto got = lfs::core::nn::max_pool2d_bhwc(X);
+    EXPECT_TRUE(all_close(host_f32(got), host_f32(ref), kF16Rtol, kF16Atol));
 }
 
 TEST_F(NnOpsTest, SplitQkvMergeHeadsAndResidual) {
@@ -715,4 +958,137 @@ TEST_F(NnOpsTest, MogeFixtureIsOptionalAndSmall) {
     std::string body((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     EXPECT_LT(body.size(), 2u * 1024u * 1024u);
     EXPECT_NE(body.find("\"normal\""), std::string::npos);
+}
+
+TEST_F(NnOpsTest, WindowPartition2dRoundTripAndPad) {
+    const int b = 2, h = 5, w = 6, c = 3, ws = 4;
+    std::vector<float> x(static_cast<std::size_t>(b) * h * w * c);
+    for (int i = 0; i < static_cast<int>(x.size()); ++i) {
+        x[static_cast<std::size_t>(i)] = 0.1f * (i - 17);
+    }
+    auto X = upload(x, {static_cast<std::size_t>(b), static_cast<std::size_t>(h), static_cast<std::size_t>(w), static_cast<std::size_t>(c)},
+                    lfs::core::DataType::Float32);
+    auto part = lfs::core::nn::window_partition_2d(X, ws);
+    EXPECT_EQ(part.pad_h, 3);
+    EXPECT_EQ(part.pad_w, 2);
+    EXPECT_EQ(part.windows.shape()[0], static_cast<std::size_t>(b * 2 * 2));
+    EXPECT_EQ(part.windows.shape()[1], static_cast<std::size_t>(ws));
+    auto back = lfs::core::nn::window_unpartition_2d(part.windows, ws, part.pad_h, part.pad_w, h, w);
+    EXPECT_TRUE(all_close(host_f32(back), x, kF32Rtol, kF32Atol));
+
+    const auto got_w = host_f32(part.windows);
+    const int n_h = 2, n_w = 2;
+    for (int bi = 0; bi < b; ++bi) {
+        for (int nh = 0; nh < n_h; ++nh) {
+            for (int nw = 0; nw < n_w; ++nw) {
+                const int win = ((bi * n_h + nh) * n_w) + nw;
+                for (int wy = 0; wy < ws; ++wy) {
+                    for (int wx = 0; wx < ws; ++wx) {
+                        const int y = nh * ws + wy;
+                        const int xj = nw * ws + wx;
+                        for (int ch = 0; ch < c; ++ch) {
+                            const std::size_t oi =
+                                ((((static_cast<std::size_t>(win) * ws + wy) * ws + wx) *
+                                  static_cast<std::size_t>(c)) +
+                                 static_cast<std::size_t>(ch));
+                            float expect = 0.0f;
+                            if (y < h && xj < w) {
+                                expect = x[(((static_cast<std::size_t>(bi) * h + y) * w + xj) *
+                                            static_cast<std::size_t>(c)) +
+                                           static_cast<std::size_t>(ch)];
+                            }
+                            EXPECT_NEAR(got_w[oi], expect, 1e-6f);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    auto X16 = upload(x, {static_cast<std::size_t>(b), static_cast<std::size_t>(h), static_cast<std::size_t>(w), static_cast<std::size_t>(c)},
+                      lfs::core::DataType::Float16);
+    auto part16 = lfs::core::nn::window_partition_2d(X16, ws);
+    auto back16 = lfs::core::nn::window_unpartition_2d(part16.windows, ws, part16.pad_h,
+                                                       part16.pad_w, h, w);
+    EXPECT_TRUE(all_close(host_f32(back16), x, kF16Rtol, kF16Atol));
+}
+
+TEST_F(NnOpsTest, FourierPe) {
+    std::vector<float> coords = {0.25f, 0.75f, 0.0f, 1.0f};
+    std::vector<float> gauss = {0.2f, -0.1f, 0.5f, 0.3f, -0.4f, 0.15f};
+    auto Co = upload(coords, {2, 2}, lfs::core::DataType::Float32);
+    auto G = upload(gauss, {2, 3}, lfs::core::DataType::Float32);
+    auto pe = lfs::core::nn::fourier_pe(Co, G);
+    std::vector<float> peref(12);
+    const float twopi = 6.283185307179586f;
+    for (int n = 0; n < 2; ++n) {
+        const float xn = 2.0f * coords[static_cast<std::size_t>(n) * 2] - 1.0f;
+        const float yn = 2.0f * coords[static_cast<std::size_t>(n) * 2 + 1] - 1.0f;
+        for (int f = 0; f < 3; ++f) {
+            const float ang = twopi * (xn * gauss[static_cast<std::size_t>(f)] +
+                                       yn * gauss[3 + f]);
+            peref[static_cast<std::size_t>(n) * 6 + f] = std::sin(ang);
+            peref[static_cast<std::size_t>(n) * 6 + 3 + f] = std::cos(ang);
+        }
+    }
+    EXPECT_TRUE(all_close(host_f32(pe), peref, 1e-5f, 1e-5f));
+
+    auto grid = lfs::core::nn::fourier_pe_grid(2, 3, G, lfs::core::DataType::Float32,
+                                               lfs::core::Device::CUDA, 0);
+    EXPECT_EQ(grid.shape()[1], 6u);
+    EXPECT_EQ(grid.shape()[2], 2u);
+    EXPECT_EQ(grid.shape()[3], 3u);
+    const auto ggot = host_f32(grid);
+    for (int y = 0; y < 2; ++y) {
+        for (int xj = 0; xj < 3; ++xj) {
+            const float xn = 2.0f * ((static_cast<float>(xj) + 0.5f) / 3.0f) - 1.0f;
+            const float yn = 2.0f * ((static_cast<float>(y) + 0.5f) / 2.0f) - 1.0f;
+            for (int f = 0; f < 3; ++f) {
+                const float ang = twopi * (xn * gauss[static_cast<std::size_t>(f)] +
+                                           yn * gauss[3 + f]);
+                const int spatial = 2 * 3;
+                EXPECT_NEAR(ggot[f * spatial + y * 3 + xj], std::sin(ang), 1e-5f);
+                EXPECT_NEAR(ggot[(3 + f) * spatial + y * 3 + xj], std::cos(ang), 1e-5f);
+            }
+        }
+    }
+}
+
+TEST_F(NnOpsTest, LayerNorm2dMatchesChannelNorm) {
+    const int n = 1, c = 4, h = 3, w = 2;
+    std::vector<float> x(static_cast<std::size_t>(n) * c * h * w);
+    std::vector<float> wt(c), bs(c);
+    for (int i = 0; i < static_cast<int>(x.size()); ++i) {
+        x[static_cast<std::size_t>(i)] = 0.2f * (i - 5);
+    }
+    for (int i = 0; i < c; ++i) {
+        wt[static_cast<std::size_t>(i)] = 0.5f + 0.1f * i;
+        bs[static_cast<std::size_t>(i)] = -0.05f * i;
+    }
+    auto X = upload(x, {1, 4, 3, 2}, lfs::core::DataType::Float32);
+    auto W = upload(wt, {4}, lfs::core::DataType::Float32);
+    auto B = upload(bs, {4}, lfs::core::DataType::Float32);
+    auto Y = lfs::core::nn::layer_norm_2d(X, W, B, 1e-6f);
+    std::vector<float> yref(x.size());
+    const int spatial = h * w;
+    for (int s = 0; s < spatial; ++s) {
+        float mean = 0.0f;
+        for (int ch = 0; ch < c; ++ch) {
+            mean += x[static_cast<std::size_t>(ch) * spatial + s];
+        }
+        mean /= static_cast<float>(c);
+        float var = 0.0f;
+        for (int ch = 0; ch < c; ++ch) {
+            const float d = x[static_cast<std::size_t>(ch) * spatial + s] - mean;
+            var += d * d;
+        }
+        var /= static_cast<float>(c);
+        const float inv = 1.0f / std::sqrt(var + 1e-6f);
+        for (int ch = 0; ch < c; ++ch) {
+            const float nrm = (x[static_cast<std::size_t>(ch) * spatial + s] - mean) * inv;
+            yref[static_cast<std::size_t>(ch) * spatial + s] =
+                nrm * wt[static_cast<std::size_t>(ch)] + bs[static_cast<std::size_t>(ch)];
+        }
+    }
+    EXPECT_TRUE(all_close(host_f32(Y), yref, 1e-5f, 1e-5f));
 }

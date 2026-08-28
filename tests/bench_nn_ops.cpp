@@ -105,6 +105,18 @@ TEST(NnBench, DISABLED_ReportTable) {
                kPeakFp16);
     bench_gemm("gemm M1370 K768 N768", 1370, 768, 768, true, lfs::core::DataType::Float32, kPeakFp32);
     bench_gemm("gemm M1370 K768 N768", 1370, 768, 768, true, lfs::core::DataType::Float16, kPeakFp16);
+    bench_gemm("hiera M65536 K112 N112", 65536, 112, 112, true, lfs::core::DataType::Float16,
+               kPeakFp16);
+    bench_gemm("hiera M65536 K112 N336", 65536, 336, 112, true, lfs::core::DataType::Float16,
+               kPeakFp16);
+    bench_gemm("hiera M65536 K112 N448", 65536, 448, 112, true, lfs::core::DataType::Float16,
+               kPeakFp16);
+    bench_gemm("hiera M4096 K448 N448", 4096, 448, 448, true, lfs::core::DataType::Float16,
+               kPeakFp16);
+    bench_gemm("hiera M4096 K448 N1792", 4096, 1792, 448, true, lfs::core::DataType::Float16,
+               kPeakFp16);
+    bench_gemm("hiera M4096 K1792 N448", 4096, 448, 1792, true, lfs::core::DataType::Float16,
+               kPeakFp16);
 
     auto bench_bmm = [&](lfs::core::DataType dtype, double peak) {
         auto a = randn({12, 1370, 64}, dtype);

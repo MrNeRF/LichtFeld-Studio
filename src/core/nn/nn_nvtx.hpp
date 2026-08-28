@@ -80,7 +80,7 @@ namespace lfs::core::nn {
                 float ms = 0.0f;
                 LFS_CUDA_CHECK(cudaEventElapsedTime(&ms, events_[i], events_[i + 1]));
                 total += ms;
-                std::fprintf(stderr, "  %7.3f  %s\n", static_cast<double>(ms), names_[i + 1].c_str());
+                std::fprintf(stderr, "  %7.3f  %s\n", static_cast<double>(ms), names_[i].c_str());
             }
             std::fprintf(stderr, "  %7.3f  TOTAL\n", static_cast<double>(total));
         }
