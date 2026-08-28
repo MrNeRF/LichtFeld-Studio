@@ -144,6 +144,8 @@ namespace {
     SafePyCallback make_safe_py_callback(nb::object callback) {
         // Native hook queues copy callbacks without the GIL. Keep Python
         // ownership behind a C++ shared pointer and acquire the GIL on deletion.
+        // The deleter may block on the GIL: never drop the last reference while
+        // holding a lock that a GIL-holding thread can also take.
         return {new nb::object(std::move(callback)), [](nb::object* callback) {
                     nb::gil_scoped_acquire gil;
                     delete callback;
@@ -2854,10 +2856,10 @@ NB_MODULE(lichtfeld, m) {
     // Frame callback for animations
     m.def(
         "on_frame", [](nb::callable cb) {
-            nb::object ocb = nb::cast<nb::object>(cb);
-            lfs::python::set_frame_callback([ocb](float dt) {
+            const auto callback = make_safe_py_callback(nb::cast<nb::object>(cb));
+            lfs::python::set_frame_callback([callback](float dt) {
                 try {
-                    ocb(dt);
+                    (*callback)(dt);
                 } catch (nb::python_error& e) {
                     (void)lfs::python::contain_python_callback(e, lfs::python::PyCallbackPolicy::DisableAndReport);
                     lfs::python::clear_frame_callback();
@@ -2879,10 +2881,10 @@ NB_MODULE(lichtfeld, m) {
 
     m.def(
         "on_scene_time", [](nb::callable cb) {
-            nb::object ocb = nb::cast<nb::object>(cb);
-            lfs::python::set_scene_time_callback([ocb](float clip_time) {
+            const auto callback = make_safe_py_callback(nb::cast<nb::object>(cb));
+            lfs::python::set_scene_time_callback([callback](float clip_time) {
                 try {
-                    ocb(clip_time);
+                    (*callback)(clip_time);
                 } catch (nb::python_error& e) {
                     (void)lfs::python::contain_python_callback(e, lfs::python::PyCallbackPolicy::DisableAndReport);
                     lfs::python::clear_scene_time_callback();
