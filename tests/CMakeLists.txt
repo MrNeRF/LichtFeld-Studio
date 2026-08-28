@@ -507,6 +507,7 @@ set(TEST_FILES
     test_tensor_nn_ops.cpp
     test_nn_ops.cpp
     test_moge2.cpp
+    test_sam2.cpp
     bench_nn_ops.cpp
     test_ppisp_controller.cpp
     test_ppisp_regularization.cpp
@@ -1081,6 +1082,7 @@ add_test(NAME lichtfeld.python.gpu
         -m gpu
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_property.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_nn_sam2.py
 )
 set_tests_properties(lichtfeld.python.gpu PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

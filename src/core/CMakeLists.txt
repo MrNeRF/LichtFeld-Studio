@@ -50,6 +50,7 @@ set(TENSOR_SOURCES
         nn/weight_file.cpp
         nn/activation_arena.cpp
         nn/models/moge2.cpp
+        nn/models/sam2.cpp
 )
 
 # Core module sources
