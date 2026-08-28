@@ -131,13 +131,15 @@ namespace lfs::vis {
             float panel_elapsed_time_ = 0.0f;
             bool playback_ticked_before_scene_ = false;
 
-            static constexpr int PREVIEW_WIDTH = 320;
-            static constexpr int PREVIEW_HEIGHT = 180;
             static constexpr float PREVIEW_TARGET_FPS = 30.0f;
             VulkanUiTexture pip_texture_;
             bool pip_initialized_ = false;
             std::optional<size_t> pip_last_keyframe_;
             bool pip_needs_update_ = true;
+            int last_pip_output_width_ = -1;
+            int last_pip_output_height_ = -1;
+            int pip_render_width_ = 320;
+            int pip_render_height_ = 180;
             bool last_equirectangular_ = false;
             std::optional<size_t> last_ply_sequence_frame_;
             std::vector<size_t> loaded_ply_sequence_frames_;

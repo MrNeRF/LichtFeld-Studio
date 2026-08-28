@@ -54,6 +54,32 @@ namespace lfs::vis::gui {
         constexpr float PATH_SAMPLES_PER_VIEWPORT_PIXEL = 2.0f;
         constexpr uint32_t PLY_SEQUENCE_CACHE_MAGIC = 0x4C465351; // "LFSQ"
         constexpr uint32_t PLY_SEQUENCE_CACHE_VERSION = 1;
+        constexpr int PIP_PREVIEW_LONG_SIDE = 320;
+
+        struct PipPreviewSize {
+            int width = PIP_PREVIEW_LONG_SIDE;
+            int height = 180;
+        };
+
+        [[nodiscard]] PipPreviewSize pipPreviewSize(int out_w, int out_h) {
+            out_w = std::max(out_w, 1);
+            out_h = std::max(out_h, 1);
+            int width;
+            int height;
+            if (out_w >= out_h) {
+                width = PIP_PREVIEW_LONG_SIDE;
+                height = static_cast<int>(std::lround(
+                    static_cast<double>(PIP_PREVIEW_LONG_SIDE) * static_cast<double>(out_h) /
+                    static_cast<double>(out_w)));
+            } else {
+                height = PIP_PREVIEW_LONG_SIDE;
+                width = static_cast<int>(std::lround(
+                    static_cast<double>(PIP_PREVIEW_LONG_SIDE) * static_cast<double>(out_w) /
+                    static_cast<double>(out_h)));
+            }
+            const auto even = [](const int value) { return std::max(2, value & ~1); };
+            return {even(width), even(height)};
+        }
 
         struct PlySequenceCacheHeader {
             uint32_t magic = PLY_SEQUENCE_CACHE_MAGIC;
@@ -486,6 +512,14 @@ namespace lfs::vis::gui {
             last_equirectangular_ = ui_state_.equirectangular;
             pip_needs_update_ = true;
             film_strip_.invalidateAll();
+        }
+
+        const int output_width = ui_state_.outputWidth();
+        const int output_height = ui_state_.outputHeight();
+        if (output_width != last_pip_output_width_ || output_height != last_pip_output_height_) {
+            last_pip_output_width_ = output_width;
+            last_pip_output_height_ = output_height;
+            pip_needs_update_ = true;
         }
 
         const auto& sdl_buf = viewer_->getWindowManager()->frameInput();
@@ -1319,16 +1353,9 @@ namespace lfs::vis::gui {
         }
 
         if (panel_->consumeExportRequest() && controller_.timeline().realKeyframeCount() > 0) {
-            const auto info = lfs::io::video::getPresetInfo(ui_state_.preset);
-            const int w = ui_state_.preset == lfs::io::video::VideoPreset::CUSTOM
-                              ? ui_state_.custom_width
-                              : info.width;
-            const int h = ui_state_.preset == lfs::io::video::VideoPreset::CUSTOM
-                              ? ui_state_.custom_height
-                              : info.height;
             lfs::core::events::cmd::SequencerExportVideo{
-                .width = w,
-                .height = h,
+                .width = ui_state_.outputWidth(),
+                .height = ui_state_.outputHeight(),
                 .framerate = ui_state_.framerate,
                 .crf = ui_state_.quality}
                 .emit();
@@ -1416,11 +1443,21 @@ namespace lfs::vis::gui {
                                    if (action.starts_with("preset_")) {
                                        using lfs::io::video::VideoPreset;
                                        const int idx = std::stoi(std::string(action.substr(7)));
-                                       ui_state_.preset = static_cast<VideoPreset>(idx);
-                                       const auto info = lfs::io::video::getPresetInfo(ui_state_.preset);
-                                       ui_state_.custom_width = info.width;
-                                       ui_state_.custom_height = info.height;
-                                       ui_state_.framerate = info.framerate;
+                                       const auto next = static_cast<VideoPreset>(idx);
+                                       if (next == VideoPreset::CUSTOM) {
+                                           ui_state_.custom_width = ui_state_.outputWidth();
+                                           ui_state_.custom_height = ui_state_.outputHeight();
+                                           if (ui_state_.preset != VideoPreset::CUSTOM)
+                                               ui_state_.framerate =
+                                                   lfs::io::video::getPresetInfo(ui_state_.preset).framerate;
+                                           ui_state_.preset = next;
+                                       } else {
+                                           ui_state_.preset = next;
+                                           const auto info = lfs::io::video::getPresetInfo(next);
+                                           ui_state_.custom_width = info.width;
+                                           ui_state_.custom_height = info.height;
+                                           ui_state_.framerate = info.framerate;
+                                       }
                                    }
                                    break;
                                case Target::CLEAR:
@@ -2382,10 +2419,14 @@ namespace lfs::vis::gui {
             }
         }
 
+        const auto preview = pipPreviewSize(ui_state_.outputWidth(), ui_state_.outputHeight());
         const auto image = rm->renderPreviewImage(sm, cam_rot, cam_pos, cam_focal_length_mm,
-                                                  PREVIEW_WIDTH, PREVIEW_HEIGHT);
+                                                  preview.width, preview.height);
         // Vulkan preview readback is already in the orientation RmlUi samples.
-        if (image && pip_texture_.upload(*image, PREVIEW_WIDTH, PREVIEW_HEIGHT, /*flip_y=*/false)) {
+        // upload() recreates the VkImage when width/height change.
+        if (image && pip_texture_.upload(*image, preview.width, preview.height, /*flip_y=*/false)) {
+            pip_render_width_ = preview.width;
+            pip_render_height_ = preview.height;
             pip_last_render_time_ = now;
             if (!is_playing) {
                 pip_last_keyframe_ = selected;
@@ -2427,12 +2468,19 @@ namespace lfs::vis::gui {
         const float scale = ui_state_.pip_preview_scale;
         constexpr float MARGIN = 16.0f;
         constexpr float TITLE_HEIGHT = 18.0f;
-        const float scaled_width = static_cast<float>(PREVIEW_WIDTH) * scale;
-        const float scaled_height = static_cast<float>(PREVIEW_HEIGHT) * scale;
+        const auto preview = pipPreviewSize(ui_state_.outputWidth(), ui_state_.outputHeight());
+        const float scaled_width = static_cast<float>(preview.width) * scale;
+        const float scaled_height = static_cast<float>(preview.height) * scale;
         const float total_height = scaled_height + TITLE_HEIGHT + 8.0f;
 
-        const float left = viewport.pos.x + MARGIN;
-        const float top = panel_->cachedPanelY() - total_height - MARGIN;
+        float left = viewport.pos.x + MARGIN;
+        float top = panel_->cachedPanelY() - total_height - MARGIN;
+        const float min_top = viewport.pos.y + MARGIN;
+        if (top < min_top)
+            top = min_top;
+        const float max_left = viewport.pos.x + viewport.size.x - scaled_width - 8.0f - MARGIN;
+        if (left > max_left)
+            left = std::max(viewport.pos.x + MARGIN, max_left);
 
         const float playhead = controller_.playhead();
         const std::string title = (is_playing || !selected.has_value())
@@ -2446,7 +2494,7 @@ namespace lfs::vis::gui {
 
         overlay_->showPreviewWindow(left, top, scaled_width, scaled_height,
                                     title, is_playing,
-                                    pip_texture_.rmlSrcUrl(PREVIEW_WIDTH, PREVIEW_HEIGHT));
+                                    pip_texture_.rmlSrcUrl(pip_render_width_, pip_render_height_));
     }
 
     void SequencerUIManager::renderKeyframeEditOverlay(const ViewportLayout& viewport) {

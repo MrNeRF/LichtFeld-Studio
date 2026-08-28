@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "io/video/video_export_options.hpp"
 #include "sequencer/animation_clip.hpp"
 #include "sequencer/keyframe.hpp"
 #include "sequencer/rml_sequencer_panel.hpp"
@@ -628,6 +629,63 @@ namespace {
         EXPECT_FLOAT_EQ(clampCenteredSpan(0.0f, timeline_width, 8.0f), 4.0f);
         EXPECT_NE(clampCenteredSpan(0.0f, timeline_width, draw_span),
                   clampCenteredSpan(0.0f, timeline_width, 8.0f));
+    }
+
+    TEST(SequencerTimelineRegressionTest, ParseVideoResolutionAcceptsRejectsAndClamps) {
+        using lfs::io::video::parseVideoResolution;
+
+        {
+            const auto parsed = parseVideoResolution("1920x1080");
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(parsed->width, 1920);
+            EXPECT_EQ(parsed->height, 1080);
+        }
+        {
+            const auto parsed = parseVideoResolution("1920 x 1080");
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(parsed->width, 1920);
+            EXPECT_EQ(parsed->height, 1080);
+        }
+        {
+            const auto parsed = parseVideoResolution(" 1280X720 ");
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(parsed->width, 1280);
+            EXPECT_EQ(parsed->height, 720);
+        }
+        {
+            const auto parsed = parseVideoResolution("1080x1920");
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(parsed->width, 1080);
+            EXPECT_EQ(parsed->height, 1920);
+        }
+        {
+            const auto parsed = parseVideoResolution("17x17");
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(parsed->width, 16);
+            EXPECT_EQ(parsed->height, 16);
+        }
+        {
+            const auto parsed = parseVideoResolution("1x99999");
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(parsed->width, 16);
+            EXPECT_EQ(parsed->height, 8192);
+        }
+        {
+            const auto parsed = parseVideoResolution("8193x16");
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(parsed->width, 8192);
+            EXPECT_EQ(parsed->height, 16);
+        }
+
+        EXPECT_FALSE(parseVideoResolution("").has_value());
+        EXPECT_FALSE(parseVideoResolution("1920").has_value());
+        EXPECT_FALSE(parseVideoResolution("1920x").has_value());
+        EXPECT_FALSE(parseVideoResolution("x1080").has_value());
+        EXPECT_FALSE(parseVideoResolution("1920x1080x30").has_value());
+        EXPECT_FALSE(parseVideoResolution("abc").has_value());
+        EXPECT_FALSE(parseVideoResolution("-1920x1080").has_value());
+        EXPECT_FALSE(parseVideoResolution("0x0").has_value());
+        EXPECT_FALSE(parseVideoResolution("1920 x").has_value());
     }
 
 } // namespace

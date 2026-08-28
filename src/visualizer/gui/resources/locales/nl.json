@@ -1070,6 +1070,7 @@
     "seq_load_sequence": "Een map met PLY-frames laden als sequencer-clip",
     "seq_sequence_fps": "PLY-sequentie afspeel-FPS (klik om te bewerken)",
     "seq_format": "Exportformaat-voorinstelling (rechtsklik voor opties)",
+    "seq_resolution": "Uitvoerresolutie (klik om te bewerken, bijv. 1920x1080)",
     "seq_quality": "CRF-kwaliteit (lager = betere kwaliteit, groter bestand)",
     "seq_export": "Video exporteren vanuit camerapad",
     "seq_clear": "Alle keyframes verwijderen",

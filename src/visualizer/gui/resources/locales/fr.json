@@ -1070,6 +1070,7 @@
     "seq_load_sequence": "Charger un dossier d'images PLY comme clip de séquenceur",
     "seq_sequence_fps": "FPS de lecture de la séquence PLY (cliquer pour modifier)",
     "seq_format": "Préréglage du format d'export (clic droit pour les options)",
+    "seq_resolution": "Résolution de sortie (cliquer pour modifier, ex. 1920x1080)",
     "seq_quality": "Qualité CRF (plus bas = meilleure qualité, fichier plus gros)",
     "seq_export": "Exporter la vidéo depuis le chemin caméra",
     "seq_clear": "Supprimer toutes les images clés",
