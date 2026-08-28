@@ -17,6 +17,7 @@ from . import (
     log as log,
     mcp as mcp,
     mesh as mesh,
+    nn as nn,
     ops as ops,
     packages as packages,
     pipeline as pipeline,

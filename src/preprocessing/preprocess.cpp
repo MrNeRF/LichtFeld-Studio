@@ -67,6 +67,37 @@ namespace {
         "https://github.com/MrNeRF/LichtFeld-Studio/releases/download/model-moge2-v1/moge-2-vitb-normal.lfw";
     constexpr std::string_view kDefaultModelSha256 =
         "db1fbe8dcd6ff91f6cdb0369c3a31f9f04e1a71a8114573ef189593f10de9cd9";
+    constexpr std::string_view kDefaultModelDownloadMessage =
+        "Downloading MoGe-2 ViT-B normal model weights (MIT license, (c) Microsoft)";
+
+    constexpr std::string_view kSam2ModelFile = "sam2.1-hiera-base-plus.lfw";
+    constexpr std::string_view kSam2ModelUrl =
+        "https://github.com/MrNeRF/LichtFeld-Studio/releases/download/model-sam2-v1/sam2.1-hiera-base-plus.lfw";
+    constexpr std::string_view kSam2ModelSha256 =
+        "eb24b1d788fceb44f5d46309a7d55084bd5df0b546199968799a631d6f64575c";
+    constexpr std::string_view kSam2ModelDownloadMessage =
+        "Downloading SAM 2.1 Hiera base+ weights (Apache-2.0, (c) Meta)";
+
+    struct CachedWeightSpec {
+        std::string_view filename;
+        std::string_view url;
+        std::string_view sha256;
+        std::string_view download_message;
+    };
+
+    constexpr CachedWeightSpec kMoge2Weights{
+        kDefaultModelFile,
+        kDefaultModelUrl,
+        kDefaultModelSha256,
+        kDefaultModelDownloadMessage,
+    };
+
+    constexpr CachedWeightSpec kSam2Weights{
+        kSam2ModelFile,
+        kSam2ModelUrl,
+        kSam2ModelSha256,
+        kSam2ModelDownloadMessage,
+    };
 
     void remove_file_if_exists(const fs::path& path);
     void replace_file(const fs::path& source, const fs::path& destination);
@@ -159,8 +190,12 @@ namespace {
         return fs::temp_directory_path();
     }
 
+    fs::path cached_weight_path(std::string_view filename) {
+        return home_directory() / ".lichtfeld" / "onnx" / std::string(filename);
+    }
+
     fs::path default_model_path() {
-        return home_directory() / ".lichtfeld" / "onnx" / std::string(kDefaultModelFile);
+        return cached_weight_path(kDefaultModelFile);
     }
 
     fs::path lfw_path_for_onnx(const fs::path& onnx_path) {
@@ -436,11 +471,11 @@ namespace {
         replace_file(tmp_path, destination);
     }
 
-    fs::path ensure_default_model(bool no_download) {
-        const fs::path path = default_model_path();
+    fs::path ensure_cached_weights(const CachedWeightSpec& spec, bool no_download) {
+        const fs::path path = cached_weight_path(spec.filename);
         if (fs::is_regular_file(path)) {
             try {
-                require_sha256(path, kDefaultModelSha256, "Cached model");
+                require_sha256(path, spec.sha256, "Cached model");
                 return path;
             } catch (const DownloadIntegrityError& e) {
                 if (no_download)
@@ -451,7 +486,19 @@ namespace {
                 std::cerr << "Removed untrusted cached model; re-downloading "
                           << path_to_string(path) << "\n";
             }
-        } else {
+        } else if (no_download) {
+            throw std::runtime_error("Default model is not cached: " + path_to_string(path));
+        }
+
+        std::cout << spec.download_message << " to " << path_to_string(path) << "\n";
+        download_verified_file(spec.url, path, spec.sha256);
+        require_sha256(path, spec.sha256, "Cached model");
+        return path;
+    }
+
+    fs::path ensure_default_model(bool no_download) {
+        const fs::path path = default_model_path();
+        if (!fs::is_regular_file(path)) {
             const fs::path legacy = legacy_model_path();
             if (fs::is_regular_file(legacy)) {
                 try {
@@ -470,16 +517,8 @@ namespace {
                               << path_to_string(legacy) << "\n";
                 }
             }
-            if (no_download) {
-                throw std::runtime_error("Default model is not cached: " + path_to_string(path));
-            }
         }
-
-        std::cout << "Downloading MoGe-2 ViT-B normal model weights (MIT license, (c) Microsoft) to "
-                  << path_to_string(path) << "\n";
-        download_verified_file(kDefaultModelUrl, path, kDefaultModelSha256);
-        require_sha256(path, kDefaultModelSha256, "Cached model");
-        return path;
+        return ensure_cached_weights(kMoge2Weights, no_download);
     }
 
     Image load_image_rgb(const fs::path& path) {
@@ -1267,6 +1306,10 @@ namespace lfs::preprocessing {
             return 1;
         }
         return 0;
+    }
+
+    std::filesystem::path ensure_sam2_weights(bool no_download) {
+        return ensure_cached_weights(kSam2Weights, no_download);
     }
 
 } // namespace lfs::preprocessing
