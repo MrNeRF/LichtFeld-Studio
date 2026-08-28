@@ -76,13 +76,24 @@ namespace lfs::vis {
             return fmt::format("{}:{:05.2f}", mins, secs);
         }
 
-        [[nodiscard]] std::string formatTimeShort(const float seconds) {
-            const int mins = static_cast<int>(seconds) / 60;
-            const int secs = static_cast<int>(seconds) % 60;
-            if (mins > 0) {
-                return fmt::format("{}:{:02d}", mins, secs);
+        [[nodiscard]] std::string formatTimeShort(const float seconds, const float major_interval) {
+            if (seconds >= 60.0f) {
+                const int total = static_cast<int>(seconds);
+                return fmt::format("{}:{:02d}", total / 60, total % 60);
             }
-            return fmt::format("{}s", secs);
+            if (major_interval < 1.0f) {
+                const int decimals = (major_interval < 0.5f) ? 2 : 1;
+                std::string body = fmt::format("{:.{}f}", seconds, decimals);
+                const auto dot = body.find('.');
+                if (dot != std::string::npos) {
+                    while (body.size() > dot && body.back() == '0')
+                        body.pop_back();
+                    if (!body.empty() && body.back() == '.')
+                        body.pop_back();
+                }
+                return body + "s";
+            }
+            return fmt::format("{}s", static_cast<int>(seconds));
         }
 
         [[nodiscard]] bool hasSelectedKeyframe(const std::vector<sequencer::KeyframeId>& selected_keyframes,
@@ -927,43 +938,38 @@ namespace lfs::vis {
         const float visible_start = pan_offset_;
         const float visible_end = visible_start + visible_duration;
 
-        float major_interval = 1.0f;
-        if (visible_duration > 60.0f)
-            major_interval = 10.0f;
-        else if (visible_duration > 30.0f)
-            major_interval = 5.0f;
-        else if (visible_duration > 10.0f)
-            major_interval = 2.0f;
-        else if (visible_duration <= 2.0f)
-            major_interval = 0.5f;
-
-        major_interval /= zoom_level_;
+        const float major_interval = sequencer_ui::rulerMajorInterval(visible_duration);
         const float minor_interval = major_interval / 4.0f;
 
         std::string html;
         html.reserve(2048);
 
         const float label_margin = 30.0f * cached_dp_ratio_;
+        const float half_label = label_margin * 0.5f;
 
-        const float first_tick = std::floor(visible_start / minor_interval) * minor_interval;
-        for (float t_val = first_tick; t_val <= visible_end + minor_interval * 0.5f; t_val += minor_interval) {
-            if (t_val < 0.0f)
-                continue;
+        int first_index = static_cast<int>(std::floor(visible_start / minor_interval));
+        if (first_index < 0)
+            first_index = 0;
+
+        for (int i = 0;; ++i) {
+            const int index = first_index + i;
+            const float t_val = static_cast<float>(index) * minor_interval;
+            if (t_val > visible_end)
+                break;
 
             const float x = timeToX(t_val, 0.0f, timeline_width);
             if (x < 0.0f || x > timeline_width)
                 continue;
 
-            const float major_phase = std::fmod(t_val, major_interval);
-            const bool is_major = major_phase < 0.01f || (major_interval - major_phase) < 0.01f;
-
+            const bool is_major = (index % 4) == 0;
             if (is_major) {
                 html += fmt::format(
                     "<div class=\"ruler-tick major\" style=\"left: {:.1f}px;\" />", x);
-                if (x + label_margin <= timeline_width) {
+                if (timeline_width > label_margin) {
+                    const float label_x = std::clamp(x, half_label, timeline_width - label_margin);
                     html += fmt::format(
                         "<span class=\"ruler-label\" style=\"left: {:.1f}px;\">{}</span>",
-                        x + 4.0f * cached_dp_ratio_, formatTimeShort(t_val));
+                        label_x, formatTimeShort(t_val, major_interval));
                 }
             } else {
                 html += fmt::format(

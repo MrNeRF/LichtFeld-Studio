@@ -1935,7 +1935,7 @@
     "go_to_last_keyframe": "Go to last keyframe",
     "loop_on": "Loop: ON",
     "loop_off": "Loop: OFF",
-    "edit_time": "Edit Time...",
+    "edit_time": "Set Time...",
     "easing_tooltip": "Easing controls outgoing motion\n(last keyframe has no outgoing segment)",
     "time_seconds": "Time (s)",
     "loop_point_tooltip": "Loop Point @ {} (returns to start)",

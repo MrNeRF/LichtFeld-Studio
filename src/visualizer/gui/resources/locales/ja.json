@@ -1936,7 +1936,7 @@
     "go_to_last_keyframe": "最後のキーフレームへ",
     "loop_on": "ループ：ON",
     "loop_off": "ループ：OFF",
-    "edit_time": "時間を編集...",
+    "edit_time": "時間を設定...",
     "easing_tooltip": "イージングは出ていく動きを制御します\n（最後のキーフレームには出力セグメントがありません）",
     "time_seconds": "時間 (s)",
     "loop_point_tooltip": "ループポイント @ {} (開始位置に戻る)",

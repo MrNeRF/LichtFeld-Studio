@@ -1936,7 +1936,7 @@
     "go_to_last_keyframe": "Aller à la dernière image clé",
     "loop_on": "Boucle : ON",
     "loop_off": "Boucle : OFF",
-    "edit_time": "Modifier le temps...",
+    "edit_time": "Définir le temps...",
     "easing_tooltip": "L'easing contrôle le mouvement sortant\n(La dernière image clé n'a pas de segment sortant)",
     "time_seconds": "Temps (s)",
     "loop_point_tooltip": "Point de boucle @ {} (retour au début)",

@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -458,6 +459,49 @@ namespace {
         controller.seekToLastKeyframe();
 
         EXPECT_FLOAT_EQ(controller.playhead(), 2.0f);
+    }
+
+    TEST(SequencerMappingRegressionTest, RulerMajorTicksAreExactMultiplesOfRoundIntervals) {
+        Timeline timeline;
+        ASSERT_FLOAT_EQ(timeline.clipDuration(), 30.0f);
+
+        constexpr float kRoundIntervals[] = {0.25f, 0.5f, 1.0f, 2.0f, 5.0f, 10.0f};
+        constexpr float kZooms[] = {1.0f, 2.0f, 3.0f, 4.0f};
+
+        for (const float zoom : kZooms) {
+            const float visible = lfs::vis::sequencer_ui::displayEndTime(timeline, zoom);
+            const float major = lfs::vis::sequencer_ui::rulerMajorInterval(visible);
+            const float minor = major / 4.0f;
+            ASSERT_GT(minor, 0.0f);
+
+            bool is_round = false;
+            for (const float interval : kRoundIntervals) {
+                if (std::abs(major - interval) < 1e-6f)
+                    is_round = true;
+            }
+            EXPECT_TRUE(is_round) << "zoom=" << zoom << " major=" << major;
+
+            int major_count = 0;
+            const int first_index = 0;
+            for (int i = 0;; ++i) {
+                const int index = first_index + i;
+                const float t = static_cast<float>(index) * minor;
+                if (t > visible)
+                    break;
+                if ((index % 4) != 0)
+                    continue;
+                ++major_count;
+                const float quotient = t / major;
+                EXPECT_NEAR(quotient, std::round(quotient), 1e-5f)
+                    << "zoom=" << zoom << " t=" << t << " major=" << major;
+            }
+            EXPECT_GT(major_count, 0) << "zoom=" << zoom;
+        }
+
+        // Zoom 3 on a 30s clip used to divide the 1s ladder by 3 again (ticks at 1/3 s).
+        EXPECT_FLOAT_EQ(lfs::vis::sequencer_ui::rulerMajorInterval(
+                            lfs::vis::sequencer_ui::displayEndTime(timeline, 3.0f)),
+                        1.0f);
     }
 
     TEST(SequencerMappingRegressionTest, TimeScreenMappingRoundTripsWithZoomAndPan) {

@@ -443,11 +443,13 @@ body {
 }
 
 .ruler-label {
-    display: block;
+    display: inline-block;
     position: absolute;
     top: 0;
     font-size: 12dp;
     color: rgba(200, 210, 230, 220);
+    white-space: nowrap;
+    transform: translateX(-50%);
 }
 
 #track-area {
