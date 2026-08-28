@@ -22,6 +22,7 @@
 #include "theme/theme.hpp"
 
 #include <RmlUi/Core.h>
+#include <RmlUi/Core/Input.h>
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -76,13 +77,24 @@ namespace lfs::vis {
             return fmt::format("{}:{:05.2f}", mins, secs);
         }
 
-        [[nodiscard]] std::string formatTimeShort(const float seconds) {
-            const int mins = static_cast<int>(seconds) / 60;
-            const int secs = static_cast<int>(seconds) % 60;
-            if (mins > 0) {
-                return fmt::format("{}:{:02d}", mins, secs);
+        [[nodiscard]] std::string formatTimeShort(const float seconds, const float major_interval) {
+            if (seconds >= 60.0f) {
+                const int total = static_cast<int>(seconds);
+                return fmt::format("{}:{:02d}", total / 60, total % 60);
             }
-            return fmt::format("{}s", secs);
+            if (major_interval < 1.0f) {
+                const int decimals = (major_interval < 0.5f) ? 2 : 1;
+                std::string body = fmt::format("{:.{}f}", seconds, decimals);
+                const auto dot = body.find('.');
+                if (dot != std::string::npos) {
+                    while (body.size() > dot && body.back() == '0')
+                        body.pop_back();
+                    if (!body.empty() && body.back() == '.')
+                        body.pop_back();
+                }
+                return body + "s";
+            }
+            return fmt::format("{}s", static_cast<int>(seconds));
         }
 
         [[nodiscard]] bool hasSelectedKeyframe(const std::vector<sequencer::KeyframeId>& selected_keyframes,
@@ -154,6 +166,7 @@ namespace lfs::vis {
         quality_scrub_listener_.panel = this;
         duration_listener_.panel = this;
         sequence_fps_listener_.panel = this;
+        resolution_listener_.panel = this;
     }
 
     RmlSequencerPanel::~RmlSequencerPanel() = default;
@@ -360,7 +373,9 @@ namespace lfs::vis {
         el_sequence_fps_display_ = nullptr;
         el_sequence_fps_input_ = nullptr;
         el_format_label_ = nullptr;
+        el_resolution_field_ = nullptr;
         el_resolution_info_ = nullptr;
+        el_resolution_input_ = nullptr;
         el_quality_scrub_ = nullptr;
         el_quality_fill_ = nullptr;
         el_quality_display_ = nullptr;
@@ -369,6 +384,7 @@ namespace lfs::vis {
         el_duration_input_ = nullptr;
         duration_editing_ = false;
         sequence_fps_editing_ = false;
+        resolution_editing_ = false;
         el_btn_equirect_ = nullptr;
         el_btn_save_ = nullptr;
         el_btn_load_ = nullptr;
@@ -503,7 +519,8 @@ namespace lfs::vis {
                !quality_scrub_active_ &&
                !quality_scrub_editing_ &&
                !duration_editing_ &&
-               !sequence_fps_editing_;
+               !sequence_fps_editing_ &&
+               !resolution_editing_;
     }
 
     void RmlSequencerPanel::queueCachedRender(const float context_x,
@@ -608,7 +625,9 @@ namespace lfs::vis {
         el_sequence_fps_display_ = document_->GetElementById("sequence-fps-display");
         el_sequence_fps_input_ = document_->GetElementById("sequence-fps-input");
         el_format_label_ = document_->GetElementById("format-label");
+        el_resolution_field_ = document_->GetElementById("resolution-field");
         el_resolution_info_ = document_->GetElementById("resolution-info");
+        el_resolution_input_ = document_->GetElementById("resolution-input");
         el_quality_scrub_ = document_->GetElementById("quality-scrub");
         el_quality_fill_ = document_->GetElementById("quality-fill");
         el_quality_display_ = document_->GetElementById("quality-display");
@@ -682,6 +701,14 @@ namespace lfs::vis {
         if (el_sequence_fps_input_) {
             el_sequence_fps_input_->AddEventListener(Rml::EventId::Change, &sequence_fps_listener_);
             el_sequence_fps_input_->AddEventListener(Rml::EventId::Blur, &sequence_fps_listener_);
+        }
+
+        if (el_resolution_field_)
+            el_resolution_field_->AddEventListener(Rml::EventId::Click, &resolution_listener_);
+        if (el_resolution_input_) {
+            el_resolution_input_->AddEventListener(Rml::EventId::Change, &resolution_listener_);
+            el_resolution_input_->AddEventListener(Rml::EventId::Blur, &resolution_listener_);
+            el_resolution_input_->AddEventListener(Rml::EventId::Keydown, &resolution_listener_);
         }
     }
 
@@ -927,43 +954,38 @@ namespace lfs::vis {
         const float visible_start = pan_offset_;
         const float visible_end = visible_start + visible_duration;
 
-        float major_interval = 1.0f;
-        if (visible_duration > 60.0f)
-            major_interval = 10.0f;
-        else if (visible_duration > 30.0f)
-            major_interval = 5.0f;
-        else if (visible_duration > 10.0f)
-            major_interval = 2.0f;
-        else if (visible_duration <= 2.0f)
-            major_interval = 0.5f;
-
-        major_interval /= zoom_level_;
+        const float major_interval = sequencer_ui::rulerMajorInterval(visible_duration);
         const float minor_interval = major_interval / 4.0f;
 
         std::string html;
         html.reserve(2048);
 
         const float label_margin = 30.0f * cached_dp_ratio_;
+        const float half_label = label_margin * 0.5f;
 
-        const float first_tick = std::floor(visible_start / minor_interval) * minor_interval;
-        for (float t_val = first_tick; t_val <= visible_end + minor_interval * 0.5f; t_val += minor_interval) {
-            if (t_val < 0.0f)
-                continue;
+        int first_index = static_cast<int>(std::floor(visible_start / minor_interval));
+        if (first_index < 0)
+            first_index = 0;
+
+        for (int i = 0;; ++i) {
+            const int index = first_index + i;
+            const float t_val = static_cast<float>(index) * minor_interval;
+            if (t_val > visible_end)
+                break;
 
             const float x = timeToX(t_val, 0.0f, timeline_width);
             if (x < 0.0f || x > timeline_width)
                 continue;
 
-            const float major_phase = std::fmod(t_val, major_interval);
-            const bool is_major = major_phase < 0.01f || (major_interval - major_phase) < 0.01f;
-
+            const bool is_major = (index % 4) == 0;
             if (is_major) {
                 html += fmt::format(
                     "<div class=\"ruler-tick major\" style=\"left: {:.1f}px;\" />", x);
-                if (x + label_margin <= timeline_width) {
+                if (timeline_width > label_margin) {
+                    const float label_x = std::clamp(x, half_label, timeline_width - label_margin);
                     html += fmt::format(
                         "<span class=\"ruler-label\" style=\"left: {:.1f}px;\">{}</span>",
-                        x + 4.0f * cached_dp_ratio_, formatTimeShort(t_val));
+                        label_x, formatTimeShort(t_val, major_interval));
                 }
             } else {
                 html += fmt::format(
@@ -1045,14 +1067,8 @@ namespace lfs::vis {
             el_sequence_fps_field_->SetClass("active", has_sequence);
         if (el_format_label_)
             el_format_label_->SetInnerRML(formatPresetShort(ui_state_.preset));
-        if (el_resolution_info_) {
-            const auto info = lfs::io::video::getPresetInfo(ui_state_.preset);
-            const bool custom = ui_state_.preset == lfs::io::video::VideoPreset::CUSTOM;
-            const int w = custom ? ui_state_.custom_width : info.width;
-            const int h = custom ? ui_state_.custom_height : info.height;
-            const int fps = custom ? ui_state_.framerate : info.framerate;
-            el_resolution_info_->SetInnerRML(fmt::format("{}x{} @ {}fps", w, h, fps));
-        }
+        if (!resolution_editing_)
+            syncResolutionDisplay();
         if (!quality_scrub_editing_)
             syncQualityScrub();
 
@@ -1428,6 +1444,77 @@ namespace lfs::vis {
         if (el_sequence_fps_field_)
             el_sequence_fps_field_->SetClass("is-editing", false);
         syncSequenceFpsDisplay();
+    }
+
+    // ── Output Resolution Field ─────────────────────────────
+
+    void RmlSequencerPanel::ResolutionEditListener::ProcessEvent(Rml::Event& event) {
+        assert(panel);
+        const auto event_id = event.GetId();
+        auto* el = event.GetCurrentElement();
+        if (!el)
+            return;
+
+        if (event_id == Rml::EventId::Click && el->GetId() == "resolution-field") {
+            if (event.GetParameter<int>("button", 0) != 0)
+                return;
+            panel->enterResolutionEdit();
+            event.StopPropagation();
+        } else if (event_id == Rml::EventId::Change && el->GetId() == "resolution-input") {
+            if (event.GetParameter<bool>("linebreak", false))
+                panel->exitResolutionEdit(true);
+        } else if (event_id == Rml::EventId::Blur && el->GetId() == "resolution-input") {
+            panel->exitResolutionEdit(true);
+        } else if (event_id == Rml::EventId::Keydown && el->GetId() == "resolution-input") {
+            const auto key = static_cast<Rml::Input::KeyIdentifier>(
+                event.GetParameter("key_identifier", static_cast<int>(Rml::Input::KI_UNKNOWN)));
+            if (key == Rml::Input::KI_ESCAPE) {
+                panel->exitResolutionEdit(false);
+                event.StopPropagation();
+            }
+        }
+    }
+
+    void RmlSequencerPanel::syncResolutionDisplay() {
+        if (!el_resolution_info_ || resolution_editing_)
+            return;
+        el_resolution_info_->SetInnerRML(
+            fmt::format("{}x{}", ui_state_.outputWidth(), ui_state_.outputHeight()));
+    }
+
+    void RmlSequencerPanel::enterResolutionEdit() {
+        if (!el_resolution_field_ || !el_resolution_input_ || resolution_editing_)
+            return;
+
+        resolution_editing_ = true;
+        el_resolution_field_->SetClass("is-editing", true);
+        el_resolution_input_->SetAttribute(
+            "value", fmt::format("{}x{}", ui_state_.outputWidth(), ui_state_.outputHeight()));
+        el_resolution_input_->Focus();
+    }
+
+    void RmlSequencerPanel::exitResolutionEdit(const bool commit) {
+        if (!resolution_editing_)
+            return;
+
+        if (commit && el_resolution_input_) {
+            const auto text = el_resolution_input_->GetAttribute<Rml::String>("value", "");
+            if (const auto parsed = lfs::io::video::parseVideoResolution(text)) {
+                if (parsed->width != ui_state_.outputWidth() ||
+                    parsed->height != ui_state_.outputHeight()) {
+                    ui_state_.preset = lfs::io::video::VideoPreset::CUSTOM;
+                }
+                if (ui_state_.preset == lfs::io::video::VideoPreset::CUSTOM) {
+                    ui_state_.custom_width = parsed->width;
+                    ui_state_.custom_height = parsed->height;
+                }
+            }
+        }
+
+        resolution_editing_ = false;
+        if (el_resolution_field_)
+            el_resolution_field_->SetClass("is-editing", false);
+        syncResolutionDisplay();
     }
 
 } // namespace lfs::vis
