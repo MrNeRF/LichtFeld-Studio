@@ -308,6 +308,8 @@ namespace lfs::vis::gui {
             overlay_->destroyGraphicsResources();
         pip_texture_.reset();
         pip_initialized_ = false;
+        pip_last_key_.reset();
+        pip_needs_update_ = true;
         line_renderer_.destroyResources();
         film_strip_.destroyGraphicsResources();
     }
@@ -332,7 +334,7 @@ namespace lfs::vis::gui {
 
         viewport_edit_mode_ = SequencerViewportEditMode::None;
         keyframe_gizmo_active_ = false;
-        pip_last_keyframe_ = std::nullopt;
+        pip_last_key_.reset();
         pip_needs_update_ = true;
         last_panel_frame_time_ = std::chrono::steady_clock::now();
         endViewportKeyframeEdit();
@@ -510,16 +512,7 @@ namespace lfs::vis::gui {
 
         if (ui_state_.equirectangular != last_equirectangular_) {
             last_equirectangular_ = ui_state_.equirectangular;
-            pip_needs_update_ = true;
             film_strip_.invalidateAll();
-        }
-
-        const int output_width = ui_state_.outputWidth();
-        const int output_height = ui_state_.outputHeight();
-        if (output_width != last_pip_output_width_ || output_height != last_pip_output_height_) {
-            last_pip_output_width_ = output_width;
-            last_pip_output_height_ = output_height;
-            pip_needs_update_ = true;
         }
 
         const auto& sdl_buf = viewer_->getWindowManager()->frameInput();
@@ -590,7 +583,8 @@ namespace lfs::vis::gui {
                plySequenceStreamHasWork() ||
                keyframe_gizmo_active_ ||
                viewport_keyframe_edit_snapshot_.has_value() ||
-               (ui_state_.show_pip_preview && pip_needs_update_) ||
+               (ui_state_.show_pip_preview &&
+                (pip_needs_update_ || !pip_last_key_ || currentPipPreviewKey() != *pip_last_key_)) ||
                (overlay_ && (overlay_->wantsInput() ||
                              overlay_->isContextMenuOpen() ||
                              overlay_->isPopupOpen()));
@@ -1325,7 +1319,6 @@ namespace lfs::vis::gui {
                     lfs::core::events::state::KeyframeListChanged{
                         .count = controller_.timeline().realKeyframeCount()}
                         .emit();
-                    pip_needs_update_ = true;
                 } else {
                     LOG_ERROR("Failed to load camera path from {}", path_utf8);
                 }
@@ -2022,7 +2015,6 @@ namespace lfs::vis::gui {
                     new_pos,
                     new_rot,
                     kf->focal_length_mm)) {
-                pip_needs_update_ = true;
                 rendering_manager->markDirty(DirtyFlag::OVERLAY);
             }
         }
@@ -2247,7 +2239,6 @@ namespace lfs::vis::gui {
                 controller_.addKeyframeAtTime(kf, time);
                 controller_.seek(time);
                 state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
-                pip_needs_update_ = true;
             } break;
             case Action::UPDATE_KEYFRAME:
                 viewport_edit_mode_ = SequencerViewportEditMode::None;
@@ -2317,7 +2308,6 @@ namespace lfs::vis::gui {
                             view_state.rotation,
                             view_state.focal_length_mm)) {
                         state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
-                        pip_needs_update_ = true;
                     }
                     if (const auto* const keyframe =
                             controller_.timeline().getKeyframeById(
@@ -2340,16 +2330,44 @@ namespace lfs::vis::gui {
         if (auto time_result = overlay_->consumeTimeEdit()) {
             if (controller_.setKeyframeTime(time_result->index, time_result->value)) {
                 state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
-                pip_needs_update_ = true;
             }
         }
 
         if (auto focal_result = overlay_->consumeFocalEdit()) {
             if (controller_.setKeyframeFocalLength(focal_result->index, focal_result->value)) {
                 state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
-                pip_needs_update_ = true;
             }
         }
+    }
+
+    SequencerUIManager::PipPreviewKey SequencerUIManager::currentPipPreviewKey() const {
+        const auto preview = pipPreviewSize(ui_state_.outputWidth(), ui_state_.outputHeight());
+        const auto selected = controller_.selectedKeyframe();
+        const bool follow_playhead = !controller_.isStopped() || !selected.has_value();
+
+        PipPreviewKey key;
+        key.equirectangular = ui_state_.equirectangular;
+        key.width = preview.width;
+        key.height = preview.height;
+
+        if (follow_playhead) {
+            const auto state = controller_.currentCameraState();
+            key.timeline_revision = controller_.timelineRevision();
+            key.playhead = controller_.playhead();
+            key.position = state.position;
+            key.rotation = state.rotation;
+            key.focal_length_mm = state.focal_length_mm;
+            return key;
+        }
+
+        const auto* const kf = controller_.timeline().getKeyframe(*selected);
+        if (kf) {
+            key.selected_id = kf->id;
+            key.position = kf->position;
+            key.rotation = kf->rotation;
+            key.focal_length_mm = kf->focal_length_mm;
+        }
+        return key;
     }
 
     void SequencerUIManager::initPipPreview() {
@@ -2360,78 +2378,36 @@ namespace lfs::vis::gui {
         if (!ui_state_.show_pip_preview)
             return;
 
-        const bool is_playing = !controller_.isStopped();
-        const auto selected = controller_.selectedKeyframe();
-
-        const auto now = std::chrono::steady_clock::now();
-        if (is_playing) {
-            const float elapsed = std::chrono::duration<float>(now - pip_last_render_time_).count();
-            if (elapsed < 1.0f / PREVIEW_TARGET_FPS)
-                return;
-        }
-
         auto* const rm = ctx.viewer->getRenderingManager();
         auto* const sm = ctx.viewer->getSceneManager();
         if (!rm || !sm)
             return;
 
+        const auto key = currentPipPreviewKey();
+        if (!pip_needs_update_ && pip_last_key_ == key)
+            return;
+
+        const auto now = std::chrono::steady_clock::now();
+        if (!key.selected_id.has_value() && !pip_needs_update_) {
+            const float elapsed = std::chrono::duration<float>(now - pip_last_render_time_).count();
+            if (elapsed < 1.0f / PREVIEW_TARGET_FPS)
+                return;
+        }
+
         if (!pip_initialized_)
             initPipPreview();
 
-        glm::mat3 cam_rot;
-        glm::vec3 cam_pos;
-        float cam_focal_length_mm;
-        auto& vp = ctx.viewer->getViewport();
-
-        if (is_playing) {
-            const auto state = controller_.currentCameraState();
-            cam_rot = glm::mat3_cast(state.rotation);
-            cam_pos = state.position;
-            cam_focal_length_mm = state.focal_length_mm;
-        } else {
-            if (selected.has_value()) {
-                if (pip_last_keyframe_ == selected && !pip_needs_update_)
-                    return;
-
-                const auto& timeline = controller_.timeline();
-                if (*selected >= timeline.size())
-                    return;
-
-                const auto* const kf = timeline.getKeyframe(*selected);
-                if (!kf)
-                    return;
-
-                cam_rot = glm::mat3_cast(kf->rotation);
-                cam_pos = kf->position;
-                cam_focal_length_mm = kf->focal_length_mm;
-            } else {
-                if (pip_last_keyframe_.has_value()) {
-                    pip_needs_update_ = true;
-                    pip_last_keyframe_ = std::nullopt;
-                }
-                if (!pip_needs_update_)
-                    return;
-
-                cam_rot = vp.camera.R;
-                cam_pos = vp.camera.t;
-                cam_focal_length_mm = rm ? rm->getFocalLengthMm()
-                                         : lfs::rendering::DEFAULT_FOCAL_LENGTH_MM;
-            }
-        }
-
-        const auto preview = pipPreviewSize(ui_state_.outputWidth(), ui_state_.outputHeight());
-        const auto image = rm->renderPreviewImage(sm, cam_rot, cam_pos, cam_focal_length_mm,
-                                                  preview.width, preview.height);
+        const glm::mat3 cam_rot = glm::mat3_cast(key.rotation);
+        const auto image = rm->renderPreviewImage(sm, cam_rot, key.position, key.focal_length_mm,
+                                                  key.width, key.height);
         // Vulkan preview readback is already in the orientation RmlUi samples.
         // upload() recreates the VkImage when width/height change.
-        if (image && pip_texture_.upload(*image, preview.width, preview.height, /*flip_y=*/false)) {
-            pip_render_width_ = preview.width;
-            pip_render_height_ = preview.height;
+        if (image && pip_texture_.upload(*image, key.width, key.height, /*flip_y=*/false)) {
+            pip_render_width_ = key.width;
+            pip_render_height_ = key.height;
             pip_last_render_time_ = now;
-            if (!is_playing) {
-                pip_last_keyframe_ = selected;
-                pip_needs_update_ = false;
-            }
+            pip_last_key_ = key;
+            pip_needs_update_ = false;
         }
     }
 
