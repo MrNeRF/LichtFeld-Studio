@@ -69,6 +69,7 @@ body {
     flex-direction: row;
     align-items: center;
     gap: 4dp;
+    flex-shrink: 0;
 }
 
 #right-controls {
@@ -76,6 +77,7 @@ body {
     flex-direction: row;
     align-items: center;
     gap: 4dp;
+    flex-shrink: 0;
 }
 
 #transport {
@@ -162,6 +164,10 @@ body {
 .transport-label {
     font-size: 12dp;
     white-space: nowrap;
+}
+
+.transport-label-short {
+    display: none;
 }
 
 .transport-info {
@@ -978,4 +984,81 @@ body {
 .timeline-tooltip-line.title {
     font-size: 12dp;
     margin-bottom: 2dp;
+}
+
+@media (max-width: 1620dp) {
+    #resolution-info,
+    .quality-group,
+    #quality-scrub,
+    .speed-text,
+    .ctx-indicator {
+        display: none;
+    }
+}
+
+@media (max-width: 1380dp) {
+    #btn-camera-path .transport-label,
+    #btn-export .transport-label,
+    #btn-clear .transport-label {
+        display: none;
+    }
+
+    #btn-camera-path .cam-path-icon,
+    #btn-export .export-icon,
+    #btn-clear .clear-icon {
+        margin-right: 0;
+    }
+}
+
+@media (max-width: 1280dp) {
+    #btn-film-strip,
+    #btn-equirect,
+    #btn-load-sequence {
+        display: none;
+    }
+}
+
+@media (max-width: 1120dp) {
+    #btn-camera-path,
+    #btn-speed,
+    #sequence-fps-field,
+    #btn-snap,
+    #btn-follow,
+    #btn-preview,
+    #btn-format,
+    #btn-clear,
+    .transport-sep {
+        display: none;
+    }
+}
+
+@media (max-width: 660dp) {
+    .transport-label-full {
+        display: none;
+    }
+
+    .transport-label-short {
+        display: block;
+    }
+}
+
+@media (max-width: 580dp) {
+    #duration-field {
+        display: none;
+    }
+
+    #time-display {
+        margin-left: 0;
+        padding-left: 4dp;
+    }
+
+    #left-controls,
+    #right-controls {
+        gap: 2dp;
+    }
+
+    #transport-row {
+        justify-content: flex-start;
+        gap: 6dp;
+    }
 }
