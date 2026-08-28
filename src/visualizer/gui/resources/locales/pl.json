@@ -1061,7 +1061,7 @@
     "seq_add": "Dodaj klatkę kluczową w bieżącej pozycji",
     "seq_speed": "Prędkość odtwarzania (kliknij, aby zmienić)",
     "seq_clip_duration": "Clip duration (click to edit, in seconds)",
-    "seq_snap": "Przyciągaj klatki kluczowe do siatki (prawy przycisk myszy dla opcji)",
+    "seq_snap": "Przyciągaj klatki kluczowe do siatki (Ctrl odwraca podczas przeciągania, prawy przycisk myszy dla opcji)",
     "seq_follow": "Podążaj za głowicą odtwarzania",
     "seq_film_strip": "Pokaż taśmę filmową pod osią czasu",
     "seq_pip_preview": "Pokaż podgląd obraz w obrazie (prawy przycisk myszy dla opcji)",

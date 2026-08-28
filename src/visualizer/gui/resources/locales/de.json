@@ -1060,7 +1060,7 @@
     "seq_add": "Keyframe an aktueller Position hinzufügen",
     "seq_speed": "Wiedergabegeschwindigkeit (Klick zum Wechseln)",
     "seq_clip_duration": "Clipdauer (zum Bearbeiten klicken, in Sekunden)",
-    "seq_snap": "Keyframes am Raster einrasten (Rechtsklick für Optionen)",
+    "seq_snap": "Keyframes am Raster einrasten (Strg kehrt beim Ziehen um, Rechtsklick für Optionen)",
     "seq_follow": "Abspielkopf bei Wiedergabe folgen",
     "seq_film_strip": "Filmstreifen unterhalb der Zeitleiste anzeigen",
     "seq_pip_preview": "Bild-in-Bild-Vorschau anzeigen (Rechtsklick für Optionen)",
