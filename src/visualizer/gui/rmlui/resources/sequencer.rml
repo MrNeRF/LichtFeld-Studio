@@ -136,6 +136,9 @@
                     <div id="playhead">
                         <div id="playhead-handle"></div>
                     </div>
+                    <div id="timeline-scrollbar">
+                        <div id="timeline-scrollbar-thumb"></div>
+                    </div>
                 </div>
             </div>
         </div>

@@ -1061,7 +1061,7 @@
     "seq_add": "現在の位置にキーフレームを追加",
     "seq_speed": "再生速度（クリックで切替）",
     "seq_clip_duration": "Clip duration (click to edit, in seconds)",
-    "seq_snap": "キーフレームをグリッドにスナップ（右クリックでオプション）",
+    "seq_snap": "キーフレームをグリッドにスナップ（ドラッグ中はCtrlで反転、右クリックでオプション）",
     "seq_follow": "再生中にプレイヘッドを追従",
     "seq_film_strip": "タイムライン下にフィルムストリップを表示",
     "seq_pip_preview": "ピクチャーインピクチャープレビューを表示（右クリックでオプション）",

@@ -1061,7 +1061,7 @@
     "seq_add": "Keyframe toevoegen op huidige positie",
     "seq_speed": "Afspeelsnelheid (klik om te wisselen)",
     "seq_clip_duration": "Clipduur (klik om te bewerken, in seconden)",
-    "seq_snap": "Keyframes uitlijnen op raster (rechtsklik voor opties)",
+    "seq_snap": "Keyframes uitlijnen op raster (Ctrl keert om tijdens slepen, rechtsklik voor opties)",
     "seq_follow": "Afspeelkop volgen tijdens afspelen",
     "seq_film_strip": "Filmstrip onder de tijdlijn tonen",
     "seq_pip_preview": "Beeld-in-beeld-voorbeeld tonen (rechtsklik voor opties)",

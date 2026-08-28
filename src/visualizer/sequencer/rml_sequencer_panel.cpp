@@ -36,8 +36,6 @@ namespace lfs::vis {
         constexpr float MIN_KEYFRAME_SPACING = 0.1f;
         constexpr float DOUBLE_CLICK_TIME = 0.3f;
         constexpr float DRAG_THRESHOLD_PX = 3.0f;
-        constexpr float PLAYHEAD_HIT_RADIUS = 6.0f;
-        constexpr float PLAYHEAD_HANDLE_WIDTH = 8.0f;
 
         constexpr std::array<float, 5> SPEED_PRESETS = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f};
 
@@ -118,6 +116,13 @@ namespace lfs::vis {
                    !input.text_codepoints.empty() ||
                    !input.text_inputs.empty() ||
                    input.has_text_editing;
+        }
+
+        [[nodiscard]] bool mouseOverPanel(const PanelInputState& input,
+                                          const float panel_x, const float panel_y,
+                                          const float panel_width, const float panel_height) {
+            return input.mouse_x >= panel_x && input.mouse_x < panel_x + panel_width &&
+                   input.mouse_y >= panel_y && input.mouse_y < panel_y + panel_height;
         }
 
         [[nodiscard]] float clampCenteredSpan(const float center,
@@ -318,6 +323,8 @@ namespace lfs::vis {
         el_keyframes_ = nullptr;
         el_playhead_ = nullptr;
         el_playhead_handle_ = nullptr;
+        el_timeline_scrollbar_ = nullptr;
+        el_timeline_scrollbar_thumb_ = nullptr;
         el_hint_ = nullptr;
         el_current_time_ = nullptr;
         el_duration_ = nullptr;
@@ -473,6 +480,17 @@ namespace lfs::vis {
                                                  const PanelInputState& input,
                                                  const int width,
                                                  const int height) const {
+        const bool mouse_over_panel = mouseOverPanel(input, cached_panel_x_, cached_panel_y_,
+                                                     cached_panel_width_, cached_total_height_);
+        const bool mouse_moved = std::abs(input.mouse_x - last_render_mouse_x_) >= 0.5f ||
+                                 std::abs(input.mouse_y - last_render_mouse_y_) >= 0.5f;
+        // Hover classes (playhead handle, scrollbar) only update on a full
+        // render. Invalidate while the cursor is over the panel, and once more
+        // when it leaves so hot classes clear. Mouse motion over the viewport
+        // must not bust the cache.
+        const bool hover_needs_frame = (mouse_over_panel && mouse_moved) ||
+                                       (!mouse_over_panel && last_render_mouse_over_panel_);
+
         return !direct_cache_dirty_ &&
                direct_cache_.texture != 0 &&
                direct_cache_.width == width &&
@@ -480,6 +498,7 @@ namespace lfs::vis {
                last_render_signature_.has_value() &&
                *last_render_signature_ == signature &&
                !hasInputActivity(input) &&
+               !hover_needs_frame &&
                !tooltip_.needsFrame() &&
                !quality_scrub_active_ &&
                !quality_scrub_editing_ &&
@@ -551,6 +570,8 @@ namespace lfs::vis {
         el_keyframes_ = document_->GetElementById("keyframes");
         el_playhead_ = document_->GetElementById("playhead");
         el_playhead_handle_ = document_->GetElementById("playhead-handle");
+        el_timeline_scrollbar_ = document_->GetElementById("timeline-scrollbar");
+        el_timeline_scrollbar_thumb_ = document_->GetElementById("timeline-scrollbar-thumb");
         el_hint_ = document_->GetElementById("hint");
         el_current_time_ = document_->GetElementById("current-time");
         el_duration_ = document_->GetElementById("duration");
@@ -607,6 +628,7 @@ namespace lfs::vis {
         el_close_panel_label_ = document_->GetElementById("close-panel-label");
 
         elements_cached_ = el_ruler_ && el_sequence_strip_ && el_keyframes_ && el_playhead_ && el_playhead_handle_ &&
+                           el_timeline_scrollbar_ && el_timeline_scrollbar_thumb_ &&
                            el_current_time_ && el_duration_ && el_play_icon_ &&
                            el_btn_loop_ && el_timeline_ && el_header_ &&
                            el_easing_stripe_ && el_easing_segments_ &&
@@ -716,6 +738,25 @@ namespace lfs::vis {
             tl_width,
             PLAYHEAD_HANDLE_WIDTH * cached_dp_ratio_);
         el_playhead_->SetProperty("left", fmt::format("{:.1f}px", x));
+    }
+
+    void RmlSequencerPanel::updateTimelineScrollbar() {
+        if (!elements_cached_ || !el_timeline_scrollbar_ || !el_timeline_scrollbar_thumb_)
+            return;
+
+        const float duration = controller_.timeline().clipDuration();
+        const float max_pan = sequencer_ui::maxPanOffset(controller_.timeline(), zoom_level_);
+        const bool visible = max_pan > 0.0f && duration > 0.0f;
+        el_timeline_scrollbar_->SetClass("visible", visible);
+        if (!visible) {
+            el_timeline_scrollbar_->SetClass("hot", false);
+            return;
+        }
+
+        const float left_frac = std::clamp(pan_offset_ / duration, 0.0f, 1.0f);
+        const float width_frac = std::clamp(getDisplayEndTime() / duration, 0.0f, 1.0f);
+        el_timeline_scrollbar_thumb_->SetProperty("left", fmt::format("{:.3f}%", left_frac * 100.0f));
+        el_timeline_scrollbar_thumb_->SetProperty("width", fmt::format("{:.3f}%", width_frac * 100.0f));
     }
 
     void RmlSequencerPanel::updateTimeDisplay() {
@@ -1138,6 +1179,7 @@ namespace lfs::vis {
             updateButtonStates();
             updateTransportSettings();
             updatePlayhead();
+            updateTimelineScrollbar();
             updateTimeDisplay();
             rebuildKeyframes();
             rebuildPlySequenceClip();
@@ -1162,6 +1204,10 @@ namespace lfs::vis {
         rml_context_->Update();
         queueCachedRender(context_x, context_y, panel_width, cached_total_height_, w, h, true);
         last_render_signature_ = signature;
+        last_render_mouse_x_ = input.mouse_x;
+        last_render_mouse_y_ = input.mouse_y;
+        last_render_mouse_over_panel_ = mouseOverPanel(input, cached_panel_x_, cached_panel_y_,
+                                                       cached_panel_width_, cached_total_height_);
         direct_cache_dirty_ = false;
     }
 

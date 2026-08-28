@@ -584,6 +584,42 @@ body {
     background-color: #ff6688;
     border-radius: 7dp;
     pointer-events: none;
+    transform-origin: 50% 50%;
+    transition: transform 0.12s quadratic-out, background-color 0.12s quadratic-out;
+}
+
+#playhead-handle.hot {
+    transform: scale(1.2);
+    background-color: #ff99aa;
+}
+
+#timeline-scrollbar {
+    display: none;
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    height: 6dp;
+    border-radius: 3dp;
+    background-color: rgba(160, 160, 180, 40);
+    overflow: hidden;
+}
+
+#timeline-scrollbar.visible {
+    display: block;
+}
+
+#timeline-scrollbar-thumb {
+    display: block;
+    position: absolute;
+    top: 0;
+    height: 100%;
+    border-radius: 3dp;
+    background-color: rgba(200, 210, 230, 120);
+}
+
+#timeline-scrollbar.hot #timeline-scrollbar-thumb {
+    background-color: rgba(230, 238, 255, 200);
 }
 
 #time-display {

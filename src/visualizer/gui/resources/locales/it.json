@@ -1061,7 +1061,7 @@
     "seq_add": "Aggiungi keyframe alla posizione attuale",
     "seq_speed": "Velocità di riproduzione (clic per cambiare)",
     "seq_clip_duration": "Durata clip (fai clic per modificare, in secondi)",
-    "seq_snap": "Allinea i keyframe alla griglia (clic destro per le opzioni)",
+    "seq_snap": "Allinea i keyframe alla griglia (Ctrl inverte durante il trascinamento, clic destro per le opzioni)",
     "seq_follow": "Segui la testina durante la riproduzione",
     "seq_film_strip": "Mostra pellicola sotto la timeline",
     "seq_pip_preview": "Mostra anteprima picture-in-picture (clic destro per le opzioni)",

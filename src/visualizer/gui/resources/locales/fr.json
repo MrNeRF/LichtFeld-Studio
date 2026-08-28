@@ -1061,7 +1061,7 @@
     "seq_add": "Ajouter une image clé à la position actuelle",
     "seq_speed": "Vitesse de lecture (cliquer pour changer)",
     "seq_clip_duration": "Durée du clip (cliquer pour modifier, en secondes)",
-    "seq_snap": "Aligner les images clés sur la grille (clic droit pour les options)",
+    "seq_snap": "Aligner les images clés sur la grille (Ctrl inverse pendant le glissement, clic droit pour les options)",
     "seq_follow": "Suivre la tête de lecture pendant la lecture",
     "seq_film_strip": "Afficher la pellicule sous la timeline",
     "seq_pip_preview": "Afficher l'aperçu image dans l'image (clic droit pour les options)",

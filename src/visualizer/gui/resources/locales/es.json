@@ -1061,7 +1061,7 @@
     "seq_add": "Añadir fotograma clave en la posición actual",
     "seq_speed": "Velocidad de reproducción (clic para cambiar)",
     "seq_clip_duration": "Duración del clip (clic para editar, en segundos)",
-    "seq_snap": "Ajustar los fotogramas clave a la cuadrícula (clic derecho para opciones)",
+    "seq_snap": "Ajustar los fotogramas clave a la cuadrícula (Ctrl invierte al arrastrar, clic derecho para opciones)",
     "seq_follow": "Seguir el cabezal de reproducción durante la reproducción",
     "seq_film_strip": "Mostrar la tira de fotogramas bajo la línea de tiempo",
     "seq_pip_preview": "Mostrar la vista previa de imagen en imagen (clic derecho para opciones)",

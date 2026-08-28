@@ -3,10 +3,12 @@
 
 #include "sequencer/animation_clip.hpp"
 #include "sequencer/keyframe.hpp"
+#include "sequencer/rml_sequencer_panel.hpp"
 #include "sequencer/sequencer_controller.hpp"
 #include "sequencer/timeline.hpp"
 #include "sequencer/timeline_view_math.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <format>
@@ -549,6 +551,39 @@ namespace {
         expectVec3Eq(points[2], timeline.evaluate(2.0f).position);
         expectVec3Eq(points[3], timeline.evaluate(3.0f).position);
         expectVec3Eq(points[4], timeline.evaluate(4.0f).position);
+    }
+
+    [[nodiscard]] float clampCenteredSpan(const float center, const float extent, const float span) {
+        if (extent <= 0.0f)
+            return 0.0f;
+        const float half_span = std::max(span * 0.5f, 0.0f);
+        if (extent <= span)
+            return extent * 0.5f;
+        return std::clamp(center, half_span, extent - half_span);
+    }
+
+    TEST(SequencerTimelineRegressionTest, PlayheadDrawAndHitUseTheSameClampSpan) {
+        using lfs::vis::panel_config::PLAYHEAD_HANDLE_WIDTH;
+        using lfs::vis::panel_config::PLAYHEAD_HIT_RADIUS;
+
+        EXPECT_FLOAT_EQ(PLAYHEAD_HANDLE_WIDTH, 14.0f);
+        EXPECT_GE(PLAYHEAD_HIT_RADIUS, 8.0f);
+
+        constexpr float timeline_width = 200.0f;
+        constexpr float dp = 1.0f;
+        const float draw_span = PLAYHEAD_HANDLE_WIDTH * dp;
+        const float hit_span = PLAYHEAD_HANDLE_WIDTH * dp;
+        EXPECT_FLOAT_EQ(draw_span, hit_span);
+
+        EXPECT_FLOAT_EQ(clampCenteredSpan(0.0f, timeline_width, draw_span), 7.0f);
+        EXPECT_FLOAT_EQ(clampCenteredSpan(0.0f, timeline_width, hit_span), 7.0f);
+        EXPECT_FLOAT_EQ(clampCenteredSpan(timeline_width, timeline_width, draw_span), 193.0f);
+        EXPECT_FLOAT_EQ(clampCenteredSpan(timeline_width, timeline_width, hit_span), 193.0f);
+
+        // Old panel.cpp used an 8dp span while input.cpp used 14dp (~3dp edge mismatch).
+        EXPECT_FLOAT_EQ(clampCenteredSpan(0.0f, timeline_width, 8.0f), 4.0f);
+        EXPECT_NE(clampCenteredSpan(0.0f, timeline_width, draw_span),
+                  clampCenteredSpan(0.0f, timeline_width, 8.0f));
     }
 
 } // namespace

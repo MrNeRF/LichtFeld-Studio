@@ -1061,7 +1061,7 @@
     "seq_add": "현재 위치에 키프레임 추가",
     "seq_speed": "재생 속도 (클릭으로 전환)",
     "seq_clip_duration": "Clip duration (click to edit, in seconds)",
-    "seq_snap": "키프레임을 그리드에 스냅 (우클릭으로 옵션)",
+    "seq_snap": "키프레임을 그리드에 스냅 (드래그 중 Ctrl로 반전, 우클릭으로 옵션)",
     "seq_follow": "재생 중 플레이헤드 따라가기",
     "seq_film_strip": "타임라인 아래에 필름 스트립 표시",
     "seq_pip_preview": "화면 속 화면 미리보기 표시 (우클릭으로 옵션)",
