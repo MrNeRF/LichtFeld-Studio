@@ -84,10 +84,12 @@
             </div>
             <div id="right-controls">
                 <div id="btn-save-path" class="transport-btn text" data-tooltip="tooltip.seq_save_path">
-                    <span class="transport-label">@tr:ui.save_path</span>
+                    <span class="transport-label transport-label-full">@tr:ui.save_path</span>
+                    <span class="transport-label transport-label-short">@tr:common.save</span>
                 </div>
                 <div id="btn-load-path" class="transport-btn text" data-tooltip="tooltip.seq_load_path">
-                    <span class="transport-label">@tr:ui.load_path</span>
+                    <span class="transport-label transport-label-full">@tr:ui.load_path</span>
+                    <span class="transport-label transport-label-short">@tr:common.load</span>
                 </div>
                 <div id="btn-load-sequence" class="transport-btn text" data-tooltip="tooltip.seq_load_sequence">
                     <span class="transport-label">@tr:ui.load_sequence</span>
