@@ -356,6 +356,57 @@ namespace {
         return {};
     }
 
+    std::optional<lfs::core::param::OutputFormat> parseFormat(const std::string& str) {
+        using lfs::core::param::OutputFormat;
+        if (str == "ply" || str == ".ply")
+            return OutputFormat::PLY;
+        if (str == "sog" || str == ".sog")
+            return OutputFormat::SOG;
+        if (str == "spz" || str == ".spz")
+            return OutputFormat::SPZ;
+        if (str == "html" || str == ".html")
+            return OutputFormat::HTML;
+        if (str == "usd" || str == ".usd")
+            return OutputFormat::USD;
+        if (str == "usda" || str == ".usda")
+            return OutputFormat::USDA;
+        if (str == "usdc" || str == ".usdc")
+            return OutputFormat::USDC;
+        if (str == "rad" || str == ".rad")
+            return OutputFormat::RAD;
+        return std::nullopt;
+    }
+
+    std::expected<std::vector<lfs::core::param::OutputFormat>, std::string> parseFormatList(const std::string& formats_str) {
+        std::vector<lfs::core::param::OutputFormat> formats;
+        size_t start = 0;
+        while (start < formats_str.size()) {
+            size_t end = formats_str.find(',', start);
+            if (end == std::string::npos)
+                end = formats_str.size();
+            std::string token = formats_str.substr(start, end - start);
+            const size_t first = token.find_first_not_of(" \t");
+            const size_t last = token.find_last_not_of(" \t");
+            if (first != std::string::npos && last != std::string::npos) {
+                token = token.substr(first, last - first + 1);
+            }
+            if (!token.empty()) {
+                auto fmt = parseFormat(token);
+                if (!fmt) {
+                    return std::unexpected(std::format("Invalid format '{}'. Use: ply, sog, spz, html, usd, usda, usdc, rad", token));
+                }
+                if (std::ranges::find(formats, *fmt) == formats.end()) {
+                    formats.push_back(*fmt);
+                }
+            }
+            start = end + 1;
+        }
+        if (formats.empty()) {
+            return std::unexpected("No output formats specified");
+        }
+        return formats;
+    }
+
     std::expected<std::tuple<ParseResult, std::function<void()>>, std::string> parse_arguments(
         const std::vector<std::string>& args,
         lfs::core::param::TrainingParameters& params) {
@@ -415,6 +466,7 @@ namespace {
             ::args::ValueFlag<float> freeze_lr_scale(paths_group, "scale", "Learning-rate scale for frozen splats (0 = fully frozen, default; try 0.01-0.1 to let frozen splats absorb small appearance mismatch)", {"freeze-lr-scale"});
             ::args::Flag exclude_export(paths_group, "exclude_export", "Exclude frozen --add-splat rows from PLY exports", {"exclude-export"});
             ::args::Flag no_provenance(paths_group, "no-provenance", "Strip identifying metadata (export id, timestamps, training info) from outputs; a minimal build stamp is always embedded", {"no-provenance"});
+            ::args::ValueFlag<std::string> export_formats(paths_group, "formats", "Also export the final trained splat next to project.licht: comma-separated ply, sog, spz, usd, usda, usdc, html, rad", {"export"});
 
             ::args::ValueFlag<std::string> import_cameras(paths_group, "path", "Import COLMAP cameras from sparse folder (no images required)", {"import-cameras"});
 
@@ -844,6 +896,14 @@ namespace {
                     params.add_splat_paths.push_back(splat_path);
                     params.add_splat_freeze.push_back((*add_splat_freeze)[i]);
                 }
+            }
+
+            if (export_formats) {
+                auto formats = parseFormatList(::args::get(export_formats));
+                if (!formats) {
+                    return std::unexpected(formats.error());
+                }
+                params.export_formats = std::move(*formats);
             }
 
             // Training mode
@@ -1574,57 +1634,6 @@ namespace {
         "  If conversion is not possible, it prints the command to run by hand.\n"
         "  --inference-backend accepts native (default; auto is an alias).\n"
         "\n";
-
-    std::optional<lfs::core::param::OutputFormat> parseFormat(const std::string& str) {
-        using lfs::core::param::OutputFormat;
-        if (str == "ply" || str == ".ply")
-            return OutputFormat::PLY;
-        if (str == "sog" || str == ".sog")
-            return OutputFormat::SOG;
-        if (str == "spz" || str == ".spz")
-            return OutputFormat::SPZ;
-        if (str == "html" || str == ".html")
-            return OutputFormat::HTML;
-        if (str == "usd" || str == ".usd")
-            return OutputFormat::USD;
-        if (str == "usda" || str == ".usda")
-            return OutputFormat::USDA;
-        if (str == "usdc" || str == ".usdc")
-            return OutputFormat::USDC;
-        if (str == "rad" || str == ".rad")
-            return OutputFormat::RAD;
-        return std::nullopt;
-    }
-
-    std::expected<std::vector<lfs::core::param::OutputFormat>, std::string> parseFormatList(const std::string& formats_str) {
-        std::vector<lfs::core::param::OutputFormat> formats;
-        size_t start = 0;
-        while (start < formats_str.size()) {
-            size_t end = formats_str.find(',', start);
-            if (end == std::string::npos)
-                end = formats_str.size();
-            std::string token = formats_str.substr(start, end - start);
-            const size_t first = token.find_first_not_of(" \t");
-            const size_t last = token.find_last_not_of(" \t");
-            if (first != std::string::npos && last != std::string::npos) {
-                token = token.substr(first, last - first + 1);
-            }
-            if (!token.empty()) {
-                auto fmt = parseFormat(token);
-                if (!fmt) {
-                    return std::unexpected(std::format("Invalid format '{}'. Use: ply, sog, spz, html, usd, usda, usdc, rad", token));
-                }
-                if (std::ranges::find(formats, *fmt) == formats.end()) {
-                    formats.push_back(*fmt);
-                }
-            }
-            start = end + 1;
-        }
-        if (formats.empty()) {
-            return std::unexpected("No output formats specified");
-        }
-        return formats;
-    }
 
     std::expected<lfs::core::args::ParsedArgs, std::string> parseConvertArgs(const int argc, const char* const argv[]) {
         namespace core_args = lfs::core::args;

@@ -1687,6 +1687,8 @@ namespace lfs::core {
         }
 
         static void trim_memory_pool();
+        // CUDA device pool only; leaves the pinned host cache intact.
+        static void trim_device_memory_pool();
         static void shutdown_memory_pool();
         static void set_memory_pool_iteration(int iteration);
 

@@ -365,6 +365,33 @@ namespace lfs::io::project {
 
     class ProjectWriter;
 
+    class LFS_IO_API MaterializeRetirementSink {
+    public:
+        MaterializeRetirementSink() = default;
+        MaterializeRetirementSink(MaterializeRetirementSink&&) noexcept = default;
+        MaterializeRetirementSink& operator=(MaterializeRetirementSink&&) noexcept =
+            default;
+        MaterializeRetirementSink(const MaterializeRetirementSink&) = delete;
+        MaterializeRetirementSink& operator=(const MaterializeRetirementSink&) =
+            delete;
+
+        void adopt(std::unique_ptr<std::byte[]> storage) {
+            if (storage) {
+                buffers_.push_back(std::move(storage));
+            }
+        }
+        void adopt(std::vector<std::byte> bytes) {
+            if (!bytes.empty()) {
+                vectors_.push_back(std::move(bytes));
+            }
+        }
+        void retire_async();
+
+    private:
+        std::vector<std::unique_ptr<std::byte[]>> buffers_;
+        std::vector<std::vector<std::byte>> vectors_;
+    };
+
     class LFS_IO_API ProjectReader {
     public:
         [[nodiscard]] static lfs::Result<ProjectReader>
@@ -400,6 +427,9 @@ namespace lfs::io::project {
                    // from decompression worker threads.
                    std::function<void(std::size_t, std::size_t)> progress = {}) const;
         [[nodiscard]] lfs::Result<void>
+        read_logical_prefix(const ChunkInfo& chunk,
+                            std::span<std::byte> destination) const;
+        [[nodiscard]] lfs::Result<void>
         read_stored_at(const ChunkInfo& chunk, std::uint64_t relative_offset,
                        std::span<std::byte> destination) const;
         [[nodiscard]] lfs::Result<void> verify_chunk(const ChunkInfo& chunk) const;
@@ -416,9 +446,16 @@ namespace lfs::io::project {
 
     private:
         friend class ProjectWriter;
+        friend class LazyChunkValue;
         struct Impl;
         explicit ProjectReader(std::shared_ptr<Impl> impl);
         std::shared_ptr<Impl> impl_;
+
+        [[nodiscard]] lfs::Result<void> visit_materialized_chunk(
+            const ChunkInfo& chunk,
+            const std::function<lfs::Result<void>(std::span<const std::byte>)>&
+                visitor,
+            MaterializeRetirementSink* retirement = nullptr) const;
     };
 
     enum class IndexCompression {

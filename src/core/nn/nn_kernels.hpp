@@ -77,6 +77,22 @@ namespace lfs::core::nn::kernels {
 
     void relu(const void* x, void* y, std::size_t n, DataType dtype, cudaStream_t stream);
 
+    void sigmoid(const void* x, void* y, std::size_t n, DataType dtype, cudaStream_t stream);
+
+    void window_partition_2d(const void* input, void* output, int batch, int height, int width,
+                             int channels, int window, int n_h, int n_w, DataType dtype,
+                             cudaStream_t stream);
+
+    void window_unpartition_2d(const void* windows, void* output, int batch, int height, int width,
+                               int channels, int window, int n_h, int n_w, DataType dtype,
+                               cudaStream_t stream);
+
+    void fourier_pe_coords(const void* coords, const void* gaussian, void* output, int count,
+                           int feats, DataType dtype, cudaStream_t stream);
+
+    void fourier_pe_grid(const void* gaussian, void* output, int height, int width, int feats,
+                         DataType dtype, cudaStream_t stream);
+
     void channel_bias(void* nchw, const void* bias, int n, int c, int spatial, DataType dtype,
                       cudaStream_t stream);
 
@@ -84,9 +100,30 @@ namespace lfs::core::nn::kernels {
     void split_qkv(const void* qkv, void* q, void* k, void* v, int batch, int seq, int heads,
                    int d, DataType dtype, cudaStream_t stream);
 
+    // qkv is [B, H, W, 3*heads*d] packed as [3, heads, d] on the last dim.
+    // Writes Q/K/V as windowed [B*nH*nW, heads, window*window, d], zero-filling
+    // the bottom/right pad so H/W need not be multiples of `window`.
+    void split_qkv_window_2d(const void* qkv, void* q, void* k, void* v, int batch, int height,
+                             int width, int heads, int d, int window, int n_h, int n_w,
+                             const void* bias, DataType dtype, cudaStream_t stream);
+
     // context [B, H, S, D] -> packed [B, S, H, D].
     void merge_heads(const void* context, void* packed, int batch, int heads, int seq, int d,
                      DataType dtype, cudaStream_t stream);
+
+    // Inverse of split_qkv_window_2d on the Q layout: [B*nH*nW, heads, ws*ws, d]
+    // -> [B, orig_h, orig_w, heads*d], cropping pad.
+    void merge_heads_unwindow_2d(const void* context, void* packed, int batch, int orig_h,
+                                 int orig_w, int heads, int d, int window, int n_h, int n_w,
+                                 DataType dtype, cudaStream_t stream);
+
+    // 2x2 stride-2 max-pool over the spatial sequence of [B, heads, H*W, D].
+    void max_pool_heads_2d(const void* input, void* output, int batch, int heads, int height,
+                           int width, int d, DataType dtype, cudaStream_t stream);
+
+    // 2x2 stride-2 max-pool on BHWC [B, H, W, C] -> [B, H/2, W/2, C].
+    void max_pool2d_bhwc(const void* input, void* output, int batch, int height, int width,
+                         int channels, DataType dtype, cudaStream_t stream);
 
     void uv_grid(void* output, int height, int width, float u0, float u1, float v0, float v1,
                  DataType dtype, cudaStream_t stream);

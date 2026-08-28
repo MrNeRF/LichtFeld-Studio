@@ -397,7 +397,10 @@ namespace lfs::io::project {
         from_bytes(std::span<const std::byte> bytes);
 
         [[nodiscard]] const JsonChapterDom& dom() const noexcept { return dom_; }
-        [[nodiscard]] JsonChapterDom& dom() noexcept { return dom_; }
+        [[nodiscard]] JsonChapterDom& dom() noexcept {
+            invalidate_parsed_nodes();
+            return dom_;
+        }
         [[nodiscard]] std::vector<std::byte> to_bytes() const { return dom_.to_bytes(); }
 
         [[nodiscard]] lfs::Result<std::optional<lfs::core::Uuid>>
@@ -410,9 +413,15 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<void> upsert_node(const SceneNodeRecord& value);
         [[nodiscard]] lfs::Result<bool> remove_node(const lfs::core::Uuid& uuid);
         [[nodiscard]] lfs::Result<void> validate_hierarchy() const;
+        [[nodiscard]] lfs::Result<void>
+        validate_hierarchy(std::span<const SceneNodeRecord> nodes) const;
 
     private:
+        void invalidate_parsed_nodes() noexcept;
+
         JsonChapterDom dom_;
+        mutable std::optional<std::vector<SceneNodeRecord>> cached_nodes_;
+        mutable bool hierarchy_valid_ = false;
     };
 
     struct ParameterManagerSnapshot {
@@ -453,7 +462,10 @@ namespace lfs::io::project {
         from_bytes(std::span<const std::byte> bytes);
 
         [[nodiscard]] const JsonChapterDom& dom() const noexcept { return dom_; }
-        [[nodiscard]] JsonChapterDom& dom() noexcept { return dom_; }
+        [[nodiscard]] JsonChapterDom& dom() noexcept {
+            cached_snapshot_.reset();
+            return dom_;
+        }
         [[nodiscard]] std::vector<std::byte> to_bytes() const { return dom_.to_bytes(); }
 
         [[nodiscard]] lfs::Result<ParameterManagerSnapshot> snapshot() const;
@@ -462,6 +474,7 @@ namespace lfs::io::project {
 
     private:
         JsonChapterDom dom_;
+        mutable std::optional<ParameterManagerSnapshot> cached_snapshot_;
     };
 
     struct ReferenceOwnerBinding {
@@ -488,6 +501,17 @@ namespace lfs::io::project {
     build_reverse_reference_index(
         const ReferencesChapter& references, const ProjectChapter& project,
         const SceneGraphChapter& scene, const ParametersChapter& parameters,
+        std::span<const ReferenceOwnerBinding> additional_bindings = {});
+    [[nodiscard]] LFS_IO_API lfs::Result<ReverseReferenceIndex>
+    build_reverse_reference_index(
+        std::span<const ReferenceRecord> records, const ProjectChapter& project,
+        std::span<const SceneNodeRecord> nodes,
+        std::span<const ReferenceOwnerBinding> additional_bindings = {});
+    [[nodiscard]] LFS_IO_API lfs::Result<ReverseReferenceIndex>
+    build_reverse_reference_index(
+        std::span<const ReferenceRecord> records, const ProjectChapter& project,
+        std::span<const SceneNodeRecord> nodes,
+        const ParameterManagerSnapshot& parameters,
         std::span<const ReferenceOwnerBinding> additional_bindings = {});
 
 } // namespace lfs::io::project

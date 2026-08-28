@@ -413,6 +413,7 @@
     "conflict.btn_cancel": "取消",
     "save_pc.title": "已修改的点云",
     "save_pc.message": "点云已被修改。是否保存到数据集文件夹以供未来使用？",
+    "save_pc.message_project": "点云已被修改。是否保存到项目？",
     "save_pc.btn_save_start": "保存并开始",
     "save_pc.btn_start_without": "不保存直接开始",
     "overwrite.title": "覆盖之前的训练？",

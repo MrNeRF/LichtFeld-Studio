@@ -271,6 +271,176 @@ namespace lfs::io::project {
                    lhs.domain == rhs.domain;
         }
 
+        struct SelectionChapterPlan {
+            std::vector<std::size_t> sorted_slice_order;
+            std::uint64_t group_offset = 0;
+            std::uint64_t group_bytes = 0;
+            std::uint64_t slice_offset = 0;
+            std::uint64_t slice_bytes = 0;
+            std::uint64_t selected_offset = 0;
+            std::uint64_t selected_bytes = 0;
+            std::uint64_t data_offset = 0;
+            std::vector<std::uint64_t> name_offsets;
+            std::vector<std::uint64_t> slice_data_offsets;
+            std::uint64_t total_bytes = 0;
+        };
+
+        lfs::Result<SelectionChapterPlan>
+        plan_selection_chapter(const SelectionChapter& chapter) {
+            if (auto result = validate_groups(
+                    chapter.groups(),
+                    chapter.active_group_id(),
+                    chapter.next_group_id(),
+                    true);
+                !result) {
+                return std::move(result).error();
+            }
+            const auto ids = group_id_set(chapter.groups());
+            const auto& slices = chapter.slices();
+            std::vector<std::size_t> sorted_slice_order(slices.size());
+            for (std::size_t index = 0; index < slices.size(); ++index) {
+                sorted_slice_order[index] = index;
+            }
+            std::ranges::sort(
+                sorted_slice_order,
+                [&](const std::size_t lhs, const std::size_t rhs) {
+                    return slice_key_less(slices[lhs], slices[rhs]);
+                });
+            for (std::size_t index = 1; index < sorted_slice_order.size();
+                 ++index) {
+                if (same_slice_key(
+                        slices[sorted_slice_order[index - 1]],
+                        slices[sorted_slice_order[index]])) {
+                    return selection_error(
+                        lfs::ErrorCode::InvalidArgument,
+                        "The selection state cannot be saved.",
+                        "SELM contains duplicate node/domain slice keys",
+                        "slices");
+                }
+            }
+            for (const std::size_t index : sorted_slice_order) {
+                if (auto result = validate_slice_values(slices[index], ids);
+                    !result) {
+                    return std::move(result).error();
+                }
+            }
+
+            std::unordered_set<lfs::core::Uuid> selected_seen;
+            for (const auto& uuid : chapter.selected_node_uuids()) {
+                if (uuid.is_nil() || !selected_seen.emplace(uuid).second) {
+                    return selection_error(
+                        lfs::ErrorCode::InvalidArgument,
+                        "The selection state cannot be saved.",
+                        "Selected-node UUIDs contain nil or duplicate values",
+                        "selected_node_uuids");
+                }
+            }
+
+            if (chapter.groups().size() >
+                    std::numeric_limits<std::uint32_t>::max() ||
+                sorted_slice_order.size() >
+                    std::numeric_limits<std::uint32_t>::max() ||
+                chapter.selected_node_uuids().size() >
+                    std::numeric_limits<std::uint32_t>::max()) {
+                return selection_error(
+                    lfs::ErrorCode::InvalidArgument,
+                    "The selection state cannot be saved.",
+                    "SELM table count exceeds u32");
+            }
+
+            SelectionChapterPlan plan;
+            plan.sorted_slice_order = std::move(sorted_slice_order);
+            plan.group_offset = HEADER_BYTES;
+            if (!checked_mul<std::uint64_t>(
+                    chapter.groups().size(),
+                    GROUP_ROW_BYTES,
+                    plan.group_bytes) ||
+                !checked_add(
+                    plan.group_offset, plan.group_bytes, plan.slice_offset) ||
+                !checked_mul<std::uint64_t>(
+                    plan.sorted_slice_order.size(),
+                    SLICE_ROW_BYTES,
+                    plan.slice_bytes) ||
+                !checked_add(
+                    plan.slice_offset,
+                    plan.slice_bytes,
+                    plan.selected_offset) ||
+                !checked_mul<std::uint64_t>(
+                    chapter.selected_node_uuids().size(),
+                    UUID_BYTES,
+                    plan.selected_bytes) ||
+                !checked_add(
+                    plan.selected_offset,
+                    plan.selected_bytes,
+                    plan.data_offset) ||
+                !align_up(
+                    plan.data_offset,
+                    DATA_ALIGNMENT,
+                    plan.data_offset)) {
+                return selection_error(
+                    lfs::ErrorCode::InvalidArgument,
+                    "The selection state cannot be saved.",
+                    "SELM table offsets overflow");
+            }
+
+            plan.name_offsets.reserve(chapter.groups().size());
+            plan.slice_data_offsets.reserve(plan.sorted_slice_order.size());
+            std::uint64_t cursor = plan.data_offset;
+            for (const auto& group : chapter.groups()) {
+                if (group.name.size() >
+                    std::numeric_limits<std::uint32_t>::max()) {
+                    return selection_error(
+                        lfs::ErrorCode::InvalidArgument,
+                        "The selection state cannot be saved.",
+                        "Selection group name exceeds u32 bytes",
+                        "groups.name");
+                }
+                if (!align_up(cursor, DATA_ALIGNMENT, cursor)) {
+                    return selection_error(
+                        lfs::ErrorCode::InvalidArgument,
+                        "The selection state cannot be saved.",
+                        "SELM group-name offset overflows",
+                        "groups.name");
+                }
+                plan.name_offsets.push_back(cursor);
+                if (!checked_add<std::uint64_t>(
+                        cursor, group.name.size(), cursor)) {
+                    return selection_error(
+                        lfs::ErrorCode::InvalidArgument,
+                        "The selection state cannot be saved.",
+                        "SELM group-name range overflows",
+                        "groups.name");
+                }
+            }
+            for (const std::size_t index : plan.sorted_slice_order) {
+                if (!align_up(cursor, DATA_ALIGNMENT, cursor)) {
+                    return selection_error(
+                        lfs::ErrorCode::InvalidArgument,
+                        "The selection state cannot be saved.",
+                        "SELM slice offset overflows",
+                        "slices.data");
+                }
+                plan.slice_data_offsets.push_back(cursor);
+                if (!checked_add<std::uint64_t>(
+                        cursor, slices[index].mask.size(), cursor)) {
+                    return selection_error(
+                        lfs::ErrorCode::InvalidArgument,
+                        "The selection state cannot be saved.",
+                        "SELM slice range overflows",
+                        "slices.data");
+                }
+            }
+            if (!align_up(cursor, DATA_ALIGNMENT, cursor) ||
+                cursor > std::numeric_limits<std::size_t>::max()) {
+                return selection_error(
+                    lfs::ErrorCode::ResourceExhausted,
+                    "The selection state is too large for this process.",
+                    "SELM payload size exceeds size_t");
+            }
+            plan.total_bytes = cursor;
+            return plan;
+        }
+
     } // namespace
 
     lfs::Result<void> SelectionChapter::set_groups(
@@ -351,172 +521,39 @@ namespace lfs::io::project {
         return {};
     }
 
+    lfs::Result<void>
+    validate_selection_chapter(const SelectionChapter& chapter) {
+        auto plan = plan_selection_chapter(chapter);
+        if (!plan) {
+            return lfs::Result<void>::failure(std::move(plan).error());
+        }
+        return {};
+    }
+
     lfs::Result<std::vector<std::byte>>
     encode_selection_chapter(const SelectionChapter& chapter) {
-        if (auto result = validate_groups(
-                chapter.groups(),
-                chapter.active_group_id(),
-                chapter.next_group_id(),
-                true);
-            !result) {
-            return std::move(result).error();
+        auto planned = plan_selection_chapter(chapter);
+        if (!planned) {
+            return std::move(planned).error();
         }
-        const auto ids = group_id_set(chapter.groups());
-
-        std::vector<SelectionMaskSlice> sorted_slices =
-            chapter.slices();
-        std::ranges::sort(sorted_slices, slice_key_less);
-        for (std::size_t index = 1;
-             index < sorted_slices.size();
-             ++index) {
-            if (same_slice_key(
-                    sorted_slices[index - 1],
-                    sorted_slices[index])) {
-                return selection_error(
-                    lfs::ErrorCode::InvalidArgument,
-                    "The selection state cannot be saved.",
-                    "SELM contains duplicate node/domain slice keys",
-                    "slices");
-            }
-        }
-
+        const SelectionChapterPlan& plan = *planned;
         std::vector<EncodedSlice> encoded_slices;
-        encoded_slices.reserve(sorted_slices.size());
-        for (auto& slice : sorted_slices) {
-            if (auto result =
-                    validate_slice_values(slice, ids);
-                !result) {
-                return std::move(result).error();
-            }
+        encoded_slices.reserve(plan.sorted_slice_order.size());
+        for (const std::size_t index : plan.sorted_slice_order) {
             encoded_slices.push_back(
-                encode_slice(std::move(slice)));
+                encode_slice(chapter.slices()[index]));
         }
 
-        std::unordered_set<lfs::core::Uuid> selected_seen;
-        for (const auto& uuid :
-             chapter.selected_node_uuids()) {
-            if (uuid.is_nil() ||
-                !selected_seen.emplace(uuid).second) {
-                return selection_error(
-                    lfs::ErrorCode::InvalidArgument,
-                    "The selection state cannot be saved.",
-                    "Selected-node UUIDs contain nil or duplicate values",
-                    "selected_node_uuids");
-            }
-        }
-
-        if (chapter.groups().size() >
-                std::numeric_limits<std::uint32_t>::max() ||
-            encoded_slices.size() >
-                std::numeric_limits<std::uint32_t>::max() ||
-            chapter.selected_node_uuids().size() >
-                std::numeric_limits<std::uint32_t>::max()) {
-            return selection_error(
-                lfs::ErrorCode::InvalidArgument,
-                "The selection state cannot be saved.",
-                "SELM table count exceeds u32");
-        }
-
-        const std::uint64_t group_offset = HEADER_BYTES;
-        std::uint64_t group_bytes = 0;
-        std::uint64_t slice_offset = 0;
-        std::uint64_t slice_bytes = 0;
-        std::uint64_t selected_offset = 0;
-        std::uint64_t selected_bytes = 0;
-        std::uint64_t data_offset = 0;
-        if (!checked_mul<std::uint64_t>(
-                chapter.groups().size(),
-                GROUP_ROW_BYTES,
-                group_bytes) ||
-            !checked_add(
-                group_offset, group_bytes, slice_offset) ||
-            !checked_mul<std::uint64_t>(
-                encoded_slices.size(),
-                SLICE_ROW_BYTES,
-                slice_bytes) ||
-            !checked_add(
-                slice_offset,
-                slice_bytes,
-                selected_offset) ||
-            !checked_mul<std::uint64_t>(
-                chapter.selected_node_uuids().size(),
-                UUID_BYTES,
-                selected_bytes) ||
-            !checked_add(
-                selected_offset,
-                selected_bytes,
-                data_offset) ||
-            !align_up(
-                data_offset,
-                DATA_ALIGNMENT,
-                data_offset)) {
-            return selection_error(
-                lfs::ErrorCode::InvalidArgument,
-                "The selection state cannot be saved.",
-                "SELM table offsets overflow");
-        }
-
-        std::vector<std::uint64_t> name_offsets;
-        std::vector<std::uint64_t> slice_data_offsets;
-        name_offsets.reserve(chapter.groups().size());
-        slice_data_offsets.reserve(encoded_slices.size());
-        std::uint64_t cursor = data_offset;
-        for (const auto& group : chapter.groups()) {
-            if (group.name.size() >
-                std::numeric_limits<std::uint32_t>::max()) {
-                return selection_error(
-                    lfs::ErrorCode::InvalidArgument,
-                    "The selection state cannot be saved.",
-                    "Selection group name exceeds u32 bytes",
-                    "groups.name");
-            }
-            if (!align_up(
-                    cursor, DATA_ALIGNMENT, cursor)) {
-                return selection_error(
-                    lfs::ErrorCode::InvalidArgument,
-                    "The selection state cannot be saved.",
-                    "SELM group-name offset overflows",
-                    "groups.name");
-            }
-            name_offsets.push_back(cursor);
-            if (!checked_add<std::uint64_t>(
-                    cursor, group.name.size(), cursor)) {
-                return selection_error(
-                    lfs::ErrorCode::InvalidArgument,
-                    "The selection state cannot be saved.",
-                    "SELM group-name range overflows",
-                    "groups.name");
-            }
-        }
-        for (const auto& slice : encoded_slices) {
-            if (!align_up(
-                    cursor, DATA_ALIGNMENT, cursor)) {
-                return selection_error(
-                    lfs::ErrorCode::InvalidArgument,
-                    "The selection state cannot be saved.",
-                    "SELM slice offset overflows",
-                    "slices.data");
-            }
-            slice_data_offsets.push_back(cursor);
-            if (!checked_add<std::uint64_t>(
-                    cursor, slice.bytes.size(), cursor)) {
-                return selection_error(
-                    lfs::ErrorCode::InvalidArgument,
-                    "The selection state cannot be saved.",
-                    "SELM slice range overflows",
-                    "slices.data");
-            }
-        }
-        if (!align_up(cursor, DATA_ALIGNMENT, cursor) ||
-            cursor > std::numeric_limits<std::size_t>::max()) {
-            return selection_error(
-                lfs::ErrorCode::ResourceExhausted,
-                "The selection state is too large for this process.",
-                "SELM payload size exceeds size_t");
-        }
+        const std::uint64_t group_offset = plan.group_offset;
+        const std::uint64_t slice_offset = plan.slice_offset;
+        const std::uint64_t selected_offset = plan.selected_offset;
+        const std::uint64_t data_offset = plan.data_offset;
+        const std::vector<std::uint64_t>& name_offsets = plan.name_offsets;
+        const std::vector<std::uint64_t>& slice_data_offsets =
+            plan.slice_data_offsets;
 
         std::vector<std::byte> result(
-            static_cast<std::size_t>(cursor),
+            static_cast<std::size_t>(plan.total_bytes),
             std::byte{0});
         std::memcpy(result.data(), "LSEL", 4);
         write_u16(result, 4, SELM_CHAPTER_VERSION);

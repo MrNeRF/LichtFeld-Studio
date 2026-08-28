@@ -14,6 +14,7 @@
 #include <format>
 #include <functional>
 #include <glm/gtc/type_ptr.hpp>
+#include <optional>
 #include <ranges>
 #include <span>
 #include <string>
@@ -527,7 +528,8 @@ namespace lfs::io::project {
         lfs::Result<void> populate_scene_stage(
             const SceneGraphChapter& chapter, lfs::core::Scene& scene,
             const ScenePayloadResolver& resolver,
-            const bool defer_geometry_payloads) {
+            const bool defer_geometry_payloads,
+            const bool payload_units_only) {
             auto nodes = chapter.nodes();
             if (!nodes) {
                 return lfs::Result<void>::failure(std::move(nodes).error());
@@ -553,8 +555,40 @@ namespace lfs::io::project {
                 }
             }
 
+            std::unordered_set<lfs::core::Uuid> keep;
+            if (payload_units_only) {
+                std::unordered_map<lfs::core::Uuid,
+                                   std::optional<lfs::core::Uuid>>
+                    parents;
+                parents.reserve(nodes->size());
+                std::vector<lfs::core::Uuid> geometry;
+                for (const SceneNodeRecord& record : *nodes) {
+                    parents.emplace(record.uuid, record.parent_uuid);
+                    const auto type = parse_node_type(record.type);
+                    if (type &&
+                        (*type == lfs::core::NodeType::SPLAT ||
+                         *type == lfs::core::NodeType::POINTCLOUD ||
+                         *type == lfs::core::NodeType::MESH)) {
+                        geometry.push_back(record.uuid);
+                    }
+                }
+                keep.reserve(geometry.size() + parents.size());
+                for (const lfs::core::Uuid& uuid : geometry) {
+                    std::optional<lfs::core::Uuid> current = uuid;
+                    while (current) {
+                        if (!keep.insert(*current).second) {
+                            break;
+                        }
+                        const auto parent = parents.find(*current);
+                        current = parent == parents.end()
+                                      ? std::nullopt
+                                      : parent->second;
+                    }
+                }
+            }
+
             std::vector<StagedNode> staged;
-            staged.reserve(nodes->size());
+            staged.reserve(payload_units_only ? keep.size() : nodes->size());
             for (const SceneNodeRecord& record : *nodes) {
                 const auto type = parse_node_type(record.type);
                 if (!type) {
@@ -601,6 +635,9 @@ namespace lfs::io::project {
                         std::format("SCNG camera model {} is outside the v1 enum",
                                     record.camera->camera_model_type),
                         record.uuid);
+                }
+                if (payload_units_only && !keep.contains(record.uuid)) {
+                    continue;
                 }
                 lfs::core::Scene::RestoreNodeDesc desc{
                     .uuid = record.uuid,
@@ -828,7 +865,8 @@ namespace lfs::io::project {
                 }
                 ids.emplace(node.record.uuid, id);
             }
-            if (*training_uuid) {
+            if (*training_uuid &&
+                (!payload_units_only || ids.contains(**training_uuid))) {
                 scene.setTrainingModelNode(**training_uuid);
                 if (scene.getTrainingModelNodeUuid() != **training_uuid) {
                     return fail<void>(
@@ -853,7 +891,25 @@ namespace lfs::io::project {
             lfs::core::Scene::createRestoreStage(target);
         if (auto populated =
                 populate_scene_stage(
-                    chapter, *staged, resolver, false);
+                    chapter, *staged, resolver, false, false);
+            !populated) {
+            return std::move(populated).error();
+        }
+        return staged;
+    }
+
+    lfs::Result<std::unique_ptr<lfs::core::Scene>>
+    stage_scene_graph(
+        const SceneGraphChapter& chapter,
+        lfs::core::Scene& target,
+        const ScenePayloadResolver& resolver,
+        const bool payload_units_only) {
+        auto staged =
+            lfs::core::Scene::createRestoreStage(target);
+        if (auto populated =
+                populate_scene_stage(
+                    chapter, *staged, resolver, false,
+                    payload_units_only);
             !populated) {
             return std::move(populated).error();
         }
@@ -868,7 +924,7 @@ namespace lfs::io::project {
             lfs::core::Scene::createRestoreStage(target);
         if (auto populated =
                 populate_scene_stage(
-                    chapter, *staged, {}, true);
+                    chapter, *staged, {}, true, false);
             !populated) {
             return std::move(populated).error();
         }

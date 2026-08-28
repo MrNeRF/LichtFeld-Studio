@@ -413,6 +413,7 @@
     "conflict.btn_cancel": "Annulla",
     "save_pc.title": "Nuvola di punti modificata",
     "save_pc.message": "La nuvola di punti è stata modificata. Salvare nella cartella del dataset per le sessioni future?",
+    "save_pc.message_project": "La nuvola di punti è stata modificata. Salvare nel progetto?",
     "save_pc.btn_save_start": "Salva e avvia",
     "save_pc.btn_start_without": "Avvia senza salvare",
     "overwrite.title": "Sovrascrivere l'addestramento precedente?",

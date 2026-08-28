@@ -3150,7 +3150,7 @@ namespace lfs::core {
         const Uuid restored_uuid = node->uuid;
         const NodeId id = insertNode(std::move(node), true);
         if (id != NULL_NODE) {
-            LOG_DEBUG("Restored node '{}' (id={}, uuid={})",
+            LOG_TRACE("Restored node '{}' (id={}, uuid={})",
                       restored_name,
                       id,
                       restored_uuid.to_string());
@@ -3196,7 +3196,7 @@ namespace lfs::core {
         selection_group_counts_dirty_ = false;
     }
 
-    void Scene::commitRestoreStage(
+    std::unique_ptr<Scene> Scene::commitRestoreStage(
         std::unique_ptr<Scene> staged) noexcept {
         assert(staged);
         assert(staged->restore_staging_);
@@ -3249,6 +3249,7 @@ namespace lfs::core {
 
         pending_mutations_ = 0;
         transaction_depth_ = 0;
+        return staged;
     }
 
     Scene::PayloadHydrationCommitReport
@@ -3653,10 +3654,11 @@ namespace lfs::core {
             splats.begin(), splats.end(),
             [](const auto& entry) { return entry.second == IDENTITY; });
 
-        // q16 (Float16 codes + bounds) and IEEE-f16 shN cannot be read via
-        // ptr<float>() / float4-swizzle gather kernels. Materialise float
-        // canonical SH, filter, and rebuild with Canonical layout so the
-        // constructor re-swizzles to Float32 for ephemeral export/merge copies.
+        // q16 (Float16 codes + bounds) and IEEE-f16 shN cannot be gathered via
+        // ptr<float>() / float4-swizzle kernels. Borrow/clone identity paths keep
+        // the compact resident SH (codes + bounds) so export does not allocate a
+        // float swizzle. Deleted-mask filtering still materialises float canonical
+        // SH, then rebuilds with Canonical layout.
         const auto shN_requires_float_materialize = [](const lfs::core::SplatData& src) {
             return src.shN_raw().is_valid() && src.shN_raw().numel() > 0 &&
                    (src.shN_raw().dtype() != lfs::core::DataType::Float32 ||
@@ -3667,22 +3669,6 @@ namespace lfs::core {
             -> std::unique_ptr<lfs::core::SplatData> {
             if (!src.has_deleted_mask()) {
                 const int active_sh = src.get_active_sh_degree();
-                if (shN_requires_float_materialize(src)) {
-                    // Materialise float SH so the clone is export-safe without
-                    // requiring a transferred q16 bounds tensor.
-                    auto result = std::make_unique<lfs::core::SplatData>(
-                        src.get_max_sh_degree(),
-                        src.means_raw().clone(),
-                        src.sh0_raw().clone(),
-                        src.shN_canonical(),
-                        src.scaling_raw().clone(),
-                        src.rotation_raw().clone(),
-                        src.opacity_raw().clone(),
-                        src.get_scene_scale(),
-                        lfs::core::SplatData::ShNLayout::Canonical);
-                    result->set_active_sh_degree(active_sh);
-                    return result;
-                }
                 auto result = std::make_unique<lfs::core::SplatData>(
                     src.get_max_sh_degree(),
                     src.means_raw().clone(),
@@ -3772,22 +3758,6 @@ namespace lfs::core {
 
                 if (storage_mode == MergeStorageMode::BorrowSingleIdentity && !src->has_deleted_mask()) {
                     const int active_sh = src->get_active_sh_degree();
-                    // q16/ieee-f16: materialise float SH for export/merge so
-                    // save_ply does not need bounds on the ephemeral SplatData.
-                    if (shN_requires_float_materialize(*src)) {
-                        auto result = std::make_unique<lfs::core::SplatData>(
-                            src->get_max_sh_degree(),
-                            src->means_raw(),
-                            src->sh0_raw(),
-                            src->shN_canonical(),
-                            src->scaling_raw(),
-                            src->rotation_raw(),
-                            src->opacity_raw(),
-                            src->get_scene_scale(),
-                            lfs::core::SplatData::ShNLayout::Canonical);
-                        result->set_active_sh_degree(active_sh);
-                        return result;
-                    }
                     auto result = std::make_unique<lfs::core::SplatData>(
                         src->get_max_sh_degree(),
                         src->means_raw(),

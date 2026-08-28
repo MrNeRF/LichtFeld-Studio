@@ -413,6 +413,7 @@
     "conflict.btn_cancel": "Cancel",
     "save_pc.title": "Modified Point Cloud",
     "save_pc.message": "The point cloud has been modified. Save to the dataset folder for future sessions?",
+    "save_pc.message_project": "The point cloud has been modified. Save it to the project?",
     "save_pc.btn_save_start": "Save & Start",
     "save_pc.btn_start_without": "Start Without Saving",
     "overwrite.title": "Overwrite previous training?",

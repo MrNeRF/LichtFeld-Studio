@@ -335,6 +335,7 @@ namespace lfs::core {
         };
 
         struct TrainingParameters;
+        enum class OutputFormat;
 
         // Process-local presence map for --resume. Keys dumped here are the
         // only ones re-applied after a project/checkpoint restore; omitted
@@ -407,6 +408,10 @@ namespace lfs::core {
 
             // Python scripts to execute for custom training callbacks
             std::vector<std::filesystem::path> python_scripts;
+
+            // Additional final-splat exports written next to project.licht after
+            // headless training completes. Empty = only the .licht project is written.
+            std::vector<OutputFormat> export_formats;
 
             // True when --bg-color was provided on the command line.
             bool cli_bg_color_set = false;

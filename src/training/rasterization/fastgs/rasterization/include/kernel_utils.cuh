@@ -925,9 +925,15 @@ namespace fast_lfs::rasterization::kernels {
         const float u_max = -red.y;
         const float s_min = red.z;
         const float s_max = -red.w;
-        // value bounds (separate from moment bounds).
-        const float v_min = value_q16 ? lfs::core::warp_ops::block_reduce_min(local_v_min) : 0.0f;
-        const float v_max = value_q16 ? lfs::core::warp_ops::block_reduce_max(local_v_max) : 0.0f;
+        // value bounds: block-uniform fused min2 (own shared alloc, distinct from min4).
+        float v_min = 0.0f;
+        float v_max = 0.0f;
+        if (value_q16) {
+            const float2 r = lfs::core::warp_ops::block_reduce_min2(
+                make_float2(local_v_min, -local_v_max));
+            v_min = r.x;
+            v_max = -r.y;
+        }
 
         __shared__ float4 sm_bounds;
         __shared__ float2 sm_vbounds;

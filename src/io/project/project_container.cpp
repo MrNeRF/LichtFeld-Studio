@@ -24,15 +24,19 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <streambuf>
 #include <string>
 #include <thread>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #include <memoryapi.h>
@@ -346,6 +350,8 @@ namespace lfs::io::project {
             lfs::core::Uuid file_uuid;
         };
 
+        using CommitRecordCache = std::map<std::uint64_t, ParsedCommit>;
+
         struct ParsedHead {
             HeadInfo info;
             ParsedCommit commit;
@@ -515,7 +521,28 @@ namespace lfs::io::project {
         lfs::Result<ParsedCommit>
         parse_commit(const detail::NativeFile& file, const std::uint64_t physical_size,
                      const SuperblockInfo& superblock, const std::uint64_t offset,
-                     const std::uint64_t authority_end) {
+                     const std::uint64_t authority_end,
+                     CommitRecordCache* cache = nullptr) {
+            if (cache != nullptr) {
+                if (const auto found = cache->find(offset); found != cache->end()) {
+                    auto end = detail::checked_add(
+                        offset, COMMIT_RECORD_BYTES, file.path(), offset,
+                        "commit_record");
+                    if (!end) {
+                        return std::move(end).error();
+                    }
+                    const std::uint64_t limit =
+                        std::min(physical_size, authority_end);
+                    if (*end > limit) {
+                        return format_error(
+                            file.path(), offset, "commit_record",
+                            std::format("{} bytes within authority end 0x{:x}",
+                                        COMMIT_RECORD_BYTES, limit),
+                            std::format("range [0x{:x},0x{:x})", offset, *end));
+                    }
+                    return found->second;
+                }
+            }
             auto raw_result = read_fixed<COMMIT_RECORD_BYTES>(
                 file, offset, physical_size, authority_end, "commit_record");
             if (!raw_result) {
@@ -802,7 +829,7 @@ namespace lfs::io::project {
                 }
             }
 
-            return ParsedCommit{
+            ParsedCommit parsed{
                 .info =
                     CommitInfo{
                         .offset = offset,
@@ -832,11 +859,16 @@ namespace lfs::io::project {
                 .project_uuid = project_uuid,
                 .file_uuid = file_uuid,
             };
+            if (cache != nullptr) {
+                cache->emplace(offset, parsed);
+            }
+            return parsed;
         }
 
         lfs::Result<std::vector<ParsedCommit>>
         validate_lineage(const detail::NativeFile& file, const std::uint64_t physical_size,
-                         const SuperblockInfo& superblock, const ParsedCommit& selected) {
+                         const SuperblockInfo& superblock, const ParsedCommit& selected,
+                         CommitRecordCache* cache = nullptr) {
             std::set<std::uint64_t> seen_offsets{selected.info.offset};
             std::set<std::array<std::uint8_t, 16>> seen_uuids{
                 selected.info.commit_uuid.bytes};
@@ -853,7 +885,7 @@ namespace lfs::io::project {
                 }
                 seen_offsets.insert(parent_offset);
                 auto parent = parse_commit(file, physical_size, superblock, parent_offset,
-                                           selected.info.committed_file_end);
+                                           selected.info.committed_file_end, cache);
                 if (!parent) {
                     return std::move(parent).error();
                 }
@@ -911,12 +943,108 @@ namespace lfs::io::project {
             return newest_to_oldest;
         }
 
+        struct UninitializedBuffer {
+            std::unique_ptr<std::byte[]> storage;
+            std::size_t size = 0;
+
+            [[nodiscard]] std::span<std::byte> bytes() noexcept {
+                return {storage.get(), size};
+            }
+            [[nodiscard]] std::span<const std::byte> bytes() const noexcept {
+                return {storage.get(), size};
+            }
+        };
+
+        lfs::Result<UninitializedBuffer>
+        allocate_uninitialized_buffer(const std::size_t bytes,
+                                      const std::filesystem::path& path,
+                                      const std::uint64_t offset,
+                                      const std::string_view field) {
+            UninitializedBuffer result;
+            result.size = bytes;
+            if (bytes == 0) {
+                return result;
+            }
+            try {
+                result.storage = std::make_unique_for_overwrite<std::byte[]>(bytes);
+            } catch (const std::bad_alloc&) {
+                return detail::project_error(
+                    lfs::ErrorCode::ResourceExhausted,
+                    "There is not enough memory to read this project chunk.",
+                    std::format("allocation of {} bytes failed", bytes), path, offset,
+                    field);
+            } catch (const std::length_error& error) {
+                return detail::project_error(
+                    lfs::ErrorCode::BoundsViolation,
+                    "The project chunk cannot be represented by this build.",
+                    std::format("allocation of {} bytes failed: {}", bytes,
+                                error.what()),
+                    path, offset, field);
+            }
+            return result;
+        }
+
+        lfs::Result<std::vector<std::byte>>
+        allocate_zeroed_vector(const std::size_t bytes,
+                               const std::filesystem::path& path,
+                               const std::uint64_t offset,
+                               const std::string_view field) {
+            std::vector<std::byte> result;
+            if (bytes == 0) {
+                return result;
+            }
+            try {
+                result.resize(bytes);
+            } catch (const std::bad_alloc&) {
+                return detail::project_error(
+                    lfs::ErrorCode::ResourceExhausted,
+                    "There is not enough memory to read this project chunk.",
+                    std::format("allocation of {} bytes failed", bytes), path, offset,
+                    field);
+            } catch (const std::length_error& error) {
+                return detail::project_error(
+                    lfs::ErrorCode::BoundsViolation,
+                    "The project chunk cannot be represented by this build.",
+                    std::format("allocation of {} bytes failed: {}", bytes,
+                                error.what()),
+                    path, offset, field);
+            }
+            return result;
+        }
+
+        lfs::Result<UninitializedBuffer>
+        allocate_uninitialized_decoded(const std::size_t bytes,
+                                       const std::filesystem::path& path,
+                                       const std::uint64_t offset) {
+            UninitializedBuffer result;
+            result.size = bytes;
+            if (bytes == 0) {
+                return result;
+            }
+            try {
+                result.storage = std::make_unique_for_overwrite<std::byte[]>(bytes);
+            } catch (const std::bad_alloc&) {
+                return detail::project_error(
+                    lfs::ErrorCode::ResourceExhausted,
+                    "There is not enough memory to decode this project region.",
+                    std::format("allocation of {} decoded bytes failed", bytes), path,
+                    offset, "payload.framed");
+            } catch (const std::length_error& error) {
+                return detail::project_error(
+                    lfs::ErrorCode::ResourceExhausted,
+                    "The framed project region cannot be represented by this build.",
+                    std::format("allocation of {} decoded bytes failed: {}", bytes,
+                                error.what()),
+                    path, offset, "payload.framed");
+            }
+            return result;
+        }
+
         // Inverse of writer byte-plane: planes of f32-word significance bytes
         // back to interleaved little-endian words. Requires size % 4 == 0.
-        std::vector<std::byte>
-        unbyte_plane_f32_words(const std::span<const std::byte> planes) {
+        void unbyte_plane_f32_words(const std::span<const std::byte> planes,
+                                    const std::span<std::byte> out) {
             const std::size_t n_words = planes.size() / 4;
-            std::vector<std::byte> out(planes.size());
             const auto* src = reinterpret_cast<const std::uint8_t*>(planes.data());
             auto* dst = reinterpret_cast<std::uint8_t*>(out.data());
             for (std::size_t w = 0; w < n_words; ++w) {
@@ -925,7 +1053,6 @@ namespace lfs::io::project {
                 dst[w * 4 + 2] = src[2 * n_words + w];
                 dst[w * 4 + 3] = src[3 * n_words + w];
             }
-            return out;
         }
 
         lfs::Result<std::vector<std::byte>>
@@ -1943,7 +2070,8 @@ namespace lfs::io::project {
         parse_head(const detail::NativeFile& file, const std::uint64_t physical_size,
                    const SuperblockInfo& superblock, const ReaderOptions& options,
                    const std::uint32_t slot_id,
-                   const std::array<std::byte, HEAD_SLOT_BYTES>& raw) {
+                   const std::array<std::byte, HEAD_SLOT_BYTES>& raw,
+                   CommitRecordCache* cache = nullptr) {
             const std::uint64_t offset = HEAD_SLOT_OFFSETS[slot_id];
             const auto bytes = byte_span(raw);
             if (auto valid = require(bytes_equal(bytes, 0, HEAD_MAGIC), file.path(), offset,
@@ -2143,7 +2271,8 @@ namespace lfs::io::project {
             }
 
             auto commit =
-                parse_commit(file, physical_size, superblock, commit_offset, committed_end);
+                parse_commit(file, physical_size, superblock, commit_offset,
+                             committed_end, cache);
             if (!commit) {
                 return std::move(commit).error();
             }
@@ -2182,7 +2311,7 @@ namespace lfs::io::project {
                 return std::move(valid).error();
             }
             auto lineage =
-                validate_lineage(file, physical_size, superblock, *commit);
+                validate_lineage(file, physical_size, superblock, *commit, cache);
             if (!lineage) {
                 return std::move(lineage).error();
             }
@@ -2287,6 +2416,7 @@ namespace lfs::io::project {
             }
 
             std::array<HeadAttempt, 2> attempts;
+            CommitRecordCache commit_cache;
             for (std::uint32_t slot_id = 0; slot_id < attempts.size(); ++slot_id) {
                 HeadAttempt& attempt = attempts[slot_id];
                 attempt.slot_id = slot_id;
@@ -2303,7 +2433,8 @@ namespace lfs::io::project {
                 }
                 attempt.sequence_hint = read_u64(byte_span(*raw), 16);
                 auto head =
-                    parse_head(*file, physical_size, *superblock, options, slot_id, *raw);
+                    parse_head(*file, physical_size, *superblock, options, slot_id, *raw,
+                               &commit_cache);
                 if (!head) {
                     attempt.error = std::move(head).error();
                     continue;
@@ -2865,27 +2996,174 @@ namespace lfs::io::project {
         // in verify_chunk does not increment this counter).
         lfs::Result<void> verify_stored_payload_crc32c(const ReaderState& state,
                                                        const ChunkInfo& row) {
+            if (row.stored_bytes == 0) {
+                if (0u != row.payload_crc32c) {
+                    return status_failure(format_error(
+                        state.path, row.payload_offset,
+                        std::format("payload[{}].crc32c", row.key_string()),
+                        std::format("0x{:08x}", row.payload_crc32c),
+                        "0x00000000"));
+                }
+                return {};
+            }
+            auto payload_end = detail::checked_add(
+                row.payload_offset, row.stored_bytes, state.path,
+                row.payload_offset, "payload.verify");
+            if (!payload_end) {
+                return status_failure(std::move(payload_end).error());
+            }
+            const std::uint64_t limit = std::min(
+                state.physical_size,
+                state.selected.commit.info.committed_file_end);
+            if (*payload_end > limit) {
+                return status_failure(format_error(
+                    state.path, row.payload_offset, "payload.verify",
+                    std::format("range within authority end 0x{:x}", limit),
+                    std::format("[0x{:x},0x{:x}) size {}", row.payload_offset,
+                                *payload_end, row.stored_bytes),
+                    lfs::ErrorCode::BoundsViolation));
+            }
+
+            const auto max_workers =
+                std::max(1u, std::thread::hardware_concurrency());
+            const std::uint64_t range_count = std::min<std::uint64_t>(
+                max_workers,
+                std::max<std::uint64_t>(
+                    1, (row.stored_bytes + BLOCK_CRC_BYTES - 1) /
+                           BLOCK_CRC_BYTES));
+            struct Range {
+                std::uint64_t offset = 0;
+                std::uint64_t size = 0;
+            };
+            std::vector<Range> ranges(static_cast<std::size_t>(range_count));
+            const std::uint64_t base = row.stored_bytes / range_count;
+            const std::uint64_t extra = row.stored_bytes % range_count;
+            std::uint64_t cursor = 0;
+            for (std::uint64_t i = 0; i < range_count; ++i) {
+                const std::uint64_t size = base + (i < extra ? 1 : 0);
+                ranges[static_cast<std::size_t>(i)] = Range{
+                    .offset = cursor,
+                    .size = size,
+                };
+                cursor += size;
+            }
+
+            std::vector<std::uint32_t> partial(ranges.size(), 0);
+            std::mutex mutex;
+            std::optional<lfs::Error> error;
+            const auto crc_range = [&](const std::size_t index) {
+                const Range& range = ranges[index];
+                if (range.size == 0) {
+                    return;
+                }
+                const std::size_t buffer_size = static_cast<std::size_t>(
+                    std::min<std::uint64_t>(BLOCK_CRC_BYTES, range.size));
+                std::vector<std::byte> buffer(buffer_size);
+                std::uint32_t crc = 0;
+                std::uint64_t remaining = range.size;
+                std::uint64_t relative = 0;
+                while (remaining > 0) {
+                    const std::uint64_t count = std::min<std::uint64_t>(
+                        buffer.size(), remaining);
+                    if (state.options.payload_bytes_read) {
+                        state.options.payload_bytes_read->fetch_add(
+                            count, std::memory_order_relaxed);
+                    }
+                    auto dest = std::span<std::byte>(buffer.data(),
+                                                     static_cast<std::size_t>(count));
+                    if (auto read = state.file->read_exact(
+                            row.payload_offset + range.offset + relative, dest);
+                        !read) {
+                        std::scoped_lock lock(mutex);
+                        if (!error) {
+                            error = std::move(read).error();
+                        }
+                        return;
+                    }
+                    crc = crc32c(crc, dest.data(), dest.size());
+                    relative += count;
+                    remaining -= count;
+                }
+                partial[index] = crc;
+            };
+
+            if (ranges.size() == 1) {
+                try {
+                    crc_range(0);
+                } catch (const std::bad_alloc&) {
+                    return status_failure(detail::project_error(
+                        lfs::ErrorCode::ResourceExhausted,
+                        "There is not enough memory to verify this project region.",
+                        "payload CRC buffer allocation failed", state.path,
+                        row.payload_offset, "payload.verify"));
+                } catch (const std::exception& exception) {
+                    // LFS-CENSUS-OK(empty-catch): propagate the CRC exception as a project error
+                    return status_failure(detail::project_error(
+                        lfs::ErrorCode::Internal,
+                        "The project payload CRC could not be verified.",
+                        exception.what(), state.path, row.payload_offset,
+                        "payload.verify"));
+                }
+            } else {
+                std::vector<std::jthread> workers;
+                try {
+                    workers.reserve(ranges.size());
+                    for (std::size_t i = 0; i < ranges.size(); ++i) {
+                        workers.emplace_back([&, i] {
+                            try {
+                                crc_range(i);
+                            } catch (const std::bad_alloc&) {
+                                std::scoped_lock lock(mutex);
+                                if (!error) {
+                                    error = detail::project_error(
+                                        lfs::ErrorCode::ResourceExhausted,
+                                        "There is not enough memory to verify this project region.",
+                                        "payload CRC buffer allocation failed",
+                                        state.path, row.payload_offset,
+                                        "payload.verify");
+                                }
+                            } catch (const std::exception& exception) {
+                                // LFS-CENSUS-OK(empty-catch): record the CRC worker exception as the first payload error
+                                std::scoped_lock lock(mutex);
+                                if (!error) {
+                                    error = detail::project_error(
+                                        lfs::ErrorCode::Internal,
+                                        "The project payload CRC could not be verified.",
+                                        exception.what(), state.path,
+                                        row.payload_offset, "payload.verify");
+                                }
+                            } catch (...) {
+                                // LFS-CENSUS-OK(empty-catch): record an unknown CRC worker exception as the first payload error
+                                std::scoped_lock lock(mutex);
+                                if (!error) {
+                                    error = detail::project_error(
+                                        lfs::ErrorCode::Internal,
+                                        "The project payload CRC could not be verified.",
+                                        "unknown worker exception", state.path,
+                                        row.payload_offset, "payload.verify");
+                                }
+                            }
+                        });
+                    }
+                } catch (const std::exception& exception) {
+                    // LFS-CENSUS-OK(empty-catch): propagate CRC worker construction failure as a project error
+                    workers.clear();
+                    return status_failure(detail::project_error(
+                        lfs::ErrorCode::Internal,
+                        "The project payload CRC could not be verified.",
+                        exception.what(), state.path, row.payload_offset,
+                        "payload.verify"));
+                }
+                workers.clear();
+            }
+            if (error) {
+                return status_failure(std::move(*error));
+            }
+
             std::uint32_t running_crc = 0;
-            std::uint64_t relative = 0;
-            while (relative < row.stored_bytes) {
-                const std::uint64_t count =
-                    std::min<std::uint64_t>(BLOCK_CRC_BYTES,
-                                            row.stored_bytes - relative);
-                if (state.options.payload_bytes_read) {
-                    state.options.payload_bytes_read->fetch_add(
-                        count, std::memory_order_relaxed);
-                }
-                auto bytes = read_vector(*state.file,
-                                         row.payload_offset + relative, count,
-                                         state.physical_size,
-                                         state.selected.commit.info.committed_file_end,
-                                         "payload.verify",
-                                         BLOCK_CRC_BYTES);
-                if (!bytes) {
-                    return status_failure(std::move(bytes).error());
-                }
-                running_crc = crc32c(running_crc, bytes->data(), bytes->size());
-                relative += count;
+            for (std::size_t i = 0; i < ranges.size(); ++i) {
+                running_crc = crc32c_combine(running_crc, partial[i],
+                                             ranges[i].size);
             }
             if (running_crc != row.payload_crc32c) {
                 return status_failure(format_error(
@@ -2911,38 +3189,39 @@ namespace lfs::io::project {
                 "commit.read_compatibility"));
         }
 
-        lfs::Result<std::vector<std::byte>> decompress_framed_zstd(
+        lfs::Result<void> decompress_framed_zstd(
             const std::filesystem::path& path, const std::uint64_t offset,
             const std::span<const std::byte> stored, const std::uint64_t expected_size,
             const std::uint64_t maximum_decoded_size,
+            const std::span<std::byte> decoded,
             const std::function<void(std::size_t, std::size_t)>& progress = {}) {
             if (stored.size() < detail::FRAMED_HEADER_BYTES ||
                 !std::equal(detail::FRAMED_MAGIC.begin(), detail::FRAMED_MAGIC.end(), stored.begin())) {
-                return format_error(path, offset, "payload.framed", "framed header", "invalid magic");
+                return status_failure(format_error(path, offset, "payload.framed", "framed header", "invalid magic"));
             }
             const auto count = read_u32(stored, 12);
             if (count > (std::numeric_limits<std::size_t>::max() -
                          detail::FRAMED_HEADER_BYTES) /
                             detail::FRAMED_RECORD_BYTES) {
-                return format_error(path, offset, "payload.framed.header",
-                                    "representable record table", std::to_string(count));
+                return status_failure(format_error(path, offset, "payload.framed.header",
+                                                   "representable record table", std::to_string(count)));
             }
             const auto table = detail::FRAMED_HEADER_BYTES +
                                static_cast<std::size_t>(count) * detail::FRAMED_RECORD_BYTES;
             if (read_u16(stored, 8) != detail::FRAMED_VERSION || read_u16(stored, 10) != 0 ||
                 count == 0 || table > stored.size()) {
-                return format_error(path, offset, "payload.framed.header", "valid header", "invalid header");
+                return status_failure(format_error(path, offset, "payload.framed.header", "valid header", "invalid header"));
             }
             if (expected_size > maximum_decoded_size || expected_size > std::numeric_limits<std::size_t>::max()) {
-                return detail::project_error(lfs::ErrorCode::ResourceExhausted,
-                                             "The project payload is too large to decode.",
-                                             std::format("decoded size {} exceeds implementation maximum {}",
-                                                         expected_size, maximum_decoded_size),
-                                             path, offset, "payload.framed");
+                return status_failure(detail::project_error(lfs::ErrorCode::ResourceExhausted,
+                                                            "The project payload is too large to decode.",
+                                                            std::format("decoded size {} exceeds implementation maximum {}",
+                                                                        expected_size, maximum_decoded_size),
+                                                            path, offset, "payload.framed"));
             }
             if (count > expected_size || stored.size() - table < count) {
-                return format_error(path, offset, "payload.framed.records",
-                                    "at least one byte per record", "invalid record count");
+                return status_failure(format_error(path, offset, "payload.framed.records",
+                                                   "at least one byte per record", "invalid record count"));
             }
             struct Record {
                 std::size_t so, sb, uo, ub;
@@ -2951,18 +3230,18 @@ namespace lfs::io::project {
             try {
                 records.reserve(count);
             } catch (const std::bad_alloc&) {
-                return detail::project_error(
+                return status_failure(detail::project_error(
                     lfs::ErrorCode::ResourceExhausted,
                     "There is not enough memory to decode this project region.",
                     std::format("allocation of {} record descriptors failed", count),
-                    path, offset, "payload.framed.records");
+                    path, offset, "payload.framed.records"));
             } catch (const std::length_error& error) {
-                return detail::project_error(
+                return status_failure(detail::project_error(
                     lfs::ErrorCode::ResourceExhausted,
                     "The framed project region cannot be represented by this build.",
                     std::format("allocation of {} record descriptors failed: {}", count,
                                 error.what()),
-                    path, offset, "payload.framed.records");
+                    path, offset, "payload.framed.records"));
             }
             std::size_t so = table, uo = 0;
             for (std::size_t i = 0; i < count; ++i) {
@@ -2971,31 +3250,14 @@ namespace lfs::io::project {
                 if (sb64 == 0 || ub64 == 0 || sb64 > stored.size() - so ||
                     ub64 > expected_size - uo || sb64 > std::numeric_limits<std::size_t>::max() ||
                     ub64 > std::numeric_limits<std::size_t>::max()) {
-                    return format_error(path, offset + at, "payload.framed.record", "valid record range", "invalid range");
+                    return status_failure(format_error(path, offset + at, "payload.framed.record", "valid record range", "invalid range"));
                 }
                 records.push_back({so, static_cast<std::size_t>(sb64), uo, static_cast<std::size_t>(ub64)});
                 so += static_cast<std::size_t>(sb64);
                 uo += static_cast<std::size_t>(ub64);
             }
             if (so != stored.size() || uo != expected_size) {
-                return format_error(path, offset, "payload.framed.records", "exact stored and decoded sizes", "size mismatch");
-            }
-            std::vector<std::byte> decoded;
-            try {
-                decoded.resize(static_cast<std::size_t>(expected_size));
-            } catch (const std::bad_alloc&) {
-                return detail::project_error(
-                    lfs::ErrorCode::ResourceExhausted,
-                    "There is not enough memory to decode this project region.",
-                    std::format("allocation of {} decoded bytes failed", expected_size),
-                    path, offset, "payload.framed");
-            } catch (const std::length_error& error) {
-                return detail::project_error(
-                    lfs::ErrorCode::ResourceExhausted,
-                    "The framed project region cannot be represented by this build.",
-                    std::format("allocation of {} decoded bytes failed: {}", expected_size,
-                                error.what()),
-                    path, offset, "payload.framed");
+                return status_failure(format_error(path, offset, "payload.framed.records", "exact stored and decoded sizes", "size mismatch"));
             }
             std::atomic<std::size_t> next{0}, done{0};
             std::mutex mutex;
@@ -3013,49 +3275,75 @@ namespace lfs::io::project {
                     // LFS-CENSUS-OK(empty-catch): preserve the first worker error if formatting fails.
                 }
             };
-            const auto workers_count = std::min<std::size_t>(records.size(), std::max(1u, std::thread::hardware_concurrency()));
-            std::vector<std::jthread> workers;
-            for (std::size_t w = 0; w < workers_count; ++w)
-                workers.emplace_back([&] {
-                    try {
-                        while (true) {
-                            const auto i = next.fetch_add(1);
-                            if (i >= records.size())
-                                return;
-                            const auto r = records[i];
-                            const auto frame = stored.subspan(r.so, r.sb);
-                            const auto size = ZSTD_getFrameContentSize(frame.data(), frame.size());
-                            const auto result = size == r.ub ? ZSTD_decompress(decoded.data() + r.uo, r.ub, frame.data(), r.sb) : ZSTD_CONTENTSIZE_ERROR;
-                            if (size != r.ub || ZSTD_isError(result) || result != r.ub) {
-                                std::scoped_lock lock(mutex);
-                                if (!error)
-                                    error = format_error(path, offset + r.so, "payload.framed.record", "valid zstd frame", "decode failed");
-                                return;
+            const auto decode_one = [&](const std::size_t i) {
+                const auto r = records[i];
+                const auto frame = stored.subspan(r.so, r.sb);
+                const auto size = ZSTD_getFrameContentSize(frame.data(), frame.size());
+                const auto result = size == r.ub ? ZSTD_decompress(decoded.data() + r.uo, r.ub, frame.data(), r.sb) : ZSTD_CONTENTSIZE_ERROR;
+                if (size != r.ub || ZSTD_isError(result) || result != r.ub) {
+                    std::scoped_lock lock(mutex);
+                    if (!error)
+                        error = format_error(path, offset + r.so, "payload.framed.record", "valid zstd frame", "decode failed");
+                    return;
+                }
+                if (progress)
+                    progress(done.fetch_add(1) + 1, records.size());
+            };
+            if (records.size() == 1) {
+                try {
+                    decode_one(0);
+                } catch (const std::bad_alloc&) {
+                    publish_worker_error(
+                        lfs::ErrorCode::ResourceExhausted,
+                        "There is not enough memory to decode this project region.",
+                        "framed decode worker allocation failed");
+                } catch (const std::exception& exception) {
+                    // LFS-CENSUS-OK(empty-catch): record the single-record decode exception as a worker error
+                    publish_worker_error(
+                        lfs::ErrorCode::Internal,
+                        "The framed project payload could not be decoded.",
+                        exception.what());
+                } catch (...) {
+                    // LFS-CENSUS-OK(empty-catch): record an unknown single-record decode exception as a worker error
+                    publish_worker_error(
+                        lfs::ErrorCode::Internal,
+                        "The framed project payload could not be decoded.",
+                        "unknown worker exception");
+                }
+            } else {
+                const auto workers_count = std::min<std::size_t>(records.size(), std::max(1u, std::thread::hardware_concurrency()));
+                std::vector<std::jthread> workers;
+                for (std::size_t w = 0; w < workers_count; ++w)
+                    workers.emplace_back([&] {
+                        try {
+                            while (true) {
+                                const auto i = next.fetch_add(1);
+                                if (i >= records.size())
+                                    return;
+                                decode_one(i);
                             }
-                            if (progress)
-                                progress(done.fetch_add(1) + 1, records.size());
+                        } catch (const std::bad_alloc&) {
+                            publish_worker_error(
+                                lfs::ErrorCode::ResourceExhausted,
+                                "There is not enough memory to decode this project region.",
+                                "framed decode worker allocation failed");
+                        } catch (const std::exception& exception) {
+                            publish_worker_error(
+                                lfs::ErrorCode::Internal,
+                                "The framed project payload could not be decoded.",
+                                exception.what());
+                        } catch (...) {
+                            publish_worker_error(
+                                lfs::ErrorCode::Internal,
+                                "The framed project payload could not be decoded.",
+                                "unknown worker exception");
                         }
-                    } catch (const std::bad_alloc&) {
-                        publish_worker_error(
-                            lfs::ErrorCode::ResourceExhausted,
-                            "There is not enough memory to decode this project region.",
-                            "framed decode worker allocation failed");
-                    } catch (const std::exception& exception) {
-                        publish_worker_error(
-                            lfs::ErrorCode::Internal,
-                            "The framed project payload could not be decoded.",
-                            exception.what());
-                    } catch (...) {
-                        publish_worker_error(
-                            lfs::ErrorCode::Internal,
-                            "The framed project payload could not be decoded.",
-                            "unknown worker exception");
-                    }
-                });
-            workers.clear();
+                    });
+                workers.clear();
+            }
             if (error)
-                return std::move(*error);
-            return decoded;
+                return status_failure(std::move(*error));
+            return {};
         }
 
     } // namespace
@@ -3065,8 +3353,38 @@ namespace lfs::io::project {
         const std::filesystem::path& path, const std::uint64_t offset,
         const std::span<const std::byte> stored, const std::uint64_t expected_size,
         const std::uint64_t maximum_decoded_size) {
-        return decompress_framed_zstd(path, offset, stored, expected_size,
-                                      maximum_decoded_size);
+        if (expected_size > maximum_decoded_size ||
+            expected_size > std::numeric_limits<std::size_t>::max()) {
+            return detail::project_error(
+                lfs::ErrorCode::ResourceExhausted,
+                "The project payload is too large to decode.",
+                std::format("decoded size {} exceeds implementation maximum {}",
+                            expected_size, maximum_decoded_size),
+                path, offset, "payload.framed");
+        }
+        std::vector<std::byte> decoded;
+        try {
+            decoded.resize(static_cast<std::size_t>(expected_size));
+        } catch (const std::bad_alloc&) {
+            return detail::project_error(
+                lfs::ErrorCode::ResourceExhausted,
+                "There is not enough memory to decode this project region.",
+                std::format("allocation of {} decoded bytes failed", expected_size),
+                path, offset, "payload.framed");
+        } catch (const std::length_error& error) {
+            return detail::project_error(
+                lfs::ErrorCode::ResourceExhausted,
+                "The framed project region cannot be represented by this build.",
+                std::format("allocation of {} decoded bytes failed: {}", expected_size,
+                            error.what()),
+                path, offset, "payload.framed");
+        }
+        if (auto status = decompress_framed_zstd(path, offset, stored, expected_size,
+                                                 maximum_decoded_size, decoded);
+            !status) {
+            return std::move(status).error();
+        }
+        return decoded;
     }
 
     void detail::set_max_payload_materialized_bytes_for_testing(
@@ -3126,6 +3444,248 @@ namespace lfs::io::project {
         }
         return impl_->state->file->read_exact(
             (*resolved)->payload_offset + relative_offset, destination);
+    }
+
+    lfs::Result<void>
+    ProjectReader::read_logical_prefix(const ChunkInfo& chunk,
+                                       const std::span<std::byte> destination) const {
+        if (auto allowed = require_supported_payload_access(*this); !allowed) {
+            return allowed;
+        }
+        auto resolved = resolve_chunk(*impl_->state, chunk);
+        if (!resolved) {
+            return status_failure(std::move(resolved).error());
+        }
+        const ChunkInfo& row = **resolved;
+        if (destination.size() > row.uncompressed_bytes) {
+            return status_failure(format_error(
+                path(), row.payload_offset, "payload.logical_prefix",
+                std::format("end <= uncompressed bytes {}", row.uncompressed_bytes),
+                std::to_string(destination.size()), lfs::ErrorCode::BoundsViolation));
+        }
+        if (destination.empty()) {
+            return {};
+        }
+        if (row.compression == Compression::Stored) {
+            return read_stored_at(row, 0, destination);
+        }
+        if (row.compression != Compression::ZstdFramed &&
+            row.compression != Compression::ByteShuffleZstdFramed) {
+            return status_failure(detail::project_error(
+                lfs::ErrorCode::InvalidArgument,
+                "This project chunk uses an unsupported compression encoding.",
+                std::format("compression {}",
+                            static_cast<std::uint16_t>(row.compression)),
+                path(), row.payload_offset, "payload.compression"));
+        }
+
+        struct FramedRecord {
+            std::uint64_t so = 0;
+            std::uint64_t sb = 0;
+            std::uint64_t uo = 0;
+            std::uint64_t ub = 0;
+        };
+        const auto fail_frame = [&](const std::string_view detail) {
+            return status_failure(format_error(
+                path(), row.payload_offset, "payload.framed.header", "valid header",
+                std::string(detail)));
+        };
+        if (row.stored_bytes < detail::FRAMED_HEADER_BYTES) {
+            return fail_frame("invalid magic");
+        }
+        std::array<std::byte, detail::FRAMED_HEADER_BYTES> header{};
+        if (auto read = read_stored_at(row, 0, byte_span(header)); !read) {
+            return read;
+        }
+        if (!std::equal(detail::FRAMED_MAGIC.begin(), detail::FRAMED_MAGIC.end(),
+                        header.begin())) {
+            return fail_frame("invalid magic");
+        }
+        const auto count = read_u32(byte_span(header), 12);
+        if (count == 0 ||
+            count > (std::numeric_limits<std::size_t>::max() -
+                     detail::FRAMED_HEADER_BYTES) /
+                        detail::FRAMED_RECORD_BYTES) {
+            return fail_frame("invalid header");
+        }
+        const auto table = detail::FRAMED_HEADER_BYTES +
+                           static_cast<std::size_t>(count) *
+                               detail::FRAMED_RECORD_BYTES;
+        if (read_u16(byte_span(header), 8) != detail::FRAMED_VERSION ||
+            read_u16(byte_span(header), 10) != 0 || table > row.stored_bytes) {
+            return fail_frame("invalid header");
+        }
+        std::vector<std::byte> table_bytes(table);
+        std::memcpy(table_bytes.data(), header.data(), header.size());
+        if (table > header.size()) {
+            if (auto read = read_stored_at(
+                    row, header.size(),
+                    std::span<std::byte>(table_bytes.data() + header.size(),
+                                         table - header.size()));
+                !read) {
+                return read;
+            }
+        }
+        std::vector<FramedRecord> records;
+        records.reserve(count);
+        std::uint64_t so = table;
+        std::uint64_t uo = 0;
+        for (std::uint32_t index = 0; index < count; ++index) {
+            const auto at = detail::FRAMED_HEADER_BYTES +
+                            static_cast<std::size_t>(index) *
+                                detail::FRAMED_RECORD_BYTES;
+            const auto sb64 = read_u64(table_bytes, at);
+            const auto ub64 = read_u64(table_bytes, at + 8);
+            if (sb64 == 0 || ub64 == 0 || sb64 > row.stored_bytes - so ||
+                ub64 > row.uncompressed_bytes - uo) {
+                return fail_frame("invalid record range");
+            }
+            records.push_back({so, sb64, uo, ub64});
+            so += sb64;
+            uo += ub64;
+        }
+        if (so != row.stored_bytes || uo != row.uncompressed_bytes) {
+            return fail_frame("record sizes do not cover payload");
+        }
+
+        const auto stream_record_prefix =
+            [&](const FramedRecord& record, const std::uint64_t skip,
+                const std::span<std::byte> dest) -> lfs::Result<void> {
+            if (dest.empty()) {
+                return {};
+            }
+            if (skip + dest.size() > record.ub) {
+                return status_failure(format_error(
+                    path(), row.payload_offset + record.so, "payload.framed.record",
+                    "prefix within record", "range exceeds record"));
+            }
+            ZSTD_DCtx* dctx = ZSTD_createDCtx();
+            if (dctx == nullptr) {
+                return status_failure(detail::project_error(
+                    lfs::ErrorCode::ResourceExhausted,
+                    "There is not enough memory to decode this project region.",
+                    "zstd stream context allocation failed", path(),
+                    row.payload_offset, "payload.framed.prefix"));
+            }
+            struct DCtxGuard {
+                ZSTD_DCtx* ctx;
+                ~DCtxGuard() { ZSTD_freeDCtx(ctx); }
+            } guard{dctx};
+            const std::size_t in_size = static_cast<std::size_t>(
+                std::min<std::uint64_t>(BLOCK_CRC_BYTES, record.sb));
+            std::vector<std::byte> inbuf(in_size == 0 ? 1 : in_size);
+            std::uint64_t stored_off = 0;
+            ZSTD_inBuffer input{nullptr, 0, 0};
+            const auto pull = [&](const std::span<std::byte> out_span)
+                -> lfs::Result<void> {
+                ZSTD_outBuffer output{out_span.data(), out_span.size(), 0};
+                while (output.pos < output.size) {
+                    if (input.pos == input.size) {
+                        if (stored_off >= record.sb) {
+                            return status_failure(format_error(
+                                path(), row.payload_offset + record.so,
+                                "payload.framed.record", "complete zstd prefix",
+                                "truncated frame"));
+                        }
+                        const auto n = static_cast<std::size_t>(std::min<std::uint64_t>(
+                            inbuf.size(), record.sb - stored_off));
+                        auto buf = std::span<std::byte>(inbuf.data(), n);
+                        if (auto read =
+                                read_stored_at(row, record.so + stored_off, buf);
+                            !read) {
+                            return read;
+                        }
+                        stored_off += n;
+                        input = {inbuf.data(), n, 0};
+                    }
+                    const auto ret =
+                        ZSTD_decompressStream(dctx, &output, &input);
+                    if (ZSTD_isError(ret)) {
+                        return status_failure(format_error(
+                            path(), row.payload_offset + record.so,
+                            "payload.framed.record", "valid zstd frame",
+                            ZSTD_getErrorName(ret)));
+                    }
+                }
+                return {};
+            };
+            std::uint64_t remaining_skip = skip;
+            std::array<std::byte, 64 * 1024> skipbuf{};
+            while (remaining_skip > 0) {
+                const auto n = static_cast<std::size_t>(std::min<std::uint64_t>(
+                    skipbuf.size(), remaining_skip));
+                if (auto filled = pull(std::span<std::byte>(skipbuf.data(), n));
+                    !filled) {
+                    return filled;
+                }
+                remaining_skip -= n;
+            }
+            return pull(dest);
+        };
+
+        if (row.compression == Compression::ZstdFramed) {
+            const FramedRecord& record = records.front();
+            const auto take = std::min<std::uint64_t>(destination.size(), record.ub);
+            return stream_record_prefix(
+                record, 0, destination.first(static_cast<std::size_t>(take)));
+        }
+        if (row.uncompressed_bytes % 4 != 0) {
+            return status_failure(format_error(
+                path(), row.payload_offset, "payload.byteshuffle",
+                "decoded size multiple of 4",
+                std::to_string(row.uncompressed_bytes)));
+        }
+        const std::uint64_t n_words = row.uncompressed_bytes / 4;
+        struct PlaneNeed {
+            std::uint64_t shuffled = 0;
+            std::size_t dest_index = 0;
+        };
+        std::vector<PlaneNeed> needs;
+        needs.reserve(destination.size());
+        for (std::size_t i = 0; i < destination.size(); ++i) {
+            needs.push_back(PlaneNeed{
+                .shuffled = (i % 4) * n_words + (i / 4),
+                .dest_index = i,
+            });
+        }
+        std::sort(needs.begin(), needs.end(),
+                  [](const PlaneNeed& lhs, const PlaneNeed& rhs) {
+                      return lhs.shuffled < rhs.shuffled;
+                  });
+        std::size_t cursor = 0;
+        while (cursor < needs.size()) {
+            const std::uint64_t pos = needs[cursor].shuffled;
+            const FramedRecord* record = nullptr;
+            for (const auto& candidate : records) {
+                if (pos >= candidate.uo && pos < candidate.uo + candidate.ub) {
+                    record = &candidate;
+                    break;
+                }
+            }
+            if (record == nullptr) {
+                return fail_frame("prefix is outside framed records");
+            }
+            std::size_t end = cursor;
+            while (end < needs.size() &&
+                   needs[end].shuffled >= record->uo &&
+                   needs[end].shuffled < record->uo + record->ub) {
+                ++end;
+            }
+            const std::uint64_t lo = needs[cursor].shuffled;
+            const std::uint64_t hi = needs[end - 1].shuffled + 1;
+            std::vector<std::byte> slice(static_cast<std::size_t>(hi - lo));
+            if (auto decoded = stream_record_prefix(
+                    *record, lo - record->uo, slice);
+                !decoded) {
+                return decoded;
+            }
+            for (std::size_t i = cursor; i < end; ++i) {
+                destination[needs[i].dest_index] =
+                    slice[static_cast<std::size_t>(needs[i].shuffled - lo)];
+            }
+            cursor = end;
+        }
+        return {};
     }
 
     lfs::Result<void> ProjectReader::verify_chunk(const ChunkInfo& chunk) const {
@@ -3213,17 +3773,33 @@ namespace lfs::io::project {
             if (!stored) {
                 return status_failure(std::move(stored).error());
             }
-            auto decoded = decompress_framed_zstd(path(), row.payload_offset, *stored,
-                                                  row.uncompressed_bytes, materialize_max);
+            if (row.uncompressed_bytes > materialize_max ||
+                row.uncompressed_bytes > std::numeric_limits<std::size_t>::max()) {
+                return status_failure(detail::project_error(
+                    lfs::ErrorCode::ResourceExhausted,
+                    "The project payload is too large to decode.",
+                    std::format("decoded size {} exceeds implementation maximum {}",
+                                row.uncompressed_bytes, materialize_max),
+                    path(), row.payload_offset, "payload.framed"));
+            }
+            auto decoded = allocate_uninitialized_decoded(
+                static_cast<std::size_t>(row.uncompressed_bytes), path(),
+                row.payload_offset);
             if (!decoded) {
                 return status_failure(std::move(decoded).error());
             }
+            if (auto inflated = decompress_framed_zstd(
+                    path(), row.payload_offset, *stored, row.uncompressed_bytes,
+                    materialize_max, decoded->bytes());
+                !inflated) {
+                return status_failure(std::move(inflated).error());
+            }
             if (row.compression == Compression::ByteShuffleZstdFramed &&
-                decoded->size() % 4 != 0) {
+                decoded->size % 4 != 0) {
                 return status_failure(format_error(
                     path(), row.payload_offset, "payload.byteshuffle",
                     "decoded size multiple of 4",
-                    std::to_string(decoded->size())));
+                    std::to_string(decoded->size)));
             }
         }
         return {};
@@ -3241,573 +3817,858 @@ namespace lfs::io::project {
         return {};
     }
 
-    lfs::Result<std::vector<std::byte>>
-    ProjectReader::read_chunk(
-        const ChunkInfo& chunk,
-        std::function<void(std::size_t, std::size_t)> progress) const {
-        const auto read_started =
-            std::chrono::steady_clock::now();
-        if (auto allowed = require_supported_payload_access(*this); !allowed) {
-            return std::move(allowed).error();
-        }
-        auto resolved = resolve_chunk(*impl_->state, chunk);
-        if (!resolved) {
-            return std::move(resolved).error();
-        }
-        const auto resolved_at =
-            std::chrono::steady_clock::now();
-        const ChunkInfo& row = **resolved;
-        const std::uint64_t materialize_max =
-            detail::max_materialized_bytes_for(**resolved);
-        if ((*resolved)->stored_bytes > materialize_max ||
-            (*resolved)->uncompressed_bytes > materialize_max) {
-            return detail::project_error(
-                lfs::ErrorCode::ResourceExhausted,
-                "This project chunk is too large to materialize in memory.",
-                std::format("stored bytes {}, decoded bytes {}, materialized-read maximum {}; "
-                            "use the bounded stream or mapped-range API",
-                            (*resolved)->stored_bytes,
-                            (*resolved)->uncompressed_bytes,
-                            materialize_max),
-                path(), (*resolved)->payload_offset, "payload.materialized_size");
-        }
-        if (row.stored_bytes > std::numeric_limits<std::size_t>::max()) {
-            return detail::project_error(
-                lfs::ErrorCode::ResourceExhausted,
-                "This project chunk is too large to materialize in memory.",
-                std::format("stored bytes {} exceed this build's size_t range",
-                            row.stored_bytes),
-                path(), row.payload_offset, "payload.read");
-        }
-        auto payload_end = detail::checked_add(
-            row.payload_offset, row.stored_bytes, path(),
-            row.payload_offset, "payload.read");
-        if (!payload_end) {
-            return std::move(payload_end).error();
-        }
-        if (*payload_end > commit().committed_file_end) {
-            return format_error(
-                path(), row.payload_offset, "payload.read",
-                std::format("end <= committed file end {}",
-                            commit().committed_file_end),
-                std::to_string(*payload_end), lfs::ErrorCode::BoundsViolation);
-        }
-        std::vector<std::byte> stored;
-        try {
-            stored.resize(static_cast<std::size_t>(row.stored_bytes));
-        } catch (const std::bad_alloc&) {
-            return detail::project_error(
-                lfs::ErrorCode::ResourceExhausted,
-                "There is not enough memory to read this project chunk.",
-                std::format("allocation of {} stored bytes failed", row.stored_bytes),
-                path(), row.payload_offset, "payload.read");
-        } catch (const std::length_error& error) {
-            return detail::project_error(
-                lfs::ErrorCode::BoundsViolation,
-                "The project chunk cannot be represented by this build.",
-                std::format("allocation of {} stored bytes failed: {}",
-                            row.stored_bytes, error.what()),
-                path(), row.payload_offset, "payload.read");
-        }
-        const bool framed_payload =
-            row.compression == Compression::ZstdFramed ||
-            row.compression == Compression::ByteShuffleZstdFramed;
-        if (framed_payload) {
-            struct Record {
-                std::size_t stored_offset;
-                std::size_t stored_bytes;
-                std::size_t decoded_offset;
-                std::size_t decoded_bytes;
-            };
-            const auto fail_header = [&](const std::string_view detail)
-                -> lfs::Result<std::vector<std::byte>> {
-                return lfs::Result<std::vector<std::byte>>(format_error(
-                    path(), row.payload_offset, "payload.framed.header", "valid header",
-                    std::string(detail)));
-            };
-            const auto block_count = static_cast<std::size_t>(
-                (row.stored_bytes + BLOCK_CRC_BYTES - 1) / BLOCK_CRC_BYTES);
-            std::vector<bool> validated(block_count, false);
-            std::size_t loaded_blocks = 0;
-            std::uint32_t running_crc = 0;
-            const auto read_block = [&](const std::size_t index) -> lfs::Result<void> {
-                const auto relative = static_cast<std::uint64_t>(index) * BLOCK_CRC_BYTES;
-                const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(
-                    BLOCK_CRC_BYTES, row.stored_bytes - relative));
-                auto block = std::span<std::byte>(
-                    stored.data() + static_cast<std::size_t>(relative), count);
-                if (auto read = impl_->state->file->read_exact(
-                        row.payload_offset + relative, block);
-                    !read) {
-                    return status_failure(std::move(read).error());
-                }
-                if (impl_->state->options.payload_bytes_read) {
-                    impl_->state->options.payload_bytes_read->fetch_add(
-                        count, std::memory_order_relaxed);
-                }
-                const auto block_crc = crc32c(0, block.data(), block.size());
-                if (row.block_crc_table.has_value()) {
-                    const auto& entries = row.block_crc_table->entries;
-                    if (index >= entries.size()) {
-                        return status_failure(detail::project_error(
-                            lfs::ErrorCode::DataLoss,
-                            "The project payload block table is inconsistent.",
-                            std::format("payload {} has more blocks than its CRC table",
-                                        row.key_string()),
-                            path(), row.block_crc_table->offset + 40,
-                            "payload.block_count"));
-                    }
-                    if (block_crc != entries[index]) {
-                        return status_failure(format_error(
-                            path(), row.payload_offset + relative,
-                            std::format("payload[{}].block[{}].crc32c",
-                                        row.key_string(), index),
-                            std::format("0x{:08x}", entries[index]),
-                            std::format("0x{:08x}", block_crc)));
-                    }
-                    validated[index] = true;
-                }
-                running_crc = crc32c(running_crc, block.data(), block.size());
-                ++loaded_blocks;
-                return {};
-            };
+    namespace {
 
-            while (loaded_blocks == 0 && row.stored_bytes != 0) {
-                if (auto read = read_block(0); !read)
-                    return std::move(read).error();
-            }
-            if (stored.size() < detail::FRAMED_HEADER_BYTES ||
-                !std::equal(detail::FRAMED_MAGIC.begin(), detail::FRAMED_MAGIC.end(),
-                            stored.begin())) {
-                return fail_header("invalid magic");
-            }
-            const auto count = read_u32(stored, 12);
-            if (count > (std::numeric_limits<std::size_t>::max() -
-                         detail::FRAMED_HEADER_BYTES) /
-                            detail::FRAMED_RECORD_BYTES)
-                return fail_header("record table is not representable");
-            const auto table = detail::FRAMED_HEADER_BYTES +
-                               static_cast<std::size_t>(count) *
-                                   detail::FRAMED_RECORD_BYTES;
-            if (read_u16(stored, 8) != detail::FRAMED_VERSION ||
-                read_u16(stored, 10) != 0 || count == 0 ||
-                table > stored.size())
-                return fail_header("invalid header");
-            if (row.uncompressed_bytes > materialize_max ||
-                row.uncompressed_bytes > std::numeric_limits<std::size_t>::max()) {
-                return detail::project_error(
-                    lfs::ErrorCode::ResourceExhausted,
-                    "The project payload is too large to decode.",
-                    std::format("decoded size {} exceeds implementation maximum {}",
-                                row.uncompressed_bytes, materialize_max),
-                    path(), row.payload_offset, "payload.framed");
-            }
-            if (count > row.uncompressed_bytes || stored.size() - table < count)
-                return fail_header("invalid record count");
-            while (loaded_blocks < block_count &&
-                   loaded_blocks * BLOCK_CRC_BYTES < table) {
-                if (auto read = read_block(loaded_blocks); !read)
-                    return std::move(read).error();
-            }
-            std::vector<Record> records;
-            std::size_t stored_offset = table;
-            std::size_t decoded_offset = 0;
-            try {
-                records.reserve(count);
-                for (std::size_t index = 0; index < count; ++index) {
-                    const auto at = detail::FRAMED_HEADER_BYTES +
-                                    index * detail::FRAMED_RECORD_BYTES;
-                    const auto stored_bytes = read_u64(stored, at);
-                    const auto decoded_bytes = read_u64(stored, at + 8);
-                    if (stored_bytes == 0 || decoded_bytes == 0 ||
-                        stored_bytes > stored.size() - stored_offset ||
-                        decoded_bytes > row.uncompressed_bytes - decoded_offset ||
-                        stored_bytes > std::numeric_limits<std::size_t>::max() ||
-                        decoded_bytes > std::numeric_limits<std::size_t>::max()) {
-                        return format_error(path(), row.payload_offset + at,
-                                            "payload.framed.record",
-                                            "valid record range", "invalid range");
-                    }
-                    records.push_back({stored_offset,
-                                       static_cast<std::size_t>(stored_bytes),
-                                       decoded_offset,
-                                       static_cast<std::size_t>(decoded_bytes)});
-                    stored_offset += static_cast<std::size_t>(stored_bytes);
-                    decoded_offset += static_cast<std::size_t>(decoded_bytes);
-                }
-            } catch (const std::bad_alloc&) {
-                return detail::project_error(
-                    lfs::ErrorCode::ResourceExhausted,
-                    "There is not enough memory to decode this project region.",
-                    std::format("allocation of {} record descriptors failed", count),
-                    path(), row.payload_offset, "payload.framed.records");
-            } catch (const std::length_error& error) {
-                return detail::project_error(
-                    lfs::ErrorCode::ResourceExhausted,
-                    "The framed project region cannot be represented by this build.",
-                    std::format("allocation of {} record descriptors failed: {}", count,
-                                error.what()),
-                    path(), row.payload_offset, "payload.framed.records");
-            }
-            if (stored_offset != stored.size() ||
-                decoded_offset != row.uncompressed_bytes)
-                return fail_header("record sizes do not cover payload");
-            std::vector<std::byte> decoded;
-            try {
-                decoded.resize(static_cast<std::size_t>(row.uncompressed_bytes));
-            } catch (const std::bad_alloc&) {
-                return detail::project_error(
-                    lfs::ErrorCode::ResourceExhausted,
-                    "There is not enough memory to decode this project region.",
-                    std::format("allocation of {} decoded bytes failed",
-                                row.uncompressed_bytes),
-                    path(), row.payload_offset, "payload.framed");
-            } catch (const std::length_error& error) {
-                return detail::project_error(
-                    lfs::ErrorCode::ResourceExhausted,
-                    "The framed project region cannot be represented by this build.",
-                    std::format("allocation of {} decoded bytes failed: {}",
-                                row.uncompressed_bytes, error.what()),
-                    path(), row.payload_offset, "payload.framed");
-            }
-            std::mutex worker_mutex;
-            std::condition_variable worker_cv;
-            std::vector<bool> ready(records.size(), false);
-            std::vector<bool> claimed(records.size(), false);
-            std::optional<lfs::Error> worker_error;
-            bool read_failed = false;
-            bool read_done = false;
-            std::atomic<std::size_t> completed{0};
-            const auto publish_worker_error = [&](const lfs::ErrorCode code,
-                                                  const std::string_view message,
-                                                  const std::string_view detail) noexcept {
-                try {
-                    std::scoped_lock lock(worker_mutex);
-                    if (!worker_error)
-                        worker_error = detail::project_error(
-                            code, std::string(message), std::string(detail), path(),
-                            row.payload_offset, "payload.framed.worker");
-                } catch (...) {
-                    // LFS-CENSUS-OK(empty-catch): preserve the first worker error if formatting fails.
-                }
-                worker_cv.notify_all();
-            };
-            const auto mark_ready = [&] {
-                if (!row.block_crc_table.has_value())
-                    return;
-                for (std::size_t index = 0; index < records.size(); ++index) {
-                    if (ready[index])
-                        continue;
-                    const auto first = records[index].stored_offset / BLOCK_CRC_BYTES;
-                    const auto last = (records[index].stored_offset +
-                                       records[index].stored_bytes - 1) /
-                                      BLOCK_CRC_BYTES;
-                    bool complete = last < loaded_blocks;
-                    for (std::size_t block = first; complete && block <= last; ++block)
-                        complete = validated[block];
-                    if (complete)
-                        ready[index] = true;
-                }
-            };
-            const auto worker_count = std::min<std::size_t>(
-                records.size(), std::max(1u, std::thread::hardware_concurrency()));
-            std::vector<std::jthread> workers;
-            try {
-                workers.reserve(worker_count);
-                for (std::size_t worker = 0; worker < worker_count; ++worker) {
-                    workers.emplace_back([&] {
-                        try {
-                            while (true) {
-                                std::size_t index = records.size();
-                                {
-                                    std::unique_lock lock(worker_mutex);
-                                    worker_cv.wait(lock, [&] {
-                                        bool has_ready = false;
-                                        for (std::size_t candidate = 0;
-                                             candidate < ready.size(); ++candidate) {
-                                            has_ready |= ready[candidate] && !claimed[candidate];
-                                        }
-                                        return worker_error.has_value() || read_failed ||
-                                               read_done || has_ready;
-                                    });
-                                    if (worker_error || read_failed)
-                                        return;
-                                    for (std::size_t candidate = 0;
-                                         candidate < records.size(); ++candidate) {
-                                        if (ready[candidate] && !claimed[candidate]) {
-                                            claimed[candidate] = true;
-                                            index = candidate;
-                                            break;
-                                        }
-                                    }
-                                    if (index == records.size()) {
-                                        if (read_done)
-                                            return;
-                                        continue;
-                                    }
-                                }
-                                const auto& record = records[index];
-                                const auto frame = std::span<const std::byte>(
-                                    stored.data() + record.stored_offset,
-                                    record.stored_bytes);
-                                const auto frame_size = ZSTD_getFrameContentSize(
-                                    frame.data(), frame.size());
-                                if (frame_size != record.decoded_bytes) {
-                                    publish_worker_error(
-                                        lfs::ErrorCode::DataLoss,
-                                        "The framed project payload could not be decoded.",
-                                        "record content size mismatch");
-                                    return;
-                                }
-                                const auto result = ZSTD_decompress(
-                                    decoded.data() + record.decoded_offset,
-                                    record.decoded_bytes, frame.data(), record.stored_bytes);
-                                if (ZSTD_isError(result) || result != record.decoded_bytes) {
-                                    publish_worker_error(
-                                        lfs::ErrorCode::DataLoss,
-                                        "The framed project payload could not be decoded.",
-                                        "record decompression failed");
-                                    return;
-                                }
-                                const auto done = completed.fetch_add(1) + 1;
-                                if (progress)
-                                    progress(done, records.size());
-                                worker_cv.notify_all();
-                            }
-                        } catch (const std::bad_alloc&) {
-                            publish_worker_error(
-                                lfs::ErrorCode::ResourceExhausted,
-                                "There is not enough memory to decode this project region.",
-                                "framed decode worker allocation failed");
-                        } catch (const std::exception& exception) {
-                            publish_worker_error(
-                                lfs::ErrorCode::Internal,
-                                "The framed project payload could not be decoded.",
-                                exception.what());
-                        } catch (...) {
-                            publish_worker_error(
-                                lfs::ErrorCode::Internal,
-                                "The framed project payload could not be decoded.",
-                                "unknown worker exception");
-                        }
-                    });
-                }
-            } catch (const std::bad_alloc&) {
-                publish_worker_error(
-                    lfs::ErrorCode::ResourceExhausted,
-                    "There is not enough memory to start framed decode workers.",
-                    "worker allocation failed");
-                {
-                    std::scoped_lock lock(worker_mutex);
-                    read_failed = true;
-                }
-                worker_cv.notify_all();
-                workers.clear();
-                return fail_header("could not start framed decode workers");
-            } catch (const std::exception& exception) {
-                publish_worker_error(
-                    lfs::ErrorCode::Internal,
-                    "The framed project payload could not be decoded.",
-                    exception.what());
-                {
-                    std::scoped_lock lock(worker_mutex);
-                    read_failed = true;
-                }
-                worker_cv.notify_all();
-                workers.clear();
-                return fail_header("could not start framed decode workers");
-            } catch (...) {
-                publish_worker_error(
-                    lfs::ErrorCode::Internal,
-                    "The framed project payload could not be decoded.",
-                    "unknown worker construction exception");
-                {
-                    std::scoped_lock lock(worker_mutex);
-                    read_failed = true;
-                }
-                worker_cv.notify_all();
-                workers.clear();
-                return fail_header("could not start framed decode workers");
-            }
-            const auto workers_started = std::chrono::steady_clock::now();
-            while (loaded_blocks < block_count) {
-                if (auto read = read_block(loaded_blocks); !read) {
-                    {
-                        std::scoped_lock lock(worker_mutex);
-                        read_failed = true;
-                        if (!worker_error)
-                            worker_error = std::move(read).error();
-                    }
-                    worker_cv.notify_all();
-                    workers.clear();
-                    return std::move(*worker_error);
-                }
-                {
-                    std::scoped_lock lock(worker_mutex);
-                    mark_ready();
-                }
-                worker_cv.notify_all();
-            }
-            const auto stored_read_at = std::chrono::steady_clock::now();
-            if (row.block_crc_table.has_value() &&
-                block_count != row.block_crc_table->entries.size()) {
-                auto error = format_error(
-                    path(), row.block_crc_table->offset + 40,
-                    std::format("payload[{}].block_count", row.key_string()),
-                    std::to_string(row.block_crc_table->entries.size()),
-                    std::to_string(block_count));
-                {
-                    std::scoped_lock lock(worker_mutex);
-                    read_failed = true;
-                    worker_error = std::move(error);
-                }
-                worker_cv.notify_all();
-                workers.clear();
-                return std::move(*worker_error);
-            }
-            if (running_crc != row.payload_crc32c) {
-                {
-                    std::scoped_lock lock(worker_mutex);
-                    read_failed = true;
-                    worker_error = format_error(
-                        path(), row.payload_offset,
-                        std::format("payload[{}].crc32c", row.key_string()),
-                        std::format("0x{:08x}", row.payload_crc32c),
-                        std::format("0x{:08x}", running_crc));
-                }
-                worker_cv.notify_all();
-                workers.clear();
-                return std::move(*worker_error);
-            }
-            {
-                std::scoped_lock lock(worker_mutex);
-                if (!row.block_crc_table.has_value())
-                    std::fill(ready.begin(), ready.end(), true);
-                read_done = true;
-                mark_ready();
-            }
-            worker_cv.notify_all();
-            workers.clear();
-            const auto decompressed_at = std::chrono::steady_clock::now();
-            if (worker_error)
-                return std::move(*worker_error);
-            if (completed != records.size())
-                return fail_header("not all records were decoded");
-            const auto milliseconds = [](const auto begin, const auto end) {
-                return std::chrono::duration<double, std::milli>(end - begin).count();
-            };
-            if (row.compression == Compression::ZstdFramed) {
-                LOG_DEBUG(
-                    "Project chunk read stages: chunk={} stored_bytes={} uncompressed_bytes={} compression={} resolve={:.3f} ms read_crc={:.3f} ms stored_read={:.3f} ms decompress={:.3f} ms unshuffle=0.000 ms total={:.3f} ms",
-                    row.key_string(), row.stored_bytes, row.uncompressed_bytes,
-                    static_cast<std::uint16_t>(row.compression),
-                    milliseconds(read_started, resolved_at),
-                    milliseconds(resolved_at, stored_read_at),
-                    milliseconds(resolved_at, stored_read_at),
-                    milliseconds(workers_started, decompressed_at),
-                    milliseconds(read_started, decompressed_at));
-                return decoded;
-            }
-            if (decoded.size() % 4 != 0)
-                return format_error(path(), row.payload_offset, "payload.byteshuffle",
-                                    "decoded size multiple of 4",
-                                    std::to_string(decoded.size()));
-            auto unshuffled = unbyte_plane_f32_words(decoded);
-            const auto unshuffled_at = std::chrono::steady_clock::now();
-            LOG_DEBUG(
-                "Project chunk read stages: chunk={} stored_bytes={} uncompressed_bytes={} compression={} resolve={:.3f} ms read_crc={:.3f} ms stored_read={:.3f} ms decompress={:.3f} ms unshuffle={:.3f} ms total={:.3f} ms",
-                row.key_string(), row.stored_bytes, row.uncompressed_bytes,
-                static_cast<std::uint16_t>(row.compression),
-                milliseconds(read_started, resolved_at),
-                milliseconds(resolved_at, stored_read_at),
-                milliseconds(resolved_at, stored_read_at),
-                milliseconds(workers_started, decompressed_at),
-                milliseconds(decompressed_at, unshuffled_at),
-                milliseconds(read_started, unshuffled_at));
-            return unshuffled;
-        }
-        std::uint32_t running_crc = 0;
-        std::size_t block_index = 0;
-        for (std::uint64_t relative = 0; relative < row.stored_bytes;) {
+        struct PayloadBlock {
+            std::size_t index = 0;
+            std::uint64_t relative = 0;
+            std::size_t count = 0;
+        };
+
+        PayloadBlock payload_block_at(const ChunkInfo& row,
+                                      const std::size_t index) noexcept {
+            const auto relative =
+                static_cast<std::uint64_t>(index) * BLOCK_CRC_BYTES;
             const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(
                 BLOCK_CRC_BYTES, row.stored_bytes - relative));
-            auto block = std::span<std::byte>(
-                stored.data() + static_cast<std::size_t>(relative), count);
-            if (auto read = impl_->state->file->read_exact(
-                    row.payload_offset + relative, block);
+            return PayloadBlock{.index = index, .relative = relative, .count = count};
+        }
+
+        lfs::Result<void> read_one_payload_block(
+            const detail::NativeFile& file, const ChunkInfo& row,
+            const std::span<std::byte> stored, const PayloadBlock& block,
+            std::uint32_t& crc_out, std::atomic_uint64_t* bytes_read,
+            const std::filesystem::path& path) {
+            auto dest = stored.subspan(static_cast<std::size_t>(block.relative),
+                                       block.count);
+            if (auto read = file.read_exact(row.payload_offset + block.relative,
+                                            dest);
                 !read) {
-                return std::move(read).error();
+                return status_failure(std::move(read).error());
             }
-            if (impl_->state->options.payload_bytes_read) {
-                impl_->state->options.payload_bytes_read->fetch_add(
-                    count, std::memory_order_relaxed);
+            if (bytes_read != nullptr) {
+                bytes_read->fetch_add(block.count, std::memory_order_relaxed);
             }
-            const auto block_crc = crc32c(0, block.data(), block.size());
+            crc_out = crc32c(0, dest.data(), dest.size());
             if (row.block_crc_table.has_value()) {
                 const auto& entries = row.block_crc_table->entries;
-                if (block_index >= entries.size()) {
-                    return detail::project_error(
+                if (block.index >= entries.size()) {
+                    return status_failure(detail::project_error(
                         lfs::ErrorCode::DataLoss,
                         "The project payload block table is inconsistent.",
                         std::format("payload {} has more blocks than its CRC table",
                                     row.key_string()),
-                        path(), row.block_crc_table->offset + 40,
-                        "payload.block_count");
+                        path, row.block_crc_table->offset + 40,
+                        "payload.block_count"));
                 }
-                if (block_crc != entries[block_index]) {
-                    return format_error(
-                        path(), row.payload_offset + relative,
+                if (crc_out != entries[block.index]) {
+                    return status_failure(format_error(
+                        path, row.payload_offset + block.relative,
                         std::format("payload[{}].block[{}].crc32c",
-                                    row.key_string(), block_index),
-                        std::format("0x{:08x}", entries[block_index]),
-                        std::format("0x{:08x}", block_crc));
+                                    row.key_string(), block.index),
+                        std::format("0x{:08x}", entries[block.index]),
+                        std::format("0x{:08x}", crc_out)));
                 }
             }
-            running_crc = crc32c(running_crc, block.data(), block.size());
-            relative += count;
-            ++block_index;
+            return {};
         }
-        if (running_crc != row.payload_crc32c) {
-            return format_error(
-                path(), row.payload_offset,
-                std::format("payload[{}].crc32c", row.key_string()),
-                std::format("0x{:08x}", row.payload_crc32c),
-                std::format("0x{:08x}", running_crc));
+
+        template <typename OnComplete>
+        lfs::Result<void> read_payload_blocks(
+            const detail::NativeFile& file, const ChunkInfo& row,
+            const std::span<std::byte> stored, const std::size_t begin,
+            const std::size_t end, const std::span<std::uint32_t> crcs,
+            const std::span<std::uint8_t> validated,
+            std::atomic_uint64_t* bytes_read, const std::filesystem::path& path,
+            OnComplete on_complete,
+            const std::size_t max_workers =
+                std::max(1u, std::thread::hardware_concurrency())) {
+            if (begin >= end) {
+                return {};
+            }
+            const auto run_one = [&](const std::size_t index) -> lfs::Result<void> {
+                const auto block = payload_block_at(row, index);
+                std::uint32_t crc = 0;
+                if (auto read = read_one_payload_block(file, row, stored, block, crc,
+                                                       bytes_read, path);
+                    !read) {
+                    return read;
+                }
+                crcs[index] = crc;
+                if (!validated.empty()) {
+                    validated[index] = 1;
+                }
+                on_complete(index);
+                return {};
+            };
+            if (end - begin == 1) {
+                try {
+                    return run_one(begin);
+                } catch (const std::bad_alloc&) {
+                    return status_failure(detail::project_error(
+                        lfs::ErrorCode::ResourceExhausted,
+                        "There is not enough memory to read this project chunk.",
+                        "payload block buffer allocation failed", path,
+                        row.payload_offset, "payload.read"));
+                } catch (const std::exception& exception) {
+                    // LFS-CENSUS-OK(empty-catch): propagate the payload-read exception as a project error
+                    return status_failure(detail::project_error(
+                        lfs::ErrorCode::Internal,
+                        "The project payload could not be read.", exception.what(),
+                        path, row.payload_offset, "payload.read"));
+                }
+            }
+
+            std::mutex mutex;
+            std::optional<lfs::Error> error;
+            std::size_t error_index = std::numeric_limits<std::size_t>::max();
+            std::atomic<std::size_t> next{begin};
+            const auto workers_count = std::min<std::size_t>(
+                end - begin, std::max<std::size_t>(1, max_workers));
+            const auto record_error = [&](const std::size_t index, lfs::Error err) {
+                std::scoped_lock lock(mutex);
+                if (!error || index < error_index) {
+                    error = std::move(err);
+                    error_index = index;
+                }
+            };
+            std::vector<std::jthread> workers;
+            try {
+                workers.reserve(workers_count);
+                for (std::size_t worker = 0; worker < workers_count; ++worker) {
+                    workers.emplace_back([&] {
+                        try {
+                            while (true) {
+                                const auto index = next.fetch_add(1);
+                                if (index >= end) {
+                                    return;
+                                }
+                                {
+                                    std::scoped_lock lock(mutex);
+                                    if (error) {
+                                        return;
+                                    }
+                                }
+                                if (auto read = run_one(index); !read) {
+                                    record_error(index, std::move(read).error());
+                                    return;
+                                }
+                            }
+                        } catch (const std::bad_alloc&) {
+                            record_error(
+                                std::numeric_limits<std::size_t>::max(),
+                                detail::project_error(
+                                    lfs::ErrorCode::ResourceExhausted,
+                                    "There is not enough memory to read this project chunk.",
+                                    "payload block worker allocation failed", path,
+                                    row.payload_offset, "payload.read"));
+                        } catch (const std::exception& exception) {
+                            // LFS-CENSUS-OK(empty-catch): record the payload-read worker exception as the first read error
+                            record_error(
+                                std::numeric_limits<std::size_t>::max(),
+                                detail::project_error(
+                                    lfs::ErrorCode::Internal,
+                                    "The project payload could not be read.",
+                                    exception.what(), path, row.payload_offset,
+                                    "payload.read"));
+                        } catch (...) {
+                            // LFS-CENSUS-OK(empty-catch): record an unknown payload-read worker exception as the first read error
+                            record_error(
+                                std::numeric_limits<std::size_t>::max(),
+                                detail::project_error(
+                                    lfs::ErrorCode::Internal,
+                                    "The project payload could not be read.",
+                                    "unknown worker exception", path,
+                                    row.payload_offset, "payload.read"));
+                        }
+                    });
+                }
+            } catch (const std::exception& exception) {
+                // LFS-CENSUS-OK(empty-catch): propagate payload-read worker construction failure as a project error
+                workers.clear();
+                return status_failure(detail::project_error(
+                    lfs::ErrorCode::Internal,
+                    "The project payload could not be read.", exception.what(),
+                    path, row.payload_offset, "payload.read"));
+            }
+            workers.clear();
+            if (error) {
+                return status_failure(std::move(*error));
+            }
+            return {};
         }
-        if (row.block_crc_table.has_value() &&
-            block_index != row.block_crc_table->entries.size()) {
-            return format_error(
-                path(), row.block_crc_table->offset + 40,
-                std::format("payload[{}].block_count", row.key_string()),
-                std::to_string(row.block_crc_table->entries.size()),
-                std::to_string(block_index));
+
+        std::uint32_t combine_block_crcs(const ChunkInfo& row,
+                                         const std::span<const std::uint32_t> crcs) {
+            std::uint32_t running = 0;
+            for (std::size_t index = 0; index < crcs.size(); ++index) {
+                running = crc32c_combine(running, crcs[index],
+                                         payload_block_at(row, index).count);
+            }
+            return running;
         }
-        const auto stored_read_at =
-            std::chrono::steady_clock::now();
-        const auto milliseconds =
-            [](const auto begin, const auto end) {
-                return std::chrono::duration<double, std::milli>(
-                           end - begin)
+
+        enum class LogicalInit : std::uint8_t { Zeroed,
+                                                Uninitialized };
+
+        struct MaterializedLogical {
+            std::vector<std::byte> zeroed;
+            UninitializedBuffer uninitialized;
+            UninitializedBuffer stored;
+            UninitializedBuffer shuffle_planes;
+            LogicalInit init = LogicalInit::Zeroed;
+
+            [[nodiscard]] std::span<std::byte> bytes() noexcept {
+                if (init == LogicalInit::Uninitialized) {
+                    return uninitialized.bytes();
+                }
+                return std::span<std::byte>(zeroed);
+            }
+
+            [[nodiscard]] std::span<const std::byte> bytes() const noexcept {
+                if (init == LogicalInit::Uninitialized) {
+                    return uninitialized.bytes();
+                }
+                return std::span<const std::byte>(zeroed);
+            }
+        };
+
+        lfs::Result<void> allocate_logical_bytes(
+            MaterializedLogical& out, const LogicalInit init, const std::size_t bytes,
+            const std::filesystem::path& path, const std::uint64_t offset,
+            const std::string_view field) {
+            out.init = init;
+            if (init == LogicalInit::Uninitialized) {
+                auto buffer =
+                    allocate_uninitialized_buffer(bytes, path, offset, field);
+                if (!buffer) {
+                    return status_failure(std::move(buffer).error());
+                }
+                out.uninitialized = std::move(*buffer);
+                return {};
+            }
+            auto vector = allocate_zeroed_vector(bytes, path, offset, field);
+            if (!vector) {
+                return status_failure(std::move(vector).error());
+            }
+            out.zeroed = std::move(*vector);
+            return {};
+        }
+
+        lfs::Result<MaterializedLogical> materialize_chunk_payload(
+            const ProjectReader& reader, const ReaderState& state,
+            const ChunkInfo& chunk,
+            std::function<void(std::size_t, std::size_t)> progress,
+            const LogicalInit init) {
+            const auto read_started = std::chrono::steady_clock::now();
+            if (auto allowed = require_supported_payload_access(reader); !allowed) {
+                return std::move(allowed).error();
+            }
+            auto resolved = resolve_chunk(state, chunk);
+            if (!resolved) {
+                return std::move(resolved).error();
+            }
+            const auto resolved_at = std::chrono::steady_clock::now();
+            const ChunkInfo& row = **resolved;
+            const std::filesystem::path& path = reader.path();
+            const std::uint64_t materialize_max =
+                detail::max_materialized_bytes_for(**resolved);
+            if ((*resolved)->stored_bytes > materialize_max ||
+                (*resolved)->uncompressed_bytes > materialize_max) {
+                return detail::project_error(
+                    lfs::ErrorCode::ResourceExhausted,
+                    "This project chunk is too large to materialize in memory.",
+                    std::format(
+                        "stored bytes {}, decoded bytes {}, materialized-read maximum {}; "
+                        "use the bounded stream or mapped-range API",
+                        (*resolved)->stored_bytes, (*resolved)->uncompressed_bytes,
+                        materialize_max),
+                    path, (*resolved)->payload_offset, "payload.materialized_size");
+            }
+            if (row.stored_bytes > std::numeric_limits<std::size_t>::max()) {
+                return detail::project_error(
+                    lfs::ErrorCode::ResourceExhausted,
+                    "This project chunk is too large to materialize in memory.",
+                    std::format("stored bytes {} exceed this build's size_t range",
+                                row.stored_bytes),
+                    path, row.payload_offset, "payload.read");
+            }
+            auto payload_end = detail::checked_add(row.payload_offset, row.stored_bytes,
+                                                   path, row.payload_offset,
+                                                   "payload.read");
+            if (!payload_end) {
+                return std::move(payload_end).error();
+            }
+            if (*payload_end > reader.commit().committed_file_end) {
+                return format_error(
+                    path, row.payload_offset, "payload.read",
+                    std::format("end <= committed file end {}",
+                                reader.commit().committed_file_end),
+                    std::to_string(*payload_end), lfs::ErrorCode::BoundsViolation);
+            }
+            const bool framed_payload =
+                row.compression == Compression::ZstdFramed ||
+                row.compression == Compression::ByteShuffleZstdFramed;
+            if (framed_payload) {
+                auto stored_buffer = allocate_uninitialized_buffer(
+                    static_cast<std::size_t>(row.stored_bytes), path,
+                    row.payload_offset, "payload.read");
+                if (!stored_buffer) {
+                    return std::move(stored_buffer).error();
+                }
+                UninitializedBuffer stored = std::move(*stored_buffer);
+                const auto stored_span = stored.bytes();
+                struct Record {
+                    std::size_t stored_offset;
+                    std::size_t stored_bytes;
+                    std::size_t decoded_offset;
+                    std::size_t decoded_bytes;
+                };
+                const auto fail_header = [&](const std::string_view detail)
+                    -> lfs::Result<MaterializedLogical> {
+                    return format_error(path, row.payload_offset,
+                                        "payload.framed.header", "valid header",
+                                        std::string(detail));
+                };
+                const auto block_count = static_cast<std::size_t>(
+                    (row.stored_bytes + BLOCK_CRC_BYTES - 1) / BLOCK_CRC_BYTES);
+                std::vector<std::uint8_t> validated(block_count, 0);
+                std::vector<std::uint32_t> block_crcs(block_count, 0);
+                std::size_t loaded_blocks = 0;
+                auto* bytes_read = state.options.payload_bytes_read.get();
+                const auto read_block =
+                    [&](const std::size_t index) -> lfs::Result<void> {
+                    const auto block = payload_block_at(row, index);
+                    std::uint32_t crc = 0;
+                    if (auto read = read_one_payload_block(
+                            *state.file, row, stored_span, block, crc, bytes_read,
+                            path);
+                        !read) {
+                        return read;
+                    }
+                    block_crcs[index] = crc;
+                    validated[index] = 1;
+                    ++loaded_blocks;
+                    return {};
+                };
+
+                while (loaded_blocks == 0 && row.stored_bytes != 0) {
+                    if (auto read = read_block(0); !read)
+                        return std::move(read).error();
+                }
+                if (stored.size < detail::FRAMED_HEADER_BYTES ||
+                    !std::equal(detail::FRAMED_MAGIC.begin(),
+                                detail::FRAMED_MAGIC.end(), stored_span.begin())) {
+                    return fail_header("invalid magic");
+                }
+                const auto count = read_u32(stored_span, 12);
+                if (count > (std::numeric_limits<std::size_t>::max() -
+                             detail::FRAMED_HEADER_BYTES) /
+                                detail::FRAMED_RECORD_BYTES)
+                    return fail_header("record table is not representable");
+                const auto table = detail::FRAMED_HEADER_BYTES +
+                                   static_cast<std::size_t>(count) *
+                                       detail::FRAMED_RECORD_BYTES;
+                if (read_u16(stored_span, 8) != detail::FRAMED_VERSION ||
+                    read_u16(stored_span, 10) != 0 || count == 0 ||
+                    table > stored.size)
+                    return fail_header("invalid header");
+                if (row.uncompressed_bytes > materialize_max ||
+                    row.uncompressed_bytes >
+                        std::numeric_limits<std::size_t>::max()) {
+                    return detail::project_error(
+                        lfs::ErrorCode::ResourceExhausted,
+                        "The project payload is too large to decode.",
+                        std::format(
+                            "decoded size {} exceeds implementation maximum {}",
+                            row.uncompressed_bytes, materialize_max),
+                        path, row.payload_offset, "payload.framed");
+                }
+                if (count > row.uncompressed_bytes || stored.size - table < count)
+                    return fail_header("invalid record count");
+                while (loaded_blocks < block_count &&
+                       loaded_blocks * BLOCK_CRC_BYTES < table) {
+                    if (auto read = read_block(loaded_blocks); !read)
+                        return std::move(read).error();
+                }
+                std::vector<Record> records;
+                std::size_t stored_offset = table;
+                std::size_t decoded_offset = 0;
+                try {
+                    records.reserve(count);
+                    for (std::size_t index = 0; index < count; ++index) {
+                        const auto at = detail::FRAMED_HEADER_BYTES +
+                                        index * detail::FRAMED_RECORD_BYTES;
+                        const auto stored_bytes = read_u64(stored_span, at);
+                        const auto decoded_bytes = read_u64(stored_span, at + 8);
+                        if (stored_bytes == 0 || decoded_bytes == 0 ||
+                            stored_bytes > stored.size - stored_offset ||
+                            decoded_bytes >
+                                row.uncompressed_bytes - decoded_offset ||
+                            stored_bytes > std::numeric_limits<std::size_t>::max() ||
+                            decoded_bytes >
+                                std::numeric_limits<std::size_t>::max()) {
+                            return format_error(path, row.payload_offset + at,
+                                                "payload.framed.record",
+                                                "valid record range",
+                                                "invalid range");
+                        }
+                        records.push_back({stored_offset,
+                                           static_cast<std::size_t>(stored_bytes),
+                                           decoded_offset,
+                                           static_cast<std::size_t>(decoded_bytes)});
+                        stored_offset += static_cast<std::size_t>(stored_bytes);
+                        decoded_offset += static_cast<std::size_t>(decoded_bytes);
+                    }
+                } catch (const std::bad_alloc&) {
+                    return detail::project_error(
+                        lfs::ErrorCode::ResourceExhausted,
+                        "There is not enough memory to decode this project region.",
+                        std::format("allocation of {} record descriptors failed",
+                                    count),
+                        path, row.payload_offset, "payload.framed.records");
+                } catch (const std::length_error& error) {
+                    return detail::project_error(
+                        lfs::ErrorCode::ResourceExhausted,
+                        "The framed project region cannot be represented by this build.",
+                        std::format(
+                            "allocation of {} record descriptors failed: {}", count,
+                            error.what()),
+                        path, row.payload_offset, "payload.framed.records");
+                }
+                if (stored_offset != stored.size ||
+                    decoded_offset != row.uncompressed_bytes)
+                    return fail_header("record sizes do not cover payload");
+                MaterializedLogical logical;
+                UninitializedBuffer shuffled;
+                std::span<std::byte> decode_dest;
+                if (row.compression == Compression::ByteShuffleZstdFramed) {
+                    auto planes = allocate_uninitialized_buffer(
+                        static_cast<std::size_t>(row.uncompressed_bytes), path,
+                        row.payload_offset, "payload.framed");
+                    if (!planes) {
+                        return std::move(planes).error();
+                    }
+                    shuffled = std::move(*planes);
+                    decode_dest = shuffled.bytes();
+                } else {
+                    if (auto allocated = allocate_logical_bytes(
+                            logical, init,
+                            static_cast<std::size_t>(row.uncompressed_bytes), path,
+                            row.payload_offset, "payload.framed");
+                        !allocated) {
+                        return std::move(allocated).error();
+                    }
+                    decode_dest = logical.bytes();
+                }
+                std::mutex worker_mutex;
+                std::condition_variable worker_cv;
+                std::vector<bool> ready(records.size(), false);
+                std::vector<bool> claimed(records.size(), false);
+                std::optional<lfs::Error> worker_error;
+                bool read_failed = false;
+                bool read_done = false;
+                std::atomic<std::size_t> completed{0};
+                const auto publish_worker_error =
+                    [&](const lfs::ErrorCode code, const std::string_view message,
+                        const std::string_view detail) noexcept {
+                        try {
+                            std::scoped_lock lock(worker_mutex);
+                            if (!worker_error)
+                                worker_error = detail::project_error(
+                                    code, std::string(message), std::string(detail),
+                                    path, row.payload_offset,
+                                    "payload.framed.worker");
+                        } catch (...) {
+                            // LFS-CENSUS-OK(empty-catch): preserve the first worker error if formatting fails.
+                        }
+                        worker_cv.notify_all();
+                    };
+                std::vector<std::vector<std::size_t>> records_for_block(block_count);
+                const auto pending_blocks =
+                    std::make_unique<std::atomic<std::uint32_t>[]>(
+                        records.size());
+                for (std::size_t index = 0; index < records.size(); ++index) {
+                    const auto first =
+                        records[index].stored_offset / BLOCK_CRC_BYTES;
+                    const auto last = (records[index].stored_offset +
+                                       records[index].stored_bytes - 1) /
+                                      BLOCK_CRC_BYTES;
+                    pending_blocks[index].store(
+                        static_cast<std::uint32_t>(last - first + 1),
+                        std::memory_order_relaxed);
+                    for (auto block = first; block <= last; ++block) {
+                        records_for_block[block].push_back(index);
+                    }
+                }
+                const auto complete_block = [&](const std::size_t block) {
+                    if (block >= records_for_block.size()) {
+                        return;
+                    }
+                    for (const auto record_index : records_for_block[block]) {
+                        if (pending_blocks[record_index].fetch_sub(
+                                1, std::memory_order_acq_rel) != 1) {
+                            continue;
+                        }
+                        {
+                            std::scoped_lock lock(worker_mutex);
+                            ready[record_index] = true;
+                        }
+                        worker_cv.notify_one();
+                    }
+                };
+                for (std::size_t block = 0; block < loaded_blocks; ++block) {
+                    complete_block(block);
+                }
+                const auto worker_count = std::min<std::size_t>(
+                    records.size(),
+                    std::max(1u, std::thread::hardware_concurrency()));
+                std::vector<std::jthread> workers;
+                const auto workers_started = std::chrono::steady_clock::now();
+                try {
+                    workers.reserve(worker_count);
+                    for (std::size_t worker = 0; worker < worker_count; ++worker) {
+                        workers.emplace_back([&] {
+                            try {
+                                while (true) {
+                                    std::size_t index = records.size();
+                                    {
+                                        std::unique_lock lock(worker_mutex);
+                                        worker_cv.wait(lock, [&] {
+                                            bool has_ready = false;
+                                            for (std::size_t candidate = 0;
+                                                 candidate < ready.size();
+                                                 ++candidate) {
+                                                has_ready |= ready[candidate] &&
+                                                             !claimed[candidate];
+                                            }
+                                            return worker_error.has_value() ||
+                                                   read_failed || read_done ||
+                                                   has_ready;
+                                        });
+                                        if (worker_error || read_failed)
+                                            return;
+                                        for (std::size_t candidate = 0;
+                                             candidate < records.size();
+                                             ++candidate) {
+                                            if (ready[candidate] &&
+                                                !claimed[candidate]) {
+                                                claimed[candidate] = true;
+                                                index = candidate;
+                                                break;
+                                            }
+                                        }
+                                        if (index == records.size()) {
+                                            if (read_done)
+                                                return;
+                                            continue;
+                                        }
+                                    }
+                                    const auto& record = records[index];
+                                    const auto frame = std::span<const std::byte>(
+                                        stored_span.data() + record.stored_offset,
+                                        record.stored_bytes);
+                                    const auto frame_size = ZSTD_getFrameContentSize(
+                                        frame.data(), frame.size());
+                                    if (frame_size != record.decoded_bytes) {
+                                        publish_worker_error(
+                                            lfs::ErrorCode::DataLoss,
+                                            "The framed project payload could not be decoded.",
+                                            "record content size mismatch");
+                                        return;
+                                    }
+                                    const auto result = ZSTD_decompress(
+                                        decode_dest.data() + record.decoded_offset,
+                                        record.decoded_bytes, frame.data(),
+                                        record.stored_bytes);
+                                    if (ZSTD_isError(result) ||
+                                        result != record.decoded_bytes) {
+                                        publish_worker_error(
+                                            lfs::ErrorCode::DataLoss,
+                                            "The framed project payload could not be decoded.",
+                                            "record decompression failed");
+                                        return;
+                                    }
+                                    const auto done = completed.fetch_add(1) + 1;
+                                    if (progress)
+                                        progress(done, records.size());
+                                }
+                            } catch (const std::bad_alloc&) {
+                                publish_worker_error(
+                                    lfs::ErrorCode::ResourceExhausted,
+                                    "There is not enough memory to decode this project region.",
+                                    "framed decode worker allocation failed");
+                            } catch (const std::exception& exception) {
+                                publish_worker_error(
+                                    lfs::ErrorCode::Internal,
+                                    "The framed project payload could not be decoded.",
+                                    exception.what());
+                            } catch (...) {
+                                publish_worker_error(
+                                    lfs::ErrorCode::Internal,
+                                    "The framed project payload could not be decoded.",
+                                    "unknown worker exception");
+                            }
+                        });
+                    }
+                } catch (const std::bad_alloc&) {
+                    publish_worker_error(
+                        lfs::ErrorCode::ResourceExhausted,
+                        "There is not enough memory to start framed decode workers.",
+                        "worker allocation failed");
+                    {
+                        std::scoped_lock lock(worker_mutex);
+                        read_failed = true;
+                    }
+                    worker_cv.notify_all();
+                    workers.clear();
+                    return fail_header("could not start framed decode workers");
+                } catch (const std::exception& exception) {
+                    publish_worker_error(
+                        lfs::ErrorCode::Internal,
+                        "The framed project payload could not be decoded.",
+                        exception.what());
+                    {
+                        std::scoped_lock lock(worker_mutex);
+                        read_failed = true;
+                    }
+                    worker_cv.notify_all();
+                    workers.clear();
+                    return fail_header("could not start framed decode workers");
+                } catch (...) {
+                    publish_worker_error(
+                        lfs::ErrorCode::Internal,
+                        "The framed project payload could not be decoded.",
+                        "unknown worker construction exception");
+                    {
+                        std::scoped_lock lock(worker_mutex);
+                        read_failed = true;
+                    }
+                    worker_cv.notify_all();
+                    workers.clear();
+                    return fail_header("could not start framed decode workers");
+                }
+                worker_cv.notify_all();
+                const auto stored_io_started = std::chrono::steady_clock::now();
+                const auto pipelined_read_workers = std::min<std::size_t>(
+                    12, std::max<std::size_t>(
+                            4, std::thread::hardware_concurrency() / 2));
+                if (auto remaining = read_payload_blocks(
+                        *state.file, row, stored_span, loaded_blocks, block_count,
+                        block_crcs, std::span<std::uint8_t>(validated), bytes_read,
+                        path,
+                        [&](const std::size_t block) { complete_block(block); },
+                        pipelined_read_workers);
+                    !remaining) {
+                    {
+                        std::scoped_lock lock(worker_mutex);
+                        read_failed = true;
+                    }
+                    worker_cv.notify_all();
+                    workers.clear();
+                    return std::move(remaining).error();
+                }
+                loaded_blocks = block_count;
+                const auto stored_read_at = std::chrono::steady_clock::now();
+                {
+                    std::scoped_lock lock(worker_mutex);
+                    read_done = true;
+                }
+                worker_cv.notify_all();
+                workers.clear();
+                const auto decompressed_at = std::chrono::steady_clock::now();
+                if (row.block_crc_table.has_value() &&
+                    block_count != row.block_crc_table->entries.size()) {
+                    return format_error(
+                        path, row.block_crc_table->offset + 40,
+                        std::format("payload[{}].block_count", row.key_string()),
+                        std::to_string(row.block_crc_table->entries.size()),
+                        std::to_string(block_count));
+                }
+                const auto running_crc = combine_block_crcs(row, block_crcs);
+                if (running_crc != row.payload_crc32c) {
+                    return format_error(
+                        path, row.payload_offset,
+                        std::format("payload[{}].crc32c", row.key_string()),
+                        std::format("0x{:08x}", row.payload_crc32c),
+                        std::format("0x{:08x}", running_crc));
+                }
+                if (worker_error)
+                    return std::move(*worker_error);
+                if (completed != records.size())
+                    return fail_header("not all records were decoded");
+                logical.stored = std::move(stored);
+                const auto milliseconds = [](const auto begin, const auto end) {
+                    return std::chrono::duration<double, std::milli>(end - begin)
+                        .count();
+                };
+                if (row.compression == Compression::ZstdFramed) {
+                    LOG_DEBUG(
+                        "Project chunk read stages: chunk={} stored_bytes={} uncompressed_bytes={} compression={} resolve={:.3f} ms stored_read={:.3f} ms decompress={:.3f} ms unshuffle=0.000 ms total={:.3f} ms",
+                        row.key_string(), row.stored_bytes, row.uncompressed_bytes,
+                        static_cast<std::uint16_t>(row.compression),
+                        milliseconds(read_started, resolved_at),
+                        milliseconds(stored_io_started, stored_read_at),
+                        milliseconds(workers_started, decompressed_at),
+                        milliseconds(read_started, decompressed_at));
+                    return logical;
+                }
+                if (shuffled.size % 4 != 0)
+                    return format_error(path, row.payload_offset,
+                                        "payload.byteshuffle",
+                                        "decoded size multiple of 4",
+                                        std::to_string(shuffled.size));
+                if (auto allocated = allocate_logical_bytes(
+                        logical, init,
+                        static_cast<std::size_t>(row.uncompressed_bytes), path,
+                        row.payload_offset, "payload.framed");
+                    !allocated) {
+                    return std::move(allocated).error();
+                }
+                unbyte_plane_f32_words(shuffled.bytes(), logical.bytes());
+                logical.shuffle_planes = std::move(shuffled);
+                const auto unshuffled_at = std::chrono::steady_clock::now();
+                LOG_DEBUG(
+                    "Project chunk read stages: chunk={} stored_bytes={} uncompressed_bytes={} compression={} resolve={:.3f} ms stored_read={:.3f} ms decompress={:.3f} ms unshuffle={:.3f} ms total={:.3f} ms",
+                    row.key_string(), row.stored_bytes, row.uncompressed_bytes,
+                    static_cast<std::uint16_t>(row.compression),
+                    milliseconds(read_started, resolved_at),
+                    milliseconds(stored_io_started, stored_read_at),
+                    milliseconds(workers_started, decompressed_at),
+                    milliseconds(decompressed_at, unshuffled_at),
+                    milliseconds(read_started, unshuffled_at));
+                return logical;
+            }
+            MaterializedLogical logical;
+            if (auto allocated = allocate_logical_bytes(
+                    logical, init, static_cast<std::size_t>(row.stored_bytes), path,
+                    row.payload_offset, "payload.read");
+                !allocated) {
+                return std::move(allocated).error();
+            }
+            const auto block_count = static_cast<std::size_t>(
+                (row.stored_bytes + BLOCK_CRC_BYTES - 1) / BLOCK_CRC_BYTES);
+            std::vector<std::uint32_t> block_crcs(block_count, 0);
+            std::vector<std::uint8_t> validated(
+                row.block_crc_table.has_value() ? block_count : 0, 0);
+            if (auto read = read_payload_blocks(
+                    *state.file, row, logical.bytes(), 0, block_count, block_crcs,
+                    validated, state.options.payload_bytes_read.get(), path,
+                    [](const std::size_t) {});
+                !read) {
+                return std::move(read).error();
+            }
+            const auto running_crc = combine_block_crcs(row, block_crcs);
+            if (running_crc != row.payload_crc32c) {
+                return format_error(
+                    path, row.payload_offset,
+                    std::format("payload[{}].crc32c", row.key_string()),
+                    std::format("0x{:08x}", row.payload_crc32c),
+                    std::format("0x{:08x}", running_crc));
+            }
+            if (row.block_crc_table.has_value() &&
+                block_count != row.block_crc_table->entries.size()) {
+                return format_error(
+                    path, row.block_crc_table->offset + 40,
+                    std::format("payload[{}].block_count", row.key_string()),
+                    std::to_string(row.block_crc_table->entries.size()),
+                    std::to_string(block_count));
+            }
+            const auto stored_read_at = std::chrono::steady_clock::now();
+            const auto milliseconds = [](const auto begin, const auto end) {
+                return std::chrono::duration<double, std::milli>(end - begin)
                     .count();
             };
-        if (row.compression == Compression::Stored) {
-            LOG_DEBUG(
-                "Project chunk read stages: chunk={} stored_bytes={} uncompressed_bytes={} compression={} resolve={:.3f} ms read_crc={:.3f} ms stored_read={:.3f} ms decompress=0.000 ms unshuffle=0.000 ms total={:.3f} ms",
-                row.key_string(), row.stored_bytes,
-                row.uncompressed_bytes,
-                static_cast<std::uint16_t>(row.compression),
-                milliseconds(read_started, resolved_at),
-                milliseconds(resolved_at, stored_read_at),
-                milliseconds(resolved_at, stored_read_at),
-                milliseconds(read_started, stored_read_at));
-            return stored;
+            if (row.compression == Compression::Stored) {
+                LOG_DEBUG(
+                    "Project chunk read stages: chunk={} stored_bytes={} uncompressed_bytes={} compression={} resolve={:.3f} ms stored_read={:.3f} ms decompress=0.000 ms unshuffle=0.000 ms total={:.3f} ms",
+                    row.key_string(), row.stored_bytes, row.uncompressed_bytes,
+                    static_cast<std::uint16_t>(row.compression),
+                    milliseconds(read_started, resolved_at),
+                    milliseconds(resolved_at, stored_read_at),
+                    milliseconds(read_started, stored_read_at));
+                return logical;
+            }
+            return detail::project_error(
+                lfs::ErrorCode::InvalidArgument,
+                "This project chunk uses an unsupported compression encoding.",
+                std::format("compression {}",
+                            static_cast<std::uint16_t>(row.compression)),
+                path, row.payload_offset, "payload.compression");
         }
-        return detail::project_error(
-            lfs::ErrorCode::InvalidArgument,
-            "This project chunk uses an unsupported compression encoding.",
-            std::format("compression {}",
-                        static_cast<std::uint16_t>(row.compression)),
-            path(), row.payload_offset, "payload.compression");
+
+        void retire_materialized_buffers_async(MaterializedLogical buffers) {
+            try {
+                std::thread([retired = std::move(buffers)]() mutable {
+                    retired = {};
+                }).detach();
+            } catch (const std::exception& e) {
+                LOG_WARN(
+                    "Failed to start asynchronous materialize buffer retirement: {}",
+                    e.what());
+                buffers = {};
+            }
+        }
+
+        void adopt_materialized_buffers(MaterializeRetirementSink& retirement,
+                                        MaterializedLogical&& buffers) {
+            retirement.adopt(std::move(buffers.uninitialized.storage));
+            retirement.adopt(std::move(buffers.stored.storage));
+            retirement.adopt(std::move(buffers.shuffle_planes.storage));
+            retirement.adopt(std::move(buffers.zeroed));
+        }
+
+    } // namespace
+
+    void MaterializeRetirementSink::retire_async() {
+        if (buffers_.empty() && vectors_.empty()) {
+            return;
+        }
+        try {
+            std::thread([buffers = std::move(buffers_),
+                         vectors = std::move(vectors_)]() mutable {
+                buffers.clear();
+                vectors.clear();
+            }).detach();
+        } catch (const std::exception& e) {
+            LOG_WARN(
+                "Failed to start asynchronous materialize buffer retirement: {}",
+                e.what());
+            buffers_.clear();
+            vectors_.clear();
+        }
+    }
+
+    lfs::Result<std::vector<std::byte>>
+    ProjectReader::read_chunk(
+        const ChunkInfo& chunk,
+        std::function<void(std::size_t, std::size_t)> progress) const {
+        auto materialized = materialize_chunk_payload(
+            *this, *impl_->state, chunk, std::move(progress), LogicalInit::Zeroed);
+        if (!materialized) {
+            return std::move(materialized).error();
+        }
+        return std::move(materialized->zeroed);
+    }
+
+    lfs::Result<void> ProjectReader::visit_materialized_chunk(
+        const ChunkInfo& chunk,
+        const std::function<lfs::Result<void>(std::span<const std::byte>)>& visitor,
+        MaterializeRetirementSink* retirement) const {
+        auto materialized = materialize_chunk_payload(
+            *this, *impl_->state, chunk, {}, LogicalInit::Uninitialized);
+        if (!materialized) {
+            return lfs::Result<void>::failure(std::move(materialized).error());
+        }
+        auto result = visitor(materialized->bytes());
+        // Deserialize synchronizes its upload stream before returning, so handing
+        // the decoded buffer off after the visitor is safe for cudaMemcpyAsync.
+        if (retirement) {
+            adopt_materialized_buffers(*retirement, std::move(*materialized));
+        } else {
+            retire_materialized_buffers_async(std::move(*materialized));
+        }
+        return result;
     }
 
     lfs::Result<std::vector<std::byte>> ProjectReader::read_preview() const {
@@ -4042,6 +4903,8 @@ namespace lfs::io::project {
                 ++plane;
             }
         }
+
+        std::atomic<std::uint64_t> g_framed_record_decode_calls{0};
 
         // Logical (decoded / unshuffled) view of a framed payload. Resident
         // decoded records are capped: ZstdFramed keeps current + one
@@ -4404,6 +5267,32 @@ namespace lfs::io::project {
                 return nullptr;
             }
 
+            [[nodiscard]] CachedRecord* find_ready_cached(const std::size_t index) {
+                if (index >= records_.size()) {
+                    return nullptr;
+                }
+                CachedRecord* cached = find_cached(index);
+                if (cached == nullptr || cached->bytes.size() != records_[index].ub) {
+                    return nullptr;
+                }
+                return cached;
+            }
+
+            void copy_cached_zstd_range(char* dest, const std::uint64_t start,
+                                        const std::uint64_t end,
+                                        const FramedRecord& record,
+                                        const CachedRecord& cached) const {
+                const std::uint64_t lo = std::max(record.uo, start);
+                const std::uint64_t hi = std::min(record.uo + record.ub, end);
+                if (lo >= hi) {
+                    return;
+                }
+                std::memcpy(dest + static_cast<std::size_t>(lo - start),
+                            cached.bytes.data() +
+                                static_cast<std::size_t>(lo - record.uo),
+                            static_cast<std::size_t>(hi - lo));
+            }
+
             bool prefetch_stored_records(const std::vector<std::size_t>& indices) {
                 if (indices.empty()) {
                     return true;
@@ -4469,6 +5358,7 @@ namespace lfs::io::project {
                 if (frame_size != record.ub) {
                     return false;
                 }
+                g_framed_record_decode_calls.fetch_add(1, std::memory_order_relaxed);
                 const auto result = ZSTD_decompress(dest, dest_bytes, stored.data(),
                                                     stored.size());
                 return !ZSTD_isError(result) && result == record.ub;
@@ -4651,6 +5541,27 @@ namespace lfs::io::project {
                              cache_.end());
             }
 
+            void append_shuffle_boundary_records(const std::uint64_t pos,
+                                                 std::vector<std::size_t>& keep) const {
+                if (pos >= size_ || size_ % 4 != 0) {
+                    return;
+                }
+                const std::uint64_t n_words = size_ / 4;
+                for (std::uint64_t plane = 0; plane < 4; ++plane) {
+                    const std::uint64_t word =
+                        first_plane_word(plane, pos, size_, n_words);
+                    if (word == kNpos) {
+                        continue;
+                    }
+                    const auto index =
+                        record_index_containing(plane * n_words + word);
+                    if (index != kNpos &&
+                        std::find(keep.begin(), keep.end(), index) == keep.end()) {
+                        keep.push_back(index);
+                    }
+                }
+            }
+
             void prune_cache_after_bulk() {
                 if (position_ >= size_ || !table_ready_) {
                     cache_.clear();
@@ -4662,21 +5573,7 @@ namespace lfs::io::project {
                         cache_.clear();
                         return;
                     }
-                    const std::uint64_t n_words = size_ / 4;
-                    for (std::uint64_t plane = 0; plane < 4; ++plane) {
-                        const std::uint64_t word =
-                            first_plane_word(plane, position_, size_, n_words);
-                        if (word == kNpos) {
-                            continue;
-                        }
-                        const auto index =
-                            record_index_containing(plane * n_words + word);
-                        if (index != kNpos &&
-                            std::find(keep.begin(), keep.end(), index) ==
-                                keep.end()) {
-                            keep.push_back(index);
-                        }
-                    }
+                    append_shuffle_boundary_records(position_, keep);
                 } else {
                     const auto index = record_index_containing(position_);
                     if (index != kNpos) {
@@ -4717,6 +5614,13 @@ namespace lfs::io::project {
                     for (std::size_t index = batch_begin; index < batch_end;
                          ++index) {
                         const FramedRecord& record = records_[index];
+                        // Cache hits must bypass decode.
+                        const CachedRecord* cached = find_ready_cached(index);
+                        if (cached != nullptr) {
+                            copy_cached_zstd_range(dest, start, end, record,
+                                                   *cached);
+                            continue;
+                        }
                         const bool full = record.uo >= start &&
                                           record.uo + record.ub <= end;
                         DecodeItem item;
@@ -4744,16 +5648,7 @@ namespace lfs::io::project {
                             position_ = std::max(start, record.uo);
                             return false;
                         }
-                        const std::uint64_t lo = std::max(record.uo, start);
-                        const std::uint64_t hi =
-                            std::min(record.uo + record.ub, end);
-                        if (lo < hi) {
-                            std::memcpy(
-                                dest + static_cast<std::size_t>(lo - start),
-                                cached->bytes.data() +
-                                    static_cast<std::size_t>(lo - record.uo),
-                                static_cast<std::size_t>(hi - lo));
-                        }
+                        copy_cached_zstd_range(dest, start, end, record, *cached);
                     }
                 }
                 position_ = end;
@@ -4835,11 +5730,12 @@ namespace lfs::io::project {
                         if (index >= status.size()) {
                             continue;
                         }
-                        if (status[index] == 1 || find_cached(index) != nullptr) {
-                            status[index] = 1;
+                        if (status[index] == 2) {
                             continue;
                         }
-                        if (status[index] == 2) {
+                        // Cache hits must bypass decode.
+                        if (find_ready_cached(index) != nullptr) {
+                            status[index] = 1;
                             continue;
                         }
                         items.push_back(DecodeItem{index, nullptr});
@@ -4923,13 +5819,22 @@ namespace lfs::io::project {
                         static_cast<std::size_t>(stripe_end - logical), cursors);
                     logical = stripe_end;
 
-                    cache_.erase(
-                        std::remove_if(cache_.begin(), cache_.end(),
-                                       [&](const CachedRecord& cached) {
-                                           return !shuffle_record_covers(
-                                               cached.index, logical, end);
-                                       }),
-                        cache_.end());
+                    if (logical < end) {
+                        std::vector<std::size_t> keep;
+                        append_shuffle_boundary_records(end, keep);
+                        cache_.erase(
+                            std::remove_if(
+                                cache_.begin(), cache_.end(),
+                                [&](const CachedRecord& cached) {
+                                    if (shuffle_record_covers(cached.index,
+                                                              logical, end)) {
+                                        return false;
+                                    }
+                                    return std::find(keep.begin(), keep.end(),
+                                                     cached.index) == keep.end();
+                                }),
+                            cache_.end());
+                    }
                 }
                 position_ = end;
                 return true;
@@ -5161,6 +6066,16 @@ namespace lfs::io::project {
         };
 
     } // namespace
+
+    namespace detail {
+        void reset_framed_record_decode_calls_for_testing() {
+            g_framed_record_decode_calls.store(0, std::memory_order_relaxed);
+        }
+
+        std::uint64_t framed_record_decode_calls_for_testing() {
+            return g_framed_record_decode_calls.load(std::memory_order_relaxed);
+        }
+    } // namespace detail
 
     struct BoundedInputStream::Impl {
         Impl(std::unique_ptr<std::streambuf> owned_buffer,

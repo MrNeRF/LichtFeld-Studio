@@ -640,6 +640,105 @@ namespace {
         shN = std::move(resized);
     }
 
+    // Host deswizzle of a 1D float4-packed buffer into canonical [N, K, 3].
+    // Shared by the fp32 shN_canonical_cpu path and IEEE-f16 host decode.
+    [[nodiscard]] lfs::core::Tensor unpack_swizzled_floats_to_canonical_cpu(
+        const float* src,
+        const size_t src_floats,
+        const size_t n,
+        const size_t k) {
+        using namespace lfs::core;
+        Tensor out = Tensor::empty({n, k, SH_CHANNELS}, Device::CPU, DataType::Float32);
+        auto* const dst = out.ptr<float>();
+        const size_t active_floats = k * SH_CHANNELS;
+        tbb::parallel_for(
+            tbb::blocked_range<size_t>(0, n),
+            [&](const tbb::blocked_range<size_t>& range) {
+                for (size_t p = range.begin(); p != range.end(); ++p) {
+                    float* const dst_row = dst + p * active_floats;
+                    for (size_t offset = 0; offset < active_floats; ++offset) {
+                        const auto slot = static_cast<std::uint32_t>(offset / 4u);
+                        const auto component = static_cast<std::uint32_t>(offset % 4u);
+                        const size_t src_offset =
+                            static_cast<size_t>(sh_swizzled_index(
+                                static_cast<std::uint32_t>(p), slot, static_cast<uint32_t>(k))) *
+                                4u +
+                            component;
+                        dst_row[offset] = src_offset < src_floats ? src[src_offset] : 0.0f;
+                    }
+                }
+            });
+        return out;
+    }
+
+    // Host q16 dequant into canonical [N, K, 3]. Math matches the previous
+    // single-threaded loop in shN_canonical() (lo/hi/kInvQ + cell-linear index).
+    [[nodiscard]] lfs::core::Tensor dequant_q16_to_canonical_cpu(
+        const std::uint16_t* codes,
+        const float* bounds,
+        const size_t n,
+        const size_t k) {
+        using namespace lfs::core;
+        Tensor out = Tensor::zeros({n, k, SH_CHANNELS}, Device::CPU, DataType::Float32);
+        auto* const dst = out.ptr<float>();
+        const std::uint32_t n_cells =
+            sh_value_quant::n_value_cells_per_prim(static_cast<std::uint32_t>(k));
+        constexpr float kInvQ = 1.0f / 65535.0f;
+        tbb::parallel_for(
+            tbb::blocked_range<size_t>(0, n),
+            [&](const tbb::blocked_range<size_t>& range) {
+                for (size_t p = range.begin(); p != range.end(); ++p) {
+                    const size_t bidx = p / 256u;
+                    const float lo = bounds[bidx * 2 + 0];
+                    const float hi = bounds[bidx * 2 + 1];
+                    float* row = dst + p * k * SH_CHANNELS;
+                    for (std::uint32_t c = 0; c < n_cells && c < k * SH_CHANNELS; ++c) {
+                        // cell-linear swizzle: block * (n_cells * R) + c * R + lane
+                        const std::uint32_t block = static_cast<std::uint32_t>(p) / kShReorderSize;
+                        const std::uint32_t lane = static_cast<std::uint32_t>(p) % kShReorderSize;
+                        const size_t idx = static_cast<size_t>(block) * n_cells * kShReorderSize +
+                                           static_cast<size_t>(c) * kShReorderSize + lane;
+                        const auto q = codes[idx];
+                        row[c] = lo + (hi - lo) * (static_cast<float>(q) * kInvQ);
+                    }
+                }
+            });
+        return out;
+    }
+
+    // Host-only Float16 → canonical [N, K, 3]. D2H of the compact codes is the
+    // only device traffic; no CUDA destination is allocated here.
+    [[nodiscard]] lfs::core::Tensor canonical_shN_from_f16_cpu(
+        const lfs::core::Tensor& shN,
+        const lfs::core::Tensor& bounds,
+        const size_t n,
+        const size_t k) {
+        using namespace lfs::core;
+        if (n == 0 || k == 0) {
+            return Tensor::zeros({n, k, SH_CHANNELS}, Device::CPU);
+        }
+        const Tensor codes_cpu = shN.cpu().contiguous();
+        if (bounds.is_valid() && bounds.numel() > 0) {
+            const Tensor bounds_cpu = bounds.cpu().contiguous();
+            return dequant_q16_to_canonical_cpu(
+                reinterpret_cast<const std::uint16_t*>(codes_cpu.data_ptr()),
+                bounds_cpu.ptr<float>(),
+                n,
+                k);
+        }
+        const Tensor fp32_swizzled = codes_cpu.to(DataType::Float32);
+        if (!fp32_swizzled.is_valid() || fp32_swizzled.numel() == 0) {
+            Tensor out = Tensor::empty({n, k, SH_CHANNELS}, Device::CPU, DataType::Float32);
+            out.zero_();
+            return out;
+        }
+        return unpack_swizzled_floats_to_canonical_cpu(
+            fp32_swizzled.ptr<float>(),
+            static_cast<size_t>(fp32_swizzled.numel()),
+            n,
+            k);
+    }
+
 } // anonymous namespace
 
 namespace lfs::core {
@@ -935,51 +1034,16 @@ namespace lfs::core {
         if (n == 0 || k == 0) {
             return Tensor::zeros({n, k, SH_CHANNELS}, dst_device);
         }
-        // Quantized path: materialise float4-swizzled temp via host/device dequant helper.
-        // Full GPU dequant is in training::sh_value::decode_shN_u16_to_float4; for core we
-        // fall back to a float temporary when the resident tensor is Float16 — callers that
-        // zero float swizzled buffer then leave dequant to higher layers when quant is on
-        // without bounds (bounds required for correct decode).
+        // Float16 resident SH (q16 codes + bounds, or IEEE-f16 swizzle) decodes on the
+        // host. Device cost is only the returned canonical tensor when dst is CUDA.
         if (_shN.dtype() == DataType::Float16) {
-            // IEEE f16 float4-swizzle (exportable): cast half→float then deswizzle.
-            if (!_shN_value_bounds.is_valid() || _shN_value_bounds.numel() == 0) {
-                Tensor fp32 = _shN.to(DataType::Float32);
-                if (fp32.device() != Device::CUDA)
-                    fp32 = fp32.cuda();
-                Tensor out = Tensor::empty({n, k, SH_CHANNELS}, Device::CUDA);
-                undo_reorder_sh_from_swizzled(fp32.ptr<float>(),
-                                              out.ptr<float>(),
-                                              n,
-                                              static_cast<uint32_t>(k),
-                                              static_cast<uint32_t>(k));
-                return dst_device == Device::CUDA ? out : out.cpu();
+            // q16 and IEEE-f16 decode on the host (parallel), then upload the
+            // canonical tensor once when the resident buffer lives on CUDA.
+            Tensor out = canonical_shN_from_f16_cpu(_shN, _shN_value_bounds, n, k);
+            if (dst_device == Device::CUDA) {
+                return out.to(Device::CUDA);
             }
-            // Host-side q16 dequant (avoids core→training link). Fine for export/I/O paths.
-            Tensor out = Tensor::zeros({n, k, SH_CHANNELS}, Device::CPU, DataType::Float32);
-            const Tensor codes_cpu = _shN.cpu().contiguous();
-            const Tensor bounds_cpu = _shN_value_bounds.cpu().contiguous();
-            const auto* codes = reinterpret_cast<const std::uint16_t*>(codes_cpu.data_ptr());
-            const auto* bounds = bounds_cpu.ptr<float>();
-            auto* dst = out.ptr<float>();
-            const std::uint32_t n_cells =
-                sh_value_quant::n_value_cells_per_prim(static_cast<std::uint32_t>(k));
-            constexpr float kInvQ = 1.0f / 65535.0f;
-            for (size_t p = 0; p < n; ++p) {
-                const size_t bidx = p / 256u;
-                const float lo = bounds[bidx * 2 + 0];
-                const float hi = bounds[bidx * 2 + 1];
-                float* row = dst + p * k * SH_CHANNELS;
-                for (std::uint32_t c = 0; c < n_cells && c < k * SH_CHANNELS; ++c) {
-                    // cell-linear swizzle: block * (n_cells * R) + c * R + lane
-                    const std::uint32_t block = static_cast<std::uint32_t>(p) / kShReorderSize;
-                    const std::uint32_t lane = static_cast<std::uint32_t>(p) % kShReorderSize;
-                    const size_t idx = static_cast<size_t>(block) * n_cells * kShReorderSize +
-                                       static_cast<size_t>(c) * kShReorderSize + lane;
-                    const auto q = codes[idx];
-                    row[c] = lo + (hi - lo) * (static_cast<float>(q) * kInvQ);
-                }
-            }
-            return out.to(dst_device);
+            return out;
         }
         Tensor out = Tensor::empty({n, k, SH_CHANNELS}, dst_device);
         undo_reorder_sh_from_swizzled(_shN.ptr<float>(),
@@ -1008,41 +1072,24 @@ namespace lfs::core {
             return Tensor::zeros({n, k, SH_CHANNELS}, Device::CPU);
         }
 
-        // Quantized path: host dequant to [N,K,3] on CPU (export/checkpoint bit-compat).
+        // Quantized / IEEE-f16 path: host dequant to [N,K,3] on CPU (export/checkpoint
+        // bit-compat). Must not allocate a CUDA destination.
         if (_shN.is_valid() && _shN.dtype() == DataType::Float16) {
-            Tensor t = shN_canonical();
-            return t.device() == Device::CPU ? t : t.cpu();
+            return canonical_shN_from_f16_cpu(_shN, _shN_value_bounds, n, k);
         }
 
-        Tensor out = Tensor::empty({n, k, SH_CHANNELS}, Device::CPU, DataType::Float32);
         if (!_shN.is_valid() || _shN.numel() == 0) {
+            Tensor out = Tensor::empty({n, k, SH_CHANNELS}, Device::CPU, DataType::Float32);
             out.zero_();
             return out;
         }
 
         const Tensor shN_cpu = _shN.cpu().contiguous();
-        const auto* const src = shN_cpu.ptr<float>();
-        auto* const dst = out.ptr<float>();
-        const size_t src_floats = shN_cpu.numel();
-        const size_t active_floats = k * SH_CHANNELS;
-
-        tbb::parallel_for(
-            tbb::blocked_range<size_t>(0, n),
-            [&](const tbb::blocked_range<size_t>& range) {
-                for (size_t p = range.begin(); p != range.end(); ++p) {
-                    float* const dst_row = dst + p * active_floats;
-                    for (size_t offset = 0; offset < active_floats; ++offset) {
-                        const auto slot = static_cast<std::uint32_t>(offset / 4u);
-                        const auto component = static_cast<std::uint32_t>(offset % 4u);
-                        const size_t src_offset =
-                            static_cast<size_t>(sh_swizzled_index(static_cast<std::uint32_t>(p), slot, static_cast<uint32_t>(k))) * 4u +
-                            component;
-                        dst_row[offset] = src_offset < src_floats ? src[src_offset] : 0.0f;
-                    }
-                }
-            });
-
-        return out;
+        return unpack_swizzled_floats_to_canonical_cpu(
+            shN_cpu.ptr<float>(),
+            static_cast<size_t>(shN_cpu.numel()),
+            n,
+            k);
     }
 
     void SplatData::shN_set_from_canonical(const Tensor& canonical, size_t capacity) {
@@ -1764,13 +1811,30 @@ namespace lfs::core {
             throw std::runtime_error("Invalid SplatData: scene scale must be finite and positive");
         }
 
+        const auto header_finished = std::chrono::steady_clock::now();
+        const cudaStream_t upload_stream = getCurrentCUDAStream();
+
         Tensor means, sh0, scaling, rotation, opacity;
-        is >> means >> sh0 >> scaling >> rotation >> opacity;
-
         Tensor shN_canon;
-        if (max_sh > 0)
-            is >> shN_canon;
+        serialization_detail::TensorLoadTiming tensor_load_timing;
+        {
+            serialization_detail::TensorLoadTimingScope tensor_load_scope(
+                tensor_load_timing);
+            const auto load_device = [&](Tensor& tensor) {
+                serialization_detail::read_serialized_tensor_device_from_span_or_host(
+                    is, tensor, upload_stream);
+            };
+            load_device(means);
+            load_device(sh0);
+            load_device(scaling);
+            load_device(rotation);
+            load_device(opacity);
+            if (max_sh > 0) {
+                load_device(shN_canon);
+            }
+        }
 
+        const auto flags_started = std::chrono::steady_clock::now();
         uint8_t has_deleted = 0;
         serialization_detail::read_exact(is, &has_deleted, sizeof(has_deleted), "SplatData deleted flag");
         if (has_deleted > 1)
@@ -1864,20 +1928,63 @@ namespace lfs::core {
         const auto gpu_upload_started =
             std::chrono::steady_clock::now();
 
+        std::vector<Tensor> upload_keep_alive;
+        upload_keep_alive.reserve(8);
+
         const auto copy_param = [&](Tensor source, std::string_view name) {
-            Tensor source_cuda = std::move(source).cuda();
-            if (!source_cuda.is_contiguous()) {
-                source_cuda = source_cuda.contiguous();
+            if (source.device() == Device::CUDA) {
+                Tensor source_cuda = std::move(source);
+                if (!source_cuda.is_contiguous()) {
+                    source_cuda = source_cuda.contiguous();
+                }
+                if (!tensor_allocator) {
+                    source_cuda.set_name(std::string{name});
+                    return source_cuda;
+                }
+                Tensor dst = allocate_param_tensor(source_cuda.shape(),
+                                                   source_cuda.capacity(),
+                                                   tensor_allocator,
+                                                   name);
+                source_cuda.sync_to_stream(dst.stream());
+                dst.copy_from(source_cuda);
+                return dst;
+            }
+            upload_keep_alive.push_back(std::move(source));
+            Tensor& host = upload_keep_alive.back();
+            if (!host.is_contiguous()) {
+                host = host.contiguous();
             }
             if (!tensor_allocator) {
+                Tensor source_cuda = host.to(Device::CUDA, upload_stream);
+                if (!source_cuda.is_contiguous()) {
+                    source_cuda = source_cuda.contiguous();
+                }
                 source_cuda.set_name(std::string{name});
                 return source_cuda;
             }
-            Tensor dst = allocate_param_tensor(source_cuda.shape(),
-                                               source_cuda.capacity(),
+            Tensor dst = allocate_param_tensor(host.shape(),
+                                               host.capacity(),
                                                tensor_allocator,
                                                name);
-            dst.copy_from(source_cuda);
+            if (host.numel() > 0) {
+                if (dst.device() == Device::CUDA && dst.dtype() == host.dtype() &&
+                    dst.is_contiguous()) {
+                    LFS_CUDA_CHECK_MSG_STREAM_ARGS(
+                        cudaMemcpyAsync(dst.data_ptr(), host.data_ptr(), host.bytes(),
+                                        cudaMemcpyHostToDevice, upload_stream),
+                        upload_stream,
+                        reinterpret_cast<uintptr_t>(dst.data_ptr()),
+                        reinterpret_cast<uintptr_t>(host.data_ptr()),
+                        host.bytes(),
+                        "while uploading tensor '{}' shape={} dtype={} to CUDA",
+                        name,
+                        host.shape().str(),
+                        dtype_name(host.dtype()));
+                    dst.record_stream(upload_stream);
+                } else {
+                    dst.copy_from(host);
+                }
+            }
             return dst;
         };
 
@@ -1888,22 +1995,29 @@ namespace lfs::core {
         Tensor loaded_opacity = copy_param(std::move(opacity), "SplatData.opacity");
 
         Tensor loaded_shN;
+        Tensor uploaded_shN_canon;
+        uint32_t shN_src_rest = 0;
+        uint32_t shN_layout_rest = 0;
         if (max_sh > 0) {
             // shN_canon is canonical [N, K, 3]; reorder into swizzled storage.
             const size_t cap = std::max<size_t>(loaded_means.capacity(), n);
-            const auto layout_rest = sh_rest_coefficients_for_degree(max_sh);
+            shN_layout_rest = sh_rest_coefficients_for_degree(max_sh);
             loaded_shN = allocate_swizzled_shN(n,
                                                cap,
-                                               layout_rest,
+                                               shN_layout_rest,
                                                tensor_allocator,
                                                "SplatData.shN");
-            const auto src_rest = std::min(canonical_rest_coefficients(shN_canon), layout_rest);
-            if (shN_canon.is_valid() && shN_canon.numel() > 0 && n > 0 && src_rest > 0 && layout_rest > 0) {
-                reorder_canonical_into_swizzled(shN_canon.cuda(),
-                                                loaded_shN,
-                                                n,
-                                                src_rest,
-                                                layout_rest);
+            shN_src_rest = std::min(canonical_rest_coefficients(shN_canon), shN_layout_rest);
+            if (shN_canon.is_valid() && shN_canon.numel() > 0 && n > 0 && shN_src_rest > 0 &&
+                shN_layout_rest > 0) {
+                if (shN_canon.device() == Device::CUDA) {
+                    uploaded_shN_canon = std::move(shN_canon);
+                } else {
+                    uploaded_shN_canon = shN_canon.to(Device::CUDA, upload_stream);
+                }
+                if (!uploaded_shN_canon.is_contiguous()) {
+                    uploaded_shN_canon = uploaded_shN_canon.contiguous();
+                }
             }
         } else {
             // Allocate an empty swizzled tensor so _shN is valid even at SH degree 0.
@@ -1913,15 +2027,47 @@ namespace lfs::core {
 
         Tensor loaded_deleted;
         if (has_deleted) {
-            Tensor deleted_cuda =
-                std::move(deleted).to(DataType::Bool).cuda();
-            if (deleted_cuda.sum_scalar() != 0.0f)
-                loaded_deleted = std::move(deleted_cuda);
+            Tensor deleted_host = deleted.device() == Device::CPU ? deleted : deleted.cpu();
+            if (!deleted_host.is_contiguous()) {
+                deleted_host = deleted_host.contiguous();
+            }
+            bool any_deleted = false;
+            if (deleted_host.numel() > 0) {
+                const auto* const bytes =
+                    static_cast<const unsigned char*>(deleted_host.data_ptr());
+                for (size_t i = 0, count = deleted_host.numel(); i < count; ++i) {
+                    if (bytes[i] != 0) {
+                        any_deleted = true;
+                        break;
+                    }
+                }
+            }
+            if (any_deleted) {
+                upload_keep_alive.push_back(deleted_host.to(DataType::Bool));
+                loaded_deleted = upload_keep_alive.back().to(Device::CUDA, upload_stream);
+                if (!loaded_deleted.is_contiguous()) {
+                    loaded_deleted = loaded_deleted.contiguous();
+                }
+            }
         }
 
-        Tensor loaded_densification = has_densification && densification.numel() > 0
-                                          ? std::move(densification).cuda()
-                                          : Tensor{};
+        Tensor loaded_densification;
+        if (has_densification && densification.numel() > 0) {
+            loaded_densification = densification.to(Device::CUDA, upload_stream);
+        }
+
+        LFS_CUDA_CHECK_MSG_STREAM(
+            cudaStreamSynchronize(upload_stream),
+            upload_stream,
+            "while completing SplatData GPU upload");
+
+        if (uploaded_shN_canon.is_valid()) {
+            reorder_canonical_into_swizzled(uploaded_shN_canon,
+                                            loaded_shN,
+                                            n,
+                                            shN_src_rest,
+                                            shN_layout_rest);
+        }
         const auto gpu_upload_finished =
             std::chrono::steady_clock::now();
 
@@ -1948,17 +2094,14 @@ namespace lfs::core {
                     .count();
             };
         LOG_DEBUG(
-            "Splat deserialize stages: gaussians={} cpu_decode={:.3f} ms gpu_upload={:.3f} ms total={:.3f} ms",
+            "Splat deserialize stages: gaussians={} header={:.3f} ms tensor_alloc={:.3f} ms tensor_read={:.3f} ms flags={:.3f} ms gpu_upload={:.3f} ms total={:.3f} ms",
             n,
-            milliseconds(
-                deserialize_started,
-                gpu_upload_started),
-            milliseconds(
-                gpu_upload_started,
-                gpu_upload_finished),
-            milliseconds(
-                deserialize_started,
-                gpu_upload_finished));
+            milliseconds(deserialize_started, header_finished),
+            tensor_load_timing.alloc_ms,
+            tensor_load_timing.read_ms,
+            milliseconds(flags_started, gpu_upload_started),
+            milliseconds(gpu_upload_started, gpu_upload_finished),
+            milliseconds(deserialize_started, gpu_upload_finished));
 
         LOG_DEBUG("Deserialized SplatData: {} Gaussians, SH {}/{}", size(), active_sh, max_sh);
     }

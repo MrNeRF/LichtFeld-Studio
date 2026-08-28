@@ -53,6 +53,7 @@ do
         --images images_${DATA_FACTOR} \
         --iter 30000 \
         --headless \
+        --export ply \
 		--config eval/mcmc_optimization_params.json || exit $?
 
     # End timer for this scene

@@ -947,6 +947,10 @@ namespace lfs::core {
         PinnedMemoryAllocator::instance().empty_cache();
     }
 
+    void Tensor::trim_device_memory_pool() {
+        CudaMemoryPool::instance().trim_cached_memory();
+    }
+
     void Tensor::shutdown_memory_pool() {
         // CPU-only commands must not initialize CUDA merely to tear it down.
         // A non-null pointer proves that an earlier CUDA allocation path

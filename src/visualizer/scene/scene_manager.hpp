@@ -289,6 +289,12 @@ namespace lfs::vis {
         [[nodiscard]] bool hasAppearanceController() const { return appearance_controller_pool_ != nullptr; }
         [[nodiscard]] bool hasAppearanceModel() const { return appearance_ppisp_ != nullptr; }
 
+        // Drop the GUI's borrowed scene-image tensor and drain the GPU so no
+        // in-flight Vulkan work references model tensors that are about to be
+        // freed. Must run before releasing splat models, especially when their
+        // tensors are backed by Vulkan-external storage.
+        void drainGpuForTensorRelease();
+
     private:
         enum class HistoryMode : uint8_t {
             Record,
@@ -326,12 +332,6 @@ namespace lfs::vis {
                                                                       bool keep_children,
                                                                       HistoryMode history_mode,
                                                                       TrainingRemovalImpact impact);
-        // Drop the GUI's borrowed scene-image tensor and drain the GPU so no in-flight
-        // Vulkan work references model tensors that are about to be freed. Must run
-        // before releasing splat models, especially when their tensors are backed by
-        // Vulkan-external storage (freeing imported memory under the GPU faults the
-        // device with VK_ERROR_DEVICE_LOST).
-        void drainGpuForTensorRelease();
         void setupEventHandlers();
         void finalizeDatasetSceneLoad(const std::filesystem::path& dataset_path,
                                       const std::filesystem::path& scene_path,

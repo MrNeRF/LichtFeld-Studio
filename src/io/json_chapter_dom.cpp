@@ -441,15 +441,25 @@ namespace lfs::io {
         });
     }
 
+    const JsonChapterDom::Json* JsonChapterDom::get_json_ref(
+        const std::string_view path) const {
+        return find_node_from(root_, path);
+    }
+
     std::optional<JsonChapterDom::Json> JsonChapterDom::get_json(
         const std::string_view path) const {
-        const Json* value = find_node_from(root_, path);
+        const Json* value = get_json_ref(path);
         return value == nullptr ? std::nullopt : std::optional<Json>(*value);
+    }
+
+    const JsonChapterDom::Json* JsonChapterDom::read_json_ref(
+        const Json& node, const std::string_view path) {
+        return find_node_from(node, path);
     }
 
     std::optional<JsonChapterDom::Json> JsonChapterDom::read_json(
         const Json& node, const std::string_view path) {
-        const Json* value = find_node_from(node, path);
+        const Json* value = read_json_ref(node, path);
         return value == nullptr ? std::nullopt : std::optional<Json>(*value);
     }
 
@@ -614,16 +624,16 @@ namespace lfs::io {
             });
     }
 
-    lfs::Result<std::vector<std::pair<std::string, JsonChapterDom::Json>>>
-    JsonChapterDom::array_items(const std::string_view path) const {
-        return guarded_dom_operation<std::vector<std::pair<std::string, Json>>>(
-            path, [&]() -> lfs::Result<std::vector<std::pair<std::string, Json>>> {
+    lfs::Result<std::vector<std::pair<std::string, const JsonChapterDom::Json*>>>
+    JsonChapterDom::array_item_refs(const std::string_view path) const {
+        return guarded_dom_operation<std::vector<std::pair<std::string, const Json*>>>(
+            path, [&]() -> lfs::Result<std::vector<std::pair<std::string, const Json*>>> {
                 auto resolved = resolve_node(root_, path, "enumerate");
                 if (!resolved) {
                     return std::move(resolved).error();
                 }
                 if (*resolved == nullptr) {
-                    return std::vector<std::pair<std::string, Json>>{};
+                    return std::vector<std::pair<std::string, const Json*>>{};
                 }
                 if (!(*resolved)->is_array()) {
                     return make_dom_error(
@@ -634,7 +644,7 @@ namespace lfs::io {
                         path);
                 }
 
-                std::vector<std::pair<std::string, Json>> items;
+                std::vector<std::pair<std::string, const Json*>> items;
                 items.reserve((*resolved)->size());
                 std::unordered_set<std::string_view> seen;
                 seen.reserve((*resolved)->size());
@@ -665,10 +675,24 @@ namespace lfs::io {
                             std::format("UUID '{}' occurs more than once in '{}'", uuid, path),
                             path, uuid);
                     }
-                    items.emplace_back(uuid, element);
+                    items.emplace_back(uuid, &element);
                 }
                 return items;
             });
+    }
+
+    lfs::Result<std::vector<std::pair<std::string, JsonChapterDom::Json>>>
+    JsonChapterDom::array_items(const std::string_view path) const {
+        auto refs = array_item_refs(path);
+        if (!refs) {
+            return std::move(refs).error();
+        }
+        std::vector<std::pair<std::string, Json>> items;
+        items.reserve(refs->size());
+        for (auto& [id, element] : *refs) {
+            items.emplace_back(std::move(id), *element);
+        }
+        return items;
     }
 
     std::optional<JsonChapterDom::Json> JsonChapterDom::array_get(
