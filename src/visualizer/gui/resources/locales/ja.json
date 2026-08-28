@@ -273,6 +273,7 @@
     "advanced.densify_error_map": "Densify Error Map:",
     "advanced.max_screen_share": "Max Screen Share:",
     "advanced.screen_share_penalty": "Screen Share Penalty:",
+    "advanced.oversize_split_fraction": "Oversize Split Fraction:",
     "advanced.use_edge_map": "Use Edge Map:",
     "advanced.far_scene_min_fraction": "Far Scene Min Fraction:",
     "advanced.growth_ratio_rank": "Growth Ratio Rank:",
@@ -294,6 +295,7 @@
     "tooltip.densify_error_map": "Densify from full SSIM or from contrast-structure only (ignores brightness-only mismatches such as empty sky)",
     "tooltip.max_screen_share": "Shrink Gaussians that cover more than this share of the view; 0 or 1 disables the cap",
     "tooltip.screen_share_penalty": "Soft log-scale hinge weight for Gaussians over the screen-share cap; balanced against photometric error so a needed large splat can stay large",
+    "tooltip.oversize_split_fraction": "Fraction of MRNF growth budget used to split Gaussians over the screen-share cap; 0 disables",
     "tooltip.use_edge_map": "Weight MRNF refinement by Canny edges in ground-truth images",
     "tooltip.background_improvements": "遠景の再構成を改善します (MRNF): 遠方シードとスプリット、減衰緩和、成長上限、スプラットごとの位置ステップ、可視性で正規化した成長ランキング、段階的な容量充填。オフで通常の MRNF。",
     "tooltip.far_scene_min_fraction": "遠方機能を有効にする deep-far スプラットの最小割合（0 = 常時有効）",
@@ -536,7 +538,8 @@
       "ppisp_reg": "単独 PPISP の正則化の重み。平均露出と平均色を中立へ引き寄せます。Exposure Correction 有効時は中立性が厳密に強制されるため無効です。",
       "densify_error_map": "高密度化を導く誤差信号。コントラスト構造は明るさだけの不一致(明るい空と空の領域など)を無視し、そこへガウシアンを浪費しません。SSIM は従来の挙動です。",
       "max_screen_share": "画面のこの割合を超えて覆うガウシアンを縮小します。偽の空の幕のようなカメラ近くの大きな塊を防ぎます。0 または 1 で無効。",
-      "screen_share_penalty": "画面占有率の上限を超えたガウシアンへの段階的縮小の強さ。画像誤差と釣り合うため、本当に必要な大きなガウシアンは大きいままでいられます。"
+      "screen_share_penalty": "画面占有率の上限を超えたガウシアンへの段階的縮小の強さ。画像誤差と釣り合うため、本当に必要な大きなガウシアンは大きいままでいられます。",
+      "oversize_split_fraction": "画面占有上限を超えたガウシアンの分割に使う成長予算の割合。誤差もあるものを優先します。0 で無効。最長軸で分割し、薄いシートを穴なくほどきます。"
     },
     "section.masking": "マスク設定",
     "section.thresholds": "しきい値",

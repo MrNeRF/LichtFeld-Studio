@@ -558,6 +558,17 @@ namespace lfs::core::param {
             .ui_step(0.1)
             .flags(PROP_ADVANCED)
             .all_strategies()
+            .float_prop(&OptimizationParameters::oversize_split_fraction,
+                        "oversize_split_fraction", "Oversize Split Fraction",
+                        d.oversize_split_fraction, 0.0f, 1.0f,
+                        "Fraction of MRNF growth budget used to split splats over the screen-share cap; 0 disables")
+            .locale("training.advanced.oversize_split_fraction")
+            .tooltip("training.tooltip.oversize_split_fraction")
+            .precision(3)
+            .ui_step(0.05)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
             .bool_prop(&OptimizationParameters::use_edge_map,
                        "use_edge_map", "Edge Map", d.use_edge_map,
                        "Weight MRNF refine signal by Canny edge map on GT images")

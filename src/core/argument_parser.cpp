@@ -54,6 +54,7 @@ namespace lfs::core::args {
                                    "; values: ssim, ssim_cs"},
             OptimizationCliBinding{"--max-screen-share", "max_screen_share", Float},
             OptimizationCliBinding{"--screen-share-penalty", "screen_share_penalty", Float},
+            OptimizationCliBinding{"--oversize-split-fraction", "oversize_split_fraction", Float},
             OptimizationCliBinding{"--no-edge-map", "use_edge_map", Bool, true},
             OptimizationCliBinding{"--no-background-improvements", "background_improvements", Bool, true},
             OptimizationCliBinding{"--no-growth-ratio-rank", "growth_ratio_rank", Bool, true},
@@ -465,6 +466,7 @@ namespace {
                     {"ssim_cs", lfs::core::param::DensifyErrorMap::SsimCs}});
             ::args::ValueFlag<float> max_screen_share(training_group, "max_screen_share", lfs::core::args::optimization_cli_help("--max-screen-share"), {"max-screen-share"});
             ::args::ValueFlag<float> screen_share_penalty(training_group, "screen_share_penalty", lfs::core::args::optimization_cli_help("--screen-share-penalty"), {"screen-share-penalty"});
+            ::args::ValueFlag<float> oversize_split_fraction(training_group, "oversize_split_fraction", lfs::core::args::optimization_cli_help("--oversize-split-fraction"), {"oversize-split-fraction"});
             ::args::Flag no_edge_map(training_group, "no_edge_map", lfs::core::args::optimization_cli_help("--no-edge-map"), {"no-edge-map"});
             ::args::Flag no_background_improvements(training_group, "no_background_improvements", lfs::core::args::optimization_cli_help("--no-background-improvements"), {"no-background-improvements"});
             ::args::Flag no_growth_ratio_rank(training_group, "no_growth_ratio_rank", lfs::core::args::optimization_cli_help("--no-growth-ratio-rank"), {"no-growth-ratio-rank"});
@@ -1150,6 +1152,9 @@ namespace {
                                         screen_share_penalty_val = cli_option_present({"--screen-share-penalty"})
                                                                        ? std::optional<float>(::args::get(screen_share_penalty))
                                                                        : std::optional<float>(),
+                                        oversize_split_fraction_val = cli_option_present({"--oversize-split-fraction"})
+                                                                          ? std::optional<float>(::args::get(oversize_split_fraction))
+                                                                          : std::optional<float>(),
                                         no_edge_map_flag = bool(no_edge_map),
                                         no_background_improvements_flag = bool(no_background_improvements),
                                         no_growth_ratio_rank_flag = bool(no_growth_ratio_rank),
@@ -1298,6 +1303,7 @@ namespace {
                 setVal(densify_error_map_val, opt.densify_error_map);
                 setVal(max_screen_share_val, opt.max_screen_share);
                 setVal(screen_share_penalty_val, opt.screen_share_penalty);
+                setVal(oversize_split_fraction_val, opt.oversize_split_fraction);
                 if (no_edge_map_flag)
                     opt.use_edge_map = false;
                 if (no_background_improvements_flag)
@@ -1410,6 +1416,7 @@ namespace {
                 note_opt("densify_error_map", densify_error_map_val.has_value());
                 note_opt("max_screen_share", max_screen_share_val.has_value());
                 note_opt("screen_share_penalty", screen_share_penalty_val.has_value());
+                note_opt("oversize_split_fraction", oversize_split_fraction_val.has_value());
                 note_opt("use_edge_map", no_edge_map_flag);
                 note_opt("background_improvements", no_background_improvements_flag);
                 note_opt("growth_ratio_rank", no_growth_ratio_rank_flag);

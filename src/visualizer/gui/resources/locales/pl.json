@@ -273,6 +273,7 @@
     "advanced.densify_error_map": "Densify Error Map:",
     "advanced.max_screen_share": "Max Screen Share:",
     "advanced.screen_share_penalty": "Screen Share Penalty:",
+    "advanced.oversize_split_fraction": "Oversize Split Fraction:",
     "advanced.use_edge_map": "Use Edge Map:",
     "advanced.far_scene_min_fraction": "Far Scene Min Fraction:",
     "advanced.growth_ratio_rank": "Growth Ratio Rank:",
@@ -294,6 +295,7 @@
     "tooltip.densify_error_map": "Densify from full SSIM or from contrast-structure only (ignores brightness-only mismatches such as empty sky)",
     "tooltip.max_screen_share": "Shrink Gaussians that cover more than this share of the view; 0 or 1 disables the cap",
     "tooltip.screen_share_penalty": "Soft log-scale hinge weight for Gaussians over the screen-share cap; balanced against photometric error so a needed large splat can stay large",
+    "tooltip.oversize_split_fraction": "Fraction of MRNF growth budget used to split Gaussians over the screen-share cap; 0 disables",
     "tooltip.use_edge_map": "Weight MRNF refinement by Canny edges in ground-truth images",
     "tooltip.background_improvements": "Poprawia rekonstrukcję odległego tła (MRNF): dalekie seedy i podziały, złagodzenie zaniku, limit wzrostu, kroki pozycji per splat, ranking wzrostu znormalizowany widocznością, stopniowe wypełnianie pojemności. Wyłączone = zwykłe MRNF.",
     "tooltip.far_scene_min_fraction": "Minimalna część splatów deep-far włączająca funkcje dalekiego pola (0 = zawsze włączone)",
@@ -536,7 +538,8 @@
       "ppisp_reg": "Waga regularyzacji samodzielnego PPISP: przyciaga srednia ekspozycje i kolor do neutralnych. Bez efektu przy wlaczonej Exposure Correction, ktora wymusza neutralnosc dokladnie.",
       "densify_error_map": "Sygnal bledu sterujacy zageszczaniem. Kontrast-struktura ignoruje roznice samej jasnosci, jak puste niebo na tle jasnego zdjecia, i nie marnuje tam gaussianow. SSIM przywraca poprzednie zachowanie.",
       "max_screen_share": "Zmniejsza kazdy gaussian pokrywajacy wiecej niz ten udzial ekranu. Zapobiega duzym plamom blisko kamery, jak falszywa zaslona nieba. 0 lub 1 wylacza limit.",
-      "screen_share_penalty": "Sila stopniowego zmniejszania gaussianow ponad limitem udzialu ekranu. Rownowazona z bledem obrazu, wiec naprawde potrzebny duzy gaussian moze pozostac duzy."
+      "screen_share_penalty": "Sila stopniowego zmniejszania gaussianow ponad limitem udzialu ekranu. Rownowazona z bledem obrazu, wiec naprawde potrzebny duzy gaussian moze pozostac duzy.",
+      "oversize_split_fraction": "Udzial budzetu wzrostu na kazde refine przeznaczony na podzial gaussianow ponad limitem ekranu, z preferencja dla tych z bledem. 0 wylacza. Dzieli wzdluz najdluzszej osi, zeby cienkie plachty sie rozpadaly zamiast zostawiac dziury."
     },
     "section.masking": "Ustawienia Maski",
     "section.thresholds": "Progi",

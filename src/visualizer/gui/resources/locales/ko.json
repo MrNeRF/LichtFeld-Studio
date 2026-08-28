@@ -273,6 +273,7 @@
     "advanced.densify_error_map": "Densify Error Map:",
     "advanced.max_screen_share": "Max Screen Share:",
     "advanced.screen_share_penalty": "Screen Share Penalty:",
+    "advanced.oversize_split_fraction": "Oversize Split Fraction:",
     "advanced.use_edge_map": "Use Edge Map:",
     "advanced.far_scene_min_fraction": "Far Scene Min Fraction:",
     "advanced.growth_ratio_rank": "Growth Ratio Rank:",
@@ -294,6 +295,7 @@
     "tooltip.densify_error_map": "Densify from full SSIM or from contrast-structure only (ignores brightness-only mismatches such as empty sky)",
     "tooltip.max_screen_share": "Shrink Gaussians that cover more than this share of the view; 0 or 1 disables the cap",
     "tooltip.screen_share_penalty": "Soft log-scale hinge weight for Gaussians over the screen-share cap; balanced against photometric error so a needed large splat can stay large",
+    "tooltip.oversize_split_fraction": "Fraction of MRNF growth budget used to split Gaussians over the screen-share cap; 0 disables",
     "tooltip.use_edge_map": "Weight MRNF refinement by Canny edges in ground-truth images",
     "tooltip.background_improvements": "원거리 배경 재구성을 개선합니다 (MRNF): 원거리 시드와 분할, 감쇠 완화, 성장 상한, 스플랫별 위치 스텝, 가시성 정규화 성장 순위, 단계적 용량 채우기. 끄면 기본 MRNF.",
     "tooltip.far_scene_min_fraction": "원거리 기능을 켜는 deep-far 스플랫 최소 비율(0 = 항상 활성)",
@@ -536,7 +538,8 @@
       "ppisp_reg": "단독 PPISP의 정규화 가중치로, 평균 노출과 색을 중립으로 당깁니다. Exposure Correction이 켜져 있으면 중립이 정확히 강제되므로 사용되지 않습니다.",
       "densify_error_map": "밀집화를 이끄는 오차 신호. 대비-구조는 밝기만 다른 불일치(밝은 하늘과 빈 영역 등)를 무시해 가우시안을 낭비하지 않습니다. SSIM은 이전 동작입니다.",
       "max_screen_share": "화면에서 이 비율 이상을 덮는 가우시안을 축소합니다. 가짜 하늘 장막 같은 카메라 근처의 큰 덩어리를 방지합니다. 0 또는 1이면 비활성화됩니다.",
-      "screen_share_penalty": "화면 점유 상한을 넘은 가우시안에 적용되는 점진적 축소의 강도. 이미지 오차와 균형을 이루므로 정말 필요한 큰 가우시안은 크게 유지될 수 있습니다."
+      "screen_share_penalty": "화면 점유 상한을 넘은 가우시안에 적용되는 점진적 축소의 강도. 이미지 오차와 균형을 이루므로 정말 필요한 큰 가우시안은 크게 유지될 수 있습니다.",
+      "oversize_split_fraction": "화면 점유 상한을 넘는 가우시안을 분할하는 데 쓰는 성장 예산 비율입니다. 오차가 있는 것을 우선합니다. 0이면 비활성화. 가장 긴 축으로 나눠 얇은 막이 구멍 없이 해체되게 합니다."
     },
     "section.masking": "마스크 설정",
     "section.thresholds": "임계값",

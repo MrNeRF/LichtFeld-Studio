@@ -127,6 +127,7 @@ namespace {
             {"scaling_lr_end", {"mrnf"}},
             {"growth_grad_threshold", {"mrnf"}},
             {"grow_fraction", {"mrnf"}},
+            {"oversize_split_fraction", {"mrnf"}},
             {"grow_until_iter", {"mrnf"}},
             {"opacity_decay", {"mrnf"}},
             {"scale_decay", {"mrnf"}},

@@ -273,6 +273,7 @@
     "advanced.densify_error_map": "Densify Error Map:",
     "advanced.max_screen_share": "Max Screen Share:",
     "advanced.screen_share_penalty": "Screen Share Penalty:",
+    "advanced.oversize_split_fraction": "Oversize Split Fraction:",
     "advanced.use_edge_map": "Use Edge Map:",
     "advanced.far_scene_min_fraction": "Far Scene Min Fraction:",
     "advanced.growth_ratio_rank": "Growth Ratio Rank:",
@@ -294,6 +295,7 @@
     "tooltip.densify_error_map": "Densify from full SSIM or from contrast-structure only (ignores brightness-only mismatches such as empty sky)",
     "tooltip.max_screen_share": "Shrink Gaussians that cover more than this share of the view; 0 or 1 disables the cap",
     "tooltip.screen_share_penalty": "Soft log-scale hinge weight for Gaussians over the screen-share cap; balanced against photometric error so a needed large splat can stay large",
+    "tooltip.oversize_split_fraction": "Fraction of MRNF growth budget used to split Gaussians over the screen-share cap; 0 disables",
     "tooltip.use_edge_map": "Weight MRNF refinement by Canny edges in ground-truth images",
     "tooltip.background_improvements": "Migliora la ricostruzione dello sfondo lontano (MRNF): semi e split di campo lontano, attenuazione del decadimento, limite di crescita, passi di posizione per splat, ranking di crescita normalizzato per visibilità, riempimento graduale della capacità. Disattivato = MRNF semplice.",
     "tooltip.far_scene_min_fraction": "Frazione minima di splat deep-far che attiva le funzioni di campo lontano (0 = sempre attive)",
@@ -536,7 +538,8 @@
       "ppisp_reg": "Peso di regolarizzazione del PPISP autonomo: ancora esposizione e colore medi verso il neutro. Senza effetto con Exposure Correction attiva, che impone la neutralita esattamente.",
       "densify_error_map": "Segnale d'errore che guida la densificazione. Contrasto-struttura ignora scarti di sola luminosita, come cielo vuoto contro foto chiara, senza sprecare gaussiane. SSIM ripristina il comportamento precedente.",
       "max_screen_share": "Riduce ogni gaussiana che copre piu di questa quota dello schermo. Evita grossi blob vicini alla camera, come una falsa volta di cielo. 0 o 1 disattiva il limite.",
-      "screen_share_penalty": "Intensita della riduzione graduale oltre la quota di schermo. Bilanciata con l'errore d'immagine: una gaussiana grande davvero necessaria puo restare grande."
+      "screen_share_penalty": "Intensita della riduzione graduale oltre la quota di schermo. Bilanciata con l'errore d'immagine: una gaussiana grande davvero necessaria puo restare grande.",
+      "oversize_split_fraction": "Frazione del budget di crescita a ogni refine usata per dividere le gaussiane oltre il limite di schermo, preferendo quelle con errore. 0 disattiva. Divide lungo l'asse piu lungo per sciogliere i fogli invece di lasciare buchi."
     },
     "section.masking": "Impostazioni Maschera",
     "section.thresholds": "Soglie",

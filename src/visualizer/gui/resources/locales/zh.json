@@ -273,6 +273,7 @@
     "advanced.densify_error_map": "Densify Error Map:",
     "advanced.max_screen_share": "Max Screen Share:",
     "advanced.screen_share_penalty": "Screen Share Penalty:",
+    "advanced.oversize_split_fraction": "Oversize Split Fraction:",
     "advanced.use_edge_map": "Use Edge Map:",
     "advanced.far_scene_min_fraction": "Far Scene Min Fraction:",
     "advanced.growth_ratio_rank": "Growth Ratio Rank:",
@@ -294,6 +295,7 @@
     "tooltip.densify_error_map": "Densify from full SSIM or from contrast-structure only (ignores brightness-only mismatches such as empty sky)",
     "tooltip.max_screen_share": "Shrink Gaussians that cover more than this share of the view; 0 or 1 disables the cap",
     "tooltip.screen_share_penalty": "Soft log-scale hinge weight for Gaussians over the screen-share cap; balanced against photometric error so a needed large splat can stay large",
+    "tooltip.oversize_split_fraction": "Fraction of MRNF growth budget used to split Gaussians over the screen-share cap; 0 disables",
     "tooltip.use_edge_map": "Weight MRNF refinement by Canny edges in ground-truth images",
     "tooltip.background_improvements": "改善远景背景重建 (MRNF)：远场种子与分裂、衰减缓和、增长上限、逐 splat 位置步长、按可见性归一化的增长排序、分阶段填满容量。关闭即为普通 MRNF。",
     "tooltip.far_scene_min_fraction": "激活远场功能所需的最小 deep-far splat 比例（0 = 始终启用）",
@@ -536,7 +538,8 @@
       "ppisp_reg": "独立 PPISP 的正则化权重:将平均曝光与颜色拉向中性。开启 Exposure Correction 时无效,因为其投影会精确强制中性。",
       "densify_error_map": "引导致密化的误差信号。对比-结构会忽略仅亮度的差异(如明亮天空对应的空白区域),不在那里浪费高斯。SSIM 恢复旧行为。",
       "max_screen_share": "收缩覆盖屏幕超过该比例的高斯。防止靠近相机的大团块,例如假的天空幕布。0 或 1 表示禁用。",
-      "screen_share_penalty": "对超过屏幕占比上限的高斯施加的渐进收缩强度。与图像误差相平衡,真正需要的大高斯仍可保持大。"
+      "screen_share_penalty": "对超过屏幕占比上限的高斯施加的渐进收缩强度。与图像误差相平衡,真正需要的大高斯仍可保持大。",
+      "oversize_split_fraction": "每次细化将此比例的增长预算用于分割超过屏幕占比上限的高斯,优先选择同时带有误差的。0 表示禁用。沿最长轴分割,使薄片解体而不是收缩出空洞。"
     },
     "section.masking": "掩码设置",
     "section.thresholds": "阈值",

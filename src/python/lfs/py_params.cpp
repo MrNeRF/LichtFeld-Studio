@@ -956,6 +956,13 @@ namespace lfs::python {
                 },
                 "Soft hinge weight on log-scale for Gaussians over the screen-share cap")
             .def_prop_rw(
+                "oversize_split_fraction",
+                [](PyOptimizationParams& self) { return self.params().oversize_split_fraction; },
+                [](PyOptimizationParams&, float v) {
+                    modify_params([v](auto& p) { p.oversize_split_fraction = v; });
+                },
+                "Fraction of MRNF growth budget used to split Gaussians over the screen-share cap; 0 disables")
+            .def_prop_rw(
                 "steps_scaler",
                 [](PyOptimizationParams& self) { return self.params().steps_scaler; },
                 [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.steps_scaler = v; }); },

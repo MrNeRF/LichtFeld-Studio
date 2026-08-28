@@ -273,6 +273,7 @@
     "advanced.densify_error_map": "Densify Error Map:",
     "advanced.max_screen_share": "Max Screen Share:",
     "advanced.screen_share_penalty": "Screen Share Penalty:",
+    "advanced.oversize_split_fraction": "Oversize Split Fraction:",
     "advanced.use_edge_map": "Use Edge Map:",
     "advanced.far_scene_min_fraction": "Far Scene Min Fraction:",
     "advanced.growth_ratio_rank": "Growth Ratio Rank:",
@@ -294,6 +295,7 @@
     "tooltip.densify_error_map": "Densify from full SSIM or from contrast-structure only (ignores brightness-only mismatches such as empty sky)",
     "tooltip.max_screen_share": "Shrink Gaussians that cover more than this share of the view; 0 or 1 disables the cap",
     "tooltip.screen_share_penalty": "Soft log-scale hinge weight for Gaussians over the screen-share cap; balanced against photometric error so a needed large splat can stay large",
+    "tooltip.oversize_split_fraction": "Fraction of MRNF growth budget used to split Gaussians over the screen-share cap; 0 disables",
     "tooltip.use_edge_map": "Weight MRNF refinement by Canny edges in ground-truth images",
     "tooltip.background_improvements": "Verbetert de reconstructie van de verre achtergrond (MRNF): verre-veld-seeds en -splits, vervalverlichting, groeiplafond, positiestappen per splat, zichtbaarheidsgenormaliseerde groeirangschikking, gelijkmatige capaciteitsvulling. Uit = gewoon MRNF.",
     "tooltip.far_scene_min_fraction": "Minimale deep-far-splatfractie die ver-veldfeatures activeert (0 = altijd aan)",
@@ -536,7 +538,8 @@
       "ppisp_reg": "Regularisatiegewicht voor los PPISP: trekt gemiddelde belichting en kleur richting neutraal. Zonder effect als Exposure Correction aanstaat, die neutraliteit exact afdwingt.",
       "densify_error_map": "Foutsignaal dat de verdichting stuurt. Contrast-structuur negeert verschillen in alleen helderheid, zoals lege lucht tegen een lichte foto, en verspilt daar geen Gaussians. SSIM herstelt het oude gedrag.",
       "max_screen_share": "Verkleint elke Gaussian die meer dan dit deel van het scherm bedekt. Voorkomt grote vlekken dicht bij de camera, zoals een vals hemelgordijn. 0 of 1 schakelt de limiet uit.",
-      "screen_share_penalty": "Sterkte van de geleidelijke verkleining boven de schermaandeel-limiet. In balans met de beeldfout, zodat een echt nodige grote Gaussian groot kan blijven."
+      "screen_share_penalty": "Sterkte van de geleidelijke verkleining boven de schermaandeel-limiet. In balans met de beeldfout, zodat een echt nodige grote Gaussian groot kan blijven.",
+      "oversize_split_fraction": "Deel van het groeibudget per refine dat splats boven de schermlimiet splitst, met voorkeur voor die met fout. 0 schakelt uit. Splitst langs de langste as zodat vellen oplossen in plaats van gaten achter te laten."
     },
     "section.masking": "Maskerinstellingen",
     "section.thresholds": "Drempelwaarden",

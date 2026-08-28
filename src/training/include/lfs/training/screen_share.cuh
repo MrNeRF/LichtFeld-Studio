@@ -67,6 +67,27 @@ namespace lfs::training {
         return max_screen_share > 0.0f && max_screen_share < 1.0f;
     }
 
+    // Oversize-split draw score: only share > limit is eligible, blended with
+    // error so the budget prefers oversized splats that also reconstruct poorly.
+    [[nodiscard]]
+#ifdef __CUDACC__
+    __host__ __device__
+#endif
+        inline float oversize_split_score(
+            const float error_score,
+            const float max_share,
+            const float limit) {
+#ifdef __CUDA_ARCH__
+        if (!(limit > 0.0f) || !(limit < 1.0f) || !(max_share > limit) || !(error_score > 0.0f))
+            return 0.0f;
+        return sqrtf(error_score) * (max_share / limit);
+#else
+        if (!(limit > 0.0f) || !(limit < 1.0f) || !(max_share > limit) || !(error_score > 0.0f))
+            return 0.0f;
+        return std::sqrt(error_score) * (max_share / limit);
+#endif
+    }
+
 #ifdef __CUDACC__
     __device__ __forceinline__ void atomic_max_float(float* addr, const float val) {
         int* const addr_i = reinterpret_cast<int*>(addr);

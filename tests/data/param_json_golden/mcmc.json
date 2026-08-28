@@ -65,6 +65,7 @@
   "opacity_decay": 0.004000000189989805,
   "opacity_lr": 0.02500000037252903,
   "opacity_reg": 0.009999999776482582,
+  "oversize_split_fraction": 0.15000000596046448,
   "ppisp_controller_activation_step": -1,
   "ppisp_controller_lr": 0.0020000000949949026,
   "ppisp_exposure_from_exif": true,

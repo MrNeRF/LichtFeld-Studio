@@ -2147,6 +2147,15 @@ class OptimizationParams:
     def screen_share_penalty(self, arg: float, /) -> None: ...
 
     @property
+    def oversize_split_fraction(self) -> float:
+        """
+        Fraction of MRNF growth budget used to split Gaussians over the screen-share cap; 0 disables
+        """
+
+    @oversize_split_fraction.setter
+    def oversize_split_fraction(self, arg: float, /) -> None: ...
+
+    @property
     def steps_scaler(self) -> float:
         """Scale factor for training step counts"""
 

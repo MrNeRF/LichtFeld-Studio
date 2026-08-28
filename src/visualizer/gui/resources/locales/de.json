@@ -273,6 +273,7 @@
     "advanced.densify_error_map": "Densify Error Map:",
     "advanced.max_screen_share": "Max Screen Share:",
     "advanced.screen_share_penalty": "Screen Share Penalty:",
+    "advanced.oversize_split_fraction": "Oversize Split Fraction:",
     "advanced.use_edge_map": "Use Edge Map:",
     "advanced.far_scene_min_fraction": "Far Scene Min Fraction:",
     "advanced.growth_ratio_rank": "Growth Ratio Rank:",
@@ -294,6 +295,7 @@
     "tooltip.densify_error_map": "Densify from full SSIM or from contrast-structure only (ignores brightness-only mismatches such as empty sky)",
     "tooltip.max_screen_share": "Shrink Gaussians that cover more than this share of the view; 0 or 1 disables the cap",
     "tooltip.screen_share_penalty": "Soft log-scale hinge weight for Gaussians over the screen-share cap; balanced against photometric error so a needed large splat can stay large",
+    "tooltip.oversize_split_fraction": "Fraction of MRNF growth budget used to split Gaussians over the screen-share cap; 0 disables",
     "tooltip.use_edge_map": "Weight MRNF refinement by Canny edges in ground-truth images",
     "tooltip.background_improvements": "Verbessert die Rekonstruktion des fernen Hintergrunds (MRNF): Fernfeld-Seeds und -Splits, Zerfallsentlastung, Wachstumskappe, Positionsschritte pro Splat, sichtbarkeitsnormierte Wachstumsrangfolge, gleichmäßige Kapazitätsfüllung. Aus = reines MRNF.",
     "tooltip.far_scene_min_fraction": "Minimaler Deep-Far-Splat-Anteil, der Fernfeld-Features aktiviert (0 = immer an)",
@@ -536,7 +538,8 @@
       "ppisp_reg": "Regularisierungsgewicht fuer eigenstaendiges PPISP: zieht mittlere Belichtung und Farbe Richtung neutral. Ohne Wirkung bei aktiver Exposure Correction, die Neutralitaet exakt erzwingt.",
       "densify_error_map": "Fehlersignal fuer die Verdichtung. Kontrast-Struktur ignoriert reine Helligkeitsabweichungen, etwa leeren Himmel vor hellem Foto, und verschwendet dort keine Gaussians. SSIM stellt das alte Verhalten wieder her.",
       "max_screen_share": "Verkleinert jede Gaussian, die mehr als diesen Anteil des Bildschirms bedeckt. Verhindert grosse kameranahe Kleckse wie einen falschen Himmelsvorhang. 0 oder 1 deaktiviert die Grenze.",
-      "screen_share_penalty": "Staerke der allmaehlichen Verkleinerung oberhalb der Bildschirmanteil-Grenze. Gegen den Bildfehler abgewogen, sodass wirklich noetige grosse Gaussians gross bleiben koennen."
+      "screen_share_penalty": "Staerke der allmaehlichen Verkleinerung oberhalb der Bildschirmanteil-Grenze. Gegen den Bildfehler abgewogen, sodass wirklich noetige grosse Gaussians gross bleiben koennen.",
+      "oversize_split_fraction": "Anteil des Wachstumsbudgets pro Refine, der zum Teilen von Gaussians ueber dem Bildschirmanteil-Limit verwendet wird; bevorzugt solche mit Rekonstruktionsfehler. 0 deaktiviert. Teilt entlang der laengsten Achse, damit duenne Flaechen sich aufloesen statt Loecher zu hinterlassen."
     },
     "section.masking": "Masken Einstellungen",
     "section.thresholds": "Schwellenwerte",

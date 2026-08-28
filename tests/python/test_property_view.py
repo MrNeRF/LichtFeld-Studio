@@ -497,6 +497,7 @@ EXPECTED_ADVANCED_IDS = (
     "densify_error_map",
     "max_screen_share",
     "screen_share_penalty",
+    "oversize_split_fraction",
     "use_edge_map",
     "far_scene_min_fraction",
     "growth_ratio_rank",

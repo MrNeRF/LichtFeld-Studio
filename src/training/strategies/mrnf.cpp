@@ -2015,6 +2015,88 @@ namespace lfs::training {
             n_grow = std::min(n_grow, budget - actual_replace);
         }
 
+        Tensor oversize_inds;
+        Tensor oversize_mask;
+        int actual_oversize = 0;
+        if (n_grow > 0 &&
+            _params->oversize_split_fraction > 0.0f &&
+            screen_share_cap_active(_params->max_screen_share) &&
+            _splat_data->_max_screen_share.is_valid() &&
+            _splat_data->_max_screen_share.numel() == n) {
+            int n_oversize = static_cast<int>(std::round(
+                static_cast<float>(n_grow) * _params->oversize_split_fraction));
+            n_oversize = std::max(0, std::min(n_oversize, n_grow));
+            if (n_oversize > 0) {
+                const bool use_ratio_rank = cfg_ratio_rank_on() &&
+                                            _refine_ratio_max.is_valid() &&
+                                            _refine_ratio_max.numel() == n;
+                Tensor error_score = use_ratio_rank ? _refine_ratio_max : _refine_weight_max;
+                if (edge_guidance.is_valid()) {
+                    error_score = error_score * edge_guidance;
+                }
+                if (_optimizer) {
+                    error_score = apply_crop_damping_to_scores(*_optimizer, error_score);
+                }
+                error_score = error_score.contiguous();
+                Tensor oversize_weights = Tensor::zeros({n}, Device::CUDA);
+                const bool* frozen = nullptr;
+                size_t frozen_n = 0;
+                if (_optimizer) {
+                    const auto& mask = _optimizer->frozen_mask();
+                    if (mask.is_valid()) {
+                        frozen = mask.ptr<bool>();
+                        frozen_n = mask.numel();
+                    }
+                }
+                kernels::launch_oversize_split_scores(
+                    error_score.ptr<float>(),
+                    _splat_data->_max_screen_share.ptr<float>(),
+                    frozen,
+                    frozen_n,
+                    oversize_weights.ptr<float>(),
+                    _params->max_screen_share,
+                    n);
+                if (active_mask.is_valid()) {
+                    oversize_weights = oversize_weights * active_mask;
+                }
+                if (trainable_mask.is_valid()) {
+                    oversize_weights = oversize_weights * trainable_mask;
+                }
+                if (replace_mask.is_valid()) {
+                    oversize_weights = oversize_weights.masked_fill(replace_mask, 0.0f);
+                }
+                kernels::launch_packed_refine_counts(
+                    nullptr, 0, nullptr, 0,
+                    oversize_weights.ptr<float>(), n,
+                    nullptr, 0,
+                    _refine_counts_dev.ptr<int64_t>());
+                LFS_CUDA_CHECK_MSG(
+                    cudaMemcpy(host_counts, _refine_counts_dev.ptr<int64_t>(),
+                               4 * sizeof(int64_t), cudaMemcpyDeviceToHost),
+                    "MRNF oversize nnz D2H");
+                const int selectable_oversize = static_cast<int>(host_counts[2]);
+                if (selectable_oversize > 0) {
+                    const int oversize_budget = std::min(n_oversize, selectable_oversize);
+                    oversize_inds = sample_gumbel_with_far_guard(
+                        oversize_weights, oversize_budget, seed + 3,
+                        static_cast<size_t>(selectable_oversize));
+                    actual_oversize =
+                        oversize_inds.is_valid() ? static_cast<int>(oversize_inds.numel()) : 0;
+                    if (actual_oversize > 0) {
+                        oversize_mask = Tensor::zeros_bool({n}, Device::CUDA);
+                        auto true_vals = Tensor::ones_bool(
+                            {static_cast<size_t>(actual_oversize)}, Device::CUDA);
+                        oversize_mask.index_put_(oversize_inds, true_vals);
+                        LFS_COUNTER_ADD("strategy.mrnf.oversize_split", actual_oversize);
+                    }
+                }
+            }
+        }
+
+        if (n_grow > 0) {
+            n_grow = std::max(0, n_grow - actual_oversize);
+        }
+
         if (n_grow > 0) {
             const bool use_ratio_rank = cfg_ratio_rank_on() &&
                                         _refine_ratio_max.is_valid() &&
@@ -2029,6 +2111,9 @@ namespace lfs::training {
                 // Keep replacement and growth disjoint on device instead of
                 // deduplicating sampled indices on the host.
                 growth_weights = growth_weights.masked_fill(replace_mask, 0.0f);
+            }
+            if (oversize_mask.is_valid()) {
+                growth_weights = growth_weights.masked_fill(oversize_mask, 0.0f);
             }
 
             // Growth nnz is data-dependent on replace_mask — second packed slot.
@@ -2068,15 +2153,24 @@ namespace lfs::training {
         if (iter < effective_grow_until_iter() && background_improvements_enabled() &&
             far_operators_active()) {
             const int growth_count = (growth_inds.is_valid() ? static_cast<int>(growth_inds.numel()) : 0);
-            const int remaining_budget = std::max(0, budget - actual_replace - growth_count);
+            const int remaining_budget =
+                std::max(0, budget - actual_replace - growth_count - actual_oversize);
             int n_explore = std::min(starved_cadence_count(kExploreSplits), remaining_budget);
             if (n_explore > 0) {
                 auto log_scales = _splat_data->scaling_raw();
                 if (log_scales.ndim() != 2 || log_scales.shape()[0] != n || log_scales.shape()[1] != 3) {
                     n_explore = 0;
                 } else {
+                    Tensor taken_inds = growth_inds;
+                    if (oversize_inds.is_valid() && oversize_inds.numel() > 0) {
+                        if (taken_inds.is_valid() && taken_inds.numel() > 0) {
+                            taken_inds = Tensor::cat({oversize_inds, taken_inds}, 0);
+                        } else {
+                            taken_inds = oversize_inds;
+                        }
+                    }
                     auto explore_weights = build_explore_split_weights(
-                        n, active_mask, trainable_mask, replace_mask, growth_inds);
+                        n, active_mask, trainable_mask, replace_mask, taken_inds);
                     if (!explore_weights.is_valid() || explore_weights.numel() != n) {
                         n_explore = 0;
                     } else {
@@ -2106,6 +2200,9 @@ namespace lfs::training {
         std::vector<Tensor> split_parts;
         if (replace_inds.is_valid() && replace_inds.numel() > 0) {
             split_parts.push_back(replace_inds);
+        }
+        if (oversize_inds.is_valid() && oversize_inds.numel() > 0) {
+            split_parts.push_back(oversize_inds);
         }
         if (growth_inds.is_valid() && growth_inds.numel() > 0) {
             split_parts.push_back(growth_inds);

@@ -273,6 +273,7 @@
     "advanced.densify_error_map": "Densify Error Map:",
     "advanced.max_screen_share": "Max Screen Share:",
     "advanced.screen_share_penalty": "Screen Share Penalty:",
+    "advanced.oversize_split_fraction": "Oversize Split Fraction:",
     "advanced.use_edge_map": "Use Edge Map:",
     "advanced.far_scene_min_fraction": "Far Scene Min Fraction:",
     "advanced.growth_ratio_rank": "Growth Ratio Rank:",
@@ -294,6 +295,7 @@
     "tooltip.densify_error_map": "Densify from full SSIM or from contrast-structure only (ignores brightness-only mismatches such as empty sky)",
     "tooltip.max_screen_share": "Shrink Gaussians that cover more than this share of the view; 0 or 1 disables the cap",
     "tooltip.screen_share_penalty": "Soft log-scale hinge weight for Gaussians over the screen-share cap; balanced against photometric error so a needed large splat can stay large",
+    "tooltip.oversize_split_fraction": "Fraction of MRNF growth budget used to split Gaussians over the screen-share cap; 0 disables",
     "tooltip.use_edge_map": "Weight MRNF refinement by Canny edges in ground-truth images",
     "tooltip.background_improvements": "Mejora la reconstrucción del fondo lejano (MRNF): semillas y divisiones de campo lejano, alivio del decaimiento, límite de crecimiento, pasos de posición por splat, ranking de crecimiento normalizado por visibilidad, llenado escalonado de la capacidad. Desactivado = MRNF simple.",
     "tooltip.far_scene_min_fraction": "Fracción mínima de splats deep-far que activa las funciones de campo lejano (0 = siempre activo)",
@@ -536,7 +538,8 @@
       "ppisp_reg": "Peso de regularizacion del PPISP independiente: ancla la exposicion y el color medios hacia lo neutro. Sin efecto con Exposure Correction activa, que impone la neutralidad exactamente.",
       "densify_error_map": "Senal de error que guia la densificacion. Contraste-estructura ignora desajustes solo de brillo, como cielo vacio frente a foto luminosa, y no gasta gaussianas ahi. SSIM restaura el comportamiento anterior.",
       "max_screen_share": "Encoge toda gaussiana que cubra mas de esta fraccion de la pantalla. Evita manchas grandes cerca de la camara, como un falso dosel de cielo. 0 o 1 desactiva el limite.",
-      "screen_share_penalty": "Fuerza del encogimiento gradual sobre el limite de fraccion de pantalla. Equilibrada con el error de imagen, de modo que una gaussiana grande realmente necesaria puede seguir grande."
+      "screen_share_penalty": "Fuerza del encogimiento gradual sobre el limite de fraccion de pantalla. Equilibrada con el error de imagen, de modo que una gaussiana grande realmente necesaria puede seguir grande.",
+      "oversize_split_fraction": "Fraccion del presupuesto de crecimiento en cada refine usada para dividir gaussianas que superan el limite de pantalla, prefiriendo las que tambien tienen error. 0 desactiva. Divide por el eje mas largo para disolver las laminas en vez de dejar agujeros."
     },
     "section.masking": "Ajustes de Máscara",
     "section.thresholds": "Umbrales",
