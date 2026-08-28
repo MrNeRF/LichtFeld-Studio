@@ -1070,6 +1070,7 @@
     "seq_load_sequence": "Cargar una carpeta de fotogramas PLY como clip del secuenciador",
     "seq_sequence_fps": "FPS de reproducción de la secuencia PLY (clic para editar)",
     "seq_format": "Preajuste del formato de exportación (clic derecho para opciones)",
+    "seq_resolution": "Resolución de salida (clic para editar, p. ej. 1920x1080)",
     "seq_quality": "Calidad CRF (menor = mejor calidad, archivo más grande)",
     "seq_export": "Exportar vídeo desde la trayectoria de cámara",
     "seq_clear": "Borrar todos los fotogramas clave",

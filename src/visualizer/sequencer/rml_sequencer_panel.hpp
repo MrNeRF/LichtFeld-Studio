@@ -244,6 +244,15 @@ namespace lfs::vis {
         void enterSequenceFpsEdit();
         void exitSequenceFpsEdit(bool commit);
 
+        struct ResolutionEditListener : Rml::EventListener {
+            RmlSequencerPanel* panel = nullptr;
+            void ProcessEvent(Rml::Event& event) override;
+        };
+
+        void syncResolutionDisplay();
+        void enterResolutionEdit();
+        void exitResolutionEdit(bool commit);
+
         struct RenderSignature {
             int width = 0;
             int height = 0;
@@ -302,6 +311,7 @@ namespace lfs::vis {
         QualityScrubListener quality_scrub_listener_;
         DurationEditListener duration_listener_;
         SequenceFpsEditListener sequence_fps_listener_;
+        ResolutionEditListener resolution_listener_;
 
         bool quality_scrub_active_ = false;
         bool quality_scrub_dragging_ = false;
@@ -309,6 +319,7 @@ namespace lfs::vis {
         float quality_scrub_start_x_ = 0.0f;
         bool duration_editing_ = false;
         bool sequence_fps_editing_ = false;
+        bool resolution_editing_ = false;
 
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
@@ -369,7 +380,9 @@ namespace lfs::vis {
         Rml::Element* el_sequence_fps_display_ = nullptr;
         Rml::Element* el_sequence_fps_input_ = nullptr;
         Rml::Element* el_format_label_ = nullptr;
+        Rml::Element* el_resolution_field_ = nullptr;
         Rml::Element* el_resolution_info_ = nullptr;
+        Rml::Element* el_resolution_input_ = nullptr;
         Rml::Element* el_quality_scrub_ = nullptr;
         Rml::Element* el_quality_fill_ = nullptr;
         Rml::Element* el_quality_display_ = nullptr;

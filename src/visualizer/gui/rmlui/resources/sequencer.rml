@@ -100,7 +100,10 @@
                     <span class="dropdown-arrow">&#x25be;</span>
                     <span class="ctx-indicator">&#x25E2;</span>
                 </div>
-                <span id="resolution-info" class="transport-info">1920x1080</span>
+                <div id="resolution-field" class="transport-info" data-tooltip="tooltip.seq_resolution">
+                    <span id="resolution-info">1920x1080</span>
+                    <input id="resolution-input" type="text" />
+                </div>
                 <span class="transport-info quality-group">Q</span>
                 <div id="quality-scrub" class="scrub-field" data-tooltip="tooltip.seq_quality">
                     <div id="quality-fill" class="scrub-field-fill"></div>
