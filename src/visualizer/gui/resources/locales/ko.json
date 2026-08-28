@@ -1070,6 +1070,7 @@
     "seq_load_sequence": "PLY 프레임 폴더를 시퀀서 클립으로 불러오기",
     "seq_sequence_fps": "PLY 시퀀스 재생 FPS (클릭하여 편집)",
     "seq_format": "내보내기 형식 프리셋 (우클릭으로 옵션)",
+    "seq_resolution": "출력 해상도 (클릭하여 편집, 예: 1920x1080)",
     "seq_quality": "CRF 품질 (낮을수록 = 높은 품질, 큰 파일)",
     "seq_export": "카메라 경로에서 동영상 내보내기",
     "seq_clear": "모든 키프레임 삭제",

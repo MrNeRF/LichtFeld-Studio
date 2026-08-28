@@ -1070,6 +1070,7 @@
     "seq_load_sequence": "Wczytaj folder klatek PLY jako klip sekwencera",
     "seq_sequence_fps": "FPS odtwarzania sekwencji PLY (kliknij, aby edytować)",
     "seq_format": "Preset formatu eksportu (prawy przycisk myszy dla opcji)",
+    "seq_resolution": "Rozdzielczość wyjściowa (kliknij, aby edytować, np. 1920x1080)",
     "seq_quality": "Jakość CRF (niższa = lepsza jakość, większy plik)",
     "seq_export": "Eksportuj wideo ze ścieżki kamery",
     "seq_clear": "Usuń wszystkie klatki kluczowe",

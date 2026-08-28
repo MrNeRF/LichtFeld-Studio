@@ -1070,6 +1070,7 @@
     "seq_load_sequence": "加载一个 PLY 帧文件夹作为序列器片段",
     "seq_sequence_fps": "PLY 序列播放帧率（点击编辑）",
     "seq_format": "导出格式预设（右键点击查看选项）",
+    "seq_resolution": "输出分辨率（点击编辑，例如 1920x1080）",
     "seq_quality": "CRF质量（值越低 = 质量越高，文件越大）",
     "seq_export": "从相机路径导出视频",
     "seq_clear": "删除所有关键帧",
