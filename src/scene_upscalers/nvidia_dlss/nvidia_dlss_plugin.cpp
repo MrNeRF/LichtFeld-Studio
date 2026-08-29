@@ -21,6 +21,8 @@
 #include <string_view>
 
 namespace {
+    constexpr std::string_view NVIDIA_DLSS_SDK_URL = "https://github.com/NVIDIA/DLSS";
+
     constexpr std::uint32_t MIN_DLSS_OUTPUT_EXTENT = 32;
 
     constexpr std::string_view PLUGIN_ID = "nvidia-dlss";
@@ -130,7 +132,11 @@ namespace {
                 config.instance, config.physical_device, &discovery, &requirement);
             if (NVSDK_NGX_FAILED(requirement_result))
                 return fail(LFS_SCENE_UPSCALER_PLUGIN_RUNTIME_ERROR,
-                            ngxFailure("querying DLSS feature support", requirement_result));
+                            std::format(
+                                "{}; verify that the NVIDIA NGX/DLSS runtime is staged "
+                                "beside the LichtFeld DLSS plugin (official SDK: {})",
+                                ngxFailure("querying DLSS feature support", requirement_result),
+                                NVIDIA_DLSS_SDK_URL));
             if (requirement.FeatureSupported != 0)
                 return fail(LFS_SCENE_UPSCALER_PLUGIN_UNSUPPORTED_DEVICE,
                             std::format(
@@ -155,8 +161,9 @@ namespace {
                 return fail(LFS_SCENE_UPSCALER_PLUGIN_UNAVAILABLE,
                             std::format(
                                 "{}; verify that the NVIDIA NGX/DLSS runtime is staged "
-                                "beside the LichtFeld DLSS plugin",
-                                ngxFailure("initializing NGX Vulkan", init_result)));
+                                "beside the LichtFeld DLSS plugin (official SDK: {})",
+                                ngxFailure("initializing NGX Vulkan", init_result),
+                                NVIDIA_DLSS_SDK_URL));
 
             device_ = config.device;
             const auto capability_result =

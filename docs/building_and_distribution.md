@@ -210,6 +210,10 @@ from that application-owned path during Vulkan bootstrap only to query required
 extensions. NGX runtime initialization and GPU feature resources remain lazy
 until DLSS is selected. Portable builds require an SDK checkout and package the
 corresponding vendor runtime subject to NVIDIA's redistribution terms.
+The official SDK repository is [NVIDIA/DLSS](https://github.com/NVIDIA/DLSS).
+Ordinary builds skip the plugin when `LFS_ENABLE_NVIDIA_DLSS=OFF`. When it is
+explicitly enabled, a missing or incomplete SDK is a configuration error rather
+than silently producing a build without the requested backend.
 
 ## Preprocess Model Downloads
 

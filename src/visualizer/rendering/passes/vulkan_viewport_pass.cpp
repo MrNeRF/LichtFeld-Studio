@@ -2044,7 +2044,12 @@ namespace lfs::vis {
                     LOG_INFO("Scene reconstruction active: {}",
                              sceneUpscalerBackendId(scene_upscaler_selection.effective));
                 }
-                logged_scene_upscaler_selection = scene_upscaler_selection;
+                // Expected startup/backend-transition warm-up may temporarily present Native
+                // before the paired reconstruction inputs exist. Do not consume the transition
+                // while its log is suppressed: a later, definitive runtime failure must still
+                // report the requested -> Native fallback exactly once.
+                if (!scene_upscaler_selection.fellBack() || log_fallback_transition)
+                    logged_scene_upscaler_selection = scene_upscaler_selection;
             }
         }
 

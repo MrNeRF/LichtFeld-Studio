@@ -102,6 +102,14 @@ scene-reconstruction plugins. Dynamic libraries are opened from exact
 application-relative plugin paths; arbitrary system search-path discovery is
 not used.
 
+If the LichtFeld-owned plugin module is absent, the optional backend is omitted
+from the runtime catalog and Native remains selected. If the plugin is valid but
+the separately staged NVIDIA runtime is missing or unsupported, the request is
+retained, presentation falls back atomically to Native, and diagnostics report
+both the NGX failure and the effective Native fallback. The failure is latched
+instead of being retried every frame; selecting Native and then NVIDIA DLSS is
+the explicit retry action after correcting the installation.
+
 DLSS consumes the same reviewed temporal frame contract as the built-in
 Temporal backend: unjittered current-to-previous pixel motion, the exact jitter
 applied to the rendered color image, scene/camera/backend reset reasons and
@@ -121,10 +129,12 @@ pixel units. Output extents below NGX's 32-by-32 minimum use a temporary native
 presentation and do not latch a backend failure, so resizing back restores the
 requested DLSS path without a manual retry.
 
-Ordinary developer builds leave the plugin disabled. To build it from an SDK
-checkout obtained separately from NVIDIA:
+Ordinary developer builds leave the plugin disabled. Obtain an SDK checkout
+from the official [NVIDIA/DLSS repository](https://github.com/NVIDIA/DLSS),
+including its Git LFS objects, and enable the plugin explicitly:
 
 ```sh
+git clone https://github.com/NVIDIA/DLSS external/nvidia-dlss-sdk
 cmake -S . -B build -DLFS_ENABLE_NVIDIA_DLSS=ON -DLFS_NVIDIA_DLSS_ROOT=/path/to/NVIDIA-DLSS-SDK
 ```
 
@@ -135,6 +145,11 @@ set explicitly.
 CMake never downloads the SDK or accepts its license for a developer build.
 Anyone redistributing a portable package must satisfy NVIDIA's SDK and runtime
 redistribution terms.
+The Windows nightly portable workflow is the controlled exception to local SDK
+discovery: it checks out a pinned `NVIDIA/DLSS` revision with Git LFS before
+configuration, then stages the external LichtFeld plugin and matching vendor
+runtime in the package. Missing portable SDK artifacts are fatal rather than
+silently producing a package without the advertised backend.
 
 ## Persistence and safe mode
 

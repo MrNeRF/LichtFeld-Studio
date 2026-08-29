@@ -9,6 +9,7 @@ option(LFS_ENABLE_NVIDIA_DLSS
     OFF)
 set(LFS_NVIDIA_DLSS_ROOT "" CACHE PATH
     "Path to an NVIDIA DLSS SDK checkout; the SDK is never fetched by CMake")
+set(_lfs_nvidia_dlss_download_url "https://github.com/NVIDIA/DLSS")
 
 # Portable packages have a controlled dependency checkout and always include
 # the optional plugin. Ordinary developer builds remain opt-in.
@@ -31,7 +32,8 @@ if(NOT LFS_NVIDIA_DLSS_ROOT)
     message(FATAL_ERROR
         "LFS_ENABLE_NVIDIA_DLSS=ON requires LFS_NVIDIA_DLSS_ROOT to point to an "
         "SDK obtained separately from NVIDIA. CMake does not download or accept "
-        "the NVIDIA SDK license on the user's behalf.")
+        "the NVIDIA SDK license on the user's behalf. Official SDK repository: "
+        "${_lfs_nvidia_dlss_download_url}")
 endif()
 
 cmake_path(ABSOLUTE_PATH LFS_NVIDIA_DLSS_ROOT
@@ -48,7 +50,8 @@ foreach(_header IN ITEMS
         nvsdk_ngx_vk.h)
     if(NOT EXISTS "${_lfs_dlss_include}/${_header}")
         message(FATAL_ERROR
-            "NVIDIA DLSS SDK at '${_lfs_dlss_root}' is missing include/${_header}")
+            "NVIDIA DLSS SDK at '${_lfs_dlss_root}' is missing include/${_header}. "
+            "Official SDK repository: ${_lfs_nvidia_dlss_download_url}")
     endif()
 endforeach()
 
@@ -94,7 +97,8 @@ foreach(_required IN ITEMS
     if(NOT DEFINED ${_required} OR NOT EXISTS "${${_required}}")
         message(FATAL_ERROR
             "NVIDIA DLSS SDK at '${_lfs_dlss_root}' is missing ${_required}: "
-            "'${${_required}}'")
+            "'${${_required}}'. Official SDK repository: "
+            "${_lfs_nvidia_dlss_download_url}")
     endif()
 endforeach()
 
@@ -118,4 +122,3 @@ set(LFS_NVIDIA_DLSS_AVAILABLE ON CACHE INTERNAL
 
 message(STATUS
     "NVIDIA DLSS: external plugin enabled from user-provided SDK ${_lfs_dlss_root}")
-
