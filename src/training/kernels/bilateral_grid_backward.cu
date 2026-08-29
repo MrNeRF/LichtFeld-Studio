@@ -1100,6 +1100,7 @@ namespace lfs::training::kernels {
         bilateral_grid_slice_backward_rgbgrad_kernel<false>
             <<<pix_grid, block, 0, stream>>>(
                 grid, rgb, grad_output, grad_rgb, L, H, W, h, w, shared_offset);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_backward_rgbgrad");
         const dim3 tile_grid((w + kBwdTileX - 1) / kBwdTileX, (h + kBwdTileY - 1) / kBwdTileY);
         bilateral_grid_slice_gridgrad_kernel<false>
             <<<tile_grid, block, bwd_hist_smem_bytes(12, L), stream>>>(
@@ -1121,6 +1122,7 @@ namespace lfs::training::kernels {
         bilateral_grid_slice_backward_rgbgrad_kernel<true>
             <<<pix_grid, block, 0, stream>>>(
                 grid, rgb, grad_output, grad_rgb, L, H, W, h, w, shared_offset);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_backward_rgbgrad_chw");
         const dim3 tile_grid((w + kBwdTileX - 1) / kBwdTileX, (h + kBwdTileY - 1) / kBwdTileY);
         bilateral_grid_slice_gridgrad_kernel<true>
             <<<tile_grid, block, bwd_hist_smem_bytes(12, L), stream>>>(
@@ -1142,6 +1144,7 @@ namespace lfs::training::kernels {
         bilateral_grid_slice_backward_exposure_chroma_rgbgrad_kernel<false>
             <<<pix_grid, block, 0, stream>>>(
                 grid, rgb, grad_output, grad_rgb, L, H, W, h, w, shared_offset);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_backward_exposure_chroma_rgbgrad");
         const dim3 tile_grid((w + kBwdTileX - 1) / kBwdTileX, (h + kBwdTileY - 1) / kBwdTileY);
         bilateral_grid_slice_exposure_chroma_gridgrad_kernel<false>
             <<<tile_grid, block, bwd_hist_smem_bytes(9, L), stream>>>(
@@ -1163,6 +1166,7 @@ namespace lfs::training::kernels {
         bilateral_grid_slice_backward_exposure_chroma_rgbgrad_kernel<true>
             <<<pix_grid, block, 0, stream>>>(
                 grid, rgb, grad_output, grad_rgb, L, H, W, h, w, shared_offset);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_backward_exposure_chroma_rgbgrad_chw");
         const dim3 tile_grid((w + kBwdTileX - 1) / kBwdTileX, (h + kBwdTileY - 1) / kBwdTileY);
         bilateral_grid_slice_exposure_chroma_gridgrad_kernel<true>
             <<<tile_grid, block, bwd_hist_smem_bytes(9, L), stream>>>(
