@@ -56,7 +56,7 @@ namespace lfs::vis {
         VkImageView current_color_view = VK_NULL_HANDLE;
         VkImageView motion_view = VK_NULL_HANDLE;
         VkImageLayout current_color_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        VkImageLayout motion_layout = VK_IMAGE_LAYOUT_GENERAL;
+        VkImageLayout motion_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         glm::ivec2 render_extent{0, 0};
         glm::ivec2 output_extent{0, 0};
         glm::ivec2 current_allocation_extent{0, 0};

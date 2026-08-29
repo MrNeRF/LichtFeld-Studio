@@ -6,6 +6,8 @@
 #include "visualizer/rendering/passes/vulkan_scene_temporal_pipeline.hpp"
 #include "visualizer/rendering/passes/vulkan_scene_temporal_resolve_pass.hpp"
 #include "visualizer/rendering/scene_temporal_resolve.hpp"
+#include "visualizer/rendering/scene_upscaler_plugin_api.h"
+#include "visualizer/rendering/temporal_frame_tracker.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -322,6 +324,22 @@ namespace lfs::vis {
             temporalJitterNdc(applied_pixels, extent), extent, false);
         EXPECT_NEAR(round_trip.x, applied_pixels.x, 1e-6f);
         EXPECT_NEAR(round_trip.y, applied_pixels.y, 1e-6f);
+
+        const glm::vec2 flipped = sceneTemporalJitterPixels(
+            temporalJitterNdc(applied_pixels, extent), extent, true);
+        EXPECT_NEAR(flipped.x, applied_pixels.x, 1e-6f);
+        EXPECT_NEAR(flipped.y, -applied_pixels.y, 1e-6f);
+
+        const glm::vec2 converged =
+            temporalJitterPixels(TemporalConvergenceController::SAMPLE_COUNT);
+        const glm::vec2 converged_round_trip = sceneTemporalJitterPixels(
+            temporalJitterNdc(converged, extent), extent, false);
+        EXPECT_NEAR(converged_round_trip.x, converged.x, 1e-6f);
+        EXPECT_NEAR(converged_round_trip.y, converged.y, 1e-6f);
+        const glm::vec2 converged_flipped = sceneTemporalJitterPixels(
+            temporalJitterNdc(converged, extent), extent, true);
+        EXPECT_NEAR(converged_flipped.x, converged.x, 1e-6f);
+        EXPECT_NEAR(converged_flipped.y, -converged.y, 1e-6f);
     }
 
     TEST(SceneTemporalResolve, WarmupUsesUniformSamplesWithoutExceedingPresetWeight) {
@@ -770,6 +788,17 @@ namespace lfs::vis {
         request.temporal.resolve.current_depth.allocation_extent = {640, 360};
         EXPECT_TRUE(validVulkanSceneDlssPipelineRequest(request));
 
+        request.temporal.resolve.current_color_layout = VK_IMAGE_LAYOUT_GENERAL;
+        EXPECT_FALSE(validVulkanSceneDlssPipelineRequest(request));
+        request.temporal.resolve.current_color_layout =
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        request.temporal.resolve.current_depth.current_depth_layout =
+            VK_IMAGE_LAYOUT_GENERAL;
+        EXPECT_FALSE(validVulkanSceneDlssPipelineRequest(request));
+        request.temporal.resolve.current_depth.current_depth_layout =
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        EXPECT_TRUE(validVulkanSceneDlssPipelineRequest(request));
+
         request.color_image = VK_NULL_HANDLE;
         EXPECT_FALSE(validVulkanSceneDlssPipelineRequest(request));
         request.color_image = reinterpret_cast<VkImage>(5);
@@ -795,6 +824,41 @@ namespace lfs::vis {
         EXPECT_TRUE(nvidiaDlssSupportsOutputExtent(
             {NVIDIA_DLSS_MIN_OUTPUT_EXTENT,
              NVIDIA_DLSS_MIN_OUTPUT_EXTENT}));
+    }
+
+    TEST(VulkanSceneDlssPipelineContract, MapsTemporalResetReasonsToPluginFlags) {
+        EXPECT_EQ(pluginResetFlags(TemporalResetReason::None),
+                  LFS_SCENE_UPSCALER_PLUGIN_RESET_NONE);
+        EXPECT_EQ(pluginResetFlags(TemporalResetReason::CameraCut),
+                  LFS_SCENE_UPSCALER_PLUGIN_RESET_CAMERA_CUT);
+        EXPECT_EQ(pluginResetFlags(TemporalResetReason::Projection),
+                  LFS_SCENE_UPSCALER_PLUGIN_RESET_CAMERA_CUT);
+        EXPECT_EQ(pluginResetFlags(TemporalResetReason::Backend),
+                  LFS_SCENE_UPSCALER_PLUGIN_RESET_SCENE);
+        EXPECT_EQ(pluginResetFlags(TemporalResetReason::Scene),
+                  LFS_SCENE_UPSCALER_PLUGIN_RESET_SCENE);
+        EXPECT_EQ(pluginResetFlags(TemporalResetReason::FirstFrame),
+                  LFS_SCENE_UPSCALER_PLUGIN_RESET_REQUESTED);
+        EXPECT_EQ(pluginResetFlags(TemporalResetReason::Requested),
+                  LFS_SCENE_UPSCALER_PLUGIN_RESET_REQUESTED);
+        EXPECT_EQ(pluginResetFlags(TemporalResetReason::HistoryDisabled),
+                  LFS_SCENE_UPSCALER_PLUGIN_RESET_REQUESTED);
+        EXPECT_EQ(pluginResetFlags(TemporalResetReason::RenderSize),
+                  LFS_SCENE_UPSCALER_PLUGIN_RESET_RENDER_SIZE);
+        EXPECT_EQ(pluginResetFlags(TemporalResetReason::RenderScale),
+                  LFS_SCENE_UPSCALER_PLUGIN_RESET_RENDER_SIZE);
+        EXPECT_EQ(pluginResetFlags(TemporalResetReason::OutputExtent),
+                  LFS_SCENE_UPSCALER_PLUGIN_RESET_OUTPUT_SIZE);
+        EXPECT_EQ(pluginResetFlags(TemporalResetReason::Quality),
+                  LFS_SCENE_UPSCALER_PLUGIN_RESET_QUALITY);
+        EXPECT_EQ(pluginResetFlags(TemporalResetReason::RuntimeUnavailable),
+                  LFS_SCENE_UPSCALER_PLUGIN_RESET_RUNTIME);
+        EXPECT_EQ(pluginResetFlags(TemporalResetReason::CameraCut |
+                                   TemporalResetReason::RenderSize |
+                                   TemporalResetReason::OutputExtent),
+                  LFS_SCENE_UPSCALER_PLUGIN_RESET_CAMERA_CUT |
+                      LFS_SCENE_UPSCALER_PLUGIN_RESET_RENDER_SIZE |
+                      LFS_SCENE_UPSCALER_PLUGIN_RESET_OUTPUT_SIZE);
     }
 
 } // namespace lfs::vis

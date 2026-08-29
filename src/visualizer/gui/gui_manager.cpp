@@ -4265,6 +4265,7 @@ namespace lfs::vis::gui {
                     .motion = {
                         .enabled = true,
                         .depth_view = params.depth_blit.external_image_view,
+                        .current_depth_layout = params.depth_blit.external_image_layout,
                         .depth_generation = params.depth_blit.external_image_generation,
                         .depth = depth,
                         .render_extent = params.scene_image_size,
@@ -4296,10 +4297,9 @@ namespace lfs::vis::gui {
                     .frame_slot = frame_slot,
                 };
                 if (params.scene_upscaler == SceneUpscalerBackend::NvidiaDlss &&
-                    nvidiaDlssSupportsOutputExtent(output_extent) &&
                     params.external_scene_image != VK_NULL_HANDLE &&
                     params.depth_blit.external_image != VK_NULL_HANDLE) {
-                    params.dlss = VulkanSceneDlssPipelineRequest{
+                    VulkanSceneDlssPipelineRequest dlss_request{
                         .temporal = *params.temporal,
                         .color_image = params.external_scene_image,
                         .color_format = VK_FORMAT_R8G8B8A8_UNORM,
@@ -4307,6 +4307,8 @@ namespace lfs::vis::gui {
                         .depth_format = params.depth_blit.external_image_format,
                         .quality = temporal_frame->quality,
                     };
+                    if (validVulkanSceneDlssPipelineRequest(dlss_request))
+                        params.dlss = dlss_request;
                 }
             }
 
@@ -4364,6 +4366,7 @@ namespace lfs::vis::gui {
                         .motion = {
                             .enabled = true,
                             .depth_view = panel.depth_image_view,
+                            .current_depth_layout = panel.depth_image_layout,
                             .depth_generation = panel.depth_image_generation,
                             .depth = depth,
                             .render_extent = panel.image_size,
@@ -4405,14 +4408,11 @@ namespace lfs::vis::gui {
                            const std::optional<VulkanSceneTemporalPipelineRequest>& temporal)
                         -> std::optional<VulkanSceneDlssPipelineRequest> {
                         if (!temporal ||
-                            !nvidiaDlssSupportsOutputExtent(
-                                temporal->temporal.output_extent) ||
                             panel.external_image == VK_NULL_HANDLE ||
-                            panel.depth_image == VK_NULL_HANDLE ||
-                            panel.depth_image_layout == VK_IMAGE_LAYOUT_UNDEFINED) {
+                            panel.depth_image == VK_NULL_HANDLE) {
                             return std::nullopt;
                         }
-                        return VulkanSceneDlssPipelineRequest{
+                        VulkanSceneDlssPipelineRequest request{
                             .temporal = *temporal,
                             .color_image = panel.external_image,
                             .color_format = VK_FORMAT_R8G8B8A8_UNORM,
@@ -4420,6 +4420,9 @@ namespace lfs::vis::gui {
                             .depth_format = panel.depth_image_format,
                             .quality = panel.temporal_quality,
                         };
+                        if (!validVulkanSceneDlssPipelineRequest(request))
+                            return std::nullopt;
+                        return request;
                     };
                     params.split_dlss[0] = make_split_dlss_request(
                         params.split_view.left, params.split_temporal[0]);

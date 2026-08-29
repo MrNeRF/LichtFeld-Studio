@@ -45,33 +45,6 @@ namespace lfs::vis {
             }
             return LFS_SCENE_UPSCALER_PLUGIN_BALANCED;
         }
-
-        [[nodiscard]] constexpr std::uint32_t pluginResetFlags(
-            const TemporalResetReason reasons) noexcept {
-            std::uint32_t flags = LFS_SCENE_UPSCALER_PLUGIN_RESET_NONE;
-            if (hasTemporalResetReason(reasons, TemporalResetReason::CameraCut) ||
-                hasTemporalResetReason(reasons, TemporalResetReason::Projection))
-                flags |= LFS_SCENE_UPSCALER_PLUGIN_RESET_CAMERA_CUT;
-            if (hasTemporalResetReason(reasons, TemporalResetReason::RenderSize) ||
-                hasTemporalResetReason(reasons, TemporalResetReason::RenderScale))
-                flags |= LFS_SCENE_UPSCALER_PLUGIN_RESET_RENDER_SIZE;
-            if (hasTemporalResetReason(reasons, TemporalResetReason::OutputExtent))
-                flags |= LFS_SCENE_UPSCALER_PLUGIN_RESET_OUTPUT_SIZE;
-            if (hasTemporalResetReason(reasons, TemporalResetReason::Scene) ||
-                hasTemporalResetReason(reasons, TemporalResetReason::Backend))
-                flags |= LFS_SCENE_UPSCALER_PLUGIN_RESET_SCENE;
-            if (hasTemporalResetReason(reasons, TemporalResetReason::Quality))
-                flags |= LFS_SCENE_UPSCALER_PLUGIN_RESET_QUALITY;
-            if (hasTemporalResetReason(reasons, TemporalResetReason::FirstFrame) ||
-                hasTemporalResetReason(reasons, TemporalResetReason::Requested) ||
-                hasTemporalResetReason(reasons, TemporalResetReason::HistoryDisabled))
-                flags |= LFS_SCENE_UPSCALER_PLUGIN_RESET_REQUESTED;
-            if (hasTemporalResetReason(reasons, TemporalResetReason::RuntimeUnavailable) ||
-                hasTemporalResetReason(reasons, TemporalResetReason::ResolveFailure) ||
-                hasTemporalResetReason(reasons, TemporalResetReason::InvalidInput))
-                flags |= LFS_SCENE_UPSCALER_PLUGIN_RESET_RUNTIME;
-            return flags;
-        }
     } // namespace
 
     struct VulkanSceneDlssPipeline::Impl {
@@ -409,7 +382,7 @@ namespace lfs::vis {
                     .struct_size = sizeof(LfsSceneUpscalerImageV1),
                     .image = depth.depthImage(*resource_slot),
                     .view = depth.depthView(*resource_slot),
-                    .layout = VK_IMAGE_LAYOUT_GENERAL,
+                    .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                     .format = VK_FORMAT_R32_SFLOAT,
                     .allocation_width = static_cast<std::uint32_t>(prepared.plan.render_extent.x),
                     .allocation_height = static_cast<std::uint32_t>(prepared.plan.render_extent.y),
@@ -421,7 +394,7 @@ namespace lfs::vis {
                     .struct_size = sizeof(LfsSceneUpscalerImageV1),
                     .image = motion.motionImage(*resource_slot),
                     .view = motion.motionView(*resource_slot),
-                    .layout = VK_IMAGE_LAYOUT_GENERAL,
+                    .layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                     .format = VK_FORMAT_R16G16_SFLOAT,
                     .allocation_width = static_cast<std::uint32_t>(prepared.plan.render_extent.x),
                     .allocation_height = static_cast<std::uint32_t>(prepared.plan.render_extent.y),

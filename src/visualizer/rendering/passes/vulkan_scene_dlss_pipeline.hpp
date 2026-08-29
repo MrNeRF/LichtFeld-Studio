@@ -24,6 +24,9 @@ namespace lfs::vis {
                extent.y >= NVIDIA_DLSS_MIN_OUTPUT_EXTENT;
     }
 
+    [[nodiscard]] LFS_VIS_API std::uint32_t pluginResetFlags(
+        TemporalResetReason reasons) noexcept;
+
     struct VulkanSceneDlssPipelineRequest {
         VulkanSceneTemporalPipelineRequest temporal;
         VkImage color_image = VK_NULL_HANDLE;

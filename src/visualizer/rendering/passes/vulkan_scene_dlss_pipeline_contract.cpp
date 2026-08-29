@@ -4,7 +4,35 @@
 
 #include "vulkan_scene_dlss_pipeline.hpp"
 
+#include "rendering/scene_upscaler_plugin_api.h"
+
 namespace lfs::vis {
+    std::uint32_t pluginResetFlags(const TemporalResetReason reasons) noexcept {
+        std::uint32_t flags = LFS_SCENE_UPSCALER_PLUGIN_RESET_NONE;
+        if (hasTemporalResetReason(reasons, TemporalResetReason::CameraCut) ||
+            hasTemporalResetReason(reasons, TemporalResetReason::Projection))
+            flags |= LFS_SCENE_UPSCALER_PLUGIN_RESET_CAMERA_CUT;
+        if (hasTemporalResetReason(reasons, TemporalResetReason::RenderSize) ||
+            hasTemporalResetReason(reasons, TemporalResetReason::RenderScale))
+            flags |= LFS_SCENE_UPSCALER_PLUGIN_RESET_RENDER_SIZE;
+        if (hasTemporalResetReason(reasons, TemporalResetReason::OutputExtent))
+            flags |= LFS_SCENE_UPSCALER_PLUGIN_RESET_OUTPUT_SIZE;
+        if (hasTemporalResetReason(reasons, TemporalResetReason::Scene) ||
+            hasTemporalResetReason(reasons, TemporalResetReason::Backend))
+            flags |= LFS_SCENE_UPSCALER_PLUGIN_RESET_SCENE;
+        if (hasTemporalResetReason(reasons, TemporalResetReason::Quality))
+            flags |= LFS_SCENE_UPSCALER_PLUGIN_RESET_QUALITY;
+        if (hasTemporalResetReason(reasons, TemporalResetReason::FirstFrame) ||
+            hasTemporalResetReason(reasons, TemporalResetReason::Requested) ||
+            hasTemporalResetReason(reasons, TemporalResetReason::HistoryDisabled))
+            flags |= LFS_SCENE_UPSCALER_PLUGIN_RESET_REQUESTED;
+        if (hasTemporalResetReason(reasons, TemporalResetReason::RuntimeUnavailable) ||
+            hasTemporalResetReason(reasons, TemporalResetReason::ResolveFailure) ||
+            hasTemporalResetReason(reasons, TemporalResetReason::InvalidInput))
+            flags |= LFS_SCENE_UPSCALER_PLUGIN_RESET_RUNTIME;
+        return flags;
+    }
+
     bool validVulkanSceneDlssPipelineRequest(
         const VulkanSceneDlssPipelineRequest& request) noexcept {
         const VulkanSceneDlssDepthParams depth{
@@ -31,8 +59,9 @@ namespace lfs::vis {
                    request.temporal.temporal.render_extent.x &&
                request.temporal.resolve.current_depth.allocation_extent.y >=
                    request.temporal.temporal.render_extent.y &&
-               request.temporal.resolve.current_color_layout != VK_IMAGE_LAYOUT_UNDEFINED &&
-               request.temporal.resolve.current_depth.current_depth_layout !=
-                   VK_IMAGE_LAYOUT_UNDEFINED;
+               request.temporal.resolve.current_color_layout ==
+                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
+               request.temporal.resolve.current_depth.current_depth_layout ==
+                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     }
 } // namespace lfs::vis

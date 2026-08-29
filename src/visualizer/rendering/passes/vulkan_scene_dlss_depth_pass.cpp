@@ -291,8 +291,9 @@ namespace lfs::vis {
             cmdImageBarrier2(command_buffer,
                              resource.image,
                              VK_IMAGE_ASPECT_COLOR_BIT,
-                             resource.initialized ? VK_IMAGE_LAYOUT_GENERAL
-                                                  : VK_IMAGE_LAYOUT_UNDEFINED,
+                             resource.initialized
+                                 ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                 : VK_IMAGE_LAYOUT_UNDEFINED,
                              VK_IMAGE_LAYOUT_GENERAL,
                              resource.initialized
                                  ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
@@ -347,7 +348,7 @@ namespace lfs::vis {
                              resource.image,
                              VK_IMAGE_ASPECT_COLOR_BIT,
                              VK_IMAGE_LAYOUT_GENERAL,
-                             VK_IMAGE_LAYOUT_GENERAL,
+                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                              VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,

@@ -24,6 +24,7 @@ namespace lfs::vis {
     struct VulkanSceneMotionParams {
         bool enabled = false;
         VkImageView depth_view = VK_NULL_HANDLE;
+        VkImageLayout current_depth_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         std::uint64_t depth_generation = 0;
         SceneDepthContract depth;
         glm::mat4 inverse_current_view_projection{1.0f};

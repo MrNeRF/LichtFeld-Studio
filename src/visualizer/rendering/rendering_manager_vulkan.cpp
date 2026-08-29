@@ -50,6 +50,23 @@ namespace lfs::vis {
         constexpr float kInteractiveResizeRenderScale = 0.33f;
         constexpr auto kTrainingOutputResizeStableDelay = std::chrono::milliseconds(500);
 
+        [[nodiscard]] std::optional<glm::ivec2> nvidiaDlssOptimalRenderExtent(
+            const glm::ivec2 output_extent, const std::uint32_t quality) {
+            if (output_extent.x <= 0 || output_extent.y <= 0)
+                return std::nullopt;
+            const auto optimal = NvidiaDlssPlugin::instance().optimalSettings(
+                static_cast<std::uint32_t>(output_extent.x),
+                static_cast<std::uint32_t>(output_extent.y),
+                quality);
+            if (!optimal || optimal->render_width == 0 || optimal->render_height == 0 ||
+                optimal->render_width > static_cast<std::uint32_t>(output_extent.x) ||
+                optimal->render_height > static_cast<std::uint32_t>(output_extent.y)) {
+                return std::nullopt;
+            }
+            return glm::ivec2{static_cast<int>(optimal->render_width),
+                              static_cast<int>(optimal->render_height)};
+        }
+
         struct LodObjectFrame {
             glm::mat4 object_to_view{1.0f};
             float object_scale = 1.0f;
@@ -1728,32 +1745,28 @@ namespace lfs::vis {
         // Under an active VRAM pressure lease, halve the viewer render resolution
         // to shrink per-frame output allocation. Restored automatically once the
         // coordinator observes sustained headroom. Does not affect training.
-        if (lfs::core::MemoryPressureCoordinator::instance().pressure_active()) {
+        const bool memory_pressure_active =
+            lfs::core::MemoryPressureCoordinator::instance().pressure_active();
+        if (memory_pressure_active) {
             scale = std::clamp(scale * 0.5f, 0.25f, 1.0f);
         }
         glm::ivec2 render_size(
             std::max(static_cast<int>(std::lround(static_cast<float>(current_size.x) * scale)), 1),
             std::max(static_cast<int>(std::lround(static_cast<float>(current_size.y) * scale)), 1));
-        if (requested_upscaler == SceneUpscalerBackend::NvidiaDlss &&
+        const std::uint32_t nvidia_dlss_quality =
+            frame_settings.scene_upscaler_preset == "performance"
+                ? LFS_SCENE_UPSCALER_PLUGIN_PERFORMANCE
+            : frame_settings.scene_upscaler_preset == "quality"
+                ? LFS_SCENE_UPSCALER_PLUGIN_QUALITY
+                : LFS_SCENE_UPSCALER_PLUGIN_BALANCED;
+        const bool nvidia_dlss_optimal_query_allowed =
+            requested_upscaler == SceneUpscalerBackend::NvidiaDlss &&
             reconstruction_runtime_ready && !resize_result.use_interactive_render_scale &&
-            !lfs::core::MemoryPressureCoordinator::instance().pressure_active()) {
-            const std::uint32_t quality =
-                frame_settings.scene_upscaler_preset == "performance"
-                    ? LFS_SCENE_UPSCALER_PLUGIN_PERFORMANCE
-                : frame_settings.scene_upscaler_preset == "quality"
-                    ? LFS_SCENE_UPSCALER_PLUGIN_QUALITY
-                    : LFS_SCENE_UPSCALER_PLUGIN_BALANCED;
-            const auto optimal = NvidiaDlssPlugin::instance().optimalSettings(
-                static_cast<std::uint32_t>(current_size.x),
-                static_cast<std::uint32_t>(current_size.y),
-                quality);
-            if (optimal && optimal->render_width > 0 && optimal->render_height > 0 &&
-                optimal->render_width <= static_cast<std::uint32_t>(current_size.x) &&
-                optimal->render_height <= static_cast<std::uint32_t>(current_size.y)) {
-                render_size = {
-                    static_cast<int>(optimal->render_width),
-                    static_cast<int>(optimal->render_height),
-                };
+            !memory_pressure_active;
+        if (nvidia_dlss_optimal_query_allowed) {
+            if (const auto optimal =
+                    nvidiaDlssOptimalRenderExtent(current_size, nvidia_dlss_quality)) {
+                render_size = *optimal;
                 scale = std::min(static_cast<float>(render_size.x) /
                                      static_cast<float>(current_size.x),
                                  static_cast<float>(render_size.y) /
@@ -1953,8 +1966,12 @@ namespace lfs::vis {
         const bool dlss_output_extent_supported =
             requested_upscaler != SceneUpscalerBackend::NvidiaDlss ||
             nvidiaDlssSupportsOutputExtent(current_size);
+        const bool dlss_interactive_or_pressure =
+            requested_upscaler == SceneUpscalerBackend::NvidiaDlss &&
+            (resize_result.use_interactive_render_scale || memory_pressure_active);
         const bool temporal_eligible =
             temporal_backend_requested && dlss_output_extent_supported &&
+            !dlss_interactive_or_pressure &&
             !frame_settings.equirectangular && !frame_settings.apply_appearance_correction &&
             temporal_split_supported &&
             lfs::rendering::isVkSplatBackend(frame_settings.raster_backend);
@@ -3252,9 +3269,20 @@ namespace lfs::vis {
             const auto output_layouts =
                 split_view_service_.panelLayouts(frame_settings, current_size.x);
             if (layouts && output_layouts && render_size.x > 1 && current_size.x > 1) {
+                const auto panel_render_extent =
+                    [&](const std::size_t index) -> glm::ivec2 {
+                    const glm::ivec2 proportional{std::max((*layouts)[index].width, 1),
+                                                  render_size.y};
+                    if (!nvidia_dlss_optimal_query_allowed)
+                        return proportional;
+                    const glm::ivec2 panel_output{std::max((*output_layouts)[index].width, 1),
+                                                  current_size.y};
+                    return nvidiaDlssOptimalRenderExtent(panel_output, nvidia_dlss_quality)
+                        .value_or(proportional);
+                };
                 auto left = render_panel_image(
                     context.viewport,
-                    {std::max((*layouts)[0].width, 1), render_size.y},
+                    panel_render_extent(0),
                     SplitViewPanelId::Left,
                     std::nullopt,
                     nullptr,
@@ -3262,7 +3290,7 @@ namespace lfs::vis {
                     VksplatViewportRenderer::OutputSlot::SplitLeft);
                 auto right = render_panel_image(
                     split_view_service_.secondaryViewport(),
-                    {std::max((*layouts)[1].width, 1), render_size.y},
+                    panel_render_extent(1),
                     SplitViewPanelId::Right,
                     std::nullopt,
                     nullptr,

@@ -404,25 +404,22 @@ namespace lfs::vis {
             cmdImageBarrier2(command_buffer,
                              frame.image,
                              VK_IMAGE_ASPECT_COLOR_BIT,
-                             frame.image_initialized ? VK_IMAGE_LAYOUT_GENERAL
-                                                     : VK_IMAGE_LAYOUT_UNDEFINED,
+                             frame.image_initialized
+                                 ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                 : VK_IMAGE_LAYOUT_UNDEFINED,
                              VK_IMAGE_LAYOUT_GENERAL,
                              frame.image_initialized
-                                 ? (VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT)
+                                 ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
                                  : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
-                             frame.image_initialized
-                                 ? (VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
-                                    VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
-                                 : VK_ACCESS_2_NONE,
+                             frame.image_initialized ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT
+                                                     : VK_ACCESS_2_NONE,
                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                              VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 
             VkDescriptorImageInfo depth_info{};
             depth_info.sampler = depth_sampler;
             depth_info.imageView = params.depth_view;
-            depth_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            depth_info.imageLayout = params.current_depth_layout;
             VkDescriptorImageInfo motion_info{};
             motion_info.imageView = frame.image_view;
             motion_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -458,13 +455,11 @@ namespace lfs::vis {
                              frame.image,
                              VK_IMAGE_ASPECT_COLOR_BIT,
                              VK_IMAGE_LAYOUT_GENERAL,
-                             VK_IMAGE_LAYOUT_GENERAL,
+                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                              VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                             VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
-                                 VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             frame.image_initialized = true;
             return true;
         }
