@@ -5806,8 +5806,9 @@ namespace lfs::vis {
 
         using AccessScope = VulkanImageBarrierTracker::AccessScope;
         const bool cross_queue_output = context.hasDedicatedComputeQueue();
-        const AccessScope fragment_sample{
-            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+        const AccessScope scene_sample{
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
             VK_ACCESS_2_SHADER_READ_BIT,
         };
         const AccessScope external_dependency{};
@@ -5822,7 +5823,7 @@ namespace lfs::vis {
                 context.imageBarriers().imageLayout(image, output.image_generation) !=
                 VK_IMAGE_LAYOUT_UNDEFINED;
             const AccessScope source = has_previous_contents && !cross_queue_output
-                                           ? fragment_sample
+                                           ? scene_sample
                                            : external_dependency;
             context.imageBarriers().transitionImage(cmd,
                                                     image,
@@ -5832,12 +5833,13 @@ namespace lfs::vis {
                                                     source,
                                                     producer);
         };
-        const auto releaseToFragmentSampling = [&](const VkImage image,
-                                                   const AccessScope producer) {
+        const auto releaseToSceneSampling = [&](const VkImage image,
+                                                const AccessScope producer) {
             // On the async-compute path the batch's timeline signal and the GUI
-            // submit's FRAGMENT_SHADER wait form the consumer dependency. A
-            // fragment destination stage in this compute-family command buffer is
-            // both invalid and unable to synchronize the other queue.
+            // submit's COMPUTE_SHADER|FRAGMENT_SHADER wait form the consumer
+            // dependency. A destination scope in this producer command buffer
+            // cannot synchronize the other queue (and fragment is unsupported
+            // on a compute-only queue), so ownership is completed by that wait.
             context.imageBarriers().transitionImage(
                 cmd,
                 image,
@@ -5845,7 +5847,7 @@ namespace lfs::vis {
                 VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 producer,
-                cross_queue_output ? external_dependency : fragment_sample);
+                cross_queue_output ? external_dependency : scene_sample);
         };
 
         const bool has_pixel_state = uniforms.sort_capacity > 0 &&
@@ -5884,8 +5886,8 @@ namespace lfs::vis {
                                  &depth_clear,
                                  1,
                                  &range);
-            releaseToFragmentSampling(output.image.image, transfer_write);
-            releaseToFragmentSampling(output.depth_image.image, transfer_write);
+            releaseToSceneSampling(output.image.image, transfer_write);
+            releaseToSceneSampling(output.depth_image.image, transfer_write);
             output.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             output.depth_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             output.generation = ring_.bumpGeneration(output_index);
@@ -6033,8 +6035,8 @@ namespace lfs::vis {
             }));
         }
         vkCmdDispatch(cmd, group_x, group_y, group_z);
-        releaseToFragmentSampling(output.image.image, compute_storage_write);
-        releaseToFragmentSampling(output.depth_image.image, compute_storage_write);
+        releaseToSceneSampling(output.image.image, compute_storage_write);
+        releaseToSceneSampling(output.depth_image.image, compute_storage_write);
         output.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         output.depth_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         output.generation = ring_.bumpGeneration(output_index);

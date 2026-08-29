@@ -191,6 +191,14 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
+      - name: Checkout NVIDIA DLSS SDK for the portable plugin
+        uses: actions/checkout@v4
+        with:
+          repository: NVIDIA/DLSS
+          ref: a291cc7b314e2b985cd10290b943b070acc8e97f
+          path: external/nvidia-dlss-sdk
+          lfs: true
+
       - name: Install CUDA 12.8
         run: |
           cd ..
@@ -231,7 +239,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $buildDir = $env:BUILD_DIR
-          $cmakeArgs = "-B $buildDir -S . -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_PORTABLE=ON -DBUILD_PYTHON_STUBS=OFF"
+          $cmakeArgs = "-B $buildDir -S . -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_PORTABLE=ON -DBUILD_PYTHON_STUBS=OFF -DLFS_NVIDIA_DLSS_ROOT=external/nvidia-dlss-sdk"
           $retryablePatterns = @(
             'status code 5\d\d',
             'timed out',

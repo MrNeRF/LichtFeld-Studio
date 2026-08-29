@@ -536,6 +536,7 @@ namespace lfs::vis {
             struct TemporalFrame {
                 TemporalFrameInput input;
                 SceneTemporalResolveSettings resolve_settings;
+                SceneTemporalQuality quality = SceneTemporalQuality::Balanced;
             };
 
             glm::mat4 view_projection{1.0f};

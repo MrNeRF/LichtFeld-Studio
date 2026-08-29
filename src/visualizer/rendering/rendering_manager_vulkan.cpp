@@ -12,8 +12,10 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "model_renderability.hpp"
+#include "nvidia_dlss_plugin.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
 #include "rendering/image_layout.hpp"
+#include "rendering/passes/vulkan_scene_dlss_pipeline.hpp"
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene_upscaler_registry.hpp"
@@ -1732,6 +1734,32 @@ namespace lfs::vis {
         glm::ivec2 render_size(
             std::max(static_cast<int>(std::lround(static_cast<float>(current_size.x) * scale)), 1),
             std::max(static_cast<int>(std::lround(static_cast<float>(current_size.y) * scale)), 1));
+        if (requested_upscaler == SceneUpscalerBackend::NvidiaDlss &&
+            reconstruction_runtime_ready && !resize_result.use_interactive_render_scale &&
+            !lfs::core::MemoryPressureCoordinator::instance().pressure_active()) {
+            const std::uint32_t quality =
+                frame_settings.scene_upscaler_preset == "performance"
+                    ? LFS_SCENE_UPSCALER_PLUGIN_PERFORMANCE
+                : frame_settings.scene_upscaler_preset == "quality"
+                    ? LFS_SCENE_UPSCALER_PLUGIN_QUALITY
+                    : LFS_SCENE_UPSCALER_PLUGIN_BALANCED;
+            const auto optimal = NvidiaDlssPlugin::instance().optimalSettings(
+                static_cast<std::uint32_t>(current_size.x),
+                static_cast<std::uint32_t>(current_size.y),
+                quality);
+            if (optimal && optimal->render_width > 0 && optimal->render_height > 0 &&
+                optimal->render_width <= static_cast<std::uint32_t>(current_size.x) &&
+                optimal->render_height <= static_cast<std::uint32_t>(current_size.y)) {
+                render_size = {
+                    static_cast<int>(optimal->render_width),
+                    static_cast<int>(optimal->render_height),
+                };
+                scale = std::min(static_cast<float>(render_size.x) /
+                                     static_cast<float>(current_size.x),
+                                 static_cast<float>(render_size.y) /
+                                     static_cast<float>(current_size.y));
+            }
+        }
         // Ground-truth comparison is a stable reference readout. Its preview
         // resolution follows only the viewport size and the base render scale;
         // scene reconstruction, interactive-resize, and memory-pressure
@@ -1919,8 +1947,14 @@ namespace lfs::vis {
             !split_view_service_.isActive(frame_settings) ||
             splitViewUsesIndependentPanels(frame_settings.split_view_mode) ||
             splitViewUsesPLYComparison(frame_settings.split_view_mode);
+        const bool temporal_backend_requested =
+            requested_upscaler == SceneUpscalerBackend::Temporal ||
+            requested_upscaler == SceneUpscalerBackend::NvidiaDlss;
+        const bool dlss_output_extent_supported =
+            requested_upscaler != SceneUpscalerBackend::NvidiaDlss ||
+            nvidiaDlssSupportsOutputExtent(current_size);
         const bool temporal_eligible =
-            requested_upscaler == SceneUpscalerBackend::Temporal &&
+            temporal_backend_requested && dlss_output_extent_supported &&
             !frame_settings.equirectangular && !frame_settings.apply_appearance_correction &&
             temporal_split_supported &&
             lfs::rendering::isVkSplatBackend(frame_settings.raster_backend);
@@ -1933,10 +1967,13 @@ namespace lfs::vis {
             (frame_dirty & temporal_source_dirty) != 0,
             allow_temporal_settle);
         glm::vec2 applied_temporal_jitter_pixels = temporal_convergence_.jitter();
-        if (reported_upscaler.requested == SceneUpscalerBackend::Temporal &&
-            reported_upscaler.fellBack()) {
-            // Native fallback still presents this raster; zero jitter so it does
-            // not shimmer while Temporal retries.
+        if (temporal_backend_requested &&
+            (reported_upscaler.requested != requested_upscaler ||
+             reported_upscaler.fellBack())) {
+            // A newly requested temporal backend has not proved that it can
+            // present yet, and an explicit runtime fallback still presents this
+            // raster natively. Keep both cases unjittered; the exact applied
+            // zero offset is carried into the first valid history frame.
             applied_temporal_jitter_pixels = glm::vec2(0.0f);
         }
         const std::uint64_t temporal_camera_cut_generation =
@@ -2247,7 +2284,10 @@ namespace lfs::vis {
             VkImage depth_image = VK_NULL_HANDLE;
             VkImageView depth_image_view = VK_NULL_HANDLE;
             VkImageLayout depth_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            VkFormat depth_image_format = VK_FORMAT_UNDEFINED;
             std::uint64_t depth_image_generation = 0;
+            glm::ivec2 depth_image_size{0, 0};
+            glm::ivec2 depth_alloc_size{0, 0};
             std::optional<TemporalFrameInput> temporal_input;
             bool flip_y = false;
             glm::ivec2 size{0, 0};
@@ -2533,7 +2573,10 @@ namespace lfs::vis {
                                          .depth_image = result->depth_image,
                                          .depth_image_view = result->depth_image_view,
                                          .depth_image_layout = result->depth_image_layout,
+                                         .depth_image_format = VK_FORMAT_R32_SFLOAT,
                                          .depth_image_generation = result->depth_generation,
+                                         .depth_image_size = result->size,
+                                         .depth_alloc_size = result->alloc_size,
                                          .temporal_input = temporal_eligible
                                                                ? std::optional<TemporalFrameInput>{
                                                                      {.view = frame_ctx.makeFrameView(
@@ -2547,7 +2590,8 @@ namespace lfs::vis {
                                                                       .render_scale = scale,
                                                                       .scene_generation = panel_scene_generation,
                                                                       .backend_key =
-                                                                          static_cast<std::uint64_t>(temporal_quality) + 1,
+                                                                          (static_cast<std::uint64_t>(requested_upscaler) << 32) |
+                                                                          (static_cast<std::uint64_t>(temporal_quality) + 1),
                                                                       .camera_cut = temporal_camera_cut}}
                                                                : std::nullopt,
                                          .flip_y = result->flip_y,
@@ -2584,11 +2628,15 @@ namespace lfs::vis {
                     .depth_image = panel.depth_image,
                     .depth_image_view = panel.depth_image_view,
                     .depth_image_layout = panel.depth_image_layout,
+                    .depth_image_format = panel.depth_image_format,
                     .depth_image_generation = panel.depth_image_generation,
+                    .depth_image_size = panel.depth_image_size,
+                    .depth_allocation_size = panel.depth_alloc_size,
                     .image_size = valid,
                     .allocation_size = alloc,
                     .temporal_input = panel.temporal_input,
                     .temporal_settings = sceneTemporalQualitySettings(temporal_quality),
+                    .temporal_quality = temporal_quality,
                     .uv_scale = outputUvScale(valid, alloc),
                     .uv_clamp_max = outputUvClampMax(valid, alloc),
                 };
@@ -3532,8 +3580,14 @@ namespace lfs::vis {
                     if (render_result->depth_image_view != VK_NULL_HANDLE) {
                         // Hardware depth attachment stores Vulkan-native NDC z; the
                         // depth-blit pass can use it directly without near/far conversion.
+                        mesh_frame.depth_blit.external_image = render_result->depth_image;
                         mesh_frame.depth_blit.external_image_view = render_result->depth_image_view;
+                        mesh_frame.depth_blit.external_image_layout = render_result->depth_image_layout;
+                        mesh_frame.depth_blit.external_image_format = VK_FORMAT_R32_SFLOAT;
                         mesh_frame.depth_blit.external_image_generation = render_result->depth_generation;
+                        mesh_frame.depth_blit.external_image_size = render_result->size;
+                        mesh_frame.depth_blit.external_image_allocation_size =
+                            render_result->size;
                         mesh_frame.depth_blit.depth_is_ndc = true;
                         mesh_frame.depth_blit.flip_y = render_result->flip_y;
                     }
@@ -3809,8 +3863,14 @@ namespace lfs::vis {
                                 auto mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view);
                                 populate_independent_split_mesh_panels(mesh_frame);
                                 if (render_result.depth_image_view != VK_NULL_HANDLE) {
+                                    mesh_frame.depth_blit.external_image = render_result.depth_image;
                                     mesh_frame.depth_blit.external_image_view = render_result.depth_image_view;
+                                    mesh_frame.depth_blit.external_image_layout = render_result.depth_image_layout;
+                                    mesh_frame.depth_blit.external_image_format = VK_FORMAT_R32_SFLOAT;
                                     mesh_frame.depth_blit.external_image_generation = render_result.depth_generation;
+                                    mesh_frame.depth_blit.external_image_size = render_result.size;
+                                    mesh_frame.depth_blit.external_image_allocation_size =
+                                        render_result.alloc_size;
                                     mesh_frame.depth_blit.depth_is_ndc = false;
                                     mesh_frame.depth_blit.flip_y = render_result.flip_y;
                                     mesh_frame.depth_blit.near_plane = request.frame_view.near_plane > 0.0f
@@ -3853,10 +3913,13 @@ namespace lfs::vis {
                                                                     applied_temporal_jitter_pixels, render_size),
                                                 .render_scale = scale,
                                                 .scene_generation = scene_generation,
-                                                .backend_key = static_cast<std::uint64_t>(quality) + 1,
+                                                .backend_key =
+                                                    (static_cast<std::uint64_t>(requested_upscaler) << 32) |
+                                                    (static_cast<std::uint64_t>(quality) + 1),
                                                 .camera_cut = temporal_camera_cut,
                                             },
                                             .resolve_settings = sceneTemporalQualitySettings(quality),
+                                            .quality = quality,
                                         };
                                         temporal_frame_published = true;
                                     }

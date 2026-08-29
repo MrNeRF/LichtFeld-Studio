@@ -4221,6 +4221,7 @@ namespace lfs::vis::gui {
                 params.external_scene_image_view != VK_NULL_HANDLE &&
                 params.depth_blit.external_image_view != VK_NULL_HANDLE &&
                 params.scene_image_size.x > 0 && params.scene_image_size.y > 0 &&
+                params.depth_blit.external_image_size == params.scene_image_size &&
                 output_extent.x > 0 && output_extent.y > 0 &&
                 temporal_frame->input.view.size == params.scene_image_size;
             if (temporal_inputs_match) {
@@ -4230,6 +4231,13 @@ namespace lfs::vis::gui {
                             params.scene_image_alloc_size.y >= params.scene_image_size.y
                         ? params.scene_image_alloc_size
                         : params.scene_image_size;
+                const glm::ivec2 depth_allocation_extent =
+                    params.depth_blit.external_image_allocation_size.x >=
+                                params.depth_blit.external_image_size.x &&
+                            params.depth_blit.external_image_allocation_size.y >=
+                                params.depth_blit.external_image_size.y
+                        ? params.depth_blit.external_image_allocation_size
+                        : params.depth_blit.external_image_size;
                 const SceneDepthContract depth = makeSceneDepthContract(
                     true,
                     SceneDepthStorage::VulkanImage,
@@ -4278,15 +4286,28 @@ namespace lfs::vis::gui {
                             .enabled = true,
                             .view = TemporalViewId::Main,
                             .current_depth_view = params.depth_blit.external_image_view,
-                            .current_depth_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            .current_depth_layout = params.depth_blit.external_image_layout,
                             .depth = depth,
-                            .allocation_extent = allocation_extent,
+                            .allocation_extent = depth_allocation_extent,
                         },
                         .depth_relative_threshold = temporal_frame->resolve_settings.depth_relative_threshold,
                         .depth_absolute_threshold = temporal_frame->resolve_settings.depth_absolute_threshold,
                     },
                     .frame_slot = frame_slot,
                 };
+                if (params.scene_upscaler == SceneUpscalerBackend::NvidiaDlss &&
+                    nvidiaDlssSupportsOutputExtent(output_extent) &&
+                    params.external_scene_image != VK_NULL_HANDLE &&
+                    params.depth_blit.external_image != VK_NULL_HANDLE) {
+                    params.dlss = VulkanSceneDlssPipelineRequest{
+                        .temporal = *params.temporal,
+                        .color_image = params.external_scene_image,
+                        .color_format = VK_FORMAT_R8G8B8A8_UNORM,
+                        .depth_image = params.depth_blit.external_image,
+                        .depth_format = params.depth_blit.external_image_format,
+                        .quality = temporal_frame->quality,
+                    };
+                }
             }
 
             if (params.split_view.enabled) {
@@ -4298,6 +4319,7 @@ namespace lfs::vis::gui {
                         panel.external_image_view == VK_NULL_HANDLE ||
                         panel.depth_image_view == VK_NULL_HANDLE ||
                         panel.image_size.x <= 0 || panel.image_size.y <= 0 ||
+                        panel.depth_image_size != panel.image_size ||
                         panel.temporal_input->view.size != panel.image_size) {
                         return std::nullopt;
                     }
@@ -4310,6 +4332,11 @@ namespace lfs::vis::gui {
                                 panel.allocation_size.y >= panel.image_size.y
                             ? panel.allocation_size
                             : panel.image_size;
+                    const glm::ivec2 depth_allocation_extent =
+                        panel.depth_allocation_size.x >= panel.depth_image_size.x &&
+                                panel.depth_allocation_size.y >= panel.depth_image_size.y
+                            ? panel.depth_allocation_size
+                            : panel.depth_image_size;
                     const bool jitter_enabled = !panel.temporal_input->view.orthographic;
                     const SceneDepthContract depth = makeSceneDepthContract(
                         true,
@@ -4358,9 +4385,9 @@ namespace lfs::vis::gui {
                                 .enabled = true,
                                 .view = view,
                                 .current_depth_view = panel.depth_image_view,
-                                .current_depth_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                .current_depth_layout = panel.depth_image_layout,
                                 .depth = depth,
-                                .allocation_extent = allocation_extent,
+                                .allocation_extent = depth_allocation_extent,
                             },
                             .depth_relative_threshold = panel.temporal_settings.depth_relative_threshold,
                             .depth_absolute_threshold = panel.temporal_settings.depth_absolute_threshold,
@@ -4372,6 +4399,33 @@ namespace lfs::vis::gui {
                     params.split_view.left, TemporalViewId::SplitLeft);
                 params.split_temporal[1] = make_split_temporal_request(
                     params.split_view.right, TemporalViewId::SplitRight);
+                if (params.scene_upscaler == SceneUpscalerBackend::NvidiaDlss) {
+                    const auto make_split_dlss_request =
+                        [](const VulkanSplitViewPanel& panel,
+                           const std::optional<VulkanSceneTemporalPipelineRequest>& temporal)
+                        -> std::optional<VulkanSceneDlssPipelineRequest> {
+                        if (!temporal ||
+                            !nvidiaDlssSupportsOutputExtent(
+                                temporal->temporal.output_extent) ||
+                            panel.external_image == VK_NULL_HANDLE ||
+                            panel.depth_image == VK_NULL_HANDLE ||
+                            panel.depth_image_layout == VK_IMAGE_LAYOUT_UNDEFINED) {
+                            return std::nullopt;
+                        }
+                        return VulkanSceneDlssPipelineRequest{
+                            .temporal = *temporal,
+                            .color_image = panel.external_image,
+                            .color_format = VK_FORMAT_R8G8B8A8_UNORM,
+                            .depth_image = panel.depth_image,
+                            .depth_format = panel.depth_image_format,
+                            .quality = panel.temporal_quality,
+                        };
+                    };
+                    params.split_dlss[0] = make_split_dlss_request(
+                        params.split_view.left, params.split_temporal[0]);
+                    params.split_dlss[1] = make_split_dlss_request(
+                        params.split_view.right, params.split_temporal[1]);
+                }
             }
         }
 

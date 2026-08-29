@@ -201,6 +201,15 @@ dist/
 | `BUILD_LOCALIZATION_TESTS` | OFF | Register headless localization contract tests |
 | `LFS_ENFORCE_LINUX_GUI_BACKENDS` | ON | Linux only. Fail configure if SDL3 would be built without both X11 and Wayland |
 | `LFS_CUDA_COMPILER_CACHE` | *(empty)* | Compiler cache for CUDA only. Empty follows the auto-detected launcher; `OFF` disables CUDA caching; or name/path of a launcher such as `ccache`. Needed where nvcc cannot be wrapped by sccache |
+| `LFS_ENABLE_NVIDIA_DLSS` | OFF | Build the optional external NVIDIA DLSS viewport plugin; portable builds force this on |
+| `LFS_NVIDIA_DLSS_ROOT` | *(empty)* | Path to an NVIDIA DLSS SDK checkout supplied separately; required when the plugin is enabled |
+
+The DLSS option builds a separate plugin under `scene_upscalers/nvidia`; the
+main executable and `lfs_visualizer` do not link to NGX. The plugin is opened
+from that application-owned path during Vulkan bootstrap only to query required
+extensions. NGX runtime initialization and GPU feature resources remain lazy
+until DLSS is selected. Portable builds require an SDK checkout and package the
+corresponding vendor runtime subject to NVIDIA's redistribution terms.
 
 ## Preprocess Model Downloads
 

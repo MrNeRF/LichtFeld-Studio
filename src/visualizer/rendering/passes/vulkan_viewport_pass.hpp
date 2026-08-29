@@ -9,6 +9,7 @@
 #include "vulkan_depth_blit_pass.hpp"
 #include "vulkan_environment_pass.hpp"
 #include "vulkan_mesh_pass.hpp"
+#include "vulkan_scene_dlss_pipeline.hpp"
 #include "vulkan_scene_temporal_pipeline.hpp"
 #include "vulkan_split_view_pass.hpp"
 
@@ -123,6 +124,8 @@ namespace lfs::vis {
         SceneUpscalerBackend scene_upscaler = SceneUpscalerBackend::Native;
         std::optional<VulkanSceneTemporalPipelineRequest> temporal;
         std::array<std::optional<VulkanSceneTemporalPipelineRequest>, 2> split_temporal;
+        std::optional<VulkanSceneDlssPipelineRequest> dlss;
+        std::array<std::optional<VulkanSceneDlssPipelineRequest>, 2> split_dlss;
 
         bool grid_enabled = false;
         glm::mat4 grid_view{1.0f};

@@ -1027,6 +1027,11 @@ namespace lfs::app {
                 if (!backend) {
                     return std::unexpected("Field 'scene_upscaler' must name a registered scene reconstruction backend");
                 }
+                if (!vis::sceneUpscalerBackendAvailable(*backend)) {
+                    return std::unexpected(
+                        "Field 'scene_upscaler' names a scene reconstruction backend "
+                        "that is not available in this process");
+                }
                 if (backend_explicit)
                     settings.scene_upscaler = backend_id;
                 if (preset_explicit) {

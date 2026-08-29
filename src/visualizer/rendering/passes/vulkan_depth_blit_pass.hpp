@@ -24,8 +24,13 @@ namespace lfs::vis {
         float far_plane = 1000.0f;
         // When set, the pass binds this VkImageView (a CUDA/Vulkan interop depth view
         // published by the viewport interop path) and skips the staging upload path.
+        VkImage external_image = VK_NULL_HANDLE;
         VkImageView external_image_view = VK_NULL_HANDLE;
+        VkImageLayout external_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkFormat external_image_format = VK_FORMAT_R32_SFLOAT;
         std::uint64_t external_image_generation = 0;
+        glm::ivec2 external_image_size{0, 0};
+        glm::ivec2 external_image_allocation_size{0, 0};
         // Valid-region UV for padded depth images (default identity).
         glm::vec2 uv_scale{1.0f, 1.0f};
         glm::vec2 uv_clamp_max{1.0f, 1.0f};

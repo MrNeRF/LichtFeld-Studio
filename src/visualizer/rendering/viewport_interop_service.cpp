@@ -62,7 +62,10 @@ namespace lfs::vis {
         glm::ivec2 source_size{0, 0};
         bool flip_y = false;
         bool disabled = false;
+        VkImage published_image = VK_NULL_HANDLE;
         VkImageView published_image_view = VK_NULL_HANDLE;
+        VkImageLayout published_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VkFormat published_image_format = VK_FORMAT_UNDEFINED;
         std::uint64_t published_image_generation = 0;
         glm::ivec2 published_valid_size{0, 0};
         glm::ivec2 published_alloc_size{0, 0};
@@ -144,7 +147,10 @@ namespace lfs::vis {
     }
 
     void ViewportInteropService::clearPublished(Channel& channel) {
+        channel.published_image = VK_NULL_HANDLE;
         channel.published_image_view = VK_NULL_HANDLE;
+        channel.published_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        channel.published_image_format = VK_FORMAT_UNDEFINED;
         channel.published_image_generation = 0;
         channel.published_valid_size = {0, 0};
         channel.published_alloc_size = {0, 0};
@@ -156,7 +162,10 @@ namespace lfs::vis {
             clearPublished(channel);
             return;
         }
+        channel.published_image = target.unit->image.image;
         channel.published_image_view = target.unit->image.view;
+        channel.published_image_layout = target.unit->layout;
+        channel.published_image_format = target.unit->image.format;
         channel.published_image_generation = target.generation;
         channel.published_valid_size = target.valid_size;
         channel.published_alloc_size = target.alloc_size;
@@ -854,7 +863,8 @@ namespace lfs::vis {
             barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
             barrier.srcStageMask = source.stage;
             barrier.srcAccessMask = source.access;
-            barrier.dstStageMask = destination.stage;
+            barrier.dstStageMask = destination.stage |
+                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
             barrier.dstAccessMask = destination.access;
             barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
             barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -889,7 +899,8 @@ namespace lfs::vis {
             // GENERAL keeps CacheHit/bind from sampling a still-GENERAL GPU image.
             if (!context.addFrameTimelineWait(pending.unit->semaphore.semaphore,
                                               pending.cuda_signal_value,
-                                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT)) {
+                                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT)) {
                 LOG_ERROR(
                     "recordFrameBarriers: addFrameTimelineWait failed; leaving layout GENERAL: {}",
                     context.lastError());
@@ -983,13 +994,18 @@ namespace lfs::vis {
 
         const auto& depth = channels_->depth_blit;
         if (depth.published_image_view != VK_NULL_HANDLE) {
+            params.depth_blit.external_image = depth.published_image;
             params.depth_blit.external_image_view = depth.published_image_view;
+            params.depth_blit.external_image_layout = depth.published_image_layout;
+            params.depth_blit.external_image_format = depth.published_image_format;
             params.depth_blit.external_image_generation = depth.published_image_generation;
             const glm::ivec2 d_valid = depth.published_valid_size;
             const glm::ivec2 d_alloc =
                 depth.published_alloc_size.x > 0 && depth.published_alloc_size.y > 0
                     ? depth.published_alloc_size
                     : d_valid;
+            params.depth_blit.external_image_size = d_valid;
+            params.depth_blit.external_image_allocation_size = d_alloc;
             params.depth_blit.uv_scale = outputUvScale(d_valid, d_alloc);
             params.depth_blit.uv_clamp_max = outputUvClampMax(d_valid, d_alloc);
         }
@@ -999,7 +1015,9 @@ namespace lfs::vis {
         // pass binds these directly and skips the CPU staging upload.
         if (params.split_view.enabled) {
             if (params.external_scene_image_view != VK_NULL_HANDLE) {
+                params.split_view.left.external_image = params.external_scene_image;
                 params.split_view.left.external_image_view = params.external_scene_image_view;
+                params.split_view.left.external_image_layout = params.external_scene_image_layout;
                 params.split_view.left.external_image_generation = params.external_scene_image_generation;
                 // Left panel UV: scene valid/alloc (tensor or external).
                 params.split_view.left.uv_scale =
@@ -1009,7 +1027,9 @@ namespace lfs::vis {
             }
             const auto& split = channels_->split_right;
             if (split.published_image_view != VK_NULL_HANDLE) {
+                params.split_view.right.external_image = split.published_image;
                 params.split_view.right.external_image_view = split.published_image_view;
+                params.split_view.right.external_image_layout = split.published_image_layout;
                 params.split_view.right.external_image_generation = split.published_image_generation;
                 const glm::ivec2 r_valid = split.published_valid_size;
                 const glm::ivec2 r_alloc =

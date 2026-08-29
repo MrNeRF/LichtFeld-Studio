@@ -1,0 +1,49 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D u_source_depth;
+layout(set = 0, binding = 1, r32f) uniform writeonly image2D u_dlss_depth;
+
+layout(push_constant) uniform DlssDepthParams {
+    ivec4 extent_encoding; // xy = valid extent, z = 1 NDC, 2 perspective linear, 3 ortho linear, w = flip y
+    vec4 planes;           // x = near, y = far
+} params;
+
+float linear_to_ndc(float depth) {
+    float near_plane = params.planes.x;
+    float far_plane = params.planes.y;
+    if (!(depth > 0.0) || !(near_plane > 0.0) || !(far_plane > near_plane)) {
+        return 1.0;
+    }
+    if (params.extent_encoding.z == 3) {
+        return (depth - near_plane) / (far_plane - near_plane);
+    }
+    return far_plane / (far_plane - near_plane) *
+           (1.0 - near_plane / max(depth, near_plane));
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 extent = params.extent_encoding.xy;
+    if (any(greaterThanEqual(pixel, extent))) {
+        return;
+    }
+
+    ivec2 source_pixel = pixel;
+    if (params.extent_encoding.w != 0) {
+        source_pixel.y = extent.y - 1 - source_pixel.y;
+    }
+    float depth = texelFetch(u_source_depth, source_pixel, 0).r;
+    if (params.extent_encoding.z != 1) {
+        depth = linear_to_ndc(depth);
+    }
+    if (isnan(depth) || isinf(depth) || depth < 0.0 || depth >= 1.0) {
+        depth = 1.0;
+    }
+    imageStore(u_dlss_depth, pixel, vec4(depth, 0.0, 0.0, 0.0));
+}

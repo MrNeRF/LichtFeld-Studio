@@ -35,11 +35,15 @@ namespace lfs::vis {
         VkImage depth_image = VK_NULL_HANDLE;
         VkImageView depth_image_view = VK_NULL_HANDLE;
         VkImageLayout depth_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VkFormat depth_image_format = VK_FORMAT_UNDEFINED;
         std::uint64_t depth_image_generation = 0;
+        glm::ivec2 depth_image_size{0, 0};
+        glm::ivec2 depth_allocation_size{0, 0};
         glm::ivec2 image_size{0, 0};
         glm::ivec2 allocation_size{0, 0};
         std::optional<TemporalFrameInput> temporal_input;
         SceneTemporalResolveSettings temporal_settings;
+        SceneTemporalQuality temporal_quality = SceneTemporalQuality::Balanced;
         // Valid-region UV for padded panel textures (default identity).
         glm::vec2 uv_scale{1.0f, 1.0f};
         glm::vec2 uv_clamp_max{1.0f, 1.0f};

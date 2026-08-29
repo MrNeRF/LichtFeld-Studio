@@ -19,10 +19,15 @@ The built-in registry exposes:
 | `native` | Off | `native` (1.0) | None |
 | `spatial` | Spatial | `quality` (0.75), `balanced` (0.67), `performance` (0.50) | None |
 | `temporal` | Temporal | `quality` (0.75), `balanced` (0.67), `performance` (0.50) | Depth, motion, jitter and per-view color/depth history |
+| `nvidia-dlss` | NVIDIA DLSS (optional) | `quality` (2/3), `balanced` (0.58), `performance` (0.50) | Depth, motion and jitter; history is owned by the NGX feature |
 
 The renderer's existing `render_scale` remains the base scene scale. A selected
 backend's input multiplier is applied independently, so reconstruction does not
 rewrite the base control. Native presentation ignores the multiplier.
+For NVIDIA DLSS, the table records the catalog's bootstrap values only. Once
+NGX is initialized, its optimal-settings query selects the exact render extent
+for the current output size and preset; that result is cached until one of
+those inputs changes.
 
 The requested backend, effective backend, fallback state, and runtime readiness
 are distinct. The built-in spatial Vulkan pipeline is created lazily on first
@@ -77,6 +82,59 @@ frames and then releases the per-view color and depth history allocations. The
 immutable compute-pipeline state remains available for a later Temporal
 selection, avoiding persistent history VRAM without paying full pipeline
 creation cost on every backend switch.
+
+## Optional NVIDIA DLSS plugin
+
+NVIDIA DLSS is isolated behind the versioned
+`scene_upscaler_plugin_api.h` C ABI. The main executable and
+`lfs_visualizer` do not link against the NVIDIA SDK. A build that enables DLSS
+produces `lfs_scene_upscaler_nvidia_dlss.dll` on Windows or
+`liblfs_scene_upscaler_nvidia_dlss.so` on Linux and places the NVIDIA runtime
+beside it under `scene_upscalers/nvidia`. The backend is registered only when
+that external plugin is present and its ABI and identifier validate.
+
+The host opens the plugin during Vulkan bootstrap because NGX must declare its
+required Vulkan instance and device extensions before those objects are
+created. NGX runtime initialization, capability queries, per-view feature
+creation and full-resolution output allocations remain lazy and occur only
+after the user selects NVIDIA DLSS. Safe mode does not load optional
+scene-reconstruction plugins. Dynamic libraries are opened from exact
+application-relative plugin paths; arbitrary system search-path discovery is
+not used.
+
+DLSS consumes the same reviewed temporal frame contract as the built-in
+Temporal backend: unjittered current-to-previous pixel motion, the exact jitter
+applied to the rendered color image, scene/camera/backend reset reasons and
+independent main/left/right view identity. Switching between Temporal and DLSS
+changes the history key. A failed DLSS initialization or evaluation is latched
+to native presentation instead of being retried every frame; selecting Native
+before selecting DLSS again is the explicit retry action. Split output is
+transactional, so both panels resolve through DLSS or both remain native.
+
+VkSplat publishes positive linear view depth, while NGX expects raster depth.
+An isolated compute pass therefore converts each valid render subregion to a
+non-inverted `R32_SFLOAT` Vulkan depth image (`near = 0`, `far = 1`) before
+evaluation. Color remains perceptually encoded LDR `RGBA8`; motion remains
+low-resolution `RG16F`, current-to-previous, top-left pixel motion without
+jitter. The exact applied projection jitter is supplied separately in render
+pixel units. Output extents below NGX's 32-by-32 minimum use a temporary native
+presentation and do not latch a backend failure, so resizing back restores the
+requested DLSS path without a manual retry.
+
+Ordinary developer builds leave the plugin disabled. To build it from an SDK
+checkout obtained separately from NVIDIA:
+
+```sh
+cmake -S . -B build -DLFS_ENABLE_NVIDIA_DLSS=ON -DLFS_NVIDIA_DLSS_ROOT=/path/to/NVIDIA-DLSS-SDK
+```
+
+Both Debug and Release SDK runtimes are supported in ordinary opt-in developer
+builds. Portable configurations force `LFS_ENABLE_NVIDIA_DLSS=ON` and therefore
+require the SDK at `external/nvidia-dlss-sdk` unless `LFS_NVIDIA_DLSS_ROOT` is
+set explicitly.
+CMake never downloads the SDK or accepts its license for a developer build.
+Anyone redistributing a portable package must satisfy NVIDIA's SDK and runtime
+redistribution terms.
 
 ## Persistence and safe mode
 
