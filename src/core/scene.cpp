@@ -3752,6 +3752,15 @@ namespace lfs::core {
             return result;
         };
 
+        // Multi-source gathers concatenate via float4-swizzle kernels; a piece that
+        // kept compact q16 / IEEE-f16 SH must be decoded to a Float32 swizzle first.
+        const auto ensure_float_swizzled_shN = [&](lfs::core::SplatData& piece) {
+            if (!shN_requires_float_materialize(piece))
+                return;
+            lfs::core::Tensor canonical = piece.shN_canonical();
+            piece.shN_set_from_canonical(canonical, piece.means().capacity());
+        };
+
         if (all_identity) {
             if (splats.size() == 1) {
                 const auto* const src = splats[0].first;
@@ -3817,12 +3826,13 @@ namespace lfs::core {
 
             size_t offset = 0;
             for (const auto& [model, _] : splats) {
-                // Route every source through clone_filtered_swizzled so q16 /
-                // ieee-f16 / deleted-mask cases materialise Float32 shN first.
+                // clone_filtered_swizzled keeps compact q16 / IEEE-f16 when there
+                // is no deleted mask. Convert those pieces to Float32 swizzle here.
                 auto piece = clone_filtered_swizzled(*model);
                 if (!piece || piece->size() == 0) {
                     continue;
                 }
+                ensure_float_swizzled_shN(*piece);
                 const size_t visible = static_cast<size_t>(piece->size());
 
                 means.slice(0, offset, offset + visible) = piece->means_raw();
@@ -3834,7 +3844,7 @@ namespace lfs::core {
                 const auto src_layout_rest = static_cast<std::uint32_t>(piece->max_sh_coeffs_rest());
                 if (shN.is_valid() && src_layout_rest > 0 && piece->shN_raw().is_valid() &&
                     piece->shN_raw().numel() > 0) {
-                    // piece is always Float32 float4-swizzle after clone_filtered.
+                    // piece is Float32 float4-swizzle after ensure_float_swizzled_shN.
                     lfs::core::shN_swizzled_copy_contiguous(
                         piece->shN_raw().ptr<float>(),
                         shN.ptr<float>(),
@@ -3894,6 +3904,9 @@ namespace lfs::core {
                 LOG_ERROR("Failed to transform splat data while merging scene nodes: {}", e.what());
                 return nullptr;
             }
+
+            // Translation/scale-only transforms leave q16 SH in place; decode here.
+            ensure_float_swizzled_shN(*transformed);
 
             means_list.push_back(transformed->means_raw().clone());
             sh0_list.push_back(transformed->sh0_raw().clone());

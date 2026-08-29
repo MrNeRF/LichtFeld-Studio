@@ -1,6 +1,10 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include "bilateral_grid.hpp"
 #include "config_serialization.hpp"
 #include "core/cuda_error.hpp"
