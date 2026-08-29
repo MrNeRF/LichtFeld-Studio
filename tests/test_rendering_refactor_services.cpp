@@ -14,6 +14,8 @@
 #include "io/cache_image_loader.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/render_constants.hpp"
+#include "rendering/vksplat_viewport_renderer.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/rendering/render_pass.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
@@ -2310,6 +2312,128 @@ namespace lfs::vis {
         EXPECT_TRUE(settings.equirectangular);
         EXPECT_EQ(settings.raster_backend, Backend::ThreeDgut);
         EXPECT_TRUE(settings.gut);
+    }
+
+    TEST(OverlayParamPackingTest, GTComparisonRenderCameraReplacesDrawAndContainmentIntrinsics) {
+        using lfs::core::Camera;
+        using lfs::core::CameraModelType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+
+        Camera camera(
+            Tensor::from_vector({1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f}, {size_t{3}, size_t{3}}, Device::CPU),
+            Tensor::from_vector({0.0f, 0.0f, 0.0f}, {size_t{3}}, Device::CPU),
+            500.0f, 600.0f, 320.0f, 240.0f,
+            Tensor(), Tensor(), CameraModelType::PINHOLE,
+            "test.png", {}, {}, 640, 480, 7);
+        glm::mat4 scene_transform(1.0f);
+        scene_transform = glm::translate(scene_transform, glm::vec3(1.0f, 2.0f, 3.0f));
+        scene_transform = glm::scale(scene_transform, glm::vec3(2.0f, 3.0f, 4.0f));
+        const auto render_camera = detail::buildGTRenderCamera(camera, {1280, 960}, scene_transform);
+        ASSERT_TRUE(render_camera.has_value());
+
+        lfs::rendering::FrameView frame_view{};
+        frame_view.intrinsics_override = lfs::rendering::CameraIntrinsics{
+            .focal_x = 111.0f,
+            .focal_y = 122.0f,
+            .center_x = 133.0f,
+            .center_y = 144.0f};
+        frame_view.containment_intrinsics = lfs::rendering::CameraIntrinsics{
+            .focal_x = 211.0f,
+            .focal_y = 222.0f,
+            .center_x = 233.0f,
+            .center_y = 244.0f};
+        bool equirectangular = true;
+        applyGTComparisonRenderCamera(frame_view, equirectangular, *render_camera);
+
+        ASSERT_TRUE(frame_view.intrinsics_override.has_value());
+        ASSERT_TRUE(frame_view.containment_intrinsics.has_value());
+        EXPECT_FLOAT_EQ(frame_view.intrinsics_override->focal_x, 1000.0f);
+        EXPECT_FLOAT_EQ(frame_view.intrinsics_override->focal_y, 1200.0f);
+        EXPECT_FLOAT_EQ(frame_view.intrinsics_override->center_x, 640.0f);
+        EXPECT_FLOAT_EQ(frame_view.intrinsics_override->center_y, 480.0f);
+        EXPECT_FLOAT_EQ(frame_view.containment_intrinsics->focal_x, 1000.0f);
+        EXPECT_FLOAT_EQ(frame_view.containment_intrinsics->focal_y, 1200.0f);
+        EXPECT_FLOAT_EQ(frame_view.containment_intrinsics->center_x, 640.0f);
+        EXPECT_FLOAT_EQ(frame_view.containment_intrinsics->center_y, 480.0f);
+        EXPECT_FALSE(frame_view.orthographic);
+        EXPECT_FLOAT_EQ(frame_view.ortho_scale, lfs::rendering::DEFAULT_ORTHO_SCALE);
+        EXPECT_FALSE(equirectangular);
+    }
+
+    TEST(OverlayParamPackingTest, OverlayParamsCarryUnjitteredContainmentIntrinsics) {
+        lfs::rendering::ViewportRenderRequest request{};
+        request.frame_view.size = {640, 480};
+        request.frame_view.intrinsics_override = lfs::rendering::CameraIntrinsics{
+            .focal_x = 111.0f,
+            .focal_y = 122.0f,
+            .center_x = 133.25f,
+            .center_y = 144.125f};
+        request.frame_view.containment_intrinsics = lfs::rendering::CameraIntrinsics{
+            .focal_x = 211.0f,
+            .focal_y = 222.0f,
+            .center_x = 233.0f,
+            .center_y = 244.0f};
+        request.filters.view_volume = lfs::rendering::BoundingBox{
+            .min = glm::vec3(-1.0f),
+            .max = glm::vec3(1.0f),
+            .transform = glm::mat4(1.0f)};
+        request.filters.screen_window = lfs::rendering::SelectionScreenWindow{};
+
+        const auto packed = detail::buildOverlayParamsCpuFloats(request, false, false, false, 0, false);
+        ASSERT_TRUE(packed.has_value());
+        const std::size_t base = static_cast<std::size_t>(detail::ViewIntrinsics) * 4u;
+        EXPECT_FLOAT_EQ((*packed)[base + 0], 211.0f);
+        EXPECT_FLOAT_EQ((*packed)[base + 1], 222.0f);
+        EXPECT_FLOAT_EQ((*packed)[base + 2], 233.0f);
+        EXPECT_FLOAT_EQ((*packed)[base + 3], 244.0f);
+    }
+
+    TEST(OverlayParamPackingTest, OverlayParamsSlotTwelveStaysZeroWithoutContainmentIntrinsics) {
+        lfs::rendering::ViewportRenderRequest request{};
+        request.frame_view.size = {640, 480};
+        request.frame_view.intrinsics_override = lfs::rendering::CameraIntrinsics{
+            .focal_x = 111.0f,
+            .focal_y = 122.0f,
+            .center_x = 133.0f,
+            .center_y = 144.0f};
+        request.filters.view_volume = lfs::rendering::BoundingBox{
+            .min = glm::vec3(-1.0f),
+            .max = glm::vec3(1.0f),
+            .transform = glm::mat4(1.0f)};
+        request.filters.screen_window = lfs::rendering::SelectionScreenWindow{};
+
+        const auto packed = detail::buildOverlayParamsCpuFloats(request, false, false, false, 0, false);
+        ASSERT_TRUE(packed.has_value());
+        const std::size_t base = static_cast<std::size_t>(detail::ViewIntrinsics) * 4u;
+        EXPECT_FLOAT_EQ((*packed)[base + 0], 0.0f);
+        EXPECT_FLOAT_EQ((*packed)[base + 1], 0.0f);
+        EXPECT_FLOAT_EQ((*packed)[base + 2], 0.0f);
+        EXPECT_FLOAT_EQ((*packed)[base + 3], 0.0f);
+    }
+
+    TEST(OverlayParamPackingTest, OverlayParamsSlotTwelveStaysZeroForOrthographic) {
+        lfs::rendering::ViewportRenderRequest request{};
+        request.frame_view.size = {640, 480};
+        request.frame_view.orthographic = true;
+        request.frame_view.containment_intrinsics = lfs::rendering::CameraIntrinsics{
+            .focal_x = 211.0f,
+            .focal_y = 222.0f,
+            .center_x = 233.0f,
+            .center_y = 244.0f};
+        request.filters.view_volume = lfs::rendering::BoundingBox{
+            .min = glm::vec3(-1.0f),
+            .max = glm::vec3(1.0f),
+            .transform = glm::mat4(1.0f)};
+        request.filters.screen_window = lfs::rendering::SelectionScreenWindow{};
+
+        const auto packed = detail::buildOverlayParamsCpuFloats(request, false, false, false, 0, false);
+        ASSERT_TRUE(packed.has_value());
+        const std::size_t base = static_cast<std::size_t>(detail::ViewIntrinsics) * 4u;
+        EXPECT_FLOAT_EQ((*packed)[base + 0], 0.0f);
+        EXPECT_FLOAT_EQ((*packed)[base + 1], 0.0f);
+        EXPECT_FLOAT_EQ((*packed)[base + 2], 0.0f);
+        EXPECT_FLOAT_EQ((*packed)[base + 3], 0.0f);
     }
 
 } // namespace lfs::vis

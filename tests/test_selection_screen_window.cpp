@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "rendering/render_constants.hpp"
 #include "rendering/selection_ops.hpp"
 
 #include "core/tensor.hpp"
@@ -38,6 +39,8 @@ namespace {
         int height = kHeight;
         float pixel_focal_x = kPixelFocalX;
         float pixel_focal_y = kPixelFocalY;
+        float center_x = 0.5f * static_cast<float>(kWidth);
+        float center_y = 0.5f * static_cast<float>(kHeight);
         float ortho_scale = kOrthoScale;
         float near_depth = 0.25f;
         float far_depth = 20.0f;
@@ -108,8 +111,8 @@ namespace {
 
         ProjectedPoint projected{.depth = view_z};
         if (config.camera_model == ScreenWindowCameraModel::Pinhole) {
-            projected.px = 0.5f * width + config.pixel_focal_x * view_x / view_z;
-            projected.py = 0.5f * height + config.pixel_focal_y * view_y / view_z;
+            projected.px = config.center_x + config.pixel_focal_x * view_x / view_z;
+            projected.py = config.center_y + config.pixel_focal_y * view_y / view_z;
         } else if (config.camera_model == ScreenWindowCameraModel::Orthographic) {
             projected.px = 0.5f * width + config.ortho_scale * view_x;
             projected.py = 0.5f * height + config.ortho_scale * view_y;
@@ -139,7 +142,12 @@ namespace {
         // reference, vertex_shader.slang compute_splat_active_state,
         // filterSelectionByScreenWindowKernel (selection_ops.cu), and (rect only,
         // no depth test) the 2D overlay in gui_manager.cpp
-        // appendCropAndFilterOverlays.
+        // appendScreenWindowOverlay.
+        // Contract: the window RECTANGLE is framebuffer-centred in all four copies;
+        // the splat projection uses the displayed camera's real unjittered intrinsics;
+        // jitter moves the draw sample, not the containment boundary.
+        // Coverage warning: the slang copy is still uncompared, but the host packing
+        // that feeds it is covered by the overlay-slot test.
         const float half_w = 0.5f * config.scale * width;
         const float half_h = 0.5f * config.scale * height;
         const float cx = 0.5f * width + config.offset_x * (0.5f * width - half_w);
@@ -202,6 +210,8 @@ namespace {
             config.height,
             config.pixel_focal_x,
             config.pixel_focal_y,
+            config.center_x,
+            config.center_y,
             config.ortho_scale,
             config.near_depth,
             config.far_depth,
@@ -349,6 +359,11 @@ namespace {
             .height = 512,
             .pixel_focal_x = 256.0f,
             .pixel_focal_y = 256.0f,
+            // The struct defaults derive the centre from kWidth/kHeight; this config
+            // overrides the size, so the centre must follow it or the projection is
+            // computed against the wrong principal point.
+            .center_x = 512.0f,
+            .center_y = 256.0f,
             .near_depth = 2.0f,
             .far_depth = 8.0f,
             .scale = 0.5f,
@@ -423,6 +438,190 @@ namespace {
         garbage_range.far_depth = 0.0f;
         EXPECT_EQ(runCuda({0.0f, 0.0f, 0.0f}, garbage_range, identity_rows, origin),
                   (std::vector<bool>{false}));
+    }
+
+    // The cases above only ever pin valid orthographic scales. The Vulkan lane
+    // replaces any non-finite or sub-threshold scale with DEFAULT_ORTHO_SCALE
+    // before the shader sees it (vksplat_viewport_renderer.cpp), so the CUDA lane
+    // has to make the same substitution or the two disagree about which splats
+    // are inside the window.
+    TEST_F(SelectionScreenWindow, OrthographicSubstitutesDefaultScaleOverInvalidDomain) {
+        const std::array<float, 9> identity_rows{
+            1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+        const std::array<float, 3> origin{0.0f, 0.0f, 0.0f};
+
+        ScreenWindowConfig config;
+        config.camera_model = ScreenWindowCameraModel::Orthographic;
+        config.ortho_scale = lfs::rendering::DEFAULT_ORTHO_SCALE;
+
+        // Inside, outside on X, and dead centre. These are only distinguishable
+        // at the substituted scale: a scale that collapsed to zero would land
+        // every point on the principal point and read all three true, and a NaN
+        // scale would poison every comparison and read all three false.
+        const std::vector<float> points{
+            1.0f, 0.0f, -5.0f,
+            3.0f, 0.0f, -5.0f,
+            0.0f, 0.0f, -5.0f};
+        const std::vector<bool> expected{true, false, true};
+        ASSERT_EQ(runCuda(points, config, identity_rows, origin), expected);
+
+        // 1.0e-5f is the boundary itself: the predicate admits only scales
+        // strictly greater, so it belongs on the invalid side and pins a
+        // future '>' -> '>=' slip.
+        for (const float invalid : {0.0f,
+                                    -0.0f,
+                                    -5.0f,
+                                    1.0e-9f,
+                                    1.0e-6f,
+                                    1.0e-5f,
+                                    std::numeric_limits<float>::quiet_NaN(),
+                                    std::numeric_limits<float>::infinity()}) {
+            ScreenWindowConfig degenerate = config;
+            degenerate.ortho_scale = invalid;
+            EXPECT_EQ(runCuda(points, degenerate, identity_rows, origin), expected)
+                << "ortho_scale " << invalid << " did not fall back to DEFAULT_ORTHO_SCALE";
+        }
+
+        config.center_x = 9999.0f;
+        config.center_y = -9999.0f;
+        EXPECT_EQ(runCuda(points, config, identity_rows, origin), expected);
+    }
+
+    TEST_F(SelectionScreenWindow, PrincipalPointDiscriminatesOpticalAxisPoint) {
+        constexpr std::array<float, 9> identity_rows{
+            1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+        constexpr std::array<float, 3> origin{0.0f, 0.0f, 0.0f};
+        const std::vector<float> optical_axis_point{0.0f, 0.0f, -5.0f};
+        ScreenWindowConfig off_centre{
+            .width = 640,
+            .height = 480,
+            .center_x = 100.0f,
+            .center_y = 240.0f,
+            .near_depth = 2.0f,
+            .far_depth = 8.0f,
+            .scale = 0.35f,
+            .offset_x = -1.0f};
+        ScreenWindowConfig image_centre = off_centre;
+        image_centre.center_x = 320.0f;
+        image_centre.center_y = 240.0f;
+        const std::array<float, 3> optical_axis_point_arr{
+            optical_axis_point[0], optical_axis_point[1], optical_axis_point[2]};
+        const auto projected_off_centre = projectCpu(optical_axis_point_arr, off_centre, identity_rows, origin);
+        const auto projected_image_centre = projectCpu(optical_axis_point_arr, image_centre, identity_rows, origin);
+        ASSERT_FALSE(nearDecisionBoundary(projected_off_centre, off_centre));
+        ASSERT_FALSE(nearDecisionBoundary(projected_image_centre, image_centre));
+        const bool cpu_inside_off_centre = cpuReferenceInside(projected_off_centre, off_centre);
+        const bool cpu_outside_image_centre = cpuReferenceInside(projected_image_centre, image_centre);
+        ASSERT_TRUE(cpu_inside_off_centre);
+        ASSERT_FALSE(cpu_outside_image_centre);
+        const auto cuda_off_centre = runCuda(optical_axis_point, off_centre, identity_rows, origin);
+        const auto cuda_image_centre = runCuda(optical_axis_point, image_centre, identity_rows, origin);
+        ASSERT_EQ(cuda_off_centre.size(), 1u);
+        ASSERT_EQ(cuda_image_centre.size(), 1u);
+        EXPECT_EQ(cuda_off_centre.front(), cpu_inside_off_centre);
+        EXPECT_EQ(cuda_image_centre.front(), cpu_outside_image_centre);
+    }
+
+    TEST_F(SelectionScreenWindow, AsymmetricFocalsAreNotReconstructedFromAspect) {
+        constexpr std::array<float, 9> identity_rows{
+            1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+        constexpr std::array<float, 3> origin{0.0f, 0.0f, 0.0f};
+        // view_x/view_z = 0.36 puts fx=500 at px=500 (inside the [280.8, 504.8] window)
+        // and fx=600 at px=536 (outside) — the pair that actually discriminates.
+        const std::vector<float> point{1.44f, 0.0f, -4.0f};
+        ScreenWindowConfig carried_focals{
+            .width = 640,
+            .height = 480,
+            .pixel_focal_x = 500.0f,
+            .pixel_focal_y = 600.0f,
+            .center_x = 320.0f,
+            .center_y = 240.0f,
+            .near_depth = 2.0f,
+            .far_depth = 8.0f,
+            .scale = 0.35f,
+            .offset_x = 0.35f};
+        ScreenWindowConfig aspect_reconstruction = carried_focals;
+        aspect_reconstruction.pixel_focal_x = 600.0f;
+        const std::array<float, 3> point_arr{point[0], point[1], point[2]};
+        const auto projected_carried = projectCpu(point_arr, carried_focals, identity_rows, origin);
+        const auto projected_aspect = projectCpu(point_arr, aspect_reconstruction, identity_rows, origin);
+        ASSERT_FALSE(nearDecisionBoundary(projected_carried, carried_focals));
+        ASSERT_FALSE(nearDecisionBoundary(projected_aspect, aspect_reconstruction));
+        const bool inside_with_fx500 = cpuReferenceInside(projected_carried, carried_focals);
+        const bool inside_with_fx600 = cpuReferenceInside(projected_aspect, aspect_reconstruction);
+        ASSERT_TRUE(inside_with_fx500);
+        ASSERT_FALSE(inside_with_fx600);
+        const auto cuda_carried = runCuda(point, carried_focals, identity_rows, origin);
+        const auto cuda_aspect = runCuda(point, aspect_reconstruction, identity_rows, origin);
+        EXPECT_TRUE(cuda_carried.front());
+        EXPECT_FALSE(cuda_aspect.front());
+    }
+
+    TEST_F(SelectionScreenWindow, RandomOffCentreAsymmetricCpuReferenceMatchesCuda) {
+        std::mt19937 rng(0xA5F1234u);
+        std::uniform_real_distribution<float> coordinate(-25.0f, 25.0f);
+        std::vector<float> points(kRandomPointCount * 3);
+        std::vector<std::array<float, 3>> point_arrays(kRandomPointCount);
+        for (std::size_t i = 0; i < kRandomPointCount; ++i) {
+            point_arrays[i] = {coordinate(rng), coordinate(rng), coordinate(rng)};
+            points[i * 3] = point_arrays[i][0];
+            points[i * 3 + 1] = point_arrays[i][1];
+            points[i * 3 + 2] = point_arrays[i][2];
+        }
+        const ScreenWindowConfig config{
+            .width = 640,
+            .height = 480,
+            .pixel_focal_x = 500.0f,
+            .pixel_focal_y = 600.0f,
+            .center_x = 120.0f,
+            .center_y = 210.0f,
+            .near_depth = 0.25f,
+            .far_depth = 20.0f,
+            .scale = 0.35f,
+            .offset_x = -0.5f,
+            .offset_y = 0.25f};
+        const auto actual = runCuda(points, config, kViewRotationRows, kTranslation);
+        ASSERT_EQ(actual.size(), kRandomPointCount);
+        std::size_t compared = 0;
+        for (std::size_t i = 0; i < kRandomPointCount; ++i) {
+            const auto projected = projectCpu(point_arrays[i], config, kViewRotationRows, kTranslation);
+            if (nearDecisionBoundary(projected, config))
+                continue;
+            ++compared;
+            ASSERT_EQ(actual[i], cpuReferenceInside(projected, config)) << "point=" << i;
+        }
+        EXPECT_GT(compared, kRandomPointCount / 2);
+    }
+
+    TEST_F(SelectionScreenWindow, OrthographicAndEquirectIgnorePrincipalPoint) {
+        constexpr std::array<float, 9> identity_rows{
+            1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+        constexpr std::array<float, 3> origin{0.0f, 0.0f, 0.0f};
+        ScreenWindowConfig orthographic;
+        orthographic.camera_model = ScreenWindowCameraModel::Orthographic;
+        orthographic.ortho_scale = lfs::rendering::DEFAULT_ORTHO_SCALE;
+        const std::vector<float> ortho_points{1.0f, 0.0f, -5.0f, 3.0f, 0.0f, -5.0f, 0.0f, 0.0f, -5.0f};
+        const std::vector<bool> ortho_expected{true, false, true};
+        const auto centred_ortho = runCuda(ortho_points, orthographic, identity_rows, origin);
+        orthographic.center_x = 9999.0f;
+        orthographic.center_y = -9999.0f;
+        EXPECT_EQ(runCuda(ortho_points, orthographic, identity_rows, origin), centred_ortho);
+        EXPECT_EQ(centred_ortho, ortho_expected);
+        const ScreenWindowConfig equirectangular{
+            .camera_model = ScreenWindowCameraModel::Equirectangular,
+            .width = 1024,
+            .height = 512,
+            .near_depth = 0.0f,
+            .far_depth = 8.0f,
+            .scale = 1.0f};
+        const std::vector<float> equirect_points{1.0e-7f, 0.0f, 4.0f, -1.0e-7f, 0.0f, 4.0f, 0.0f, 0.0f, 0.0f};
+        const std::vector<bool> equirect_expected{true, true, false};
+        const auto centred_equirect = runCuda(equirect_points, equirectangular, identity_rows, origin);
+        ScreenWindowConfig bogus_equirect = equirectangular;
+        bogus_equirect.center_x = 9999.0f;
+        bogus_equirect.center_y = -9999.0f;
+        EXPECT_EQ(runCuda(equirect_points, bogus_equirect, identity_rows, origin), centred_equirect);
+        EXPECT_EQ(centred_equirect, equirect_expected);
     }
 
 } // namespace

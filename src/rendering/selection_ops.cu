@@ -7,9 +7,11 @@
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
+#include "rendering/render_constants.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -176,6 +178,8 @@ namespace lfs::rendering {
             const float3 translation,
             const float pixel_focal_x,
             const float pixel_focal_y,
+            const float center_x,
+            const float center_y,
             const bool orthographic,
             const float ortho_scale,
             const float* __restrict__ model_transforms,
@@ -219,8 +223,8 @@ namespace lfs::rendering {
                 return;
             }
 
-            const float cx = static_cast<float>(width) * 0.5f;
-            const float cy = static_cast<float>(height) * 0.5f;
+            const float cx = center_x;
+            const float cy = center_y;
             if (orthographic) {
                 if (!isfinite(ortho_scale) || ortho_scale <= 0.0f) {
                     writeInvalidScreenPosition(output, idx);
@@ -697,6 +701,8 @@ namespace lfs::rendering {
             const int height,
             const float pixel_focal_x,
             const float pixel_focal_y,
+            const float center_x,
+            const float center_y,
             const float ortho_scale,
             const float near_depth,
             const float far_depth,
@@ -744,8 +750,8 @@ namespace lfs::rendering {
             float depth = view_z;
 
             if (camera_model == static_cast<std::uint32_t>(ScreenWindowCameraModel::Pinhole)) {
-                px = 0.5f * image_width + pixel_focal_x * view_x / view_z;
-                py = 0.5f * image_height + pixel_focal_y * view_y / view_z;
+                px = center_x + pixel_focal_x * view_x / view_z;
+                py = center_y + pixel_focal_y * view_y / view_z;
             } else if (camera_model == static_cast<std::uint32_t>(ScreenWindowCameraModel::Orthographic)) {
                 px = 0.5f * image_width + ortho_scale * view_x;
                 py = 0.5f * image_height + ortho_scale * view_y;
@@ -768,7 +774,10 @@ namespace lfs::rendering {
             // kernel, vertex_shader.slang compute_splat_active_state, the CPU
             // reference in tests/test_selection_screen_window.cpp, and (rect only,
             // no depth test) the 2D overlay in gui_manager.cpp
-            // appendCropAndFilterOverlays.
+            // appendScreenWindowOverlay.
+            // Contract: the window RECTANGLE is framebuffer-centred in all four copies;
+            // the splat projection uses the displayed camera's real unjittered intrinsics;
+            // jitter moves the draw sample, not the containment boundary.
             // The transform/projection above is mathematically equivalent to
             // projectScreenPositionsKernel in this file; conventions differ because
             // that kernel keeps visualizer view Y and flips its sign at the
@@ -855,7 +864,9 @@ namespace lfs::rendering {
         const float ortho_scale) {
         return project_screen_positions_tensor(
             means, width, height, view_rotation_rows, translation,
-            pixel_focal_x, pixel_focal_y, orthographic, ortho_scale,
+            pixel_focal_x, pixel_focal_y,
+            0.5f * static_cast<float>(width), 0.5f * static_cast<float>(height),
+            orthographic, ortho_scale,
             nullptr, nullptr, {});
     }
 
@@ -872,7 +883,9 @@ namespace lfs::rendering {
         const Tensor* const model_transforms) {
         return project_screen_positions_tensor(
             means, width, height, view_rotation_rows, translation,
-            pixel_focal_x, pixel_focal_y, orthographic, ortho_scale,
+            pixel_focal_x, pixel_focal_y,
+            0.5f * static_cast<float>(width), 0.5f * static_cast<float>(height),
+            orthographic, ortho_scale,
             model_transforms, nullptr, {});
     }
 
@@ -890,7 +903,9 @@ namespace lfs::rendering {
         const Tensor* const transform_indices) {
         return project_screen_positions_tensor(
             means, width, height, view_rotation_rows, translation,
-            pixel_focal_x, pixel_focal_y, orthographic, ortho_scale,
+            pixel_focal_x, pixel_focal_y,
+            0.5f * static_cast<float>(width), 0.5f * static_cast<float>(height),
+            orthographic, ortho_scale,
             model_transforms, transform_indices, {});
     }
 
@@ -902,6 +917,8 @@ namespace lfs::rendering {
         const std::array<float, 3>& translation,
         const float pixel_focal_x,
         const float pixel_focal_y,
+        const float center_x,
+        const float center_y,
         const bool orthographic,
         const float ortho_scale,
         const Tensor* const model_transforms,
@@ -984,6 +1001,8 @@ namespace lfs::rendering {
             make_float3(translation[0], translation[1], translation[2]),
             pixel_focal_x,
             pixel_focal_y,
+            center_x,
+            center_y,
             orthographic,
             ortho_scale,
             prepared_transforms.ptr,
@@ -1440,6 +1459,8 @@ namespace lfs::rendering {
         const int height,
         const float pixel_focal_x,
         const float pixel_focal_y,
+        const float center_x,
+        const float center_y,
         const float ortho_scale,
         const float near_depth,
         const float far_depth,
@@ -1476,6 +1497,18 @@ namespace lfs::rendering {
             transform_indices_ptr = transform_indices_contig.ptr<int>();
         }
 
+        // Match the Vulkan lane's substitution exactly. vksplat_viewport_renderer
+        // replaces any non-finite or sub-threshold ortho_scale with
+        // DEFAULT_ORTHO_SCALE before it reaches the shader; running the kernel on
+        // the raw value instead would project every splat onto the principal point
+        // (scale 0) or poison the comparison (NaN), so the two lanes would disagree
+        // about which splats are inside the window. Guarding here rather than only
+        // in SelectionService also covers callers that reach this entry point
+        // directly.
+        const float sanitized_ortho_scale =
+            (std::isfinite(ortho_scale) && ortho_scale > 1.0e-5f) ? ortho_scale
+                                                                  : DEFAULT_ORTHO_SCALE;
+
         const int grid_size = (n + kBlockSize - 1) / kBlockSize;
         filterSelectionByScreenWindowKernel<<<grid_size, kBlockSize, 0, currentSelectionStream(&selection)>>>(
             selection.ptr<bool>(),
@@ -1489,7 +1522,9 @@ namespace lfs::rendering {
             height,
             pixel_focal_x,
             pixel_focal_y,
-            ortho_scale,
+            center_x,
+            center_y,
+            sanitized_ortho_scale,
             near_depth,
             far_depth,
             scale,

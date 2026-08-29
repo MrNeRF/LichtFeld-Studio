@@ -27,13 +27,33 @@
 namespace lfs::vis {
 
     namespace {
-        // Sanitizes only the screen-window fields. Near/far normalization is
-        // deferred until the screen-window path owns depth_filter_min/max: the
-        // legacy tool and GUI bindings rewrite those values per frame, and a
-        // sanitizer in that loop shifts its equilibrium.
+        // Sanitizes the screen-window fields, plus a one-shot migration of the
+        // legacy positive-Z depth box. General near/far normalization still does
+        // not belong here: the tool and GUI bindings rewrite depth_filter_min/max
+        // every frame, and a normalizer that keeps transforming those values
+        // shifts that loop's equilibrium. The migration below is exempt because
+        // it is an exact sentinel match that cannot fire twice - once (0, 100)
+        // becomes (-100, 0) it no longer matches, and a band the screen-window
+        // path writes always satisfies min.z = -far <= max.z = -near <= 0.
         void sanitizeSelectionWindowSettings(RenderSettings& settings) {
             constexpr float kDefaultScale = 0.35f;
             constexpr float kDefaultOffset = 0.0f;
+
+            // The constructor defaults predate the screen-window contract and
+            // still carry the old positive-Z box. Decoded as a negated near/far
+            // band they yield [-100, 0], which no positive depth satisfies, so
+            // enabling the filter without a writer selects nothing. Only Z is
+            // tested: legacy callers could have moved X/Y while leaving the
+            // default near/far in place. Deliberately independent of the
+            // previous enabled state - session restore applies an enabled box
+            // on top of an already-enabled filter, so a false->true edge would
+            // miss it.
+            if (settings.depth_filter_enabled &&
+                settings.depth_filter_min.z == 0.0f &&
+                settings.depth_filter_max.z == 100.0f) {
+                settings.depth_filter_min.z = -100.0f;
+                settings.depth_filter_max.z = 0.0f;
+            }
 
             if (!std::isfinite(settings.depth_filter_scale)) {
                 settings.depth_filter_scale = kDefaultScale;
@@ -430,6 +450,7 @@ namespace lfs::vis {
         vulkan_viewport_image_alloc_size_ = alloc_size.x > 0 && alloc_size.y > 0 ? alloc_size : size;
         vulkan_viewport_image_flip_y_ = flip_y;
         vulkan_gt_comparison_content_size_ = {0, 0};
+        vulkan_gt_comparison_selection_view_.reset();
     }
 
     void RenderingManager::releaseSceneRenderResources() {
@@ -463,6 +484,8 @@ namespace lfs::vis {
         gt_async_held_display_.reset();
         gt_async_held_flip_y_ = false;
         gt_async_held_metadata_ = {};
+        gt_async_ticket_view_.reset();
+        gt_async_held_view_.reset();
         if (point_cloud_vulkan_renderer_) {
             point_cloud_vulkan_renderer_->reset();
         }
@@ -918,6 +941,13 @@ namespace lfs::vis {
         if (!result.mode_changed) {
             return;
         }
+
+        // Any GT enter/exit invalidates the published GT selection camera, whether or not the
+        // viewport output is cleared: clear_viewport_output is only set for
+        // enabled -> disabled (split_view_service.cpp:202), so re-entering GT would otherwise
+        // expose the previous session's camera until the next GT frame is presented.
+        vulkan_gt_comparison_selection_view_.reset();
+        vulkan_gt_comparison_content_size_ = {0, 0};
 
         if (result.clear_viewport_output) {
             viewport_artifact_service_.clearViewportOutput();

@@ -202,6 +202,9 @@ namespace lfs::vis {
                 .center_y = static_cast<float>(camera_size.y) * 0.5f,
             };
         }
+        // Only the draw intrinsics are jittered. frame_view.containment_intrinsics is captured
+        // unjittered in makeFrameView and must stay untouched here — the depth-window boundary
+        // is not allowed to move with the temporal sample position.
         jittered.intrinsics_override->center_x += jitter_pixels.x;
         jittered.intrinsics_override->center_y += jitter_pixels.y;
         return jittered;

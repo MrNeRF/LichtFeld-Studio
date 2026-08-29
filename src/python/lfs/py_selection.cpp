@@ -42,6 +42,10 @@ namespace lfs::python {
         constexpr float MIN_WINDOW_SCALE = 0.05f;
         constexpr float MAX_WINDOW_SCALE = 1.0f;
         constexpr float DEFAULT_LEGACY_HALF_WIDTH = 1.35f;
+        // The range the depth getters report when no near/far band is in effect.
+        // Matches what they already return with no rendering manager.
+        constexpr float DEFAULT_LEGACY_DEPTH_NEAR = 0.0f;
+        constexpr float DEFAULT_LEGACY_DEPTH_FAR = 100.0f;
 
         float g_last_legacy_half_width = DEFAULT_LEGACY_HALF_WIDTH;
 
@@ -257,6 +261,22 @@ namespace lfs::python {
         }
 
         [[nodiscard]] std::tuple<float, float> fallback_depth_near_far(const vis::RenderSettings& settings) {
+            // The constructor default is not in the near/far encoding - session
+            // restore makes the same distinction before decoding a box. Decoding
+            // it anyway reads it as near 0 / far 0, so a script that read the
+            // range and wrote it back would build a zero-width band. Report the
+            // legacy range instead, which is what the no-manager branches of
+            // these getters already return.
+            //
+            // Test the sentinel, not merely the disabled flag:
+            // configure_depth_filter writes a real near/far box before it returns
+            // for a disabled request, so a caller can legitimately hold a band
+            // with the filter switched off, and that band must still read back.
+            if (!settings.depth_filter_enabled &&
+                settings.depth_filter_min.z == 0.0f &&
+                settings.depth_filter_max.z == 100.0f) {
+                return {DEFAULT_LEGACY_DEPTH_NEAR, DEFAULT_LEGACY_DEPTH_FAR};
+            }
             const float depth_near = std::max(-settings.depth_filter_max.z, 0.0f);
             const float depth_far = std::max(-settings.depth_filter_min.z, depth_near);
             return {depth_near, depth_far};

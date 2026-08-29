@@ -1837,9 +1837,11 @@ namespace lfs::vis {
                         gt_async_ticket_intrinsics_.reset();
                         gt_async_ticket_flip_y_ = false;
                         gt_async_ticket_metadata_ = {};
+                        gt_async_ticket_view_.reset();
                         gt_async_held_display_.reset();
                         gt_async_held_flip_y_ = false;
                         gt_async_held_metadata_ = {};
+                        gt_async_held_view_.reset();
                     }
                 }
                 viewport_artifact_service_.clearViewportOutput();
@@ -2183,6 +2185,7 @@ namespace lfs::vis {
         std::string render_error;
         bool rendered_image_contains_ground_truth = false;
         glm::ivec2 rendered_gt_content_size{0, 0};
+        std::optional<GTPresentedView> rendered_gt_view;
         const SceneTemporalQuality temporal_quality =
             frame_settings.scene_upscaler_preset == "performance"
                 ? SceneTemporalQuality::Performance
@@ -2799,12 +2802,8 @@ namespace lfs::vis {
                             const auto render_camera =
                                 detail::buildGTRenderCamera(*camera, gt_size, scene_transform);
                             if (render_camera) {
-                                request.frame_view.rotation = render_camera->rotation;
-                                request.frame_view.translation = render_camera->translation;
-                                request.frame_view.intrinsics_override = render_camera->intrinsics;
-                                request.frame_view.orthographic = false;
-                                request.frame_view.ortho_scale = lfs::rendering::DEFAULT_ORTHO_SCALE;
-                                request.equirectangular = render_camera->equirectangular;
+                                applyGTComparisonRenderCamera(
+                                    request.frame_view, request.equirectangular, *render_camera);
                             }
 
                             RenderedPanel compare_panel{};
@@ -2828,6 +2827,7 @@ namespace lfs::vis {
                                     gt_async_ticket_intrinsics_.reset();
                                     gt_async_ticket_flip_y_ = false;
                                     gt_async_ticket_metadata_ = {};
+                                    gt_async_ticket_view_.reset();
                                 };
                                 const auto apply_gt_async_ready =
                                     [this, &frame_settings, &clear_gt_async_ticket]()
@@ -2866,6 +2866,7 @@ namespace lfs::vis {
                                     gt_async_held_display_ = std::move(display);
                                     gt_async_held_flip_y_ = gt_async_ticket_flip_y_;
                                     gt_async_held_metadata_ = gt_async_ticket_metadata_;
+                                    gt_async_held_view_ = gt_async_ticket_view_;
                                     clear_gt_async_ticket();
                                     return {};
                                 };
@@ -2878,6 +2879,7 @@ namespace lfs::vis {
                                         clear_gt_async_ticket();
                                     }
                                     gt_async_held_display_.reset();
+                                    gt_async_held_view_.reset();
                                 } else if (!context.vulkan_context) {
                                     compare_error = "Normal/depth GT comparison requires an active Vulkan context";
                                 } else if (!render_camera) {
@@ -2924,9 +2926,11 @@ namespace lfs::vis {
                                                     gt_async_held_display_ = std::move(display);
                                                     gt_async_held_flip_y_ = gt_async_ticket_flip_y_;
                                                     gt_async_held_metadata_ = gt_async_ticket_metadata_;
+                                                    gt_async_held_view_ = gt_async_ticket_view_;
                                                 }
                                             } else {
                                                 gt_async_held_display_.reset();
+                                                gt_async_held_view_.reset();
                                             }
                                             clear_gt_async_ticket();
                                         }
@@ -2980,6 +2984,7 @@ namespace lfs::vis {
                                                         request.frame_view.intrinsics_override;
                                                     gt_async_ticket_flip_y_ = rendered->flip_y;
                                                     gt_async_ticket_metadata_ = rendered->metadata;
+                                                    gt_async_ticket_view_ = GTPresentedView{*render_camera, gt_size};
                                                 }
                                             }
                                         }
@@ -2992,6 +2997,14 @@ namespace lfs::vis {
                                         compare_panel.external_image_view = VK_NULL_HANDLE;
                                         compare_panel.external_image_generation = 0;
                                         compare_panel.size = gt_size;
+                                        // Degenerate GT calibration: buildGTRenderCamera returns nullopt when render_size is
+                                        // degenerate or the camera's R/T tensors have no CPU pointer
+                                        // (split_view_service.cpp:56-65). We publish nothing for such a frame, so the selection
+                                        // lane keeps its pre-GT behaviour. Known and accepted consequence (Alex, Phase 1): in RGB
+                                        // GT the compare panel is then drawn with the interactive camera at gt_size while CUDA
+                                        // classifies with that same camera at the full composited size, so the two lanes disagree
+                                        // on size for that frame. Disclosed in the PR text; do not "fix" this silently.
+                                        rendered_gt_view = gt_async_held_view_;
                                     }
 
                                     LOG_PERF(
@@ -3011,6 +3024,7 @@ namespace lfs::vis {
                                     gt_async_depth_dest_ = {};
                                 }
                                 gt_async_held_display_.reset();
+                                gt_async_held_view_.reset();
                                 const bool use_point_cloud_compare =
                                     frame_settings.point_cloud_mode || !has_visible_gaussian_model;
                                 if (use_point_cloud_compare && has_visible_gaussian_model) {
@@ -3077,6 +3091,7 @@ namespace lfs::vis {
                                   isRetryableSharedScratchUnavailable(compare_error))) {
                                 LOG_WARN("GT comparison using placeholder rendered panel: {}", compare_error);
                                 compare_panel = make_placeholder_panel(gt_size, glm::vec3(0.035f, 0.045f, 0.070f));
+                                rendered_gt_view.reset();
                             }
 
                             if (compare_panel.image || compare_panel.external_image_view != VK_NULL_HANDLE) {
@@ -3152,6 +3167,21 @@ namespace lfs::vis {
                                 rendered_metadata = compare_panel.metadata;
                                 rendered_image_contains_ground_truth = true;
                                 rendered_gt_content_size = gt_size;
+                                if (render_camera && gt_mode == GTComparisonMode::RGB) {
+                                    // Synchronous RGB production only: the panel just rendered IS the
+                                    // current camera's image, so publish that pairing. Depth/Normal go
+                                    // through the hold-then-swap ticket and publish the HELD camera with
+                                    // the held image above — assigning the current camera here would pair
+                                    // panel image A with camera B while a new ticket is in flight.
+                                    // Degenerate GT calibration: buildGTRenderCamera returns nullopt when render_size is
+                                    // degenerate or the camera's R/T tensors have no CPU pointer
+                                    // (split_view_service.cpp:56-65). We publish nothing for such a frame, so the selection
+                                    // lane keeps its pre-GT behaviour. Known and accepted consequence (Alex, Phase 1): in RGB
+                                    // GT the compare panel is then drawn with the interactive camera at gt_size while CUDA
+                                    // classifies with that same camera at the full composited size, so the two lanes disagree
+                                    // on size for that frame. Disclosed in the PR text; do not "fix" this silently.
+                                    rendered_gt_view = GTPresentedView{*render_camera, gt_size};
+                                }
                                 const char* mode_label = "GT Compare";
                                 const char* left_name = "Ground Truth";
                                 const char* right_name = "Rendered";
@@ -3903,6 +3933,7 @@ namespace lfs::vis {
                                     vulkan_viewport_image_alloc_size_ = render_result.size;
                                     vulkan_viewport_image_flip_y_ = render_result.flip_y;
                                     vulkan_gt_comparison_content_size_ = {0, 0};
+                                    vulkan_gt_comparison_selection_view_.reset();
                                     viewport_artifact_service_.updateFromImageOutput(
                                         corrected_image, metadata, render_result.size, true);
                                     if (transparent_viewer_compositing) {
@@ -4199,6 +4230,11 @@ namespace lfs::vis {
             clearVulkanViewportImageState(render_size, false);
             vulkan_gt_comparison_content_size_ =
                 rendered_image_contains_ground_truth ? rendered_gt_content_size : glm::ivec2{0, 0};
+            if (rendered_image_contains_ground_truth) {
+                vulkan_gt_comparison_selection_view_ = rendered_gt_view;
+            } else {
+                vulkan_gt_comparison_selection_view_.reset();
+            }
             FrameResources split_info_resources;
             if (rendered_split_info) {
                 split_info_resources.split_view_executed = true;
@@ -4409,6 +4445,11 @@ namespace lfs::vis {
         vulkan_viewport_image_flip_y_ = !rendered_metadata.flip_y;
         vulkan_gt_comparison_content_size_ =
             rendered_image_contains_ground_truth ? rendered_gt_content_size : glm::ivec2{0, 0};
+        if (rendered_image_contains_ground_truth) {
+            vulkan_gt_comparison_selection_view_ = rendered_gt_view;
+        } else {
+            vulkan_gt_comparison_selection_view_.reset();
+        }
         viewport_artifact_service_.updateFromImageOutput(
             std::move(viewport_image), rendered_metadata, render_size, true);
         release_inactive_split_outputs();

@@ -78,6 +78,11 @@ namespace lfs::vis {
         rendering::ViewportData viewport{};
         bool equirectangular = false;
         float far_plane = rendering::DEFAULT_FAR_PLANE;
+        // Real unjittered intrinsics of the displayed camera for depth-window containment.
+        // Empty means "image-centred with FoV-derived focals", which is correct for every
+        // synthetic-intrinsics viewport. Populated for the explicit-camera lane (M2) and the
+        // GT compare panel (M3).
+        std::optional<rendering::CameraIntrinsics> containment_intrinsics;
         std::optional<ViewerLayout> viewer_layout;
         std::optional<SplitViewPanelId> panel;
 
@@ -184,6 +189,7 @@ namespace lfs::vis {
         void setTestingScreenPositions(std::shared_ptr<core::Tensor> screen_positions);
         void setTestingScreenPositionsForCamera(int camera_index, std::shared_ptr<core::Tensor> screen_positions);
         void setTestingViewport(ViewportInfo viewport);
+        void setTestingContainmentIntrinsics(std::optional<rendering::CameraIntrinsics> intrinsics);
         void setTestingHoveredGaussianId(std::optional<int> hovered_gaussian_id);
 
     private:
@@ -354,6 +360,7 @@ namespace lfs::vis {
         std::shared_ptr<core::Tensor> testing_screen_positions_;
         std::unordered_map<int, std::shared_ptr<core::Tensor>> testing_camera_screen_positions_;
         std::optional<ViewportInfo> testing_viewport_;
+        std::optional<rendering::CameraIntrinsics> testing_containment_intrinsics_;
         std::optional<int> testing_hovered_gaussian_id_;
         mutable std::array<std::shared_ptr<core::Tensor>, 2> viewport_screen_positions_;
         mutable std::array<ScreenPositionCacheKey, 2> viewport_screen_position_keys_{};

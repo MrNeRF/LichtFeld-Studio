@@ -31,6 +31,11 @@ namespace lfs::rendering {
         glm::ivec2 subregion_full_size{0, 0};
         float focal_length_mm = DEFAULT_FOCAL_LENGTH_MM;
         std::optional<CameraIntrinsics> intrinsics_override;
+        // Unjittered intrinsics of the displayed camera, for depth-window containment only.
+        // Captured before applySceneViewJitter and replaced wholesale wherever
+        // intrinsics_override is replaced. Never carries jitter. Empty means "image-centred
+        // with the draw focals", which is correct for every synthetic-intrinsics viewport.
+        std::optional<CameraIntrinsics> containment_intrinsics;
         float near_plane = DEFAULT_NEAR_PLANE;
         float far_plane = DEFAULT_FAR_PLANE;
         bool orthographic = false;

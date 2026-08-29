@@ -205,7 +205,7 @@ class SelectionControlsController:
         model.bind(
             "selection_depth_near_value",
             lambda: f"{self._depth_near:.3f}",
-            self._set_depth_near,
+            self._set_depth_near_from_slider,
         )
         model.bind_func("selection_depth_near_slider_min", lambda: f"{self._near_slider_bounds()[0]:.3f}")
         model.bind_func("selection_depth_near_slider_max", lambda: f"{self._near_slider_bounds()[1]:.3f}")
@@ -217,7 +217,7 @@ class SelectionControlsController:
         model.bind(
             "selection_depth_far_value",
             lambda: f"{self._depth_far:.3f}",
-            self._set_depth_far,
+            self._set_depth_far_from_slider,
         )
         model.bind_func("selection_depth_far_slider_min", lambda: f"{self._far_slider_bounds()[0]:.3f}")
         model.bind_func("selection_depth_far_slider_max", lambda: f"{self._far_slider_bounds()[1]:.3f}")
@@ -229,7 +229,7 @@ class SelectionControlsController:
         model.bind(
             "selection_depth_scale_value",
             lambda: f"{self._scale_percent():.0f}",
-            self._set_depth_scale_percent,
+            self._set_depth_scale_percent_from_slider,
         )
         model.bind_func("selection_depth_scale_slider_min", lambda: f"{_SCALE_PERCENT_MIN:.0f}")
         model.bind_func("selection_depth_scale_slider_max", lambda: f"{_SCALE_PERCENT_MAX:.0f}")
@@ -241,7 +241,7 @@ class SelectionControlsController:
         model.bind(
             "selection_depth_offset_x_value",
             lambda: f"{self._offset_percent(self._offset_x):.0f}",
-            self._set_depth_offset_x_percent,
+            self._set_depth_offset_x_percent_from_slider,
         )
         model.bind_func("selection_depth_offset_x_slider_min", lambda: f"{_OFFSET_PERCENT_MIN:.0f}")
         model.bind_func("selection_depth_offset_x_slider_max", lambda: f"{_OFFSET_PERCENT_MAX:.0f}")
@@ -253,7 +253,7 @@ class SelectionControlsController:
         model.bind(
             "selection_depth_offset_y_value",
             lambda: f"{self._offset_percent(self._offset_y):.0f}",
-            self._set_depth_offset_y_percent,
+            self._set_depth_offset_y_percent_from_slider,
         )
         model.bind_func("selection_depth_offset_y_slider_min", lambda: f"{_OFFSET_PERCENT_MIN:.0f}")
         model.bind_func("selection_depth_offset_y_slider_max", lambda: f"{_OFFSET_PERCENT_MAX:.0f}")
@@ -300,10 +300,13 @@ class SelectionControlsController:
             self._last_state_items = None
             return ",".join(dirty_reasons) if dirty else None
 
-        previous_depth = (self._depth_near, self._depth_far)
+        previous_depth = self._depth_window_state()
         self._refresh_state()
         # RmlUi range inputs echo stale values when attributes update in the same frame.
-        if (self._depth_near, self._depth_far) != previous_depth:
+        # The window size and the two offsets are driven by the same kind of range
+        # input as near/far, so a change to any of the five has to arm the holdoff;
+        # arming on near/far alone leaves the window sliders unprotected.
+        if self._depth_window_state() != previous_depth:
             self._depth_echo_holdoff = 2
         else:
             self._depth_echo_holdoff = max(0, self._depth_echo_holdoff - 1)
@@ -398,6 +401,16 @@ class SelectionControlsController:
         self._frustum_half_width = max(_parse_float(width, _DEFAULT_FRUSTUM_HALF_WIDTH), 0.05)
         self._refresh_viz_mode()
 
+    def _depth_window_state(self):
+        """Every field the depth sliders write, for echo-holdoff comparison."""
+        return (
+            self._depth_near,
+            self._depth_far,
+            self._window_scale,
+            self._offset_x,
+            self._offset_y,
+        )
+
     def _state_items(self):
         return (
             ("language_generation", RuntimeState.language_generation.value),
@@ -478,8 +491,19 @@ class SelectionControlsController:
         except Exception:
             return False
 
+    # The five _set_depth_* methods below are the text-commit path: they apply a
+    # deliberate user edit and do not consult the echo holdoff. The range inputs
+    # bind the _from_slider wrappers instead, which carry that check, so each
+    # origin keeps its own entry point and neither call site has to be told
+    # which it is.
+    # Splitting the origins is not on its own enough: applying a commit dirties
+    # every slider-bound value, and RmlUi answers that by replaying the
+    # pre-commit slider position. _commit_depth_text_key therefore arms the
+    # holdoff before it dispatches, so the wrappers reject that echo.
+    # `not self._visible` and `_last_state_key is None` still gate both paths.
+
     def _set_depth_near(self, value):
-        if not self._visible or self._last_state_key is None or self._depth_echo_holdoff > 0:
+        if not self._visible or self._last_state_key is None:
             return
         self._refresh_depth_state()
         near = _clamp(_parse_float(value, self._depth_near), _DEPTH_MIN, _DEPTH_MAX - _DEPTH_GAP)
@@ -487,7 +511,7 @@ class SelectionControlsController:
         self._apply_depth_range(self._depth_enabled, near, far)
 
     def _set_depth_far(self, value):
-        if not self._visible or self._last_state_key is None or self._depth_echo_holdoff > 0:
+        if not self._visible or self._last_state_key is None:
             return
         self._refresh_depth_state()
         far = _clamp(_parse_float(value, self._depth_far), self._depth_near + _DEPTH_GAP, _DEPTH_MAX)
@@ -522,6 +546,8 @@ class SelectionControlsController:
         return _VIZ_MODE_ICONS.get(int(self._viz_mode), _VIZ_MODE_ICONS[_DEFAULT_VIZ_MODE])
 
     def _set_depth_scale_percent(self, value):
+        if not self._visible or self._last_state_key is None:
+            return
         self._refresh_depth_state()
         if isinstance(value, str):
             value = value.strip().rstrip("%")
@@ -529,14 +555,48 @@ class SelectionControlsController:
         self._apply_depth_window(self._depth_enabled, self._depth_near, self._depth_far, percent / 100.0, self._offset_x, self._offset_y)
 
     def _set_depth_offset_x_percent(self, value):
+        if not self._visible or self._last_state_key is None:
+            return
         self._refresh_depth_state()
         percent = _clamp(_parse_float(value, self._offset_percent(self._offset_x)), _OFFSET_PERCENT_MIN, _OFFSET_PERCENT_MAX)
         self._apply_depth_window(self._depth_enabled, self._depth_near, self._depth_far, self._window_scale, percent / 100.0, self._offset_y)
 
     def _set_depth_offset_y_percent(self, value):
+        if not self._visible or self._last_state_key is None:
+            return
         self._refresh_depth_state()
         percent = _clamp(_parse_float(value, self._offset_percent(self._offset_y)), _OFFSET_PERCENT_MIN, _OFFSET_PERCENT_MAX)
         self._apply_depth_window(self._depth_enabled, self._depth_near, self._depth_far, self._window_scale, self._offset_x, percent / 100.0)
+
+    # Range-input entry points. RmlUi replays a slider's pre-update position into
+    # its setter when the bound attributes change in the same frame, so these
+    # drop the value while the echo holdoff is armed. They are bound in
+    # bind_model; the text-commit path calls the cores above directly.
+
+    def _set_depth_near_from_slider(self, value):
+        if self._depth_echo_holdoff > 0:
+            return
+        self._set_depth_near(value)
+
+    def _set_depth_far_from_slider(self, value):
+        if self._depth_echo_holdoff > 0:
+            return
+        self._set_depth_far(value)
+
+    def _set_depth_scale_percent_from_slider(self, value):
+        if self._depth_echo_holdoff > 0:
+            return
+        self._set_depth_scale_percent(value)
+
+    def _set_depth_offset_x_percent_from_slider(self, value):
+        if self._depth_echo_holdoff > 0:
+            return
+        self._set_depth_offset_x_percent(value)
+
+    def _set_depth_offset_y_percent_from_slider(self, value):
+        if self._depth_echo_holdoff > 0:
+            return
+        self._set_depth_offset_y_percent(value)
 
     def _apply_depth_range(self, enabled, near, far):
         self._apply_depth_window(enabled, near, far, self._window_scale, self._offset_x, self._offset_y)
@@ -626,6 +686,9 @@ class SelectionControlsController:
         return self._canonical_depth_text_value(key)
 
     def _restore_depth_text_snapshot(self, key, snapshot):
+        # Escape restores the pre-edit text and the host blurs immediately after
+        # (cancelFocusedElement in rml_input_utils.hpp), so that blur is what
+        # carries the revert to the native side.
         self._depth_text_bufs[key] = str(snapshot or "")
         if self._handle:
             self._handle.dirty(key)
@@ -638,6 +701,21 @@ class SelectionControlsController:
             if parsed is None:
                 self._sync_depth_text_bufs(force=True)
                 return
+            # The cores below refuse while the panel is hidden or before the
+            # first update lands. Refuse here too, ahead of the arming: arming
+            # for a write that is then refused would leave the holdoff set, and a
+            # hidden update returns before the decrement, so it would still be
+            # armed when the panel comes back.
+            if not self._visible or self._last_state_key is None:
+                self._sync_depth_text_bufs(force=True)
+                return
+            # Applying dirties every slider-bound value, and RmlUi answers that by
+            # replaying each slider's pre-commit position into its setter. Arm the
+            # holdoff first so the _from_slider wrappers reject that echo whether
+            # it arrives during this call or on the next model update. The cores
+            # below are the text path and do not consult the holdoff, so this
+            # cannot block the commit it is protecting.
+            self._depth_echo_holdoff = 2
             if key == "selection_depth_near_str":
                 self._set_depth_near(parsed)
             elif key == "selection_depth_far_str":

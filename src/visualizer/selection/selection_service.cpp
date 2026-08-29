@@ -169,6 +169,13 @@ namespace lfs::vis {
                 hashCombine(seed, std::hash<int>{}(layout.render_width));
                 hashCombine(seed, std::hash<int>{}(layout.render_height));
             }
+            hashCombine(seed, std::hash<bool>{}(context.containment_intrinsics.has_value()));
+            if (context.containment_intrinsics) {
+                hashFloat(seed, context.containment_intrinsics->focal_x);
+                hashFloat(seed, context.containment_intrinsics->focal_y);
+                hashFloat(seed, context.containment_intrinsics->center_x);
+                hashFloat(seed, context.containment_intrinsics->center_y);
+            }
             return seed;
         }
 
@@ -176,7 +183,8 @@ namespace lfs::vis {
             const SceneRenderState& scene_state,
             const rendering::ViewportData& viewport,
             const bool equirectangular,
-            const std::uint64_t projection_generation) {
+            const std::uint64_t projection_generation,
+            const std::optional<rendering::CameraIntrinsics>& containment) {
             std::size_t seed = 0;
             hashCombine(seed, std::hash<std::uint64_t>{}(projection_generation));
             hashCombine(seed, reinterpret_cast<std::size_t>(scene_state.combined_model));
@@ -204,6 +212,13 @@ namespace lfs::vis {
             hashCombine(seed, std::hash<bool>{}(viewport.orthographic));
             hashFloat(seed, viewport.ortho_scale);
             hashCombine(seed, std::hash<bool>{}(equirectangular));
+            hashCombine(seed, std::hash<bool>{}(containment.has_value()));
+            if (containment) {
+                hashFloat(seed, containment->focal_x);
+                hashFloat(seed, containment->focal_y);
+                hashFloat(seed, containment->center_x);
+                hashFloat(seed, containment->center_y);
+            }
             return seed;
         }
 
@@ -525,6 +540,55 @@ namespace lfs::vis {
             return selection.logical_and(active_visible);
         }
 
+        // Base intrinsics for a dataset camera, scaled to a target render size.
+        // O3 ruling: prefer the undistort destination set when it is precomputed, exactly as
+        // buildGTRenderCamera does (split_view_service.cpp:78-103), otherwise the raw camera
+        // values; then scale all four fields from the base size to the target. get_intrinsics()
+        // is NOT usable here: it scales to image_/camera_ size (camera.cpp:351-354), while the
+        // selection viewport is sized max(image_*, camera_*) (viewportDataFromCamera, this file),
+        // so the two disagree whenever a dataset is loaded resized.
+        [[nodiscard]] std::optional<rendering::CameraIntrinsics> containmentIntrinsicsFromCamera(
+            const core::Camera& camera, glm::ivec2 target_size) {
+            if (camera.camera_model_type() == core::CameraModelType::EQUIRECTANGULAR) {
+                return std::nullopt;
+            }
+            if (target_size.x <= 0 || target_size.y <= 0) {
+                return std::nullopt;
+            }
+
+            float base_fx = camera.focal_x();
+            float base_fy = camera.focal_y();
+            float base_cx = camera.center_x();
+            float base_cy = camera.center_y();
+            int base_width = camera.camera_width();
+            int base_height = camera.camera_height();
+            if (camera.is_undistort_precomputed()) {
+                const auto& undistort = camera.undistort_params();
+                base_fx = undistort.dst_fx;
+                base_fy = undistort.dst_fy;
+                base_cx = undistort.dst_cx;
+                base_cy = undistort.dst_cy;
+                base_width = undistort.dst_width;
+                base_height = undistort.dst_height;
+            }
+            const float x_scale =
+                static_cast<float>(target_size.x) / static_cast<float>(std::max(base_width, 1));
+            const float y_scale =
+                static_cast<float>(target_size.y) / static_cast<float>(std::max(base_height, 1));
+            const rendering::CameraIntrinsics intrinsics{
+                .focal_x = base_fx * x_scale,
+                .focal_y = base_fy * y_scale,
+                .center_x = base_cx * x_scale,
+                .center_y = base_cy * y_scale,
+            };
+            if (!std::isfinite(intrinsics.focal_x) || !std::isfinite(intrinsics.focal_y) ||
+                !std::isfinite(intrinsics.center_x) || !std::isfinite(intrinsics.center_y) ||
+                intrinsics.focal_x <= 0.0f) {
+                return std::nullopt;
+            }
+            return intrinsics;
+        }
+
         [[nodiscard]] rendering::ViewportData viewportDataFromCamera(const core::Camera& camera) {
             const auto rotation_cpu = camera.R().cpu().to(core::DataType::Float32);
             const auto position_cpu = camera.cam_position().cpu().to(core::DataType::Float32);
@@ -596,13 +660,15 @@ namespace lfs::vis {
 
         [[nodiscard]] rendering::FrameView frameViewFromViewport(const rendering::ViewportData& viewport,
                                                                  const glm::vec3& background_color,
-                                                                 const float far_plane = rendering::DEFAULT_FAR_PLANE) {
+                                                                 const float far_plane = rendering::DEFAULT_FAR_PLANE,
+                                                                 std::optional<rendering::CameraIntrinsics> intrinsics = std::nullopt) {
             return rendering::FrameView{
                 .rotation = viewport.rotation,
                 .translation = viewport.translation,
                 .size = viewport.size,
                 .focal_length_mm = viewport.focal_length_mm,
-                .intrinsics_override = std::nullopt,
+                .intrinsics_override = intrinsics,
+                .containment_intrinsics = intrinsics,
                 .far_plane = far_plane,
                 .orthographic = viewport.orthographic,
                 .ortho_scale = viewport.ortho_scale,
@@ -714,7 +780,8 @@ namespace lfs::vis {
             const core::SplatData& model,
             const rendering::ViewportData& viewport,
             const bool equirectangular,
-            const rendering::GaussianSceneState& scene) {
+            const rendering::GaussianSceneState& scene,
+            const std::optional<rendering::CameraIntrinsics>& containment) {
             if (equirectangular || viewport.size.x <= 0 || viewport.size.y <= 0 ||
                 (viewport.orthographic && viewport.ortho_scale <= 0.0f)) {
                 return nullptr;
@@ -767,8 +834,14 @@ namespace lfs::vis {
                             transform_indices_ptr = &transform_indices_cuda;
                         }
 
-                        const auto [fx, fy] =
+                        const auto [derived_focal_x, derived_focal_y] =
                             rendering::computePixelFocalLengths(viewport.size, viewport.focal_length_mm);
+                        const float fx = containment ? containment->focal_x : derived_focal_x;
+                        const float fy = containment ? containment->focal_y : derived_focal_y;
+                        const float center_x = containment ? containment->center_x
+                                                           : 0.5f * static_cast<float>(viewport.size.x);
+                        const float center_y = containment ? containment->center_y
+                                                           : 0.5f * static_cast<float>(viewport.size.y);
                         const std::array<float, 9> view_rotation_rows{
                             viewport.rotation[0].x,
                             viewport.rotation[0].y,
@@ -795,6 +868,8 @@ namespace lfs::vis {
                                 translation,
                                 fx,
                                 fy,
+                                center_x,
+                                center_y,
                                 viewport.orthographic,
                                 viewport.ortho_scale,
                                 model_transforms_ptr,
@@ -856,7 +931,8 @@ namespace lfs::vis {
                         world_point,
                         viewport.focal_length_mm,
                         viewport.orthographic,
-                        viewport.ortho_scale);
+                        viewport.ortho_scale,
+                        containment);
                     if (!projected || !std::isfinite(projected->x) || !std::isfinite(projected->y)) {
                         continue;
                     }
@@ -1210,12 +1286,17 @@ namespace lfs::vis {
         const auto projection_context_opt = viewer_context
                                                 ? projectionContextFromViewerContext(*viewer_context)
                                                 : std::nullopt;
-        if (!projection_context_opt) {
-            return {false, 0, "Invalid projection context"};
-        }
-        const SelectionProjectionContext projection_context = *projection_context_opt;
         auto filters = defaultFilterState();
         filters.crop_filter = false;
+        // A projection is only consumed by the depth filter (applyFilters).
+        // Demanding one unconditionally failed this command whenever the
+        // viewport had no size yet - first frame, or minimized - even with the
+        // depth filter switched off, which origin never did.
+        if (!projection_context_opt && filters.depth_filter) {
+            return {false, 0, "Invalid projection context"};
+        }
+        const SelectionProjectionContext projection_context =
+            projection_context_opt.value_or(SelectionProjectionContext{});
         return commitSelection(selection,
                                mode,
                                effectiveNodeMask(filters.restrict_to_selected_nodes),
@@ -1255,12 +1336,14 @@ namespace lfs::vis {
         const auto projection_context_opt = viewer_context
                                                 ? projectionContextFromViewerContext(*viewer_context)
                                                 : std::nullopt;
-        if (!projection_context_opt) {
-            return {false, 0, "Invalid projection context"};
-        }
-        const SelectionProjectionContext projection_context = *projection_context_opt;
         auto filters = defaultFilterState();
         filters.crop_filter = false;
+        // See selectInBox: the context is only needed when the depth filter is on.
+        if (!projection_context_opt && filters.depth_filter) {
+            return {false, 0, "Invalid projection context"};
+        }
+        const SelectionProjectionContext projection_context =
+            projection_context_opt.value_or(SelectionProjectionContext{});
         return commitSelection(selection,
                                mode,
                                effectiveNodeMask(filters.restrict_to_selected_nodes),
@@ -1284,13 +1367,15 @@ namespace lfs::vis {
         const auto projection_context_opt = viewer_context
                                                 ? projectionContextFromViewerContext(*viewer_context)
                                                 : std::nullopt;
-        if (!projection_context_opt) {
+        const auto filters = defaultFilterState();
+        // See selectInBox: the context is only needed when the depth filter is on.
+        if (!projection_context_opt && filters.depth_filter) {
             LOG_WARN("SelectionService: selectAllFiltered failed: no valid projection context");
             return {false, 0, "Invalid projection context"};
         }
-        const SelectionProjectionContext projection_context = *projection_context_opt;
+        const SelectionProjectionContext projection_context =
+            projection_context_opt.value_or(SelectionProjectionContext{});
 
-        const auto filters = defaultFilterState();
         auto selection = core::Tensor::ones({total}, core::Device::CUDA, core::DataType::Bool);
         return commitSelection(selection,
                                SelectionMode::Replace,
@@ -1314,13 +1399,16 @@ namespace lfs::vis {
         const auto projection_context_opt = viewer_context
                                                 ? projectionContextFromViewerContext(*viewer_context)
                                                 : std::nullopt;
-        if (!projection_context_opt) {
+        const auto filters = defaultFilterState();
+        // See selectInBox: the context is only needed when the depth filter is on.
+        // The applyFilters guard below stays as the defensive check.
+        if (!projection_context_opt && filters.depth_filter) {
             LOG_WARN("SelectionService: invertFiltered failed: no valid projection context");
             return {false, 0, "Invalid projection context"};
         }
-        const SelectionProjectionContext projection_context = *projection_context_opt;
+        const SelectionProjectionContext projection_context =
+            projection_context_opt.value_or(SelectionProjectionContext{});
 
-        const auto filters = defaultFilterState();
         const auto node_mask = effectiveNodeMask(filters.restrict_to_selected_nodes);
         auto filter_mask = core::Tensor::ones({total}, core::Device::CUDA, core::DataType::Bool);
         if (!applyFilters(filter_mask, filters, node_mask, projection_context)) {
@@ -1439,15 +1527,18 @@ namespace lfs::vis {
         const auto projection_context_opt = viewer_context
                                                 ? projectionContextFromViewerContext(*viewer_context)
                                                 : std::nullopt;
-        if (!projection_context_opt) {
+        const auto filters = defaultFilterState();
+        // See selectInBox: the context is only needed when the depth filter is on.
+        if (!projection_context_opt && filters.depth_filter) {
             LOG_WARN("SelectionService: finalizeStroke failed: no valid projection context");
             return {false, 0, "Invalid projection context"};
         }
-        const SelectionProjectionContext projection_context = *projection_context_opt;
+        const SelectionProjectionContext projection_context =
+            projection_context_opt.value_or(SelectionProjectionContext{});
 
         const auto result = commitSelection(stroke_selection_, mode,
                                             node_mask.empty() ? effectiveNodeMask(true) : node_mask,
-                                            defaultFilterState(), projection_context, "selection.stroke");
+                                            filters, projection_context, "selection.stroke");
 
         selection_before_stroke_.reset();
         stroke_selection_ = core::Tensor();
@@ -1524,6 +1615,11 @@ namespace lfs::vis {
         testing_viewport_ = std::move(viewport);
     }
 
+    void SelectionService::setTestingContainmentIntrinsics(
+        std::optional<rendering::CameraIntrinsics> intrinsics) {
+        testing_containment_intrinsics_ = std::move(intrinsics);
+    }
+
     void SelectionService::setTestingHoveredGaussianId(std::optional<int> hovered_gaussian_id) {
         testing_hovered_gaussian_id_ = hovered_gaussian_id;
     }
@@ -1558,6 +1654,29 @@ namespace lfs::vis {
                                                                    : lfs::rendering::DEFAULT_FAR_PLANE;
         projection_context.viewer_layout = viewerLayoutFromInfo(context.info);
         projection_context.panel = context.panel;
+        // GT comparison: the compare panel shows a dataset camera at gt_size, not the
+        // interactive viewport. Project committed selection against what is actually on
+        // screen. Returns nullopt whenever GT is off or its camera is unavailable, in which
+        // case everything below is exactly the interactive-viewer behaviour.
+        if (const auto gt = rendering_manager_->gtComparisonSelectionContext()) {
+            projection_context.viewport.rotation = gt->camera.rotation;
+            projection_context.viewport.translation = gt->camera.translation;
+            projection_context.viewport.size = gt->size;
+            projection_context.viewport.orthographic = false;
+            projection_context.viewport.ortho_scale = lfs::rendering::DEFAULT_ORTHO_SCALE;
+            // Equirect GT keeps its own camera model and carries no containment intrinsics:
+            // buildGTRenderCamera leaves them empty by design and equirect ignores cx/cy.
+            projection_context.equirectangular = gt->camera.equirectangular;
+            projection_context.containment_intrinsics = gt->camera.intrinsics;
+        }
+        // Test-only override of the viewer-derived containment intrinsics. In production the
+        // only writer of this field on a viewer-derived context is GT-C (M3.4), which needs a
+        // presented GT frame and therefore a live Vulkan context; this hook lets the cache and
+        // brush-invalidation contracts (M2.5, M2.6) be tested without one. Mirrors
+        // testing_viewport_ in resolveViewerViewportContext.
+        if (testing_containment_intrinsics_) {
+            projection_context.containment_intrinsics = testing_containment_intrinsics_;
+        }
         return projection_context.valid() ? std::optional<SelectionProjectionContext>(projection_context)
                                           : std::nullopt;
     }
@@ -1600,6 +1719,8 @@ namespace lfs::vis {
                     const auto settings = rendering_manager_->getSettings();
                     SelectionProjectionContext projection_context;
                     projection_context.viewport = viewportDataFromCamera(*cameras[camera_index]);
+                    projection_context.containment_intrinsics = containmentIntrinsicsFromCamera(
+                        *cameras[camera_index], projection_context.viewport.size);
                     projection_context.equirectangular = settings.equirectangular;
                     projection_context.far_plane = lfs::rendering::DEFAULT_FAR_PLANE;
                     if (projection_context.valid()) {
@@ -1636,7 +1757,8 @@ namespace lfs::vis {
         return frameViewFromViewport(
             projection_context.viewport,
             settings.background_color,
-            projection_context.far_plane);
+            projection_context.far_plane,
+            projection_context.containment_intrinsics);
     }
 
     std::shared_ptr<core::Tensor> SelectionService::renderScreenPositionsForProjectionContext(
@@ -1684,7 +1806,8 @@ namespace lfs::vis {
                     scene_state,
                     projection_context.viewport,
                     projection_context.equirectangular,
-                    rendering_manager_->getViewportProjectionGeneration()),
+                    rendering_manager_->getViewportProjectionGeneration(),
+                    projection_context.containment_intrinsics),
             };
             if (viewport_screen_position_keys_[panel_index] == key &&
                 viewport_screen_positions_[panel_index] &&
@@ -1698,7 +1821,8 @@ namespace lfs::vis {
                 projection_context.equirectangular,
                 {.model_transforms = &scene_state.model_transforms,
                  .transform_indices = scene_state.transform_indices,
-                 .node_visibility_mask = scene_state.node_visibility_mask});
+                 .node_visibility_mask = scene_state.node_visibility_mask},
+                projection_context.containment_intrinsics);
             viewport_screen_positions_[panel_index] = screen_positions;
             viewport_screen_position_keys_[panel_index] =
                 (screen_positions && screen_positions->is_valid()) ? key : ScreenPositionCacheKey{};
@@ -1711,7 +1835,8 @@ namespace lfs::vis {
             projection_context.equirectangular,
             {.model_transforms = &scene_state.model_transforms,
              .transform_indices = scene_state.transform_indices,
-             .node_visibility_mask = scene_state.node_visibility_mask});
+             .node_visibility_mask = scene_state.node_visibility_mask},
+            projection_context.containment_intrinsics);
     }
 
     std::shared_ptr<core::Tensor> SelectionService::screenPositionsForCommandPass(
@@ -1756,6 +1881,36 @@ namespace lfs::vis {
             context.info = *testing_viewport_;
             context.viewport = &testing_viewport_source;
             return context;
+        }
+
+        // GT-C: the compare image is rendered at gt_size and composited across the whole
+        // letterboxed content rect, with the divider merely hiding its left portion — so the
+        // linear map from content-rect screen pixels to gt_size render pixels is the correct one
+        // for the full rect. This lives here, in the selection lane's own resolver, and NOT in
+        // RenderingManager::resolveViewerPanel: that function has nineteen non-selection callers
+        // (gizmos, alignment, sequencer, the guide-panel collector) which would otherwise combine
+        // GT layout and gt_size with the interactive pose.
+        if (const auto gt = rendering_manager_->gtComparisonSelectionContext()) {
+            auto* const gui = services().guiOrNull();
+            if (gui && gui->getViewer()) {
+                const auto viewport_pos = gui->getViewportPos();
+                const auto viewport_size = gui->getViewportSize();
+                const auto bounds = rendering_manager_->getContentBounds(
+                    glm::ivec2(static_cast<int>(viewport_size.x), static_cast<int>(viewport_size.y)));
+                context.panel = SplitViewPanelId::Right;
+                context.info = ViewportInfo{
+                    .x = viewport_pos.x + bounds.x,
+                    .y = viewport_pos.y + bounds.y,
+                    .width = bounds.width,
+                    .height = bounds.height,
+                    .render_width = gt->size.x,
+                    .render_height = gt->size.y,
+                };
+                context.viewport = &gui->getViewer()->getViewport();
+                if (context.info.valid()) {
+                    return context;
+                }
+            }
         }
 
         auto* const gm = services().guiOrNull();
@@ -3290,6 +3445,40 @@ namespace lfs::vis {
         Viewport projection_viewport = *viewport_context->viewport;
         projection_viewport.windowSize = {info.render_width, info.render_height};
         const auto render_point = screenToRender(screen_point, info);
+
+        if (const auto gt = rendering_manager_->gtComparisonSelectionContext()) {
+            if (gt->camera.intrinsics) {
+                projection_viewport.camera.R = gt->camera.rotation;
+                projection_viewport.camera.t = gt->camera.translation;
+
+                const float pivot_distance = glm::length(projection_viewport.camera.pivot - projection_viewport.camera.t);
+                const float fallback_distance = pivot_distance > 0.1f ? pivot_distance : 10.0f;
+
+                // Same pinhole inverse as rendering::unprojectScreenPoint, but with the displayed GT
+                // camera's real intrinsics instead of the image-centred, aspect-derived ones that helper
+                // assumes (coordinate_conventions.hpp:278-282). Distance along the ray uses the existing
+                // pivot-distance heuristic rather than a depth-buffer read: in GT the reachable depth is
+                // either addressed in the wrong space or belongs to a held, older frame (see above).
+                const auto& gt_intrinsics = *gt->camera.intrinsics;
+                const glm::vec3 view_pos(
+                    (render_point.x - gt_intrinsics.center_x) * fallback_distance / gt_intrinsics.focal_x,
+                    (gt_intrinsics.center_y - render_point.y) * fallback_distance / gt_intrinsics.focal_y,
+                    -fallback_distance);
+                const glm::vec3 world = projection_viewport.camera.R * view_pos + projection_viewport.camera.t;
+                if (Viewport::isValidWorldPosition(world)) {
+                    return world;
+                }
+                // Deliberate GT-only terminal fallback (not a duplicate of the shared
+                // one below): falling through would cross the getDepthAtPixel read the
+                // STOP-3 ruling forbids on the GT path, and the shared fallback
+                // unprojects through unprojectPixel, which hard-centres the principal
+                // point and derives symmetric focals — exactly what the GT ray must
+                // not use. A forward ray at the fallback distance needs no intrinsics.
+                const glm::vec3 forward = rendering::cameraForward(projection_viewport.camera.R);
+                return projection_viewport.camera.t + forward * fallback_distance;
+            }
+        }
+
         const float depth = rendering_manager_->getDepthAtPixel(
             static_cast<int>(render_point.x), static_cast<int>(render_point.y), viewport_context->panel);
         const float ortho_scale = effectiveOrthoScale(projection_viewport, settings);
@@ -3338,6 +3527,25 @@ namespace lfs::vis {
         projection_viewport.windowSize = {info.render_width, info.render_height};
         const auto settings = rendering_manager_->getSettings();
         const float ortho_scale = effectiveOrthoScale(projection_viewport, settings);
+
+        if (const auto gt = rendering_manager_->gtComparisonSelectionContext()) {
+            if (gt->camera.intrinsics) {
+                const glm::vec3 view = glm::transpose(gt->camera.rotation) * (world_point - gt->camera.translation);
+                if (!lfs::rendering::isFiniteVec3(view) || view.z >= -1e-6f) {
+                    return std::nullopt;
+                }
+                const auto& gt_intrinsics = *gt->camera.intrinsics;
+                const float depth = -view.z;
+                const glm::vec2 projected(
+                    gt_intrinsics.center_x + view.x * gt_intrinsics.focal_x / depth,
+                    gt_intrinsics.center_y - view.y * gt_intrinsics.focal_y / depth);
+                const float scale_x = info.width / static_cast<float>(std::max(info.render_width, 1));
+                const float scale_y = info.height / static_cast<float>(std::max(info.render_height, 1));
+                return glm::vec2(info.x + projected.x * scale_x,
+                                 info.y + projected.y * scale_y);
+            }
+        }
+
         const auto projected = rendering::projectWorldPoint(
             projection_viewport.camera.R,
             projection_viewport.camera.t,
@@ -3580,8 +3788,19 @@ namespace lfs::vis {
         {
             LOG_TIMER("applyDepthFilter.filter_selection_by_screen_window");
             const auto& viewport = projection_context.viewport;
-            const auto [pixel_focal_x, pixel_focal_y] = rendering::computePixelFocalLengths(
+            // The displayed camera's real intrinsics when we have them. computePixelFocalLengths
+            // reconstructs fx from fy and the aspect ratio, which silently discards asymmetric
+            // focals, so a carried intrinsics set must win outright rather than contribute only
+            // its principal point.
+            const auto& containment = projection_context.containment_intrinsics;
+            const auto [derived_focal_x, derived_focal_y] = rendering::computePixelFocalLengths(
                 {viewport.size.x, viewport.size.y}, viewport.focal_length_mm);
+            const float pixel_focal_x = containment ? containment->focal_x : derived_focal_x;
+            const float pixel_focal_y = containment ? containment->focal_y : derived_focal_y;
+            const float center_x = containment ? containment->center_x
+                                               : 0.5f * static_cast<float>(viewport.size.x);
+            const float center_y = containment ? containment->center_y
+                                               : 0.5f * static_cast<float>(viewport.size.y);
             const std::array<float, 9> view_rotation_rows{
                 viewport.rotation[0][0],
                 viewport.rotation[0][1],
@@ -3603,6 +3822,15 @@ namespace lfs::vis {
                                       : viewport.orthographic
                                           ? rendering::ScreenWindowCameraModel::Orthographic
                                           : rendering::ScreenWindowCameraModel::Pinhole;
+            // Same substitution the Vulkan lane applies before handing the scale
+            // to the shader (vksplat_viewport_renderer.cpp), so the selection the
+            // kernel computes matches the window the viewport draws. The invalid
+            // domain is the whole of "not finite or not above the threshold", not
+            // just values near zero: a negative or NaN scale is equally unusable.
+            const float sanitized_ortho_scale =
+                (std::isfinite(viewport.ortho_scale) && viewport.ortho_scale > 1.0e-5f)
+                    ? viewport.ortho_scale
+                    : lfs::rendering::DEFAULT_ORTHO_SCALE;
             rendering::filter_selection_by_screen_window(
                 selection,
                 means,
@@ -3613,7 +3841,9 @@ namespace lfs::vis {
                 viewport.size.y,
                 pixel_focal_x,
                 pixel_focal_y,
-                viewport.ortho_scale,
+                center_x,
+                center_y,
+                sanitized_ortho_scale,
                 -settings.depth_filter_max.z,
                 -settings.depth_filter_min.z,
                 settings.depth_filter_scale,

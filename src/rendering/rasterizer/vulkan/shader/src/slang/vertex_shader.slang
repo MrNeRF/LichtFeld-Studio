@@ -344,22 +344,44 @@ SplatActiveState compute_splat_active_state(
         // this block, filterSelectionByScreenWindowKernel (selection_ops.cu),
         // the CPU reference in tests/test_selection_screen_window.cpp, and
         // (rect only, no depth test) the 2D overlay in gui_manager.cpp
-        // appendCropAndFilterOverlays.
+        // appendScreenWindowOverlay.
+        // Contract: the window RECTANGLE is framebuffer-centred (0.5*W/H plus the user
+        // offsets) in all four copies, but the SPLAT is projected with the displayed
+        // camera's real, unjittered intrinsics. The host supplies those in
+        // OVERLAY_PARAM_VIEW_INTRINSICS; when the slot is empty (x <= 0) the displayed
+        // camera is image-centred anyway and cam's own focals with the image centre are
+        // the correct value. Temporal jitter moves cam.cx/cy but never this slot, so the
+        // containment boundary does not move while the frame settles. Equirectangular and
+        // orthographic ignore cx/cy, and the host does not write the slot for them.
+        Camera containment_cam = cam;
+        float4 containment_intrinsics = overlay_params[OVERLAY_PARAM_VIEW_INTRINSICS];
+        if (containment_intrinsics.x > 0.0f) {
+            containment_cam.fx = containment_intrinsics.x;
+            containment_cam.fy = containment_intrinsics.y;
+            containment_cam.cx = containment_intrinsics.z;
+            containment_cam.cy = containment_intrinsics.w;
+        } else {
+            containment_cam.cx = 0.5f * float(cam.W);
+            containment_cam.cy = 0.5f * float(cam.H);
+        }
+        float3 containment_center = project_point(mean_ws, containment_cam);
         float4 vmin = overlay_params[OVERLAY_PARAM_VIEW_MIN];
         float4 vmax = overlay_params[OVERLAY_PARAM_VIEW_MAX];
         float half_w = 0.5f * view_flags.w * float(cam.W);
         float half_h = 0.5f * view_flags.w * float(cam.H);
         float cx = 0.5f * float(cam.W) + vmin.w * (0.5f * float(cam.W) - half_w);
         float cy = 0.5f * float(cam.H) + vmax.w * (0.5f * float(cam.H) - half_h);
-        bool inside_rect = abs(projected_center.x - cx) <= half_w &&
-                           abs(projected_center.y - cy) <= half_h;
+        bool inside_rect = abs(containment_center.x - cx) <= half_w &&
+                           abs(containment_center.y - cy) <= half_h;
         float near_depth = -vmax.z;
         float far_depth = -vmin.z;
         // Also excludes the equirect degenerate sentinel (project_point_equirect
-        // returns z = -1); real equirect depths are always positive radial lengths.
-        bool positive_depth = projected_center.z > 0.0f;
+        // returns z = -1) and the OpenCV/fisheye out-of-domain sentinel, both of
+        // which return z = -1 before any principal point is applied; real depths
+        // here are always positive.
+        bool positive_depth = containment_center.z > 0.0f;
         bool inside = inside_rect &&
-                      projected_center.z >= near_depth && projected_center.z <= far_depth &&
+                      containment_center.z >= near_depth && containment_center.z <= far_depth &&
                       positive_depth;
         if (!inside) {
             overlay_flags |= OVERLAY_FLAG_NONSELECTABLE;
