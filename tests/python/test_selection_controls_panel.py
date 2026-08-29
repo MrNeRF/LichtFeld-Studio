@@ -304,11 +304,10 @@ def test_selection_depth_fallback_far_defaults_to_6(selection_controls_module):
 
 def test_selection_depth_toggle_and_sliders_use_selection_api(selection_controls_module):
     module, state = selection_controls_module
-    panel = module.SelectionControlsController()
-    model = _DataModelStub()
-
-    panel.bind_model(model)
-    panel.update(_DocumentStub())
+    # Start disabled so the toggle actually enables. _mounted_panel decays the
+    # echo holdoff armed by the first refresh (controller defaults (0, 6) vs
+    # stub (0.25, 7.5)) before any slider write.
+    panel, model, _doc = _mounted_panel(module, state, enabled=False)
 
     model.bound_events["selection_action"](None, None, ["toggle_depth"])
     assert state.depth_calls[-1] == (True, 0.25, 7.5, 1.35)

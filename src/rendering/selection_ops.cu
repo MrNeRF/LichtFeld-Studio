@@ -180,7 +180,7 @@ namespace lfs::rendering {
             const float pixel_focal_y,
             const float center_x,
             const float center_y,
-            const bool orthographic,
+            const std::uint32_t camera_model,
             const float ortho_scale,
             const float* __restrict__ model_transforms,
             const int* __restrict__ transform_indices,
@@ -218,14 +218,46 @@ namespace lfs::rendering {
             const float view_x = view_row0.x * dx + view_row0.y * dy + view_row0.z * dz;
             const float view_y = view_row1.x * dx + view_row1.y * dy + view_row1.z * dz;
             const float view_z = view_row2.x * dx + view_row2.y * dy + view_row2.z * dz;
-            if (!isfinite(view_x) || !isfinite(view_y) || !isfinite(view_z) || view_z >= -1.0e-6f) {
+            if (!isfinite(view_x) || !isfinite(view_y) || !isfinite(view_z)) {
+                writeInvalidScreenPosition(output, idx);
+                return;
+            }
+
+            // Equirect sees every direction, including behind the camera. The
+            // z-sign reject is pinhole/ortho only; the finite check above still
+            // applies to all three models.
+            const bool equirectangular =
+                camera_model == static_cast<std::uint32_t>(ScreenWindowCameraModel::Equirectangular);
+            if (!equirectangular && view_z >= -1.0e-6f) {
                 writeInvalidScreenPosition(output, idx);
                 return;
             }
 
             const float cx = center_x;
             const float cy = center_y;
-            if (orthographic) {
+            if (equirectangular) {
+                // Same vksplat-axis negation as filterSelectionByScreenWindowKernel's
+                // equirect branch: vis is +X right, +Y up, -Z forward; vk is +X
+                // right, +Y down, +Z forward. The resulting px/py match that kernel.
+                const float eq_x = view_x;
+                const float eq_y = -view_y;
+                const float eq_z = -view_z;
+                const float len = sqrtf(eq_x * eq_x + eq_y * eq_y + eq_z * eq_z);
+                if (len <= 1.0e-6f || !isfinite(len)) {
+                    writeInvalidScreenPosition(output, idx);
+                    return;
+                }
+                const float dir_x = eq_x / len;
+                const float dir_y = eq_y / len;
+                const float dir_z = eq_z / len;
+                constexpr float pi = 3.14159265358979323846f;
+                output[idx] = make_float2(
+                    (atan2f(dir_x, dir_z) / (2.0f * pi) + 0.5f) * static_cast<float>(width),
+                    (asinf(fminf(fmaxf(dir_y, -1.0f), 1.0f)) / pi + 0.5f) * static_cast<float>(height));
+                return;
+            }
+
+            if (camera_model == static_cast<std::uint32_t>(ScreenWindowCameraModel::Orthographic)) {
                 if (!isfinite(ortho_scale) || ortho_scale <= 0.0f) {
                     writeInvalidScreenPosition(output, idx);
                     return;
@@ -779,11 +811,13 @@ namespace lfs::rendering {
             // the splat projection uses the displayed camera's real unjittered intrinsics;
             // jitter moves the draw sample, not the containment boundary.
             // The transform/projection above is mathematically equivalent to
-            // projectScreenPositionsKernel in this file; conventions differ because
-            // that kernel keeps visualizer view Y and flips its sign at the
-            // principal point (cy - ...), negating only Z up front
-            // (depth = -view_z), while this one negates view_y and view_z up
-            // front so it can add, mirroring the slang formula verbatim.
+            // projectScreenPositionsKernel in this file (pinhole, ortho, and
+            // equirect); conventions differ because that kernel keeps visualizer
+            // view Y and flips its sign at the principal point (cy - ...),
+            // negating only Z up front (depth = -view_z), while this one negates
+            // view_y and view_z up front so it can add, mirroring the slang
+            // formula verbatim. The equirect branch in that kernel applies the
+            // same vis→vk negation used here so px/py match.
             const float half_w = 0.5f * scale * image_width;
             const float half_h = 0.5f * scale * image_height;
             const float cx = 0.5f * image_width + offset_x * (0.5f * image_width - half_w);
@@ -860,13 +894,13 @@ namespace lfs::rendering {
         const std::array<float, 3>& translation,
         const float pixel_focal_x,
         const float pixel_focal_y,
-        const bool orthographic,
+        const ScreenWindowCameraModel camera_model,
         const float ortho_scale) {
         return project_screen_positions_tensor(
             means, width, height, view_rotation_rows, translation,
             pixel_focal_x, pixel_focal_y,
             0.5f * static_cast<float>(width), 0.5f * static_cast<float>(height),
-            orthographic, ortho_scale,
+            camera_model, ortho_scale,
             nullptr, nullptr, {});
     }
 
@@ -878,14 +912,14 @@ namespace lfs::rendering {
         const std::array<float, 3>& translation,
         const float pixel_focal_x,
         const float pixel_focal_y,
-        const bool orthographic,
+        const ScreenWindowCameraModel camera_model,
         const float ortho_scale,
         const Tensor* const model_transforms) {
         return project_screen_positions_tensor(
             means, width, height, view_rotation_rows, translation,
             pixel_focal_x, pixel_focal_y,
             0.5f * static_cast<float>(width), 0.5f * static_cast<float>(height),
-            orthographic, ortho_scale,
+            camera_model, ortho_scale,
             model_transforms, nullptr, {});
     }
 
@@ -897,7 +931,7 @@ namespace lfs::rendering {
         const std::array<float, 3>& translation,
         const float pixel_focal_x,
         const float pixel_focal_y,
-        const bool orthographic,
+        const ScreenWindowCameraModel camera_model,
         const float ortho_scale,
         const Tensor* const model_transforms,
         const Tensor* const transform_indices) {
@@ -905,7 +939,7 @@ namespace lfs::rendering {
             means, width, height, view_rotation_rows, translation,
             pixel_focal_x, pixel_focal_y,
             0.5f * static_cast<float>(width), 0.5f * static_cast<float>(height),
-            orthographic, ortho_scale,
+            camera_model, ortho_scale,
             model_transforms, transform_indices, {});
     }
 
@@ -919,7 +953,7 @@ namespace lfs::rendering {
         const float pixel_focal_y,
         const float center_x,
         const float center_y,
-        const bool orthographic,
+        const ScreenWindowCameraModel camera_model,
         const float ortho_scale,
         const Tensor* const model_transforms,
         const Tensor* const transform_indices,
@@ -1003,7 +1037,7 @@ namespace lfs::rendering {
             pixel_focal_y,
             center_x,
             center_y,
-            orthographic,
+            static_cast<std::uint32_t>(camera_model),
             ortho_scale,
             prepared_transforms.ptr,
             transform_indices_ptr,

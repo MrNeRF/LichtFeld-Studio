@@ -2351,6 +2351,26 @@ namespace lfs::vis {
         EXPECT_TRUE(settings.gut);
     }
 
+    TEST_F(RenderingManagerEventsTest, EnablingDepthFilterMigratesConstructorDefaultPositiveZBox) {
+        RenderingManager manager;
+        auto settings = manager.getSettings();
+        ASSERT_FALSE(settings.depth_filter_enabled);
+        ASSERT_EQ(settings.depth_filter_min.z, 0.0f);
+        ASSERT_EQ(settings.depth_filter_max.z, 100.0f);
+
+        settings.depth_filter_enabled = true;
+        manager.updateSettings(settings);
+
+        settings = manager.getSettings();
+        EXPECT_EQ(settings.depth_filter_min.z, -100.0f);
+        EXPECT_EQ(settings.depth_filter_max.z, 0.0f);
+
+        manager.updateSettings(settings);
+        settings = manager.getSettings();
+        EXPECT_EQ(settings.depth_filter_min.z, -100.0f);
+        EXPECT_EQ(settings.depth_filter_max.z, 0.0f);
+    }
+
     TEST(OverlayParamPackingTest, GTComparisonRenderCameraReplacesDrawAndContainmentIntrinsics) {
         using lfs::core::Camera;
         using lfs::core::CameraModelType;

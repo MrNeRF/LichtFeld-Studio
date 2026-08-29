@@ -65,7 +65,7 @@ namespace lfs::rendering {
         const std::array<float, 3>& translation,
         float pixel_focal_x,
         float pixel_focal_y,
-        bool orthographic,
+        ScreenWindowCameraModel camera_model,
         float ortho_scale);
     [[nodiscard]] Tensor project_screen_positions_tensor(
         const Tensor& means,
@@ -75,7 +75,7 @@ namespace lfs::rendering {
         const std::array<float, 3>& translation,
         float pixel_focal_x,
         float pixel_focal_y,
-        bool orthographic,
+        ScreenWindowCameraModel camera_model,
         float ortho_scale,
         const Tensor* model_transforms);
     [[nodiscard]] Tensor project_screen_positions_tensor(
@@ -86,7 +86,7 @@ namespace lfs::rendering {
         const std::array<float, 3>& translation,
         float pixel_focal_x,
         float pixel_focal_y,
-        bool orthographic,
+        ScreenWindowCameraModel camera_model,
         float ortho_scale,
         const Tensor* model_transforms,
         const Tensor* transform_indices);
@@ -100,7 +100,7 @@ namespace lfs::rendering {
         float pixel_focal_y,
         float center_x,
         float center_y,
-        bool orthographic,
+        ScreenWindowCameraModel camera_model,
         float ortho_scale,
         const Tensor* model_transforms,
         const Tensor* transform_indices,
