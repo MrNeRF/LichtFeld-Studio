@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/contiguous_streambuf.hpp"
+
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
@@ -17,7 +19,7 @@ namespace lfs::io::project {
 
     // Get-area windows stay at most INT_MAX bytes because MSVC stores the
     // get-area length as int.
-    class SpanStreambuf final : public std::streambuf {
+    class SpanStreambuf final : public lfs::core::ContiguousStreambuf {
     public:
         explicit SpanStreambuf(
             std::span<const std::byte> bytes,
@@ -33,6 +35,15 @@ namespace lfs::io::project {
                        static_cast<std::size_t>(
                            std::numeric_limits<int>::max()));
             set_window(0);
+        }
+
+        [[nodiscard]] std::span<const std::byte>
+        remaining_bytes() const noexcept override {
+            const auto pos = logical_position();
+            if (pos >= bytes_.size()) {
+                return {};
+            }
+            return bytes_.subspan(static_cast<std::size_t>(pos));
         }
 
     protected:

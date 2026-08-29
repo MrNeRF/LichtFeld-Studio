@@ -104,6 +104,7 @@
 #include <fstream>
 #include <functional>
 #include <future>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -137,6 +138,19 @@ namespace {
     using lfs::training::SelectionKind;
     using lfs::training::TrainingPhase;
     using lfs::training::TrainingSnapshot;
+
+    using SafePyCallback = std::shared_ptr<nb::object>;
+
+    SafePyCallback make_safe_py_callback(nb::object callback) {
+        // Native hook queues copy callbacks without the GIL. Keep Python
+        // ownership behind a C++ shared pointer and acquire the GIL on deletion.
+        // The deleter may block on the GIL: never drop the last reference while
+        // holding a lock that a GIL-holding thread can also take.
+        return {new nb::object(std::move(callback)), [](nb::object* callback) {
+                    nb::gil_scoped_acquire gil;
+                    delete callback;
+                }};
+    }
 
     void warn_deprecated_python_api(const std::string_view old_name, const std::string_view replacement) {
         const std::string message = std::format(
@@ -460,19 +474,20 @@ namespace {
 
         void add(ControlHook hook, nb::callable fn) {
             nb::object fn_obj = std::move(fn);
-            auto cb = [fn_obj](const HookContext& ctx) {
+            auto callback = make_safe_py_callback(std::move(fn_obj));
+            auto cb = [callback](const HookContext& ctx) {
                 nb::gil_scoped_acquire gil;
                 HookInvocationGuard hook_guard(ctx);
-                fn_obj(ctx.iteration, ctx.loss, ctx.num_gaussians, ctx.is_refining);
+                (*callback)(ctx.iteration, ctx.loss, ctx.num_gaussians, ctx.is_refining);
             };
 
             const auto id = ControlBoundary::instance().register_callback(hook, std::move(cb));
             registrations_.push_back({hook, id});
-            owned_callbacks_.push_back(std::move(fn_obj));
+            owned_callbacks_.push_back(std::move(callback));
         }
 
         std::vector<RegistrationHandle> registrations_;
-        std::vector<nb::object> owned_callbacks_;
+        std::vector<SafePyCallback> owned_callbacks_;
     };
 
     class PyScopedHandler {
@@ -499,15 +514,16 @@ namespace {
     private:
         void add_hook(ControlHook hook, nb::callable cb) {
             nb::object fn = nb::cast<nb::object>(cb);
-            owned_callbacks_.push_back(fn);
+            auto callback = make_safe_py_callback(std::move(fn));
+            owned_callbacks_.push_back(callback);
 
-            handler_.subscribe_hook(hook, [fn, hook](const HookContext& ctx) {
-                invoke_python_dict_hook(fn, hook, ctx);
+            handler_.subscribe_hook(hook, [callback, hook](const HookContext& ctx) {
+                invoke_python_dict_hook(*callback, hook, ctx);
             });
         }
 
         lfs::event::ScopedHandler handler_;
-        std::vector<nb::object> owned_callbacks_;
+        std::vector<SafePyCallback> owned_callbacks_;
     };
 
     class PyContextView {
@@ -700,10 +716,10 @@ namespace {
     std::size_t register_hook(ControlHook hook, nb::callable cb) {
         if (!cb)
             return 0;
-        const nb::object ocb = nb::cast<nb::object>(cb);
+        const auto callback = make_safe_py_callback(nb::cast<nb::object>(cb));
         LOG_INFO("Python hook registered for hook {}", static_cast<int>(hook));
-        return ControlBoundary::instance().register_callback(hook, [ocb, hook](const HookContext& ctx) {
-            invoke_python_dict_hook(ocb, hook, ctx);
+        return ControlBoundary::instance().register_callback(hook, [callback, hook](const HookContext& ctx) {
+            invoke_python_dict_hook(*callback, hook, ctx);
         });
     }
 
@@ -2840,10 +2856,10 @@ NB_MODULE(lichtfeld, m) {
     // Frame callback for animations
     m.def(
         "on_frame", [](nb::callable cb) {
-            nb::object ocb = nb::cast<nb::object>(cb);
-            lfs::python::set_frame_callback([ocb](float dt) {
+            const auto callback = make_safe_py_callback(nb::cast<nb::object>(cb));
+            lfs::python::set_frame_callback([callback](float dt) {
                 try {
-                    ocb(dt);
+                    (*callback)(dt);
                 } catch (nb::python_error& e) {
                     (void)lfs::python::contain_python_callback(e, lfs::python::PyCallbackPolicy::DisableAndReport);
                     lfs::python::clear_frame_callback();
@@ -2865,10 +2881,10 @@ NB_MODULE(lichtfeld, m) {
 
     m.def(
         "on_scene_time", [](nb::callable cb) {
-            nb::object ocb = nb::cast<nb::object>(cb);
-            lfs::python::set_scene_time_callback([ocb](float clip_time) {
+            const auto callback = make_safe_py_callback(nb::cast<nb::object>(cb));
+            lfs::python::set_scene_time_callback([callback](float clip_time) {
                 try {
-                    ocb(clip_time);
+                    (*callback)(clip_time);
                 } catch (nb::python_error& e) {
                     (void)lfs::python::contain_python_callback(e, lfs::python::PyCallbackPolicy::DisableAndReport);
                     lfs::python::clear_scene_time_callback();

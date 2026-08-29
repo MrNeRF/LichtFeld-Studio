@@ -54,6 +54,32 @@ namespace lfs::vis::gui {
         constexpr float PATH_SAMPLES_PER_VIEWPORT_PIXEL = 2.0f;
         constexpr uint32_t PLY_SEQUENCE_CACHE_MAGIC = 0x4C465351; // "LFSQ"
         constexpr uint32_t PLY_SEQUENCE_CACHE_VERSION = 1;
+        constexpr int PIP_PREVIEW_LONG_SIDE = 320;
+
+        struct PipPreviewSize {
+            int width = PIP_PREVIEW_LONG_SIDE;
+            int height = 180;
+        };
+
+        [[nodiscard]] PipPreviewSize pipPreviewSize(int out_w, int out_h) {
+            out_w = std::max(out_w, 1);
+            out_h = std::max(out_h, 1);
+            int width;
+            int height;
+            if (out_w >= out_h) {
+                width = PIP_PREVIEW_LONG_SIDE;
+                height = static_cast<int>(std::lround(
+                    static_cast<double>(PIP_PREVIEW_LONG_SIDE) * static_cast<double>(out_h) /
+                    static_cast<double>(out_w)));
+            } else {
+                height = PIP_PREVIEW_LONG_SIDE;
+                width = static_cast<int>(std::lround(
+                    static_cast<double>(PIP_PREVIEW_LONG_SIDE) * static_cast<double>(out_w) /
+                    static_cast<double>(out_h)));
+            }
+            const auto even = [](const int value) { return std::max(2, value & ~1); };
+            return {even(width), even(height)};
+        }
 
         struct PlySequenceCacheHeader {
             uint32_t magic = PLY_SEQUENCE_CACHE_MAGIC;
@@ -282,6 +308,8 @@ namespace lfs::vis::gui {
             overlay_->destroyGraphicsResources();
         pip_texture_.reset();
         pip_initialized_ = false;
+        pip_last_key_.reset();
+        pip_needs_update_ = true;
         line_renderer_.destroyResources();
         film_strip_.destroyGraphicsResources();
     }
@@ -306,7 +334,7 @@ namespace lfs::vis::gui {
 
         viewport_edit_mode_ = SequencerViewportEditMode::None;
         keyframe_gizmo_active_ = false;
-        pip_last_keyframe_ = std::nullopt;
+        pip_last_key_.reset();
         pip_needs_update_ = true;
         last_panel_frame_time_ = std::chrono::steady_clock::now();
         endViewportKeyframeEdit();
@@ -484,7 +512,6 @@ namespace lfs::vis::gui {
 
         if (ui_state_.equirectangular != last_equirectangular_) {
             last_equirectangular_ = ui_state_.equirectangular;
-            pip_needs_update_ = true;
             film_strip_.invalidateAll();
         }
 
@@ -556,7 +583,8 @@ namespace lfs::vis::gui {
                plySequenceStreamHasWork() ||
                keyframe_gizmo_active_ ||
                viewport_keyframe_edit_snapshot_.has_value() ||
-               (ui_state_.show_pip_preview && pip_needs_update_) ||
+               (ui_state_.show_pip_preview &&
+                (pip_needs_update_ || !pip_last_key_ || currentPipPreviewKey() != *pip_last_key_)) ||
                (overlay_ && (overlay_->wantsInput() ||
                              overlay_->isContextMenuOpen() ||
                              overlay_->isPopupOpen()));
@@ -1291,7 +1319,6 @@ namespace lfs::vis::gui {
                     lfs::core::events::state::KeyframeListChanged{
                         .count = controller_.timeline().realKeyframeCount()}
                         .emit();
-                    pip_needs_update_ = true;
                 } else {
                     LOG_ERROR("Failed to load camera path from {}", path_utf8);
                 }
@@ -1319,16 +1346,9 @@ namespace lfs::vis::gui {
         }
 
         if (panel_->consumeExportRequest() && controller_.timeline().realKeyframeCount() > 0) {
-            const auto info = lfs::io::video::getPresetInfo(ui_state_.preset);
-            const int w = ui_state_.preset == lfs::io::video::VideoPreset::CUSTOM
-                              ? ui_state_.custom_width
-                              : info.width;
-            const int h = ui_state_.preset == lfs::io::video::VideoPreset::CUSTOM
-                              ? ui_state_.custom_height
-                              : info.height;
             lfs::core::events::cmd::SequencerExportVideo{
-                .width = w,
-                .height = h,
+                .width = ui_state_.outputWidth(),
+                .height = ui_state_.outputHeight(),
                 .framerate = ui_state_.framerate,
                 .crf = ui_state_.quality}
                 .emit();
@@ -1416,11 +1436,21 @@ namespace lfs::vis::gui {
                                    if (action.starts_with("preset_")) {
                                        using lfs::io::video::VideoPreset;
                                        const int idx = std::stoi(std::string(action.substr(7)));
-                                       ui_state_.preset = static_cast<VideoPreset>(idx);
-                                       const auto info = lfs::io::video::getPresetInfo(ui_state_.preset);
-                                       ui_state_.custom_width = info.width;
-                                       ui_state_.custom_height = info.height;
-                                       ui_state_.framerate = info.framerate;
+                                       const auto next = static_cast<VideoPreset>(idx);
+                                       if (next == VideoPreset::CUSTOM) {
+                                           ui_state_.custom_width = ui_state_.outputWidth();
+                                           ui_state_.custom_height = ui_state_.outputHeight();
+                                           if (ui_state_.preset != VideoPreset::CUSTOM)
+                                               ui_state_.framerate =
+                                                   lfs::io::video::getPresetInfo(ui_state_.preset).framerate;
+                                           ui_state_.preset = next;
+                                       } else {
+                                           ui_state_.preset = next;
+                                           const auto info = lfs::io::video::getPresetInfo(next);
+                                           ui_state_.custom_width = info.width;
+                                           ui_state_.custom_height = info.height;
+                                           ui_state_.framerate = info.framerate;
+                                       }
                                    }
                                    break;
                                case Target::CLEAR:
@@ -1985,7 +2015,6 @@ namespace lfs::vis::gui {
                     new_pos,
                     new_rot,
                     kf->focal_length_mm)) {
-                pip_needs_update_ = true;
                 rendering_manager->markDirty(DirtyFlag::OVERLAY);
             }
         }
@@ -2210,7 +2239,6 @@ namespace lfs::vis::gui {
                 controller_.addKeyframeAtTime(kf, time);
                 controller_.seek(time);
                 state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
-                pip_needs_update_ = true;
             } break;
             case Action::UPDATE_KEYFRAME:
                 viewport_edit_mode_ = SequencerViewportEditMode::None;
@@ -2280,7 +2308,6 @@ namespace lfs::vis::gui {
                             view_state.rotation,
                             view_state.focal_length_mm)) {
                         state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
-                        pip_needs_update_ = true;
                     }
                     if (const auto* const keyframe =
                             controller_.timeline().getKeyframeById(
@@ -2303,16 +2330,44 @@ namespace lfs::vis::gui {
         if (auto time_result = overlay_->consumeTimeEdit()) {
             if (controller_.setKeyframeTime(time_result->index, time_result->value)) {
                 state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
-                pip_needs_update_ = true;
             }
         }
 
         if (auto focal_result = overlay_->consumeFocalEdit()) {
             if (controller_.setKeyframeFocalLength(focal_result->index, focal_result->value)) {
                 state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
-                pip_needs_update_ = true;
             }
         }
+    }
+
+    SequencerUIManager::PipPreviewKey SequencerUIManager::currentPipPreviewKey() const {
+        const auto preview = pipPreviewSize(ui_state_.outputWidth(), ui_state_.outputHeight());
+        const auto selected = controller_.selectedKeyframe();
+        const bool follow_playhead = !controller_.isStopped() || !selected.has_value();
+
+        PipPreviewKey key;
+        key.equirectangular = ui_state_.equirectangular;
+        key.width = preview.width;
+        key.height = preview.height;
+
+        if (follow_playhead) {
+            const auto state = controller_.currentCameraState();
+            key.timeline_revision = controller_.timelineRevision();
+            key.playhead = controller_.playhead();
+            key.position = state.position;
+            key.rotation = state.rotation;
+            key.focal_length_mm = state.focal_length_mm;
+            return key;
+        }
+
+        const auto* const kf = controller_.timeline().getKeyframe(*selected);
+        if (kf) {
+            key.selected_id = kf->id;
+            key.position = kf->position;
+            key.rotation = kf->rotation;
+            key.focal_length_mm = kf->focal_length_mm;
+        }
+        return key;
     }
 
     void SequencerUIManager::initPipPreview() {
@@ -2323,74 +2378,36 @@ namespace lfs::vis::gui {
         if (!ui_state_.show_pip_preview)
             return;
 
-        const bool is_playing = !controller_.isStopped();
-        const auto selected = controller_.selectedKeyframe();
-
-        const auto now = std::chrono::steady_clock::now();
-        if (is_playing) {
-            const float elapsed = std::chrono::duration<float>(now - pip_last_render_time_).count();
-            if (elapsed < 1.0f / PREVIEW_TARGET_FPS)
-                return;
-        }
-
         auto* const rm = ctx.viewer->getRenderingManager();
         auto* const sm = ctx.viewer->getSceneManager();
         if (!rm || !sm)
             return;
 
+        const auto key = currentPipPreviewKey();
+        if (!pip_needs_update_ && pip_last_key_ == key)
+            return;
+
+        const auto now = std::chrono::steady_clock::now();
+        if (!key.selected_id.has_value() && !pip_needs_update_) {
+            const float elapsed = std::chrono::duration<float>(now - pip_last_render_time_).count();
+            if (elapsed < 1.0f / PREVIEW_TARGET_FPS)
+                return;
+        }
+
         if (!pip_initialized_)
             initPipPreview();
 
-        glm::mat3 cam_rot;
-        glm::vec3 cam_pos;
-        float cam_focal_length_mm;
-        auto& vp = ctx.viewer->getViewport();
-
-        if (is_playing) {
-            const auto state = controller_.currentCameraState();
-            cam_rot = glm::mat3_cast(state.rotation);
-            cam_pos = state.position;
-            cam_focal_length_mm = state.focal_length_mm;
-        } else {
-            if (selected.has_value()) {
-                if (pip_last_keyframe_ == selected && !pip_needs_update_)
-                    return;
-
-                const auto& timeline = controller_.timeline();
-                if (*selected >= timeline.size())
-                    return;
-
-                const auto* const kf = timeline.getKeyframe(*selected);
-                if (!kf)
-                    return;
-
-                cam_rot = glm::mat3_cast(kf->rotation);
-                cam_pos = kf->position;
-                cam_focal_length_mm = kf->focal_length_mm;
-            } else {
-                if (pip_last_keyframe_.has_value()) {
-                    pip_needs_update_ = true;
-                    pip_last_keyframe_ = std::nullopt;
-                }
-                if (!pip_needs_update_)
-                    return;
-
-                cam_rot = vp.camera.R;
-                cam_pos = vp.camera.t;
-                cam_focal_length_mm = rm ? rm->getFocalLengthMm()
-                                         : lfs::rendering::DEFAULT_FOCAL_LENGTH_MM;
-            }
-        }
-
-        const auto image = rm->renderPreviewImage(sm, cam_rot, cam_pos, cam_focal_length_mm,
-                                                  PREVIEW_WIDTH, PREVIEW_HEIGHT);
+        const glm::mat3 cam_rot = glm::mat3_cast(key.rotation);
+        const auto image = rm->renderPreviewImage(sm, cam_rot, key.position, key.focal_length_mm,
+                                                  key.width, key.height);
         // Vulkan preview readback is already in the orientation RmlUi samples.
-        if (image && pip_texture_.upload(*image, PREVIEW_WIDTH, PREVIEW_HEIGHT, /*flip_y=*/false)) {
+        // upload() recreates the VkImage when width/height change.
+        if (image && pip_texture_.upload(*image, key.width, key.height, /*flip_y=*/false)) {
+            pip_render_width_ = key.width;
+            pip_render_height_ = key.height;
             pip_last_render_time_ = now;
-            if (!is_playing) {
-                pip_last_keyframe_ = selected;
-                pip_needs_update_ = false;
-            }
+            pip_last_key_ = key;
+            pip_needs_update_ = false;
         }
     }
 
@@ -2427,12 +2444,19 @@ namespace lfs::vis::gui {
         const float scale = ui_state_.pip_preview_scale;
         constexpr float MARGIN = 16.0f;
         constexpr float TITLE_HEIGHT = 18.0f;
-        const float scaled_width = static_cast<float>(PREVIEW_WIDTH) * scale;
-        const float scaled_height = static_cast<float>(PREVIEW_HEIGHT) * scale;
+        const auto preview = pipPreviewSize(ui_state_.outputWidth(), ui_state_.outputHeight());
+        const float scaled_width = static_cast<float>(preview.width) * scale;
+        const float scaled_height = static_cast<float>(preview.height) * scale;
         const float total_height = scaled_height + TITLE_HEIGHT + 8.0f;
 
-        const float left = viewport.pos.x + MARGIN;
-        const float top = panel_->cachedPanelY() - total_height - MARGIN;
+        float left = viewport.pos.x + MARGIN;
+        float top = panel_->cachedPanelY() - total_height - MARGIN;
+        const float min_top = viewport.pos.y + MARGIN;
+        if (top < min_top)
+            top = min_top;
+        const float max_left = viewport.pos.x + viewport.size.x - scaled_width - 8.0f - MARGIN;
+        if (left > max_left)
+            left = std::max(viewport.pos.x + MARGIN, max_left);
 
         const float playhead = controller_.playhead();
         const std::string title = (is_playing || !selected.has_value())
@@ -2446,7 +2470,7 @@ namespace lfs::vis::gui {
 
         overlay_->showPreviewWindow(left, top, scaled_width, scaled_height,
                                     title, is_playing,
-                                    pip_texture_.rmlSrcUrl(PREVIEW_WIDTH, PREVIEW_HEIGHT));
+                                    pip_texture_.rmlSrcUrl(pip_render_width_, pip_render_height_));
     }
 
     void SequencerUIManager::renderKeyframeEditOverlay(const ViewportLayout& viewport) {

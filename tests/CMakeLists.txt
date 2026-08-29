@@ -918,6 +918,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_selection_groups_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_splat_lod_hierarchy.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_store.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_store_subscriptions.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_property.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tool_registry_activation.py

@@ -16,6 +16,7 @@
 #include "core/shareable_allocation_limit.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/tensor_ops.hpp"
+#include "python/gil.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
 #include "training/control/command_api.hpp"
@@ -34,7 +35,9 @@
 #include <cstring>
 #include <cuda_runtime.h>
 #include <format>
+#include <memory>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <utility>
 
@@ -71,6 +74,29 @@ namespace lfs::vis {
             }
             return lfs::io::project::TrainingFinishReason::None;
         }
+
+        struct SignalGilBatch {
+            SignalGilBatch() {
+                if (lfs::python::can_acquire_gil()) {
+                    gil_ = std::make_unique<lfs::python::GilAcquire>();
+                }
+            }
+            std::unique_ptr<lfs::python::GilAcquire> gil_;
+        };
+
+        struct LastStoredSessionPublish {
+            const TrainerManager* owner = nullptr;
+            bool valid = false;
+            bool available = false;
+            bool completed = false;
+            bool hydrated = false;
+            int iteration = 0;
+            int max_iterations = 0;
+            int num_gaussians = 0;
+            std::string strategy;
+        };
+
+        LastStoredSessionPublish g_last_stored_session_publish;
 
         [[nodiscard]] FinishReason
         fromIoFinishReason(
@@ -438,6 +464,9 @@ namespace lfs::vis {
     }
 
     TrainerManager::~TrainerManager() {
+        if (g_last_stored_session_publish.owner == this) {
+            g_last_stored_session_publish = {};
+        }
         if (isCompletionPending()) {
             LOG_INFO("Stopping training thread during destruction...");
             if (canStop()) {
@@ -586,6 +615,48 @@ namespace lfs::vis {
         if (viewer_) {
             session = viewer_->projectTrainingSessionState();
         }
+
+        LastStoredSessionPublish desired;
+        desired.owner = this;
+        desired.valid = true;
+        desired.available = session.available;
+        if (session.available) {
+            const core::Scene* scene = scene_;
+            if (!scene && viewer_) {
+                scene = &viewer_->getScene();
+            }
+            desired.completed = session.completed;
+            desired.hydrated = session.hydrated;
+            desired.iteration = session.iteration;
+            desired.max_iterations = session.max_iterations;
+            if (scene) {
+                desired.num_gaussians = static_cast<int>(
+                    scene->getTrainingModelGaussianCount());
+            }
+            desired.strategy =
+                session.strategy.empty() ? "unknown" : session.strategy;
+        }
+
+        const bool stored_matches = desired.available
+                                        ? (stored_session_presentation_active_ &&
+                                           stored_session_presentation_completed_ == desired.completed &&
+                                           stored_session_presentation_iteration_ == desired.iteration &&
+                                           stored_session_presentation_max_iterations_ ==
+                                               desired.max_iterations &&
+                                           stored_session_presentation_strategy_ == desired.strategy)
+                                        : !stored_session_presentation_active_;
+        const auto& last = g_last_stored_session_publish;
+        if (last.owner == this && last.valid && stored_matches &&
+            last.available == desired.available &&
+            last.completed == desired.completed &&
+            last.hydrated == desired.hydrated &&
+            last.iteration == desired.iteration &&
+            last.max_iterations == desired.max_iterations &&
+            last.num_gaussians == desired.num_gaussians &&
+            last.strategy == desired.strategy) {
+            return;
+        }
+
         if (!session.available) {
             clearStoredSessionPresentation();
             auto& store = app_store();
@@ -595,28 +666,22 @@ namespace lfs::vis {
             store.training_state.set("idle");
             store.iteration.set(0);
             store.total_iterations.set(0);
-            python::update_training_state(false, "idle");
-            python::update_trainer_loaded(false, 0, 0);
-            python::flush_signals();
+            {
+                SignalGilBatch gil_batch;
+                python::update_training_state(false, "idle");
+                python::update_trainer_loaded(false, 0, 0);
+                python::flush_signals();
+            }
+            g_last_stored_session_publish = desired;
             return;
         }
 
-        const core::Scene* scene = scene_;
-        if (!scene && viewer_) {
-            scene = &viewer_->getScene();
-        }
-        int num_gaussians = 0;
-        if (scene) {
-            num_gaussians = static_cast<int>(
-                scene->getTrainingModelGaussianCount());
-        }
         stored_session_presentation_active_ = true;
         stored_session_presentation_completed_ = session.completed;
         stored_session_presentation_iteration_ = session.iteration;
         stored_session_presentation_max_iterations_ =
             session.max_iterations;
-        stored_session_presentation_strategy_ =
-            session.strategy.empty() ? "unknown" : session.strategy;
+        stored_session_presentation_strategy_ = desired.strategy;
         const char* const presented_state =
             session.completed ? "completed" : "paused";
 
@@ -629,22 +694,25 @@ namespace lfs::vis {
             store.iteration.set(session.iteration);
             store.total_iterations.set(session.max_iterations);
             store.num_gaussians.set(
-                static_cast<std::int64_t>(num_gaussians));
+                static_cast<std::int64_t>(desired.num_gaussians));
         }
 
-        python::update_trainer_loaded(
-            false, session.max_iterations, session.iteration);
-        python::update_training_state(false, presented_state);
-        python::update_training_progress(
-            session.iteration, 0.0f,
-            static_cast<std::size_t>(std::max(0, num_gaussians)));
-        python::flush_signals();
+        {
+            SignalGilBatch gil_batch;
+            python::update_trainer_loaded(
+                false, session.max_iterations, session.iteration);
+            python::update_training_state(false, presented_state);
+            python::update_training_progress(
+                session.iteration, 0.0f,
+                static_cast<std::size_t>(std::max(0, desired.num_gaussians)));
+            python::flush_signals();
+        }
 
         lfs::training::CommandCenter::instance().update_snapshot(
             lfs::training::HookContext{
                 .iteration = session.iteration,
                 .num_gaussians = static_cast<std::size_t>(
-                    std::max(0, num_gaussians)),
+                    std::max(0, desired.num_gaussians)),
                 .trainer = nullptr},
             session.max_iterations,
             !session.completed,
@@ -653,6 +721,7 @@ namespace lfs::vis {
             lfs::training::TrainingPhase::Idle);
         lfs::training::CommandCenter::instance().overlay_stored_session(
             stored_session_presentation_strategy_, session.hydrated);
+        g_last_stored_session_publish = desired;
     }
 
     bool TrainerManager::clearTrainer() {

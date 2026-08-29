@@ -16,14 +16,17 @@
 #include <zstd.h>
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <cstring>
 #include <exception>
 #include <format>
+#include <functional>
 #include <istream>
 #include <limits>
 #include <map>
+#include <optional>
 #include <ostream>
 #include <ranges>
 #include <set>
@@ -57,6 +60,7 @@ namespace lfs::io::project {
 
         void encode_staged_splat_shN(lfs::core::Scene& scene) {
             bool encoded = false;
+            std::size_t staged_gaussians = 0;
             for (const auto* node : scene.getNodes()) {
                 if (!node ||
                     node->type != lfs::core::NodeType::SPLAT) {
@@ -67,6 +71,7 @@ namespace lfs::io::project {
                     continue;
                 }
                 auto& model = *live->model;
+                staged_gaussians += static_cast<std::size_t>(model.size());
                 if (!model.has_tensor_allocator() ||
                     model.shN_value_quantized() ||
                     !model.shN_raw().is_valid() ||
@@ -82,7 +87,7 @@ namespace lfs::io::project {
                         live->name, error.what());
                 }
             }
-            if (encoded) {
+            if (encoded && staged_gaussians > 10'000'000) {
                 lfs::core::Tensor::trim_memory_pool();
             }
         }
@@ -711,6 +716,91 @@ namespace lfs::io::project {
         return visitor(stream, logical->size());
     }
 
+    lfs::Result<void>
+    LazyChunkValue::visit_materialized(
+        const StreamVisitor& visitor,
+        MaterializeRetirementSink* retirement) const {
+        if (!impl_->owned && impl_->reader && impl_->source &&
+            !impl_->inflated &&
+            (impl_->source->compression == Compression::Stored ||
+             impl_->source->compression == Compression::ZstdFramed ||
+             impl_->source->compression ==
+                 Compression::ByteShuffleZstdFramed)) {
+            const std::uint64_t materialize_max =
+                detail::max_materialized_bytes_for(*impl_->source);
+            if (impl_->source->stored_bytes <= materialize_max &&
+                impl_->source->uncompressed_bytes <= materialize_max) {
+                if (!visitor) {
+                    return fail<void>(
+                        lfs::ErrorCode::InvalidArgument,
+                        "The lazy chapter visitor is empty.",
+                        "visit_materialized requires a callable",
+                        "lazy_chunk.visitor");
+                }
+                return impl_->reader->visit_materialized_chunk(
+                    *impl_->source,
+                    [&](const std::span<const std::byte> bytes)
+                        -> lfs::Result<void> {
+                        SpanStreambuf buffer(bytes);
+                        std::istream stream(&buffer);
+                        return visitor(stream, bytes.size());
+                    },
+                    retirement);
+            }
+        }
+        return visit_stream(visitor);
+    }
+
+    lfs::Result<void>
+    LazyChunkValue::peek_prefix(
+        const std::span<std::byte> destination) const {
+        const auto total = size();
+        if (destination.size() > total) {
+            return fail<void>(
+                lfs::ErrorCode::InvalidArgument,
+                "The lazy chapter window is out of bounds.",
+                std::format(
+                    "prefix size {} exceeds chapter size {}",
+                    destination.size(), total),
+                "lazy_chunk.window");
+        }
+        if (destination.empty()) {
+            return {};
+        }
+        if (impl_->owned) {
+            std::memcpy(
+                destination.data(), impl_->owned->data(), destination.size());
+            return {};
+        }
+        if (impl_->inflated) {
+            std::memcpy(
+                destination.data(), impl_->inflated->data(),
+                destination.size());
+            return {};
+        }
+        if (!impl_->reader || !impl_->source) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "The lazy chapter has no byte source.",
+                "Neither clean file range nor owned storage is available",
+                "lazy_chunk.source");
+        }
+        if (impl_->source->compression == Compression::Stored ||
+            impl_->source->compression == Compression::ZstdFramed ||
+            impl_->source->compression ==
+                Compression::ByteShuffleZstdFramed) {
+            return impl_->reader->read_logical_prefix(
+                *impl_->source, destination);
+        }
+        auto logical = impl_->logical_owned_or_inflated();
+        if (!logical) {
+            return lfs::Result<void>::failure(std::move(logical).error());
+        }
+        std::memcpy(
+            destination.data(), logical->data(), destination.size());
+        return {};
+    }
+
     struct ProjectHydrationPlan::Impl {
         lfs::core::Scene* destination = nullptr;
         std::unique_ptr<lfs::core::Scene> staged_scene;
@@ -799,6 +889,8 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<void>
         validate(const ProjectChapter& candidate_project,
                  const std::map<ChunkKey, Hash128, ChunkKeyLess>& hashes) const {
+            const auto validate_started =
+                std::chrono::steady_clock::now();
             degraded_states.clear();
             auto manifest = candidate_project.manifest();
             auto manifest_uuid = candidate_project.project_uuid();
@@ -807,9 +899,17 @@ namespace lfs::io::project {
             auto dataset_reference = candidate_project.dataset_reference();
             auto lineage = candidate_project.project_lineage();
             auto georeference = candidate_project.georeference();
+            const auto proj_fields_at =
+                std::chrono::steady_clock::now();
             auto decisions = candidate_project.embed_decisions();
+            const auto decisions_at =
+                std::chrono::steady_clock::now();
             auto provenance = candidate_project.provenance();
+            const auto provenance_at =
+                std::chrono::steady_clock::now();
             auto embedded = candidate_project.embedded_payload_provenance();
+            const auto embedded_at =
+                std::chrono::steady_clock::now();
             if (!manifest) {
                 return lfs::Result<void>::failure(std::move(manifest).error());
             }
@@ -860,6 +960,8 @@ namespace lfs::io::project {
                     "created_at and modified_at must be non-zero and monotonic",
                     "PROJ.timestamps");
             }
+            const auto proj_checks_at =
+                std::chrono::steady_clock::now();
 
             auto reference_rows = references.records();
             if (!reference_rows) {
@@ -880,6 +982,8 @@ namespace lfs::io::project {
                                 (**dataset_reference).to_string()),
                     "PROJ.dataset_reference");
             }
+            const auto refs_at =
+                std::chrono::steady_clock::now();
 
             if (auto hierarchy = scene_graph.validate_hierarchy(); !hierarchy) {
                 return hierarchy;
@@ -892,10 +996,14 @@ namespace lfs::io::project {
             if (!training) {
                 return lfs::Result<void>::failure(std::move(training).error());
             }
+            const auto scng_at =
+                std::chrono::steady_clock::now();
             auto pending = parameters.snapshot();
             if (!pending) {
                 return lfs::Result<void>::failure(std::move(pending).error());
             }
+            const auto prms_at =
+                std::chrono::steady_clock::now();
             if (auto valid = gui_layout.validate(); !valid) {
                 return valid;
             }
@@ -918,18 +1026,22 @@ namespace lfs::io::project {
                 return lfs::Result<void>::failure(
                     std::move(session_bindings).error());
             }
+            const auto session_at =
+                std::chrono::steady_clock::now();
             auto reverse = build_reverse_reference_index(
-                references, candidate_project, scene_graph, parameters,
+                *reference_rows, candidate_project, *nodes, *pending,
                 *session_bindings);
             if (!reverse) {
                 return lfs::Result<void>::failure(
                     std::move(reverse).error());
             }
-            auto encoded_selection = encode_selection_chapter(selection);
-            if (!encoded_selection) {
-                return lfs::Result<void>::failure(
-                    std::move(encoded_selection).error());
+            const auto reverse_index_at =
+                std::chrono::steady_clock::now();
+            if (auto valid = validate_selection_chapter(selection); !valid) {
+                return valid;
             }
+            const auto selm_at =
+                std::chrono::steady_clock::now();
 
             std::unordered_map<lfs::core::Uuid, const SceneNodeRecord*> nodes_by_uuid;
             nodes_by_uuid.reserve(nodes->size());
@@ -1078,6 +1190,8 @@ namespace lfs::io::project {
                         "SELM.slices.domain");
                 }
             }
+            const auto owners_at =
+                std::chrono::steady_clock::now();
 
             std::unordered_map<std::string, const EmbeddedPayloadProvenance*>
                 embedded_by_payload;
@@ -1095,6 +1209,41 @@ namespace lfs::io::project {
                 }
             }
 
+            struct EmbedDecisionKey {
+                lfs::core::Uuid node_uuid;
+                std::string payload_fourcc;
+                std::string decision;
+                std::optional<lfs::core::Uuid> reference_uuid;
+
+                bool operator==(const EmbedDecisionKey&) const = default;
+            };
+            struct EmbedDecisionKeyHash {
+                std::size_t operator()(const EmbedDecisionKey& key) const {
+                    std::size_t hash = std::hash<lfs::core::Uuid>{}(key.node_uuid);
+                    const auto mix = [&](const std::size_t value) {
+                        hash ^= value + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+                    };
+                    mix(std::hash<std::string>{}(key.payload_fourcc));
+                    mix(std::hash<std::string>{}(key.decision));
+                    mix(key.reference_uuid
+                            ? std::hash<lfs::core::Uuid>{}(*key.reference_uuid)
+                            : 0);
+                    return hash;
+                }
+            };
+            std::unordered_map<EmbedDecisionKey, std::size_t,
+                               EmbedDecisionKeyHash>
+                decision_counts;
+            decision_counts.reserve(decisions->size());
+            for (const auto& decision : *decisions) {
+                ++decision_counts[EmbedDecisionKey{
+                    .node_uuid = decision.node_uuid,
+                    .payload_fourcc = decision.payload_fourcc,
+                    .decision = decision.decision,
+                    .reference_uuid = decision.reference_uuid,
+                }];
+            }
+
             const auto require_decision =
                 [&](const SceneNodeRecord& node,
                     const std::string_view expected_decision)
@@ -1107,15 +1256,14 @@ namespace lfs::io::project {
                                     node.uuid.to_string()),
                         "SCNG.nodes.payload");
                 }
-                const auto matching = std::ranges::count_if(
-                    *decisions, [&](const EmbedDecision& decision) {
-                        return decision.node_uuid == node.uuid &&
-                               decision.payload_fourcc ==
-                                   node.payload->fourcc &&
-                               decision.decision == expected_decision &&
-                               decision.reference_uuid ==
-                                   node.payload->reference_uuid;
-                    });
+                const auto found = decision_counts.find(EmbedDecisionKey{
+                    .node_uuid = node.uuid,
+                    .payload_fourcc = node.payload->fourcc,
+                    .decision = std::string(expected_decision),
+                    .reference_uuid = node.payload->reference_uuid,
+                });
+                const auto matching =
+                    found == decision_counts.end() ? 0 : found->second;
                 if (matching != 1) {
                     return fail<void>(
                         lfs::ErrorCode::DataLoss,
@@ -1379,31 +1527,29 @@ namespace lfs::io::project {
                         "PPIS.header");
                 }
             }
+            const auto geometry_at =
+                std::chrono::steady_clock::now();
             if (bound_checkpoint) {
                 const auto found = checkpoints.find(*bound_checkpoint);
                 assert(found != checkpoints.end());
-                std::optional<lfs::core::CheckpointHeader> header;
-                auto inspected = found->second.visit_stream(
-                    [&](std::istream& stream,
-                        const std::uint64_t bytes) -> lfs::Result<void> {
-                        auto loaded =
-                            lfs::core::load_checkpoint_header(
-                                stream, bytes);
-                        if (!loaded) {
-                            return fail<void>(
-                                lfs::ErrorCode::DataLoss,
-                                "The embedded checkpoint header is invalid.",
-                                loaded.error(),
-                                "CKPT.LFKP.header");
-                        }
-                        header = *loaded;
-                        return {};
-                    });
-                if (!inspected) {
-                    return inspected;
+                std::array<std::byte, sizeof(lfs::core::CheckpointHeader)>
+                    prefix{};
+                if (auto peeked = found->second.peek_prefix(prefix); !peeked) {
+                    return peeked;
                 }
-                assert(header);
-                if (header->num_gaussians == 0) {
+                SpanStreambuf buffer(std::span<const std::byte>(
+                    prefix.data(), prefix.size()));
+                std::istream stream(&buffer);
+                auto loaded = lfs::core::load_checkpoint_header(
+                    stream, found->second.size());
+                if (!loaded) {
+                    return fail<void>(
+                        lfs::ErrorCode::DataLoss,
+                        "The embedded checkpoint header is invalid.",
+                        loaded.error(),
+                        "CKPT.LFKP.header");
+                }
+                if (loaded->num_gaussians == 0) {
                     return fail<void>(
                         lfs::ErrorCode::DataLoss,
                         "The training checkpoint has no Gaussian model.",
@@ -1411,6 +1557,31 @@ namespace lfs::io::project {
                         "CKPT.LFKP.num_gaussians");
                 }
             }
+            const auto validate_finished =
+                std::chrono::steady_clock::now();
+            const auto milliseconds =
+                [](const auto begin, const auto end) {
+                    return std::chrono::duration<double, std::milli>(
+                               end - begin)
+                        .count();
+                };
+            LOG_DEBUG(
+                "Project validate stages: proj={:.3f} ms decisions={:.3f} ms provenance={:.3f} ms embedded={:.3f} ms refs={:.3f} ms scng={:.3f} ms prms={:.3f} ms session={:.3f} ms reverse_index={:.3f} ms selm={:.3f} ms owners={:.3f} ms geometry={:.3f} ms ckpt={:.3f} ms total={:.3f} ms",
+                milliseconds(validate_started, proj_fields_at) +
+                    milliseconds(embedded_at, proj_checks_at),
+                milliseconds(proj_fields_at, decisions_at),
+                milliseconds(decisions_at, provenance_at),
+                milliseconds(provenance_at, embedded_at),
+                milliseconds(proj_checks_at, refs_at),
+                milliseconds(refs_at, scng_at),
+                milliseconds(scng_at, prms_at),
+                milliseconds(prms_at, session_at),
+                milliseconds(session_at, reverse_index_at),
+                milliseconds(reverse_index_at, selm_at),
+                milliseconds(selm_at, owners_at),
+                milliseconds(owners_at, geometry_at),
+                milliseconds(geometry_at, validate_finished),
+                milliseconds(validate_started, validate_finished));
             return {};
         }
 
@@ -1984,9 +2155,12 @@ namespace lfs::io::project {
                 }
             }
         }
-        if (auto valid = impl->validate(impl->project, impl->content_hashes);
-            !valid) {
-            return std::move(valid).error();
+        if (!options.skip_validation) {
+            if (auto valid =
+                    impl->validate(impl->project, impl->content_hashes);
+                !valid) {
+                return std::move(valid).error();
+            }
         }
         const auto open_finished =
             std::chrono::steady_clock::now();
@@ -3887,6 +4061,12 @@ namespace lfs::io::project {
     }
 
     lfs::Result<std::unique_ptr<lfs::core::Scene>>
+    stage_scene_graph(const SceneGraphChapter& chapter,
+                      lfs::core::Scene& target,
+                      const ScenePayloadResolver& resolver,
+                      bool payload_units_only);
+
+    lfs::Result<std::unique_ptr<lfs::core::Scene>>
     ProjectDocument::stage_shell(
         lfs::core::Scene& destination) const {
         auto shell =
@@ -4063,6 +4243,9 @@ namespace lfs::io::project {
                 checkpoint_uuid;
             std::optional<lfs::core::CheckpointHeader>
                 checkpoint_header;
+            std::optional<lfs::core::param::TrainingParameters>
+                checkpoint_params;
+            MaterializeRetirementSink ckpt_retirement;
             staged_checkpoint_splats.reserve(
                 impl_->checkpoints.size());
             for (const auto& [uuid, payload] :
@@ -4071,13 +4254,25 @@ namespace lfs::io::project {
                     materialized;
                 const auto ckpt_started =
                     std::chrono::steady_clock::now();
-                auto decoded = payload.visit_stream(
+                double ckpt_read_chunk_ms = 0.0;
+                double ckpt_header_ms = 0.0;
+                double ckpt_params_ms = 0.0;
+                double ckpt_deserialize_ms = 0.0;
+                auto decoded = payload.visit_materialized(
                     [&](std::istream& stream,
                         const std::uint64_t bytes)
                         -> lfs::Result<void> {
+                        ckpt_read_chunk_ms = milliseconds(
+                            ckpt_started,
+                            std::chrono::steady_clock::now());
+                        const auto header_started =
+                            std::chrono::steady_clock::now();
                         auto header =
                             lfs::core::load_checkpoint_header(
                                 stream, bytes);
+                        ckpt_header_ms = milliseconds(
+                            header_started,
+                            std::chrono::steady_clock::now());
                         if (!header) {
                             return fail<void>(
                                 lfs::ErrorCode::DataLoss,
@@ -4095,10 +4290,34 @@ namespace lfs::io::project {
                                 "The bounded CKPT stream must support seek to byte zero",
                                 "CKPT.LFKP.stream");
                         }
+                        const auto params_started =
+                            std::chrono::steady_clock::now();
+                        auto params =
+                            lfs::core::load_checkpoint_params(stream, bytes);
+                        ckpt_params_ms = milliseconds(
+                            params_started,
+                            std::chrono::steady_clock::now());
+                        if (params) {
+                            checkpoint_params = *params;
+                        }
+                        stream.clear();
+                        stream.seekg(0);
+                        if (!stream) {
+                            return fail<void>(
+                                lfs::ErrorCode::DataLoss,
+                                "The embedded checkpoint cannot be rewound.",
+                                "The bounded CKPT stream must support seek to byte zero",
+                                "CKPT.LFKP.stream");
+                        }
+                        const auto deserialize_started =
+                            std::chrono::steady_clock::now();
                         auto model =
                             lfs::core::load_checkpoint_splat_data(
                                 stream, bytes,
                                 splat_allocator);
+                        ckpt_deserialize_ms = milliseconds(
+                            deserialize_started,
+                            std::chrono::steady_clock::now());
                         if (!model) {
                             return fail<void>(
                                 lfs::ErrorCode::DataLoss,
@@ -4109,10 +4328,22 @@ namespace lfs::io::project {
                         materialized.emplace(
                             std::move(*model));
                         return {};
-                    });
-                splat_materialize_ms += milliseconds(
-                    ckpt_started,
-                    std::chrono::steady_clock::now());
+                    },
+                    &ckpt_retirement);
+                const auto ckpt_finished =
+                    std::chrono::steady_clock::now();
+                const double ckpt_total_ms =
+                    milliseconds(ckpt_started, ckpt_finished);
+                splat_materialize_ms += ckpt_total_ms;
+                LOG_DEBUG(
+                    "Ckpt materialize stages: read_chunk={:.3f} ms header={:.3f} ms params={:.3f} ms deserialize={:.3f} ms other={:.3f} ms total={:.3f} ms",
+                    ckpt_read_chunk_ms, ckpt_header_ms, ckpt_params_ms,
+                    ckpt_deserialize_ms,
+                    std::max(0.0,
+                             ckpt_total_ms - ckpt_read_chunk_ms -
+                                 ckpt_header_ms - ckpt_params_ms -
+                                 ckpt_deserialize_ms),
+                    ckpt_total_ms);
                 if (!decoded) {
                     return std::move(decoded).error();
                 }
@@ -4127,25 +4358,23 @@ namespace lfs::io::project {
             staged_point_clouds.reserve(
                 impl_->point_clouds.size() +
                 deferred_count(FOURCC_PCLD));
-            for (const auto& [uuid, payload] :
-                 impl_->point_clouds) {
-                auto bytes =
-                    encode_point_cloud_payload(payload);
-                if (!bytes) {
-                    return std::move(bytes).error();
-                }
+            for (auto& [uuid, payload] : impl_->point_clouds) {
                 const ChunkKey key{
                     .fourcc = FOURCC_PCLD,
                     .instance_uuid = uuid,
                 };
-                hashes.emplace(key, xxh3_128(*bytes));
-                auto materialized =
-                    decode_point_cloud_payload(*bytes);
-                if (!materialized) {
-                    return std::move(materialized).error();
+                const auto stored_hash = impl_->content_hashes.find(key);
+                if (stored_hash != impl_->content_hashes.end()) {
+                    hashes.emplace(key, stored_hash->second);
+                } else {
+                    auto bytes = encode_point_cloud_payload(payload);
+                    if (!bytes) {
+                        return std::move(bytes).error();
+                    }
+                    hashes.emplace(key, xxh3_128(*bytes));
                 }
                 staged_point_clouds.emplace(
-                    uuid, materialized->point_cloud());
+                    uuid, payload.point_cloud());
             }
             for (const auto& key : impl_->deferred_geometry_keys) {
                 if (key.fourcc != FOURCC_PCLD) {
@@ -4168,24 +4397,22 @@ namespace lfs::io::project {
             staged_meshes.reserve(
                 impl_->meshes.size() +
                 deferred_count(FOURCC_MESH));
-            for (const auto& [uuid, payload] :
-                 impl_->meshes) {
-                auto bytes = encode_mesh_payload(payload);
-                if (!bytes) {
-                    return std::move(bytes).error();
-                }
+            for (auto& [uuid, payload] : impl_->meshes) {
                 const ChunkKey key{
                     .fourcc = FOURCC_MESH,
                     .instance_uuid = uuid,
                 };
-                hashes.emplace(key, xxh3_128(*bytes));
-                auto materialized =
-                    decode_mesh_payload(*bytes);
-                if (!materialized) {
-                    return std::move(materialized).error();
+                const auto stored_hash = impl_->content_hashes.find(key);
+                if (stored_hash != impl_->content_hashes.end()) {
+                    hashes.emplace(key, stored_hash->second);
+                } else {
+                    auto bytes = encode_mesh_payload(payload);
+                    if (!bytes) {
+                        return std::move(bytes).error();
+                    }
+                    hashes.emplace(key, xxh3_128(*bytes));
                 }
-                staged_meshes.emplace(
-                    uuid, materialized->mesh());
+                staged_meshes.emplace(uuid, payload.mesh());
             }
             for (const auto& key : impl_->deferred_geometry_keys) {
                 if (key.fourcc != FOURCC_MESH) {
@@ -4356,8 +4583,20 @@ namespace lfs::io::project {
                 return external_payloads.mesh(binding);
             };
 
+            bool payload_units_only = false;
+            for (const auto* node : destination.getNodes()) {
+                if (!node) {
+                    continue;
+                }
+                auto found = impl_->scene_graph.find(node->uuid);
+                if (found && found->has_value()) {
+                    payload_units_only = true;
+                    break;
+                }
+            }
             auto staged_scene = stage_scene_graph(
-                impl_->scene_graph, destination, resolver);
+                impl_->scene_graph, destination, resolver,
+                payload_units_only);
             if (!staged_scene) {
                 return std::move(staged_scene).error();
             }
@@ -4391,6 +4630,8 @@ namespace lfs::io::project {
                         checkpoint_uuid,
                     .checkpoint_header =
                         checkpoint_header,
+                    .checkpoint_params =
+                        std::move(checkpoint_params),
                     .trainer_state_pending =
                         checkpoint_uuid.has_value(),
                     .pending_session =
@@ -4412,6 +4653,7 @@ namespace lfs::io::project {
                          total_ms - splat_read_ms - splat_hash_ms -
                              splat_copy_ms - splat_materialize_ms),
                 total_ms);
+            ckpt_retirement.retire_async();
             return ProjectHydrationPlan(std::move(plan));
         } catch (const std::bad_alloc& error) {
             // LFS-CENSUS-OK(empty-catch): Phase A converts allocation failure into the Result contract.

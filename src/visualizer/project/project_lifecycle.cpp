@@ -65,6 +65,8 @@
 #include <istream>
 #include <ranges>
 #include <span>
+#include <sstream>
+#include <string>
 #include <system_error>
 #include <thread>
 #include <tuple>
@@ -109,6 +111,23 @@ namespace lfs::vis::project {
                 return true;
             }
             return max_iterations > 0 && iteration >= max_iterations;
+        }
+
+        void retireSceneAsync(std::unique_ptr<lfs::core::Scene> scene) {
+            if (!scene) {
+                return;
+            }
+            try {
+                std::thread([retired = std::move(scene)]() mutable {
+                    retired.reset();
+                    lfs::core::Tensor::trim_device_memory_pool();
+                }).detach();
+            } catch (const std::exception& e) {
+                LOG_WARN("Failed to start asynchronous scene retirement: {}",
+                         e.what());
+                scene.reset();
+                lfs::core::Tensor::trim_device_memory_pool();
+            }
         }
 
         [[nodiscard]] lfs::Error lifecycleError(
@@ -156,28 +175,52 @@ namespace lfs::vis::project {
         readBoundCheckpointHeaderIteration(
             const lfs::io::project::LazyChunkValue&
                 checkpoint) {
-            std::optional<int> stored_iteration;
-            auto visited = checkpoint.visit_stream(
-                [&](std::istream& source,
-                    const std::uint64_t bytes)
-                    -> lfs::Result<void> {
-                    auto header =
-                        lfs::core::load_checkpoint_header(
-                            source, bytes);
-                    if (!header) {
-                        return fail<void>(
-                            lfs::ErrorCode::DataLoss,
-                            "Could not read the bound checkpoint header.",
-                            header.error(),
-                            "CKPT.header");
-                    }
-                    stored_iteration = header->iteration;
-                    return {};
-                });
-            if (!visited || !stored_iteration) {
+            std::array<std::byte, sizeof(lfs::core::CheckpointHeader)>
+                prefix{};
+            if (auto peeked = checkpoint.peek_prefix(prefix); !peeked) {
                 return std::nullopt;
             }
-            return stored_iteration;
+            std::istringstream source(
+                std::string(reinterpret_cast<const char*>(prefix.data()),
+                            prefix.size()),
+                std::ios::binary);
+            auto header = lfs::core::load_checkpoint_header(
+                source, checkpoint.size());
+            if (!header) {
+                return std::nullopt;
+            }
+            return header->iteration;
+        }
+
+        [[nodiscard]] lfs::Result<lfs::core::param::TrainingParameters>
+        checkpointParamsFromReportOrStream(
+            const lfs::io::project::ProjectDocumentHydrationReport&
+                report,
+            const lfs::io::project::LazyChunkValue& checkpoint) {
+            if (report.checkpoint_params) {
+                return *report.checkpoint_params;
+            }
+            std::optional<lfs::core::CheckpointParametersLoadResult>
+                parsed_params;
+            auto params_visit = checkpoint.visit_stream(
+                [&](std::istream& source, const std::uint64_t bytes)
+                    -> lfs::Result<void> {
+                    parsed_params = lfs::core::load_checkpoint_params(
+                        source, bytes);
+                    return {};
+                });
+            if (!params_visit) {
+                return std::move(params_visit).error();
+            }
+            if (!parsed_params || !*parsed_params) {
+                return fail<lfs::core::param::TrainingParameters>(
+                    lfs::ErrorCode::DataLoss,
+                    "Could not read checkpoint parameters.",
+                    parsed_params ? parsed_params->error()
+                                  : "CKPT parameter visitor did not run",
+                    "CKPT.params");
+            }
+            return std::move(**parsed_params);
         }
 
         [[nodiscard]] std::string developerError(
@@ -730,28 +773,14 @@ namespace lfs::vis::project {
             return;
         }
 
-        std::optional<lfs::core::CheckpointParametersLoadResult>
-            parsed_params;
-        auto params_visit = checkpoint->visit_stream(
-            [&](std::istream& source, const std::uint64_t bytes)
-                -> lfs::Result<void> {
-                parsed_params = lfs::core::load_checkpoint_params(
-                    source, bytes);
-                return {};
-            });
-        if (!params_visit) {
+        auto parsed_params = checkpointParamsFromReportOrStream(
+            report, *checkpoint);
+        if (!parsed_params) {
             notifyTrainerRestoreFailure(
-                viewer_, developerError(params_visit.error()));
+                viewer_, developerError(parsed_params.error()));
             return;
         }
-        if (!parsed_params || !*parsed_params) {
-            notifyTrainerRestoreFailure(
-                viewer_,
-                parsed_params ? parsed_params->error()
-                              : "CKPT parameter visitor did not run");
-            return;
-        }
-        auto ckpt_params = std::move(**parsed_params);
+        auto ckpt_params = std::move(*parsed_params);
         ckpt_params.resume_checkpoint.reset();
         if (const auto source = document.source_path()) {
             ckpt_params.resume_project = *source;
@@ -934,28 +963,15 @@ namespace lfs::vis::project {
                 std::filesystem::exists(*dataset_root)) {
                 return;
             }
-            std::optional<lfs::core::CheckpointParametersLoadResult>
-                parsed_params;
-            auto params_visit = checkpoint->visit_stream(
-                [&](std::istream& source,
-                    const std::uint64_t bytes)
-                    -> lfs::Result<void> {
-                    parsed_params =
-                        lfs::core::load_checkpoint_params(
-                            source, bytes);
-                    return {};
-                });
-            if (!params_visit || !parsed_params ||
-                !*parsed_params) {
+            auto parsed_params = checkpointParamsFromReportOrStream(
+                report, *checkpoint);
+            if (!parsed_params) {
                 std::lock_guard lock(training_session_mutex_);
                 training_session_error_ =
-                    !params_visit
-                        ? developerError(params_visit.error())
-                    : parsed_params ? parsed_params->error()
-                                    : "CKPT parameter visitor did not run";
+                    developerError(parsed_params.error());
                 return;
             }
-            auto ckpt_params = std::move(**parsed_params);
+            auto ckpt_params = std::move(*parsed_params);
             const auto ckpt_dataset_root =
                 resolveDatasetRootForTrainer(
                     *document_,
@@ -2012,6 +2028,13 @@ namespace lfs::vis::project {
     }
 
     namespace {
+        [[nodiscard]] bool isStaleAutosaveBasePublicationError(
+            const std::string& formatted) {
+            return formatted.find(
+                       "The autosave base changed before publication.") !=
+                   std::string::npos;
+        }
+
         [[nodiscard]] bool documentMatchesOpenedHead(
             const lfs::io::project::ProjectDocument& current,
             const lfs::io::project::ProjectDocument& opened) {
@@ -3713,6 +3736,14 @@ namespace lfs::vis::project {
             !adopted) {
             return adopted;
         }
+        // Sidecar publication re-opens the master and
+        // rejects a stale base commit. Explicit save
+        // already rebases; light autosave must too.
+        if (auto rebased =
+                ensureDocumentMatchesBoundMaster();
+            !rebased) {
+            return rebased;
+        }
         const auto hydration = hydration_.load(
             std::memory_order_acquire);
         if (hydration != Hydration::Empty &&
@@ -4390,6 +4421,16 @@ namespace lfs::vis::project {
                 LOG_INFO(
                     "Project background write canceled: {}",
                     error);
+            } else if (
+                was_autosave &&
+                isStaleAutosaveBasePublicationError(
+                    error)) {
+                // Trainer step-boundary publish can advance
+                // the on-disk master after this sidecar was
+                // bound. The next autosave rebases and retries.
+                LOG_INFO(
+                    "Autosave skipped because the master moved: {}",
+                    error);
             } else {
                 LOG_ERROR(
                     "Project background write failed: {}",
@@ -4401,7 +4442,9 @@ namespace lfs::vis::project {
                     error,
                     gui::error_op::kSave);
             }
-            if (was_autosave) {
+            if (was_autosave &&
+                !isStaleAutosaveBasePublicationError(
+                    error)) {
                 scheduleAutosaveFailureBackoff();
             }
         }
@@ -4658,6 +4701,8 @@ namespace lfs::vis::project {
         }
         const auto metrics =
             trainer->get_project_snapshot_metrics();
+        resetAdoptedSnapshotCountOnServiceRestart(
+            metrics.capture.completed_snapshots);
         if (metrics.writer_in_flight ||
             metrics.last_path.empty()) {
             return {};
@@ -4746,6 +4791,18 @@ namespace lfs::vis::project {
         return {};
     }
 
+    void ProjectLifecycle::
+        resetAdoptedSnapshotCountOnServiceRestart(
+            const std::uint64_t completed_snapshots) {
+        // A new trainer / snapshot service starts this
+        // counter at 0. Comparing it with a previous
+        // run's adopted count skips the new head.
+        if (completed_snapshots <
+            adopted_training_snapshot_count_) {
+            adopted_training_snapshot_count_ = 0;
+        }
+    }
+
     lfs::Result<void>
     ProjectLifecycle::
         adoptSettledTrainerPublishOntoCurrentMaster() {
@@ -4760,6 +4817,8 @@ namespace lfs::vis::project {
         }
         const auto metrics =
             trainer->get_project_snapshot_metrics();
+        resetAdoptedSnapshotCountOnServiceRestart(
+            metrics.capture.completed_snapshots);
         if (metrics.writer_in_flight ||
             metrics.last_path.empty() ||
             !metrics.last_writer_error.empty()) {
@@ -6354,8 +6413,12 @@ namespace lfs::vis::project {
         viewer_.deactivateProjectTools();
         viewer_.resetProjectState();
         manager->setDatasetPath({});
-        manager->getScene().commitRestoreStage(
-            std::move(*shell));
+        manager->drainGpuForTensorRelease();
+        if (auto* rendering = viewer_.getRenderingManager()) {
+            rendering->releaseSceneModelResources();
+        }
+        retireSceneAsync(manager->getScene().commitRestoreStage(
+            std::move(*shell)));
         manager->changeContentType(
             inferContentType(
                 manager->getScene()));
@@ -6586,6 +6649,7 @@ namespace lfs::vis::project {
                                 .geometry = {},
                                 .defer_geometry_payloads =
                                     true,
+                                .skip_validation = true,
                             });
                     if (!opened_source) {
                         if (!stop.stop_requested()) {

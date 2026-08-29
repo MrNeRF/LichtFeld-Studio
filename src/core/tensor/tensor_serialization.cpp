@@ -3,9 +3,12 @@
 
 #include "internal/tensor_serialization.hpp"
 
+#include "core/contiguous_streambuf.hpp"
+#include "core/cuda_error.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor_serialization_sink.hpp"
 
+#include <chrono>
 #include <fstream>
 #include <ios>
 #include <limits>
@@ -17,7 +20,21 @@ namespace lfs::core {
     namespace {
         thread_local TensorSerializationSink*
             active_tensor_serialization_sink = nullptr;
-    }
+        thread_local serialization_detail::TensorLoadTiming*
+            active_tensor_load_timing = nullptr;
+    } // namespace
+
+    namespace serialization_detail {
+        TensorLoadTimingScope::TensorLoadTimingScope(
+            TensorLoadTiming& timing) noexcept
+            : previous_(active_tensor_load_timing) {
+            active_tensor_load_timing = &timing;
+        }
+
+        TensorLoadTimingScope::~TensorLoadTimingScope() {
+            active_tensor_load_timing = previous_;
+        }
+    } // namespace serialization_detail
 
     std::uint64_t
     TensorSerializationDescriptor::payload_bytes() const {
@@ -48,6 +65,8 @@ namespace lfs::core {
     current_tensor_serialization_sink() noexcept {
         return active_tensor_serialization_sink;
     }
+
+    ContiguousStreambuf::~ContiguousStreambuf() = default;
 
     namespace serialization_detail {
         void read_exact(std::istream& is,
@@ -238,12 +257,117 @@ namespace lfs::core {
         }
     } // namespace serialization_detail
 
+    namespace {
+        constexpr std::uint64_t kPageableSerializedHostTensorBytes =
+            256ull * 1024ull * 1024ull;
+
+        void load_parsed_serialized_tensor(
+            std::istream& is, Tensor& tensor, const ParsedTensorPayload& parsed,
+            const bool use_pinned) {
+            auto* const timing = active_tensor_load_timing;
+            const auto run_timed =
+                [timing](double serialization_detail::TensorLoadTiming::*member,
+                         auto&& fn) {
+                    if (timing == nullptr) {
+                        fn();
+                        return;
+                    }
+                    const auto started = std::chrono::steady_clock::now();
+                    fn();
+                    timing->*member +=
+                        std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - started)
+                            .count();
+                };
+            Tensor loaded;
+            run_timed(&serialization_detail::TensorLoadTiming::alloc_ms, [&] {
+                loaded = Tensor::empty(parsed.shape, Device::CPU, parsed.dtype,
+                                       use_pinned);
+            });
+            run_timed(&serialization_detail::TensorLoadTiming::read_ms, [&] {
+                serialization_detail::read_exact(
+                    is, loaded.data_ptr(), loaded.bytes(), "tensor payload");
+            });
+            tensor = std::move(loaded);
+        }
+    } // namespace
+
+    namespace serialization_detail {
+        void read_serialized_tensor(std::istream& is, Tensor& tensor,
+                                    const bool use_pinned) {
+            const auto parsed = parse_serialized_tensor_header(is);
+            load_parsed_serialized_tensor(is, tensor, parsed, use_pinned);
+        }
+
+        void read_serialized_tensor_pageable_if_large(std::istream& is,
+                                                      Tensor& tensor) {
+            const auto parsed = parse_serialized_tensor_header(is);
+            const bool use_pinned =
+                parsed.payload_bytes < kPageableSerializedHostTensorBytes;
+            load_parsed_serialized_tensor(is, tensor, parsed, use_pinned);
+        }
+
+        void read_serialized_tensor_device_from_span_or_host(
+            std::istream& is, Tensor& tensor, const cudaStream_t stream) {
+            const auto parsed = parse_serialized_tensor_header(is);
+            const auto* const span_buf =
+                dynamic_cast<const ContiguousStreambuf*>(is.rdbuf());
+            if (span_buf != nullptr &&
+                parsed.payload_bytes <=
+                    std::numeric_limits<std::size_t>::max()) {
+                const auto remaining = span_buf->remaining_bytes();
+                if (remaining.size() <
+                    static_cast<std::size_t>(parsed.payload_bytes)) {
+                    throw std::runtime_error("Truncated serialized tensor payload");
+                }
+                auto* const timing = active_tensor_load_timing;
+                const auto run_timed =
+                    [timing](double TensorLoadTiming::*member, auto&& fn) {
+                        if (timing == nullptr) {
+                            fn();
+                            return;
+                        }
+                        const auto started = std::chrono::steady_clock::now();
+                        fn();
+                        timing->*member +=
+                            std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - started)
+                                .count();
+                    };
+                Tensor loaded;
+                run_timed(&TensorLoadTiming::alloc_ms, [&] {
+                    loaded = Tensor::empty(parsed.shape, Device::CUDA,
+                                           parsed.dtype);
+                    loaded.set_stream(stream);
+                });
+                if (parsed.payload_bytes > 0) {
+                    run_timed(&TensorLoadTiming::read_ms, [&] {
+                        LFS_CUDA_CHECK_MSG_STREAM_ARGS(
+                            cudaMemcpyAsync(
+                                loaded.data_ptr(), remaining.data(),
+                                static_cast<std::size_t>(parsed.payload_bytes),
+                                cudaMemcpyHostToDevice, stream),
+                            stream,
+                            reinterpret_cast<uintptr_t>(loaded.data_ptr()),
+                            reinterpret_cast<uintptr_t>(remaining.data()),
+                            static_cast<std::size_t>(parsed.payload_bytes),
+                            "while uploading serialized tensor payload shape={} dtype={} to CUDA",
+                            parsed.shape.str(), dtype_name(parsed.dtype));
+                        loaded.record_stream(stream);
+                    });
+                }
+                seek_serialized_payload(is, parsed.payload_bytes);
+                tensor = std::move(loaded);
+                return;
+            }
+            const bool use_pinned =
+                parsed.payload_bytes < kPageableSerializedHostTensorBytes;
+            load_parsed_serialized_tensor(is, tensor, parsed, use_pinned);
+        }
+    } // namespace serialization_detail
+
     std::istream& operator>>(std::istream& is, Tensor& tensor) {
-        const auto parsed = parse_serialized_tensor_header(is);
-        Tensor loaded = Tensor::empty(parsed.shape, Device::CPU, parsed.dtype);
-        serialization_detail::read_exact(
-            is, loaded.data_ptr(), loaded.bytes(), "tensor payload");
-        tensor = std::move(loaded);
+        serialization_detail::read_serialized_tensor(is, tensor, true);
         return is;
     }
 

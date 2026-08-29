@@ -67,6 +67,11 @@ namespace lfs::io::project {
         read_at(std::uint64_t offset, std::span<std::byte> destination) const;
         [[nodiscard]] lfs::Result<void>
         visit_stream(const StreamVisitor& visitor) const;
+        [[nodiscard]] lfs::Result<void>
+        visit_materialized(const StreamVisitor& visitor,
+                           MaterializeRetirementSink* retirement = nullptr) const;
+        [[nodiscard]] lfs::Result<void>
+        peek_prefix(std::span<std::byte> destination) const;
 
     private:
         friend class ProjectDocument;
@@ -81,6 +86,9 @@ namespace lfs::io::project {
         // Decode the KB-scale shell chapters only. Embedded scene payloads
         // remain clean source spans until stage_hydration() consumes them.
         bool defer_geometry_payloads = false;
+        // Skip Impl::validate after the chapter scan. Hydration re-opens a
+        // path the shell already validated; identity is checked by the caller.
+        bool skip_validation = false;
     };
 
     struct ProjectDocumentSaveOptions {
@@ -167,6 +175,7 @@ namespace lfs::io::project {
         ReverseReferenceIndex reverse_reference_index;
         std::optional<lfs::core::Uuid> checkpoint_uuid;
         std::optional<lfs::core::CheckpointHeader> checkpoint_header;
+        std::optional<lfs::core::param::TrainingParameters> checkpoint_params;
         bool trainer_state_pending = false;
         ProjectSessionChapters pending_session;
         std::size_t hydrated_payload_units = 0;

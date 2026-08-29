@@ -1,13 +1,17 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "io/video/video_export_options.hpp"
 #include "sequencer/animation_clip.hpp"
 #include "sequencer/keyframe.hpp"
+#include "sequencer/rml_sequencer_panel.hpp"
 #include "sequencer/sequencer_controller.hpp"
 #include "sequencer/timeline.hpp"
 #include "sequencer/timeline_view_math.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -458,6 +462,49 @@ namespace {
         EXPECT_FLOAT_EQ(controller.playhead(), 2.0f);
     }
 
+    TEST(SequencerMappingRegressionTest, RulerMajorTicksAreExactMultiplesOfRoundIntervals) {
+        Timeline timeline;
+        ASSERT_FLOAT_EQ(timeline.clipDuration(), 30.0f);
+
+        constexpr float kRoundIntervals[] = {0.25f, 0.5f, 1.0f, 2.0f, 5.0f, 10.0f};
+        constexpr float kZooms[] = {1.0f, 2.0f, 3.0f, 4.0f};
+
+        for (const float zoom : kZooms) {
+            const float visible = lfs::vis::sequencer_ui::displayEndTime(timeline, zoom);
+            const float major = lfs::vis::sequencer_ui::rulerMajorInterval(visible);
+            const float minor = major / 4.0f;
+            ASSERT_GT(minor, 0.0f);
+
+            bool is_round = false;
+            for (const float interval : kRoundIntervals) {
+                if (std::abs(major - interval) < 1e-6f)
+                    is_round = true;
+            }
+            EXPECT_TRUE(is_round) << "zoom=" << zoom << " major=" << major;
+
+            int major_count = 0;
+            const int first_index = 0;
+            for (int i = 0;; ++i) {
+                const int index = first_index + i;
+                const float t = static_cast<float>(index) * minor;
+                if (t > visible)
+                    break;
+                if ((index % 4) != 0)
+                    continue;
+                ++major_count;
+                const float quotient = t / major;
+                EXPECT_NEAR(quotient, std::round(quotient), 1e-5f)
+                    << "zoom=" << zoom << " t=" << t << " major=" << major;
+            }
+            EXPECT_GT(major_count, 0) << "zoom=" << zoom;
+        }
+
+        // Zoom 3 on a 30s clip used to divide the 1s ladder by 3 again (ticks at 1/3 s).
+        EXPECT_FLOAT_EQ(lfs::vis::sequencer_ui::rulerMajorInterval(
+                            lfs::vis::sequencer_ui::displayEndTime(timeline, 3.0f)),
+                        1.0f);
+    }
+
     TEST(SequencerMappingRegressionTest, TimeScreenMappingRoundTripsWithZoomAndPan) {
         Timeline timeline;
         timeline.addKeyframe(makeKeyframe(0.0f));
@@ -549,6 +596,96 @@ namespace {
         expectVec3Eq(points[2], timeline.evaluate(2.0f).position);
         expectVec3Eq(points[3], timeline.evaluate(3.0f).position);
         expectVec3Eq(points[4], timeline.evaluate(4.0f).position);
+    }
+
+    [[nodiscard]] float clampCenteredSpan(const float center, const float extent, const float span) {
+        if (extent <= 0.0f)
+            return 0.0f;
+        const float half_span = std::max(span * 0.5f, 0.0f);
+        if (extent <= span)
+            return extent * 0.5f;
+        return std::clamp(center, half_span, extent - half_span);
+    }
+
+    TEST(SequencerTimelineRegressionTest, PlayheadDrawAndHitUseTheSameClampSpan) {
+        using lfs::vis::panel_config::PLAYHEAD_HANDLE_WIDTH;
+        using lfs::vis::panel_config::PLAYHEAD_HIT_RADIUS;
+
+        EXPECT_FLOAT_EQ(PLAYHEAD_HANDLE_WIDTH, 14.0f);
+        EXPECT_GE(PLAYHEAD_HIT_RADIUS, 8.0f);
+
+        constexpr float timeline_width = 200.0f;
+        constexpr float dp = 1.0f;
+        const float draw_span = PLAYHEAD_HANDLE_WIDTH * dp;
+        const float hit_span = PLAYHEAD_HANDLE_WIDTH * dp;
+        EXPECT_FLOAT_EQ(draw_span, hit_span);
+
+        EXPECT_FLOAT_EQ(clampCenteredSpan(0.0f, timeline_width, draw_span), 7.0f);
+        EXPECT_FLOAT_EQ(clampCenteredSpan(0.0f, timeline_width, hit_span), 7.0f);
+        EXPECT_FLOAT_EQ(clampCenteredSpan(timeline_width, timeline_width, draw_span), 193.0f);
+        EXPECT_FLOAT_EQ(clampCenteredSpan(timeline_width, timeline_width, hit_span), 193.0f);
+
+        // Old panel.cpp used an 8dp span while input.cpp used 14dp (~3dp edge mismatch).
+        EXPECT_FLOAT_EQ(clampCenteredSpan(0.0f, timeline_width, 8.0f), 4.0f);
+        EXPECT_NE(clampCenteredSpan(0.0f, timeline_width, draw_span),
+                  clampCenteredSpan(0.0f, timeline_width, 8.0f));
+    }
+
+    TEST(SequencerTimelineRegressionTest, ParseVideoResolutionAcceptsRejectsAndClamps) {
+        using lfs::io::video::parseVideoResolution;
+
+        {
+            const auto parsed = parseVideoResolution("1920x1080");
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(parsed->width, 1920);
+            EXPECT_EQ(parsed->height, 1080);
+        }
+        {
+            const auto parsed = parseVideoResolution("1920 x 1080");
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(parsed->width, 1920);
+            EXPECT_EQ(parsed->height, 1080);
+        }
+        {
+            const auto parsed = parseVideoResolution(" 1280X720 ");
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(parsed->width, 1280);
+            EXPECT_EQ(parsed->height, 720);
+        }
+        {
+            const auto parsed = parseVideoResolution("1080x1920");
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(parsed->width, 1080);
+            EXPECT_EQ(parsed->height, 1920);
+        }
+        {
+            const auto parsed = parseVideoResolution("17x17");
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(parsed->width, 16);
+            EXPECT_EQ(parsed->height, 16);
+        }
+        {
+            const auto parsed = parseVideoResolution("1x99999");
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(parsed->width, 16);
+            EXPECT_EQ(parsed->height, 8192);
+        }
+        {
+            const auto parsed = parseVideoResolution("8193x16");
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(parsed->width, 8192);
+            EXPECT_EQ(parsed->height, 16);
+        }
+
+        EXPECT_FALSE(parseVideoResolution("").has_value());
+        EXPECT_FALSE(parseVideoResolution("1920").has_value());
+        EXPECT_FALSE(parseVideoResolution("1920x").has_value());
+        EXPECT_FALSE(parseVideoResolution("x1080").has_value());
+        EXPECT_FALSE(parseVideoResolution("1920x1080x30").has_value());
+        EXPECT_FALSE(parseVideoResolution("abc").has_value());
+        EXPECT_FALSE(parseVideoResolution("-1920x1080").has_value());
+        EXPECT_FALSE(parseVideoResolution("0x0").has_value());
+        EXPECT_FALSE(parseVideoResolution("1920 x").has_value());
     }
 
 } // namespace

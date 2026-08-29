@@ -786,6 +786,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* DELETE_KEYFRAME = "sequencer.delete_keyframe";
         inline constexpr const char* ADD_KEYFRAME_HERE = "sequencer.add_keyframe_here";
         inline constexpr const char* EDIT_KEYFRAME_TIME = "sequencer.edit_keyframe_time";
+        inline constexpr const char* SET_TIME = "sequencer.edit_time";
         inline constexpr const char* APPLY_U = "sequencer.apply_u";
         inline constexpr const char* REVERT_ESC = "sequencer.revert_esc";
         inline constexpr const char* EDITING_KEYFRAME = "sequencer.editing_keyframe";

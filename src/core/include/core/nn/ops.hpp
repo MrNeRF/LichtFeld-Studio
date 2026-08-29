@@ -73,10 +73,13 @@ namespace lfs::core::nn {
                                            const Tensor* residual = nullptr,
                                            const Tensor* scale = nullptr);
 
-    // y = x @ Wᵀ [+ bias] [+ activation]. x is [..., K], W is [N, K], bias [N].
+    // y = x @ Wᵀ [+ bias] [+ activation] [+ residual]. x is [..., K], W is [N, K],
+    // bias [N]. residual, if given, matches the output and is added after the
+    // activation (same epilogue order as gemm).
     [[nodiscard]] LFS_CORE_API Tensor linear(const Tensor& input, const Tensor& weight,
                                              const Tensor* bias = nullptr,
-                                             Activation activation = Activation::None);
+                                             Activation activation = Activation::None,
+                                             const Tensor* residual = nullptr);
 
     // Batched GEMM. a is [B, M, K], b is [B, N, K] if trans_b else [B, K, N].
     // A rank-2 b is broadcast across the batch.
@@ -111,6 +114,21 @@ namespace lfs::core::nn {
     // Inverse of window_partition. original_n is the unpadded sequence length.
     [[nodiscard]] LFS_CORE_API Tensor window_unpartition(const Tensor& windows, int window_size,
                                                          int original_n);
+
+    // 2D window partition for Hiera: [B, H, W, C] -> [B * nH * nW, ws, ws, C],
+    // padding H/W up to a multiple of window_size with zeros (bottom/right).
+    struct Window2d {
+        Tensor windows;
+        int pad_h = 0;
+        int pad_w = 0;
+    };
+
+    [[nodiscard]] LFS_CORE_API Window2d window_partition_2d(const Tensor& input, int window_size);
+
+    // Inverse of window_partition_2d. Crops back to orig_h x orig_w.
+    [[nodiscard]] LFS_CORE_API Tensor window_unpartition_2d(const Tensor& windows, int window_size,
+                                                            int pad_h, int pad_w, int orig_h,
+                                                            int orig_w);
 
     [[nodiscard]] LFS_CORE_API std::pair<int, int> conv2d_output_hw(
         int height, int width, int kernel_h, int kernel_w, const Conv2dParams& params);
@@ -156,14 +174,46 @@ namespace lfs::core::nn {
                                            GELUApprox approx = GELUApprox::Erf);
     [[nodiscard]] LFS_CORE_API Tensor silu(const Tensor& input);
     [[nodiscard]] LFS_CORE_API Tensor relu(const Tensor& input);
+    [[nodiscard]] LFS_CORE_API Tensor sigmoid(const Tensor& input);
+
+    // Channel-wise LayerNorm on NCHW (SAM LayerNorm2d): permute + layer_norm.
+    [[nodiscard]] LFS_CORE_API Tensor layer_norm_2d(const Tensor& input, const Tensor& weight,
+                                                    const Tensor& bias, float eps = 1e-6f);
+
+    // Random-Fourier PE: coords [..., 2] in [0, 1], gaussian [2, F], out [..., 2F].
+    [[nodiscard]] LFS_CORE_API Tensor fourier_pe(const Tensor& coords, const Tensor& gaussian);
+
+    // Dense grid PE as NCHW [1, 2F, H, W], matching PositionEmbeddingRandom.forward.
+    [[nodiscard]] LFS_CORE_API Tensor fourier_pe_grid(int height, int width, const Tensor& gaussian,
+                                                      DataType dtype, Device device,
+                                                      cudaStream_t stream);
 
     [[nodiscard]] LFS_CORE_API Tensor cast(const Tensor& input, DataType dtype);
 
     // qkv is [B, S, 3*H*D] or [B, S, 3, H, D]. Returns Q,K,V each [B, H, S, D].
     [[nodiscard]] LFS_CORE_API std::array<Tensor, 3> split_qkv(const Tensor& qkv, int heads);
 
+    // qkv is BHWC [B, H, W, 3*heads*d] packed as [3, heads, d] on the last dim.
+    // Returns Q,K,V each [B*nH*nW, heads, window*window, d], with bottom/right
+    // pad zeros (same padding as window_partition_2d).
+    [[nodiscard]] LFS_CORE_API std::array<Tensor, 3>
+    split_qkv_window_2d(const Tensor& qkv, int heads, int window, const Tensor* bias = nullptr);
+
     // context [B, H, S, D] -> [B, S, H*D].
     [[nodiscard]] LFS_CORE_API Tensor merge_heads(const Tensor& context);
+
+    // context [B*nH*nW, heads, window*window, d] -> [B, orig_h, orig_w, heads*d].
+    // orig_h/orig_w are the unpadded spatial size (pad is cropped).
+    [[nodiscard]] LFS_CORE_API Tensor merge_heads_unwindow_2d(const Tensor& context, int window,
+                                                              int orig_h, int orig_w);
+
+    // Max-pool 2x2 stride-2 over the spatial sequence of [B, heads, H*W, D].
+    // height*width must equal S. Output is [B, heads, (H/2)*(W/2), D].
+    [[nodiscard]] LFS_CORE_API Tensor max_pool_heads_2d(const Tensor& input, int height,
+                                                        int width);
+
+    // Max-pool 2x2 stride-2 on BHWC [B, H, W, C] -> [B, H/2, W/2, C].
+    [[nodiscard]] LFS_CORE_API Tensor max_pool2d_bhwc(const Tensor& input);
 
     // MoGe-2 unit-circle UV encoding as NCHW [1, 2, H, W].
     [[nodiscard]] LFS_CORE_API Tensor uv_grid(int height, int width, float aspect, DataType dtype,
