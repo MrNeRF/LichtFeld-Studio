@@ -2587,32 +2587,59 @@ namespace lfs::vis::gui {
             }
         }
 
+        // The depth-window rectangle. Extracted so the GT compare panel can own it without
+        // duplicating the crop/ellipsoid/frustum/axis/pivot overlays that the shared panel
+        // collector drives. The math is byte-identical to its previous inline form (F7).
+        void appendScreenWindowOverlay(VulkanViewportPassParams& params,
+                                       const VulkanGuidePanelTarget& panel,
+                                       const RenderSettings& settings) {
+            if (!settings.depth_filter_enabled) {
+                return;
+            }
+            // KEEP IN SYNC: the screen-window formula lives in four places —
+            // this overlay (rect only, no depth test),
+            // vertex_shader.slang compute_splat_active_state,
+            // filterSelectionByScreenWindowKernel (selection_ops.cu), and the
+            // CPU reference in tests/test_selection_screen_window.cpp.
+            // Contract: the window RECTANGLE is framebuffer-centred in all four
+            // copies; the splat projection uses the displayed camera's real
+            // unjittered intrinsics; jitter moves the draw sample, not the
+            // containment boundary.
+            const float W = static_cast<float>(std::max(panel.render_size.x, 1));
+            const float H = static_cast<float>(std::max(panel.render_size.y, 1));
+            const float scale = settings.depth_filter_scale;
+            const float half_w = 0.5f * scale * W;
+            const float half_h = 0.5f * scale * H;
+            const float cx = 0.5f * W + settings.depth_filter_offset_x * (0.5f * W - half_w);
+            const float cy = 0.5f * H + settings.depth_filter_offset_y * (0.5f * H - half_h);
+            const glm::vec2 min_screen =
+                renderToPanelScreen(panel, glm::vec2(cx - half_w, cy - half_h));
+            const glm::vec2 max_screen =
+                renderToPanelScreen(panel, glm::vec2(cx + half_w, cy + half_h));
+            const glm::vec2 tl{min_screen.x, min_screen.y};
+            const glm::vec2 tr{max_screen.x, min_screen.y};
+            const glm::vec2 br{max_screen.x, max_screen.y};
+            const glm::vec2 bl{min_screen.x, max_screen.y};
+            const auto append_rect = [&](const glm::vec4& color, const float thickness) {
+                appendShapeOverlayLine(params.ui_shape_overlay_triangles, params, tl, tr, color, thickness);
+                appendShapeOverlayLine(params.ui_shape_overlay_triangles, params, tr, br, color, thickness);
+                appendShapeOverlayLine(params.ui_shape_overlay_triangles, params, br, bl, color, thickness);
+                appendShapeOverlayLine(params.ui_shape_overlay_triangles, params, bl, tl, color, thickness);
+            };
+            append_rect(glm::vec4(0.0f, 0.0f, 0.0f, 0.85f), 9.0f);
+            append_rect(glm::vec4(1.0f, 1.0f, 1.0f, 0.90f), 6.0f);
+            append_rect(glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), 4.5f);
+        }
+
         void appendCropAndFilterOverlays(VulkanViewportPassParams& params,
                                          const VulkanGuidePanelTarget& panel,
                                          const RenderSettings& settings,
                                          const SceneRenderState* scene_state,
                                          const SceneManager* scene_manager,
-                                         const GizmoState& gizmo) {
-            if (settings.depth_filter_enabled) {
-                const glm::mat4 filter_to_world = settings.depth_filter_transform.toMat4();
-                appendProjectedBox(params, panel, settings,
-                                   settings.depth_filter_min,
-                                   settings.depth_filter_max,
-                                   filter_to_world,
-                                   glm::vec4(0.0f, 0.0f, 0.0f, 0.85f),
-                                   9.0f);
-                appendProjectedBox(params, panel, settings,
-                                   settings.depth_filter_min,
-                                   settings.depth_filter_max,
-                                   filter_to_world,
-                                   glm::vec4(1.0f, 1.0f, 1.0f, 0.90f),
-                                   6.0f);
-                appendProjectedBox(params, panel, settings,
-                                   settings.depth_filter_min,
-                                   settings.depth_filter_max,
-                                   filter_to_world,
-                                   glm::vec4(1.0f, 1.0f, 1.0f, 1.0f),
-                                   4.5f);
+                                         const GizmoState& gizmo,
+                                         const bool suppress_screen_window = false) {
+            if (!suppress_screen_window) {
+                appendScreenWindowOverlay(params, panel, settings);
             }
 
             const auto selected_cropbox_is_visible = [&]() {
@@ -2753,6 +2780,8 @@ namespace lfs::vis::gui {
                 return;
             }
 
+            const auto gt_selection = rendering_manager.gtComparisonSelectionContext();
+
             constexpr std::array axis_colors{
                 glm::vec4(1.0f, 0.0f, 0.0f, 1.0f),
                 glm::vec4(0.0f, 1.0f, 0.0f, 1.0f),
@@ -2769,7 +2798,7 @@ namespace lfs::vis::gui {
                     continue;
                 }
 
-                appendCropAndFilterOverlays(params, panel, settings, scene_state, scene_manager, gizmo);
+                appendCropAndFilterOverlays(params, panel, settings, scene_state, scene_manager, gizmo, gt_selection.has_value());
                 if (scene_manager) {
                     appendCameraFrustumOverlays(params,
                                                 panel,
@@ -2804,6 +2833,26 @@ namespace lfs::vis::gui {
                                               ? 1.0f
                                               : 1.0f - std::clamp(time_since_set / kPivotDurationSec, 0.0f, 1.0f);
                     appendPivotShaderOverlay(params, panel, settings, panel.viewport->camera.getPivot(), opacity);
+                }
+            }
+
+            if (gt_selection) {
+                // GT-C: the depth window belongs to the compare image, so it is drawn from a
+                // target describing that image — the whole letterboxed content rect at gt_size.
+                // Alex's Option A ruling: the rectangle spans the WHOLE content rect and is NOT
+                // clipped at the wipe divider, so part of it lies over the GT photograph half.
+                // Do not add clipping.
+                const auto bounds = rendering_manager.getContentBounds(
+                    glm::ivec2(params.viewport_size));
+                const VulkanGuidePanelTarget gt_panel{
+                    .panel = SplitViewPanelId::Right,
+                    .viewport = &viewer.getViewport(),
+                    .pos = params.viewport_pos + glm::vec2(bounds.x, bounds.y),
+                    .size = glm::vec2(bounds.width, bounds.height),
+                    .render_size = gt_selection->size,
+                };
+                if (gt_panel.valid()) {
+                    appendScreenWindowOverlay(params, gt_panel, settings);
                 }
             }
         }

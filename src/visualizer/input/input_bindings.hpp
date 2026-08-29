@@ -139,6 +139,7 @@ namespace lfs::vis::input {
         SELECT_ALL_SCENE_NODES,
         TOGGLE_SCENE_SELECTION_VISIBILITY,
         TOGGLE_SCENE_SELECTION_TRAINING,
+        DEPTH_ADJUST_SIZE,
 
     };
 

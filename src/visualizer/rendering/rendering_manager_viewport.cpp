@@ -155,6 +155,26 @@ namespace lfs::vis {
         return bounds;
     }
 
+    std::optional<RenderingManager::GTSelectionContext> RenderingManager::gtComparisonSelectionContext() const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        if (!split_view_service_.isGTComparisonActive(settings_)) {
+            return std::nullopt;
+        }
+        if (!vulkan_gt_comparison_selection_view_.has_value()) {
+            return std::nullopt;
+        }
+        const auto& view = *vulkan_gt_comparison_selection_view_;
+        if (view.size.x <= 0 || view.size.y <= 0) {
+            return std::nullopt;
+        }
+        if (view.size != vulkan_gt_comparison_content_size_) {
+            return std::nullopt;
+        }
+        // Fallback contract: when any condition fails the accessor returns nullopt and every
+        // downstream consumer behaves exactly as it does today.
+        return GTSelectionContext{.camera = view.camera, .size = view.size};
+    }
+
     std::optional<RenderingManager::MutableViewerPanelInfo> RenderingManager::resolveViewerPanel(
         Viewport& primary_viewport,
         const glm::vec2& viewport_pos,
@@ -986,7 +1006,11 @@ namespace lfs::vis {
         if (transparent_background_override) {
             request.transparent_background = *transparent_background_override;
         }
+        const auto supplied_intrinsics_override = intrinsics_override;
         request.frame_view.intrinsics_override = std::move(intrinsics_override);
+        if (supplied_intrinsics_override) {
+            request.frame_view.containment_intrinsics = *supplied_intrinsics_override;
+        }
         request.frame_view.subregion_origin = subregion_origin;
         request.frame_view.subregion_full_size = subregion_full_size;
         request.raster_backend =

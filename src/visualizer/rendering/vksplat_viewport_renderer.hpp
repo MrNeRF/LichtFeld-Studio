@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/error.hpp"
+#include "core/export.hpp"
 #include "core/exportable_storage.hpp"
 #include "core/splat_data.hpp"
 #include "lod_page_cache.hpp"
@@ -745,5 +746,49 @@ namespace lfs::vis {
         std::uint64_t lod_upload_log_batches_ = 0;
         bool lod_upload_log_converged_ = false;
     };
+
+    namespace detail {
+        // Slot indices for the overlay parameter table. Defined here (not in the .cpp anonymous
+        // namespace) so the slot-12 packing test can name detail::ViewIntrinsics.
+        enum OverlayParamIndex : std::size_t {
+            CropFlags = 0,
+            CropMin = 1,
+            CropMax = 2,
+            CropTransform = 3,
+            EllipsoidFlags = 7,
+            EllipsoidRadii = 8,
+            EllipsoidTransform = 9,
+            ViewIntrinsics = 12,
+            ViewFlags = 13,
+            ViewMin = 14,
+            ViewMax = 15,
+            ViewTransform = 16,
+            EmphasisFlags = 20,
+            CursorFlags = 21,
+            MarkerFlags = 22,
+            SelectionCursor = 23,
+            SelectionFlags = 24,
+            VisibilityFlags = 25,
+            CropExtraBase = 26,
+            CropParamStride = 7,
+            CropExtraCount = 15,
+            EllipsoidExtraBase = CropExtraBase + CropParamStride * CropExtraCount,
+            EllipsoidParamStride = 5,
+            EllipsoidExtraCount = 15,
+            ParamCount = EllipsoidExtraBase + EllipsoidParamStride * EllipsoidExtraCount,
+        };
+        static_assert(EllipsoidFlags + EllipsoidParamStride <= ViewFlags);
+        static_assert(EllipsoidExtraBase + EllipsoidParamStride * EllipsoidExtraCount == ParamCount);
+
+        // Exposed for tests (O4): pure function over the request, no device state.
+        [[nodiscard]] LFS_VIS_API std::expected<std::vector<float>, std::string>
+        buildOverlayParamsCpuFloats(
+            const lfs::rendering::ViewportRenderRequest& request,
+            bool selection_enabled,
+            bool preview_enabled,
+            bool transform_indices_enabled,
+            std::size_t node_mask_count,
+            bool node_visibility_cull);
+    } // namespace detail
 
 } // namespace lfs::vis

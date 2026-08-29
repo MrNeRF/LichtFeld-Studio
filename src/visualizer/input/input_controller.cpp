@@ -1528,6 +1528,11 @@ namespace lfs::vis {
                 selection_tool_->adjustDepthFar((yoff > 0) ? 1.1f : 0.9f);
                 return;
             }
+            if (scroll_action == input::Action::DEPTH_ADJUST_SIZE &&
+                selection_tool_->isDepthFilterEnabled()) {
+                selection_tool_->adjustWindowScale((yoff > 0) ? 1.05f : 0.95f);
+                return;
+            }
         }
 
         // Brush radius adjustment for the selection tool. Modal operators

@@ -5,6 +5,7 @@
 #include "tools/selection_tool.hpp"
 #include "geometry/euclidean_transform.hpp"
 #include "gui/gui_focus_state.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
@@ -33,20 +34,39 @@ namespace lfs::vis::tools {
             return rm ? rm->getScreenOverlayRenderer() : nullptr;
         }
 
-        [[nodiscard]] float depthBoxHalfHeight(const ToolContext& ctx, const float half_width) {
-            const auto& bounds = ctx.getViewportBounds();
-            const float aspect = (bounds.height > 0.0f)
-                                     ? std::max(bounds.width / bounds.height, 0.1f)
-                                     : 1.0f;
-            return std::max(half_width / aspect, 0.05f);
-        }
-
         [[nodiscard]] const Viewport& selectionFilterViewport(const ToolContext& ctx) {
             auto* const rm = ctx.getRenderingManager();
             if (rm) {
                 return rm->resolveFocusedViewport(ctx.getViewport());
             }
             return ctx.getViewport();
+        }
+
+        // KEEP IN SYNC: the legacy width<->scale converters in py_selection.cpp
+        // (convert_legacy_half_width_to_scale / convert_scale_to_legacy_half_width)
+        // invert this mapping via the vertical fov; they do not see
+        // ortho_scale_override.
+        [[nodiscard]] glm::vec2 depthWindowFarPlaneHalfExtents(
+            const Viewport& viewport,
+            const RenderSettings& settings,
+            const float far_depth,
+            const float window_scale) {
+            const glm::ivec2 size = glm::max(viewport.windowSize, glm::ivec2(1));
+            const float half_w_pixels = 0.5f * window_scale * static_cast<float>(size.x);
+            const float half_h_pixels = 0.5f * window_scale * static_cast<float>(size.y);
+            if (settings.orthographic) {
+                const float pixels_per_world =
+                    viewport.ortho_scale_override.value_or(settings.ortho_scale);
+                const float valid_scale = std::max(pixels_per_world, 1.0e-5f);
+                return {half_w_pixels / valid_scale, half_h_pixels / valid_scale};
+            }
+
+            const auto [pixel_focal_x, pixel_focal_y] =
+                lfs::rendering::computePixelFocalLengths(size, settings.focal_length_mm);
+            return {
+                half_w_pixels * far_depth / pixel_focal_x,
+                half_h_pixels * far_depth / pixel_focal_y,
+            };
         }
 
         [[nodiscard]] bool pointInViewportBounds(const ViewportBounds& bounds, const glm::vec2 point) {
@@ -177,10 +197,9 @@ namespace lfs::vis::tools {
     void SelectionTool::setDepthFilterRange(const bool enabled,
                                             const float depth_near,
                                             const float depth_far,
-                                            const float frustum_half_width) {
+                                            const float informational_half_width) {
         depth_near_ = std::clamp(depth_near, 0.0f, DEPTH_MAX - DEPTH_MIN);
         depth_far_ = std::clamp(depth_far, depth_near_ + DEPTH_MIN, DEPTH_MAX);
-        frustum_half_width_ = std::max(frustum_half_width, 0.05f);
 
         depth_filter_enabled_ = enabled;
         if (!tool_context_ || !isEnabled() ||
@@ -188,11 +207,30 @@ namespace lfs::vis::tools {
             return;
         }
 
-        applySelectionFilterSettings(*tool_context_);
+        applySelectionFilterSettings(*tool_context_, std::max(informational_half_width, 0.05f));
     }
 
     void SelectionTool::adjustDepthFar(const float scale) {
         depth_far_ = std::clamp(depth_far_ * scale, std::max(DEPTH_MIN, depth_near_ + DEPTH_MIN), DEPTH_MAX);
+        if (tool_context_ && isEnabled() && depth_filter_enabled_) {
+            applySelectionFilterSettings(*tool_context_);
+        }
+    }
+
+    void SelectionTool::adjustWindowScale(const float factor) {
+        if (tool_context_) {
+            if (auto* const rm = tool_context_->getRenderingManager()) {
+                window_scale_ = rm->getSettings().depth_filter_scale;
+            }
+        }
+        window_scale_ = std::clamp(window_scale_ * factor, 0.05f, 1.0f);
+        if (tool_context_) {
+            if (auto* const rm = tool_context_->getRenderingManager()) {
+                auto settings = rm->getSettings();
+                settings.depth_filter_scale = window_scale_;
+                rm->updateSettings(settings);
+            }
+        }
         if (tool_context_ && isEnabled() && depth_filter_enabled_) {
             applySelectionFilterSettings(*tool_context_);
         }
@@ -215,11 +253,13 @@ namespace lfs::vis::tools {
             settings.show_ellipsoid = true;
         }
         settings.depth_filter_enabled = depth_filter_enabled_;
+        window_scale_ = settings.depth_filter_scale;
         const glm::quat camera_quat = glm::quat_cast(viewport.camera.R);
-        const float half_height = depthBoxHalfHeight(*tool_context_, frustum_half_width_);
+        const glm::vec2 half_extents =
+            depthWindowFarPlaneHalfExtents(viewport, settings, depth_far_, settings.depth_filter_scale);
         settings.depth_filter_transform = lfs::geometry::EuclideanTransform(camera_quat, viewport.camera.t);
-        settings.depth_filter_min = glm::vec3(-frustum_half_width_, -half_height, -depth_far_);
-        settings.depth_filter_max = glm::vec3(frustum_half_width_, half_height, -depth_near_);
+        settings.depth_filter_min = glm::vec3(-half_extents.x, -half_extents.y, -depth_far_);
+        settings.depth_filter_max = glm::vec3(half_extents.x, half_extents.y, -depth_near_);
         rm->updateSettings(settings);
         rm->markDirty(DirtyFlag::SELECTION);
     }
@@ -232,7 +272,9 @@ namespace lfs::vis::tools {
         applySelectionFilterSettings(*tool_context_);
     }
 
-    void SelectionTool::applySelectionFilterSettings(const ToolContext& ctx) const {
+    void SelectionTool::applySelectionFilterSettings(
+        const ToolContext& ctx,
+        const std::optional<float> informational_half_width) const {
         auto* const rm = ctx.getRenderingManager();
         if (!rm) {
             return;
@@ -245,13 +287,25 @@ namespace lfs::vis::tools {
             settings.show_ellipsoid = true;
         }
         settings.depth_filter_enabled = depth_filter_enabled_;
+        // Window scale/offset live on RenderSettings. Read them from settings and
+        // do not stamp tool members — crop-filter toggles and enable/disable
+        // reach this path and would otherwise revert Python/slider/MCP writes.
+        const float window_scale = settings.depth_filter_scale;
         if (depth_filter_enabled_) {
             const auto& viewport = selectionFilterViewport(ctx);
             const glm::quat camera_quat = glm::quat_cast(viewport.camera.R);
-            const float half_height = depthBoxHalfHeight(ctx, frustum_half_width_);
+            glm::vec2 half_extents =
+                depthWindowFarPlaneHalfExtents(viewport, settings, depth_far_, window_scale);
+            if (informational_half_width) {
+                const glm::ivec2 size = glm::max(viewport.windowSize, glm::ivec2(1));
+                const float aspect = std::max(
+                    static_cast<float>(size.x) / static_cast<float>(size.y), 0.1f);
+                half_extents = {*informational_half_width,
+                                std::max(*informational_half_width / aspect, 0.05f)};
+            }
             settings.depth_filter_transform = lfs::geometry::EuclideanTransform(camera_quat, viewport.camera.t);
-            settings.depth_filter_min = glm::vec3(-frustum_half_width_, -half_height, -depth_far_);
-            settings.depth_filter_max = glm::vec3(frustum_half_width_, half_height, -depth_near_);
+            settings.depth_filter_min = glm::vec3(-half_extents.x, -half_extents.y, -depth_far_);
+            settings.depth_filter_max = glm::vec3(half_extents.x, half_extents.y, -depth_near_);
         }
         rm->updateSettings(settings);
         rm->markDirty(DirtyFlag::SELECTION);

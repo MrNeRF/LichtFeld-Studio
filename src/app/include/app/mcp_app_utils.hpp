@@ -322,4 +322,12 @@ namespace lfs::app {
                 .content = std::move(base64_payload)}};
     }
 
+    // Selection tools: an omitted camera_index means "the current viewer".
+    // A value >= 0 names a dataset camera; out-of-range values fail in the service.
+    inline constexpr int SELECTION_VIEWER_CAMERA_INDEX = -1;
+
+    [[nodiscard]] inline int selection_camera_index_from_args(const nlohmann::json& args) {
+        return args.value("camera_index", SELECTION_VIEWER_CAMERA_INDEX);
+    }
+
 } // namespace lfs::app

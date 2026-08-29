@@ -400,9 +400,98 @@ body {
 
 #selection-block .viewport-selection-depth-fields {
     flex-wrap: nowrap;
-    gap: 5dp;
+    gap: 10dp;
+    flex-grow: 0;
+    flex-shrink: 1;
+    position: relative;
+}
+
+/* Vertically center the 4dp track (and its progress fill) inside the 22dp
+   slider box so it lines up with the label and value box; the thumb keeps
+   its -3dp offset relative to the track line. */
+#selection-block .viewport-selection-slider slidertrack {
+    margin-top: 8dp;
+}
+
+#selection-block .viewport-selection-slider sliderbar {
+    margin-top: 5dp;
+}
+
+#selection-block .viewport-selection-depth-axis {
+    gap: 6dp;
+}
+
+/* Sub-rows: Near/Far and Size/X/Y ride side by side on one line at full
+   width and stack as whole units when the row wraps. */
+#selection-block .depth-axis-group {
+    display: flex;
+    align-items: center;
+    gap: 10dp;
+    min-width: 0;
+    flex-grow: 1;
+    flex-shrink: 1;
+}
+
+/* Narrow-width behavior, breakpoint style: sliders and number inputs
+   compress first; below ~1150dp the row wraps to two lines; below ~700dp
+   the slider row hides, leaving the icon toolbar. */
+#selection-block .viewport-selection-depth-axis {
+    flex-grow: 1;
+    flex-shrink: 1;
+    max-width: 330dp;
+}
+
+#selection-block .viewport-selection-depth-fields {
+    flex-grow: 1;
+}
+
+#selection-block .viewport-selection-slider {
+    min-width: 56dp;
+    max-width: 240dp;
+    flex-grow: 1;
+    flex-shrink: 1;
+}
+
+#selection-block .viewport-selection-depth-axis > .number-input.viewport-selection-depth-input {
+    /* Content-fit, never grows: the global .number-input flex: 1 would split
+       the axis's spare width with the slider. RmlUi cannot size a text input
+       to its content, so a tight fixed width stands in for it. */
     flex-grow: 0;
     flex-shrink: 0;
+    width: 50dp;
+    min-width: 50dp;
+}
+
+@media (max-width: 1150dp) {
+    /* Deterministic 2+3 wrap: the Near/Far group takes the first line, the
+       Size/X/Y group the second, each centered, with UNIFORM slider lengths
+       on both lines. The viz-mode button is pinned to the top-right
+       (document order would put it on the last line; this RmlUi has no
+       flex `order`). */
+    #selection-block .viewport-selection-depth-fields {
+        flex-wrap: wrap;
+        padding-right: 36dp;
+    }
+    #selection-block .depth-axis-group {
+        flex-basis: 100%;
+        justify-content: center;
+    }
+    #selection-block .depth-axis-group .viewport-selection-slider {
+        width: 90dp;
+        min-width: 56dp;
+        max-width: 150dp;
+    }
+    #selection-block .viewport-selection-depth-fields > .viewport-transform-action {
+        position: absolute;
+        top: 0;
+        right: 0;
+    }
+}
+
+@media (max-width: 650dp) {
+    #selection-block .viewport-selection-depth-fields {
+        display: none;
+    }
 }
 
 .viewport-selection-depth-axis {
@@ -541,6 +630,10 @@ body {
 
 #selection-block .viewport-selection-panel {
     min-width: 0;
+    /* Window-relative: the panel tracks the viewport width and the sliders
+       grow into it (capped below), instead of collapsing to the icon row. */
+    width: 65%;
+    max-width: 1500dp;
     padding: 5dp 6dp;
     border-radius: 6dp;
     gap: 4dp;

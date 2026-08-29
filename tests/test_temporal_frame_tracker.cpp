@@ -232,6 +232,25 @@ namespace lfs::vis {
         EXPECT_FLOAT_EQ(input.view.intrinsics_override->center_x, 640.0f);
     }
 
+    TEST(TemporalFrameTracker, SceneViewJitterLeavesContainmentIntrinsicsAlone) {
+        auto input = frameInput();
+        input.view.intrinsics_override = lfs::rendering::CameraIntrinsics{
+            .focal_x = 900.0f,
+            .focal_y = 880.0f,
+            .center_x = 600.0f,
+            .center_y = 360.0f};
+        input.view.containment_intrinsics = *input.view.intrinsics_override;
+        const auto jittered = applySceneViewJitter(input.view, {0.25f, -0.125f});
+        ASSERT_TRUE(jittered.intrinsics_override);
+        ASSERT_TRUE(jittered.containment_intrinsics);
+        EXPECT_FLOAT_EQ(jittered.intrinsics_override->center_x, 600.25f);
+        EXPECT_FLOAT_EQ(jittered.intrinsics_override->center_y, 359.875f);
+        EXPECT_FLOAT_EQ(jittered.containment_intrinsics->center_x, 600.0f);
+        EXPECT_FLOAT_EQ(jittered.containment_intrinsics->center_y, 360.0f);
+        EXPECT_FLOAT_EQ(input.view.intrinsics_override->center_x, 600.0f);
+        EXPECT_FLOAT_EQ(input.view.containment_intrinsics->center_x, 600.0f);
+    }
+
     TEST(TemporalFrameTracker, SceneViewJitterSynthesizesTileStableIntrinsics) {
         auto input = frameInput();
         input.view.size = {320, 180};

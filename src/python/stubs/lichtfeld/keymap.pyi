@@ -171,6 +171,8 @@ class Action(enum.Enum):
 
     TOGGLE_SCENE_SELECTION_TRAINING = 84
 
+    DEPTH_ADJUST_SIZE = 85
+
 class ToolMode(enum.Enum):
     GLOBAL = 0
 

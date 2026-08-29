@@ -358,11 +358,15 @@
         <input type="checkbox" data-checked="desaturate_cropping" />
       </label>
     </div>
-    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.hide_outside_depth_box">
-      <span class="setting-row__label-col">{{label_hide_outside_depth_box}}</span>
-      <label class="setting-row__control-col setting-row__control-col--checkbox">
-        <input type="checkbox" data-checked="hide_outside_depth_box" />
-      </label>
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.depth_filter_viz_mode">
+      <span class="setting-row__label-col">{{label_depth_filter_viz_mode}}</span>
+      <div class="setting-row__control-col setting-row__control-col--fill">
+        <select data-value="depth_filter_viz_mode">
+          <option value="0">@tr:main_panel.depth_filter_viz_mode_off</option>
+          <option value="1">@tr:main_panel.depth_filter_viz_mode_dim</option>
+          <option value="2">@tr:main_panel.depth_filter_viz_mode_hide</option>
+        </select>
+      </div>
     </div>
 
     <div class="setting-row setting-row--aligned" data-tooltip="tooltip.selection_color_committed">

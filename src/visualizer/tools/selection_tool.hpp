@@ -8,6 +8,7 @@
 #include "tool_base.hpp"
 #include <algorithm>
 #include <glm/glm.hpp>
+#include <optional>
 
 namespace lfs::vis::tools {
 
@@ -33,11 +34,11 @@ namespace lfs::vis::tools {
         [[nodiscard]] bool isDepthFilterEnabled() const { return depth_filter_enabled_; }
         [[nodiscard]] float getDepthNear() const { return depth_near_; }
         [[nodiscard]] float getDepthFar() const { return depth_far_; }
-        [[nodiscard]] float getDepthFrustumHalfWidth() const { return frustum_half_width_; }
         void setDepthFilterEnabled(bool enabled);
-        void setDepthFilterRange(bool enabled, float depth_near, float depth_far, float frustum_half_width);
+        void setDepthFilterRange(bool enabled, float depth_near, float depth_far, float informational_half_width);
         void toggleDepthFilter() { setDepthFilterEnabled(!depth_filter_enabled_); }
         void adjustDepthFar(float scale);
+        void adjustWindowScale(float factor);
         void syncDepthFilterToCamera(const Viewport& viewport);
 
         // Crop filter (use scene crop box/ellipsoid as selection filter)
@@ -78,7 +79,7 @@ namespace lfs::vis::tools {
         bool depth_filter_enabled_ = false;
         float depth_near_ = 0.0f;
         float depth_far_ = DEFAULT_DEPTH_FAR;
-        float frustum_half_width_ = DEFAULT_FRUSTUM_HALF_WIDTH;
+        float window_scale_ = 0.35f;
 
         // Crop filter
         bool crop_filter_enabled_ = false;
@@ -88,9 +89,9 @@ namespace lfs::vis::tools {
         static constexpr float DEPTH_MIN = 0.01f;
         static constexpr float DEPTH_MAX = 1000.0f;
         static constexpr float DEFAULT_DEPTH_FAR = 6.0f;
-        static constexpr float DEFAULT_FRUSTUM_HALF_WIDTH = 1.35f;
-
-        void applySelectionFilterSettings(const ToolContext& ctx) const;
+        void applySelectionFilterSettings(
+            const ToolContext& ctx,
+            std::optional<float> informational_half_width = std::nullopt) const;
         void clearSelectionRenderState(const ToolContext& ctx) const;
     };
 

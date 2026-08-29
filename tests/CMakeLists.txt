@@ -475,6 +475,7 @@ set(TEST_FILES
     test_scene_temporal_resolve.cpp
     test_temporal_frame_tracker.cpp
     test_selection_rasterization_ops.cpp
+    test_selection_screen_window.cpp
     test_rendering_refactor_services.cpp
     test_theme_registry.cpp
     test_viewport.cpp
