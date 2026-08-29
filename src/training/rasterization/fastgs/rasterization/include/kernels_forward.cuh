@@ -7,6 +7,7 @@
 #include "buffer_utils.h"
 #include "helper_math.h"
 #include "kernel_utils.cuh"
+#include "lfs/training/screen_share.cuh"
 #include "rasterization_config.h"
 #include "utils.h"
 #include <cooperative_groups.h>
@@ -91,7 +92,8 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float near_, // near and far are macros in windowns
         const float far_,
         const uint depth_bits,
-        const bool mip_filter) {
+        const bool mip_filter,
+        float* __restrict__ max_screen_share) {
         (void)w;
         (void)h;
         auto primitive_idx = cg::this_grid().thread_rank();
@@ -234,6 +236,16 @@ namespace fast_lfs::rasterization::kernels::forward {
         // cooperative threads no longer needed
         if (n_touched_tiles == 0 || !active)
             return;
+
+        if (max_screen_share != nullptr) {
+            const float3 campos = cam_position[0];
+            const float share = lfs::training::gaussian_screen_share(
+                mean3d.x, mean3d.y, mean3d.z,
+                campos.x, campos.y, campos.z,
+                raw_scale.x, raw_scale.y, raw_scale.z,
+                raw_opacity);
+            lfs::training::atomic_max_float(max_screen_share + primitive_idx, share);
+        }
 
         // store results
         primitive_n_touched_tiles[primitive_idx] = n_touched_tiles;

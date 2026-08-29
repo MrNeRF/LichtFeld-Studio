@@ -176,6 +176,8 @@ namespace lfs::vis::gui {
         float computeLeftDockReservedWidth(bool show_main_panel, bool ui_hidden,
                                            const ScreenState& screen) const;
         [[nodiscard]] bool shouldReserveLeftDockWidth() const;
+        [[nodiscard]] bool willRenderLeftDock(bool show_main_panel, bool ui_hidden,
+                                              const ScreenState& screen) const;
         [[nodiscard]] float maxLeftDockPanelWidth(bool show_main_panel, bool ui_hidden,
                                                   const ScreenState& screen) const;
         [[nodiscard]] float maxRightPanelWidth(bool show_main_panel, bool ui_hidden,

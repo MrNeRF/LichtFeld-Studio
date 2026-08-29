@@ -31,6 +31,31 @@ namespace lfs::core {
             AlphaConsistent   // Enforce exact alpha values from mask
         };
 
+        enum class DensifyErrorMap {
+            Ssim,   // full SSIM (luminance × contrast × structure)
+            SsimCs, // contrast × structure only (luminance excluded)
+        };
+
+        [[nodiscard]] inline constexpr std::string_view densify_error_map_name(
+            const DensifyErrorMap mode) noexcept {
+            switch (mode) {
+            case DensifyErrorMap::Ssim:
+                return "ssim";
+            case DensifyErrorMap::SsimCs:
+                return "ssim_cs";
+            }
+            return "ssim_cs";
+        }
+
+        [[nodiscard]] inline constexpr std::optional<DensifyErrorMap> densify_error_map_from_string(
+            const std::string_view value) noexcept {
+            if (value == "ssim")
+                return DensifyErrorMap::Ssim;
+            if (value == "ssim_cs")
+                return DensifyErrorMap::SsimCs;
+            return std::nullopt;
+        }
+
         enum class NormalLossSpace {
             Auto,
             CameraOpenCV,
@@ -199,6 +224,17 @@ namespace lfs::core {
             float bilateral_grid_lr = 2e-3f;
             float tv_loss_weight = 10.f;
 
+            // Combined per-photo exposure + residual grid (replaces standalone grid/PPISP)
+            bool use_exposure_correction = false;
+            int exposure_correction_grid_start_iter = 1000;
+
+            [[nodiscard]] bool bilateral_grid_active() const {
+                return use_bilateral_grid || use_exposure_correction;
+            }
+            [[nodiscard]] bool ppisp_active() const {
+                return use_ppisp || use_exposure_correction;
+            }
+
             // PPISP (Physically-Plausible ISP) parameters
             bool use_ppisp = false;
             bool ppisp_exposure_from_exif = true;
@@ -228,6 +264,12 @@ namespace lfs::core {
             float means_noise_weight = 50.0f;
             float bounds_percentile = 0.8f;
             bool use_error_map = true;
+            DensifyErrorMap densify_error_map = DensifyErrorMap::SsimCs;
+            // Dimensionless on-screen share cap. <=0 or >=1 disables the cap.
+            float max_screen_share = 0.3f;
+            float screen_share_penalty = 1.0f;
+            // Fraction of MRNF growth budget spent splitting over-cap splats. 0 disables.
+            float oversize_split_fraction = 0.15f;
             bool use_edge_map = true;
             bool background_improvements = false;
             float far_scene_min_fraction = 0.01f; // min deep-far splat fraction that activates far-field (0 = always on); mrnf_defaults() overrides to 0.0

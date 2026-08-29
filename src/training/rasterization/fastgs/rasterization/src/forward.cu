@@ -395,7 +395,8 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     const float near_, // near and far are macros in windows
     const float far_,
     bool mip_filter,
-    cudaStream_t stream) {
+    cudaStream_t stream,
+    float* max_screen_share) {
 
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
     const uint64_t n_tiles_u64 = static_cast<uint64_t>(grid.x) * static_cast<uint64_t>(grid.y);
@@ -467,7 +468,8 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         near_,
         far_,
         depth_bits,
-        mip_filter);
+        mip_filter,
+        max_screen_share);
     LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.preprocess");
     check_cuda_with_fastgs_status(cudaGetLastError(), "preprocess", forward_status, "preprocess", static_cast<uint64_t>(n_primitives), n_tiles_u64);
     sync_fastgs_phase_if_requested("preprocess", forward_status, "preprocess", static_cast<uint64_t>(n_primitives), n_tiles_u64);

@@ -361,6 +361,7 @@ namespace lfs::training {
                 auto frozen_ranges = model.frozen_ranges();
                 lfs::core::Tensor deleted = model.has_deleted_mask() ? model.deleted() : lfs::core::Tensor{};
                 lfs::core::Tensor densification_info = model._densification_info;
+                lfs::core::Tensor max_screen_share = model._max_screen_share;
 
                 const auto copy_param =
                     [&](const lfs::core::Tensor& source,
@@ -478,6 +479,9 @@ namespace lfs::training {
                 }
                 if (densification_info.is_valid()) {
                     migrated._densification_info = std::move(densification_info);
+                }
+                if (max_screen_share.is_valid()) {
+                    migrated._max_screen_share = std::move(max_screen_share);
                 }
                 migrated.set_frozen_ranges(std::move(frozen_ranges));
                 model = std::move(migrated);

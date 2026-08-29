@@ -152,6 +152,9 @@ namespace lichtfeld::Strings {
             inline constexpr const char* SH_DEGREE = "training.tooltip.sh_degree";
             inline constexpr const char* STEPS_SCALER = "training.tooltip.steps_scaler";
             inline constexpr const char* BILATERAL_GRID = "training.tooltip.bilateral_grid";
+            inline constexpr const char* EXPOSURE_CORRECTION = "training.tooltip.exposure_correction";
+            inline constexpr const char* EXPOSURE_CORRECTION_GRID_START =
+                "training.tooltip.exposure_correction_grid_start";
             inline constexpr const char* MASK_MODE = "training.tooltip.mask_mode";
             inline constexpr const char* USE_ALPHA_AS_MASK = "training.tooltip.use_alpha_as_mask";
             inline constexpr const char* SPARSITY = "training.tooltip.sparsity";
@@ -783,6 +786,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* DELETE_KEYFRAME = "sequencer.delete_keyframe";
         inline constexpr const char* ADD_KEYFRAME_HERE = "sequencer.add_keyframe_here";
         inline constexpr const char* EDIT_KEYFRAME_TIME = "sequencer.edit_keyframe_time";
+        inline constexpr const char* SET_TIME = "sequencer.edit_time";
         inline constexpr const char* APPLY_U = "sequencer.apply_u";
         inline constexpr const char* REVERT_ESC = "sequencer.revert_esc";
         inline constexpr const char* EDITING_KEYFRAME = "sequencer.editing_keyframe";
