@@ -223,6 +223,33 @@ namespace {
         return selection.cpu().to_vector_bool();
     }
 
+    std::vector<float> runShapeProjector(
+        const std::vector<float>& points,
+        const ScreenWindowConfig& config,
+        const std::array<float, 9>& view_rotation_rows,
+        const std::array<float, 3>& translation) {
+        const auto means = cudaMeans(points);
+        const auto projected = lfs::rendering::project_screen_positions_tensor(
+            means,
+            config.width,
+            config.height,
+            view_rotation_rows,
+            translation,
+            config.pixel_focal_x,
+            config.pixel_focal_y,
+            config.center_x,
+            config.center_y,
+            config.camera_model,
+            config.ortho_scale,
+            nullptr,
+            nullptr,
+            {});
+        if (!projected.is_valid()) {
+            return {};
+        }
+        return projected.cpu().to(DataType::Float32).to_vector();
+    }
+
     class SelectionScreenWindow : public ::testing::Test {
     protected:
         void SetUp() override {
@@ -622,6 +649,85 @@ namespace {
         bogus_equirect.center_y = -9999.0f;
         EXPECT_EQ(runCuda(equirect_points, bogus_equirect, identity_rows, origin), centred_equirect);
         EXPECT_EQ(centred_equirect, equirect_expected);
+    }
+
+    TEST_F(SelectionScreenWindow, EquirectShapeProjectorProjectsBehindTheCamera) {
+        // Identity visualizer pose at the origin: right=+X, up=+Y, back=+Z
+        // (forward is -Z). A splat at (0, 0, 1) is directly behind the camera.
+        constexpr std::array<float, 9> identity_rows{
+            1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+        constexpr std::array<float, 3> origin{0.0f, 0.0f, 0.0f};
+        constexpr int kImageWidth = 100;
+        constexpr int kImageHeight = 80;
+        const ScreenWindowConfig equirect{
+            .camera_model = ScreenWindowCameraModel::Equirectangular,
+            .width = kImageWidth,
+            .height = kImageHeight,
+        };
+
+        // vis = (0, 0, 1). Window-kernel axes: eq = (vis_x, -vis_y, -vis_z)
+        // = (0, 0, -1). dir = (0, 0, -1).
+        // px = (atan2(dir_x, dir_z) / (2π) + 0.5) * width
+        //    = (atan2(0, -1) / (2π) + 0.5) * width
+        //    = (π / 2π + 0.5) * width = width
+        // py = (asin(dir_y) / π + 0.5) * height = height / 2
+        constexpr float pi = 3.14159265358979323846f;
+        const float expected_px =
+            (std::atan2(0.0f, -1.0f) / (2.0f * pi) + 0.5f) * static_cast<float>(kImageWidth);
+        const float expected_py =
+            (std::asin(0.0f) / pi + 0.5f) * static_cast<float>(kImageHeight);
+
+        const auto actual = runShapeProjector({0.0f, 0.0f, 1.0f}, equirect, identity_rows, origin);
+        ASSERT_EQ(actual.size(), 2u);
+        EXPECT_NEAR(actual[0], expected_px, 1.0e-4f);
+        EXPECT_NEAR(actual[1], expected_py, 1.0e-4f);
+
+        // Control: the same splat is behind the camera in pinhole, so the shape
+        // projector must still write an invalid screen position.
+        ScreenWindowConfig pinhole = equirect;
+        pinhole.camera_model = ScreenWindowCameraModel::Pinhole;
+        const auto pinhole_actual =
+            runShapeProjector({0.0f, 0.0f, 1.0f}, pinhole, identity_rows, origin);
+        ASSERT_EQ(pinhole_actual.size(), 2u);
+        EXPECT_LT(pinhole_actual[0], -1000.0f);
+        EXPECT_LT(pinhole_actual[1], -1000.0f);
+    }
+
+    TEST_F(SelectionScreenWindow, EquirectShapeProjectorMatchesWindowCpuReference) {
+        std::mt19937 rng(0xE01EC7u);
+        std::uniform_real_distribution<float> coordinate(-25.0f, 25.0f);
+        std::vector<float> points(kRandomPointCount * 3);
+        std::vector<std::array<float, 3>> point_arrays(kRandomPointCount);
+        for (std::size_t i = 0; i < kRandomPointCount; ++i) {
+            point_arrays[i] = {coordinate(rng), coordinate(rng), coordinate(rng)};
+            points[i * 3] = point_arrays[i][0];
+            points[i * 3 + 1] = point_arrays[i][1];
+            points[i * 3 + 2] = point_arrays[i][2];
+        }
+
+        const ScreenWindowConfig config{
+            .camera_model = ScreenWindowCameraModel::Equirectangular,
+            .width = 1024,
+            .height = 512,
+        };
+        const auto actual = runShapeProjector(points, config, kViewRotationRows, kTranslation);
+        ASSERT_EQ(actual.size(), kRandomPointCount * 2);
+
+        std::size_t compared = 0;
+        for (std::size_t i = 0; i < kRandomPointCount; ++i) {
+            const auto projected = projectCpu(point_arrays[i], config, kViewRotationRows, kTranslation);
+            if (projected.depth <= 0.0f || !std::isfinite(projected.px) || !std::isfinite(projected.py)) {
+                // Degenerate (at the camera). The shape kernel writes invalid;
+                // the window CPU reference leaves px/py at 0 with depth = -1.
+                EXPECT_LT(actual[i * 2], -1000.0f) << "point=" << i;
+                EXPECT_LT(actual[i * 2 + 1], -1000.0f) << "point=" << i;
+                continue;
+            }
+            ++compared;
+            EXPECT_NEAR(actual[i * 2], projected.px, 1.0e-3f) << "point=" << i;
+            EXPECT_NEAR(actual[i * 2 + 1], projected.py, 1.0e-3f) << "point=" << i;
+        }
+        EXPECT_GT(compared, kRandomPointCount / 2);
     }
 
 } // namespace

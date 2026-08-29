@@ -777,7 +777,7 @@ namespace lfs::vis {
             EllipsoidExtraCount = 15,
             ParamCount = EllipsoidExtraBase + EllipsoidParamStride * EllipsoidExtraCount,
         };
-        static_assert(EllipsoidFlags + EllipsoidParamStride <= ViewFlags);
+        static_assert(EllipsoidFlags + EllipsoidParamStride <= ViewIntrinsics);
         static_assert(EllipsoidExtraBase + EllipsoidParamStride * EllipsoidExtraCount == ParamCount);
 
         // Exposed for tests (O4): pure function over the request, no device state.

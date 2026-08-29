@@ -549,7 +549,9 @@ TEST_F(SelectionServiceInteractionsTest, CommandRingSelectionUsesHoveredGaussian
 // Neither test can pass vacuously.
 namespace {
 
-    std::shared_ptr<lfs::core::Camera> make_x_axis_dataset_camera() {
+    std::shared_ptr<lfs::core::Camera> make_x_axis_dataset_camera(
+        lfs::core::CameraModelType model = lfs::core::CameraModelType::PINHOLE,
+        const std::string& image_name = "dataset.png") {
         // world->camera rotation: R * (1,0,0) = (0,0,1), det = +1.
         auto rotation = Tensor::from_vector(
             std::vector<float>{
@@ -563,8 +565,8 @@ namespace {
             std::move(translation),
             100.0f, 100.0f, 50.0f, 50.0f,
             Tensor{}, Tensor{},
-            lfs::core::CameraModelType::PINHOLE,
-            "dataset.png", std::filesystem::path{}, std::filesystem::path{},
+            model,
+            image_name, std::filesystem::path{}, std::filesystem::path{},
             100, 100, 0);
     }
 
@@ -693,26 +695,72 @@ namespace {
                              0.0f, 5.0f, 0.0f}));
     }
 
+    // Same x-axis camera as install_m44_axis_depth_pair_fixture, but splat1 is
+    // off-axis so a hover pick at the optical-axis principal point cannot
+    // resolve it. splat0 origin: depth 10, px = 50, py = 50. splat1 (1.5, 5, 0):
+    // depth 11.5 (band-rejected), px = 50 + 100*(5/11.5) ≈ 93.5 — well outside
+    // HOVER_PICK_RADIUS_PX of (50, 50).
+    void install_m44_color_seed_fixture(lfs::vis::SceneManager& scene_manager) {
+        scene_manager.changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+        scene_manager.getScene().removeNode("test");
+        scene_manager.getScene().addSplat(
+            "m44_color_seed",
+            make_test_splat({0.0f, 0.0f, 0.0f,
+                             1.5f, 5.0f, 0.0f}));
+    }
+
+    // x-axis camera at cam_pos=(-10,0,0) looking +X. splat0 (-20,0,0) sits
+    // directly behind the camera (visualizer view_z = +10): pinhole rejects
+    // (vksplat depth = -view_z < 0), equirect maps it to the image edge with
+    // depth = 10. splat1 (1000,0,0) is in front at depth 1010, outside a
+    // (0, 100] band under both models.
+    void install_equirect_behind_camera_fixture(lfs::vis::SceneManager& scene_manager) {
+        scene_manager.changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+        scene_manager.getScene().removeNode("test");
+        scene_manager.getScene().addSplat(
+            "equirect_behind",
+            make_test_splat({-20.0f, 0.0f, 0.0f,
+                             1000.0f, 0.0f, 0.0f}));
+    }
+
+    void arm_wide_full_frame_depth_window(lfs::vis::RenderingManager& rendering_manager) {
+        auto settings = rendering_manager.getSettings();
+        settings.depth_filter_enabled = true;
+        settings.depth_filter_min = {-0.5f, -0.5f, -100.0f};
+        settings.depth_filter_max = {0.5f, 0.5f, 0.0f};
+        settings.depth_filter_scale = 1.0f;
+        settings.depth_filter_offset_x = 0.0f;
+        settings.depth_filter_offset_y = 0.0f;
+        rendering_manager.updateSettings(settings);
+    }
+
+    void starve_testing_viewport(lfs::vis::SelectionService& service) {
+        service.setTestingViewport({
+            .x = 0.0f,
+            .y = 0.0f,
+            .width = 0.0f,
+            .height = 0.0f,
+            .render_width = 0,
+            .render_height = 0,
+        });
+    }
+
 } // namespace
 
 TEST_F(SelectionServiceInteractionsTest, ExplicitCameraRectFiltersWithTheCommandCameraNotTheViewer) {
+    install_m44_axis_depth_pair_fixture(*scene_manager_);
     const auto cameras_group = scene_manager_->getScene().addGroup("Cameras");
     scene_manager_->getScene().addCamera("dataset.png", cameras_group, make_x_axis_dataset_camera());
     ASSERT_EQ(scene_manager_->getScene().getAllCameras().size(), 1u);
 
     arm_dataset_camera_depth_band(*rendering_manager_);
 
-    // Mask side: both splats inside the rect, bound to camera 0 so the mask is
-    // unambiguously the command camera's.
-    service_->setTestingScreenPositionsForCamera(0, make_screen_positions({
-                                                        10.0f,
-                                                        10.0f,
-                                                        20.0f,
-                                                        20.0f,
-                                                    }));
-
-    const auto result = service_->selectRect(0.0f, 0.0f, 50.0f, 50.0f, lfs::vis::SelectionMode::Replace, 0);
-    ASSERT_TRUE(result.success);
+    // Real projector, no screen-position stub. Both splats sit on the optical
+    // axis so they share px = center_x = 50, py = 50 and fall inside this rect;
+    // only the depth band can discriminate. splat0 origin: depth 10 (inside
+    // [9.5, 10.5]). splat1 (1.5, 0, 0): depth 11.5 — band-rejected.
+    const auto result = service_->selectRect(40.0f, 35.0f, 60.0f, 65.0f, lfs::vis::SelectionMode::Replace, 0);
+    ASSERT_TRUE(result.success) << "error: " << result.error;
 
     // Depth filtering must use camera 0 (band keeps splat0 only), NOT the
     // viewer camera (which rejects both and yields {}).
@@ -720,6 +768,7 @@ TEST_F(SelectionServiceInteractionsTest, ExplicitCameraRectFiltersWithTheCommand
 }
 
 TEST_F(SelectionServiceInteractionsTest, ExplicitCameraColorSeedFiltersWithTheCommandCamera) {
+    install_m44_color_seed_fixture(*scene_manager_);
     const auto cameras_group = scene_manager_->getScene().addGroup("Cameras");
     scene_manager_->getScene().addCamera("dataset.png", cameras_group, make_x_axis_dataset_camera());
     ASSERT_EQ(scene_manager_->getScene().getAllCameras().size(), 1u);
@@ -728,22 +777,11 @@ TEST_F(SelectionServiceInteractionsTest, ExplicitCameraColorSeedFiltersWithTheCo
 
     // Deliberately NOT setTestingHoveredGaussianId: the override short-circuits
     // resolveCommandHoveredGaussianId and would bypass the seed-camera identity
-    // this test exists to prove.
-    service_->setTestingScreenPositionsForCamera(0, make_screen_positions({
-                                                        10.0f,
-                                                        10.0f,
-                                                        20.0f,
-                                                        20.0f,
-                                                    }));
-    // Viewer-side positions too, so the seed pick can resolve a candidate at
-    // all. Without these the failure is merely "no positions", which would not
-    // distinguish a wrong-camera filter from an unseeded fixture.
-    service_->setTestingScreenPositions(make_screen_positions({
-        10.0f,
-        10.0f,
-        20.0f,
-        20.0f,
-    }));
+    // this test exists to prove. No command-camera screen-position stub either:
+    // the seed is picked from the real projector. splat0 origin projects to the
+    // principal point (50, 50); splat1 is off-axis so it cannot steal the pick.
+    // camera_index >= 0 never consults the viewer-side testing_screen_positions_
+    // hook, so that stub is omitted too.
 
     // CONTROL: with filtering off, the seed resolves and the colour selection
     // succeeds. This is what makes the assertion below non-vacuous - it proves
@@ -751,7 +789,7 @@ TEST_F(SelectionServiceInteractionsTest, ExplicitCameraColorSeedFiltersWithTheCo
     {
         lfs::vis::SelectionFilterState unfiltered;
         const auto control =
-            service_->selectByColorAt(10.0f, 10.0f, lfs::vis::SelectionMode::Replace, unfiltered, 0);
+            service_->selectByColorAt(50.0f, 50.0f, lfs::vis::SelectionMode::Replace, unfiltered, 0);
         ASSERT_TRUE(control.success) << "fixture cannot seed at all: " << control.error;
         ASSERT_FALSE(selection_values(*scene_manager_).empty());
     }
@@ -763,7 +801,7 @@ TEST_F(SelectionServiceInteractionsTest, ExplicitCameraColorSeedFiltersWithTheCo
     // pickHoveredGaussianIdFromScreenPositions), BEFORE commitSelection — which
     // is why a rect-only repair would leave this path wrong.
     // Under the command camera the band accepts splat0, so the seed must survive.
-    const auto result = service_->selectByColorAt(10.0f, 10.0f, lfs::vis::SelectionMode::Replace, filters, 0);
+    const auto result = service_->selectByColorAt(50.0f, 50.0f, lfs::vis::SelectionMode::Replace, filters, 0);
     ASSERT_TRUE(result.success) << "seed rejected by a filter using the wrong camera: " << result.error;
 
     EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
@@ -918,4 +956,72 @@ TEST_F(SelectionServiceInteractionsTest, ScreenPositionCacheIsNotSharedAcrossCon
     ASSERT_TRUE(second.success) << "error: " << second.error;
     EXPECT_TRUE(nothing_selected(*scene_manager_));
     service_->setTestingContainmentIntrinsics(std::nullopt);
+}
+
+TEST_F(SelectionServiceInteractionsTest, ExplicitCameraEquirectangularKeepsSplatBehindTheCamera) {
+    install_equirect_behind_camera_fixture(*scene_manager_);
+    const auto cameras_group = scene_manager_->getScene().addGroup("Cameras");
+    scene_manager_->getScene().addCamera(
+        "equirect.png", cameras_group,
+        make_x_axis_dataset_camera(lfs::core::CameraModelType::EQUIRECTANGULAR, "equirect.png"));
+    ASSERT_EQ(scene_manager_->getScene().getAllCameras().size(), 1u);
+
+    // Viewer stays pinhole: leaking settings.equirectangular into the explicit-
+    // camera snapshot would classify this as pinhole and drop splat0.
+    ASSERT_FALSE(rendering_manager_->getSettings().equirectangular);
+    arm_wide_full_frame_depth_window(*rendering_manager_);
+
+    // Real projector, no screen-position stub. Splat0 is directly behind the
+    // camera: vis = (0, 0, +10), vk = (0, 0, -10),
+    // px = (atan2(0, -1)/(2π) + 0.5)*100 = 100, py = 50 — the image edge.
+    // Splat1 is in front on-axis at px = 50, py = 50, depth 1010. A full-frame
+    // rect includes both so only the depth band can discriminate:
+    // {1, 0} equirect kept the behind-camera splat and band-rejected the far one
+    // {}     leaked the viewer's pinhole (behind-camera z-reject)
+    // {1, 1} depth filter did not run
+    const auto result = service_->selectRect(0.0f, 0.0f, 100.0f, 100.0f, lfs::vis::SelectionMode::Replace, 0);
+    ASSERT_TRUE(result.success) << "error: " << result.error;
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
+}
+
+TEST_F(SelectionServiceInteractionsTest, FilteredSelectAllAndInvertRequireProjectionOnlyWhenDepthFilterOn) {
+    starve_testing_viewport(*service_);
+
+    ASSERT_FALSE(rendering_manager_->getSettings().depth_filter_enabled);
+
+    const auto copy_id = scene_manager_->getScene().addSplat(
+        "copy",
+        make_test_splat({
+            2.0f,
+            0.0f,
+            0.0f,
+            3.0f,
+            0.0f,
+            0.0f,
+        }));
+    ASSERT_NE(copy_id, lfs::core::NULL_NODE);
+    scene_manager_->selectNodes({"copy"});
+    EXPECT_EQ(scene_manager_->getSelectedNodeMask(), (std::vector<bool>{false, true}));
+
+    const auto all = service_->selectAllFiltered();
+    ASSERT_TRUE(all.success) << "error: " << all.error;
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 0, 1, 1}));
+
+    set_initial_selection({0, 0, 1, 0});
+    const auto inverted = service_->invertFiltered();
+    ASSERT_TRUE(inverted.success) << "error: " << inverted.error;
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 0, 0, 1}));
+
+    auto settings = rendering_manager_->getSettings();
+    settings.depth_filter_enabled = true;
+    rendering_manager_->updateSettings(settings);
+
+    const auto all_fail = service_->selectAllFiltered();
+    EXPECT_FALSE(all_fail.success);
+    EXPECT_EQ(all_fail.error, "Invalid projection context");
+
+    const auto invert_fail = service_->invertFiltered();
+    EXPECT_FALSE(invert_fail.success);
+    EXPECT_EQ(invert_fail.error, "Invalid projection context");
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 0, 0, 1}));
 }

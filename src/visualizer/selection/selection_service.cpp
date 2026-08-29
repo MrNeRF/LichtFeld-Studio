@@ -104,6 +104,41 @@ namespace lfs::vis {
             return render_points;
         }
 
+        // CPU inverse/forward of filterSelectionByScreenWindowKernel's equirect
+        // branch. Not a fifth KEEP-IN-SYNC copy: used by the GT path and by the
+        // CPU fallback of projectGaussianScreenPositions.
+        constexpr float kEquirectPi = 3.14159265358979323846f;
+
+        [[nodiscard]] glm::vec3 equirectVisualizerDirectionFromRenderPixel(
+            const glm::vec2& render_point, const int width, const int height) {
+            const float lon =
+                (render_point.x / static_cast<float>(width) - 0.5f) * (2.0f * kEquirectPi);
+            const float lat =
+                (render_point.y / static_cast<float>(height) - 0.5f) * kEquirectPi;
+            const glm::vec3 vk_dir{
+                std::cos(lat) * std::sin(lon),
+                std::sin(lat),
+                std::cos(lat) * std::cos(lon),
+            };
+            return {vk_dir.x, -vk_dir.y, -vk_dir.z};
+        }
+
+        [[nodiscard]] std::optional<glm::vec2> equirectRenderPixelFromVisualizerView(
+            const glm::vec3& vis_view, const int width, const int height) {
+            const glm::vec3 vk{vis_view.x, -vis_view.y, -vis_view.z};
+            const float len = glm::length(vk);
+            if (len <= 1.0e-6f || !std::isfinite(len)) {
+                return std::nullopt;
+            }
+            const glm::vec3 dir = vk / len;
+            const float px =
+                (std::atan2(dir.x, dir.z) / (2.0f * kEquirectPi) + 0.5f) * static_cast<float>(width);
+            const float py =
+                (std::asin(std::clamp(dir.y, -1.0f, 1.0f)) / kEquirectPi + 0.5f) *
+                static_cast<float>(height);
+            return glm::vec2(px, py);
+        }
+
         void hashCombine(std::size_t& seed, const std::size_t value) {
             seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6u) + (seed >> 2u);
         }
@@ -583,7 +618,7 @@ namespace lfs::vis {
             };
             if (!std::isfinite(intrinsics.focal_x) || !std::isfinite(intrinsics.focal_y) ||
                 !std::isfinite(intrinsics.center_x) || !std::isfinite(intrinsics.center_y) ||
-                intrinsics.focal_x <= 0.0f) {
+                intrinsics.focal_x <= 0.0f || intrinsics.focal_y <= 0.0f) {
                 return std::nullopt;
             }
             return intrinsics;
@@ -782,8 +817,8 @@ namespace lfs::vis {
             const bool equirectangular,
             const rendering::GaussianSceneState& scene,
             const std::optional<rendering::CameraIntrinsics>& containment) {
-            if (equirectangular || viewport.size.x <= 0 || viewport.size.y <= 0 ||
-                (viewport.orthographic && viewport.ortho_scale <= 0.0f)) {
+            if (viewport.size.x <= 0 || viewport.size.y <= 0 ||
+                (!equirectangular && viewport.orthographic && viewport.ortho_scale <= 0.0f)) {
                 return nullptr;
             }
 
@@ -858,6 +893,11 @@ namespace lfs::vis {
                             viewport.translation.y,
                             viewport.translation.z,
                         };
+                        const auto camera_model = equirectangular
+                                                      ? rendering::ScreenWindowCameraModel::Equirectangular
+                                                  : viewport.orthographic
+                                                      ? rendering::ScreenWindowCameraModel::Orthographic
+                                                      : rendering::ScreenWindowCameraModel::Pinhole;
 
                         return std::make_shared<core::Tensor>(
                             rendering::project_screen_positions_tensor(
@@ -870,7 +910,7 @@ namespace lfs::vis {
                                 fy,
                                 center_x,
                                 center_y,
-                                viewport.orthographic,
+                                camera_model,
                                 viewport.ortho_scale,
                                 model_transforms_ptr,
                                 transform_indices_ptr,
@@ -922,6 +962,19 @@ namespace lfs::vis {
                             std::clamp(transform_index, 0, static_cast<int>(transforms.size()) - 1);
                         world_point = glm::vec3(
                             transforms[static_cast<size_t>(clamped_index)] * glm::vec4(world_point, 1.0f));
+                    }
+
+                    if (equirectangular) {
+                        const glm::vec3 view =
+                            glm::transpose(viewport.rotation) * (world_point - viewport.translation);
+                        const auto projected = equirectRenderPixelFromVisualizerView(
+                            view, viewport.size.x, viewport.size.y);
+                        if (!projected || !std::isfinite(projected->x) || !std::isfinite(projected->y)) {
+                            continue;
+                        }
+                        positions[i * 2] = projected->x;
+                        positions[i * 2 + 1] = projected->y;
+                        continue;
                     }
 
                     const auto projected = rendering::projectWorldPoint(
@@ -1716,12 +1769,12 @@ namespace lfs::vis {
             if (scene_manager_) {
                 const auto cameras = scene_manager_->getScene().getAllCameras();
                 if (camera_index < static_cast<int>(cameras.size()) && cameras[camera_index]) {
-                    const auto settings = rendering_manager_->getSettings();
                     SelectionProjectionContext projection_context;
                     projection_context.viewport = viewportDataFromCamera(*cameras[camera_index]);
                     projection_context.containment_intrinsics = containmentIntrinsicsFromCamera(
                         *cameras[camera_index], projection_context.viewport.size);
-                    projection_context.equirectangular = settings.equirectangular;
+                    projection_context.equirectangular =
+                        cameras[camera_index]->camera_model_type() == core::CameraModelType::EQUIRECTANGULAR;
                     projection_context.far_plane = lfs::rendering::DEFAULT_FAR_PLANE;
                     if (projection_context.valid()) {
                         return projection_context;
@@ -3447,6 +3500,25 @@ namespace lfs::vis {
         const auto render_point = screenToRender(screen_point, info);
 
         if (const auto gt = rendering_manager_->gtComparisonSelectionContext()) {
+            // Equirect GT has empty intrinsics by construction (split_view_service.cpp:78-103).
+            // Falling through would unproject through the interactive camera — the path the
+            // STOP-3 comment below forbids. Inverse of filterSelectionByScreenWindowKernel.
+            if (gt->camera.equirectangular) {
+                projection_viewport.camera.R = gt->camera.rotation;
+                projection_viewport.camera.t = gt->camera.translation;
+
+                const float pivot_distance = glm::length(projection_viewport.camera.pivot - projection_viewport.camera.t);
+                const float fallback_distance = pivot_distance > 0.1f ? pivot_distance : 10.0f;
+                const glm::vec3 vis_dir = equirectVisualizerDirectionFromRenderPixel(
+                    render_point, info.render_width, info.render_height);
+                const glm::vec3 world =
+                    projection_viewport.camera.R * (vis_dir * fallback_distance) + projection_viewport.camera.t;
+                if (Viewport::isValidWorldPosition(world)) {
+                    return world;
+                }
+                const glm::vec3 forward = rendering::cameraForward(projection_viewport.camera.R);
+                return projection_viewport.camera.t + forward * fallback_distance;
+            }
             if (gt->camera.intrinsics) {
                 projection_viewport.camera.R = gt->camera.rotation;
                 projection_viewport.camera.t = gt->camera.translation;
@@ -3529,6 +3601,21 @@ namespace lfs::vis {
         const float ortho_scale = effectiveOrthoScale(projection_viewport, settings);
 
         if (const auto gt = rendering_manager_->gtComparisonSelectionContext()) {
+            // Forward of filterSelectionByScreenWindowKernel's equirect branch. Must
+            // not fall through to projectWorldPoint's interactive-camera pinhole.
+            if (gt->camera.equirectangular) {
+                const glm::vec3 view =
+                    glm::transpose(gt->camera.rotation) * (world_point - gt->camera.translation);
+                const auto projected = equirectRenderPixelFromVisualizerView(
+                    view, info.render_width, info.render_height);
+                if (!projected) {
+                    return std::nullopt;
+                }
+                const float scale_x = info.width / static_cast<float>(std::max(info.render_width, 1));
+                const float scale_y = info.height / static_cast<float>(std::max(info.render_height, 1));
+                return glm::vec2(info.x + projected->x * scale_x,
+                                 info.y + projected->y * scale_y);
+            }
             if (gt->camera.intrinsics) {
                 const glm::vec3 view = glm::transpose(gt->camera.rotation) * (world_point - gt->camera.translation);
                 if (!lfs::rendering::isFiniteVec3(view) || view.z >= -1e-6f) {
