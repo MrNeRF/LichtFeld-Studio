@@ -1,6 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  *
- * SPDX-License-Identifier: GPL-3.0-or-later */
+ * SPDX-License-Identifier: MIT */
 
 #include "rendering/scene_upscaler_plugin_api.h"
 
@@ -312,7 +312,7 @@ namespace {
                                                            parameters_,
                                                            &create);
             if (NVSDK_NGX_FAILED(result) || view.feature == nullptr) {
-                view = {};
+                releaseFeatureLocked(view);
                 return fail(LFS_SCENE_UPSCALER_PLUGIN_RUNTIME_ERROR,
                             ngxFailure("creating DLSS feature", result));
             }
@@ -436,9 +436,8 @@ namespace {
                                              const bool writable) noexcept {
             const bool valid_layout = writable
                                           ? image.layout == VK_IMAGE_LAYOUT_GENERAL
-                                          : (image.layout ==
-                                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL ||
-                                             image.layout == VK_IMAGE_LAYOUT_GENERAL);
+                                          : image.layout ==
+                                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             return image.struct_size >= sizeof(LfsSceneUpscalerImageV1) &&
                    image.image != VK_NULL_HANDLE && image.view != VK_NULL_HANDLE &&
                    valid_layout &&
