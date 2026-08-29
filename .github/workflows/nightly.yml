@@ -239,7 +239,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $buildDir = $env:BUILD_DIR
-          $cmakeArgs = "-B $buildDir -S . -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_PORTABLE=ON -DBUILD_PYTHON_STUBS=OFF -DLFS_NVIDIA_DLSS_ROOT=external/nvidia-dlss-sdk"
+          $cmakeArgs = "-B $buildDir -S . -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_PORTABLE=ON -DBUILD_PYTHON_STUBS=OFF -DLFS_ENABLE_NVIDIA_DLSS=ON -DLFS_NVIDIA_DLSS_ROOT=external/nvidia-dlss-sdk"
           $retryablePatterns = @(
             'status code 5\d\d',
             'timed out',

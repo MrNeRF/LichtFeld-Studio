@@ -139,9 +139,10 @@ cmake -S . -B build -DLFS_ENABLE_NVIDIA_DLSS=ON -DLFS_NVIDIA_DLSS_ROOT=/path/to/
 ```
 
 Both Debug and Release SDK runtimes are supported in ordinary opt-in developer
-builds. Portable configurations force `LFS_ENABLE_NVIDIA_DLSS=ON` and therefore
-require the SDK at `external/nvidia-dlss-sdk` unless `LFS_NVIDIA_DLSS_ROOT` is
-set explicitly.
+builds. Portable configurations default `LFS_ENABLE_NVIDIA_DLSS=ON` and
+therefore require the SDK at `external/nvidia-dlss-sdk` unless
+`LFS_NVIDIA_DLSS_ROOT` is set explicitly. Pass `-DLFS_ENABLE_NVIDIA_DLSS=OFF`
+to build a portable package without the plugin.
 CMake never downloads the SDK or accepts its license for a developer build.
 Anyone redistributing a portable package must satisfy NVIDIA's SDK and runtime
 redistribution terms.

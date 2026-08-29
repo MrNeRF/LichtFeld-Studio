@@ -4,6 +4,15 @@
 
 include_guard(GLOBAL)
 
+# Inspect the cache before option() creates LFS_ENABLE_NVIDIA_DLSS. Portable
+# builds default the plugin ON so nightlies still ship it; an explicit
+# command-line/cache value (including OFF) always wins. Ordinary developer
+# builds remain opt-in.
+if(BUILD_PORTABLE AND NOT DEFINED CACHE{LFS_ENABLE_NVIDIA_DLSS})
+    set(LFS_ENABLE_NVIDIA_DLSS ON CACHE BOOL
+        "Build the optional external NVIDIA DLSS scene-reconstruction plugin")
+endif()
+
 option(LFS_ENABLE_NVIDIA_DLSS
     "Build the optional external NVIDIA DLSS scene-reconstruction plugin"
     OFF)
@@ -11,15 +20,9 @@ set(LFS_NVIDIA_DLSS_ROOT "" CACHE PATH
     "Path to an NVIDIA DLSS SDK checkout; the SDK is never fetched by CMake")
 set(_lfs_nvidia_dlss_download_url "https://github.com/NVIDIA/DLSS")
 
-# Portable packages have a controlled dependency checkout and always include
-# the optional plugin. Ordinary developer builds remain opt-in.
-if(BUILD_PORTABLE)
-    set(LFS_ENABLE_NVIDIA_DLSS ON CACHE BOOL
-        "Build the optional external NVIDIA DLSS scene-reconstruction plugin" FORCE)
-    if(NOT LFS_NVIDIA_DLSS_ROOT)
-        set(LFS_NVIDIA_DLSS_ROOT "${CMAKE_SOURCE_DIR}/external/nvidia-dlss-sdk"
-            CACHE PATH "Path to an NVIDIA DLSS SDK checkout" FORCE)
-    endif()
+if(BUILD_PORTABLE AND LFS_ENABLE_NVIDIA_DLSS AND NOT LFS_NVIDIA_DLSS_ROOT)
+    set(LFS_NVIDIA_DLSS_ROOT "${CMAKE_SOURCE_DIR}/external/nvidia-dlss-sdk"
+        CACHE PATH "Path to an NVIDIA DLSS SDK checkout" FORCE)
 endif()
 
 if(NOT LFS_ENABLE_NVIDIA_DLSS)

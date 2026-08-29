@@ -71,7 +71,15 @@ cmake --build build -j 16
 
 Creates a self-contained package that works on any machine with an NVIDIA driver.
 
+Portable builds include the optional NVIDIA DLSS scene-reconstruction plugin by
+default and therefore need an NVIDIA DLSS SDK checkout (including Git LFS
+objects), typically at `external/nvidia-dlss-sdk`, or an explicit
+`-DLFS_NVIDIA_DLSS_ROOT=` path. CMake never downloads the SDK or accepts its
+license. Opt out with `-DLFS_ENABLE_NVIDIA_DLSS=OFF` if you want a portable
+package without that backend.
+
 ```bash
+git clone https://github.com/NVIDIA/DLSS external/nvidia-dlss-sdk
 cmake -B build -DBUILD_PORTABLE=ON
 cmake --build build -j 16
 cmake --install build --prefix ./dist
@@ -80,6 +88,9 @@ cmake --install build --prefix ./dist
 
 # Example training run
 ./dist/bin/run_lichtfeld.sh -d /path/to/data -o /path/to/output
+
+# Portable package without the NVIDIA plugin:
+# cmake -B build -DBUILD_PORTABLE=ON -DLFS_ENABLE_NVIDIA_DLSS=OFF
 ```
 
 ## Tests
@@ -201,19 +212,22 @@ dist/
 | `BUILD_LOCALIZATION_TESTS` | OFF | Register headless localization contract tests |
 | `LFS_ENFORCE_LINUX_GUI_BACKENDS` | ON | Linux only. Fail configure if SDL3 would be built without both X11 and Wayland |
 | `LFS_CUDA_COMPILER_CACHE` | *(empty)* | Compiler cache for CUDA only. Empty follows the auto-detected launcher; `OFF` disables CUDA caching; or name/path of a launcher such as `ccache`. Needed where nvcc cannot be wrapped by sccache |
-| `LFS_ENABLE_NVIDIA_DLSS` | OFF | Build the optional external NVIDIA DLSS viewport plugin; portable builds force this on |
+| `LFS_ENABLE_NVIDIA_DLSS` | OFF | Build the optional external NVIDIA DLSS viewport plugin; portable builds default this ON (override with `-DLFS_ENABLE_NVIDIA_DLSS=OFF`) |
 | `LFS_NVIDIA_DLSS_ROOT` | *(empty)* | Path to an NVIDIA DLSS SDK checkout supplied separately; required when the plugin is enabled |
 
 The DLSS option builds a separate plugin under `scene_upscalers/nvidia`; the
 main executable and `lfs_visualizer` do not link to NGX. The plugin is opened
 from that application-owned path during Vulkan bootstrap only to query required
 extensions. NGX runtime initialization and GPU feature resources remain lazy
-until DLSS is selected. Portable builds require an SDK checkout and package the
-corresponding vendor runtime subject to NVIDIA's redistribution terms.
-The official SDK repository is [NVIDIA/DLSS](https://github.com/NVIDIA/DLSS).
+until DLSS is selected. Portable builds default the plugin on, require an SDK
+checkout in that case, and package the corresponding vendor runtime subject to
+NVIDIA's redistribution terms. Pass `-DLFS_ENABLE_NVIDIA_DLSS=OFF` to skip the
+plugin and the SDK. The official SDK repository is
+[NVIDIA/DLSS](https://github.com/NVIDIA/DLSS).
 Ordinary builds skip the plugin when `LFS_ENABLE_NVIDIA_DLSS=OFF`. When it is
-explicitly enabled, a missing or incomplete SDK is a configuration error rather
-than silently producing a build without the requested backend.
+enabled (explicitly, or by the portable default), a missing or incomplete SDK
+is a configuration error rather than silently producing a build without the
+requested backend.
 
 ## Preprocess Model Downloads
 

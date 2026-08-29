@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 #
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 
 add_library(lfs_scene_upscaler_nvidia_dlss SHARED
     nvidia_dlss_plugin.cpp)
@@ -16,12 +16,16 @@ target_link_libraries(lfs_scene_upscaler_nvidia_dlss PRIVATE
     Threads::Threads
     ${CMAKE_DL_LIBS})
 
+# Stage next to the exe so the loader's <exe>/scene_upscalers/nvidia probe hits
+# both single-config (build/) and multi-config (build/$<CONFIG>/) layouts.
+# TARGET_FILE_DIR already includes the per-config dir; the genex also suppresses
+# CMake's extra $<CONFIG> append on OUTPUT_DIRECTORY.
 set_target_properties(lfs_scene_upscaler_nvidia_dlss PROPERTIES
     OUTPUT_NAME "lfs_scene_upscaler_nvidia_dlss"
     CXX_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN YES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/scene_upscalers/nvidia/$<0:>"
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/scene_upscalers/nvidia/$<0:>")
+    RUNTIME_OUTPUT_DIRECTORY "$<TARGET_FILE_DIR:LichtFeld-Studio>/scene_upscalers/nvidia"
+    LIBRARY_OUTPUT_DIRECTORY "$<TARGET_FILE_DIR:LichtFeld-Studio>/scene_upscalers/nvidia")
 
 set(_lfs_dlss_runtime
     "$<IF:$<CONFIG:Debug>,${LFS_NVIDIA_DLSS_RUNTIME_DEBUG},${LFS_NVIDIA_DLSS_RUNTIME_RELEASE}>")
@@ -35,7 +39,8 @@ include(GNUInstallDirs)
 if(WIN32)
     set(_lfs_dlss_install_dir "${CMAKE_INSTALL_BINDIR}/scene_upscalers/nvidia")
 else()
-    set(_lfs_dlss_install_dir "${CMAKE_INSTALL_LIBDIR}/scene_upscalers/nvidia")
+    # Loader contract: probe <exe>/scene_upscalers/nvidia and <exe-adjacent lib>/scene_upscalers/nvidia (getLibDir() is hard-coded to lib, not GNUInstallDirs).
+    set(_lfs_dlss_install_dir "lib/scene_upscalers/nvidia")
 endif()
 install(TARGETS lfs_scene_upscaler_nvidia_dlss
     RUNTIME DESTINATION "${_lfs_dlss_install_dir}"

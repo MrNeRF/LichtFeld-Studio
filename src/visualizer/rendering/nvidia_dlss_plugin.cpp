@@ -13,8 +13,10 @@
 #include <cstring>
 #include <format>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <system_error>
+#include <thread>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -124,6 +126,21 @@ namespace lfs::vis {
         std::optional<OptimalSettingsCache> optimal_settings_cache;
         bool loading_enabled = true;
         bool runtime_initialized = false;
+        std::optional<std::thread::id> ngx_thread_id;
+        bool ngx_thread_mismatch_warned = false;
+
+        void noteNgxCallerThreadLocked() {
+            const auto thread_id = std::this_thread::get_id();
+            if (!ngx_thread_id) {
+                ngx_thread_id = thread_id;
+                return;
+            }
+            if (*ngx_thread_id != thread_id && !ngx_thread_mismatch_warned) {
+                ngx_thread_mismatch_warned = true;
+                LOG_WARN("NVIDIA NGX called from a different thread than the first "
+                         "initializeRuntime/evaluate/createFeature caller; NGX is not thread-safe");
+            }
+        }
 
         [[nodiscard]] std::string pluginErrorLocked() const {
             constexpr std::size_t MAX_ERROR_SIZE = 64 * 1024;
@@ -366,6 +383,7 @@ namespace lfs::vis {
 
     bool NvidiaDlssPlugin::initializeRuntime(const LfsSceneUpscalerRuntimeConfigV1& config) {
         std::scoped_lock lock(impl_->mutex);
+        impl_->noteNgxCallerThreadLocked();
         if (!impl_->probeLocked())
             return false;
         if (impl_->runtime_initialized)
@@ -438,6 +456,7 @@ namespace lfs::vis {
         const VkCommandBuffer command_buffer,
         const LfsSceneUpscalerFeatureConfigV1& config) {
         std::scoped_lock lock(impl_->mutex);
+        impl_->noteNgxCallerThreadLocked();
         if (!impl_->runtime_initialized)
             return false;
         if (impl_->api->create_feature(impl_->plugin, command_buffer, &config) !=
@@ -450,6 +469,7 @@ namespace lfs::vis {
 
     bool NvidiaDlssPlugin::evaluate(const LfsSceneUpscalerEvaluateV1& evaluation) {
         std::scoped_lock lock(impl_->mutex);
+        impl_->noteNgxCallerThreadLocked();
         if (!impl_->runtime_initialized)
             return false;
         if (impl_->api->evaluate(impl_->plugin, &evaluation) !=
