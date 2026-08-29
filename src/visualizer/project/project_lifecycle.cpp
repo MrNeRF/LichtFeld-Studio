@@ -2028,6 +2028,13 @@ namespace lfs::vis::project {
     }
 
     namespace {
+        [[nodiscard]] bool isStaleAutosaveBasePublicationError(
+            const std::string& formatted) {
+            return formatted.find(
+                       "The autosave base changed before publication.") !=
+                   std::string::npos;
+        }
+
         [[nodiscard]] bool documentMatchesOpenedHead(
             const lfs::io::project::ProjectDocument& current,
             const lfs::io::project::ProjectDocument& opened) {
@@ -3729,6 +3736,14 @@ namespace lfs::vis::project {
             !adopted) {
             return adopted;
         }
+        // Sidecar publication re-opens the master and
+        // rejects a stale base commit. Explicit save
+        // already rebases; light autosave must too.
+        if (auto rebased =
+                ensureDocumentMatchesBoundMaster();
+            !rebased) {
+            return rebased;
+        }
         const auto hydration = hydration_.load(
             std::memory_order_acquire);
         if (hydration != Hydration::Empty &&
@@ -4406,6 +4421,16 @@ namespace lfs::vis::project {
                 LOG_INFO(
                     "Project background write canceled: {}",
                     error);
+            } else if (
+                was_autosave &&
+                isStaleAutosaveBasePublicationError(
+                    error)) {
+                // Trainer step-boundary publish can advance
+                // the on-disk master after this sidecar was
+                // bound. The next autosave rebases and retries.
+                LOG_INFO(
+                    "Autosave skipped because the master moved: {}",
+                    error);
             } else {
                 LOG_ERROR(
                     "Project background write failed: {}",
@@ -4417,7 +4442,9 @@ namespace lfs::vis::project {
                     error,
                     gui::error_op::kSave);
             }
-            if (was_autosave) {
+            if (was_autosave &&
+                !isStaleAutosaveBasePublicationError(
+                    error)) {
                 scheduleAutosaveFailureBackoff();
             }
         }
@@ -4674,6 +4701,8 @@ namespace lfs::vis::project {
         }
         const auto metrics =
             trainer->get_project_snapshot_metrics();
+        resetAdoptedSnapshotCountOnServiceRestart(
+            metrics.capture.completed_snapshots);
         if (metrics.writer_in_flight ||
             metrics.last_path.empty()) {
             return {};
@@ -4762,6 +4791,18 @@ namespace lfs::vis::project {
         return {};
     }
 
+    void ProjectLifecycle::
+        resetAdoptedSnapshotCountOnServiceRestart(
+            const std::uint64_t completed_snapshots) {
+        // A new trainer / snapshot service starts this
+        // counter at 0. Comparing it with a previous
+        // run's adopted count skips the new head.
+        if (completed_snapshots <
+            adopted_training_snapshot_count_) {
+            adopted_training_snapshot_count_ = 0;
+        }
+    }
+
     lfs::Result<void>
     ProjectLifecycle::
         adoptSettledTrainerPublishOntoCurrentMaster() {
@@ -4776,6 +4817,8 @@ namespace lfs::vis::project {
         }
         const auto metrics =
             trainer->get_project_snapshot_metrics();
+        resetAdoptedSnapshotCountOnServiceRestart(
+            metrics.capture.completed_snapshots);
         if (metrics.writer_in_flight ||
             metrics.last_path.empty() ||
             !metrics.last_writer_error.empty()) {

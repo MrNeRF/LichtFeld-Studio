@@ -189,6 +189,15 @@ EXPECTED_NUMBER_ROWS = {
         0.1,
         False,
     ),
+    "exposure_correction_grid_start_iter": (
+        "training_params.exposure_correction_grid_start",
+        "training.tooltip.exposure_correction_grid_start",
+        0,
+        100,
+        0,
+        100000,
+        True,
+    ),
     "mask_opacity_penalty_weight": (
         "training.masking.penalty_weight",
         "training.tooltip.penalty_weight",
@@ -373,6 +382,10 @@ EXPECTED_NUMBER_ROWS = {
 
 
 EXPECTED_CHECKBOX_ROWS = {
+    "use_exposure_correction": (
+        "training_params.exposure_correction",
+        "training.tooltip.exposure_correction",
+    ),
     "use_bilateral_grid": (
         "training_params.bilateral_grid",
         "training.tooltip.bilateral_grid",
@@ -481,6 +494,10 @@ EXPECTED_ADVANCED_IDS = (
     "means_noise_weight",
     "bounds_percentile",
     "use_error_map",
+    "densify_error_map",
+    "max_screen_share",
+    "screen_share_penalty",
+    "oversize_split_fraction",
     "use_edge_map",
     "far_scene_min_fraction",
     "growth_ratio_rank",
@@ -514,13 +531,13 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     assert property_view.NUMBER_PROPS == tuple(EXPECTED_NUMBER_ROWS)
     assert property_view.BOOL_PROPS == tuple(EXPECTED_CHECKBOX_ROWS)
     assert property_view.SELECT_PROPS == tuple(EXPECTED_SELECT_ROWS)
-    assert len(property_view.MIGRATED_PROP_IDS) == 59
-    assert len(set(property_view.MIGRATED_PROP_IDS)) == 59
+    assert len(property_view.MIGRATED_PROP_IDS) == 61
+    assert len(set(property_view.MIGRATED_PROP_IDS)) == 61
 
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(rendered) == len(set(rendered)) == 79
+    assert len(rendered) == len(set(rendered)) == 84
     assert set(rendered) == (
         set(property_view.MIGRATED_PROP_IDS) | set(EXPECTED_ADVANCED_IDS)
     ) - set(property_view.BESPOKE_OR_HIDDEN)
@@ -666,7 +683,7 @@ def test_ppisp_advanced_declarations_are_exact(lf):
             5,
             0.0001,
             0.0,
-            0.1,
+            2.0,
             False,
         ),
         "ppisp_warmup_steps": (
@@ -727,7 +744,13 @@ def test_checkbox_and_select_rows_match_registry_declarations(lf):
         assert row["kind"] == "checkbox"
         assert row["label_key"] == label
         assert row["tooltip_key"] == tooltip
-        if prop_id in {"use_bilateral_grid", "random", "undistort", "background_improvements"}:
+        if prop_id in {
+            "use_exposure_correction",
+            "use_bilateral_grid",
+            "random",
+            "undistort",
+            "background_improvements",
+        }:
             assert params.prop_info(prop_id)["needs_restart"] is True
 
     for prop_id, (label, tooltip, expected_items) in EXPECTED_SELECT_ROWS.items():

@@ -270,14 +270,9 @@ namespace lfs::training::kernels {
         }
     }
 
-    // Adam update kernel
-    __global__ void ppisp_adam_update_kernel(float* params, float* exp_avg, float* exp_avg_sq, const float* grad,
-                                             int num_elements, float lr, float beta1, float beta2, float bc1_rcp,
-                                             float bc2_sqrt_rcp, float eps) {
-        int idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx >= num_elements)
-            return;
-
+    __device__ __forceinline__ void ppisp_adam_one(float* params, float* exp_avg, float* exp_avg_sq,
+                                                   const float* grad, int idx, float lr, float beta1,
+                                                   float beta2, float bc1_rcp, float bc2_sqrt_rcp, float eps) {
         const bool valid_param = isfinite(params[idx]);
         const float parameter = valid_param ? params[idx] : 0.0f;
         const float g = valid_param && isfinite(grad[idx]) ? grad[idx] : 0.0f;
@@ -301,6 +296,141 @@ namespace lfs::training::kernels {
             params[idx] = parameter;
             exp_avg[idx] = 0.0f;
             exp_avg_sq[idx] = 0.0f;
+        }
+    }
+
+    // Adam update kernel
+    __global__ void ppisp_adam_update_kernel(float* params, float* exp_avg, float* exp_avg_sq, const float* grad,
+                                             int num_elements, float lr, float beta1, float beta2, float bc1_rcp,
+                                             float bc2_sqrt_rcp, float eps) {
+        int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= num_elements)
+            return;
+        ppisp_adam_one(params, exp_avg, exp_avg_sq, grad, idx, lr, beta1, beta2, bc1_rcp, bc2_sqrt_rcp, eps);
+    }
+
+    __global__ void ppisp_adam_update_batched_kernel(PPISPAdamGroup g0, PPISPAdamGroup g1, PPISPAdamGroup g2,
+                                                     PPISPAdamGroup g3, float lr, float beta1, float beta2,
+                                                     float bc1_rcp, float bc2_sqrt_rcp, float eps) {
+        const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        const int n0 = g0.n > 0 ? g0.n : 0;
+        const int n1 = g1.n > 0 ? g1.n : 0;
+        const int n2 = g2.n > 0 ? g2.n : 0;
+        const int n3 = g3.n > 0 ? g3.n : 0;
+        const int t01 = n0 + n1;
+        const int t012 = t01 + n2;
+        const int total = t012 + n3;
+        if (idx >= total)
+            return;
+        if (idx < n0) {
+            ppisp_adam_one(g0.params, g0.exp_avg, g0.exp_avg_sq, g0.grad, idx, lr, beta1, beta2, bc1_rcp,
+                           bc2_sqrt_rcp, eps);
+        } else if (idx < t01) {
+            ppisp_adam_one(g1.params, g1.exp_avg, g1.exp_avg_sq, g1.grad, idx - n0, lr, beta1, beta2, bc1_rcp,
+                           bc2_sqrt_rcp, eps);
+        } else if (idx < t012) {
+            ppisp_adam_one(g2.params, g2.exp_avg, g2.exp_avg_sq, g2.grad, idx - t01, lr, beta1, beta2, bc1_rcp,
+                           bc2_sqrt_rcp, eps);
+        } else {
+            ppisp_adam_one(g3.params, g3.exp_avg, g3.exp_avg_sq, g3.grad, idx - t012, lr, beta1, beta2, bc1_rcp,
+                           bc2_sqrt_rcp, eps);
+        }
+    }
+
+    // One thread owns one camera's 15 vignetting params so grad += needs no atomics.
+    __global__ void ppisp_vignetting_reg_kernel(const float* __restrict__ vig, float* __restrict__ grad,
+                                                float* __restrict__ loss, int num_cameras, float w_center,
+                                                float w_channel, float w_non_pos) {
+        using BlockReduce = cub::BlockReduce<float, PPISP_BLOCK_SIZE>;
+        __shared__ typename BlockReduce::TempStorage temp;
+
+        float local_loss = 0.0f;
+        const int cam = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+        if (cam < num_cameras) {
+            const float* p = vig + static_cast<size_t>(cam) * 15;
+            float* g = grad ? grad + static_cast<size_t>(cam) * 15 : nullptr;
+            const float inv_center = 1.0f / static_cast<float>(num_cameras * 3);
+            const float inv_non_pos = 1.0f / static_cast<float>(num_cameras * 3 * 3);
+            const float inv_channel = 1.0f / static_cast<float>(num_cameras * 5 * 3);
+
+            if (w_center != 0.0f) {
+                const float s = w_center * 2.0f * inv_center;
+                for (int ch = 0; ch < 3; ++ch) {
+                    const float cx = p[ch * 5 + 0];
+                    const float cy = p[ch * 5 + 1];
+                    local_loss += w_center * (cx * cx + cy * cy) * inv_center;
+                    if (g) {
+                        g[ch * 5 + 0] += s * cx;
+                        g[ch * 5 + 1] += s * cy;
+                    }
+                }
+            }
+            if (w_non_pos != 0.0f) {
+                for (int ch = 0; ch < 3; ++ch) {
+                    for (int a = 0; a < 3; ++a) {
+                        const float alpha = p[ch * 5 + 2 + a];
+                        if (alpha > 0.0f) {
+                            local_loss += w_non_pos * alpha * inv_non_pos;
+                            if (g)
+                                g[ch * 5 + 2 + a] += w_non_pos * inv_non_pos;
+                        }
+                    }
+                }
+            }
+            if (w_channel != 0.0f) {
+                const float s = w_channel * 2.0f * inv_channel;
+                for (int param = 0; param < 5; ++param) {
+                    float vals[3];
+                    float mean = 0.0f;
+                    for (int ch = 0; ch < 3; ++ch) {
+                        vals[ch] = p[ch * 5 + param];
+                        mean += vals[ch];
+                    }
+                    mean /= 3.0f;
+                    for (int ch = 0; ch < 3; ++ch) {
+                        const float diff = vals[ch] - mean;
+                        local_loss += w_channel * diff * diff * inv_channel;
+                        if (g)
+                            g[ch * 5 + param] += s * diff;
+                    }
+                }
+            }
+        }
+
+        const float block_loss = BlockReduce(temp).Sum(local_loss);
+        if (loss && threadIdx.x == 0 && block_loss != 0.0f)
+            atomicAdd(loss, block_loss);
+    }
+
+    __global__ void ppisp_project_mean_kernel(float* __restrict__ exposure, float* __restrict__ color, int n) {
+        using BlockReduce = cub::BlockReduce<float, PPISP_BLOCK_SIZE>;
+        __shared__ typename BlockReduce::TempStorage temp;
+        __shared__ float smean;
+        __shared__ float col_mean[8];
+
+        if (blockIdx.x == 0) {
+            float local = 0.0f;
+            for (int i = static_cast<int>(threadIdx.x); i < n; i += PPISP_BLOCK_SIZE)
+                local += exposure[i];
+            const float sum = BlockReduce(temp).Sum(local);
+            if (threadIdx.x == 0)
+                smean = n > 0 ? sum / static_cast<float>(n) : 0.0f;
+            __syncthreads();
+            const float mean = smean;
+            for (int i = static_cast<int>(threadIdx.x); i < n; i += PPISP_BLOCK_SIZE)
+                exposure[i] -= mean;
+        } else {
+            for (int c = 0; c < 8; ++c) {
+                float local = 0.0f;
+                for (int f = static_cast<int>(threadIdx.x); f < n; f += PPISP_BLOCK_SIZE)
+                    local += color[f * 8 + c];
+                const float sum = BlockReduce(temp).Sum(local);
+                if (threadIdx.x == 0)
+                    col_mean[c] = n > 0 ? sum / static_cast<float>(n) : 0.0f;
+                __syncthreads();
+            }
+            for (int i = static_cast<int>(threadIdx.x); i < n * 8; i += PPISP_BLOCK_SIZE)
+                color[i] -= col_mean[i % 8];
         }
     }
 
@@ -421,6 +551,45 @@ namespace lfs::training::kernels {
                                                                  beta1, beta2, bc1_rcp, bc2_sqrt_rcp, eps);
 
         LFS_CUDA_CHECK_MSG(cudaGetLastError(), "PPISP Adam update kernel launch failed");
+    }
+
+    void launch_ppisp_adam_update_batched(PPISPAdamGroup exposure, PPISPAdamGroup vignetting, PPISPAdamGroup color,
+                                          PPISPAdamGroup crf, float lr, float beta1, float beta2, float bc1_rcp,
+                                          float bc2_sqrt_rcp, float eps, cudaStream_t stream) {
+        const int n0 = exposure.n > 0 ? exposure.n : 0;
+        const int n1 = vignetting.n > 0 ? vignetting.n : 0;
+        const int n2 = color.n > 0 ? color.n : 0;
+        const int n3 = crf.n > 0 ? crf.n : 0;
+        const int total = n0 + n1 + n2 + n3;
+        if (total <= 0)
+            return;
+        stream = resolve_stream(stream);
+        const int threads = PPISP_BLOCK_SIZE;
+        const int blocks = divUp(total, threads);
+        ppisp_adam_update_batched_kernel<<<blocks, threads, 0, stream>>>(
+            exposure, vignetting, color, crf, lr, beta1, beta2, bc1_rcp, bc2_sqrt_rcp, eps);
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "PPISP batched Adam update kernel launch failed");
+    }
+
+    void launch_ppisp_vignetting_reg(const float* vignetting_params, float* vignetting_grad, float* loss,
+                                     int num_cameras, float vig_center, float vig_channel, float vig_non_pos,
+                                     cudaStream_t stream) {
+        if (num_cameras <= 0)
+            return;
+        stream = resolve_stream(stream);
+        const int threads = PPISP_BLOCK_SIZE;
+        const int blocks = divUp(num_cameras, threads);
+        ppisp_vignetting_reg_kernel<<<blocks, threads, 0, stream>>>(
+            vignetting_params, vignetting_grad, loss, num_cameras, vig_center, vig_channel, vig_non_pos);
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "PPISP vignetting reg kernel launch failed");
+    }
+
+    void launch_ppisp_project_mean(float* exposure_params, float* color_params, int num_frames, cudaStream_t stream) {
+        if (num_frames <= 0)
+            return;
+        stream = resolve_stream(stream);
+        ppisp_project_mean_kernel<<<2, PPISP_BLOCK_SIZE, 0, stream>>>(exposure_params, color_params, num_frames);
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "PPISP project_mean kernel launch failed");
     }
 
     void launch_ppisp_init_identity(float* exposure, float* vignetting, float* color, float* crf, int num_cameras,

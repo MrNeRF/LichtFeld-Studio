@@ -6,6 +6,7 @@
 #include "lfs/core/memory_ops.cuh"
 #include "lfs/core/warp_reduce.cuh"
 #include "lfs/kernels/bilateral_grid.cuh"
+#include <cassert>
 #include <cuda_runtime.h>
 
 #include "kernel_stream.hpp"
@@ -24,9 +25,9 @@ namespace lfs::training::kernels {
      * - Each block writes one partial sum
      */
     __global__ void bilateral_grid_tv_forward_stage1_kernel(
-        const float* __restrict__ grids, // [N,12,L,H,W]
+        const float* __restrict__ grids, // [N,C,L,H,W]
         float* __restrict__ partial_sums,
-        int N, int L, int H, int W) {
+        int N, int C, int L, int H, int W, int norm_n) {
 
         int tid = blockIdx.x * blockDim.x + threadIdx.x;
         int stride = gridDim.x * blockDim.x;
@@ -46,10 +47,8 @@ namespace lfs::training::kernels {
             tmp /= L;
             int ni = tmp;
 
-            // Process all 12 channels with unrolling
-#pragma unroll 12
-            for (int ci = 0; ci < 12; ci++) {
-                int base = (ni * 12 + ci) * L * H * W;
+            for (int ci = 0; ci < C; ci++) {
+                int base = (ni * C + ci) * L * H * W;
                 int cell_idx = base + (li * H + hi) * W + wi;
 
                 // Use streaming cache hint - grid values accessed only once
@@ -78,7 +77,7 @@ namespace lfs::training::kernels {
             }
         }
 
-        local_sum /= (12 * N);
+        local_sum /= (C * norm_n);
 
         // Block-level reduction using warp shuffles (NO ATOMIC!)
         local_sum = warp_ops::block_reduce_sum(local_sum);
@@ -122,10 +121,10 @@ namespace lfs::training::kernels {
      * - Direct writes (no atomics needed)
      */
     __global__ void bilateral_grid_tv_backward_kernel(
-        const float* __restrict__ grids, // [N,12,L,H,W]
+        const float* __restrict__ grids, // [N,C,L,H,W]
         const float grad_output,         // scalar gradient dL/d(tv_loss)
-        float* __restrict__ grad_grids,  // [N,12,L,H,W]
-        int N, int L, int H, int W) {
+        float* __restrict__ grad_grids,  // [N,C,L,H,W]
+        int N, int C, int L, int H, int W, int norm_n) {
 
         int wi = blockIdx.x * blockDim.x + threadIdx.x;
         int hi = blockIdx.y * blockDim.y + threadIdx.y;
@@ -137,13 +136,13 @@ namespace lfs::training::kernels {
         idx /= L;
         int ni = idx;
 
-        float s = grad_output / (6 * N);
+        float s = 2.0f * grad_output / static_cast<float>(C * norm_n);
         float sx = s / (float)(L * H * (W - 1));
         float sy = s / (float)(L * (H - 1) * W);
         float sz = s / (float)((L - 1) * H * W);
 
-        for (int ci = 0; ci < 12; ci++) {
-            int cell_idx = (((ni * 12 + ci) * L + li) * H + hi) * W + wi;
+        for (int ci = 0; ci < C; ci++) {
+            int cell_idx = (((ni * C + ci) * L + li) * H + hi) * W + wi;
 
             float half_grad = 0.0f;
             // Use read-only cache for grid (shared across threads)
@@ -174,7 +173,7 @@ namespace lfs::training::kernels {
                 half_grad += (val - val0) * sz;
             }
 
-            grad_grids[cell_idx] = half_grad;
+            grad_grids[cell_idx] += half_grad;
         }
     }
 
@@ -182,9 +181,12 @@ namespace lfs::training::kernels {
         const float* grids,
         float* tv_loss,
         float* temp_buffer,
-        int N, int L, int H, int W,
+        int N, int C, int L, int H, int W, int norm_n,
         cudaStream_t stream) {
+        assert(N > 0 && C > 0 && L > 0 && H > 0 && W > 0);
         stream = resolve_stream(stream);
+        if (norm_n <= 0)
+            norm_n = N;
 
         const int threads = 256;
         const int total = N * L * H * W;
@@ -192,7 +194,7 @@ namespace lfs::training::kernels {
 
         // Stage 1: Each block reduces to a partial sum (NO ATOMICS!)
         bilateral_grid_tv_forward_stage1_kernel<<<num_blocks, threads, 0, stream>>>(
-            grids, temp_buffer, N, L, H, W);
+            grids, temp_buffer, N, C, L, H, W, norm_n);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.tv_forward_stage1");
 
         // Stage 2: Single block aggregates partial sums (DETERMINISTIC!)
@@ -205,9 +207,12 @@ namespace lfs::training::kernels {
         const float* grids,
         float grad_output,
         float* grad_grids,
-        int N, int L, int H, int W,
+        int N, int C, int L, int H, int W, int norm_n,
         cudaStream_t stream) {
+        assert(N > 0 && C > 0 && L > 0 && H > 0 && W > 0);
         stream = resolve_stream(stream);
+        if (norm_n <= 0)
+            norm_n = N;
 
         // 3D grid for better thread organization
         dim3 block(4, 4, 4);
@@ -217,7 +222,7 @@ namespace lfs::training::kernels {
             (N * L + block.z - 1) / block.z);
 
         bilateral_grid_tv_backward_kernel<<<grid_dim, block, 0, stream>>>(
-            grids, grad_output, grad_grids, N, L, H, W);
+            grids, grad_output, grad_grids, N, C, L, H, W, norm_n);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.tv_backward");
     }
 

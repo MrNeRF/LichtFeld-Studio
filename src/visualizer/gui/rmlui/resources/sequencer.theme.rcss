@@ -35,6 +35,7 @@
 
 .ruler-label,
 #duration,
+#resolution-info,
 .transport-info,
 .speed-text,
 .dropdown-arrow,
@@ -45,6 +46,22 @@
 
 #playhead-handle {
     background-color: @{error};
+}
+
+#playhead-handle.hot {
+    background-color: @{lighten(error,0.12)};
+}
+
+#timeline-scrollbar {
+    background-color: @{alpha(border,0.35)};
+}
+
+#timeline-scrollbar-thumb {
+    background-color: @{alpha(text_dim,0.55)};
+}
+
+#timeline-scrollbar.hot #timeline-scrollbar-thumb {
+    background-color: @{alpha(text,0.75)};
 }
 
 #current-time,

@@ -14,6 +14,7 @@
   "bounds_percentile": 0.800000011920929,
   "cropbox_loss_weight": 0.10000000149011612,
   "cropbox_lr_scale": 0.10000000149011612,
+  "densify_error_map": "ssim_cs",
   "depth_loss_mode": "ssi",
   "depth_loss_weight": 2.0,
   "enable_eval": false,
@@ -23,6 +24,7 @@
     7000,
     30000
   ],
+  "exposure_correction_grid_start_iter": 1000,
   "far_scene_min_fraction": 0.009999999776482582,
   "far_seed_dose": 0,
   "fill_pacing_iter": 0,
@@ -46,6 +48,7 @@
   "mask_opacity_penalty_weight": 1.0,
   "mask_threshold": 0.5,
   "max_cap": 1000000,
+  "max_screen_share": 0.30000001192092896,
   "means_lr": 1.5999999959603883e-05,
   "means_lr_end": 1.5999999902760464e-07,
   "means_noise_weight": 50.0,
@@ -62,6 +65,7 @@
   "opacity_decay": 0.004000000189989805,
   "opacity_lr": 0.02500000037252903,
   "opacity_reg": 0.009999999776482582,
+  "oversize_split_fraction": 0.15000000596046448,
   "ppisp_controller_activation_step": -1,
   "ppisp_controller_lr": 0.0020000000949949026,
   "ppisp_exposure_from_exif": true,
@@ -86,6 +90,7 @@
   "scale_reg": 0.009999999776482582,
   "scaling_lr": 0.004999999888241291,
   "scaling_lr_end": 0.004999999888241291,
+  "screen_share_penalty": 1.0,
   "sh_degree": 3,
   "sh_degree_interval": 1000,
   "shs_lr": 0.0024999999441206455,
@@ -101,6 +106,7 @@
   "use_depth_loss": false,
   "use_edge_map": true,
   "use_error_map": true,
+  "use_exposure_correction": false,
   "use_normal_loss": false,
   "use_ppisp": false
 }
