@@ -5,6 +5,7 @@ class MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test
 class MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
 class MRNFStrategyTest_SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth_Test;
 class MRNFStrategyTest_GrowAndSplitUsesIgsPlusSplitRule_Test;
+class MRNFStrategyTest_GrowAndSplitOversizeChannelPrefersOversizedError_Test;
 class MRNFStrategyTest_GrowAndSplitWithoutMaxCapExtendsBookkeepingMasks_Test;
 class MRNFStrategyTest_DeletedMaskCapacityGrowthPreservesExistingRows_Test;
 class MRNFStrategyTest_GrowAndSplitReplacementSkipsZeroWeightCandidates_Test;
@@ -681,6 +682,71 @@ TEST(MRNFStrategyTest, GrowAndSplitUsesIgsPlusSplitRule) {
     EXPECT_NEAR(scales_ptr[child_scale_base + 1], std::log(0.85f), 1e-5f);
     EXPECT_NEAR(scales_ptr[child_scale_base + 2], std::log(0.85f), 1e-5f);
 
+    EXPECT_NEAR(opacities_ptr[0], std::log(0.3f / 0.7f), 1e-5f);
+    EXPECT_NEAR(opacities_ptr[initial_size], std::log(0.3f / 0.7f), 1e-5f);
+}
+
+TEST(MRNFStrategyTest, GrowAndSplitOversizeChannelPrefersOversizedError) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+
+    auto opt_params = vanilla_mrnf_params();
+    opt_params.iterations = 10'000;
+    opt_params.sh_degree_interval = 10'000;
+    opt_params.max_cap = 32;
+    opt_params.growth_grad_threshold = 0.5f;
+    opt_params.grow_fraction = 0.5f;
+    opt_params.grow_until_iter = 10'000;
+    opt_params.max_screen_share = 0.3f;
+    opt_params.oversize_split_fraction = 1.0f;
+    strategy.initialize(opt_params);
+
+    const size_t n = static_cast<size_t>(splat_data.size());
+    strategy._refine_weight_max = Tensor::zeros({n}, Device::CUDA);
+    strategy._vis_count = Tensor::zeros({n}, Device::CUDA);
+
+    const auto idx0 = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
+    const auto idx1 = Tensor::from_vector(std::vector<int>{1}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
+    strategy._refine_weight_max.index_put_(idx0, Tensor::full({1}, 1.0f, Device::CUDA));
+    strategy._refine_weight_max.index_put_(idx1, Tensor::full({1}, 10.0f, Device::CUDA));
+    strategy._vis_count.index_put_(idx0, Tensor::full({1}, 1.0f, Device::CUDA));
+    strategy._vis_count.index_put_(idx1, Tensor::full({1}, 1.0f, Device::CUDA));
+
+    ASSERT_TRUE(splat_data._max_screen_share.is_valid());
+    auto share_cpu = Tensor::zeros({n}, Device::CPU);
+    share_cpu.ptr<float>()[0] = 0.9f;
+    share_cpu.ptr<float>()[1] = 0.05f;
+    splat_data._max_screen_share = share_cpu.cuda();
+
+    const auto means_before = splat_data.means().cpu();
+    const float* mb = means_before.ptr<float>();
+    const float splat1_x = mb[3];
+
+    const size_t initial_size = splat_data.size();
+    strategy.grow_and_split(1, 0);
+
+    ASSERT_EQ(splat_data.size(), initial_size + 1);
+
+    const auto means_cpu = splat_data.means().cpu();
+    const auto scales_cpu = splat_data.scaling_raw().cpu();
+    const auto opacities_cpu = splat_data.opacity_raw().cpu();
+    const float* means_ptr = means_cpu.ptr<float>();
+    const float* scales_ptr = scales_cpu.ptr<float>();
+    const float* opacities_ptr = opacities_cpu.ptr<float>();
+
+    EXPECT_NEAR(means_ptr[0], 0.5f, 1e-5f);
+    EXPECT_NEAR(means_ptr[1], 0.0f, 1e-5f);
+    EXPECT_NEAR(means_ptr[2], 0.0f, 1e-5f);
+    EXPECT_NEAR(means_ptr[3], splat1_x, 1e-5f);
+
+    const size_t child_base = initial_size * 3;
+    EXPECT_NEAR(means_ptr[child_base + 0], -0.5f, 1e-5f);
+    EXPECT_NEAR(means_ptr[child_base + 1], 0.0f, 1e-5f);
+    EXPECT_NEAR(means_ptr[child_base + 2], 0.0f, 1e-5f);
+
+    EXPECT_NEAR(scales_ptr[0], std::log(0.5f), 1e-5f);
+    EXPECT_NEAR(scales_ptr[1], std::log(0.85f), 1e-5f);
+    EXPECT_NEAR(scales_ptr[2], std::log(0.85f), 1e-5f);
     EXPECT_NEAR(opacities_ptr[0], std::log(0.3f / 0.7f), 1e-5f);
     EXPECT_NEAR(opacities_ptr[initial_size], std::log(0.3f / 0.7f), 1e-5f);
 }

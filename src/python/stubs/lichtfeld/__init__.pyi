@@ -1905,6 +1905,11 @@ class MaskMode(enum.Enum):
 
     ALPHA_CONSISTENT = 4
 
+class DensifyErrorMap(enum.Enum):
+    SSIM = 0
+
+    SSIM_CS = 1
+
 class NormalLossSpace(enum.Enum):
     AUTO = 0
 
@@ -2119,6 +2124,38 @@ class OptimizationParams:
     def far_seed_dose(self, arg: int, /) -> None: ...
 
     @property
+    def densify_error_map(self) -> DensifyErrorMap:
+        """Densification error map: full SSIM or contrast-structure only"""
+
+    @densify_error_map.setter
+    def densify_error_map(self, arg: DensifyErrorMap, /) -> None: ...
+
+    @property
+    def max_screen_share(self) -> float:
+        """
+        Shrink Gaussians that cover more than this share of the view; 0 or 1 disables
+        """
+
+    @max_screen_share.setter
+    def max_screen_share(self, arg: float, /) -> None: ...
+
+    @property
+    def screen_share_penalty(self) -> float:
+        """Soft hinge weight on log-scale for Gaussians over the screen-share cap"""
+
+    @screen_share_penalty.setter
+    def screen_share_penalty(self, arg: float, /) -> None: ...
+
+    @property
+    def oversize_split_fraction(self) -> float:
+        """
+        Fraction of MRNF growth budget used to split Gaussians over the screen-share cap; 0 disables
+        """
+
+    @oversize_split_fraction.setter
+    def oversize_split_fraction(self, arg: float, /) -> None: ...
+
+    @property
     def steps_scaler(self) -> float:
         """Scale factor for training step counts"""
 
@@ -2137,6 +2174,20 @@ class OptimizationParams:
 
     @gut.setter
     def gut(self, arg: bool, /) -> None: ...
+
+    @property
+    def use_exposure_correction(self) -> bool:
+        """Enable combined per-photo exposure correction"""
+
+    @use_exposure_correction.setter
+    def use_exposure_correction(self, arg: bool, /) -> None: ...
+
+    @property
+    def exposure_correction_grid_start_iter(self) -> int:
+        """Iteration at which the local residual grid starts training"""
+
+    @exposure_correction_grid_start_iter.setter
+    def exposure_correction_grid_start_iter(self, arg: int, /) -> None: ...
 
     @property
     def use_bilateral_grid(self) -> bool:

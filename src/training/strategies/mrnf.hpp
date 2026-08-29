@@ -19,6 +19,7 @@ class MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test
 class MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
 class MRNFStrategyTest_SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth_Test;
 class MRNFStrategyTest_GrowAndSplitUsesIgsPlusSplitRule_Test;
+class MRNFStrategyTest_GrowAndSplitOversizeChannelPrefersOversizedError_Test;
 class MRNFStrategyTest_GrowAndSplitWithoutMaxCapExtendsBookkeepingMasks_Test;
 class MRNFStrategyTest_DeletedMaskCapacityGrowthPreservesExistingRows_Test;
 class MRNFStrategyTest_GrowAndSplitReplacementSkipsZeroWeightCandidates_Test;
@@ -108,6 +109,7 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
         friend class ::MRNFStrategyTest_SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth_Test;
         friend class ::MRNFStrategyTest_GrowAndSplitUsesIgsPlusSplitRule_Test;
+        friend class ::MRNFStrategyTest_GrowAndSplitOversizeChannelPrefersOversizedError_Test;
         friend class ::MRNFStrategyTest_GrowAndSplitWithoutMaxCapExtendsBookkeepingMasks_Test;
         friend class ::MRNFStrategyTest_DeletedMaskCapacityGrowthPreservesExistingRows_Test;
         friend class ::MRNFStrategyTest_GrowAndSplitReplacementSkipsZeroWeightCandidates_Test;

@@ -6,6 +6,7 @@
 
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
+#include "lfs/training/screen_share.cuh"
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/scheduler.hpp"
 #include <cstdint>
@@ -200,6 +201,34 @@ namespace lfs::training {
         size_t n,
         lfs::core::Device device,
         size_t reserve_capacity = 0);
+
+    inline void ensure_max_screen_share_shape(
+        lfs::core::SplatData& splat,
+        const size_t n,
+        const size_t reserve_capacity = 0) {
+        ensure_score_buffer_inplace(
+            splat._max_screen_share, n, splat.means().device(), reserve_capacity);
+        splat._max_screen_share.set_name("splat.max_screen_share");
+    }
+
+    inline void publish_screen_share_cap(
+        AdamOptimizer* optimizer,
+        lfs::core::SplatData& splat,
+        const lfs::core::param::OptimizationParameters& params) {
+        if (!optimizer) {
+            return;
+        }
+        if (!screen_share_cap_active(params.max_screen_share) ||
+            !splat._max_screen_share.is_valid()) {
+            optimizer->set_screen_share_cap(nullptr, 0, 0.0f, 0.0f);
+            return;
+        }
+        optimizer->set_screen_share_cap(
+            splat._max_screen_share.ptr<float>(),
+            static_cast<int>(splat._max_screen_share.numel()),
+            params.max_screen_share,
+            params.screen_share_penalty);
+    }
 
     /// Collect leftover per-primitive Adam scale pointers from the removed
     /// legacy moment codec. Always returns 0 under joint-only Adam state.

@@ -688,6 +688,7 @@ namespace lfs::core {
             auto frozen_ranges = model.frozen_ranges();
             Tensor deleted = model.has_deleted_mask() ? model.deleted() : Tensor{};
             Tensor densification_info = model._densification_info;
+            Tensor max_screen_share = model._max_screen_share;
             // Preserve layout generation across the SplatData rebuild so
             // ensure_param_capacity's layout_changed signal stays monotonic.
             const std::uint64_t layout_gen = model.param_layout_generation();
@@ -801,6 +802,9 @@ namespace lfs::core {
             }
             if (densification_info.is_valid()) {
                 rebound._densification_info = std::move(densification_info);
+            }
+            if (max_screen_share.is_valid()) {
+                rebound._max_screen_share = std::move(max_screen_share);
             }
             rebound.set_frozen_ranges(std::move(frozen_ranges));
             rebound.set_tensor_allocator(allocator);

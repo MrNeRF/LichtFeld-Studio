@@ -50,7 +50,13 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--cropbox-loss-weight", "cropbox_loss_weight", Float},
             OptimizationCliBinding{"--steps-scaler", "steps_scaler", Float},
             OptimizationCliBinding{"--no-error-map", "use_error_map", Bool, true},
+            OptimizationCliBinding{"--densify-error-map", "densify_error_map", Enum, false,
+                                   "; values: ssim, ssim_cs"},
+            OptimizationCliBinding{"--max-screen-share", "max_screen_share", Float},
+            OptimizationCliBinding{"--screen-share-penalty", "screen_share_penalty", Float},
+            OptimizationCliBinding{"--oversize-split-fraction", "oversize_split_fraction", Float},
             OptimizationCliBinding{"--no-edge-map", "use_edge_map", Bool, true},
+            OptimizationCliBinding{"--background-improvements", "background_improvements", Bool},
             OptimizationCliBinding{"--no-background-improvements", "background_improvements", Bool, true},
             OptimizationCliBinding{"--no-growth-ratio-rank", "growth_ratio_rank", Bool, true},
             OptimizationCliBinding{"--bg-mode", "bg_mode", Enum, false,
@@ -79,6 +85,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--prune-ratio", "prune_ratio", Float},
             OptimizationCliBinding{"--enable-mip", "mip_filter", Bool},
             OptimizationCliBinding{"--bilateral-grid", "use_bilateral_grid", Bool},
+            OptimizationCliBinding{"--exposure-correction", "use_exposure_correction", Bool},
             OptimizationCliBinding{"--ppisp", "ppisp", Bool},
             OptimizationCliBinding{"--no-ppisp-exif-exposure", "ppisp_exposure_from_exif", Bool, true},
             OptimizationCliBinding{"--ppisp-controller", "ppisp_use_controller", Bool},
@@ -499,7 +506,18 @@ namespace {
             ::args::ValueFlag<float> cropbox_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--cropbox-loss-weight"), {"cropbox-loss-weight"});
             ::args::ValueFlag<float> steps_scaler(training_group, "steps_scaler", lfs::core::args::optimization_cli_help("--steps-scaler"), {"steps-scaler"});
             ::args::Flag no_error_map(training_group, "no_error_map", lfs::core::args::optimization_cli_help("--no-error-map"), {"no-error-map"});
+            ::args::MapFlag<std::string, lfs::core::param::DensifyErrorMap> densify_error_map(
+                training_group, "densify_error_map",
+                lfs::core::args::optimization_cli_help("--densify-error-map"),
+                {"densify-error-map"},
+                std::unordered_map<std::string, lfs::core::param::DensifyErrorMap>{
+                    {"ssim", lfs::core::param::DensifyErrorMap::Ssim},
+                    {"ssim_cs", lfs::core::param::DensifyErrorMap::SsimCs}});
+            ::args::ValueFlag<float> max_screen_share(training_group, "max_screen_share", lfs::core::args::optimization_cli_help("--max-screen-share"), {"max-screen-share"});
+            ::args::ValueFlag<float> screen_share_penalty(training_group, "screen_share_penalty", lfs::core::args::optimization_cli_help("--screen-share-penalty"), {"screen-share-penalty"});
+            ::args::ValueFlag<float> oversize_split_fraction(training_group, "oversize_split_fraction", lfs::core::args::optimization_cli_help("--oversize-split-fraction"), {"oversize-split-fraction"});
             ::args::Flag no_edge_map(training_group, "no_edge_map", lfs::core::args::optimization_cli_help("--no-edge-map"), {"no-edge-map"});
+            ::args::Flag background_improvements(training_group, "background_improvements", lfs::core::args::optimization_cli_help("--background-improvements"), {"background-improvements"});
             ::args::Flag no_background_improvements(training_group, "no_background_improvements", lfs::core::args::optimization_cli_help("--no-background-improvements"), {"no-background-improvements"});
             ::args::Flag no_growth_ratio_rank(training_group, "no_growth_ratio_rank", lfs::core::args::optimization_cli_help("--no-growth-ratio-rank"), {"no-growth-ratio-rank"});
             ::args::ValueFlag<float> far_scene_min_fraction(training_group, "fraction", lfs::core::args::optimization_cli_help("--far-scene-min-fraction"), {"far-scene-min-fraction"});
@@ -593,6 +611,7 @@ namespace {
             ::args::Group rendering_group(parser, "RENDERING OPTIONS:");
             ::args::Flag enable_mip(rendering_group, "enable_mip", lfs::core::args::optimization_cli_help("--enable-mip"), {"enable-mip"});
             ::args::Flag use_bilateral_grid(rendering_group, "bilateral_grid", lfs::core::args::optimization_cli_help("--bilateral-grid"), {"bilateral-grid"});
+            ::args::Flag use_exposure_correction(rendering_group, "exposure_correction", lfs::core::args::optimization_cli_help("--exposure-correction"), {"exposure-correction"});
             ::args::Flag use_ppisp(rendering_group, "ppisp", lfs::core::args::optimization_cli_help("--ppisp"), {"ppisp"});
             ::args::Flag no_ppisp_exif_exposure(rendering_group, "no_ppisp_exif_exposure", lfs::core::args::optimization_cli_help("--no-ppisp-exif-exposure"), {"no-ppisp-exif-exposure"});
             ::args::Flag ppisp_controller(rendering_group, "ppisp_controller", lfs::core::args::optimization_cli_help("--ppisp-controller"), {"ppisp-controller"});
@@ -1139,6 +1158,7 @@ namespace {
                                         // Capture flag states
                                         enable_mip_flag = bool(enable_mip),
                                         use_bilateral_grid_flag = bool(use_bilateral_grid),
+                                        use_exposure_correction_flag = bool(use_exposure_correction),
                                         use_ppisp_flag = bool(use_ppisp),
                                         no_ppisp_exif_exposure_flag = bool(no_ppisp_exif_exposure),
                                         ppisp_controller_flag = bool(ppisp_controller),
@@ -1173,7 +1193,20 @@ namespace {
                                         use_normal_loss_flag = bool(use_normal_loss),
                                         no_normal_auto_generate_flag = bool(no_normal_auto_generate),
                                         no_error_map_flag = bool(no_error_map),
+                                        densify_error_map_val = cli_option_present({"--densify-error-map"})
+                                                                    ? std::optional<lfs::core::param::DensifyErrorMap>(::args::get(densify_error_map))
+                                                                    : std::optional<lfs::core::param::DensifyErrorMap>(),
+                                        max_screen_share_val = cli_option_present({"--max-screen-share"})
+                                                                   ? std::optional<float>(::args::get(max_screen_share))
+                                                                   : std::optional<float>(),
+                                        screen_share_penalty_val = cli_option_present({"--screen-share-penalty"})
+                                                                       ? std::optional<float>(::args::get(screen_share_penalty))
+                                                                       : std::optional<float>(),
+                                        oversize_split_fraction_val = cli_option_present({"--oversize-split-fraction"})
+                                                                          ? std::optional<float>(::args::get(oversize_split_fraction))
+                                                                          : std::optional<float>(),
                                         no_edge_map_flag = bool(no_edge_map),
+                                        background_improvements_flag = bool(background_improvements),
                                         no_background_improvements_flag = bool(no_background_improvements),
                                         no_growth_ratio_rank_flag = bool(no_growth_ratio_rank),
                                         far_scene_min_fraction_val = cli_option_present({"--far-scene-min-fraction"}) ? std::optional<float>(::args::get(far_scene_min_fraction)) : std::optional<float>(),
@@ -1275,6 +1308,7 @@ namespace {
 
                 setFlag(enable_mip_flag, opt.mip_filter);
                 setFlag(use_bilateral_grid_flag, opt.use_bilateral_grid);
+                setFlag(use_exposure_correction_flag, opt.use_exposure_correction);
                 setFlag(use_ppisp_flag, opt.use_ppisp);
                 if (no_ppisp_exif_exposure_flag)
                     opt.ppisp_exposure_from_exif = false;
@@ -1317,8 +1351,14 @@ namespace {
                 setFlag(enable_sparsity_flag, opt.enable_sparsity);
                 if (no_error_map_flag)
                     opt.use_error_map = false;
+                setVal(densify_error_map_val, opt.densify_error_map);
+                setVal(max_screen_share_val, opt.max_screen_share);
+                setVal(screen_share_penalty_val, opt.screen_share_penalty);
+                setVal(oversize_split_fraction_val, opt.oversize_split_fraction);
                 if (no_edge_map_flag)
                     opt.use_edge_map = false;
+                if (background_improvements_flag)
+                    opt.background_improvements = true;
                 if (no_background_improvements_flag)
                     opt.background_improvements = false;
                 if (no_growth_ratio_rank_flag)
@@ -1404,6 +1444,7 @@ namespace {
                 note_opt("profile_stop_iter", profile_stop_val.has_value());
                 note_opt("mip_filter", enable_mip_flag);
                 note_opt("use_bilateral_grid", use_bilateral_grid_flag);
+                note_opt("use_exposure_correction", use_exposure_correction_flag);
                 note_opt("use_ppisp", use_ppisp_flag || ppisp_controller_flag ||
                                           ppisp_freeze_from_sidecar_flag);
                 note_opt("ppisp_use_controller", ppisp_controller_flag);
@@ -1425,8 +1466,12 @@ namespace {
                 note_opt("undistort", undistort_flag);
                 note_opt("enable_sparsity", enable_sparsity_flag);
                 note_opt("use_error_map", no_error_map_flag);
+                note_opt("densify_error_map", densify_error_map_val.has_value());
+                note_opt("max_screen_share", max_screen_share_val.has_value());
+                note_opt("screen_share_penalty", screen_share_penalty_val.has_value());
+                note_opt("oversize_split_fraction", oversize_split_fraction_val.has_value());
                 note_opt("use_edge_map", no_edge_map_flag);
-                note_opt("background_improvements", no_background_improvements_flag);
+                note_opt("background_improvements", background_improvements_flag || no_background_improvements_flag);
                 note_opt("growth_ratio_rank", no_growth_ratio_rank_flag);
                 note_opt("far_scene_min_fraction", far_scene_min_fraction_val.has_value());
                 note_opt("growth_ratio_pow", growth_ratio_pow_val.has_value());

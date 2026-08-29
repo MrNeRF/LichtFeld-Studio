@@ -89,7 +89,8 @@ namespace fast_lfs::rasterization {
         cudaStream_t stream = nullptr,              // nullptr → getCurrentCUDAStream()
         const float* sh_value_bounds_ptr = nullptr, // float2 per 256; null = fp32/IEEE-f16 shN
         unsigned int sh_value_n_cells = 0,
-        unsigned int sh_value_bits = 0); // 0=fp32, 16=q16(+bounds) or IEEE f16
+        unsigned int sh_value_bits = 0, // 0=fp32, 16=q16(+bounds) or IEEE f16
+        float* max_screen_share_ptr = nullptr);
 
     void release_forward_context(const ForwardContext& forward_ctx);
 

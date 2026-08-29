@@ -4,13 +4,16 @@
 
 #include "mcmc.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "kernels/densification_kernels.hpp"
 #include "kernels/mcmc_kernels.hpp"
 #include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <stdexcept>
 #include <utility>
@@ -176,6 +179,10 @@ namespace lfs::training {
             (_params && _params->max_cap > 0) ? static_cast<size_t>(_params->max_cap) : 0;
         ensure_densification_info_shape_inplace(
             _splat_data->_densification_info, n, _splat_data->means().device());
+        if (_params) {
+            ensure_max_screen_share_shape(*_splat_data, n, reserve);
+            publish_screen_share_cap(_optimizer.get(), *_splat_data, *_params);
+        }
 
         const size_t prev_n = _error_score_max.is_valid() ? _error_score_max.numel() : 0;
         ensure_score_buffer_inplace(
@@ -731,6 +738,10 @@ namespace lfs::training {
 
         if (iter == _params->stop_refine) {
             _splat_data->_densification_info = lfs::core::Tensor::empty({0});
+            _splat_data->_max_screen_share = lfs::core::Tensor::empty({0});
+            if (_params) {
+                publish_screen_share_cap(_optimizer.get(), *_splat_data, *_params);
+            }
             _error_score_max = lfs::core::Tensor::empty({0});
             _error_score_windows = 0;
         }
@@ -756,6 +767,35 @@ namespace lfs::training {
 
         // Refine Gaussians
         if (is_refining(iter)) {
+            if (_splat_data->_max_screen_share.is_valid() &&
+                _splat_data->_max_screen_share.numel() > 0) {
+                LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(),
+                                   "wait fused adam before screen-share mutate");
+            }
+            const size_t n_clip = static_cast<size_t>(_splat_data->size());
+            if (_params && screen_share_cap_active(_params->max_screen_share) &&
+                _splat_data->_max_screen_share.is_valid() &&
+                _splat_data->_max_screen_share.numel() == n_clip) {
+                auto& log_scales = _splat_data->scaling_raw();
+                assert(log_scales.shape()[0] == n_clip && log_scales.shape()[1] == 3);
+                const bool* frozen = nullptr;
+                size_t frozen_n = 0;
+                if (_optimizer) {
+                    const auto& mask = _optimizer->frozen_mask();
+                    if (mask.is_valid()) {
+                        frozen = mask.ptr<bool>();
+                        frozen_n = mask.numel();
+                    }
+                }
+                kernels::launch_clip_log_scale_by_screen_share(
+                    log_scales.ptr<float>(),
+                    _splat_data->_max_screen_share.ptr<float>(),
+                    frozen,
+                    frozen_n,
+                    _params->max_screen_share,
+                    n_clip);
+            }
+
             const int n_relocated = relocate_gs();
             if (n_relocated > 0) {
                 LOG_DEBUG("MCMC: Relocated {} dead Gaussians at iteration {}", n_relocated, iter);
@@ -791,6 +831,12 @@ namespace lfs::training {
             ensure_densification_info_shape_inplace(
                 _splat_data->_densification_info, n, _splat_data->means().device());
             _splat_data->_densification_info.zero_();
+            if (_params) {
+                const size_t cap = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
+                ensure_max_screen_share_shape(*_splat_data, n, cap);
+                _splat_data->_max_screen_share.zero_();
+                publish_screen_share_cap(_optimizer.get(), *_splat_data, *_params);
+            }
         }
 
         // Inject noise to positions every iteration
@@ -861,6 +907,13 @@ namespace lfs::training {
         }
 
         LOG_DEBUG("MCMC: soft-deleted {} Gaussians (rotation and optimizer state zeroed)", n_remove);
+    }
+
+    void MCMC::set_optimization_params(const lfs::core::param::OptimizationParameters& params) {
+        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(params);
+        if (_splat_data) {
+            publish_screen_share_cap(_optimizer.get(), *_splat_data, *_params);
+        }
     }
 
     void MCMC::initialize(const lfs::core::param::OptimizationParameters& optimParams) {

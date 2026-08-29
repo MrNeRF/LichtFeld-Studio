@@ -615,6 +615,15 @@ namespace lfs::training {
                 loaded_strategy->reserve_optimizer_capacity(max_cap);
             }
 
+            if (bilateral_grid && loaded_bilateral_grid &&
+                bilateral_grid->parameterization() != loaded_bilateral_grid->parameterization()) {
+                throw std::runtime_error(
+                    std::string("BilateralGrid parameterization mismatch: checkpoint is ") +
+                    bilateral_grid_parameterization_name(loaded_bilateral_grid->parameterization()) +
+                    ", current is " +
+                    bilateral_grid_parameterization_name(bilateral_grid->parameterization()));
+            }
+
             static_assert(std::is_nothrow_swappable_v<lfs::core::param::TrainingParameters>);
             static_assert(std::is_nothrow_move_assignable_v<lfs::core::SplatData>);
 

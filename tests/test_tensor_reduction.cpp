@@ -3,8 +3,11 @@
 
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cub_workspace.hpp"
+#include <chrono>
 #include <cmath>
+#include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <iostream>
 #include <numeric>
 #include <random>
 #include <stdexcept>
@@ -668,4 +671,57 @@ TEST_F(TensorReductionTest, ReductionsCPU) {
     compare_scalars(custom_tensor.mean_scalar(), torch_tensor.mean().item<float>(), 1e-5f, "CPU_Mean");
     compare_scalars(custom_tensor.min_scalar(), torch_tensor.min().item<float>(), 1e-5f, "CPU_Min");
     compare_scalars(custom_tensor.max_scalar(), torch_tensor.max().item<float>(), 1e-5f, "CPU_Max");
+}
+
+TEST_F(TensorReductionTest, NonTrailingMultiAxisMatchesCpuAndIsFast) {
+    // Kept axis in the middle: previously the generic one-thread-per-output path.
+    const std::vector<int64_t> big_shape{194, 12, 8, 16, 16};
+    auto custom_big = Tensor::randn({194, 12, 8, 16, 16}, Device::CUDA);
+    const auto host = custom_big.cpu().contiguous().to_vector();
+    auto torch_big = torch::from_blob(const_cast<float*>(host.data()), big_shape,
+                                      torch::TensorOptions().dtype(torch::kFloat32))
+                         .clone()
+                         .cuda();
+
+    const std::vector<int> big_axes{0, 2, 3, 4};
+    const std::vector<int64_t> torch_big_axes{0, 2, 3, 4};
+    compare_tensors(custom_big.mean(big_axes), torch_big.mean(torch_big_axes),
+                    1e-5f, 1e-5f, "mean{0,2,3,4}");
+    compare_tensors(custom_big.sum(big_axes), torch_big.sum(torch_big_axes),
+                    1e-4f, 1e-3f, "sum{0,2,3,4}");
+    compare_tensors(custom_big.max(big_axes), torch_big.amax(torch_big_axes),
+                    1e-5f, 1e-5f, "max{0,2,3,4}");
+
+    auto custom_mid = Tensor::randn({7, 5, 3, 4}, Device::CUDA);
+    const auto mid_host = custom_mid.cpu().contiguous().to_vector();
+    auto torch_mid = torch::from_blob(const_cast<float*>(mid_host.data()), {7, 5, 3, 4},
+                                      torch::TensorOptions().dtype(torch::kFloat32))
+                         .clone()
+                         .cuda();
+    compare_tensors(custom_mid.mean(std::vector<int>{0, 2}), torch_mid.mean(std::vector<int64_t>{0, 2}),
+                    1e-5f, 1e-5f, "mean{0,2}");
+    compare_tensors(custom_mid.sum(std::vector<int>{0, 2}), torch_mid.sum(std::vector<int64_t>{0, 2}),
+                    1e-5f, 1e-5f, "sum{0,2}");
+
+    compare_tensors(custom_mid.mean(1), torch_mid.mean(1), 1e-5f, 1e-5f, "mean(1)");
+    compare_tensors(custom_mid.sum(1), torch_mid.sum(1), 1e-5f, 1e-5f, "sum(1)");
+    compare_tensors(custom_mid.max(1), std::get<0>(torch_mid.max(1)), 1e-5f, 1e-5f, "max(1)");
+
+    // Warmup + timed mean({0,2,3,4}) on the [194,12,8,16,16] case.
+    for (int i = 0; i < 3; ++i) {
+        (void)custom_big.mean(big_axes);
+    }
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    const auto t0 = std::chrono::steady_clock::now();
+    constexpr int kIters = 20;
+    for (int i = 0; i < kIters; ++i) {
+        (void)custom_big.mean(big_axes);
+    }
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    const auto t1 = std::chrono::steady_clock::now();
+    const double ms =
+        std::chrono::duration<double, std::milli>(t1 - t0).count() / static_cast<double>(kIters);
+    std::cout << "[NonTrailingMultiAxis] mean({0,2,3,4}) [194,12,8,16,16] "
+              << ms << " ms/call\n";
+    EXPECT_LT(ms, 50.0) << "non-trailing multi-axis mean should be milliseconds, not hundreds";
 }

@@ -443,7 +443,12 @@ namespace lfs::training {
                 raster_stream,
                 shN_bounds_ptr,
                 shN_n_cells,
-                shN_bits);
+                shN_bits,
+                (gaussian_model._max_screen_share.is_valid() &&
+                 gaussian_model._max_screen_share.ndim() == 1 &&
+                 gaussian_model._max_screen_share.numel() >= static_cast<size_t>(n_primitives))
+                    ? gaussian_model._max_screen_share.ptr<float>()
+                    : nullptr);
         } catch (const std::exception& e) {
             // Dump all input data for debugging
             dump_crash_data(
@@ -747,6 +752,10 @@ namespace lfs::training {
             dst.step_size = src.step_size;
             dst.bias_correction2_sqrt_rcp = src.bias_correction2_sqrt_rcp;
             dst.enabled = src.enabled;
+            dst.screen_share_max = src.screen_share_max;
+            dst.screen_share_n = src.screen_share_n;
+            dst.screen_share_limit = src.screen_share_limit;
+            dst.screen_share_penalty = src.screen_share_penalty;
             return dst;
         };
         fused_adam.enabled = optimizer_fused.enabled;

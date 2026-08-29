@@ -388,6 +388,8 @@ set(TEST_FILES
     test_expanded_tensor_ops.cpp
     test_bool_any_all.cpp
     test_fused_l1_ssim.cpp
+    test_densify_error_map.cpp
+    test_screen_share.cpp
     test_loss_workspace_union.cpp
     test_image_kernels.cpp
     test_add_new_gs_tensor_ops.cpp
@@ -453,6 +455,10 @@ set(TEST_FILES
     test_ppisp_regularization.cpp
     test_ppisp_sidecar.cpp
     test_ppisp_checkpoint_roundtrip.cpp
+    test_bilateral_grid_projection.cpp
+    test_bilateral_grid_exposure_chroma.cpp
+    test_bilateral_grid_backward_tiled.cpp
+    test_ppisp_projection.cpp
     test_ppisp_cuda_vs_torch.cpp
     test_ppisp_banded_region.cpp
     test_ppisp_exposure_seed.cpp
