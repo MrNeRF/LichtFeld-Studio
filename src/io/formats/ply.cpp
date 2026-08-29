@@ -2909,18 +2909,24 @@ namespace lfs::io {
                 attr_off += cols;
             };
 
-            append_builtin_block(pc.means.cpu().contiguous(), {"x", "y", "z"});
+            auto as_cpu_contiguous = [](const Tensor& tensor) -> Tensor {
+                if (tensor.device() == Device::CPU && tensor.is_contiguous())
+                    return tensor;
+                return tensor.cpu().contiguous();
+            };
+
+            append_builtin_block(as_cpu_contiguous(pc.means), {"x", "y", "z"});
 
             if (pc.normals.is_valid()) {
-                append_builtin_block(pc.normals.cpu().contiguous(), {"nx", "ny", "nz"});
+                append_builtin_block(as_cpu_contiguous(pc.normals), {"nx", "ny", "nz"});
             }
 
-            auto process_sh = [](const Tensor& sh) -> Tensor {
+            auto process_sh = [&](const Tensor& sh) -> Tensor {
                 if (sh.ndim() == 3) {
                     auto transposed = sh.transpose(1, 2).contiguous();
-                    return transposed.flatten(1).cpu().contiguous();
+                    return as_cpu_contiguous(transposed.flatten(1));
                 }
-                return sh.cpu().contiguous();
+                return as_cpu_contiguous(sh);
             };
 
             if (pc.sh0.is_valid()) {
@@ -2934,14 +2940,14 @@ namespace lfs::io {
                 append_builtin_block(std::move(t), make_indexed_names("f_rest_", cols));
             }
             if (pc.opacity.is_valid())
-                append_builtin_block(pc.opacity.cpu().contiguous(), {"opacity"});
+                append_builtin_block(as_cpu_contiguous(pc.opacity), {"opacity"});
             if (pc.scaling.is_valid()) {
-                auto t = pc.scaling.cpu().contiguous();
+                auto t = as_cpu_contiguous(pc.scaling);
                 const auto cols = static_cast<size_t>(t.size(1));
                 append_builtin_block(std::move(t), make_indexed_names("scale_", cols));
             }
             if (pc.rotation.is_valid()) {
-                auto t = pc.rotation.cpu().contiguous();
+                auto t = as_cpu_contiguous(pc.rotation);
                 const auto cols = static_cast<size_t>(t.size(1));
                 append_builtin_block(std::move(t), make_indexed_names("rot_", cols));
             }

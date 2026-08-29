@@ -62,7 +62,6 @@ def _install_lf_stub(monkeypatch):
         get_export_state=lambda: dict(state.export_state),
         set_panel_enabled=lambda panel_id, enabled: state.set_panel_enabled_calls.append((panel_id, enabled)),
         cancel_export=lambda: setattr(state, "cancel_calls", state.cancel_calls + 1),
-        set_save_asset_callback=lambda _callback: None,
         save_ply_file_dialog=lambda default_name: f"/tmp/{default_name}.ply",
         save_sog_file_dialog=lambda default_name: f"/tmp/{default_name}.sog",
         save_spz_file_dialog=lambda default_name: f"/tmp/{default_name}.spz",
@@ -268,27 +267,6 @@ def test_export_panel_closes_when_export_finishes(export_panel_module):
     assert panel._exporting is False
     assert panel._selection_seeded is False
     assert state.set_panel_enabled_calls == [("lfs.export", False)]
-
-
-def test_export_panel_does_not_register_failed_export(export_panel_module):
-    module, state = export_panel_module
-    panel = module.ExportPanel()
-    panel._exporting = True
-    panel._last_export_path = "/tmp/failed.ply"
-    panel._last_export_format = module.ExportFormat.PLY
-    registered = []
-    panel._register_export = lambda path, fmt: registered.append((path, fmt))
-    state.export_state = {
-        "active": False,
-        "stage": "Failed",
-        "error": "disk full",
-        "format": "PLY",
-    }
-
-    assert panel._update_export_progress() is True
-    assert registered == []
-    assert panel._last_export_path is None
-    assert panel._last_export_format is None
 
 
 def test_export_panel_store_subscriptions_mark_panel_dirty(export_panel_module, monkeypatch):

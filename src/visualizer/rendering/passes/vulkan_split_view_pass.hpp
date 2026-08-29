@@ -50,6 +50,7 @@ namespace lfs::vis {
 
     struct VulkanSplitViewParams {
         bool enabled = false;
+        bool loss_visualization = false;
         VulkanSplitViewPanel left;
         VulkanSplitViewPanel right;
         float split_position = 0.5f;

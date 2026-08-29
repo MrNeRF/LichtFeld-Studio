@@ -15,6 +15,7 @@ from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .training_confirm import (
     _invoke_project_save_as,
     _project_has_path,
+    _save_titled_project,
     _schedule_once_project_bound,
     confirm_discard_work_then,
 )
@@ -65,6 +66,30 @@ _rate_tracker = IterationRateTracker()
 
 def _is_mrnf_strategy(strategy):
     return property_view.canonical_strategy_name(strategy) == "mrnf"
+
+
+def _training_session_state():
+    getter = getattr(lf, "project_training_session_state", None)
+    if getter is None:
+        return {}
+    try:
+        state = getter()
+    except Exception:
+        return {}
+    return state if isinstance(state, dict) else {}
+
+
+def _restore_stored_session_if_needed(then_start=False):
+    session = _training_session_state()
+    if session.get("restoring"):
+        return True
+    if not session.get("available") or session.get("hydrated"):
+        return False
+    restore = getattr(lf, "restore_training_session", None)
+    if not callable(restore):
+        return False
+    restore(then_start)
+    return True
 
 
 DEPTH_LOSS_MODE_VALUES = ("ssi", "ssi-disparity", "ssi-depth")
@@ -180,6 +205,7 @@ class TrainingPanel(Panel):
         self._auto_scale_user_override = False
         self._auto_scale_dataset_path = ""
         self._last_state = ""
+        self._last_session = None
         self._last_save_steps = None
         self._color_edit_prop = None
         self._picker_click_handled = False
@@ -413,7 +439,13 @@ class TrainingPanel(Panel):
         )
 
         def _btn_start():
+            session = _training_session_state()
+            if session.get("restoring"):
+                n = int(session.get("iteration") or 0)
+                return tr("training_panel.loading_session").replace("{n}", f"{n:,}")
             it = RuntimeState.iteration.value
+            if it <= 0:
+                it = int(session.get("iteration") or 0)
             return (
                 tr("training_panel.resume_training")
                 if it > 0
@@ -468,7 +500,17 @@ class TrainingPanel(Panel):
 
     def _bind_visibility(self, model, p, d):
         def _state():
-            return RuntimeState.trainer_state.value
+            value = RuntimeState.trainer_state.value
+            session = _training_session_state()
+            if (
+                not RuntimeState.has_trainer.value
+                and session.get("available")
+                and not session.get("hydrated")
+                and not session.get("restoring")
+                and value in ("idle", "ready", "", None)
+            ):
+                return "completed" if session.get("completed") else "paused"
+            return value
 
         def _iteration():
             return RuntimeState.iteration.value
@@ -476,15 +518,35 @@ class TrainingPanel(Panel):
         def _save_steps_editable():
             return _state() in ("ready", "running", "paused")
 
-        model.bind_func("show_no_trainer", lambda: not RuntimeState.has_trainer.value)
+        def _has_stored_session():
+            session = _training_session_state()
+            return bool(
+                session.get("available")
+                or session.get("hydrated")
+                or session.get("restoring")
+            )
+
+        model.bind_func(
+            "show_no_trainer",
+            lambda: not RuntimeState.has_trainer.value and not _has_stored_session(),
+        )
         model.bind_func(
             "show_no_params",
             lambda: RuntimeState.has_trainer.value and not (p() and p().has_params()),
         )
         model.bind_func(
             "show_main",
-            lambda: RuntimeState.has_trainer.value and p() is not None and p().has_params(),
+            lambda: (
+                (RuntimeState.has_trainer.value or _has_stored_session())
+                and p() is not None
+                and p().has_params()
+            ),
         )
+
+        def _show_ctrl_ready():
+            if _training_session_state().get("restoring"):
+                return False
+            return _state() == "ready"
 
         for state_name in [
             "ready",
@@ -495,9 +557,12 @@ class TrainingPanel(Panel):
             "error",
             "stopping",
         ]:
-            model.bind_func(
-                f"show_ctrl_{state_name}", lambda s=state_name: _state() == s
-            )
+            if state_name == "ready":
+                model.bind_func("show_ctrl_ready", _show_ctrl_ready)
+            else:
+                model.bind_func(
+                    f"show_ctrl_{state_name}", lambda s=state_name: _state() == s
+                )
 
         model.bind_func(
             "show_reset_ready", lambda: _state() == "ready" and _iteration() > 0
@@ -596,6 +661,7 @@ class TrainingPanel(Panel):
             lambda: (
                 _state() in ("running", "paused", "stopping", "completed", "stopped")
                 or _iteration() > 0
+                or _has_stored_session()
             ),
         )
         model.bind_func("has_dataset", lambda: d() is not None and d().has_params())
@@ -980,7 +1046,25 @@ class TrainingPanel(Panel):
 
     def _bind_status(self, model, p):
         def _status_mode():
+            session = _training_session_state()
+            if session.get("restoring"):
+                n = int(session.get("iteration") or 0)
+                return (
+                    f"{tr('status.mode')} "
+                    + tr("training_panel.loading_session").replace("{n}", f"{n:,}")
+                )
+            if session.get("error"):
+                return (
+                    f"{tr('status.mode')} "
+                    + tr("training_panel.session_restore_failed")
+                )
             state = RuntimeState.trainer_state.value
+            if (
+                not RuntimeState.has_trainer.value
+                and session.get("available")
+                and not session.get("hydrated")
+            ):
+                state = "completed" if session.get("completed") else "paused"
             it = RuntimeState.iteration.value
             if state == "stopping" and lf.trainer_saving_model():
                 return f"{tr('status.mode')} Saving model..."
@@ -998,6 +1082,8 @@ class TrainingPanel(Panel):
 
         def _status_iteration():
             it = RuntimeState.iteration.value
+            if it <= 0:
+                it = int(_training_session_state().get("iteration") or 0)
             _rate_tracker.add_sample(it)
             rate = _rate_tracker.get_rate()
             return f"{tr('status.iteration')} {it:,} ({rate:.1f} {tr('training_panel.iters_per_sec')})"
@@ -1006,8 +1092,13 @@ class TrainingPanel(Panel):
             return tr("progress.num_splats") % f"{RuntimeState.num_gaussians.value:,}"
 
         def _progress_text():
+            session = _training_session_state()
             it = RuntimeState.iteration.value
+            if it <= 0:
+                it = int(session.get("iteration") or 0)
             mx = RuntimeState.max_iterations.value
+            if mx <= 0:
+                mx = int(session.get("max_iterations") or 0)
             return f"{it:,}/{mx:,}" if mx > 0 else ""
 
         def _error_message():
@@ -1280,6 +1371,30 @@ class TrainingPanel(Panel):
                 binding.publish()
             self._handle.dirty_all()
             self._sync_section_states()
+            dirty = True
+        session = _training_session_state()
+        session_key = (
+            bool(session.get("available")),
+            int(session.get("iteration") or 0),
+            int(session.get("max_iterations") or 0),
+            str(session.get("strategy") or ""),
+            bool(session.get("completed")),
+            bool(session.get("hydrated")),
+            bool(session.get("restoring")),
+            str(session.get("error") or ""),
+        )
+        if session_key != self._last_session:
+            self._last_session = session_key
+            self._handle.dirty("status_mode")
+            self._handle.dirty("status_iteration")
+            self._handle.dirty("progress_text")
+            self._handle.dirty("btn_start")
+            self._handle.dirty("show_no_trainer")
+            self._handle.dirty("show_main")
+            self._handle.dirty("show_ctrl_ready")
+            self._handle.dirty("show_ctrl_paused")
+            self._handle.dirty("show_ctrl_completed")
+            self._handle.dirty("show_training_telemetry")
             dirty = True
         state = RuntimeState.trainer_state.value
         if state != self._last_state:
@@ -2145,6 +2260,9 @@ class TrainingPanel(Panel):
         elif action == "pause":
             lf.pause_training()
         elif action == "resume":
+            if _training_session_state().get("restoring"):
+                return
+            _restore_stored_session_if_needed(then_start=True)
             lf.resume_training()
         elif action == "stop":
             lf.stop_training()
@@ -2153,7 +2271,26 @@ class TrainingPanel(Panel):
         elif action == "clear":
             lf.new_project()
         elif action == "switch_edit":
-            lf.switch_to_edit_mode()
+            session = _training_session_state()
+            if session.get("hydrated") and session.get("available"):
+                n = int(session.get("iteration") or 0)
+                btn_ok = tr("common.ok")
+                btn_cancel = tr("common.cancel")
+
+                def _on_edit(button, _ok=btn_ok):
+                    if button == _ok:
+                        lf.switch_to_edit_mode()
+
+                lf.ui.confirm_dialog(
+                    tr("training_panel.edit_mode_discards_session_title"),
+                    tr("training_panel.edit_mode_discards_session").replace(
+                        "{n}", f"{n:,}"
+                    ),
+                    [btn_ok, btn_cancel],
+                    _on_edit,
+                )
+            else:
+                lf.switch_to_edit_mode()
         elif action == "save_project":
             lf.project_save()
             self._mark_project_saved()
@@ -2200,13 +2337,21 @@ class TrainingPanel(Panel):
                 self._refresh_save_steps_model(params)
 
     def _action_reset(self):
+        def _reset(_stop_training):
+            _restore_stored_session_if_needed()
+            lf.reset_training()
+
         confirm_discard_work_then(
             tr("training_panel.reset"),
-            lambda stop_training: lf.reset_training(),
+            _reset,
             ask_stop_training=False,
         )
 
     def _action_start(self):
+        if _training_session_state().get("restoring"):
+            return
+        if _restore_stored_session_if_needed(then_start=True):
+            return
         params = lf.optimization_params()
 
         if params and params.has_params() and params.enable_eval:
@@ -2305,14 +2450,27 @@ class TrainingPanel(Panel):
             elif button == _k:
                 lf.start_training()
 
+        message = (
+            tr("training.save_pc.message_project")
+            if _project_has_path()
+            else tr("training.save_pc.message")
+        )
         lf.ui.confirm_dialog(
             tr("training.save_pc.title"),
-            tr("training.save_pc.message"),
+            message,
             [btn_save, btn_skip, btn_cancel],
             _on_result,
         )
 
     def _save_modified_pc(self):
+        if _project_has_path():
+            if _save_titled_project():
+                scene = lf.get_scene()
+                if scene:
+                    scene.is_point_cloud_modified = False
+            else:
+                lf.log.error("Failed to save the point cloud to the project")
+            return
         d = lf.dataset_params()
         if not d or not d.has_params() or not d.data_path:
             return

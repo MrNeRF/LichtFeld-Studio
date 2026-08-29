@@ -221,8 +221,10 @@ namespace lfs::python {
         pc_->scaling = pc_->scaling.is_valid() ? pc_->scaling[mask_dev] : pc_->scaling;
         pc_->rotation = pc_->rotation.is_valid() ? pc_->rotation[mask_dev] : pc_->rotation;
 
-        if (scene_)
+        if (scene_) {
             scene_->setPointCloudModified(true);
+            scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+        }
         return old_size - pc_->size();
     }
 
@@ -243,8 +245,10 @@ namespace lfs::python {
         pc_->scaling = pc_->scaling.is_valid() ? pc_->scaling[idx_dev] : pc_->scaling;
         pc_->rotation = pc_->rotation.is_valid() ? pc_->rotation[idx_dev] : pc_->rotation;
 
-        if (scene_)
+        if (scene_) {
             scene_->setPointCloudModified(true);
+            scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+        }
         return old_size - pc_->size();
     }
 

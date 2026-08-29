@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Asset Index module for JSON persistence of the Asset Manager catalog."""
+"""Minimal, UUID-based persistence for Asset Manager .licht projects."""
+
+from __future__ import annotations
 
 import json
 import logging
@@ -9,8 +11,8 @@ import shutil
 import tempfile
 import threading
 import uuid
-from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from copy import deepcopy
+from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
@@ -21,17 +23,32 @@ _log = logging.getLogger(__name__)
 _T = TypeVar("_T")
 _ASSET_INDEX_LOCK = threading.RLock()
 
-LIBRARY_VERSION = "1.0.0"
-LEGACY_STORAGE_PATH = Path.home() / ".lichtfeld" / "asset_manager"
-DEFAULT_LIBRARY_PATH = LEGACY_STORAGE_PATH / "library.json"
-LEGACY_LIBRARY_PATH = LEGACY_STORAGE_PATH / "library.json"
+SCHEMA_VERSION = 3
+SUPPORTED_ASSET_EXTENSION = ".licht"
 DEFAULT_FOLDER_ID = "default"
-DEFAULT_FOLDER_NAME = "Default"
+
+
+def _normalize_path(path: str) -> str:
+    return os.path.abspath(os.path.expanduser(path))
+
+
+def _path_is_within(path: str, directory: str) -> bool:
+    try:
+        return Path(_normalize_path(path)).is_relative_to(
+            Path(_normalize_path(directory))
+        )
+    except (OSError, ValueError):
+        return False
+
+
+def _enum_name(value: Any) -> str:
+    name = getattr(value, "name", None)
+    if name:
+        return str(name)
+    return str(value).rsplit(".", 1)[-1]
 
 
 def _synchronized(method: Callable[..., _T]) -> Callable[..., _T]:
-    """Serialize access to the in-memory catalog and backing JSON file."""
-
     @wraps(method)
     def wrapper(self, *args, **kwargs):
         with self._lock:
@@ -41,45 +58,30 @@ def _synchronized(method: Callable[..., _T]) -> Callable[..., _T]:
 
 
 def _dedupe_paths(paths: List[Path]) -> List[Path]:
-    seen: set[str] = set()
     result: List[Path] = []
+    seen = set()
     for path in paths:
+        expanded = path.expanduser()
         try:
-            expanded = path.expanduser()
-            key = str(expanded.resolve())
-        except Exception:
-            expanded = path.expanduser()
-            key = str(expanded)
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(expanded)
+            key = os.path.normcase(str(expanded.resolve()))
+        except OSError:
+            key = os.path.normcase(str(expanded))
+        if key not in seen:
+            seen.add(key)
+            result.append(expanded)
     return result
 
 
-def _storage_candidates() -> List[Path]:
-    candidates: List[Path] = []
-
-    env_value = environment_value("LFS_ASSET_MANAGER_DIR")
-    if env_value:
-        candidates.append(Path(env_value))
-
-    resolved_value = environment_value("LFS_RESOLVED_ASSET_LIBRARY_DIR")
-    if resolved_value:
-        candidates.append(Path(resolved_value))
-
-    candidates.append(LEGACY_STORAGE_PATH)
-
-    appdata = environment_value("APPDATA")
-    if appdata:
-        candidates.append(Path(appdata) / "LichtFeldStudio" / "asset_manager")
-
-    local_appdata = environment_value("LOCALAPPDATA")
-    if local_appdata:
-        candidates.append(Path(local_appdata) / "LichtFeldStudio" / "asset_manager")
-
-    candidates.append(Path(tempfile.gettempdir()) / "LichtFeldStudio" / "asset_manager")
-    return _dedupe_paths(candidates)
+def _legacy_storage_paths(native_storage: Optional[Path] = None) -> List[Path]:
+    paths: List[Path] = []
+    if native_storage is not None:
+        paths.append(native_storage.parent.parent / "asset_manager")
+    paths.append(Path.home() / ".lichtfeld" / "asset_manager")
+    for variable in ("APPDATA", "LOCALAPPDATA"):
+        base = environment_value(variable)
+        if base:
+            paths.append(Path(base) / "LichtFeldStudio" / "asset_manager")
+    return _dedupe_paths(paths)
 
 
 def _path_accepts_writes(path: Path) -> bool:
@@ -87,9 +89,7 @@ def _path_accepts_writes(path: Path) -> bool:
     try:
         path.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
-            prefix=".lfs-write-test-",
-            dir=path,
-            delete=False,
+            prefix=".lfs-write-test-", dir=path, delete=False
         ) as probe:
             probe.write(b"ok")
             probe_path = Path(probe.name)
@@ -100,1264 +100,1068 @@ def _path_accepts_writes(path: Path) -> bool:
         if probe_path is not None:
             try:
                 probe_path.unlink(missing_ok=True)
-            except Exception:
+            except OSError:
                 pass
         return False
-    except Exception as exc:
-        _log.debug("Asset Manager storage path probe failed: %s (%s)", path, exc)
-        return False
 
 
-def _copy_existing_storage(source_dir: Path, target_dir: Path) -> None:
-    if source_dir == target_dir:
+def _copy_existing_catalog(source: Path, target: Path) -> None:
+    source_library = source / "library.json"
+    target_library = target / "library.json"
+    if source == target or not source_library.is_file() or target_library.exists():
         return
-
-    source_library = source_dir / "library.json"
-    target_library = target_dir / "library.json"
     try:
-        if source_library.exists() and not target_library.exists():
-            target_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source_library, target_library)
-            _log.info(
-                "Copied Asset Manager catalog from %s to writable storage %s",
-                source_library,
-                target_library,
-            )
-    except Exception as exc:
+        target.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_library, target_library)
+        _log.info(
+            "Copied Asset Manager catalog from %s to writable storage %s",
+            source_library,
+            target_library,
+        )
+    except OSError as exc:
         _log.warning(
-            "Failed to copy Asset Manager catalog from %s to %s: %s",
+            "Could not copy Asset Manager catalog from %s to %s: %s",
             source_library,
             target_library,
             exc,
         )
 
-    source_thumbnails = source_dir / "thumbnails"
-    target_thumbnails = target_dir / "thumbnails"
-    try:
-        if source_thumbnails.exists() and not target_thumbnails.exists():
-            shutil.copytree(source_thumbnails, target_thumbnails)
-    except Exception as exc:
-        _log.debug(
-            "Failed to copy Asset Manager thumbnails from %s to %s: %s",
-            source_thumbnails,
-            target_thumbnails,
-            exc,
-        )
-
 
 def resolve_asset_manager_storage_path() -> Path:
-    candidates = _storage_candidates()
-    if environment_flag("LFS_SAFE_MODE", False):
-        return candidates[0] if candidates else LEGACY_STORAGE_PATH
+    override = environment_value("LFS_ASSET_MANAGER_DIR")
+    if override:
+        return Path(override).expanduser()
 
-    for candidate in candidates:
+    resolved = environment_value("LFS_RESOLVED_ASSET_LIBRARY_DIR")
+    if resolved:
+        native_storage = Path(resolved).expanduser()
+    else:
+        import lichtfeld as lf
+
+        native_storage = Path(lf.io.asset_library_dir())
+
+    if environment_flag("LFS_SAFE_MODE", False):
+        return native_storage
+
+    candidates = [native_storage]
+    appdata = environment_value("APPDATA")
+    if appdata:
+        candidates.append(Path(appdata) / "LichtFeldStudio" / "asset_manager")
+    local_appdata = environment_value("LOCALAPPDATA")
+    if local_appdata:
+        candidates.append(Path(local_appdata) / "LichtFeldStudio" / "asset_manager")
+    candidates.append(Path(tempfile.gettempdir()) / "LichtFeldStudio" / "asset_manager")
+
+    for candidate in _dedupe_paths(candidates):
         if _path_accepts_writes(candidate):
-            if candidate != LEGACY_STORAGE_PATH:
-                _copy_existing_storage(LEGACY_STORAGE_PATH, candidate)
+            if candidate != native_storage:
+                _copy_existing_catalog(native_storage, candidate)
                 _log.warning(
                     "Asset Manager catalog path %s is not writable; using %s",
-                    LEGACY_STORAGE_PATH,
+                    native_storage,
                     candidate,
                 )
             return candidate
 
-    return LEGACY_STORAGE_PATH
+    return native_storage
 
 
 def resolve_asset_manager_library_path() -> Path:
     return resolve_asset_manager_storage_path() / "library.json"
 
 
+def resolve_default_asset_directory() -> Path:
+    override = environment_value("LFS_ASSET_MANAGER_ASSETS_DIR")
+    if override:
+        return Path(override).expanduser()
+
+    try:
+        import lichtfeld as lf
+
+        getter = getattr(getattr(lf, "ui", None), "get_asset_manager_directory", None)
+        if callable(getter):
+            resolved = str(getter() or "").strip()
+            if resolved:
+                return Path(resolved).expanduser()
+    except Exception:
+        pass
+
+    return Path.home() / ".lichtfeld" / "assets"
+
+
+def is_supported_asset_path(path: str) -> bool:
+    return Path(path).suffix.lower() == SUPPORTED_ASSET_EXTENSION
+
+
 @dataclass
 class Folder:
-    """A folder container for scenes and assets."""
-
     id: str
-    name: str
-    description: str = ""
-    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
-    modified_at: str = field(default_factory=lambda: datetime.now().isoformat())
-    scene_ids: List[str] = field(default_factory=list)
-    tags: List[str] = field(default_factory=list)
-    notes: str = ""
-    thumbnail_asset_id: Optional[str] = None
-    watch_directories: List[str] = field(default_factory=list)
+    path: str
+
+    @property
+    def name(self) -> str:
+        directory = Path(self.path)
+        return directory.name or str(directory)
+
+    def to_storage_dict(self) -> Dict[str, Any]:
+        return {"path": self.path}
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Folder":
-        """Create from dictionary."""
-        return cls(
-            id=data["id"],
-            name=data["name"],
-            description=data.get("description", ""),
-            created_at=data.get("created_at", datetime.now().isoformat()),
-            modified_at=data.get("modified_at", datetime.now().isoformat()),
-            scene_ids=data.get("scene_ids", []),
-            tags=data.get("tags", []),
-            notes=data.get("notes", ""),
-            thumbnail_asset_id=data.get("thumbnail_asset_id"),
-            watch_directories=data.get("watch_directories", []),
-        )
+        return {
+            "id": self.id,
+            "name": self.name,
+            "path": self.path,
+            "is_default": self.id == DEFAULT_FOLDER_ID,
+        }
 
 
 @dataclass
-class Scene:
-    """A scene within a folder."""
+class Project:
+    """Persisted locator plus inspection data derived from the .licht file."""
 
-    id: str
+    project_uuid: str
+    name: str
+    path: str
     folder_id: str
-    name: str
-    description: str = ""
-    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
-    modified_at: str = field(default_factory=lambda: datetime.now().isoformat())
-    dataset_asset_id: Optional[str] = None
-    tags: List[str] = field(default_factory=list)
-    notes: str = ""
-    thumbnail_asset_id: Optional[str] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Scene":
-        """Create from dictionary."""
-        return cls(
-            id=data["id"],
-            folder_id=data.get("folder_id") or DEFAULT_FOLDER_ID,
-            name=data["name"],
-            description=data.get("description", ""),
-            created_at=data.get("created_at", datetime.now().isoformat()),
-            modified_at=data.get("modified_at", datetime.now().isoformat()),
-            dataset_asset_id=data.get("dataset_asset_id"),
-            tags=data.get("tags", []),
-            notes=data.get("notes", ""),
-            thumbnail_asset_id=data.get("thumbnail_asset_id"),
-        )
-
-
-@dataclass
-class Asset:
-    """An asset file (dataset, checkpoint, etc.)."""
-
-    id: str
-    folder_id: Optional[str] = None
-    scene_id: Optional[str] = None
-    name: str = ""
-    type: str = ""  # dataset, checkpoint, image, mesh, etc.
-    role: str = ""  # source, output, intermediate, thumbnail, etc.
-    path: str = ""  # Relative path within folder
-    absolute_path: str = ""  # Absolute path on filesystem
-    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
-    modified_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    file_uuid: str = ""
+    commit_uuid: str = ""
+    generation: int = 0
+    created_at_unix_ns: int = 0
+    saved_at_unix_ns: int = 0
     file_size_bytes: int = 0
-    tags: List[str] = field(default_factory=list)
-    thumbnail_path: Optional[str] = None
-    geometry_metadata: Dict[str, Any] = field(default_factory=dict)
-    dataset_metadata: Dict[str, Any] = field(default_factory=dict)
-    transform_metadata: Dict[str, Any] = field(default_factory=dict)
-    exists: bool = True
+    role: str = ""
+    open_state: str = ""
+    has_preview: bool = False
+    exists: bool = False
+    available: bool = False
+    status: str = "UNVERIFIED"
+    error: str = ""
+    relocation_candidate: str = ""
+    fallback_preview_path: str = ""
+
+    @property
+    def id(self) -> str:
+        return self.project_uuid
+
+    def to_storage_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "path": self.path,
+            "folder_id": self.folder_id,
+        }
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Asset":
-        """Create from dictionary."""
-        return cls(
-            id=data["id"],
-            folder_id=data.get("folder_id"),
-            scene_id=data.get("scene_id"),
-            name=data.get("name", ""),
-            type=data.get("type", ""),
-            role=data.get("role", ""),
-            path=data.get("path", ""),
-            absolute_path=data.get("absolute_path", ""),
-            created_at=data.get("created_at", datetime.now().isoformat()),
-            modified_at=data.get("modified_at", datetime.now().isoformat()),
-            file_size_bytes=data.get("file_size_bytes", 0),
-            tags=data.get("tags", []),
-            thumbnail_path=data.get("thumbnail_path"),
-            geometry_metadata=data.get("geometry_metadata", {}),
-            dataset_metadata=data.get("dataset_metadata", {}),
-            transform_metadata=data.get("transform_metadata", {}),
-            exists=data.get("exists", True),
-        )
+        return {
+            "id": self.project_uuid,
+            "project_uuid": self.project_uuid,
+            **self.to_storage_dict(),
+            "file_uuid": self.file_uuid,
+            "commit_uuid": self.commit_uuid,
+            "generation": self.generation,
+            "created_at_unix_ns": self.created_at_unix_ns,
+            "saved_at_unix_ns": self.saved_at_unix_ns,
+            "file_size_bytes": self.file_size_bytes,
+            "role": self.role,
+            "open_state": self.open_state,
+            "has_preview": self.has_preview,
+            "exists": self.exists,
+            "available": self.available,
+            "status": self.status,
+            "error": self.error,
+            "relocation_candidate": self.relocation_candidate,
+            "fallback_preview_path": self.fallback_preview_path,
+        }
 
 
 class AssetIndex:
-    """JSON persistence layer for the Asset Manager catalog."""
+    """Small JSON locator index; project metadata stays inside each .licht file."""
 
-    def __init__(self, library_path: Optional[Path] = None):
-        """Initialize with path to library.json.
-
-        Args:
-            library_path: Path to library.json. Defaults to the resolved Asset Manager data directory.
-        """
+    def __init__(
+        self,
+        library_path: Optional[Path] = None,
+        default_folder_path: Optional[Path] = None,
+    ):
         self._library_path = library_path or resolve_asset_manager_library_path()
         self._library_path.parent.mkdir(parents=True, exist_ok=True)
+        self._uses_default_library_path = library_path is None
+        if default_folder_path is None:
+            default_folder_path = (
+                resolve_default_asset_directory()
+                if library_path is None
+                else self._library_path.parent
+            )
+        self._default_folder_path = _normalize_path(str(default_folder_path))
+        if not environment_flag("LFS_SAFE_MODE", False):
+            try:
+                Path(self._default_folder_path).mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                _log.warning(
+                    "Could not create the default Asset Manager folder %s: %s",
+                    self._default_folder_path,
+                    exc,
+                )
         self._lock = _ASSET_INDEX_LOCK
-
-        # In-memory catalog storage
-        self._version: str = LIBRARY_VERSION
-        self._created_at: str = datetime.now().isoformat()
-        self._modified_at: str = datetime.now().isoformat()
         self._folders: Dict[str, Folder] = {}
-        self._scenes: Dict[str, Scene] = {}
-        self._assets: Dict[str, Asset] = {}
-        self._collections: Dict[str, Dict[str, Any]] = {}
-        self._tags: Dict[str, Dict[str, Any]] = {}
+        self._projects: Dict[str, Project] = {}
+        self._project_by_path: Dict[str, str] = {}
+        self._catalog_epoch = 0
+        self.load_issues: List[str] = []
 
     @property
     def library_path(self) -> Path:
-        """Return the backing library.json path."""
         return self._library_path
 
     @property
     @_synchronized
     def folders(self) -> Dict[str, Dict[str, Any]]:
-        """Return folders as dictionaries for backward compatibility."""
-        return {fid: f.to_dict() for fid, f in self._folders.items()}
-
-    @property
-    @_synchronized
-    def scenes(self) -> Dict[str, Dict[str, Any]]:
-        """Return scenes as dictionaries for backward compatibility."""
-        return {sid: s.to_dict() for sid, s in self._scenes.items()}
+        return {folder_id: folder.to_dict() for folder_id, folder in self._folders.items()}
 
     @property
     @_synchronized
     def assets(self) -> Dict[str, Dict[str, Any]]:
-        """Return assets as dictionaries for backward compatibility."""
-        return {aid: a.to_dict() for aid, a in self._assets.items()}
+        return {
+            project_uuid: project.to_dict()
+            for project_uuid, project in self._projects.items()
+        }
 
-    @property
-    @_synchronized
-    def collections(self) -> Dict[str, Dict[str, Any]]:
-        """Return collections."""
-        return dict(self._collections)
+    @staticmethod
+    def _path_key(path: str) -> str:
+        return os.path.normcase(_normalize_path(path))
 
-    @property
+    @staticmethod
+    def _inspection_is_master(inspection: Any) -> bool:
+        return _enum_name(inspection.role) == "MASTER"
+
+    @staticmethod
+    def _inspection_name(path: str) -> str:
+        return Path(path).stem
+
+    @staticmethod
+    def _inspect_path(path: str) -> Any:
+        import lichtfeld as lf
+
+        return lf.io.inspect_project(path)
+
+    def _touch_catalog(self) -> None:
+        self._catalog_epoch += 1
+
     @_synchronized
-    def tags(self) -> Dict[str, Dict[str, Any]]:
-        """Return tags."""
-        return dict(self._tags)
+    def catalog_epoch(self) -> int:
+        return self._catalog_epoch
+
+    def _apply_inspection(self, project: Project, inspection: Any) -> None:
+        project.file_uuid = str(inspection.file_uuid)
+        project.commit_uuid = str(inspection.commit_uuid)
+        project.generation = int(inspection.generation)
+        project.created_at_unix_ns = int(inspection.created_at_unix_ns)
+        project.saved_at_unix_ns = int(inspection.saved_at_unix_ns)
+        project.file_size_bytes = int(inspection.physical_file_size)
+        project.role = _enum_name(inspection.role)
+        project.open_state = _enum_name(inspection.open_state)
+        project.has_preview = bool(inspection.has_preview)
+        project.fallback_preview_path = str(
+            getattr(inspection, "fallback_preview_path", "") or ""
+        )
+        project.exists = True
+        project.available = project.role == "MASTER" and project.open_state == "OPEN"
+        if project.available:
+            project.status = "AVAILABLE"
+        elif project.open_state == "REPAIR_ONLY":
+            project.status = "REPAIR_ONLY"
+        elif project.open_state == "UNSUPPORTED_NEWER":
+            project.status = "UNSUPPORTED_NEWER"
+        else:
+            project.status = "UNSUPPORTED"
+        project.error = ""
+        self._touch_catalog()
+
+    def _clear_runtime(self, project: Project, status: str, error: str = "") -> None:
+        project.file_uuid = ""
+        project.commit_uuid = ""
+        project.generation = 0
+        project.created_at_unix_ns = 0
+        project.saved_at_unix_ns = 0
+        project.file_size_bytes = 0
+        project.role = ""
+        project.open_state = ""
+        project.has_preview = False
+        project.fallback_preview_path = ""
+        project.exists = status != "MISSING"
+        project.available = False
+        project.status = status
+        project.error = error
+        self._touch_catalog()
+
+    def _read_project_runtime(self, path: str, expected_uuid: str) -> Tuple[str, Any]:
+        if not Path(path).is_file():
+            return "MISSING", None
+        try:
+            inspection = self._inspect_path(path)
+        except Exception as exc:
+            return "UNREADABLE", str(exc)
+        if str(inspection.project_uuid) != expected_uuid:
+            return (
+                "IDENTITY_MISMATCH",
+                "The file at this path belongs to a different project",
+            )
+        if not self._inspection_is_master(inspection):
+            return "UNSUPPORTED", "Not a master project container"
+        return "AVAILABLE", inspection
+
+    def _apply_runtime_result(self, project: Project, kind: str, payload: Any) -> None:
+        if kind == "AVAILABLE":
+            project.relocation_candidate = ""
+            self._apply_inspection(project, payload)
+            return
+        self._clear_runtime(project, kind, str(payload or ""))
+
+    def _refresh_project(self, project: Project) -> None:
+        kind, payload = self._read_project_runtime(project.path, project.project_uuid)
+        self._apply_runtime_result(project, kind, payload)
+
+    def _rebuild_path_lookup(self) -> None:
+        self._project_by_path = {
+            self._path_key(project.path): project_uuid
+            for project_uuid, project in self._projects.items()
+        }
+
+    def _folder_id_for_path(self, path: str) -> Optional[str]:
+        candidates = [
+            folder
+            for folder in self._folders.values()
+            if _path_is_within(path, folder.path)
+        ]
+        if not candidates:
+            return None
+        return max(
+            candidates,
+            key=lambda folder: (len(Path(folder.path).parts), folder.id),
+        ).id
+
+    def _add_folder_record(
+        self,
+        directory: str,
+        *,
+        preferred_id: Optional[str] = None,
+    ) -> Folder:
+        normalized = _normalize_path(directory)
+        key = self._path_key(normalized)
+        for folder in self._folders.values():
+            if self._path_key(folder.path) == key:
+                return folder
+        folder_id = preferred_id or str(uuid.uuid4())
+        if folder_id == DEFAULT_FOLDER_ID or folder_id in self._folders:
+            folder_id = str(
+                uuid.uuid5(uuid.NAMESPACE_URL, f"lichtfeld-asset-folder:{key}")
+            )
+            if folder_id in self._folders:
+                folder_id = str(uuid.uuid4())
+        folder = Folder(id=folder_id, path=normalized)
+        self._folders[folder.id] = folder
+        return folder
+
+    def _snapshot_state(
+        self,
+    ) -> Tuple[Dict[str, Folder], Dict[str, Project], Dict[str, str]]:
+        return deepcopy((self._folders, self._projects, self._project_by_path))
+
+    def _restore_state(
+        self,
+        state: Tuple[Dict[str, Folder], Dict[str, Project], Dict[str, str]],
+    ) -> None:
+        self._folders, self._projects, self._project_by_path = state
+
+    def _ensure_default_folder(self) -> bool:
+        folder = self._folders.get(DEFAULT_FOLDER_ID)
+        if folder is None:
+            self._folders[DEFAULT_FOLDER_ID] = Folder(
+                id=DEFAULT_FOLDER_ID,
+                path=self._default_folder_path,
+            )
+            return True
+        if self._path_key(folder.path) != self._path_key(self._default_folder_path):
+            folder.path = self._default_folder_path
+            return True
+        return False
+
+    def _initialize_empty(self) -> None:
+        self._folders = {}
+        self._projects = {}
+        self._project_by_path = {}
+        self._ensure_default_folder()
+
+    def _load_v3(self, data: Dict[str, Any]) -> bool:
+        folders_data = data.get("folders")
+        projects_data = data.get("projects")
+        if not isinstance(folders_data, dict) or not isinstance(projects_data, dict):
+            raise ValueError("Asset Manager schema v3 requires folders and projects objects")
+        normalized = set(data) != {"schema_version", "folders", "projects"}
+
+        self._folders = {}
+        self._projects = {}
+        self._project_by_path = {}
+        stored_default_path = ""
+        for folder_id, value in folders_data.items():
+            if not isinstance(folder_id, str) or not isinstance(value, dict):
+                raise ValueError("Invalid Asset Manager folder record")
+            normalized = normalized or set(value) != {"path"}
+            raw_path = str(value.get("path") or "").strip()
+            if not raw_path:
+                normalized = True
+                continue
+            path = _normalize_path(raw_path)
+            normalized = normalized or path != raw_path
+            if folder_id == DEFAULT_FOLDER_ID:
+                stored_default_path = path
+                continue
+            if self._path_key(path) == self._path_key(self._default_folder_path):
+                normalized = True
+                continue
+            before = len(self._folders)
+            self._add_folder_record(path, preferred_id=folder_id)
+            normalized = normalized or len(self._folders) == before
+
+        self._ensure_default_folder()
+        if (
+            stored_default_path
+            and self._path_key(stored_default_path)
+            != self._path_key(self._default_folder_path)
+        ):
+            self._add_folder_record(stored_default_path)
+            normalized = True
+
+        seen_paths = set()
+        for project_uuid, value in projects_data.items():
+            if not isinstance(value, dict):
+                self.load_issues.append(
+                    f"Skipped catalog entry {project_uuid}: record is not an object"
+                )
+                continue
+            try:
+                canonical_uuid = str(uuid.UUID(str(project_uuid)))
+            except ValueError:
+                self.load_issues.append(
+                    f"Skipped catalog entry {project_uuid}: invalid project UUID"
+                )
+                continue
+            if canonical_uuid != project_uuid:
+                self.load_issues.append(
+                    f"Skipped catalog entry {project_uuid}: project UUID is not canonical"
+                )
+                continue
+
+            stored_path = str(value.get("path") or "")
+            if not stored_path.strip():
+                self.load_issues.append(
+                    f"Skipped catalog entry {project_uuid}: empty path"
+                )
+                continue
+            path = _normalize_path(stored_path)
+            if not is_supported_asset_path(path):
+                self.load_issues.append(
+                    f"Skipped catalog entry {project_uuid}: not a .licht file: {path}"
+                )
+                continue
+            path_key = self._path_key(path)
+            if path_key in seen_paths:
+                self.load_issues.append(
+                    f"Skipped catalog entry {project_uuid}: duplicate path: {path}"
+                )
+                continue
+            seen_paths.add(path_key)
+
+            normalized = normalized or set(value) != {"name", "path", "folder_id"}
+            normalized = normalized or path != stored_path
+            stored_folder_id = str(value.get("folder_id") or DEFAULT_FOLDER_ID)
+            folder_id = self._folder_id_for_path(path)
+            if folder_id is None:
+                folder_id = self._add_folder_record(str(Path(path).parent)).id
+                normalized = True
+            if folder_id != stored_folder_id:
+                normalized = True
+            project = Project(
+                project_uuid=canonical_uuid,
+                name=str(value.get("name") or self._inspection_name(path)),
+                path=path,
+                folder_id=folder_id,
+                exists=True,
+                status="UNVERIFIED",
+            )
+            self._projects[canonical_uuid] = project
+            self._project_by_path[path_key] = canonical_uuid
+        if self._projects:
+            self._touch_catalog()
+        return normalized
+
+    def _migrate_legacy(self, data: Dict[str, Any]) -> None:
+        self._initialize_empty()
+
+        legacy_folders = data.get("folders")
+        legacy_assets = data.get("assets")
+        # Before #1265 the object named "projects" held folder-like records;
+        # the actual catalog entries were in "assets" and linked by project_id.
+        if not isinstance(legacy_folders, dict) and isinstance(legacy_assets, dict):
+            legacy_folders = data.get("projects", {})
+        if not isinstance(legacy_folders, dict):
+            legacy_folders = {}
+        for folder_id, value in legacy_folders.items():
+            if not isinstance(folder_id, str) or not isinstance(value, dict):
+                continue
+            raw_directories = value.get("watch_directories", [])
+            if not isinstance(raw_directories, (list, tuple)):
+                raw_directories = []
+            for index, directory in enumerate(raw_directories):
+                text = str(directory or "").strip()
+                if not text:
+                    continue
+                preferred_id = folder_id if index == 0 and folder_id != DEFAULT_FOLDER_ID else None
+                self._add_folder_record(text, preferred_id=preferred_id)
+
+        legacy_projects = legacy_assets
+        if not isinstance(legacy_projects, dict):
+            legacy_projects = data.get("projects")
+        if not isinstance(legacy_projects, dict):
+            legacy_projects = {}
+
+        candidates: List[Tuple[str, Dict[str, Any]]] = []
+        strict_v2 = data.get("schema_version") == 2
+        for legacy_id, value in legacy_projects.items():
+            if not isinstance(value, dict):
+                continue
+            if strict_v2:
+                canonical_id = str(uuid.UUID(str(legacy_id)))
+                if canonical_id != legacy_id:
+                    raise ValueError(f"Project UUID is not canonical: {legacy_id}")
+                value = {**value, "project_uuid": canonical_id}
+            raw_path = value.get("absolute_path") or value.get("path")
+            if not raw_path:
+                continue
+            path = _normalize_path(str(raw_path))
+            if is_supported_asset_path(path):
+                candidates.append((path, value))
+
+        for path, value in sorted(candidates, key=lambda item: self._path_key(item[0])):
+            if self._path_key(path) in self._project_by_path:
+                continue
+            inspection = None
+            try:
+                if Path(path).is_file():
+                    inspection = self._inspect_path(path)
+                    if not self._inspection_is_master(inspection):
+                        continue
+            except Exception as exc:
+                _log.warning("Preserving unreadable legacy .licht project %s: %s", path, exc)
+
+            if inspection is not None:
+                project_uuid = str(inspection.project_uuid)
+                uuid.UUID(project_uuid)
+            else:
+                project_uuid = ""
+                for candidate_id in (value.get("project_uuid"), value.get("id")):
+                    try:
+                        project_uuid = str(uuid.UUID(str(candidate_id)))
+                        break
+                    except (ValueError, TypeError, AttributeError):
+                        project_uuid = ""
+                if not project_uuid:
+                    project_uuid = str(
+                        uuid.uuid5(
+                            uuid.NAMESPACE_URL,
+                            f"lichtfeld-legacy-project:{self._path_key(path)}",
+                        )
+                    )
+            if project_uuid in self._projects:
+                if inspection is not None:
+                    continue
+                project_uuid = str(
+                    uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"lichtfeld-legacy-project:{self._path_key(path)}",
+                    )
+                )
+                if project_uuid in self._projects:
+                    continue
+
+            folder_id = self._folder_id_for_path(path)
+            if folder_id is None:
+                folder_id = self._add_folder_record(str(Path(path).parent)).id
+            project = Project(
+                project_uuid=project_uuid,
+                name=str(value.get("name") or self._inspection_name(path)),
+                path=path,
+                folder_id=folder_id,
+            )
+            if inspection is not None:
+                self._apply_inspection(project, inspection)
+            elif Path(path).is_file():
+                self._clear_runtime(project, "UNREADABLE", "Legacy project needs inspection")
+            else:
+                self._clear_runtime(project, "MISSING")
+            self._projects[project_uuid] = project
+            self._project_by_path[self._path_key(path)] = project_uuid
+        self._rebuild_path_lookup()
+
+    def _canonical_cleanup_paths(self) -> Optional[Tuple[Path, Path]]:
+        if not self._uses_default_library_path or environment_value("LFS_ASSET_MANAGER_DIR"):
+            return None
+        try:
+            expected = resolve_asset_manager_library_path().resolve()
+            actual = self._library_path.resolve()
+        except OSError:
+            return None
+        if actual != expected:
+            return None
+
+        storage = actual.parent
+        if storage.name != "asset_library" or storage.parent.name != "data":
+            return None
+        legacy = storage.parent.parent / "asset_manager"
+        if legacy == storage or legacy.name != "asset_manager":
+            return None
+        return storage / "thumbnails", legacy
+
+    def _legacy_library_path(self) -> Optional[Path]:
+        if not self._uses_default_library_path or environment_value(
+            "LFS_ASSET_MANAGER_DIR"
+        ):
+            return None
+        paths = self._canonical_cleanup_paths()
+        candidates: List[Path] = []
+        if paths is not None:
+            candidates.append(paths[1])
+        candidates.extend(_legacy_storage_paths())
+        target_key = os.path.normcase(str(self._library_path))
+        for storage in _dedupe_paths(candidates):
+            candidate = storage / "library.json"
+            if os.path.normcase(str(candidate)) != target_key and candidate.is_file():
+                return candidate
+        return None
+
+    def _cleanup_obsolete_storage(self) -> None:
+        paths = self._canonical_cleanup_paths()
+        if paths is None:
+            return
+        for obsolete in paths:
+            if not obsolete.exists():
+                continue
+            try:
+                shutil.rmtree(obsolete)
+                _log.info("Removed obsolete Asset Manager storage: %s", obsolete)
+            except OSError as exc:
+                _log.warning("Could not remove obsolete Asset Manager storage %s: %s", obsolete, exc)
+
+    def _preserve_legacy_backup(self, source_path: Path) -> None:
+        backup = self._library_path.with_name(self._library_path.name + ".legacy.bak")
+        backup_temp = backup.with_suffix(backup.suffix + ".tmp")
+        try:
+            self._library_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_path, backup_temp)
+            os.replace(backup_temp, backup)
+        finally:
+            backup_temp.unlink(missing_ok=True)
 
     @_synchronized
     def load(self) -> bool:
-        """Load library.json, create default if missing.
-
-        Returns:
-            True if loaded successfully, False otherwise.
-        """
-        if not self._library_path.exists():
-            _log.info(
-                "Library not found at %s, creating default catalog", self._library_path
-            )
-            self.ensure_default_catalog()
-            return self.save()
+        self.load_issues = []
+        previous_state = self._snapshot_state()
+        source_path = self._library_path
+        migrating_legacy_location = False
+        if not source_path.exists():
+            legacy_path = self._legacy_library_path()
+            if legacy_path is not None and legacy_path.is_file():
+                source_path = legacy_path
+                migrating_legacy_location = True
+            else:
+                self._initialize_empty()
+                saved = self.save()
+                if saved:
+                    self._cleanup_obsolete_storage()
+                else:
+                    self._restore_state(previous_state)
+                return saved
 
         try:
-            with open(self._library_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            with source_path.open("r", encoding="utf-8") as stream:
+                data = json.load(stream)
+            if not isinstance(data, dict):
+                raise ValueError("Asset Manager catalog root must be an object")
 
-            # Shape-based migration from pre-#1265 schema (projects -> folders).
-            # Legacy files still claim version "1.0.0", so this must not rely on version.
-            migrated = False
-            if "folders" not in data and "projects" in data:
-                data["folders"] = data.pop("projects")
-                migrated = True
-            for scene_data in data.get("scenes", {}).values():
-                if "folder_id" not in scene_data and "project_id" in scene_data:
-                    scene_data["folder_id"] = scene_data.pop("project_id")
-                    migrated = True
-            for asset_data in data.get("assets", {}).values():
-                if "folder_id" not in asset_data and "project_id" in asset_data:
-                    asset_data["folder_id"] = asset_data.pop("project_id")
-                    migrated = True
-
-            self._version = data.get("version", LIBRARY_VERSION)
-            self._created_at = data.get("created_at", datetime.now().isoformat())
-            self._modified_at = data.get("modified_at", datetime.now().isoformat())
-
-            # Load folders
-            self._folders = {
-                fid: Folder.from_dict(f) for fid, f in data.get("folders", {}).items()
-            }
-
-            # Load scenes
-            self._scenes = {
-                sid: Scene.from_dict(s) for sid, s in data.get("scenes", {}).items()
-            }
-
-            # Load assets
-            self._assets = {
-                aid: Asset.from_dict(a) for aid, a in data.get("assets", {}).items()
-            }
-
-            # Load collections and tags
-            self._collections = data.get("collections", {})
-            self._tags = data.get("tags", {})
-            self.rebuild_tag_index(save=False)
-            self._ensure_default_folder()
-
-            _log.info(
-                "Loaded library with %d folders, %d scenes, %d assets",
-                len(self._folders),
-                len(self._scenes),
-                len(self._assets),
-            )
-            if migrated:
-                _log.info(
-                    "Migrated legacy library.json schema (projects -> folders)"
-                )
+            is_current = data.get("schema_version") == SCHEMA_VERSION
+            if is_current and not migrating_legacy_location:
+                if self._load_v3(data) and not self.save():
+                    self._restore_state(previous_state)
+                    return False
+                self._cleanup_obsolete_storage()
+            else:
+                self._migrate_legacy(data)
+                self._preserve_legacy_backup(source_path)
                 if not self.save():
-                    _log.error(
-                        "Failed to persist migrated library.json schema at %s",
-                        self._library_path,
-                    )
+                    self._restore_state(previous_state)
+                    return False
+                self._cleanup_obsolete_storage()
+                _log.info("Migrated Asset Manager catalog to schema v%d", SCHEMA_VERSION)
+            _log.info(
+                "Loaded Asset Manager library with %d folders and %d projects",
+                len(self._folders),
+                len(self._projects),
+            )
+            self._touch_catalog()
             return True
-
-        except json.JSONDecodeError as exc:
-            _log.error("Failed to parse library.json: %s", exc)
-            return False
-        except Exception as exc:
-            _log.error("Failed to load library: %s", exc)
+        except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
+            self._restore_state(previous_state)
+            _log.error("Failed to load Asset Manager library %s: %s", source_path, exc)
             return False
 
     @_synchronized
     def save(self) -> bool:
-        """Atomic save with backup (.json.bak).
-
-        Returns:
-            True if saved successfully, False otherwise.
-        """
-        temp_path_str: Optional[str] = None
+        temp_path: Optional[Path] = None
         try:
-            self._modified_at = datetime.now().isoformat()
-
             data = {
-                "version": self._version,
-                "created_at": self._created_at,
-                "modified_at": self._modified_at,
-                "folders": {fid: f.to_dict() for fid, f in self._folders.items()},
-                "scenes": {sid: s.to_dict() for sid, s in self._scenes.items()},
-                "assets": {aid: a.to_dict() for aid, a in self._assets.items()},
-                "collections": self._collections,
-                "tags": self._tags,
+                "schema_version": SCHEMA_VERSION,
+                "folders": {
+                    folder_id: folder.to_storage_dict()
+                    for folder_id, folder in self._folders.items()
+                },
+                "projects": {
+                    project_uuid: project.to_storage_dict()
+                    for project_uuid, project in self._projects.items()
+                },
             }
-
-            # Ensure parent directory exists
             self._library_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Write to a temp file in the same directory (same filesystem guarantees
-            # atomic rename).  Use tempfile so we never collide with an existing
-            # file and we get a guaranteed unique name.
-            import tempfile as _tf
-
-            fd, temp_path_str = _tf.mkstemp(
+            fd, temp_name = tempfile.mkstemp(
+                prefix=f"{self._library_path.stem}.",
                 suffix=".tmp",
-                prefix=self._library_path.stem + ".",
                 dir=str(self._library_path.parent),
             )
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2, ensure_ascii=False)
-                    f.flush()
-                    os.fsync(f.fileno())
-            except Exception:
-                # Clean up the temp file if writing failed
-                try:
-                    os.unlink(temp_path_str)
-                except Exception:
-                    pass
-                raise
+            temp_path = Path(temp_name)
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(data, stream, indent=2, ensure_ascii=False)
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
 
-            # Refresh the backup without moving the live catalog away. The
-            # final os.replace therefore always replaces a valid destination
-            # atomically, including on Windows.
-            backup_path = self._library_path.with_suffix(".json.bak")
-            backup_temp: Optional[Path] = None
-            try:
-                if self._library_path.exists():
-                    backup_temp = backup_path.with_suffix(backup_path.suffix + ".tmp")
+            if self._library_path.exists():
+                backup = self._library_path.with_suffix(".json.bak")
+                backup_temp = backup.with_suffix(backup.suffix + ".tmp")
+                try:
                     shutil.copy2(self._library_path, backup_temp)
-                    os.replace(backup_temp, backup_path)
-            except FileNotFoundError:
-                pass  # Nothing to back up — proceed with the new file
-            finally:
-                if backup_temp is not None:
-                    try:
-                        backup_temp.unlink(missing_ok=True)
-                    except OSError:
-                        pass
-
-            # Atomic replacement preserves the previous destination until the
-            # new catalog has been fully flushed.
-            os.replace(temp_path_str, self._library_path)
-
-            _log.info(
-                "Saved library to %s (%d folders, %d scenes, %d assets)",
-                self._library_path,
-                len(self._folders),
-                len(self._scenes),
-                len(self._assets),
-            )
+                    os.replace(backup_temp, backup)
+                finally:
+                    backup_temp.unlink(missing_ok=True)
+            os.replace(temp_path, self._library_path)
             return True
-
         except Exception as exc:
-            if temp_path_str is not None:
-                try:
-                    Path(temp_path_str).unlink(missing_ok=True)
-                except OSError:
-                    pass
-            _log.error(
-                "Failed to save library to %s: %s",
-                self._library_path,
-                exc,
-                exc_info=True,
-            )
+            _log.error("Failed to save Asset Manager library %s: %s", self._library_path, exc)
             return False
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
 
     @_synchronized
     def ensure_default_catalog(self) -> None:
-        """Create empty catalog structure."""
-        self._version = LIBRARY_VERSION
-        self._created_at = datetime.now().isoformat()
-        self._modified_at = datetime.now().isoformat()
-        self._folders = {}
-        self._scenes = {}
-        self._assets = {}
-        self._collections = {}
-        self._tags = {}
-        self._ensure_default_folder()
-        _log.debug("Initialized default catalog")
-
-    def _ensure_default_folder(self) -> bool:
-        """Guarantee that the catalog always contains the canonical default folder."""
-        for folder in self._folders.values():
-            if folder.id == DEFAULT_FOLDER_ID:
-                if folder.name != DEFAULT_FOLDER_NAME:
-                    folder.name = DEFAULT_FOLDER_NAME
-                    folder.modified_at = datetime.now().isoformat()
-                return False
-
-        for folder in self._folders.values():
-            if str(folder.name).strip().lower() == DEFAULT_FOLDER_NAME.lower():
-                return False
-
-        self._folders[DEFAULT_FOLDER_ID] = Folder(
-            id=DEFAULT_FOLDER_ID,
-            name=DEFAULT_FOLDER_NAME,
-        )
-        return True
-
-    # -------------------------------------------------------------------------
-    # Folder CRUD
-    # -------------------------------------------------------------------------
+        self._initialize_empty()
 
     @_synchronized
-    def create_folder(
-        self, name: str, description: str = "", tags: Optional[List[str]] = None
-    ) -> Folder:
-        """Create a new folder.
-
-        Args:
-            name: Folder name
-            description: Folder description
-            tags: Optional list of tags
-
-        Returns:
-            The created Folder instance
-        """
-        folder = Folder(
-            id=str(uuid.uuid4()),
-            name=name,
-            description=description,
-            tags=tags or [],
-        )
-        self._folders[folder.id] = folder
-        self.save()
-        return folder
-
-    @_synchronized
-    def update_folder(self, folder_id: str, **kwargs) -> Optional[Folder]:
-        """Update a folder.
-
-        Args:
-            folder_id: Folder ID to update
-            **kwargs: Fields to update
-
-        Returns:
-            Updated Folder or None if not found
-        """
-        if folder_id not in self._folders:
+    def add_folder(self, directory: str) -> Optional[Folder]:
+        path = Path(_normalize_path(directory))
+        if not path.is_dir():
             return None
-
-        folder = self._folders[folder_id]
-        for key, value in kwargs.items():
-            if hasattr(folder, key):
-                setattr(folder, key, value)
-        folder.modified_at = datetime.now().isoformat()
-        self.save()
+        existing = next(
+            (
+                folder
+                for folder in self._folders.values()
+                if self._path_key(folder.path) == self._path_key(str(path))
+            ),
+            None,
+        )
+        if existing is not None:
+            return existing
+        previous_state = self._snapshot_state()
+        folder = self._add_folder_record(str(path))
+        if not self.save():
+            self._restore_state(previous_state)
+            return None
         return folder
 
     @_synchronized
     def delete_folder(self, folder_id: str) -> bool:
-        """Delete a folder and all associated scenes and assets.
-
-        Args:
-            folder_id: Folder ID to delete
-
-        Returns:
-            True if deleted, False if not found
-        """
-        if folder_id not in self._folders:
-            return False
-
-        now = datetime.now().isoformat()
-        scenes_to_delete = {
-            sid for sid, s in self._scenes.items() if s.folder_id == folder_id
-        }
-        assets_to_delete = {
-            aid
-            for aid, a in self._assets.items()
-            if a.folder_id == folder_id or a.scene_id in scenes_to_delete
-        }
-
-        for scene in self._scenes.values():
-            if scene.dataset_asset_id in assets_to_delete:
-                scene.dataset_asset_id = None
-                scene.modified_at = now
-        for aid in assets_to_delete:
-            del self._assets[aid]
-
-        for sid in scenes_to_delete:
-            del self._scenes[sid]
-
-        if folder_id == DEFAULT_FOLDER_ID:
-            folder = self._folders[folder_id]
-            folder.scene_ids = []
-            folder.modified_at = now
-        else:
-            del self._folders[folder_id]
-        self.rebuild_tag_index(save=False)
-        return self.save()
-
-    @_synchronized
-    def get_folder(self, folder_id: str) -> Optional[Folder]:
-        """Get a folder by ID.
-
-        Args:
-            folder_id: Folder ID
-
-        Returns:
-            Folder or None if not found
-        """
-        return self._folders.get(folder_id)
-
-    @_synchronized
-    def get_watch_dirs(self, folder_id: str) -> List[str]:
-        """Get watched directories for a folder.
-
-        Args:
-            folder_id: Folder ID
-
-        Returns:
-            List of watched directory paths
-        """
         folder = self._folders.get(folder_id)
-        if folder is None:
-            return []
-        return list(folder.watch_directories)
-
-    @_synchronized
-    def set_watch_dirs(self, folder_id: str, paths: List[str]) -> bool:
-        """Set watched directories for a folder.
-
-        Args:
-            folder_id: Folder ID
-            paths: List of directory paths to watch
-
-        Returns:
-            True if updated, False if folder not found
-        """
-        if folder_id not in self._folders:
+        if folder is None or folder_id == DEFAULT_FOLDER_ID:
             return False
-        folder = self._folders[folder_id]
-        previous_paths = list(folder.watch_directories)
-        previous_modified_at = folder.modified_at
-        folder.watch_directories = list(paths)
-        folder.modified_at = datetime.now().isoformat()
-        if not self.save():
-            folder.watch_directories = previous_paths
-            folder.modified_at = previous_modified_at
-            return False
-        return True
+        previous_state = self._snapshot_state()
+        del self._folders[folder_id]
+        self._projects = {
+            project_uuid: project
+            for project_uuid, project in self._projects.items()
+            if project.folder_id != folder_id
+        }
+        self._rebuild_path_lookup()
+        if self.save():
+            return True
+        self._restore_state(previous_state)
+        return False
 
     @_synchronized
-    def list_folders(self) -> List[Folder]:
-        """List all folders.
-
-        Returns:
-            List of all folders
-        """
-        return list(self._folders.values())
-
-    @_synchronized
-    def find_or_create_folder(self, name: str) -> Folder:
-        """Find a folder by name or create a new one.
-
-        Args:
-            name: Folder name to find or create
-
-        Returns:
-            Existing or newly created Folder instance
-        """
-        for folder in self._folders.values():
-            if folder.name == name:
-                return folder
-        return self.create_folder(name=name)
-
-    # -------------------------------------------------------------------------
-    # Scene CRUD
-    # -------------------------------------------------------------------------
-
-    @_synchronized
-    def create_scene(
-        self,
-        folder_id: str,
-        name: str,
-        description: str = "",
-        tags: Optional[List[str]] = None,
-    ) -> Optional[Scene]:
-        """Create a new scene within a folder.
-
-        Args:
-            folder_id: Parent folder ID
-            name: Scene name
-            description: Scene description
-            tags: Optional list of tags
-
-        Returns:
-            The created Scene instance or None if folder not found
-        """
-        if folder_id not in self._folders:
-            return None
-
-        scene = Scene(
-            id=str(uuid.uuid4()),
-            folder_id=folder_id,
-            name=name,
-            description=description,
-            tags=tags or [],
-        )
-        self._scenes[scene.id] = scene
-        self._folders[folder_id].scene_ids.append(scene.id)
-        self._folders[folder_id].modified_at = datetime.now().isoformat()
-        if not self.save():
-            _log.error("Failed to save library during scene creation for %s", scene.id)
-            # Clean up in-memory state
-            del self._scenes[scene.id]
-            self._folders[folder_id].scene_ids.remove(scene.id)
-            return None
-        return scene
-
-    @_synchronized
-    def update_scene(self, scene_id: str, **kwargs) -> Optional[Scene]:
-        """Update a scene.
-
-        Args:
-            scene_id: Scene ID to update
-            **kwargs: Fields to update
-
-        Returns:
-            Updated Scene or None if not found
-        """
-        if scene_id not in self._scenes:
-            return None
-
-        scene = self._scenes[scene_id]
-        for key, value in kwargs.items():
-            if hasattr(scene, key):
-                setattr(scene, key, value)
-        scene.modified_at = datetime.now().isoformat()
-        if not self.save():
-            _log.error("Failed to save library during scene update for %s", scene_id)
-            return None
-        return scene
-
-    @_synchronized
-    def delete_scene(self, scene_id: str) -> bool:
-        """Delete a scene and all associated assets.
-
-        Args:
-            scene_id: Scene ID to delete
-
-        Returns:
-            True if deleted, False if not found
-        """
-        if scene_id not in self._scenes:
-            return False
-
-        scene = self._scenes[scene_id]
-
-        # Delete associated assets
-        assets_to_delete = [
-            aid for aid, a in self._assets.items() if a.scene_id == scene_id
+    def set_default_folder_path(self, directory: str) -> bool:
+        normalized = _normalize_path(directory)
+        if not environment_flag("LFS_SAFE_MODE", False):
+            try:
+                Path(normalized).mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                _log.error(
+                    "Could not create the default Asset Manager folder %s: %s",
+                    normalized,
+                    exc,
+                )
+                return False
+            if not Path(normalized).is_dir():
+                return False
+        folder = self._folders.get(DEFAULT_FOLDER_ID)
+        if folder is not None and self._path_key(folder.path) == self._path_key(normalized):
+            return True
+        previous_state = self._snapshot_state()
+        previous_default_path = self._default_folder_path
+        old_path = folder.path if folder is not None else ""
+        new_path_key = self._path_key(normalized)
+        duplicate_ids = [
+            folder_id
+            for folder_id, item in self._folders.items()
+            if folder_id != DEFAULT_FOLDER_ID
+            and self._path_key(item.path) == new_path_key
         ]
-        for aid in assets_to_delete:
-            del self._assets[aid]
-
-        # Remove from folder
-        if scene.folder_id in self._folders:
-            folder = self._folders[scene.folder_id]
-            if scene_id in folder.scene_ids:
-                folder.scene_ids.remove(scene_id)
-                folder.modified_at = datetime.now().isoformat()
-
-        del self._scenes[scene_id]
-        self.save()
-        return True
-
-    @_synchronized
-    def get_scene(self, scene_id: str) -> Optional[Scene]:
-        """Get a scene by ID.
-
-        Args:
-            scene_id: Scene ID
-
-        Returns:
-            Scene or None if not found
-        """
-        return self._scenes.get(scene_id)
-
-    @_synchronized
-    def list_scenes(self, folder_id: Optional[str] = None) -> List[Scene]:
-        """List scenes, optionally filtered by folder.
-
-        Args:
-            folder_id: Optional folder ID to filter by
-
-        Returns:
-            List of scenes
-        """
-        scenes = list(self._scenes.values())
-        if folder_id:
-            scenes = [s for s in scenes if s.folder_id == folder_id]
-        return scenes
-
-    @_synchronized
-    def find_or_create_scene(self, folder_id: str, name: str) -> Optional[Scene]:
-        """Find a scene by name within a folder or create a new one.
-
-        Args:
-            folder_id: Parent folder ID
-            name: Scene name to find or create
-
-        Returns:
-            Existing or newly created Scene instance, or None if folder not found
-        """
-        if folder_id not in self._folders:
-            return None
-        for scene in self._scenes.values():
-            if scene.folder_id == folder_id and scene.name == name:
-                return scene
-        return self.create_scene(folder_id=folder_id, name=name)
-
-    # -------------------------------------------------------------------------
-    # Asset CRUD
-    # -------------------------------------------------------------------------
-
-    @_synchronized
-    def create_asset(
-        self,
-        folder_id: Optional[str],
-        name: str,
-        type: str,
-        path: str,
-        absolute_path: str,
-        scene_id: Optional[str] = None,
-        role: str = "",
-        tags: Optional[List[str]] = None,
-        file_size_bytes: int = 0,
-        thumbnail_path: Optional[str] = None,
-        geometry_metadata: Optional[Dict[str, Any]] = None,
-        dataset_metadata: Optional[Dict[str, Any]] = None,
-        transform_metadata: Optional[Dict[str, Any]] = None,
-        created_at: Optional[str] = None,
-        modified_at: Optional[str] = None,
-        exists: Optional[bool] = None,
-        save: bool = True,
-        check_existing: bool = True,
-        rebuild_tags: bool = True,
-    ) -> Optional[Asset]:
-        """Create a new asset.
-
-        Args:
-            folder_id: Parent folder ID
-            name: Asset name
-            type: Asset type (dataset, checkpoint, etc.)
-            path: Relative path within folder
-            absolute_path: Absolute path on filesystem
-            scene_id: Optional parent scene ID
-            role: Asset role (source, output, etc.)
-            tags: Optional list of tags
-            file_size_bytes: File size in bytes
-
-        Returns:
-            The created Asset instance or None if folder not found
-        """
-        if folder_id is not None and folder_id not in self._folders:
-            _log.error("Cannot create asset: folder_id %s not found", folder_id)
-            return None
-        if scene_id is not None and scene_id not in self._scenes:
-            _log.error("Cannot create asset: scene_id %s not found", scene_id)
-            return None
-
-        normalized_abs_path = os.path.abspath(absolute_path or path)
-        if check_existing:
-            existing_asset = self.find_asset_by_path(
-                normalized_abs_path,
-                folder_id=folder_id,
+        for folder_id in duplicate_ids:
+            del self._folders[folder_id]
+        self._default_folder_path = normalized
+        if folder is None:
+            self._folders[DEFAULT_FOLDER_ID] = Folder(DEFAULT_FOLDER_ID, normalized)
+        else:
+            folder.path = normalized
+        if (
+            old_path
+            and self._path_key(old_path) != new_path_key
+            and any(
+                _path_is_within(project.path, old_path)
+                for project in self._projects.values()
             )
-            if existing_asset is not None:
-                merged_tags = list(
-                    dict.fromkeys((existing_asset.tags or []) + (tags or []))
-                )
-                updated = self.update_asset(
-                    existing_asset.id,
-                    folder_id=folder_id
-                    if folder_id is not None
-                    else existing_asset.folder_id,
-                    scene_id=scene_id if scene_id is not None else existing_asset.scene_id,
-                    name=name or existing_asset.name,
-                    type=type or existing_asset.type,
-                    role=role or existing_asset.role,
-                    path=path,
-                    absolute_path=normalized_abs_path,
-                    file_size_bytes=file_size_bytes or existing_asset.file_size_bytes,
-                    thumbnail_path=thumbnail_path
-                    if thumbnail_path is not None
-                    else existing_asset.thumbnail_path,
-                    geometry_metadata=geometry_metadata
-                    if geometry_metadata is not None
-                    else existing_asset.geometry_metadata,
-                    dataset_metadata=dataset_metadata
-                    if dataset_metadata is not None
-                    else existing_asset.dataset_metadata,
-                    tags=merged_tags,
-                    created_at=created_at or existing_asset.created_at,
-                    exists=os.path.exists(normalized_abs_path)
-                    if exists is None
-                    else exists,
-                    save=save,
-                    rebuild_tags=rebuild_tags,
-                )
-                return updated
-
-        asset = Asset(
-            id=str(uuid.uuid4()),
-            folder_id=folder_id,
-            scene_id=scene_id,
-            name=name,
-            type=type,
-            role=role,
-            path=path,
-            absolute_path=normalized_abs_path,
-            created_at=created_at or datetime.now().isoformat(),
-            modified_at=modified_at or datetime.now().isoformat(),
-            tags=tags or [],
-            file_size_bytes=file_size_bytes,
-            thumbnail_path=thumbnail_path,
-            geometry_metadata=geometry_metadata or {},
-            dataset_metadata=dataset_metadata or {},
-            transform_metadata=transform_metadata or {},
-            exists=os.path.exists(normalized_abs_path) if exists is None else exists,
-        )
-        self._assets[asset.id] = asset
-
-        # Update parent modified times
-        if scene_id and scene_id in self._scenes:
-            self._scenes[scene_id].modified_at = datetime.now().isoformat()
-
-        if rebuild_tags:
-            self.rebuild_tag_index(save=False)
-        if save:
-            if not self.save():
-                _log.error("Failed to save library during asset creation for %s", asset.id)
-                # Clean up in-memory state to maintain consistency with disk
-                del self._assets[asset.id]
-                return None
-        return asset
+        ):
+            self._add_folder_record(old_path)
+        for project in self._projects.values():
+            resolved_folder = self._folder_id_for_path(project.path)
+            if resolved_folder is None:
+                resolved_folder = self._add_folder_record(str(Path(project.path).parent)).id
+            project.folder_id = resolved_folder
+        if self.save():
+            return True
+        self._default_folder_path = previous_default_path
+        self._restore_state(previous_state)
+        return False
 
     @_synchronized
-    def update_asset(
-        self,
-        asset_id: str,
-        *,
-        save: bool = True,
-        rebuild_tags: bool = True,
-        **kwargs,
-    ) -> Optional[Asset]:
-        """Update an asset.
+    def folder_id_for_path(self, path: str) -> Optional[str]:
+        return self._folder_id_for_path(path)
 
-        Args:
-            asset_id: Asset ID to update
-            **kwargs: Fields to update
-
-        Returns:
-            Updated Asset or None if not found
-        """
-        if asset_id not in self._assets:
+    @_synchronized
+    def update_asset(self, asset_id: str, *, save: bool = True, **kwargs) -> Optional[Project]:
+        project = self._projects.get(asset_id)
+        if project is None:
             return None
-
-        asset = self._assets[asset_id]
-        explicit_modified_at = kwargs.pop("modified_at", None)
-        for key, value in kwargs.items():
-            if hasattr(asset, key):
-                setattr(asset, key, value)
-        asset.modified_at = explicit_modified_at or datetime.now().isoformat()
-        if rebuild_tags:
-            self.rebuild_tag_index(save=False)
-        if save:
-            if not self.save():
-                _log.error("Failed to save library during asset update for %s", asset_id)
+        previous_state = self._snapshot_state() if save else None
+        if "folder_id" in kwargs:
+            target = self._folders.get(str(kwargs["folder_id"]))
+            resolved_folder_id = self._folder_id_for_path(project.path)
+            if target is None or target.id != resolved_folder_id:
                 return None
-        return asset
+            project.folder_id = target.id
+        if "name" in kwargs:
+            project.name = str(kwargs["name"])
+        if save and not self.save():
+            assert previous_state is not None
+            self._restore_state(previous_state)
+            return None
+        return project
 
     @_synchronized
     def delete_asset(self, asset_id: str) -> bool:
-        """Delete an asset.
+        return self.delete_assets([asset_id]) == 1
 
-        Args:
-            asset_id: Asset ID to delete
-
-        Returns:
-            True if deleted, False if not found
-        """
-        if asset_id not in self._assets:
-            return False
-
-        asset = self._assets[asset_id]
-        asset_scene_id = asset.scene_id
-        asset_folder_id = asset.folder_id
-        is_dataset = asset.type == "dataset" or asset.role == "source_dataset"
-
-        for scene in self._scenes.values():
-            if scene.dataset_asset_id == asset_id:
-                scene.dataset_asset_id = None
-                scene.modified_at = datetime.now().isoformat()
-
-        del self._assets[asset_id]
-
-        if is_dataset and asset_scene_id in self._scenes:
-            scene_has_assets = any(
-                a.scene_id == asset_scene_id for a in self._assets.values()
-            )
-            scene = self._scenes[asset_scene_id]
-            if (
-                not scene_has_assets
-                and scene.dataset_asset_id is None
-            ):
-                folder = self._folders.get(scene.folder_id)
-                if folder and asset_scene_id in folder.scene_ids:
-                    folder.scene_ids.remove(asset_scene_id)
-                    folder.modified_at = datetime.now().isoformat()
-                del self._scenes[asset_scene_id]
-
-        if asset_folder_id in self._folders:
-            folder_has_scenes = bool(self._folders[asset_folder_id].scene_ids)
-            folder_has_assets = any(
-                a.folder_id == asset_folder_id for a in self._assets.values()
-            )
-            if not folder_has_scenes and not folder_has_assets:
-                del self._folders[asset_folder_id]
-
-        self.rebuild_tag_index(save=False)
+    @_synchronized
+    def delete_assets(self, asset_ids: List[str]) -> int:
+        removed: Dict[str, Project] = {}
+        for asset_id in dict.fromkeys(asset_ids):
+            project = self._projects.pop(asset_id, None)
+            if project is None:
+                continue
+            self._project_by_path.pop(self._path_key(project.path), None)
+            removed[asset_id] = project
+        if not removed:
+            return 0
         if not self.save():
-            _log.error("Failed to save library during asset deletion for %s", asset_id)
+            self._projects.update(removed)
+            self._rebuild_path_lookup()
+            return 0
+        self._touch_catalog()
+        return len(removed)
+
+    @_synchronized
+    def get_asset(self, asset_id: str) -> Optional[Project]:
+        return self._projects.get(asset_id)
+
+    def register_licht_asset(
+        self,
+        project_path: str,
+        *,
+        folder_id: Optional[str] = None,
+        name: Optional[str] = None,
+        adopt_existing: bool = True,
+        save: bool = True,
+        inspection: Any = None,
+    ) -> Tuple[Optional[Project], bool]:
+        path = _normalize_path(project_path)
+        if not is_supported_asset_path(path):
+            _log.warning("Asset Manager only supports .licht projects: %s", path)
+            return None, False
+        if not Path(path).is_file():
+            raise FileNotFoundError(path)
+
+        if inspection is None:
+            inspection = self._inspect_path(path)
+        if not self._inspection_is_master(inspection):
+            raise ValueError("Asset Manager only registers master .licht project files")
+        project_uuid = str(inspection.project_uuid)
+        uuid.UUID(project_uuid)
+
+        with self._lock:
+            previous_state = self._snapshot_state() if save else None
+            target_folder_id = self._folder_id_for_path(path)
+            if target_folder_id is None:
+                target_folder_id = self._add_folder_record(str(Path(path).parent)).id
+
+            path_key = self._path_key(path)
+            stale_uuid = self._project_by_path.get(path_key)
+            if stale_uuid is not None and stale_uuid != project_uuid:
+                self._projects.pop(stale_uuid, None)
+                self._project_by_path.pop(path_key, None)
+
+            project = self._projects.get(project_uuid)
+            created = project is None
+            persisted_changed = created or stale_uuid is not None
+            if project is None:
+                project = Project(
+                    project_uuid=project_uuid,
+                    name=name or self._inspection_name(path),
+                    path=path,
+                    folder_id=target_folder_id,
+                )
+                self._projects[project_uuid] = project
+                self._project_by_path[path_key] = project_uuid
+                self._apply_inspection(project, inspection)
+            else:
+                use_observed_path = adopt_existing or self._path_key(project.path) == path_key
+                if use_observed_path:
+                    old_path_key = self._path_key(project.path)
+                    if old_path_key != path_key:
+                        self._project_by_path.pop(old_path_key, None)
+                        project.path = path
+                        self._project_by_path[path_key] = project_uuid
+                        persisted_changed = True
+                    self._apply_inspection(project, inspection)
+                else:
+                    if not Path(project.path).is_file():
+                        project.relocation_candidate = path
+                    self._refresh_project(project)
+
+                if name is not None and project.name != name:
+                    project.name = name
+                    persisted_changed = True
+                if adopt_existing and project.folder_id != target_folder_id:
+                    project.folder_id = target_folder_id
+                    persisted_changed = True
+
+            if save and persisted_changed and not self.save():
+                assert previous_state is not None
+                self._restore_state(previous_state)
+                return None, False
+            return project, created
+
+    def verify_asset(self, asset_id: str) -> Optional[Project]:
+        with self._lock:
+            project = self._projects.get(asset_id)
+            if project is None:
+                return None
+            path = project.path
+            expected_uuid = project.project_uuid
+        kind, payload = self._read_project_runtime(path, expected_uuid)
+        with self._lock:
+            project = self._projects.get(asset_id)
+            if project is None:
+                return None
+            if project.path != path or project.project_uuid != expected_uuid:
+                return project
+            self._apply_runtime_result(project, kind, payload)
+            return project
+
+    @_synchronized
+    def relink_asset(self, asset_id: str, new_path: str) -> bool:
+        project = self._projects.get(asset_id)
+        path = _normalize_path(new_path)
+        if project is None or not is_supported_asset_path(path) or not Path(path).is_file():
             return False
-        return True
+        inspection = self._inspect_path(path)
+        if (
+            not self._inspection_is_master(inspection)
+            or str(inspection.project_uuid) != project.project_uuid
+        ):
+            return False
+
+        path_key = self._path_key(path)
+        conflicting_uuid = self._project_by_path.get(path_key)
+        if conflicting_uuid is not None and conflicting_uuid != asset_id:
+            return False
+        previous_state = self._snapshot_state()
+        folder_id = self._folder_id_for_path(path)
+        if folder_id is None:
+            folder_id = self._add_folder_record(str(Path(path).parent)).id
+        self._project_by_path.pop(self._path_key(project.path), None)
+        project.path = path
+        project.folder_id = folder_id
+        project.relocation_candidate = ""
+        self._project_by_path[path_key] = asset_id
+        self._apply_inspection(project, inspection)
+        if self.save():
+            return True
+        self._restore_state(previous_state)
+        return False
+
+    def verify_projects_batch(self, asset_ids: List[str]) -> int:
+        verified = 0
+        for asset_id in asset_ids:
+            if self.verify_asset(asset_id) is not None:
+                verified += 1
+        return verified
+
+    def verify_projects(self) -> Tuple[int, int]:
+        with self._lock:
+            asset_ids = list(self._projects)
+        self.verify_projects_batch(asset_ids)
+        with self._lock:
+            unavailable = sum(not project.available for project in self._projects.values())
+            return unavailable, len(self._projects)
 
     @_synchronized
-    def remove_asset(self, asset_id: str) -> bool:
-        """Backward-compatible alias for delete_asset."""
-        return self.delete_asset(asset_id)
-
-    @_synchronized
-    def get_asset(self, asset_id: str) -> Optional[Asset]:
-        """Get an asset by ID.
-
-        Args:
-            asset_id: Asset ID
-
-        Returns:
-            Asset or None if not found
-        """
-        return self._assets.get(asset_id)
+    def list_projects(self, folder_id: Optional[str] = None) -> List[Project]:
+        projects = list(self._projects.values())
+        if folder_id is not None:
+            projects = [project for project in projects if project.folder_id == folder_id]
+        return projects
 
     @_synchronized
     def find_asset_by_path(
         self,
-        absolute_path: str,
+        project_path: str,
         folder_id: Optional[str] = None,
-    ) -> Optional[Asset]:
-        """Find an asset by its absolute path.
-
-        Args:
-            absolute_path: Absolute file path
-            folder_id: Optional folder ID to scope the lookup
-
-        Returns:
-            Asset or None if not found
-        """
-        normalized = os.path.abspath(absolute_path)
-        for asset in self._assets.values():
-            if folder_id is not None and asset.folder_id != folder_id:
-                continue
-            if os.path.abspath(asset.absolute_path) == normalized:
-                return asset
+    ) -> Optional[Project]:
+        project_uuid = self._project_by_path.get(self._path_key(project_path))
+        project = self._projects.get(project_uuid) if project_uuid else None
+        if project is not None and (folder_id is None or project.folder_id == folder_id):
+            return project
         return None
-
-    @_synchronized
-    def rebuild_tag_index(self, save: bool = True) -> None:
-        """Recompute tag counts from current catalog contents."""
-        tag_counts: Dict[str, Dict[str, Any]] = {}
-
-        def _accumulate(values: List[str]) -> None:
-            for raw_tag in values or []:
-                tag = str(raw_tag).strip()
-                if not tag:
-                    continue
-                entry = tag_counts.setdefault(
-                    tag,
-                    {
-                        "label": tag,
-                        "count": 0,
-                    },
-                )
-                entry["count"] += 1
-
-        for folder in self._folders.values():
-            _accumulate(folder.tags)
-        for scene in self._scenes.values():
-            _accumulate(scene.tags)
-        for asset in self._assets.values():
-            _accumulate(asset.tags)
-
-        self._tags = tag_counts
-        if save:
-            self.save()
-
-    @_synchronized
-    def add_tag_to_asset(self, asset_id: str, tag: str) -> Optional[Asset]:
-        """Add a tag to an asset if it is not already present."""
-        asset = self._assets.get(asset_id)
-        if asset is None:
-            return None
-        normalized = tag.strip()
-        if not normalized:
-            return asset
-        if normalized not in asset.tags:
-            asset.tags.append(normalized)
-        asset.modified_at = datetime.now().isoformat()
-        self.rebuild_tag_index(save=False)
-        self.save()
-        return asset
-
-    @_synchronized
-    def remove_tag_from_asset(self, asset_id: str, tag: str) -> Optional[Asset]:
-        """Remove a tag from an asset."""
-        asset = self._assets.get(asset_id)
-        if asset is None:
-            return None
-        normalized = tag.strip()
-        if normalized in asset.tags:
-            asset.tags.remove(normalized)
-            asset.modified_at = datetime.now().isoformat()
-        self.rebuild_tag_index(save=False)
-        if not self.save():
-            _log.error("Failed to save library during tag removal for %s", asset.id)
-            # Restore the tag on failure to maintain consistency
-            if normalized not in asset.tags:
-                asset.tags.append(normalized)
-            return None
-        return asset
-
-    @_synchronized
-    def list_assets(
-        self,
-        folder_id: Optional[str] = None,
-        scene_id: Optional[str] = None,
-        type: Optional[str] = None,
-        role: Optional[str] = None,
-        tags: Optional[List[str]] = None,
-    ) -> List[Asset]:
-        """List assets with optional filters.
-
-        Args:
-            folder_id: Optional folder ID to filter by
-            scene_id: Optional scene ID to filter by
-            type: Optional asset type to filter by
-            role: Optional asset role to filter by
-            tags: Optional tags to filter by (all must match)
-
-        Returns:
-            List of assets
-        """
-        assets = list(self._assets.values())
-        if folder_id:
-            assets = [a for a in assets if a.folder_id == folder_id]
-        if scene_id:
-            assets = [a for a in assets if a.scene_id == scene_id]
-        if type:
-            assets = [a for a in assets if a.type == type]
-        if role:
-            assets = [a for a in assets if a.role == role]
-        if tags:
-            assets = [a for a in assets if all(t in a.tags for t in tags)]
-        return assets
-
-    @_synchronized
-    def mark_missing_files(self) -> Tuple[int, int]:
-        """Update exists flag for all assets based on file existence.
-
-        Returns:
-            Tuple of (missing_count, total_count)
-        """
-        missing_count = 0
-        total_count = len(self._assets)
-        changed = False
-
-        for asset in self._assets.values():
-            exists = os.path.exists(asset.absolute_path)
-            if not exists:
-                missing_count += 1
-            if asset.exists != exists:
-                asset.exists = exists
-                asset.modified_at = datetime.now().isoformat()
-                changed = True
-
-        if changed:
-            self.save()
-
-        _log.info("Marked %d/%d assets as missing", missing_count, total_count)
-        return missing_count, total_count
-
-    # -------------------------------------------------------------------------
-    # Search/Filter Methods
-    # -------------------------------------------------------------------------
-
-    @_synchronized
-    def search_folders(self, query: str) -> List[Folder]:
-        """Search folders by name, description, or tags.
-
-        Args:
-            query: Search query string
-
-        Returns:
-            List of matching folders
-        """
-        query_lower = query.lower()
-        results = []
-        for folder in self._folders.values():
-            searchable = (
-                f"{folder.name} {folder.description} {' '.join(folder.tags)}".lower()
-            )
-            if query_lower in searchable:
-                results.append(folder)
-        return results
-
-    @_synchronized
-    def search_scenes(
-        self, query: str, folder_id: Optional[str] = None
-    ) -> List[Scene]:
-        """Search scenes by name, description, or tags.
-
-        Args:
-            query: Search query string
-            folder_id: Optional folder ID to filter by
-
-        Returns:
-            List of matching scenes
-        """
-        query_lower = query.lower()
-        results = []
-        scenes = self.list_scenes(folder_id)
-        for scene in scenes:
-            searchable = (
-                f"{scene.name} {scene.description} {' '.join(scene.tags)}".lower()
-            )
-            if query_lower in searchable:
-                results.append(scene)
-        return results
-
-    @_synchronized
-    def search_assets(
-        self,
-        query: str,
-        folder_id: Optional[str] = None,
-        type: Optional[str] = None,
-    ) -> List[Asset]:
-        """Search assets by name, path, or tags.
-
-        Args:
-            query: Search query string
-            folder_id: Optional folder ID to filter by
-            type: Optional asset type to filter by
-
-        Returns:
-            List of matching assets
-        """
-        query_lower = query.lower()
-        results = []
-        assets = self.list_assets(folder_id=folder_id, type=type)
-        for asset in assets:
-            searchable = f"{asset.name} {asset.path} {' '.join(asset.tags)}".lower()
-            if query_lower in searchable:
-                results.append(asset)
-        return results
-
-    @_synchronized
-    def get_recent_assets(self, limit: int = 10) -> List[Asset]:
-        """Get most recently modified assets.
-
-        Args:
-            limit: Maximum number of assets to return
-
-        Returns:
-            List of recently modified assets
-        """
-        sorted_assets = sorted(
-            self._assets.values(),
-            key=lambda a: a.modified_at,
-            reverse=True,
-        )
-        return sorted_assets[:limit]
-
-    @_synchronized
-    def get_statistics(self) -> Dict[str, Any]:
-        """Get catalog statistics.
-
-        Returns:
-            Dictionary with catalog statistics
-        """
-        total_size = sum(a.file_size_bytes for a in self._assets.values())
-        missing_count = sum(1 for a in self._assets.values() if not a.exists)
-
-        return {
-            "version": self._version,
-            "created_at": self._created_at,
-            "modified_at": self._modified_at,
-            "folder_count": len(self._folders),
-            "scene_count": len(self._scenes),
-            "asset_count": len(self._assets),
-            "total_size_bytes": total_size,
-            "missing_files_count": missing_count,
-        }

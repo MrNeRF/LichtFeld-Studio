@@ -500,6 +500,7 @@ set(TEST_FILES
     test_operator_return_value.cpp
     test_sdl_rml_key_mapping.cpp
     test_rml_path_utils.cpp
+    test_rml_drag_payload.cpp
     test_rml_static_style_boundaries.cpp
     test_sequencer_regressions.cpp
     test_tensor_storage_version.cpp
@@ -507,6 +508,7 @@ set(TEST_FILES
     test_tensor_nn_ops.cpp
     test_nn_ops.cpp
     test_moge2.cpp
+    test_sam2.cpp
     bench_nn_ops.cpp
     test_ppisp_controller.cpp
     test_ppisp_regularization.cpp
@@ -964,6 +966,7 @@ set_tests_properties(lichtfeld.discovery PROPERTIES
 # Keep every Python tier explicit so new modules cannot silently drift out of
 # the curated suite.
 set(LFS_PYTHON_FAST_TESTS
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_asset_identity.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_bug_report.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_event_keypad_mapping.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_export_panel.py
@@ -1080,6 +1083,7 @@ add_test(NAME lichtfeld.python.gpu
         -m gpu
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_property.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_nn_sam2.py
 )
 set_tests_properties(lichtfeld.python.gpu PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

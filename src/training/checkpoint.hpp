@@ -67,6 +67,10 @@ namespace lfs::training {
         nullptr, nullptr, nullptr, nullptr));
 
     /// Load a complete checkpoint from a bounded, seekable CKPT stream.
+    /// When `preloaded_model` is non-null it must already match the CKPT splat
+    /// (count, SH degree). The loader seeks past the serialized model instead of
+    /// decoding it a second time and moves `preloaded_model` into the isolated
+    /// load graph so training tensors stay identical to a cold deserialize.
     CheckpointLoadResult load_checkpoint(
         std::istream& source,
         std::uint64_t source_bytes,
@@ -77,6 +81,7 @@ namespace lfs::training {
         PPISPControllerPool* ppisp_controller_pool,
         ADMMSparsityOptimizer* sparsity_optimizer,
         lfs::core::SplatTensorAllocator tensor_allocator = {},
-        std::string_view source_name = "embedded CKPT");
+        std::string_view source_name = "embedded CKPT",
+        lfs::core::SplatData* preloaded_model = nullptr);
 
 } // namespace lfs::training

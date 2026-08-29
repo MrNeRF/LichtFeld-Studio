@@ -62,6 +62,7 @@ do
         --test-every 8 \
         --eval \
         --headless \
+        --export ply \
         --config eval/mcmc_optimization_params.json || exit $?
     scene_end=$(date +%s.%N)
     scene_elapsed=$(echo "$scene_end - $scene_start" | bc -l)

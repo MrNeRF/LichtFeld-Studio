@@ -6,6 +6,7 @@
 
 #include "core/parameters.hpp"
 
+#include <filesystem>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -27,5 +28,7 @@ namespace lfs::preprocessing {
     PreprocessRunResult run_preprocess_ex(
         const lfs::core::param::PreprocessParameters& params,
         const PreprocessProgressCallback& progress = {});
+
+    std::filesystem::path ensure_sam2_weights(bool no_download = false);
 
 } // namespace lfs::preprocessing

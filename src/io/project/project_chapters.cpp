@@ -21,6 +21,7 @@
 #include <optional>
 #include <ranges>
 #include <set>
+#include <span>
 #include <system_error>
 #include <type_traits>
 #include <unordered_set>
@@ -1583,7 +1584,7 @@ namespace lfs::io::project {
     }
 
     lfs::Result<std::vector<ReferenceRecord>> ReferencesChapter::records() const {
-        auto items = dom_.array_items("references");
+        auto items = dom_.array_item_refs("references");
         if (!items) {
             return std::move(items).error();
         }
@@ -1592,11 +1593,13 @@ namespace lfs::io::project {
         std::unordered_set<std::string> keys;
         for (const auto& [id, element] : *items) {
             auto uuid = lfs::core::Uuid::from_string(id);
-            auto key = JsonChapterDom::read<std::string>(element, "key");
-            auto kind = JsonChapterDom::read<std::string>(element, "kind");
-            auto unresolved = JsonChapterDom::read<bool>(element, "unresolved");
-            const auto locator_value = JsonChapterDom::read_json(element, "locator");
-            const auto fingerprint_value = JsonChapterDom::read_json(element, "fingerprint");
+            auto key = JsonChapterDom::read<std::string>(*element, "key");
+            auto kind = JsonChapterDom::read<std::string>(*element, "kind");
+            auto unresolved = JsonChapterDom::read<bool>(*element, "unresolved");
+            const JsonChapterDom::Json* locator_value =
+                JsonChapterDom::read_json_ref(*element, "locator");
+            const JsonChapterDom::Json* fingerprint_value =
+                JsonChapterDom::read_json_ref(*element, "fingerprint");
             if (!uuid || !key || key->empty() || !kind || kind->empty() ||
                 !unresolved || !locator_value || !fingerprint_value ||
                 !keys.insert(*key).second) {
@@ -2358,7 +2361,8 @@ namespace lfs::io::project {
             const Json& element, const lfs::core::Uuid& uuid) {
             auto type = JsonChapterDom::read<std::string>(element, "type");
             auto name = JsonChapterDom::read<std::string>(element, "name");
-            auto parent_value = JsonChapterDom::read_json(element, "parent_uuid");
+            const Json* parent_value =
+                JsonChapterDom::read_json_ref(element, "parent_uuid");
             std::optional<lfs::core::Uuid> parent;
             if (parent_value && !parent_value->is_null()) {
                 auto parsed = parse_uuid(*parent_value, "SCNG", "nodes.parent_uuid");
@@ -2368,7 +2372,8 @@ namespace lfs::io::project {
                 parent = *parsed;
             }
             auto order = JsonChapterDom::read<std::uint32_t>(element, "child_order");
-            const auto transform_value = JsonChapterDom::read_json(element, "local_transform");
+            const Json* transform_value =
+                JsonChapterDom::read_json_ref(element, "local_transform");
             auto visible = JsonChapterDom::read<bool>(element, "visible");
             auto locked = JsonChapterDom::read<bool>(element, "locked");
             auto training = JsonChapterDom::read<bool>(element, "training_enabled");
@@ -2404,7 +2409,9 @@ namespace lfs::io::project {
                 .camera = std::nullopt,
             };
 
-            if (const auto pose = JsonChapterDom::read_json(element, "georef_pose"); pose) {
+            if (const Json* pose =
+                    JsonChapterDom::read_json_ref(element, "georef_pose");
+                pose) {
                 if (auto valid = require_object(*pose, "SCNG", "nodes.georef_pose");
                     !valid) {
                     return std::move(valid).error();
@@ -2440,28 +2447,36 @@ namespace lfs::io::project {
                 }
                 result.georef_pose = GeorefPose{*r, *t};
             }
-            if (const auto payload = JsonChapterDom::read_json(element, "payload"); payload) {
+            if (const Json* payload =
+                    JsonChapterDom::read_json_ref(element, "payload");
+                payload) {
                 auto parsed = parse_payload_binding(*payload, "nodes.payload");
                 if (!parsed) {
                     return std::move(parsed).error();
                 }
                 result.payload = std::move(*parsed);
             }
-            if (const auto cropbox = JsonChapterDom::read_json(element, "cropbox"); cropbox) {
+            if (const Json* cropbox =
+                    JsonChapterDom::read_json_ref(element, "cropbox");
+                cropbox) {
                 auto parsed = parse_cropbox(*cropbox, "nodes.cropbox");
                 if (!parsed) {
                     return std::move(parsed).error();
                 }
                 result.cropbox = std::move(*parsed);
             }
-            if (const auto ellipsoid = JsonChapterDom::read_json(element, "ellipsoid"); ellipsoid) {
+            if (const Json* ellipsoid =
+                    JsonChapterDom::read_json_ref(element, "ellipsoid");
+                ellipsoid) {
                 auto parsed = parse_ellipsoid(*ellipsoid, "nodes.ellipsoid");
                 if (!parsed) {
                     return std::move(parsed).error();
                 }
                 result.ellipsoid = std::move(*parsed);
             }
-            if (const auto camera = JsonChapterDom::read_json(element, "camera"); camera) {
+            if (const Json* camera =
+                    JsonChapterDom::read_json_ref(element, "camera");
+                camera) {
                 auto parsed = parse_camera(*camera, "nodes.camera");
                 if (!parsed) {
                     return std::move(parsed).error();
@@ -2506,7 +2521,7 @@ namespace lfs::io::project {
 
     lfs::Result<std::optional<lfs::core::Uuid>>
     SceneGraphChapter::training_model_uuid() const {
-        const auto value = dom_.get_json("training_model_uuid");
+        const JsonChapterDom::Json* value = dom_.get_json_ref("training_model_uuid");
         if (!value || value->is_null()) {
             return std::optional<lfs::core::Uuid>{};
         }
@@ -2517,8 +2532,14 @@ namespace lfs::io::project {
         return std::optional<lfs::core::Uuid>(*parsed);
     }
 
+    void SceneGraphChapter::invalidate_parsed_nodes() noexcept {
+        cached_nodes_.reset();
+        hierarchy_valid_ = false;
+    }
+
     lfs::Result<void> SceneGraphChapter::set_training_model_uuid(
         const std::optional<lfs::core::Uuid> value) {
+        hierarchy_valid_ = false;
         if (value && value->is_nil()) {
             return fail<void>(
                 lfs::ErrorCode::InvalidArgument,
@@ -2531,7 +2552,10 @@ namespace lfs::io::project {
     }
 
     lfs::Result<std::vector<SceneNodeRecord>> SceneGraphChapter::nodes() const {
-        auto items = dom_.array_items("nodes");
+        if (cached_nodes_) {
+            return *cached_nodes_;
+        }
+        auto items = dom_.array_item_refs("nodes");
         if (!items) {
             return std::move(items).error();
         }
@@ -2545,13 +2569,14 @@ namespace lfs::io::project {
                     std::format("SCNG node UUID '{}' cannot be decoded", id), "SCNG",
                     "nodes.uuid");
             }
-            auto parsed = parse_scene_node(element, *uuid);
+            auto parsed = parse_scene_node(*element, *uuid);
             if (!parsed) {
                 return std::move(parsed).error();
             }
             result.push_back(std::move(*parsed));
         }
-        return result;
+        cached_nodes_ = std::move(result);
+        return *cached_nodes_;
     }
 
     lfs::Result<std::optional<SceneNodeRecord>> SceneGraphChapter::find(
@@ -2574,6 +2599,7 @@ namespace lfs::io::project {
 
     lfs::Result<void> SceneGraphChapter::upsert_node(
         const SceneNodeRecord& value) {
+        invalidate_parsed_nodes();
         if (value.uuid.is_nil() || value.type.empty() || value.name.empty() ||
             (value.parent_uuid && value.parent_uuid->is_nil()) ||
             std::ranges::any_of(value.local_transform,
@@ -2662,6 +2688,7 @@ namespace lfs::io::project {
 
     lfs::Result<bool> SceneGraphChapter::remove_node(
         const lfs::core::Uuid& uuid) {
+        invalidate_parsed_nodes();
         if (uuid.is_nil()) {
             return fail<bool>(
                 lfs::ErrorCode::InvalidArgument, "The scene node UUID cannot be null.",
@@ -2671,19 +2698,31 @@ namespace lfs::io::project {
     }
 
     lfs::Result<void> SceneGraphChapter::validate_hierarchy() const {
+        if (hierarchy_valid_) {
+            return {};
+        }
         auto all = nodes();
         if (!all) {
             return lfs::Result<void>::failure(std::move(all).error());
         }
+        if (auto valid = validate_hierarchy(*all); !valid) {
+            return valid;
+        }
+        hierarchy_valid_ = true;
+        return {};
+    }
+
+    lfs::Result<void> SceneGraphChapter::validate_hierarchy(
+        const std::span<const SceneNodeRecord> all) const {
         std::unordered_map<lfs::core::Uuid, std::size_t> positions;
-        positions.reserve(all->size());
+        positions.reserve(all.size());
         std::unordered_map<lfs::core::Uuid, std::set<std::uint32_t>> orders;
         std::set<std::uint32_t> root_orders;
-        for (std::size_t i = 0; i < all->size(); ++i) {
-            positions.emplace((*all)[i].uuid, i);
+        for (std::size_t i = 0; i < all.size(); ++i) {
+            positions.emplace(all[i].uuid, i);
         }
-        for (std::size_t i = 0; i < all->size(); ++i) {
-            const SceneNodeRecord& node = (*all)[i];
+        for (std::size_t i = 0; i < all.size(); ++i) {
+            const SceneNodeRecord& node = all[i];
             if (node.parent_uuid) {
                 const auto parent = positions.find(*node.parent_uuid);
                 if (parent == positions.end()) {
@@ -2995,9 +3034,12 @@ namespace lfs::io::project {
     }
 
     lfs::Result<ParameterManagerSnapshot> ParametersChapter::snapshot() const {
+        if (cached_snapshot_) {
+            return *cached_snapshot_;
+        }
         const auto active = dom_.get<std::string>("active_strategy");
-        const auto presets = dom_.get_json("presets");
-        const auto dataset = dom_.get_json("dataset");
+        const JsonChapterDom::Json* presets = dom_.get_json_ref("presets");
+        const JsonChapterDom::Json* dataset = dom_.get_json_ref("dataset");
         if (!active || !valid_pending_strategy(*active) || !presets ||
             !presets->is_object() || !dataset) {
             return fail<ParameterManagerSnapshot>(
@@ -3074,7 +3116,7 @@ namespace lfs::io::project {
                 "Each PRMS preset must carry the strategy named by its role",
                 "PRMS", "presets");
         }
-        return ParameterManagerSnapshot{
+        cached_snapshot_ = ParameterManagerSnapshot{
             .active_strategy = *active,
             .mcmc_session = std::move(mcmc_session->parameters),
             .mrnf_session = std::move(mrnf_session->parameters),
@@ -3096,10 +3138,12 @@ namespace lfs::io::project {
                 std::move(igs_current->references),
             .dataset = std::move(*parsed_dataset),
         };
+        return *cached_snapshot_;
     }
 
     lfs::Result<void> ParametersChapter::set_snapshot(
         const ParameterManagerSnapshot& value) {
+        cached_snapshot_.reset();
         if (!valid_pending_strategy(value.active_strategy)) {
             return fail<void>(
                 lfs::ErrorCode::InvalidArgument,
@@ -3238,8 +3282,21 @@ namespace lfs::io::project {
         if (!records) {
             return std::move(records).error();
         }
+        auto nodes = scene.nodes();
+        if (!nodes) {
+            return std::move(nodes).error();
+        }
+        return build_reverse_reference_index(
+            *records, project, *nodes, additional_bindings);
+    }
+
+    lfs::Result<ReverseReferenceIndex> build_reverse_reference_index(
+        const std::span<const ReferenceRecord> records,
+        const ProjectChapter& project,
+        const std::span<const SceneNodeRecord> nodes,
+        const std::span<const ReferenceOwnerBinding> additional_bindings) {
         ReverseReferenceIndex result;
-        for (const ReferenceRecord& record : *records) {
+        for (const ReferenceRecord& record : records) {
             result.try_emplace(record.uuid);
         }
         const auto append = [&](const ReferenceOwnerBinding& binding)
@@ -3276,11 +3333,7 @@ namespace lfs::io::project {
                 return std::move(status).error();
             }
         }
-        auto nodes = scene.nodes();
-        if (!nodes) {
-            return std::move(nodes).error();
-        }
-        for (const SceneNodeRecord& node : *nodes) {
+        for (const SceneNodeRecord& node : nodes) {
             if (node.payload && node.payload->reference_uuid) {
                 if (auto status = append(ReferenceOwnerBinding{
                         .reference_uuid = *node.payload->reference_uuid,
@@ -3330,44 +3383,32 @@ namespace lfs::io::project {
         return result;
     }
 
-    lfs::Result<ReverseReferenceIndex> build_reverse_reference_index(
-        const ReferencesChapter& references, const ProjectChapter& project,
-        const SceneGraphChapter& scene, const ParametersChapter& parameters,
-        const std::span<const ReferenceOwnerBinding> additional_bindings) {
-        auto result = build_reverse_reference_index(
-            references, project, scene, additional_bindings);
-        if (!result) {
-            return std::move(result).error();
-        }
-        auto snapshot = parameters.snapshot();
-        if (!snapshot) {
-            return std::move(snapshot).error();
-        }
-
+    lfs::Result<ReverseReferenceIndex> apply_parameter_snapshot_to_index(
+        ReverseReferenceIndex result, const ParameterManagerSnapshot& snapshot) {
         struct PresetReferences {
             std::string_view path;
             const ParameterManagerSnapshot::ReferenceBindings* references;
         };
         const std::array presets{
             PresetReferences{"presets.mcmc.session",
-                             &snapshot->mcmc_session_references},
+                             &snapshot.mcmc_session_references},
             PresetReferences{"presets.mrnf.session",
-                             &snapshot->mrnf_session_references},
+                             &snapshot.mrnf_session_references},
             PresetReferences{"presets.igs+.session",
-                             &snapshot->igs_session_references},
+                             &snapshot.igs_session_references},
             PresetReferences{"presets.mcmc.current",
-                             &snapshot->mcmc_current_references},
+                             &snapshot.mcmc_current_references},
             PresetReferences{"presets.mrnf.current",
-                             &snapshot->mrnf_current_references},
+                             &snapshot.mrnf_current_references},
             PresetReferences{"presets.igs+.current",
-                             &snapshot->igs_current_references},
+                             &snapshot.igs_current_references},
         };
         const auto append =
             [&](const lfs::core::Uuid& reference_uuid,
                 const std::string& field,
                 const bool may_target_ppis) -> lfs::Result<void> {
-            const auto found = result->find(reference_uuid);
-            if (found == result->end()) {
+            const auto found = result.find(reference_uuid);
+            if (found == result.end()) {
                 if (may_target_ppis) {
                     return {};
                 }
@@ -3412,7 +3453,7 @@ namespace lfs::io::project {
                 }
             }
         }
-        for (auto& [uuid, bindings] : *result) {
+        for (auto& [uuid, bindings] : result) {
             (void)uuid;
             std::ranges::sort(
                 bindings,
@@ -3435,6 +3476,38 @@ namespace lfs::io::project {
                 });
         }
         return result;
+    }
+
+    lfs::Result<ReverseReferenceIndex> build_reverse_reference_index(
+        const ReferencesChapter& references, const ProjectChapter& project,
+        const SceneGraphChapter& scene, const ParametersChapter& parameters,
+        const std::span<const ReferenceOwnerBinding> additional_bindings) {
+        auto result = build_reverse_reference_index(
+            references, project, scene, additional_bindings);
+        if (!result) {
+            return std::move(result).error();
+        }
+        auto snapshot = parameters.snapshot();
+        if (!snapshot) {
+            return std::move(snapshot).error();
+        }
+        return apply_parameter_snapshot_to_index(
+            std::move(*result), *snapshot);
+    }
+
+    lfs::Result<ReverseReferenceIndex> build_reverse_reference_index(
+        const std::span<const ReferenceRecord> records,
+        const ProjectChapter& project,
+        const std::span<const SceneNodeRecord> nodes,
+        const ParameterManagerSnapshot& parameters,
+        const std::span<const ReferenceOwnerBinding> additional_bindings) {
+        auto result = build_reverse_reference_index(
+            records, project, nodes, additional_bindings);
+        if (!result) {
+            return std::move(result).error();
+        }
+        return apply_parameter_snapshot_to_index(
+            std::move(*result), parameters);
     }
 
 } // namespace lfs::io::project

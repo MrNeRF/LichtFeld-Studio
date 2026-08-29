@@ -49,6 +49,37 @@ namespace {
         std::optional<std::string> previous_;
     };
 
+    class ScopedEnvVar {
+    public:
+        ScopedEnvVar(const char* name, const std::string& value) : name_(name) {
+            if (const char* previous = std::getenv(name_))
+                previous_ = previous;
+#ifdef _WIN32
+            (void)_putenv_s(name_, value.c_str());
+#else
+            (void)setenv(name_, value.c_str(), 1);
+#endif
+        }
+
+        ~ScopedEnvVar() {
+#ifdef _WIN32
+            (void)_putenv_s(name_, previous_ ? previous_->c_str() : "");
+#else
+            if (previous_)
+                (void)setenv(name_, previous_->c_str(), 1);
+            else
+                (void)unsetenv(name_);
+#endif
+        }
+
+        ScopedEnvVar(const ScopedEnvVar&) = delete;
+        ScopedEnvVar& operator=(const ScopedEnvVar&) = delete;
+
+    private:
+        const char* name_;
+        std::optional<std::string> previous_;
+    };
+
     class ScopedSafeMode {
     public:
         ScopedSafeMode() {
@@ -357,6 +388,137 @@ TEST(ThemePreferencesContract, WorkingDirectoryRoundTripAndRejectsUnwritable) {
 
     lfs::vis::clearWorkingDirectoryPreference();
     EXPECT_TRUE(lfs::vis::workingDirectoryPreferenceRaw().empty());
+    std::filesystem::remove_all(root, error);
+}
+
+TEST(ThemePreferencesContract, AssetManagerDirectoryRoundTripAndDefaultsUnderLfsHome) {
+    const auto root =
+        std::filesystem::temp_directory_path() / "lfs_asset_manager_directory_preferences";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << lfs::format_for_developer(paths.error());
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+
+    EXPECT_TRUE(lfs::vis::assetManagerDirectoryPreferenceRaw().empty());
+    EXPECT_EQ(
+        lfs::vis::defaultAssetManagerDirectory().lexically_normal(),
+        (paths->rootDir() / "assets").lexically_normal());
+    EXPECT_EQ(
+        lfs::vis::loadAssetManagerDirectoryPreference().lexically_normal(),
+        (paths->rootDir() / "assets").lexically_normal());
+
+    const auto custom = root / "custom-assets";
+    auto set = lfs::vis::setAssetManagerDirectoryPreference(custom);
+    ASSERT_TRUE(set) << lfs::format_for_developer(set.error());
+    EXPECT_TRUE(std::filesystem::is_directory(custom));
+    EXPECT_EQ(
+        lfs::vis::assetManagerDirectoryPreferenceRaw().lexically_normal(),
+        custom.lexically_normal());
+    EXPECT_EQ(
+        lfs::vis::loadAssetManagerDirectoryPreference().lexically_normal(),
+        custom.lexically_normal());
+
+    const auto as_file = root / "not-an-asset-directory";
+    std::ofstream(as_file) << "file";
+    const auto before = lfs::vis::assetManagerDirectoryPreferenceRaw();
+    const auto rejected = lfs::vis::setAssetManagerDirectoryPreference(as_file);
+    ASSERT_FALSE(rejected);
+    EXPECT_EQ(
+        lfs::vis::assetManagerDirectoryPreferenceRaw().lexically_normal(),
+        before.lexically_normal());
+
+    lfs::vis::clearAssetManagerDirectoryPreference();
+    EXPECT_TRUE(lfs::vis::assetManagerDirectoryPreferenceRaw().empty());
+    std::filesystem::remove_all(root, error);
+}
+
+TEST(ThemePreferencesContract, WorkingDirectoryRejectsRelativeAndExpandsHome) {
+    const auto root =
+        std::filesystem::temp_directory_path() / "lfs_working_directory_absolute";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome lfs_home(root);
+    const auto fake_home = root / "fake-home";
+    const ScopedEnvVar home("HOME", fake_home.string());
+#ifdef _WIN32
+    const ScopedEnvVar userprofile("USERPROFILE", fake_home.string());
+#endif
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << lfs::format_for_developer(paths.error());
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+
+    const auto relative = std::filesystem::path("lfs_wd_rel_must_not_exist");
+    const auto cwd_target = std::filesystem::current_path() / relative;
+    std::filesystem::remove_all(cwd_target, error);
+    const auto rejected = lfs::vis::setWorkingDirectoryPreference(relative);
+    ASSERT_FALSE(rejected);
+    EXPECT_EQ(rejected.error().code(), lfs::ErrorCode::InvalidArgument);
+    EXPECT_EQ(
+        rejected.error().user_message(),
+        "The working folder path must be absolute.");
+    EXPECT_TRUE(lfs::vis::workingDirectoryPreferenceRaw().empty());
+    EXPECT_FALSE(std::filesystem::exists(cwd_target));
+    EXPECT_FALSE(std::filesystem::exists(fake_home / relative));
+
+    const auto tilde = std::filesystem::path("~") / "custom-working";
+    const auto expanded = (fake_home / "custom-working").lexically_normal();
+    const auto set = lfs::vis::setWorkingDirectoryPreference(tilde);
+    ASSERT_TRUE(set) << lfs::format_for_developer(set.error());
+    EXPECT_TRUE(std::filesystem::is_directory(expanded));
+    EXPECT_EQ(
+        lfs::vis::workingDirectoryPreferenceRaw().lexically_normal(),
+        expanded);
+    EXPECT_EQ(
+        lfs::vis::loadWorkingDirectoryPreference().lexically_normal(),
+        expanded);
+
+    lfs::vis::clearWorkingDirectoryPreference();
+    std::filesystem::remove_all(root, error);
+}
+
+TEST(ThemePreferencesContract, AssetManagerDirectoryRejectsRelativeAndExpandsHome) {
+    const auto root =
+        std::filesystem::temp_directory_path() / "lfs_asset_manager_directory_absolute";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome lfs_home(root);
+    const auto fake_home = root / "fake-home";
+    const ScopedEnvVar home("HOME", fake_home.string());
+#ifdef _WIN32
+    const ScopedEnvVar userprofile("USERPROFILE", fake_home.string());
+#endif
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << lfs::format_for_developer(paths.error());
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+
+    const auto relative = std::filesystem::path("lfs_am_rel_must_not_exist");
+    const auto cwd_target = std::filesystem::current_path() / relative;
+    std::filesystem::remove_all(cwd_target, error);
+    const auto rejected = lfs::vis::setAssetManagerDirectoryPreference(relative);
+    ASSERT_FALSE(rejected);
+    EXPECT_EQ(rejected.error().code(), lfs::ErrorCode::InvalidArgument);
+    EXPECT_EQ(
+        rejected.error().user_message(),
+        "The Asset Manager folder path must be absolute.");
+    EXPECT_TRUE(lfs::vis::assetManagerDirectoryPreferenceRaw().empty());
+    EXPECT_FALSE(std::filesystem::exists(cwd_target));
+    EXPECT_FALSE(std::filesystem::exists(fake_home / relative));
+
+    const auto tilde = std::filesystem::path("~") / "custom-assets";
+    const auto expanded = (fake_home / "custom-assets").lexically_normal();
+    const auto set = lfs::vis::setAssetManagerDirectoryPreference(tilde);
+    ASSERT_TRUE(set) << lfs::format_for_developer(set.error());
+    EXPECT_TRUE(std::filesystem::is_directory(expanded));
+    EXPECT_EQ(
+        lfs::vis::assetManagerDirectoryPreferenceRaw().lexically_normal(),
+        expanded);
+    EXPECT_EQ(
+        lfs::vis::loadAssetManagerDirectoryPreference().lexically_normal(),
+        expanded);
+
+    lfs::vis::clearAssetManagerDirectoryPreference();
     std::filesystem::remove_all(root, error);
 }
 

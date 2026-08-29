@@ -96,6 +96,8 @@ namespace lfs::training {
         bool stop_requested = false;
         TrainingPhase phase = TrainingPhase::Idle;
         Trainer* trainer = nullptr; // non-owning
+        std::string strategy;
+        bool session_hydrated = true;
         TrainingSnapshotServiceMetrics project_snapshot;
         std::string project_snapshot_path;
         std::string project_snapshot_writer_error;
@@ -125,6 +127,7 @@ namespace lfs::training {
         void set_phase(TrainingPhase phase);
 
         void update_snapshot(const HookContext& ctx, int max_iterations, bool is_paused, bool is_running, bool stop_requested, TrainingPhase phase);
+        void overlay_stored_session(std::string strategy, bool hydrated);
         LFS_BRIDGE_API void bind_state_events();
         void clear_snapshot(const Trainer* trainer);
         // Drop trainer-owned snapshot fields after teardown (no trainer loaded).

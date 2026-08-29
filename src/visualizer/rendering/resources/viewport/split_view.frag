@@ -13,7 +13,7 @@ layout(push_constant) uniform Push {
     // x = split_position (0..1 in viewport space)
     // y = left_flip_y (0/1)
     // z = right_flip_y (0/1)
-    // w = padding
+    // w = loss visualization (0/1)
     vec4 split;
 
     // Viewport pixel rect (x, y, width, height) — letterboxed content extent.
@@ -66,6 +66,31 @@ vec3 sample_panel(sampler2D tex, vec2 uv, float start, float end, float normaliz
     return clamp(sharpened, neighborhood_min, neighborhood_max);
 }
 
+vec3 loss_heatmap(vec3 ground_truth, vec3 rendered) {
+    vec3 difference = abs(ground_truth - rendered);
+    float mean_absolute_error =
+        (difference.r + difference.g + difference.b) / 3.0;
+    float intensity = clamp(
+        1.0 - exp(-8.0 * max(mean_absolute_error, 0.0)),
+        0.0, 1.0);
+
+    const vec3 black = vec3(0.0, 0.0, 0.0);
+    const vec3 purple = vec3(0.22, 0.02, 0.47);
+    const vec3 red = vec3(0.72, 0.12, 0.29);
+    const vec3 yellow = vec3(0.99, 0.65, 0.04);
+    const vec3 white = vec3(1.0, 1.0, 0.75);
+    if (intensity < 0.25) {
+        return mix(black, purple, intensity * 4.0);
+    }
+    if (intensity < 0.5) {
+        return mix(purple, red, (intensity - 0.25) * 4.0);
+    }
+    if (intensity < 0.75) {
+        return mix(red, yellow, (intensity - 0.5) * 4.0);
+    }
+    return mix(yellow, white, (intensity - 0.75) * 4.0);
+}
+
 void main() {
     // Pixel-space coordinate (gl_FragCoord origin top-left in Vulkan).
     vec2 px = gl_FragCoord.xy;
@@ -81,6 +106,19 @@ void main() {
     vec2 content_uv = vec2(
         pc.rect.z > 1.0 ? (px.x - pc.rect.x) / (pc.rect.z - 1.0) : 0.0,
         pc.rect.w > 1.0 ? (px.y - pc.rect.y) / (pc.rect.w - 1.0) : 0.0);
+
+    if (pc.split.w > 0.5) {
+        vec3 ground_truth = sample_panel(
+            u_left, content_uv, pc.panel_norm.x, pc.panel_norm.y,
+            pc.panel_flags.x, pc.split.y, pc.panel_flags.z,
+            pc.left_uv_scale_clamp.xy, pc.left_uv_scale_clamp.zw);
+        vec3 rendered = sample_panel(
+            u_right, content_uv, pc.panel_norm.z, pc.panel_norm.w,
+            pc.panel_flags.y, pc.split.z, pc.panel_flags.w,
+            pc.right_uv_scale_clamp.xy, pc.right_uv_scale_clamp.zw);
+        frag_color = vec4(loss_heatmap(ground_truth, rendered), 1.0);
+        return;
+    }
 
     float split_x = pc.rect.x + clamp(pc.split.x, 0.0, 1.0) * pc.rect.z;
     float divider_pixel = pc.rect.x + floor(pc.split.x * pc.rect.z + 0.5);

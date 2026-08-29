@@ -1352,6 +1352,12 @@ namespace lfs::vis::gui {
                         model_lock.emplace(*model_mutex);
                     }
 
+                    if (!cancelled &&
+                        !update_progress(0.0f, LOC(lichtfeld::Strings::Runtime::EXPORT_PREPARING_DATA))) {
+                        cancelled = true;
+                        error_msg = LOC(lichtfeld::Strings::Runtime::EXPORT_CANCELLED);
+                    }
+
                     if (!cancelled) {
                         std::vector<std::pair<const lfs::core::SplatData*, glm::mat4>> merge_inputs;
                         merge_inputs.reserve(splats.size());

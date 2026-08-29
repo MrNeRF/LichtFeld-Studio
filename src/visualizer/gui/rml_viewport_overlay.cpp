@@ -20,6 +20,7 @@
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/Input.h>
+#include <RmlUi/Core/StringUtilities.h>
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -30,7 +31,13 @@
 namespace lfs::vis::gui {
     namespace {
         [[nodiscard]] bool isInteractiveViewportOverlayElement(const Rml::Element* const element) {
-            return element && element->GetTagName() != "body" &&
+            if (!element)
+                return false;
+            for (auto* node = element; node; node = node->GetParentNode()) {
+                if (node->GetId() == "project-drop-overlay")
+                    return false;
+            }
+            return element->GetTagName() != "body" &&
                    element->GetTagName() != "#root" &&
                    element->GetId() != "overlay-body" &&
                    element->GetId() != "dm-root" &&
@@ -128,6 +135,7 @@ namespace lfs::vis::gui {
         append(RenderReason::Keyboard, "keyboard");
         append(RenderReason::LodStats, "lod_stats");
         append(RenderReason::LeftDockResize, "left_dock_resize");
+        append(RenderReason::ProjectDrag, "project_drag");
         return sources.empty() ? "unknown" : sources;
     }
 
@@ -153,6 +161,7 @@ namespace lfs::vis::gui {
             bindReactiveStore();
             refreshGTMetricsOverlayFromStore();
             applyLodStatsOverlay();
+            applyProjectDragOverlay();
             if (vram_hud_)
                 vram_hud_->onDocumentLoaded(document_);
         } catch (const std::exception& e) {
@@ -238,6 +247,7 @@ namespace lfs::vis::gui {
             applySplitDividerOverlay();
             applyLeftDockResizeIndicator();
             applyLodStatsOverlay();
+            applyProjectDragOverlay();
             if (vram_hud_)
                 vram_hud_->onDocumentLoaded(document_);
             updateToolbarRoots();
@@ -325,6 +335,8 @@ namespace lfs::vis::gui {
         vp_pos_ = pos;
         vp_size_ = size;
         screen_origin_ = screen_origin;
+        if (context_size_changed && project_drag_overlay_.visible)
+            applyProjectDragOverlay();
     }
 
     void RmlViewportOverlay::setViewportContentOffset(const float x) {
@@ -590,6 +602,7 @@ namespace lfs::vis::gui {
         if (auto* const element = document_->GetElementById("viewport-content")) {
             element->SetProperty("left", std::format("{:.1f}px", viewport_content_offset_));
         }
+        applyProjectDragOverlay();
         viewport_content_offset_dirty_ = false;
     }
 
@@ -692,6 +705,33 @@ namespace lfs::vis::gui {
 
         if (touched)
             markRenderNeeded(RenderReason::LodStats);
+    }
+
+    void RmlViewportOverlay::setProjectDragOverlay(ProjectDragOverlayState state) {
+        if (project_drag_overlay_.visible == state.visible &&
+            project_drag_overlay_.label == state.label) {
+            return;
+        }
+        project_drag_overlay_ = std::move(state);
+        applyProjectDragOverlay();
+        markRenderNeeded(RenderReason::ProjectDrag);
+    }
+
+    void RmlViewportOverlay::applyProjectDragOverlay() {
+        if (!document_)
+            return;
+
+        if (auto* const overlay = document_->GetElementById("project-drop-overlay")) {
+            overlay->SetClass("hidden", !project_drag_overlay_.visible);
+            overlay->SetProperty("left", std::format("{:.1f}px", viewport_content_offset_));
+            overlay->SetProperty(
+                "width",
+                std::format("{:.1f}px", std::max(vp_size_.x - viewport_content_offset_, 0.0f)));
+        }
+        if (auto* const label = document_->GetElementById("project-drop-label")) {
+            label->SetInnerRML(
+                Rml::StringUtilities::EncodeRml(project_drag_overlay_.label));
+        }
     }
 
     void RmlViewportOverlay::processInput(const PanelInputState& input) {
@@ -957,6 +997,7 @@ namespace lfs::vis::gui {
         applySplitDividerOverlay();
         applyLeftDockResizeIndicator();
         applyLodStatsOverlay();
+        applyProjectDragOverlay();
         if (vram_hud_)
             vram_hud_->onDocumentLoaded(document_);
     }

@@ -80,8 +80,9 @@ explicit override on every platform and in portable builds. The application
 imports legacy keymaps, theme/language choices, UI preferences, and
 `layout.json` once when the unified tree is first used. Existing destination
 files are never overwritten and legacy sources are never deleted. The Asset
-Manager similarly copies an existing legacy catalog into the resolved writable
-catalog directory without deleting the source.
+Manager is the exception: after its catalog is converted to the UUID-based
+`.licht` project index, the obsolete catalog directory and disk thumbnail cache
+are removed. Gallery previews are read directly from each `.licht` container.
 
 | Mode | Config | Durable data | Cache | Logs |
 | --- | --- | --- | --- | --- |
@@ -103,11 +104,14 @@ config/keymaps/
 data/backups/
 data/presets/
 data/asset_library/
+  library.json
+  library.json.bak
 cache/
 logs/
 logs/mcp/
 plugins/
 venv/
+assets/     (default Asset Manager project folder)
 temp/
 recovery/   (legacy untitled crash files; scanned at startup if present)
 ```
@@ -118,6 +122,15 @@ The **working folder** preference (`working_directory` in
 and portable mode). An empty or absent key means the default. A custom value
 must be an absolute, writable directory; LichtFeld creates it if needed and
 rejects the change without persisting when the write probe fails.
+
+The **Asset Manager folder** preference (`asset_manager_directory`) is also in
+`config/preferences.json` and defaults to `<root>/assets` (normally
+`~/.lichtfeld/assets`). Every folder shown in the Asset Manager maps one-to-one
+to a real directory selected by the user; folder names are derived from the
+directory names. The catalog remains internal at `data/asset_library/library.json`
+and stores only these directory mappings and `.licht` project locators. Changing
+the default preserves an old directory mapping when it still contains cataloged
+projects, and removing a mapping never deletes the directory or project files.
 
 Untitled crash files and untitled training snapshots live in
 `<working folder>/tmp/<session-uuid>.licht`, not under `dataset.output_path`.

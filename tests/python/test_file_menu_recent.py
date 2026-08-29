@@ -29,6 +29,7 @@ def _load_file_menu(monkeypatch, recent_paths=()):
 
     opened = []
     opened_stop_training = []
+    opened_keep_asset_manager = []
     new_projects = []
     removed = []
     confirm_dialogs = []
@@ -36,9 +37,15 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     warnings = []
     training_active = False
 
-    def project_open(path, discard=False, stop_training=False):
+    def project_open(
+        path,
+        discard=False,
+        stop_training=False,
+        keep_asset_manager_open=False,
+    ):
         opened.append((path, discard))
         opened_stop_training.append(stop_training)
+        opened_keep_asset_manager.append(keep_asset_manager_open)
 
     def new_project(discard=False, stop_training=False):
         new_projects.append((discard, stop_training))
@@ -75,6 +82,7 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     lf_stub.project_remove_recent_file = project_remove_recent_file
     lf_stub.project_open_calls = opened
     lf_stub.project_open_stop_training = opened_stop_training
+    lf_stub.project_open_keep_asset_manager = opened_keep_asset_manager
     lf_stub.new_project_calls = new_projects
     lf_stub.project_remove_recent_file_calls = removed
     lf_stub.confirm_dialogs = confirm_dialogs
@@ -103,14 +111,6 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     types_stub = ModuleType("lfs_plugins.types")
     types_stub.Operator = Operator
     monkeypatch.setitem(sys.modules, "lfs_plugins.types", types_stub)
-
-    asset_stub = ModuleType("lfs_plugins.asset_manager_integration")
-    asset_stub.register_catalog_asset_path = lambda *_args, **_kwargs: None
-    monkeypatch.setitem(
-        sys.modules,
-        "lfs_plugins.asset_manager_integration",
-        asset_stub,
-    )
 
     imports_stub = ModuleType("lfs_plugins.import_panels")
     imports_stub.open_dataset_import_panel = lambda _path: True
@@ -254,6 +254,58 @@ def test_open_recent_existing_other_error_shows_message(monkeypatch, tmp_path):
     assert "boom" in message
 
 
+def test_open_project_with_confirmation_handles_dirty_project(monkeypatch):
+    path = "/tmp/catalog-project.licht"
+    file_menu = _load_file_menu(monkeypatch)
+    file_menu.lf.project_is_dirty = lambda: True
+
+    file_menu.open_project_with_confirmation(path)
+
+    assert file_menu.lf.project_open_calls == []
+    assert len(file_menu.lf.confirm_dialogs) == 1
+    title, _message, buttons, callback = file_menu.lf.confirm_dialogs[0]
+    assert title == "tr:menu.file.open_project"
+    assert buttons == [
+        "tr:menu.file.save_project_as",
+        "tr:unsaved_work.continue_without_saving",
+        "tr:common.cancel",
+    ]
+
+    callback("tr:common.cancel")
+    assert file_menu.lf.project_open_calls == []
+
+    callback("tr:unsaved_work.continue_without_saving")
+    assert file_menu.lf.project_open_calls == [(path, True)]
+
+
+def test_asset_manager_open_can_keep_panel_open(monkeypatch):
+    path = "/tmp/catalog-project.licht"
+    file_menu = _load_file_menu(monkeypatch)
+
+    file_menu.open_project_with_confirmation(
+        path,
+        keep_asset_manager_open=True,
+    )
+
+    assert file_menu.lf.project_open_calls == [(path, True)]
+    assert file_menu.lf.project_open_keep_asset_manager == [True]
+
+
+def test_open_project_with_confirmation_reports_open_error(monkeypatch):
+    path = "/tmp/broken-catalog-project.licht"
+    file_menu = _load_file_menu(monkeypatch)
+
+    def raise_boom(_path, _discard=False, _stop_training=False):
+        raise RuntimeError("open failed")
+
+    file_menu.lf.project_open = raise_boom
+    file_menu.open_project_with_confirmation(path)
+
+    assert file_menu.lf.message_dialogs == [
+        ("tr:menu.file.open_project", "open failed", "error")
+    ]
+
+
 def _compact_project_item(file_menu):
     for item in file_menu.FileMenu().menu_items():
         if str(item.get("operator_id", "")).endswith("CompactProjectOperator"):
@@ -375,10 +427,10 @@ def test_immediate_import_error_reports_reason(monkeypatch):
     selected = "/tmp/broken.ply"
     file_menu.lf.ui.open_ply_file_dialog = lambda _path: selected
 
-    def fail_registration(*_args, **_kwargs):
-        raise RuntimeError("catalog unavailable")
+    def fail_load(*_args, **_kwargs):
+        raise RuntimeError("load failed")
 
-    file_menu.register_catalog_asset_path = fail_registration
+    file_menu.lf.load_file = fail_load
 
     result = file_menu.ImportPlyOperator().execute(None)
 
@@ -388,7 +440,7 @@ def test_immediate_import_error_reports_reason(monkeypatch):
     assert title == "tr:menu.file.import_failed"
     assert message == "tr:menu.file.import_failed_message"
     assert style == "error"
-    assert "catalog unavailable" in file_menu.lf.warning_messages[0]
+    assert "load failed" in file_menu.lf.warning_messages[0]
 
 
 def test_new_project_while_training_prompts_instead_of_switching(monkeypatch):
@@ -459,6 +511,19 @@ def test_stop_training_confirmation_yes_retries_with_stop_flag(monkeypatch):
     open_callback("tr:common.yes")
     assert file_menu.lf.project_open_calls == [("/tmp/other.licht", False)]
     assert file_menu.lf.project_open_stop_training == [True]
+
+
+def test_drag_open_confirmation_preserves_asset_manager(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+
+    file_menu._show_project_switch_confirmation(
+        False, "/tmp/dragged.licht", True
+    )
+
+    assert file_menu.lf.project_open_calls == [
+        ("/tmp/dragged.licht", True)
+    ]
+    assert file_menu.lf.project_open_keep_asset_manager == [True]
 
 
 def test_new_project_dirty_offers_save_continue_cancel(monkeypatch):
@@ -533,4 +598,3 @@ def test_load_file_confirmation_reissues_in_order_with_replace_on_first(
             },
         ),
     ]
-

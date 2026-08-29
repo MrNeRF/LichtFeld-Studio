@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -77,6 +78,14 @@ namespace lfs::vis::gui {
         // Used by scrollable panels whose content can exceed the framebuffer.
         bool cache_visible_region = false;
         RmlRect clip;
+    };
+
+    struct RmlDragPayload {
+        std::uint64_t token = 0;
+        std::string type;
+        std::string data;
+        std::string label;
+        bool released = false;
     };
 
     class RmlUIManager {
@@ -154,6 +163,15 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool anyItemActive() const;
         bool refreshLocalizedDocuments();
 
+        LFS_VIS_API std::uint64_t beginDragPayload(std::string type,
+                                                   std::string data,
+                                                   std::string label = {});
+        LFS_VIS_API bool endDragPayload(std::uint64_t token);
+        LFS_VIS_API bool cancelDragPayload(std::uint64_t token);
+        LFS_VIS_API void cancelDragPayload();
+        [[nodiscard]] LFS_VIS_API std::optional<RmlDragPayload> dragPayload() const;
+        LFS_VIS_API std::optional<RmlDragPayload> takeReleasedDragPayload();
+
     private:
         struct VulkanContextCommand {
             Rml::Context* context = nullptr;
@@ -215,6 +233,9 @@ namespace lfs::vis::gui {
         VkExtent2D vulkan_frame_extent_{};
         bool initialized_ = false;
         std::uint64_t tracked_context_order_ = 0;
+        mutable std::mutex drag_payload_mutex_;
+        std::optional<RmlDragPayload> drag_payload_;
+        std::uint64_t next_drag_payload_token_ = 1;
     };
 
 } // namespace lfs::vis::gui

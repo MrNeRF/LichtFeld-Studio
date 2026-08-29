@@ -61,6 +61,11 @@ namespace lfs::vis {
         [[nodiscard]] std::filesystem::path workingDirectoryPreference();
         void clearWorkingDirectory();
 
+        [[nodiscard]] lfs::Status setAssetManagerDirectory(const std::filesystem::path& path);
+        [[nodiscard]] std::filesystem::path assetManagerDirectory();
+        [[nodiscard]] std::filesystem::path assetManagerDirectoryPreference();
+        void clearAssetManagerDirectory();
+
     private:
         UserPreferences();
         struct Impl;
@@ -97,5 +102,11 @@ namespace lfs::vis {
     LFS_VIS_API void clearWorkingDirectoryPreference();
     [[nodiscard]] LFS_VIS_API std::filesystem::path defaultWorkingDirectory();
     [[nodiscard]] LFS_VIS_API std::filesystem::path tempProjectDirectoryPreference();
+    [[nodiscard]] LFS_VIS_API lfs::Status
+    setAssetManagerDirectoryPreference(const std::filesystem::path& path);
+    [[nodiscard]] LFS_VIS_API std::filesystem::path loadAssetManagerDirectoryPreference();
+    [[nodiscard]] LFS_VIS_API std::filesystem::path assetManagerDirectoryPreferenceRaw();
+    LFS_VIS_API void clearAssetManagerDirectoryPreference();
+    [[nodiscard]] LFS_VIS_API std::filesystem::path defaultAssetManagerDirectory();
 
 } // namespace lfs::vis

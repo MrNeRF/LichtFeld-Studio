@@ -69,11 +69,11 @@ namespace lfs::core {
             EVENT(NewProject, bool discard_changes = false; bool stop_training = false;);
             EVENT(ProjectSave, bool regenerate_preview = true;);
             EVENT(ProjectSaveAs, std::filesystem::path path;);
-            EVENT(ProjectOpen, std::filesystem::path path; bool discard_changes = false; bool stop_training = false;);
+            EVENT(ProjectOpen, std::filesystem::path path; bool discard_changes = false; bool stop_training = false; bool keep_asset_manager_open = false;);
             EVENT(ProjectCompact, );
-            EVENT(ShowProjectSwitchConfirmation, bool new_project = false; std::filesystem::path path;);
+            EVENT(ShowProjectSwitchConfirmation, bool new_project = false; std::filesystem::path path; bool keep_asset_manager_open = false;);
             EVENT(ShowLoadFileConfirmation, std::vector<std::filesystem::path> paths; bool is_dataset = false; bool replace = false;);
-            EVENT(ShowStopTrainingConfirmation, bool new_project = false; std::filesystem::path path; bool discard_changes = false;);
+            EVENT(ShowStopTrainingConfirmation, bool new_project = false; std::filesystem::path path; bool discard_changes = false; bool keep_asset_manager_open = false;);
             EVENT(SetReopenLastProject, bool enabled;);
             EVENT(SetAutoSaveOnClose, bool enabled;);
             EVENT(SetProjectAutosaveInterval, std::uint64_t seconds;);
@@ -156,9 +156,6 @@ namespace lfs::core {
             EVENT(SequencerDeleteKeyframe, size_t keyframe_index;);
             EVENT(SequencerSetKeyframeEasing, size_t keyframe_index; int easing_type;);
             EVENT(SequencerLoadPlySequence, std::string directory; float fps;);
-            EVENT(SaveAsset, std::string node_name;);
-            EVENT(SaveAssetById, int32_t node_id;);
-            EVENT(SaveAssetAs, std::string node_name; std::string asset_name;);
         } // namespace cmd
 
         // ============================================================================

@@ -1127,6 +1127,14 @@ namespace lfs::training {
             trainer->setSplatTensorAllocator(
                 std::move(tensor_allocator));
         }
+        lfs::core::SplatData preloaded_model;
+        lfs::core::SplatData* preloaded_model_ptr = nullptr;
+        if (auto* hydrated = scene.getTrainingModel();
+            hydrated && hydrated->size() > 0) {
+            preloaded_model = hydrated->clone();
+            preloaded_model.set_frozen_ranges(hydrated->frozen_ranges());
+            preloaded_model_ptr = &preloaded_model;
+        }
         if (const auto initialized =
                 trainer->initialize(params);
             !initialized) {
@@ -1146,7 +1154,8 @@ namespace lfs::training {
                 const std::uint64_t bytes)
                 -> lfs::Result<void> {
                 restored = trainer->load_checkpoint(
-                    source, bytes, source_name);
+                    source, bytes, source_name,
+                    preloaded_model_ptr);
                 return {};
             });
         if (!visited) {

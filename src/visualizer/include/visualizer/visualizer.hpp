@@ -260,6 +260,27 @@ namespace lfs::vis {
             return false;
         }
 
+        struct ProjectTrainingSessionState {
+            bool available = false;
+            int iteration = 0;
+            int max_iterations = 0;
+            std::string strategy;
+            bool completed = false;
+            bool hydrated = false;
+            bool restoring = false;
+            std::string error;
+        };
+
+        [[nodiscard]] virtual ProjectTrainingSessionState
+        projectTrainingSessionState() const {
+            return {};
+        }
+        virtual lfs::Result<void>
+        restoreProjectTrainingSession(bool then_start = false) {
+            (void)then_start;
+            return {};
+        }
+
         virtual ~Visualizer() = default;
     };
 

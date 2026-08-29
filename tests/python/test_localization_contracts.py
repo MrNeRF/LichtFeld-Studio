@@ -152,17 +152,6 @@ def test_hardcoded_ui_audit_detects_common_bypasses():
         assert {"Cancel", "Export"} <= rml_texts
 
 
-def test_watch_directory_scan_messages_format_in_every_locale():
-    values = {"count": 2, "path": "assets/sample", "folders": 3, "assets": 4,
-              "processed": 2, "total": 4, "added": 1, "discovered": 4,
-              "created": 1, "skipped": 3, "status": "ok", "error": "failure"}
-    for path in sorted(LOCALES.glob("*.json")):
-        messages = json.loads(path.read_text(encoding="utf-8"))["watch_dirs"]
-        for key, text in messages.items():
-            if key.startswith("scan_"):
-                text.format(**values)
-
-
 def test_counted_messages_use_supported_plural_forms():
     spec = importlib.util.spec_from_file_location(
         "localization_helpers", ROOT / "src" / "python" / "lfs_plugins" / "localization.py"
@@ -181,7 +170,7 @@ def test_counted_messages_use_supported_plural_forms():
 
     keys = dict(_flatten(_load("en")))
     for key in (
-        "asset_manager.status.showing_assets",
+        "asset_manager.status.showing_projects",
         "plugin_marketplace.registry_loaded",
         "plugin_marketplace.registry_unavailable",
     ):
@@ -446,7 +435,6 @@ if __name__ == "__main__":
         test_literal_localization_calls_resolve,
         test_hardcoded_ui_audit_has_no_candidates,
         test_hardcoded_ui_audit_detects_common_bypasses,
-        test_watch_directory_scan_messages_format_in_every_locale,
         test_counted_messages_use_supported_plural_forms,
         test_language_generation_is_part_of_cached_localized_ui_state,
         test_mcp_task_status_uses_stable_outcomes_not_localized_stages,

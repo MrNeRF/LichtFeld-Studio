@@ -178,6 +178,7 @@ nanobind_add_module(
     lfs/py_gizmo.cpp
     lfs/py_keymap.cpp
     lfs/py_tensor.cpp
+    lfs/py_nn.cpp
     lfs/py_splat_data.cpp
     lfs/py_scene.cpp
     lfs/py_scripts.cpp
@@ -241,7 +242,7 @@ target_compile_definitions(lfs_py PRIVATE
 
 if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
     set(LFS_PY_INTERNAL_LINK_LIBS
-        "$<LINK_GROUP:RESCAN,lfs_core,lfs_diagnostics,lfs_event_bridge,lfs_geometry,lfs_visualizer,lfs_mcp,lfs_python_runtime,lfs_training,lfs_io,lfs_rendering_tensor,lfs_sequencer>"
+        "$<LINK_GROUP:RESCAN,lfs_core,lfs_diagnostics,lfs_event_bridge,lfs_geometry,lfs_visualizer,lfs_mcp,lfs_python_runtime,lfs_training,lfs_io,lfs_rendering_tensor,lfs_sequencer,lfs_preprocessing>"
     )
 else()
     set(LFS_PY_INTERNAL_LINK_LIBS
@@ -256,6 +257,7 @@ else()
         lfs_io
         lfs_rendering_tensor
         lfs_sequencer
+        lfs_preprocessing
     )
 endif()
 

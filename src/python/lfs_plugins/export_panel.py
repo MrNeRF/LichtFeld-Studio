@@ -13,14 +13,6 @@ from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
 from .ui import RuntimeState, native_value as _native_store_value
 
-# Asset Manager integration (optional)
-try:
-    from .asset_manager_integration import register_catalog_asset_path
-
-    ASSET_MANAGER_AVAILABLE = True
-except ImportError:
-    ASSET_MANAGER_AVAILABLE = False
-
 __lfs_panel_classes__ = ["ExportPanel"]
 __lfs_panel_ids__ = ["lfs.export"]
 
@@ -110,8 +102,6 @@ class ExportPanel(Panel):
         self._rad_streamable = True
         self._include_provenance = True
         self._doc = None  # Document reference for DOM access
-        self._last_export_path = None  # Track last export path for Asset Manager
-        self._last_export_format = None  # Track last export format for Asset Manager
         self._reactive_unsubscribers = []
 
     # ── Data model ────────────────────────────────────────────
@@ -750,11 +740,6 @@ class ExportPanel(Panel):
 
     def _start_export(self, path, selected_nodes):
         if path:
-
-            # Store export info for Asset Manager registration
-            self._last_export_path = path
-            self._last_export_format = self._format
-
             self._exporting = True
             self._last_progress = -1.0
             self._progress_value = "0"
@@ -813,12 +798,6 @@ class ExportPanel(Panel):
         if not state.get("active", False):
             self._exporting = False
             self._selection_seeded = False
-            # Register export with Asset Manager if successful
-            completed = state.get("outcome") == "completed" and not state.get("error")
-            if completed and self._last_export_path and self._last_export_format is not None:
-                self._register_export(self._last_export_path, self._last_export_format)
-            self._last_export_path = None
-            self._last_export_format = None
             self._last_progress = -1.0
             self._progress_value = "0"
             self._dirty_model(
@@ -857,47 +836,3 @@ class ExportPanel(Panel):
             return True
 
         return False
-
-    def _format_to_asset_type(self, fmt: ExportFormat) -> str:
-        """Map ExportFormat to asset type string for Asset Manager."""
-        mapping = {
-            ExportFormat.PLY: "ply",
-            ExportFormat.SOG: "sog",
-            ExportFormat.SPZ: "spz",
-            ExportFormat.RAD: "rad",
-            ExportFormat.USD: "usd",
-            ExportFormat.NUREC_USDZ: "usdz",
-            ExportFormat.HTML_VIEWER: "html",
-            ExportFormat.COLMAP: "dataset",
-        }
-        return mapping.get(fmt, "unknown")
-
-    def _register_export(self, path: str, fmt: ExportFormat):
-        """Register exported file with Asset Manager catalog.
-
-        Called after successful export to add/update the asset in the catalog
-        and refresh the Asset Manager UI if open.
-
-        Args:
-            path: Output file path
-            fmt: Export format used
-        """
-        if not ASSET_MANAGER_AVAILABLE:
-            return
-
-        try:
-            # Determine asset type from format
-            asset_type = self._format_to_asset_type(fmt)
-
-            role = "trained_output" if lf.trainer_current_iteration() > 0 else "export"
-            register_catalog_asset_path(
-                path,
-                asset_type=asset_type,
-                role=role,
-                select=True,
-            )
-
-        except Exception:
-            # Asset Manager integration is non-intrusive
-            # Log error but don't fail the export
-            pass

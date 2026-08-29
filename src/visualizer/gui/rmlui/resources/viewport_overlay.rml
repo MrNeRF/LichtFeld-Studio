@@ -6,6 +6,12 @@
     <div id="left-frame-border" class="viewport-frame-border"></div>
     <div id="left-dock-resize-indicator" class="left-dock-resize-indicator hidden"></div>
     <div id="split-divider-overlay" class="viewport-split-divider hidden"></div>
+    <div id="project-drop-overlay" class="project-drop-overlay hidden">
+        <div class="project-drop-card">
+            <div class="project-drop-title">@tr:asset_manager.drag.open_project</div>
+            <div id="project-drop-label" class="project-drop-label"></div>
+        </div>
+    </div>
 
     <div id="primary-toolbar-root" class="panel-toolbar-root">
         <div id="primary-utility-toolbar" class="toolbar-container toolbar-vertical">
@@ -833,7 +839,40 @@
                         <option value="rgb">RGB</option>
                         <option value="normal">@tr:ui.normal</option>
                         <option value="depth">@tr:ui.depth</option>
+                        <option value="loss">@tr:status.loss</option>
                     </select>
+                </div>
+            </div>
+            <div class="viewport-gt-color-legend"
+                 data-if="gt_compare_mode_value == 'depth'">
+                <div class="viewport-gt-color-scale"
+                     data-if="gt_compare_depth_mode_value == 'palette'">
+                    <span class="viewport-gt-color-scale__segment viewport-gt-color-scale__segment--depth-far"></span>
+                    <span class="viewport-gt-color-scale__segment viewport-gt-color-scale__segment--depth-far-mid"></span>
+                    <span class="viewport-gt-color-scale__segment viewport-gt-color-scale__segment--depth-mid"></span>
+                    <span class="viewport-gt-color-scale__segment viewport-gt-color-scale__segment--depth-near-mid"></span>
+                    <span class="viewport-gt-color-scale__segment viewport-gt-color-scale__segment--depth-near"></span>
+                </div>
+                <div class="viewport-gt-color-scale"
+                     data-if="gt_compare_depth_mode_value == 'gray'">
+                    <span class="viewport-gt-color-scale__segment viewport-gt-color-scale__segment--depth-gray"></span>
+                </div>
+                <div class="viewport-gt-color-labels">
+                    <span>@tr:ui.far</span>
+                    <span>@tr:ui.near</span>
+                </div>
+            </div>
+            <div class="viewport-gt-color-legend"
+                 data-if="gt_compare_mode_value == 'loss'">
+                <div class="viewport-gt-color-scale">
+                    <span class="viewport-gt-color-scale__segment viewport-gt-color-scale__segment--loss-lowest"></span>
+                    <span class="viewport-gt-color-scale__segment viewport-gt-color-scale__segment--loss-low"></span>
+                    <span class="viewport-gt-color-scale__segment viewport-gt-color-scale__segment--loss-medium"></span>
+                    <span class="viewport-gt-color-scale__segment viewport-gt-color-scale__segment--loss-high"></span>
+                </div>
+                <div class="viewport-gt-color-labels">
+                    <span>@tr:tooltip.gt_loss_lower_error</span>
+                    <span>@tr:tooltip.gt_loss_higher_error</span>
                 </div>
             </div>
         </div>

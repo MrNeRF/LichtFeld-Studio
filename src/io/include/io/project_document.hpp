@@ -67,6 +67,11 @@ namespace lfs::io::project {
         read_at(std::uint64_t offset, std::span<std::byte> destination) const;
         [[nodiscard]] lfs::Result<void>
         visit_stream(const StreamVisitor& visitor) const;
+        [[nodiscard]] lfs::Result<void>
+        visit_materialized(const StreamVisitor& visitor,
+                           MaterializeRetirementSink* retirement = nullptr) const;
+        [[nodiscard]] lfs::Result<void>
+        peek_prefix(std::span<std::byte> destination) const;
 
     private:
         friend class ProjectDocument;
@@ -81,11 +86,17 @@ namespace lfs::io::project {
         // Decode the KB-scale shell chapters only. Embedded scene payloads
         // remain clean source spans until stage_hydration() consumes them.
         bool defer_geometry_payloads = false;
+        // Skip Impl::validate after the chapter scan. Hydration re-opens a
+        // path the shell already validated; identity is checked by the caller.
+        bool skip_validation = false;
     };
 
     struct ProjectDocumentSaveOptions {
         CommitOptions commit;
         lfs::core::Uuid file_uuid;
+        // A titled-project Save As uses a new catalog identity. Leave null
+        // for ordinary saves, recovery publication, and first save.
+        lfs::core::Uuid save_as_project_uuid = {};
         IndexCompression index_compression = IndexCompression::Zstd;
         std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
         // Only a file-dialog-confirmed Save As may replace a first-save destination.
@@ -107,6 +118,19 @@ namespace lfs::io::project {
         // the live document to that app-private path.
         bool leave_unbound = false;
     };
+
+    [[nodiscard]] LFS_IO_API lfs::Result<std::vector<std::byte>>
+    dataset_preview_png(const std::filesystem::path& first_image,
+                        int max_size = 512);
+
+    [[nodiscard]] LFS_IO_API std::optional<std::filesystem::path>
+    first_dataset_image(const lfs::core::param::DatasetConfig& dataset);
+
+    [[nodiscard]] LFS_IO_API std::optional<std::filesystem::path>
+    first_dataset_image(const ProjectChapter& project,
+                        const ReferencesChapter& references,
+                        const ParametersChapter& parameters,
+                        const std::filesystem::path& project_root = {});
 
     struct ProjectDocumentAutosaveOptions {
         lfs::core::Uuid file_uuid;
@@ -151,11 +175,16 @@ namespace lfs::io::project {
         ReverseReferenceIndex reverse_reference_index;
         std::optional<lfs::core::Uuid> checkpoint_uuid;
         std::optional<lfs::core::CheckpointHeader> checkpoint_header;
+        std::optional<lfs::core::param::TrainingParameters> checkpoint_params;
         bool trainer_state_pending = false;
         ProjectSessionChapters pending_session;
         std::size_t hydrated_payload_units = 0;
         std::size_t invalidated_payload_units = 0;
         bool selection_installed = false;
+        double splat_read_ms = 0;
+        double splat_hash_ms = 0;
+        double splat_copy_ms = 0;
+        double splat_materialize_ms = 0;
     };
 
     class LFS_IO_API ProjectHydrationPlan {
@@ -296,9 +325,10 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<ProjectDocumentSaveReport>
         save(const std::filesystem::path& path,
              const ProjectDocumentSaveOptions& options = {});
-        // Publishes a compacted sibling with a new file UUID, preserving the
-        // project UUID and all clean/unloaded payloads. An existing
-        // destination is atomically replaced only after staged verification.
+        // Publishes a compacted sibling with a new file UUID and all
+        // clean/unloaded payloads. save_as_project_uuid optionally assigns a
+        // new project identity. An existing destination is atomically
+        // replaced only after staged verification.
         [[nodiscard]] lfs::Result<ProjectDocumentSaveReport>
         save_as(const std::filesystem::path& path,
                 const ProjectDocumentSaveOptions& options = {});

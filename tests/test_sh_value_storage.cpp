@@ -5,11 +5,11 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/scene.hpp"
 #include "core/sh_value_quant.hpp"
-#include "core/sh_value_quant_kernels.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
 #include "io/exporter.hpp"
+#include "io/formats/ply.hpp"
 #include "io/loader.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/sh_value_codec.hpp"
@@ -21,6 +21,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <cuda_runtime.h>
 #include <filesystem>
 #include <glm/mat4x4.hpp>
@@ -77,6 +78,16 @@ namespace {
             mse += e * e;
         }
         return mse / static_cast<double>(a.numel());
+    }
+
+    void expect_tensors_bitwise_equal(const Tensor& a, const Tensor& b, const char* name) {
+        auto ac = a.cpu().contiguous();
+        auto bc = b.cpu().contiguous();
+        ASSERT_EQ(ac.dtype(), bc.dtype()) << name;
+        ASSERT_EQ(ac.ndim(), bc.ndim()) << name;
+        ASSERT_EQ(ac.numel(), bc.numel()) << name;
+        ASSERT_EQ(ac.shape().str(), bc.shape().str()) << name;
+        ASSERT_EQ(std::memcmp(ac.data_ptr(), bc.data_ptr(), ac.bytes()), 0) << name;
     }
 
     [[nodiscard]] double psnr_from_mse(double mse) {
@@ -175,6 +186,34 @@ TEST(ShValueStorageTest, CanonicalExportIsFp32BitCompat) {
     EXPECT_GT(psnr_from_mse(mse), 55.0);
 
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST(ShValueStorageTest, Q16CanonicalCpuMatchesDevicePath) {
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    auto splat = make_random_sh3(kN);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+    ASSERT_TRUE(splat.shN_value_quantized());
+
+    const auto cpu = splat.shN_canonical_cpu();
+    const auto device_cpu = splat.shN_canonical().cpu();
+    EXPECT_EQ(cpu.device(), Device::CPU);
+    EXPECT_EQ(cpu.dtype(), DataType::Float32);
+    expect_tensors_bitwise_equal(cpu, device_cpu, "q16 canonical cpu vs device");
+
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST(ShValueStorageTest, IeeeF16CanonicalCpuMatchesDevicePath) {
+    auto splat = make_random_sh3(64);
+    splat.shN() = splat.shN().to(DataType::Float16);
+    ASSERT_TRUE(splat.shN_ieee_f16());
+    ASSERT_FALSE(splat.shN_value_quantized());
+
+    const auto cpu = splat.shN_canonical_cpu();
+    const auto device_cpu = splat.shN_canonical().cpu();
+    EXPECT_EQ(cpu.device(), Device::CPU);
+    EXPECT_EQ(cpu.dtype(), DataType::Float32);
+    expect_tensors_bitwise_equal(cpu, device_cpu, "ieee-f16 canonical cpu vs device");
 }
 
 TEST(ShValueStorageTest, Q16CloneCarriesBoundsAndDecodesIdentically) {
@@ -294,6 +333,57 @@ TEST(ShValueStorageTest, Q16DeletedMaskSceneMergeAndPlyExport) {
     EXPECT_GT(std::filesystem::file_size(output_path), 0u);
     std::filesystem::remove(output_path);
 
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST(ShValueStorageTest, Q16BorrowSingleIdentityMergePreservesQuantAndPly) {
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    auto splat = make_random_sh3(64);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+    ASSERT_TRUE(splat.shN_value_quantized());
+    ASSERT_EQ(splat.shN_raw().dtype(), DataType::Float16);
+
+    auto merged = Scene::mergeSplatsWithTransforms(
+        {{&splat, glm::mat4{1.0f}}}, Scene::MergeStorageMode::BorrowSingleIdentity);
+    ASSERT_NE(merged, nullptr);
+    EXPECT_EQ(merged->shN_raw().dtype(), DataType::Float16);
+    EXPECT_TRUE(merged->shN_value_quantized());
+    EXPECT_TRUE(merged->shN_value_bounds().is_valid());
+    EXPECT_GT(merged->shN_value_bounds().numel(), 0u);
+    expect_tensors_bitwise_equal(splat.shN_canonical_cpu(), merged->shN_canonical_cpu(),
+                                 "borrow ephemeral shN");
+
+    const auto source_path =
+        std::filesystem::temp_directory_path() / "lfs_q16_borrow_source.ply";
+    const auto merged_path =
+        std::filesystem::temp_directory_path() / "lfs_q16_borrow_merged.ply";
+    std::filesystem::remove(source_path);
+    std::filesystem::remove(merged_path);
+
+    const auto save_source = lfs::io::save_ply(
+        splat, {.output_path = source_path, .binary = true, .async = false});
+    ASSERT_TRUE(save_source.has_value()) << save_source.error().message;
+    const auto save_merged = lfs::io::save_ply(
+        *merged, {.output_path = merged_path, .binary = true, .async = false});
+    ASSERT_TRUE(save_merged.has_value()) << save_merged.error().message;
+
+    auto loaded_source = lfs::io::load_ply(source_path);
+    auto loaded_merged = lfs::io::load_ply(merged_path);
+    ASSERT_TRUE(loaded_source.has_value()) << lfs::format_for_developer(loaded_source.error());
+    ASSERT_TRUE(loaded_merged.has_value()) << lfs::format_for_developer(loaded_merged.error());
+
+    const SplatData& src_pc = loaded_source->value;
+    const SplatData& merged_pc = loaded_merged->value;
+    expect_tensors_bitwise_equal(src_pc.means_raw(), merged_pc.means_raw(), "ply means");
+    expect_tensors_bitwise_equal(src_pc.sh0_raw(), merged_pc.sh0_raw(), "ply sh0");
+    expect_tensors_bitwise_equal(src_pc.shN_canonical_cpu(), merged_pc.shN_canonical_cpu(),
+                                 "ply shN");
+    expect_tensors_bitwise_equal(src_pc.opacity_raw(), merged_pc.opacity_raw(), "ply opacity");
+    expect_tensors_bitwise_equal(src_pc.scaling_raw(), merged_pc.scaling_raw(), "ply scaling");
+    expect_tensors_bitwise_equal(src_pc.rotation_raw(), merged_pc.rotation_raw(), "ply rotation");
+
+    std::filesystem::remove(source_path);
+    std::filesystem::remove(merged_path);
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 

@@ -51,14 +51,12 @@ def _build_builtin_panel_steps(lf):
         lf.register_class(TrainingPanel)
 
     def import_panels():
-        from .import_panels import DatasetImportPanel, ResumeCheckpointPanel, URLImportPanel
+        from .import_panels import DatasetImportPanel, ResumeCheckpointPanel
 
         lf.register_class(DatasetImportPanel)
         lf.ui.set_panel_enabled("lfs.dataset_import", False)
         lf.register_class(ResumeCheckpointPanel)
         lf.ui.set_panel_enabled("lfs.resume_checkpoint", False)
-        lf.register_class(URLImportPanel)
-        lf.ui.set_panel_enabled("lfs.url_import", False)
 
     def selection_groups():
         from . import selection_groups as selection_groups_mod
@@ -168,8 +166,6 @@ def _build_builtin_panel_steps(lf):
         lf.ui.set_panel_enabled("lfs.plugin_marketplace", False)
 
     def asset_manager_panel():
-        # Eager import to register save callbacks
-        from . import asset_manager_integration  # noqa: F401
         from .asset_manager_panel import AssetManagerPanel
 
         lf.register_class(AssetManagerPanel)

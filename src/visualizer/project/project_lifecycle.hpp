@@ -111,6 +111,7 @@ namespace lfs::vis {
     class VisualizerImplResetTest_DatasetLoadIntoTitledProjectStartsUntitledSessionAndKeepsProjectFile_Test;
     class VisualizerImplResetTest_DatasetLoadIntoTrainedTempSessionRemovesOldTempFile_Test;
     class VisualizerImplResetTest_SplatDropOntoTitledDatasetProjectStartsUntitledSessionAndKeepsProjectFile_Test;
+    class VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnAutosave_Test;
 } // namespace lfs::vis
 
 namespace lfs::vis::project {
@@ -254,6 +255,24 @@ namespace lfs::vis::project {
         [[nodiscard]] lfs::Result<void>
         prepareForEditModeTransition();
 
+        struct TrainingSessionState {
+            bool available = false;
+            int iteration = 0;
+            int max_iterations = 0;
+            std::string strategy;
+            bool completed = false;
+            bool hydrated = false;
+            bool restoring = false;
+            std::string error;
+        };
+
+        [[nodiscard]] TrainingSessionState
+        trainingSessionState() const;
+        [[nodiscard]] lfs::Result<void>
+        restoreTrainingSession(bool then_start = false,
+                               bool then_reset = false);
+        void abandonStoredTrainingSession();
+
         [[nodiscard]] std::optional<std::filesystem::path>
         pendingDatasetRelocationPath() const;
         bool relocateProjectDataset(
@@ -345,6 +364,7 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_DatasetLoadIntoTitledProjectStartsUntitledSessionAndKeepsProjectFile_Test;
         friend class lfs::vis::VisualizerImplResetTest_DatasetLoadIntoTrainedTempSessionRemovesOldTempFile_Test;
         friend class lfs::vis::VisualizerImplResetTest_SplatDropOntoTitledDatasetProjectStartsUntitledSessionAndKeepsProjectFile_Test;
+        friend class lfs::vis::VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnAutosave_Test;
         enum class Hydration {
             Empty,
             ShellReady,
@@ -509,7 +529,7 @@ namespace lfs::vis::project {
             std::uint64_t restore_ticket);
         [[nodiscard]] lfs::Result<void>
         persistSettings();
-        void stopHydrationThreads();
+        void stopHydrationThreads(bool cancel_open_job = true);
         void markHydrationFailed(
             std::uint64_t epoch,
             const std::string& detail);
@@ -528,6 +548,13 @@ namespace lfs::vis::project {
             lfs::io::project::ProjectDocument& document,
             const lfs::io::project::ProjectDocumentHydrationReport&
                 report);
+        void captureStoredTrainingSession(
+            const lfs::io::project::ProjectDocumentHydrationReport&
+                report);
+        void clearStoredTrainingSession();
+        void launchStoredTrainingSessionRestore(
+            std::uint64_t epoch);
+        [[nodiscard]] bool keepStoredCheckpointChapters() const;
         void beginPendingDatasetRelocation(
             std::filesystem::path missing_path,
             std::function<void(const std::filesystem::path&)>
@@ -650,6 +677,25 @@ namespace lfs::vis::project {
             last_unadoptable_training_snapshot_warning_;
         mutable std::optional<int>
             cached_bound_checkpoint_iteration_;
+        enum class StoredTrainingKind : std::uint8_t {
+            None,
+            Checkpoint,
+            DatasetScene,
+        };
+        StoredTrainingKind stored_training_kind_ =
+            StoredTrainingKind::None;
+        std::optional<lfs::core::Uuid>
+            stored_checkpoint_uuid_;
+        std::filesystem::path stored_dataset_output_path_;
+        std::atomic<bool> training_session_hydrated_{false};
+        std::atomic<bool> training_session_restoring_{false};
+        std::atomic<bool> restore_then_start_{false};
+        std::atomic<bool> restore_then_reset_{false};
+        mutable std::mutex training_session_mutex_;
+        std::string training_session_error_;
+        int stored_max_iterations_ = 0;
+        std::string stored_strategy_;
+        bool stored_completed_ = false;
         mutable std::mutex thread_mutex_;
         std::vector<std::jthread> hydration_threads_;
         std::atomic<CloseSaveState>

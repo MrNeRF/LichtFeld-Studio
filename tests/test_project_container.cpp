@@ -49,6 +49,11 @@
 #include <unistd.h>
 #endif
 
+namespace lfs::io::project::detail {
+    void reset_framed_record_decode_calls_for_testing();
+    std::uint64_t framed_record_decode_calls_for_testing();
+} // namespace lfs::io::project::detail
+
 namespace {
 
     namespace fs = std::filesystem;
@@ -279,6 +284,68 @@ namespace {
         for (std::size_t n = 0; n <= 9; ++n) {
             EXPECT_EQ(crc32c(0, sequential.data(), n), kExpected[n]) << "n=" << n;
         }
+    }
+
+    TEST(ProjectContainerFormat, Crc32cCombineMatchesConcatenation) {
+        constexpr std::string_view kKnown = "123456789";
+        EXPECT_EQ(crc32c_combine(crc32c(0, kKnown.data(), 3),
+                                 crc32c(0, kKnown.data() + 3, 6), 6),
+                  crc32c(0, kKnown.data(), kKnown.size()));
+        EXPECT_EQ(crc32c_combine(crc32c(0, kKnown.data(), kKnown.size()),
+                                 crc32c(0, kKnown.data(), 0), 0),
+                  crc32c(0, kKnown.data(), kKnown.size()));
+
+        const std::array<std::size_t, 6> suffixes{
+            0, 1, 17, 1024, BLOCK_CRC_BYTES + 17,
+            static_cast<std::size_t>(BLOCK_CRC_BYTES) + 256u * 1024u};
+        for (const std::size_t n2 : suffixes) {
+            const std::size_t n1 = 64;
+            std::vector<std::uint8_t> prefix(n1);
+            std::vector<std::uint8_t> suffix(n2);
+            for (std::size_t i = 0; i < n1; ++i) {
+                prefix[i] = static_cast<std::uint8_t>(i * 3u + 1u);
+            }
+            for (std::size_t i = 0; i < n2; ++i) {
+                suffix[i] = static_cast<std::uint8_t>(i * 7u + 11u);
+            }
+            std::vector<std::uint8_t> joined;
+            joined.reserve(n1 + n2);
+            joined.insert(joined.end(), prefix.begin(), prefix.end());
+            joined.insert(joined.end(), suffix.begin(), suffix.end());
+            const auto crc_a = crc32c(0, prefix.data(), prefix.size());
+            const auto crc_b = crc32c(0, suffix.data(), suffix.size());
+            const auto crc_ab = crc32c(0, joined.data(), joined.size());
+            EXPECT_EQ(crc32c_combine(crc_a, crc_b, suffix.size()), crc_ab)
+                << "n2=" << n2;
+        }
+    }
+
+    TEST(ProjectContainerReader, ThreeGenerationOpenSelectsNewestHead) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "three-generations.licht";
+        const ChunkKey key = fixed_key("PROJ", 941);
+        for (std::uint64_t generation = 1; generation <= 3; ++generation) {
+            ProjectWriter writer = require_result(
+                generation == 1
+                    ? ProjectWriter::create(path, fixture_create_options(940))
+                    : ProjectWriter::append(path, fixture_append_options()));
+            const auto payload = byte_vector(
+                std::format(R"({{"generation":{}}})", generation));
+            require_status(writer.plan_commit(fixture_commit_options(
+                940 + generation * 3, 941 + generation * 3, generation)));
+            require_status(writer.preflight(payload.size()));
+            require_status(writer.write_chunk(key, payload));
+            require_status(writer.commit());
+        }
+        ProjectReader reader = require_result(ProjectReader::open(path));
+        EXPECT_EQ(reader.commit().generation, 3u);
+        EXPECT_EQ(reader.selected_head().generation, 3u);
+        EXPECT_EQ(reader.selected_head().head_sequence, 3u);
+        EXPECT_EQ(reader.commit().commit_uuid, fixed_uuid(949));
+        const ChunkInfo* row = reader.find(key);
+        ASSERT_NE(row, nullptr);
+        EXPECT_EQ(require_result(reader.read_chunk(*row)),
+                  byte_vector(R"({"generation":3})"));
     }
 
     TEST(ProjectContainerReader,
@@ -1239,6 +1306,52 @@ namespace {
             stream.read(reinterpret_cast<char*>(&probe), 1);
             EXPECT_EQ(stream.gcount(), 0) << name;
             EXPECT_TRUE(stream.fail()) << name;
+        };
+        check(Compression::ZstdFramed, "zstd-framed");
+        check(Compression::ByteShuffleZstdFramed, "byteshuffle-framed");
+    }
+
+    TEST(ProjectContainerReader, BoundedStreamSmallReadsDoNotRedecodeFramedRecords) {
+        constexpr std::size_t kBytes =
+            2ull * 64ull * 1024ull * 1024ull + 32ull * 1024ull * 1024ull;
+        const auto payload = patterned_payload(kBytes);
+        const auto check = [&](const Compression compression,
+                               const std::string_view name) {
+            TemporaryDirectory temporary;
+            const fs::path path =
+                temporary.path / (std::string(name) + "-small-reads.licht");
+            write_framed_fixture(path, FOURCC_CKPT, 1130, payload, compression,
+                                 true, true, 1130);
+            ProjectReader reader = require_result(ProjectReader::open(path));
+            const ChunkInfo& chunk = reader.chunks().front();
+            EXPECT_EQ(chunk.compression, compression) << name;
+            const auto records = read_framed_table(path, chunk);
+            ASSERT_GE(records.size(), 3u) << name;
+            const auto materialized = require_result(reader.read_chunk(chunk));
+            ASSERT_EQ(materialized, payload) << name;
+
+            auto bounded = reader.open_bounded_stream(chunk);
+            ASSERT_TRUE(bounded) << lfs::format_for_developer(bounded.error());
+            std::streambuf* buf = bounded->stream().rdbuf();
+            ASSERT_NE(buf, nullptr) << name;
+            const auto step = std::max<std::uint64_t>(
+                records.front().decoded_bytes / 4, 1);
+            detail::reset_framed_record_decode_calls_for_testing();
+            std::vector<std::byte> got(payload.size());
+            std::size_t filled = 0;
+            while (filled < got.size()) {
+                const auto want = std::min<std::size_t>(
+                    static_cast<std::size_t>(step), got.size() - filled);
+                const auto n = buf->sgetn(
+                    reinterpret_cast<char*>(got.data() + filled),
+                    static_cast<std::streamsize>(want));
+                ASSERT_GT(n, 0) << name << " @" << filled;
+                filled += static_cast<std::size_t>(n);
+            }
+            EXPECT_EQ(got, materialized) << name;
+            EXPECT_EQ(detail::framed_record_decode_calls_for_testing(),
+                      records.size())
+                << name;
         };
         check(Compression::ZstdFramed, "zstd-framed");
         check(Compression::ByteShuffleZstdFramed, "byteshuffle-framed");

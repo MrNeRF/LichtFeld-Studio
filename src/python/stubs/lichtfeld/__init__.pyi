@@ -17,6 +17,7 @@ from . import (
     log as log,
     mcp as mcp,
     mesh as mesh,
+    nn as nn,
     ops as ops,
     packages as packages,
     pipeline as pipeline,
@@ -257,6 +258,17 @@ def pause_training() -> None:
 def resume_training() -> None:
     """Resume a paused training run"""
 
+def project_training_session_state() -> dict:
+    """Return the stored training-session restore state for the open project"""
+
+def restore_training_session(then_start: bool = False) -> None:
+    """Hydrate the stored training session on demand"""
+
+def training_get_state() -> dict:
+    """
+    Return the live trainer state, or the stored session when the trainer is not hydrated
+    """
+
 def stop_training() -> None:
     """Stop the current training run"""
 
@@ -275,7 +287,10 @@ def project_save(wait: bool = False, regenerate_preview: bool = True) -> bool:
 def project_save_as(path: str = '', wait: bool = False) -> bool:
     """Save the active project to a new .licht path"""
 
-def project_open(path: str = '', discard_changes: bool = False, stop_training: bool = False) -> ProjectOpenOutcome:
+def project_poll_write() -> dict:
+    """Return the active .licht project write state"""
+
+def project_open(path: str = '', discard_changes: bool = False, stop_training: bool = False, keep_asset_manager_open: bool = False) -> ProjectOpenOutcome:
     """Open a .licht project"""
 
 def project_compact() -> None:

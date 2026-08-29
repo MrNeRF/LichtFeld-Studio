@@ -760,6 +760,50 @@ namespace lfs::vis {
                 output[pixel_count + idx] = c.g;
                 output[2 * pixel_count + idx] = c.b;
             };
+            const auto sample_panel_color = [&](const VulkanSplitViewPanel& panel,
+                                                const auto& data,
+                                                const float u,
+                                                const float v) {
+                float panel_u = u;
+                if (panel.normalize_x_to_panel) {
+                    const float span = std::max(panel.end_position - panel.start_position, 1e-6f);
+                    panel_u = (u - panel.start_position) / span;
+                }
+                const float panel_v = panel.flip_y ? 1.0f - v : v;
+                const glm::vec2 clamp_max = glm::clamp(panel.uv_clamp_max,
+                                                       glm::vec2(0.0f), glm::vec2(1.0f));
+                const glm::vec2 texture_uv = glm::min(glm::vec2(panel_u, panel_v) * panel.uv_scale,
+                                                      clamp_max);
+                const auto sample_color = [&](const glm::vec2 sample_uv) {
+                    return glm::vec3{
+                        sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
+                               sample_uv.x, sample_uv.y, 0),
+                        sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
+                               sample_uv.x, sample_uv.y, 1),
+                        sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
+                               sample_uv.x, sample_uv.y, 2)};
+                };
+
+                glm::vec3 color = sample_color(texture_uv);
+                if (panel.spatial_filter) {
+                    constexpr float kSpatialSharpenStrength = 0.18f;
+                    const float texel_x = 1.0f / static_cast<float>(std::max(std::get<1>(data), 1));
+                    const float texel_y = 1.0f / static_cast<float>(std::max(std::get<2>(data), 1));
+                    const auto clamp_uv = [&clamp_max](const glm::vec2 uv) {
+                        return glm::clamp(uv, glm::vec2(0.0f), clamp_max);
+                    };
+                    const glm::vec3 left = sample_color(clamp_uv(texture_uv - glm::vec2(texel_x, 0.0f)));
+                    const glm::vec3 right = sample_color(clamp_uv(texture_uv + glm::vec2(texel_x, 0.0f)));
+                    const glm::vec3 up = sample_color(clamp_uv(texture_uv - glm::vec2(0.0f, texel_y)));
+                    const glm::vec3 down = sample_color(clamp_uv(texture_uv + glm::vec2(0.0f, texel_y)));
+                    const glm::vec3 sharpened = color * (1.0f + 4.0f * kSpatialSharpenStrength) -
+                                                (left + right + up + down) * kSpatialSharpenStrength;
+                    color = glm::clamp(sharpened,
+                                       glm::min(color, glm::min(glm::min(left, right), glm::min(up, down))),
+                                       glm::max(color, glm::max(glm::max(left, right), glm::max(up, down))));
+                }
+                return color;
+            };
 
             for (int y = rect_y; y < rect_y + rect_h; ++y) {
                 const float v = rect_h > 1
@@ -771,51 +815,21 @@ namespace lfs::vis {
                                         ? (static_cast<float>(x) + 0.5f - static_cast<float>(rect_x)) /
                                               static_cast<float>(rect_w - 1)
                                         : 0.0f;
-                    const bool use_left = x < divider;
-                    const auto& panel = use_left ? left_panel : right_panel;
-                    const auto& data = use_left ? *left_data : *right_data;
-                    float panel_u = u;
-                    if (panel.normalize_x_to_panel) {
-                        const float span = std::max(panel.end_position - panel.start_position, 1e-6f);
-                        panel_u = (u - panel.start_position) / span;
-                    }
-                    const float panel_v = panel.flip_y ? 1.0f - v : v;
-                    const glm::vec2 clamp_max = glm::clamp(panel.uv_clamp_max,
-                                                           glm::vec2(0.0f), glm::vec2(1.0f));
-                    const glm::vec2 texture_uv = glm::min(glm::vec2(panel_u, panel_v) * panel.uv_scale,
-                                                          clamp_max);
                     const std::size_t idx = static_cast<std::size_t>(y) * width + x;
-                    const auto sample_color = [&](const glm::vec2 sample_uv) {
-                        return glm::vec3{
-                            sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
-                                   sample_uv.x, sample_uv.y, 0),
-                            sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
-                                   sample_uv.x, sample_uv.y, 1),
-                            sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
-                                   sample_uv.x, sample_uv.y, 2)};
-                    };
-                    glm::vec3 color = sample_color(texture_uv);
-                    if (panel.spatial_filter) {
-                        constexpr float kSpatialSharpenStrength = 0.18f;
-                        const float texel_x = 1.0f / static_cast<float>(std::max(std::get<1>(data), 1));
-                        const float texel_y = 1.0f / static_cast<float>(std::max(std::get<2>(data), 1));
-                        const auto clamp_uv = [&clamp_max](const glm::vec2 uv) {
-                            return glm::clamp(uv, glm::vec2(0.0f), clamp_max);
-                        };
-                        const glm::vec3 left = sample_color(clamp_uv(texture_uv - glm::vec2(texel_x, 0.0f)));
-                        const glm::vec3 right = sample_color(clamp_uv(texture_uv + glm::vec2(texel_x, 0.0f)));
-                        const glm::vec3 up = sample_color(clamp_uv(texture_uv - glm::vec2(0.0f, texel_y)));
-                        const glm::vec3 down = sample_color(clamp_uv(texture_uv + glm::vec2(0.0f, texel_y)));
-                        const glm::vec3 sharpened = color * (1.0f + 4.0f * kSpatialSharpenStrength) -
-                                                    (left + right + up + down) * kSpatialSharpenStrength;
-                        color = glm::clamp(sharpened,
-                                           glm::min(color, glm::min(glm::min(left, right), glm::min(up, down))),
-                                           glm::max(color, glm::max(glm::max(left, right), glm::max(up, down))));
+                    glm::vec3 color;
+                    if (params.loss_visualization) {
+                        color = gtLossHeatmapColor(
+                            sample_panel_color(left_panel, *left_data, u, v),
+                            sample_panel_color(right_panel, *right_data, u, v));
+                    } else if (x < divider) {
+                        color = sample_panel_color(left_panel, *left_data, u, v);
+                    } else {
+                        color = sample_panel_color(right_panel, *right_data, u, v);
                     }
                     write(idx, color);
 
                     const float dist_from_split = std::abs(static_cast<float>(x) + 0.5f - split_x);
-                    if (dist_from_split < kMinBarWidthPx * 0.5f) {
+                    if (!params.loss_visualization && dist_from_split < kMinBarWidthPx * 0.5f) {
                         glm::vec3 color = kDividerColor;
                         const float dist_from_center =
                             std::abs(static_cast<float>(y) + 0.5f - center_y);
@@ -2624,7 +2638,7 @@ namespace lfs::vis {
                     std::string gt_error;
                     bool gt_loading = false;
 
-                    if (gt_mode == GTComparisonMode::RGB) {
+                    if (gtComparisonUsesRGBReference(gt_mode)) {
                         if (camera->image_path().empty() || !camera->has_image()) {
                             gt_error = "RGB GT comparison requires a source image";
                         } else {
@@ -2809,7 +2823,7 @@ namespace lfs::vis {
                             RenderedPanel compare_panel{};
                             std::string compare_error;
 
-                            if (gt_mode != GTComparisonMode::RGB) {
+                            if (!gtComparisonUsesRGBReference(gt_mode)) {
                                 // #1574 hold-then-swap: never host-wait the GT depth ticket on the
                                 // render thread. Poll any outstanding ticket; swap into the held
                                 // display when Ready; submit at most one new ticket when free. The
@@ -3087,7 +3101,7 @@ namespace lfs::vis {
 
                             if (!compare_panel.image && compare_panel.external_image_view == VK_NULL_HANDLE &&
                                 !compare_error.empty() &&
-                                !(gt_mode == GTComparisonMode::RGB &&
+                                !(gtComparisonUsesRGBReference(gt_mode) &&
                                   isRetryableSharedScratchUnavailable(compare_error))) {
                                 LOG_WARN("GT comparison using placeholder rendered panel: {}", compare_error);
                                 compare_panel = make_placeholder_panel(gt_size, glm::vec3(0.035f, 0.045f, 0.070f));
@@ -3095,7 +3109,7 @@ namespace lfs::vis {
                             }
 
                             if (compare_panel.image || compare_panel.external_image_view != VK_NULL_HANDLE) {
-                                if (gt_mode == GTComparisonMode::RGB) {
+                                if (gtComparisonUsesRGBReference(gt_mode)) {
                                     bool compare_panel_ppisp_applied = false;
                                     if (!compare_panel.image &&
                                         compare_panel.external_image_view != VK_NULL_HANDLE &&
@@ -3158,6 +3172,7 @@ namespace lfs::vis {
                                 const SplitCompositeContentRect rect =
                                     resolveSplitCompositeContentRect(render_size, true, gt_size);
                                 pending_split_view.enabled = true;
+                                pending_split_view.loss_visualization = gtComparisonShowsLoss(gt_mode);
                                 pending_split_view.split_position = frame_settings.split_position;
                                 pending_split_view.background = frame_settings.background_color;
                                 pending_split_view.content_rect = {rect.x, rect.y, rect.width, rect.height};
@@ -3167,9 +3182,11 @@ namespace lfs::vis {
                                 rendered_metadata = compare_panel.metadata;
                                 rendered_image_contains_ground_truth = true;
                                 rendered_gt_content_size = gt_size;
-                                if (render_camera && gt_mode == GTComparisonMode::RGB) {
-                                    // Synchronous RGB production only: the panel just rendered IS the
-                                    // current camera's image, so publish that pairing. Depth/Normal go
+                                if (render_camera && gtComparisonUsesRGBReference(gt_mode)) {
+                                    // Synchronous production only (RGB and, post-#1857, Loss — the
+                                    // predicate is upstream's own name for the synchronous set): the
+                                    // panel just rendered IS the current camera's image, so publish
+                                    // that pairing. Depth/Normal go
                                     // through the hold-then-swap ticket and publish the HELD camera with
                                     // the held image above — assigning the current camera here would pair
                                     // panel image A with camera B while a new ticket is in flight.
@@ -3193,6 +3210,10 @@ namespace lfs::vis {
                                     mode_label = "GT Normal Compare";
                                     left_name = "GT Normal";
                                     right_name = "Rendered Normal";
+                                } else if (gt_mode == GTComparisonMode::Loss) {
+                                    mode_label = "GT Loss";
+                                    left_name = "Loss";
+                                    right_name = "";
                                 }
                                 rendered_split_info = SplitViewInfo{
                                     .enabled = true,

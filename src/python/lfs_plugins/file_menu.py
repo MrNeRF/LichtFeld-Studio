@@ -5,7 +5,6 @@
 from pathlib import Path, PureWindowsPath
 
 import lichtfeld as lf
-from .asset_manager_integration import register_catalog_asset_path
 from .types import Operator
 from .layouts.menus import (
     menu_action,
@@ -93,10 +92,42 @@ def _offer_remove_missing_recent(path: str) -> None:
     )
 
 
-def _open_project(path: str, discard_changes: bool, stop_training: bool = False):
+def _open_project(
+    path: str,
+    discard_changes: bool,
+    stop_training: bool = False,
+    keep_asset_manager_open: bool = False,
+):
+    if keep_asset_manager_open:
+        return lf.project_open(
+            path, discard_changes, stop_training, True
+        )
     if stop_training:
         return lf.project_open(path, discard_changes, True)
     return lf.project_open(path, discard_changes)
+
+
+def open_project_with_confirmation(
+    path: str,
+    *,
+    keep_asset_manager_open: bool = False,
+) -> None:
+    """Open a known project path through the standard project-switch flow."""
+    title = lf.ui.tr("menu.file.open_project")
+
+    def _open_checked(stop_training: bool) -> None:
+        try:
+            _open_project(
+                path,
+                True,
+                stop_training,
+                keep_asset_manager_open=keep_asset_manager_open,
+            )
+        except Exception as exc:
+            message = str(exc).strip() or title
+            lf.ui.message_dialog(title, message, "error")
+
+    confirm_discard_work_then(title, _open_checked)
 
 
 def _new_project(discard_changes: bool, stop_training: bool = False):
@@ -219,7 +250,6 @@ class ImportPlyOperator(Operator):
         path = lf.ui.open_ply_file_dialog("")
         if path:
             def _load() -> None:
-                register_catalog_asset_path(path, select=True)
                 lf.load_file(path, is_dataset=False)
 
             if not _run_import(path, _load):
@@ -235,12 +265,6 @@ class ImportMeshOperator(Operator):
         path = lf.ui.open_mesh_file_dialog("")
         if path:
             def _load() -> None:
-                register_catalog_asset_path(
-                    path,
-                    asset_type="mesh",
-                    role="reference",
-                    select=True,
-                )
                 lf.load_file(path, is_dataset=False)
 
             if not _run_import(path, _load):
@@ -374,7 +398,9 @@ def _show_exit_confirmation(training_in_progress: bool = False) -> None:
 
 
 def _show_project_switch_confirmation(
-    new_project: bool, path: str
+    new_project: bool,
+    path: str,
+    keep_asset_manager_open: bool = False,
 ) -> None:
     if new_project:
         title = lf.ui.tr("menu.file.new_project")
@@ -382,13 +408,16 @@ def _show_project_switch_confirmation(
     else:
         title = lf.ui.tr("menu.file.open_project")
         callback = lambda stop_training: _open_project(
-            path, True, stop_training
+            path, True, stop_training, keep_asset_manager_open
         )
     confirm_discard_work_then(title, callback)
 
 
 def _show_stop_training_confirmation(
-    new_project: bool, path: str, discard_changes: bool = False
+    new_project: bool,
+    path: str,
+    discard_changes: bool = False,
+    keep_asset_manager_open: bool = False,
 ) -> None:
     tr = lf.ui.tr
     yes_label = tr("common.yes")
@@ -400,7 +429,12 @@ def _show_stop_training_confirmation(
         if new_project:
             _new_project(discard_changes, True)
         else:
-            _open_project(path, discard_changes, True)
+            _open_project(
+                path,
+                discard_changes,
+                True,
+                keep_asset_manager_open,
+            )
 
     lf.ui.confirm_dialog(
         tr("project_switch.stop_training_title"),

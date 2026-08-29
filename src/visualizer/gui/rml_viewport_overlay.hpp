@@ -71,6 +71,11 @@ namespace lfs::vis::gui {
             std::string hash_text;
         };
 
+        struct ProjectDragOverlayState {
+            bool visible = false;
+            std::string label;
+        };
+
         using VramHudOverlayState = VramHudOverlay::State;
 
         RmlViewportOverlay();
@@ -90,6 +95,7 @@ namespace lfs::vis::gui {
         void setSplitDividerOverlay(SplitDividerOverlayState state);
         void setGTMetricsOverlay(GTMetricsOverlayState state);
         void setLodStatsOverlay(LodStatsOverlayState state);
+        void setProjectDragOverlay(ProjectDragOverlayState state);
         void setVramHudOverlay(VramHudOverlayState state);
         void reloadResources();
         void render();
@@ -121,6 +127,7 @@ namespace lfs::vis::gui {
         void applyLeftDockResizeIndicator();
         void applyGTMetricsOverlay();
         void applyLodStatsOverlay();
+        void applyProjectDragOverlay();
         bool applyFrameTooltip();
         void queueCachedVulkanContext(bool refresh_cache);
         enum class RenderReason : std::uint32_t {
@@ -142,6 +149,7 @@ namespace lfs::vis::gui {
             LodStats = 1u << 15,
             LeftDockResize = 1u << 16,
             PerfHud = 1u << 17,
+            ProjectDrag = 1u << 18,
         };
         void markRenderNeeded(RenderReason reason);
         [[nodiscard]] std::string renderReasonSources() const;
@@ -193,6 +201,7 @@ namespace lfs::vis::gui {
         SplitDividerOverlayState split_divider_overlay_;
         GTMetricsOverlayState gt_metrics_overlay_;
         LodStatsOverlayState lod_stats_overlay_;
+        ProjectDragOverlayState project_drag_overlay_;
         lfs::vis::AppStore::GTMetricsOverlayConfig gt_metrics_config_;
         std::optional<lfs::vis::AppStore::CameraMetrics> camera_metrics_;
         lfs::core::reactive::SubscriptionToken gt_metrics_config_subscription_;
