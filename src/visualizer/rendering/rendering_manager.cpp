@@ -567,13 +567,6 @@ namespace lfs::vis {
             settings_.ortho_scale = std::clamp(
                 viewport_height / (2.0f * distance_to_pivot * half_tan_fov),
                 MIN_SCALE, MAX_SCALE);
-        } else if (!enabled && settings_.orthographic) {
-            const float half_tan_fov = viewport_height / (2.0f * distance_to_pivot * settings_.ortho_scale);
-            const float vfov = glm::degrees(2.0f * std::atan(half_tan_fov));
-            settings_.focal_length_mm = std::clamp(
-                lfs::rendering::vFovToFocalLength(vfov),
-                lfs::rendering::MIN_FOCAL_LENGTH_MM,
-                lfs::rendering::MAX_FOCAL_LENGTH_MM);
         }
 
         settings_.orthographic = enabled;
