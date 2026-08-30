@@ -363,6 +363,27 @@ namespace {
         return {};
     }
 
+    std::expected<void, std::string> apply_per_launch_ui_flags(
+        lfs::core::param::TrainingParameters& params,
+        const bool no_splash_flag,
+        const std::optional<int> mcp_port_val) {
+        if (mcp_port_val) {
+            const int port = *mcp_port_val;
+            if (port < 1 || port > 65535) {
+                return std::unexpected("ERROR: --mcp-port must be between 1 and 65535");
+            }
+            params.mcp_port = port;
+        }
+#ifndef LFS_BUILD_PORTABLE
+        if (no_splash_flag) {
+            params.optimization.no_splash = true;
+        }
+#else
+        (void)no_splash_flag;
+#endif
+        return {};
+    }
+
     std::optional<lfs::core::param::OutputFormat> parseFormat(const std::string& str) {
         using lfs::core::param::OutputFormat;
         if (str == "ply" || str == ".ply")
@@ -785,6 +806,14 @@ namespace {
                 return std::make_tuple(ParseResult::Success, std::function<void()>{});
             }
 
+#ifdef LFS_BUILD_PORTABLE
+            const bool per_launch_no_splash = false;
+#else
+            const bool per_launch_no_splash = bool(no_splash);
+#endif
+            const std::optional<int> per_launch_mcp_port =
+                mcp_port ? std::optional<int>(::args::get(mcp_port)) : std::nullopt;
+
             // Viewer mode: file or directory. Bare positional paths are rewritten to
             // -v in parse_args_and_params so they share this branch.
             if (view_ply) {
@@ -798,7 +827,20 @@ namespace {
                 if (gut) {
                     params.optimization.gut = true;
                 }
-                return std::make_tuple(ParseResult::Success, std::function<void()>{});
+                if (const auto applied = apply_per_launch_ui_flags(
+                        params, per_launch_no_splash, per_launch_mcp_port);
+                    !applied) {
+                    return std::unexpected(applied.error());
+                }
+                // parse_args_and_params replaces optimization with defaults
+                // after this return; re-apply so --no-splash survives.
+                return std::make_tuple(
+                    ParseResult::Success,
+                    std::function<void()>([&params, per_launch_no_splash,
+                                           per_launch_mcp_port]() {
+                        (void)apply_per_launch_ui_flags(
+                            params, per_launch_no_splash, per_launch_mcp_port);
+                    }));
             }
 
             // Headless camera-path -> video render mode: no training, no window.
@@ -1018,11 +1060,10 @@ namespace {
                     return std::unexpected("ERROR: --min-track-length must be 0 or greater");
                 }
             }
-            if (mcp_port) {
-                const int port = ::args::get(mcp_port);
-                if (port < 1 || port > 65535) {
-                    return std::unexpected("ERROR: --mcp-port must be between 1 and 65535");
-                }
+            if (const auto applied = apply_per_launch_ui_flags(
+                    params, per_launch_no_splash, per_launch_mcp_port);
+                !applied) {
+                return std::unexpected(applied.error());
             }
 
             // Validate sh_degree (0-3)
@@ -1171,14 +1212,10 @@ namespace {
                                         reset_preferences_flag = bool(reset_preferences),
                                         reset_layout_flag = bool(reset_layout),
                                         reset_all_settings_flag = bool(reset_all_settings),
-#ifdef LFS_BUILD_PORTABLE
-                                        no_splash_flag = false,
-#else
-                                        no_splash_flag = bool(no_splash),
-#endif
+                                        no_splash_flag = per_launch_no_splash,
                                         debug_python_flag = bool(debug_python),
                                         debug_python_port_val = cli_option_present({"--debug-python-port"}) ? std::optional<int>(::args::get(debug_python_port)) : std::optional<int>(),
-                                        mcp_port_val = cli_option_present({"--mcp-port"}) ? std::optional<int>(::args::get(mcp_port)) : std::optional<int>(),
+                                        mcp_port_val = per_launch_mcp_port,
                                         no_save_eval_images_flag = bool(no_save_eval_images),
                                         bg_mode_val = parsed_bg_mode,
                                         bg_color_val = parsed_bg_color,
@@ -1328,10 +1365,9 @@ namespace {
                 setFlag(reset_preferences_flag, params.reset_preferences);
                 setFlag(reset_layout_flag, params.reset_layout);
                 setFlag(reset_all_settings_flag, params.reset_all_settings);
-                setFlag(no_splash_flag, opt.no_splash);
+                (void)apply_per_launch_ui_flags(params, no_splash_flag, mcp_port_val);
                 setFlag(debug_python_flag, opt.debug_python);
                 setVal(debug_python_port_val, opt.debug_python_port);
-                setVal(mcp_port_val, params.mcp_port);
                 if (no_save_eval_images_flag)
                     opt.enable_save_eval_images = false;
                 if (bg_mode_val) {
