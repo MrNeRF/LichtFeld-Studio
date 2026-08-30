@@ -4,12 +4,103 @@
 #include "gui/status_bar_mining.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <format>
+#include <random>
+#include <string_view>
 
 namespace lfs::vis::gui::mining {
     namespace {
         constexpr int kBlockDp = 16;
+        constexpr float kGroundDp = 15.0f;
+        constexpr float kGravity = 110.0f;
+        constexpr int kSmokeLettersFromMs = 500;
+        constexpr int kSmokeLetterEveryMs = 500;
+        constexpr int kSmokeFrameMs = 280;
+        constexpr int kSmokeWordLength = 9;
+        constexpr char kSmokeWord[] = "LichtFeld";
+        constexpr std::array<std::array<std::string_view, 5>, 9> kSmokeGlyphs = {{
+            {"100", "100", "100", "100", "111"},
+            {"010", "000", "010", "010", "010"},
+            {"000", "011", "100", "100", "011"},
+            {"100", "100", "110", "101", "101"},
+            {"010", "111", "010", "010", "011"},
+            {"111", "100", "110", "100", "100"},
+            {"010", "101", "111", "100", "011"},
+            {"010", "010", "010", "010", "011"},
+            {"001", "001", "011", "101", "011"},
+        }};
+        constexpr std::array<char, 9> kSmokeGlyphKeys = {'L', 'i', 'c', 'h', 't', 'F', 'e', 'l', 'd'};
+        constexpr uint32_t kSmokeLetterRgb = 0xdedee6;
+        constexpr uint32_t kSmokeLetterShadowRgb = 0x222228;
+        constexpr uint8_t kSmokeLetterAlpha = 240;
+        constexpr uint8_t kSmokeLetterShadowAlpha = 150;
+
+        struct Rgb {
+            int r;
+            int g;
+            int b;
+        };
+
+        constexpr Rgb kStone[] = {{125, 125, 125}, {110, 110, 110}, {96, 96, 96}};
+        constexpr Rgb kDirt[] = {{134, 96, 67}, {115, 81, 53}, {97, 67, 42}};
+
+        struct Ore {
+            Rgb blob[2];
+        };
+
+        constexpr Ore kCoal{{{38, 38, 38}, {58, 58, 58}}};
+        constexpr Ore kIron{{{216, 175, 147}, {178, 140, 116}}};
+        constexpr Ore kGold{{{250, 220, 96}, {202, 172, 60}}};
+        constexpr Ore kDiamond{{{102, 219, 214}, {58, 178, 190}}};
+
+        uint32_t packRgb(const Rgb color) {
+            return (static_cast<uint32_t>(color.r) << 16) |
+                   (static_cast<uint32_t>(color.g) << 8) | static_cast<uint32_t>(color.b);
+        }
+
+        Rgb sampleBlockColor(const char* type, std::mt19937& rng) {
+            const Rgb* base = std::strcmp(type, "dirt") == 0 ? kDirt : kStone;
+            int base_count = 3;
+            const Ore* ore = nullptr;
+            if (std::strcmp(type, "coal") == 0)
+                ore = &kCoal;
+            else if (std::strcmp(type, "iron") == 0)
+                ore = &kIron;
+            else if (std::strcmp(type, "gold") == 0)
+                ore = &kGold;
+            else if (std::strcmp(type, "diamond-ore") == 0)
+                ore = &kDiamond;
+
+            const int palette_size = base_count + (ore ? 2 : 0);
+            const int selected = std::uniform_int_distribution<int>(0, palette_size - 1)(rng);
+            return selected < base_count ? base[selected] : ore->blob[selected - base_count];
+        }
+
+        float randomFloat(std::mt19937& rng, const float min, const float max) {
+            return std::uniform_real_distribution<float>(min, max)(rng);
+        }
+
+        const std::array<std::string_view, 5>& smokeGlyph(const char key) {
+            const auto it = std::find(kSmokeGlyphKeys.begin(), kSmokeGlyphKeys.end(), key);
+            return kSmokeGlyphs[static_cast<size_t>(std::distance(kSmokeGlyphKeys.begin(), it))];
+        }
+
+        bool smokeGlyphPixel(const std::array<std::string_view, 5>& glyph, const int x,
+                             const int y) {
+            return y >= 0 && y < 5 && x >= 0 && x < 3 && glyph[static_cast<size_t>(y)][x] == '1';
+        }
+
+        uint8_t miningParticleAlpha(const MiningParticle& particle) {
+            if (!particle.fade || particle.life <= 0.0f)
+                return particle.alpha;
+            const float remaining = std::max(0.0f, 1.0f - particle.age / particle.life);
+            return static_cast<uint8_t>(static_cast<float>(particle.alpha) *
+                                        std::pow(remaining, 0.7f));
+        }
     } // namespace
 
     MiningLayout miningLayout(const float bar_dp) {
@@ -70,14 +161,146 @@ namespace lfs::vis::gui::mining {
         return wall_rml;
     }
 
-    std::string buildMiningDebrisRml(const MiningLayout& layout, const int block,
-                                     const int break_frame) {
-        if (block < 0 || break_frame < 0)
-            return {};
+    void spawnBreakParticles(std::vector<MiningParticle>& particles, const MiningLayout& layout,
+                             const int block, const char* type) {
+        if (block < 0 || !type)
+            return;
+
+        std::mt19937 rng(static_cast<uint32_t>(block));
         const float left = layout.offset_dp + static_cast<float>(block * kBlockDp);
-        return std::format(
-            "<img class=\"wall-block\" style=\"left: {:.2f}dp\" src=\"../icon/mining/break-{}.png\"/>",
-            left, break_frame + 1);
+        const int sizes[] = {1, 1, 2, 2, 2};
+        for (int i = 0; i < 16; ++i) {
+            const int px = std::uniform_int_distribution<int>(0, 15)(rng);
+            const int py = std::uniform_int_distribution<int>(0, 15)(rng);
+            const int size = sizes[std::uniform_int_distribution<int>(0, 4)(rng)];
+            particles.push_back({
+                .x = left + static_cast<float>(px),
+                .y = static_cast<float>(py),
+                .vx = randomFloat(rng, -26.0f, 30.0f),
+                .vy = randomFloat(rng, -42.0f, 4.0f),
+                .size = size,
+                .rgb = packRgb(sampleBlockColor(type, rng)),
+                .life = randomFloat(rng, 0.45f, 0.8f),
+            });
+        }
+    }
+
+    void spawnStrikeChips(std::vector<MiningParticle>& particles, const float hit_x,
+                          const float hit_y, const char* type, const uint32_t seed) {
+        if (!type)
+            return;
+
+        std::mt19937 rng(seed);
+        for (int i = 0; i < 4; ++i) {
+            particles.push_back({
+                .x = hit_x + randomFloat(rng, -1.0f, 1.0f),
+                .y = hit_y + randomFloat(rng, -1.5f, 1.5f),
+                .vx = randomFloat(rng, -30.0f, -4.0f),
+                .vy = randomFloat(rng, -30.0f, -6.0f),
+                .size = 1,
+                .rgb = packRgb(sampleBlockColor(type, rng)),
+                .life = randomFloat(rng, 0.3f, 0.45f),
+            });
+        }
+    }
+
+    void stepMiningParticles(std::vector<MiningParticle>& particles, const float dt_s) {
+        if (dt_s <= 0.0f)
+            return;
+
+        std::erase_if(particles, [dt_s](MiningParticle& particle) {
+            particle.age += dt_s;
+            if (particle.age >= particle.life)
+                return true;
+            if (!particle.gravity) {
+                particle.x += particle.vx * dt_s;
+                particle.y += particle.vy * dt_s;
+                return false;
+            }
+            if (particle.landed) {
+                particle.x += particle.vx * dt_s;
+                return false;
+            }
+
+            particle.vy += kGravity * dt_s;
+            particle.x += particle.vx * dt_s;
+            particle.y += particle.vy * dt_s;
+            if (particle.y + static_cast<float>(particle.size) >= kGroundDp) {
+                particle.y = kGroundDp - static_cast<float>(particle.size);
+                particle.landed = true;
+                particle.vx *= 0.3f;
+            }
+            return false;
+        });
+    }
+
+    std::string buildMiningParticlesRml(const std::vector<MiningParticle>& particles) {
+        std::string rml;
+        for (const auto& particle : particles) {
+            const uint32_t rgba = (particle.rgb << 8) | miningParticleAlpha(particle);
+            rml += std::format(
+                "<div class=\"mining-particle\" style=\"left:{:.2f}dp;top:{:.2f}dp;width:{}dp;height:{}dp;background-color:#{:08x}\"></div>",
+                particle.x, particle.y, particle.size, particle.size, rgba);
+        }
+        return rml;
+    }
+
+    int miningSmokeSpriteIndex(const int pause_ms) {
+        constexpr int word_end_ms = kSmokeLettersFromMs + kSmokeLetterEveryMs * kSmokeWordLength;
+        if (pause_ms < kSmokeLettersFromMs)
+            return 0;
+        if (pause_ms < word_end_ms)
+            return (pause_ms - kSmokeLettersFromMs) % kSmokeLetterEveryMs < 250 ? 1 : 0;
+        return ((pause_ms - word_end_ms) / kSmokeFrameMs) % 6;
+    }
+
+    void spawnSmokeLetters(std::vector<MiningParticle>& particles, const float x, const float y,
+                           const int prev_pause_ms, const int pause_ms) {
+        for (int index = 0; index < kSmokeWordLength; ++index) {
+            const int at = kSmokeLettersFromMs + index * kSmokeLetterEveryMs;
+            if (prev_pause_ms >= at || at > pause_ms)
+                continue;
+
+            const auto& glyph = smokeGlyph(kSmokeWord[kSmokeWordLength - 1 - index]);
+            for (int gy = 0; gy < 5; ++gy) {
+                for (int gx = 0; gx < 3; ++gx) {
+                    if (!smokeGlyphPixel(glyph, gx, gy))
+                        continue;
+                    if (!smokeGlyphPixel(glyph, gx + 1, gy + 1)) {
+                        particles.push_back({
+                            .x = x + static_cast<float>(gx + 1),
+                            .y = y + static_cast<float>(gy + 1),
+                            .vx = 8.0f,
+                            .vy = -0.25f,
+                            .size = 1,
+                            .rgb = kSmokeLetterShadowRgb,
+                            .life = 6.0f,
+                            .gravity = false,
+                            .fade = true,
+                            .alpha = kSmokeLetterShadowAlpha,
+                        });
+                    }
+                }
+            }
+            for (int gy = 0; gy < 5; ++gy) {
+                for (int gx = 0; gx < 3; ++gx) {
+                    if (!smokeGlyphPixel(glyph, gx, gy))
+                        continue;
+                    particles.push_back({
+                        .x = x + static_cast<float>(gx),
+                        .y = y + static_cast<float>(gy),
+                        .vx = 8.0f,
+                        .vy = -0.25f,
+                        .size = 1,
+                        .rgb = kSmokeLetterRgb,
+                        .life = 6.0f,
+                        .gravity = false,
+                        .fade = true,
+                        .alpha = kSmokeLetterAlpha,
+                    });
+                }
+            }
+        }
     }
 
 } // namespace lfs::vis::gui::mining

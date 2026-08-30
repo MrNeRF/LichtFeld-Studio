@@ -16,7 +16,15 @@
                     <div id="progress-debris"></div>
                     <div id="progress-markers"></div>
                     <img class="progress-figure" src="../icon/mining/miner-raised.png" data-style-left="progress_width" data-class-hidden="!miner_raised"/>
+                    <img class="progress-figure" src="../icon/mining/miner-raised-step-a.png" data-style-left="progress_width" data-class-hidden="!miner_step_a"/>
                     <img class="progress-figure" src="../icon/mining/miner-strike.png" data-style-left="progress_width" data-class-hidden="!miner_strike"/>
+                    <img class="progress-figure" src="../icon/mining/miner-raised-step-b.png" data-style-left="progress_width" data-class-hidden="!miner_step_b"/>
+                    <img class="progress-figure smoke" src="../icon/mining/miner-smoke-1.png" data-style-left="progress_width" data-class-hidden="!miner_smoke_1"/>
+                    <img class="progress-figure smoke" src="../icon/mining/miner-smoke-2.png" data-style-left="progress_width" data-class-hidden="!miner_smoke_2"/>
+                    <img class="progress-figure smoke" src="../icon/mining/miner-smoke-3.png" data-style-left="progress_width" data-class-hidden="!miner_smoke_3"/>
+                    <img class="progress-figure smoke" src="../icon/mining/miner-smoke-4.png" data-style-left="progress_width" data-class-hidden="!miner_smoke_4"/>
+                    <img class="progress-figure smoke" src="../icon/mining/miner-smoke-5.png" data-style-left="progress_width" data-class-hidden="!miner_smoke_5"/>
+                    <img class="progress-figure smoke" src="../icon/mining/miner-smoke-6.png" data-style-left="progress_width" data-class-hidden="!miner_smoke_6"/>
                     <span id="progress-text">{{ progress_text }}</span>
                 </div>
             </div>

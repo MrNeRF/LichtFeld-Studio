@@ -277,8 +277,17 @@ body {
     position: absolute;
     top: 1dp;
     width: 14dp;
-    height: 14dp;
+    height: 15dp;
     margin-left: -4dp;
+    pointer-events: none;
+}
+
+.progress-figure.smoke {
+    width: 18dp;
+}
+
+.mining-particle {
+    position: absolute;
     pointer-events: none;
 }
 
