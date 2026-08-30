@@ -81,8 +81,9 @@ namespace lfs::training {
     /**
      * @brief Initialize training model from point cloud
      *
-     * Called when training starts. Creates SplatData from the POINTCLOUD node,
-     * optionally filtering by any CropBox attached to the point cloud.
+     * Called when training starts. If a Gaussian-splat init file is set, that
+     * file is loaded as the training model. Otherwise creates SplatData from the
+     * POINTCLOUD node, optionally filtering by any CropBox attached to the point cloud.
      *
      * The POINTCLOUD node is replaced with a SPLAT node containing the initialized model.
      *
