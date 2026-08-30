@@ -363,16 +363,18 @@ namespace {
         return {};
     }
 
-    std::expected<void, std::string> apply_per_launch_ui_flags(
+    constexpr const char* kMcpPortRangeError = "ERROR: --mcp-port must be between 1 and 65535";
+
+    bool valid_mcp_port(const std::optional<int> mcp_port_val) {
+        return !mcp_port_val || (*mcp_port_val >= 1 && *mcp_port_val <= 65535);
+    }
+
+    void apply_per_launch_ui_flags(
         lfs::core::param::TrainingParameters& params,
         const bool no_splash_flag,
         const std::optional<int> mcp_port_val) {
         if (mcp_port_val) {
-            const int port = *mcp_port_val;
-            if (port < 1 || port > 65535) {
-                return std::unexpected("ERROR: --mcp-port must be between 1 and 65535");
-            }
-            params.mcp_port = port;
+            params.mcp_port = *mcp_port_val;
         }
 #ifndef LFS_BUILD_PORTABLE
         if (no_splash_flag) {
@@ -381,7 +383,6 @@ namespace {
 #else
         (void)no_splash_flag;
 #endif
-        return {};
     }
 
     std::optional<lfs::core::param::OutputFormat> parseFormat(const std::string& str) {
@@ -827,18 +828,17 @@ namespace {
                 if (gut) {
                     params.optimization.gut = true;
                 }
-                if (const auto applied = apply_per_launch_ui_flags(
-                        params, per_launch_no_splash, per_launch_mcp_port);
-                    !applied) {
-                    return std::unexpected(applied.error());
+                if (!valid_mcp_port(per_launch_mcp_port)) {
+                    return std::unexpected(kMcpPortRangeError);
                 }
+                apply_per_launch_ui_flags(params, per_launch_no_splash, per_launch_mcp_port);
                 // parse_args_and_params replaces optimization with defaults
                 // after this return; re-apply so --no-splash survives.
                 return std::make_tuple(
                     ParseResult::Success,
                     std::function<void()>([&params, per_launch_no_splash,
                                            per_launch_mcp_port]() {
-                        (void)apply_per_launch_ui_flags(
+                        apply_per_launch_ui_flags(
                             params, per_launch_no_splash, per_launch_mcp_port);
                     }));
             }
@@ -1060,11 +1060,10 @@ namespace {
                     return std::unexpected("ERROR: --min-track-length must be 0 or greater");
                 }
             }
-            if (const auto applied = apply_per_launch_ui_flags(
-                    params, per_launch_no_splash, per_launch_mcp_port);
-                !applied) {
-                return std::unexpected(applied.error());
+            if (!valid_mcp_port(per_launch_mcp_port)) {
+                return std::unexpected(kMcpPortRangeError);
             }
+            apply_per_launch_ui_flags(params, per_launch_no_splash, per_launch_mcp_port);
 
             // Validate sh_degree (0-3)
             if (sh_degree) {
@@ -1365,7 +1364,7 @@ namespace {
                 setFlag(reset_preferences_flag, params.reset_preferences);
                 setFlag(reset_layout_flag, params.reset_layout);
                 setFlag(reset_all_settings_flag, params.reset_all_settings);
-                (void)apply_per_launch_ui_flags(params, no_splash_flag, mcp_port_val);
+                apply_per_launch_ui_flags(params, no_splash_flag, mcp_port_val);
                 setFlag(debug_python_flag, opt.debug_python);
                 setVal(debug_python_port_val, opt.debug_python_port);
                 if (no_save_eval_images_flag)
