@@ -45,6 +45,7 @@
 #include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/perf_bench.hpp"
+#include "lfs/training/screen_share.cuh"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/vram_ledger.hpp"
 #include "losses/losses.hpp"
@@ -1264,13 +1265,22 @@ namespace lfs::training {
     }
 
     std::expected<void, std::string> Trainer::initialize_bilateral_grid() {
-        if (!params_.optimization.use_bilateral_grid) {
+        if (!params_.optimization.bilateral_grid_active()) {
             return {};
         }
 
         try {
             BilateralGrid::Config config;
             config.lr = params_.optimization.bilateral_grid_lr;
+
+            const auto parameterization = params_.optimization.use_exposure_correction
+                                              ? BilateralGridParameterization::ExposureChroma
+                                              : BilateralGridParameterization::Affine;
+            int schedule_iters = get_total_iterations();
+            if (params_.optimization.use_exposure_correction) {
+                schedule_iters = std::max(
+                    1, get_total_iterations() - params_.optimization.exposure_correction_grid_start_iter);
+            }
 
             // BilateralGrid is indexed with cam->uid() in the training loop. Those UIDs stay
             // in the original camera space even when train/val splits are enabled, so the grid
@@ -1280,8 +1290,9 @@ namespace lfs::training {
                 params_.optimization.bilateral_grid_X,
                 params_.optimization.bilateral_grid_Y,
                 params_.optimization.bilateral_grid_W,
-                get_total_iterations(),
-                config);
+                schedule_iters,
+                config,
+                parameterization);
 
             LOG_INFO("Bilateral grid initialized: {}x{}x{} for {} camera slots ({} train images)",
                      params_.optimization.bilateral_grid_X,
@@ -1297,7 +1308,7 @@ namespace lfs::training {
     }
 
     std::expected<void, std::string> Trainer::initialize_ppisp() {
-        if (!params_.optimization.use_ppisp) {
+        if (!params_.optimization.ppisp_active()) {
             return {};
         }
 
@@ -1305,13 +1316,24 @@ namespace lfs::training {
             PPISPConfig config;
             config.lr = params_.optimization.ppisp_lr;
             config.warmup_steps = params_.optimization.ppisp_warmup_steps;
-            const float reg_weight = params_.optimization.ppisp_reg_weight;
-            config.exposure_mean *= reg_weight;
-            config.vig_center *= reg_weight;
-            config.vig_channel *= reg_weight;
-            config.vig_non_pos *= reg_weight;
-            config.color_mean *= reg_weight;
-            config.crf_channel *= reg_weight;
+            const bool exposure_correction = params_.optimization.use_exposure_correction;
+            if (exposure_correction) {
+                config.train_crf = false;
+                config.exposure_mean = 0.0f;
+                config.color_mean = 0.0f;
+                config.crf_channel = 0.0f;
+                config.vig_center = 0.02f;
+                config.vig_non_pos = 0.01f;
+                config.vig_channel = 0.1f;
+            } else {
+                const float reg_weight = params_.optimization.ppisp_reg_weight;
+                config.exposure_mean *= reg_weight;
+                config.vig_center *= reg_weight;
+                config.vig_channel *= reg_weight;
+                config.vig_non_pos *= reg_weight;
+                config.color_mean *= reg_weight;
+                config.crf_channel *= reg_weight;
+            }
 
             ppisp_ = std::make_unique<PPISP>(get_total_iterations(), config);
             for (const auto& cam : train_dataset_->get_cameras()) {
@@ -1321,9 +1343,9 @@ namespace lfs::training {
             }
             ppisp_->finalize();
 
-            LOG_INFO("PPISP initialized: {} cameras (physical), {} frames, lr={:.2e}, warmup={}, reg_weight={:.2e}",
+            LOG_INFO("PPISP initialized: {} cameras (physical), {} frames, lr={:.2e}, warmup={}, train_crf={}",
                      ppisp_->num_cameras(), ppisp_->num_frames(), params_.optimization.ppisp_lr,
-                     config.warmup_steps, reg_weight);
+                     config.warmup_steps, config.train_crf);
 
             const bool resume = params_.resume_checkpoint.has_value() || params_.resume_project.has_value();
             if (params_.optimization.ppisp_exposure_from_exif && !resume) {
@@ -1349,6 +1371,7 @@ namespace lfs::training {
                     }
                     const double mean = sum / static_cast<double>(n);
                     ppisp_exif_exposure_mean_ = static_cast<float>(mean);
+                    ppisp_->set_exif_exposure_mean(ppisp_exif_exposure_mean_);
                     ppisp_->seed_exposure(uid_ev);
                     LOG_INFO("PPISP exposure seeded from EXIF for {} of {} frames (mean {:.2f} EV)",
                              n, m, mean);
@@ -1582,7 +1605,7 @@ namespace lfs::training {
     }
 
     std::expected<void, std::string> Trainer::initialize_ppisp_controller() {
-        if (!params_.optimization.ppisp_use_controller || !params_.optimization.use_ppisp) {
+        if (!params_.optimization.ppisp_use_controller || !params_.optimization.ppisp_active()) {
             return {};
         }
 
@@ -3072,7 +3095,7 @@ namespace lfs::training {
 
             // Initialize the evaluator - it handles all metrics internally
             evaluator_ = std::make_unique<lfs::training::MetricsEvaluator>(params_);
-            if (params_.optimization.use_ppisp && ppisp_ && ppisp_->isFinalized()) {
+            if (params_.optimization.ppisp_active() && ppisp_ && ppisp_->isFinalized()) {
                 evaluator_->set_appearance([this](const lfs::core::Tensor& rgb, const lfs::core::Camera& cam) {
                     return applyPPISPForEval(rgb, cam);
                 });
@@ -6308,7 +6331,7 @@ namespace lfs::training {
                         std::lock_guard<std::mutex> controller_lock(ppisp_controller_pool_->predict_mutex());
 
                         lfs::core::Tensor corrected_image = output.image;
-                        if (bilateral_grid_ && params_.optimization.use_bilateral_grid) {
+                        if (bilateral_grid_ && params_.optimization.bilateral_grid_active()) {
                             LFS_VRAM_SCOPE("train.bilateral_grid.forward");
                             LOG_VRAM_DIFF("train.bilateral_grid.forward");
                             corrected_image = bilateral_grid_->apply(output.image, cam->uid());
@@ -6430,37 +6453,65 @@ namespace lfs::training {
                         // Normal phase: full forward + backward through all components
                         auto tile_context_guard = makeScopeGuard(cleanup_tile_context);
 
-                        lfs::core::Tensor corrected_image = output.image;
-                        if (bilateral_grid_ && params_.optimization.use_bilateral_grid) {
-                            nvtxRangePush("bilateral_grid_forward");
-                            LFS_VRAM_SCOPE("train.bilateral_grid.forward");
-                            LOG_VRAM_DIFF("train.bilateral_grid.forward");
-                            corrected_image = bilateral_grid_->apply(output.image, cam->uid());
-                            nvtxRangePop();
-                        }
+                        const auto& opt = params_.optimization;
+                        const bool exposure_correction = opt.use_exposure_correction;
+                        const bool grid_on = bilateral_grid_ && opt.bilateral_grid_active();
+                        const bool ppisp_on = ppisp_ && opt.ppisp_active();
+                        const bool grid_active_this_iter =
+                            grid_on &&
+                            (!exposure_correction ||
+                             iter >= opt.exposure_correction_grid_start_iter);
 
+                        lfs::core::Tensor corrected_image = output.image;
                         lfs::core::Tensor ppisp_input;
-                        if (ppisp_ && params_.optimization.use_ppisp) {
-                            nvtxRangePush("ppisp_forward");
-                            LFS_VRAM_SCOPE("train.ppisp.forward");
-                            LOG_VRAM_DIFF("train.ppisp.forward");
-                            ppisp_input = corrected_image;
-                            corrected_image = ppisp_->apply(ppisp_input, cam->camera_id(), cam->uid());
-                            nvtxRangePop();
+                        lfs::core::Tensor grid_input;
+                        if (exposure_correction) {
+                            if (ppisp_on) {
+                                nvtxRangePush("ppisp_forward");
+                                LFS_VRAM_SCOPE("train.ppisp.forward");
+                                LOG_VRAM_DIFF("train.ppisp.forward");
+                                ppisp_input = output.image;
+                                corrected_image = ppisp_->apply(
+                                    ppisp_input, cam->camera_id(), cam->uid());
+                                nvtxRangePop();
+                            }
+                            grid_input = corrected_image;
+                            if (grid_active_this_iter) {
+                                nvtxRangePush("bilateral_grid_forward");
+                                LFS_VRAM_SCOPE("train.bilateral_grid.forward");
+                                LOG_VRAM_DIFF("train.bilateral_grid.forward");
+                                corrected_image = bilateral_grid_->apply(grid_input, cam->uid());
+                                nvtxRangePop();
+                            }
+                            corrected_image.clamp_(0.0f, 1.0f);
+                        } else {
+                            if (grid_on) {
+                                nvtxRangePush("bilateral_grid_forward");
+                                LFS_VRAM_SCOPE("train.bilateral_grid.forward");
+                                LOG_VRAM_DIFF("train.bilateral_grid.forward");
+                                corrected_image = bilateral_grid_->apply(output.image, cam->uid());
+                                nvtxRangePop();
+                            }
+
+                            if (ppisp_on) {
+                                nvtxRangePush("ppisp_forward");
+                                LFS_VRAM_SCOPE("train.ppisp.forward");
+                                LOG_VRAM_DIFF("train.ppisp.forward");
+                                ppisp_input = corrected_image;
+                                corrected_image = ppisp_->apply(
+                                    ppisp_input, cam->camera_id(), cam->uid());
+                                nvtxRangePop();
+                            }
+                            // Final tonemapping: clamp to [0, 1] for loss computation.
+                            // skip when PPISP is active — CRF already clamps.
+                            if (!ppisp_on) {
+                                corrected_image.clamp_(0.0f, 1.0f);
+                            }
                         }
                         // For decoupled D-SSIM, the active appearance model provides the corrected image
                         // for the L1/luminance terms, while contrast/structure still use the raw render.
                         const lfs::core::Tensor raw_loss_input =
-                            ((bilateral_grid_ && params_.optimization.use_bilateral_grid) ||
-                             (ppisp_ && params_.optimization.use_ppisp))
-                                ? output.image
-                                : lfs::core::Tensor{};
-
-                        // Final tonemapping: clamp to [0, 1] for loss computation.
-                        // skip when PPISP is active — CRF already clamps.
-                        if (!(ppisp_ && params_.optimization.use_ppisp)) {
-                            corrected_image.clamp_(0.0f, 1.0f);
-                        }
+                            (grid_on || ppisp_on) ? output.image : lfs::core::Tensor{};
 
                         nvtxRangePush("compute_photometric_loss");
                         PerfBenchCollector::phase_mark(PerfBenchCollector::PhaseBoundary::LossBegin, iter);
@@ -7014,26 +7065,37 @@ namespace lfs::training {
                             LOG_VRAM_DIFF("train.densification_error_map");
                             if (use_ssim_error && params_.optimization.lambda_dssim > 0.0f) {
                                 lfs::core::Tensor ssim_map;
+                                lfs::core::Tensor cs_map;
                                 if (used_masked_fused && raw_loss_input.is_valid()) {
                                     ssim_map = photometric_loss_.arena().masked_decoupled().ssim_map;
+                                    cs_map = photometric_loss_.arena().masked_decoupled().cs_map;
                                 } else if (used_masked_fused) {
                                     ssim_map = photometric_loss_.arena().masked_fused().ssim_map;
+                                    cs_map = photometric_loss_.arena().masked_fused().cs_map;
                                 } else if (raw_loss_input.is_valid()) {
                                     ssim_map = photometric_loss_.arena().decoupled().ssim_map;
+                                    cs_map = photometric_loss_.arena().decoupled().cs_map;
                                 } else if (params_.optimization.lambda_dssim < 1.0f) {
                                     ssim_map = photometric_loss_.fused_workspace().ssim_map;
+                                    cs_map = photometric_loss_.fused_workspace().cs_map;
                                 } else {
                                     ssim_map = photometric_loss_.ssim_workspace().ssim_map;
+                                    cs_map = photometric_loss_.ssim_workspace().cs_map;
                                 }
-                                if (ssim_map.shape()[0] == 1 && ssim_map.shape()[1] == 1 &&
-                                    ssim_map.is_contiguous()) {
-                                    const size_t H = ssim_map.shape()[2];
-                                    const size_t W = ssim_map.shape()[3];
-                                    tile_error_map = ssim_map.reshape({static_cast<int>(H), static_cast<int>(W)});
-                                    lfs::training::kernels::launch_ssim_to_error_map(ssim_map, tile_error_map);
+                                const bool use_cs =
+                                    params_.optimization.densify_error_map ==
+                                        lfs::core::param::DensifyErrorMap::SsimCs &&
+                                    cs_map.is_valid();
+                                const lfs::core::Tensor& densify_src = use_cs ? cs_map : ssim_map;
+                                if (densify_src.shape()[0] == 1 && densify_src.shape()[1] == 1 &&
+                                    densify_src.is_contiguous()) {
+                                    const size_t H = densify_src.shape()[2];
+                                    const size_t W = densify_src.shape()[3];
+                                    tile_error_map = densify_src.reshape({static_cast<int>(H), static_cast<int>(W)});
+                                    lfs::training::kernels::launch_ssim_to_error_map(densify_src, tile_error_map);
                                 } else {
-                                    const size_t H = ssim_map.shape()[2];
-                                    const size_t W = ssim_map.shape()[3];
+                                    const size_t H = densify_src.shape()[2];
+                                    const size_t W = densify_src.shape()[3];
                                     if (!densification_error_map_.is_valid() ||
                                         densification_error_map_.shape()[0] != H ||
                                         densification_error_map_.shape()[1] != W) {
@@ -7041,7 +7103,8 @@ namespace lfs::training {
                                             {static_cast<size_t>(H), static_cast<size_t>(W)},
                                             core::Device::CUDA);
                                     }
-                                    lfs::training::kernels::launch_ssim_to_error_map(ssim_map, densification_error_map_);
+                                    lfs::training::kernels::launch_ssim_to_error_map(
+                                        densify_src, densification_error_map_);
                                     tile_error_map = densification_error_map_;
                                 }
                             } else if (use_ssim_error) {
@@ -7053,8 +7116,11 @@ namespace lfs::training {
                                     pred_chw = pred_chw.permute({2, 0, 1}).contiguous();
                                     gt_chw = gt_chw.permute({2, 0, 1}).contiguous();
                                 }
+                                const bool use_cs = params_.optimization.densify_error_map ==
+                                                    lfs::core::param::DensifyErrorMap::SsimCs;
                                 lfs::training::kernels::ssim_error_map_forward(
-                                    pred_chw, gt_chw, densification_ssim_workspace_, densification_error_map_);
+                                    pred_chw, gt_chw, densification_ssim_workspace_,
+                                    densification_error_map_, use_cs);
                                 tile_error_map = densification_error_map_;
                             } else {
                                 const auto gt_for_error = gt_tile.dtype() == lfs::core::DataType::UInt8
@@ -7142,23 +7208,45 @@ namespace lfs::training {
                         nvtxRangePop();
 
                         lfs::core::Tensor raster_grad = tile_grad;
-                        if (ppisp_ && params_.optimization.use_ppisp) {
-                            nvtxRangePush("ppisp_backward");
-                            LFS_VRAM_SCOPE("train.ppisp.backward");
-                            LOG_VRAM_DIFF("train.ppisp.backward");
-                            raster_grad = ppisp_->backward(ppisp_input, raster_grad, cam->camera_id(), cam->uid());
-                            if (ppisp_frozen) {
-                                ppisp_->zero_grad();
+                        if (exposure_correction) {
+                            if (grid_active_this_iter) {
+                                nvtxRangePush("bilateral_grid_backward");
+                                LFS_VRAM_SCOPE("train.bilateral_grid.backward");
+                                LOG_VRAM_DIFF("train.bilateral_grid.backward");
+                                raster_grad = bilateral_grid_->backward(grid_input, raster_grad, cam->uid());
+                                nvtxRangePop();
                             }
-                            nvtxRangePop();
-                        }
+                            if (ppisp_on) {
+                                nvtxRangePush("ppisp_backward");
+                                LFS_VRAM_SCOPE("train.ppisp.backward");
+                                LOG_VRAM_DIFF("train.ppisp.backward");
+                                raster_grad = ppisp_->backward(
+                                    ppisp_input, raster_grad, cam->camera_id(), cam->uid());
+                                if (ppisp_frozen) {
+                                    ppisp_->zero_grad();
+                                }
+                                nvtxRangePop();
+                            }
+                        } else {
+                            if (ppisp_on) {
+                                nvtxRangePush("ppisp_backward");
+                                LFS_VRAM_SCOPE("train.ppisp.backward");
+                                LOG_VRAM_DIFF("train.ppisp.backward");
+                                raster_grad = ppisp_->backward(
+                                    ppisp_input, raster_grad, cam->camera_id(), cam->uid());
+                                if (ppisp_frozen) {
+                                    ppisp_->zero_grad();
+                                }
+                                nvtxRangePop();
+                            }
 
-                        if (bilateral_grid_ && params_.optimization.use_bilateral_grid) {
-                            nvtxRangePush("bilateral_grid_backward");
-                            LFS_VRAM_SCOPE("train.bilateral_grid.backward");
-                            LOG_VRAM_DIFF("train.bilateral_grid.backward");
-                            raster_grad = bilateral_grid_->backward(output.image, raster_grad, cam->uid());
-                            nvtxRangePop();
+                            if (grid_on) {
+                                nvtxRangePush("bilateral_grid_backward");
+                                LFS_VRAM_SCOPE("train.bilateral_grid.backward");
+                                LOG_VRAM_DIFF("train.bilateral_grid.backward");
+                                raster_grad = bilateral_grid_->backward(output.image, raster_grad, cam->uid());
+                                nvtxRangePop();
+                            }
                         }
 
                         if (tile_grad_raw.is_valid() && tile_grad_raw.numel() > 0) {
@@ -7292,25 +7380,24 @@ namespace lfs::training {
                         nvtxRangePop();
                     }
 
-                    if (bilateral_grid_ && params_.optimization.use_bilateral_grid) {
-                        current_phase = StepPhase::OptimizerCommit;
-                        nvtxRangePush("bilateral_grid_tv_and_step");
-                        LFS_VRAM_SCOPE("train.bilateral_grid.tv_and_step");
-                        LOG_VRAM_DIFF("train.bilateral_grid.tv_and_step");
-                        const float tv_weight = params_.optimization.tv_loss_weight;
+                    if (bilateral_grid_ && params_.optimization.bilateral_grid_active()) {
+                        const bool grid_active_this_iter =
+                            !params_.optimization.use_exposure_correction ||
+                            iter >= params_.optimization.exposure_correction_grid_start_iter;
+                        if (grid_active_this_iter) {
+                            current_phase = StepPhase::OptimizerCommit;
+                            LFS_VRAM_SCOPE("train.bilateral_grid.step");
+                            LOG_VRAM_DIFF("train.bilateral_grid.step");
+                            const float tv_weight = params_.optimization.tv_loss_weight;
 
-                        loss_tensor_gpu = loss_tensor_gpu + bilateral_grid_->tv_loss_gpu() * tv_weight;
-                        bilateral_grid_->tv_backward(tv_weight);
-                        bilateral_grid_->optimizer_step();
-                        bilateral_grid_->zero_grad();
-                        bilateral_grid_->scheduler_step();
-                        ++mutation_epoch_;
-                        persistent_commit = true;
-
-                        nvtxRangePop();
+                            loss_tensor_gpu = loss_tensor_gpu + bilateral_grid_->tv_loss_gpu(cam->uid()) * tv_weight;
+                            bilateral_grid_->step_image(cam->uid(), tv_weight);
+                            ++mutation_epoch_;
+                            persistent_commit = true;
+                        }
                     }
 
-                    if (ppisp_ && params_.optimization.use_ppisp && !ppisp_frozen) {
+                    if (ppisp_ && params_.optimization.ppisp_active() && !ppisp_frozen) {
                         current_phase = StepPhase::OptimizerCommit;
                         nvtxRangePush("ppisp_reg_and_step");
                         LFS_VRAM_SCOPE("train.ppisp.reg_and_step");
@@ -7319,6 +7406,11 @@ namespace lfs::training {
                         loss_tensor_gpu = loss_tensor_gpu + ppisp_->reg_loss_gpu();
                         ppisp_->reg_backward();
                         ppisp_->optimizer_step();
+                        if (params_.optimization.use_exposure_correction) {
+                            nvtxRangePush("ppisp_project_mean");
+                            ppisp_->project_mean();
+                            nvtxRangePop();
+                        }
                         ppisp_->zero_grad();
                         ppisp_->scheduler_step();
                         ++mutation_epoch_;
@@ -7583,6 +7675,26 @@ namespace lfs::training {
                                      n, k, n - k);
                         }
                         LOG_INFO("{}", metrics.to_string());
+                        if (strategy_) {
+                            auto& splat = strategy_->get_model();
+                            const float configured = params_.optimization.max_screen_share;
+                            const float limit = lfs::training::screen_share_cap_active(configured)
+                                                    ? configured
+                                                    : 0.3f;
+                            int n_over_share = 0;
+                            if (splat._max_screen_share.is_valid() &&
+                                splat._max_screen_share.numel() > 0) {
+                                auto over = splat._max_screen_share.gt(limit).to(lfs::core::DataType::Int32).sum();
+                                n_over_share = over.template item<int>();
+                            }
+                            LOG_INFO("n_over_share={} strategy={}", n_over_share, strategy_->strategy_type());
+                        }
+                        if (ppisp_ && params_.optimization.ppisp_active() && ppisp_->isFinalized()) {
+                            ppisp_->log_eval_diagnostics();
+                        }
+                        if (bilateral_grid_ && params_.optimization.bilateral_grid_active()) {
+                            bilateral_grid_->log_eval_diagnostics();
+                        }
                         // B2: retain only the current active shape after evaluation.
                         photometric_loss_.arena().shrink_to_required();
                     }
@@ -8651,7 +8763,7 @@ namespace lfs::training {
         eval_ppisp_applied_.fetch_add(1, std::memory_order_relaxed);
 
         const auto params = getParams();
-        if (!ppisp_ || !params.optimization.use_ppisp || !ppisp_->isFinalized() ||
+        if (!ppisp_ || !params.optimization.ppisp_active() || !ppisp_->isFinalized() ||
             rgb.shape().rank() != 3) {
             return rgb;
         }
@@ -8677,7 +8789,7 @@ namespace lfs::training {
 
         int camera_id = cam.camera_id();
         if (!ppisp_->is_known_camera(camera_id)) {
-            camera_id = ppisp_->any_camera_id();
+            camera_id = ppisp_->majority_camera_id();
         }
 
         if (ppisp_->is_known_frame(cam.uid())) {
@@ -8702,7 +8814,7 @@ namespace lfs::training {
                                                      const PPISPViewportOverrides& overrides,
                                                      const bool use_controller) const {
         const auto params = getParams();
-        if (!ppisp_ || !params.optimization.use_ppisp || rgb.shape().rank() != 3) {
+        if (!ppisp_ || !params.optimization.ppisp_active() || rgb.shape().rank() != 3) {
             return rgb;
         }
 
@@ -8813,14 +8925,14 @@ namespace lfs::training {
         }
 
         // Create bilateral grid before loading if needed (checkpoint may contain grid state)
-        if (params_.optimization.use_bilateral_grid && !bilateral_grid_) {
+        if (params_.optimization.bilateral_grid_active() && !bilateral_grid_) {
             if (auto init_result = initialize_bilateral_grid(); !init_result) {
                 LOG_WARN("Failed to init bilateral grid for resume: {}", init_result.error());
             }
         }
 
         // Create PPISP before loading if needed
-        if (params_.optimization.use_ppisp && !ppisp_) {
+        if (params_.optimization.ppisp_active() && !ppisp_) {
             if (auto init_result = initialize_ppisp(); !init_result) {
                 LOG_WARN("Failed to init PPISP for resume: {}", init_result.error());
             }
@@ -8870,6 +8982,12 @@ namespace lfs::training {
             splat_tensor_allocator_, source_name, preloaded_model);
         if (!result) {
             return result;
+        }
+        if (ppisp_) {
+            if (params_.optimization.use_exposure_correction) {
+                ppisp_->set_train_crf(false);
+            }
+            ppisp_exif_exposure_mean_ = ppisp_->exif_exposure_mean();
         }
         if (params_.resume_project && scene_) {
             const auto disabled =

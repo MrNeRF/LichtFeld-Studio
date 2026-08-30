@@ -621,11 +621,31 @@ namespace lfs::vis {
         cmd::CopySelection::when([this](const auto&) { copySelectionToClipboard(); });
         cmd::CutSelection::when([this](const auto&) { cutSelectedGaussians(); });
         cmd::PasteSelection::when([this](const auto&) { pasteSelectionFromClipboard(); });
-        cmd::SelectBrush::when([this](const auto& e) { (void)selectBrush(e.x, e.y, e.radius, e.mode, e.camera_index); });
-        cmd::SelectRect::when([this](const auto& e) { (void)selectRect(e.x0, e.y0, e.x1, e.y1, e.mode, e.camera_index); });
-        cmd::SelectPolygon::when([this](const auto& e) { (void)selectPolygon(e.points, e.mode, e.camera_index); });
-        cmd::SelectLasso::when([this](const auto& e) { (void)selectLasso(e.points, e.mode, e.camera_index); });
-        cmd::SelectRing::when([this](const auto& e) { (void)selectRing(e.x, e.y, e.mode, e.camera_index); });
+        cmd::SelectBrush::when([this](const auto& e) {
+            if (const auto result = selectBrush(e.x, e.y, e.radius, e.mode, e.camera_index); !result.success) {
+                LOG_WARN("SelectBrush command failed: {}", result.error);
+            }
+        });
+        cmd::SelectRect::when([this](const auto& e) {
+            if (const auto result = selectRect(e.x0, e.y0, e.x1, e.y1, e.mode, e.camera_index); !result.success) {
+                LOG_WARN("SelectRect command failed: {}", result.error);
+            }
+        });
+        cmd::SelectPolygon::when([this](const auto& e) {
+            if (const auto result = selectPolygon(e.points, e.mode, e.camera_index); !result.success) {
+                LOG_WARN("SelectPolygon command failed: {}", result.error);
+            }
+        });
+        cmd::SelectLasso::when([this](const auto& e) {
+            if (const auto result = selectLasso(e.points, e.mode, e.camera_index); !result.success) {
+                LOG_WARN("SelectLasso command failed: {}", result.error);
+            }
+        });
+        cmd::SelectRing::when([this](const auto& e) {
+            if (const auto result = selectRing(e.x, e.y, e.mode, e.camera_index); !result.success) {
+                LOG_WARN("SelectRing command failed: {}", result.error);
+            }
+        });
         cmd::ApplySelectionMask::when([this](const auto& e) { (void)applySelectionMask(e.mask); });
 
         state::SelectionChanged::when([](const auto& event) {

@@ -858,6 +858,7 @@ namespace lfs::core {
         copy._rotation = cloned(_rotation, "splat.rotation");
         copy._opacity = cloned(_opacity, "splat.opacity");
         copy._densification_info = cloned(_densification_info, "splat.densification_info");
+        copy._max_screen_share = cloned(_max_screen_share, "splat.max_screen_share");
         copy._deleted = cloned(_deleted, "splat.deleted_mask");
         copy._deleted_count.store(_deleted_count.load(std::memory_order_relaxed),
                                   std::memory_order_relaxed);
@@ -883,6 +884,7 @@ namespace lfs::core {
           _rotation(std::move(other._rotation)),
           _opacity(std::move(other._opacity)),
           _densification_info(std::move(other._densification_info)),
+          _max_screen_share(std::move(other._max_screen_share)),
           _deleted(std::move(other._deleted)),
           _deleted_count(other._deleted_count.load(std::memory_order_relaxed)),
           _deleted_mask_version(other._deleted_mask_version.load(std::memory_order_relaxed)),
@@ -917,6 +919,7 @@ namespace lfs::core {
             _rotation = std::move(other._rotation);
             _opacity = std::move(other._opacity);
             _densification_info = std::move(other._densification_info);
+            _max_screen_share = std::move(other._max_screen_share);
             _deleted = std::move(other._deleted);
 
             // Move LOD tree
@@ -1008,6 +1011,7 @@ namespace lfs::core {
             &_opacity,
             &_deleted,
             &_densification_info,
+            &_max_screen_share,
         };
         for (Tensor* tensor : tensors) {
             if (!tensor->is_valid() || tensor->device() != Device::CUDA) {
@@ -1572,6 +1576,7 @@ namespace lfs::core {
         Tensor saved_bounds = _shN_value_bounds;
         Tensor saved_deleted = _deleted;
         Tensor saved_densify = _densification_info;
+        Tensor saved_max_share = _max_screen_share;
         auto saved_frozen = _frozen_ranges;
 
         auto restore = [&]() {
@@ -1584,6 +1589,7 @@ namespace lfs::core {
             _shN_value_bounds = saved_bounds;
             _deleted = saved_deleted;
             _densification_info = saved_densify;
+            _max_screen_share = saved_max_share;
             _frozen_ranges = saved_frozen;
         };
 
@@ -1659,6 +1665,7 @@ namespace lfs::core {
             }
 
             _densification_info = Tensor();
+            _max_screen_share = Tensor();
             if (!_frozen_ranges.empty()) {
                 remap_frozen_ranges_after_keep(old_size, kept_indices_host);
             }

@@ -41,7 +41,39 @@ namespace {
     constexpr float kIouAbs = 2e-2f;
 
     using u64 = std::uint64_t;
-    using u128 = unsigned __int128;
+
+    struct U128 {
+        u64 hi = 0;
+        u64 lo = 0;
+    };
+
+    constexpr U128 multiply_u64(const u64 left, const u64 right) {
+        const u64 left_lo = static_cast<std::uint32_t>(left);
+        const u64 left_hi = left >> 32;
+        const u64 right_lo = static_cast<std::uint32_t>(right);
+        const u64 right_hi = right >> 32;
+        const u64 low_product = left_lo * right_lo;
+        const u64 middle = (low_product >> 32) +
+                           static_cast<std::uint32_t>(left_lo * right_hi) +
+                           static_cast<std::uint32_t>(left_hi * right_lo);
+        return {
+            .hi = left_hi * right_hi + (left_lo * right_hi >> 32) +
+                  (left_hi * right_lo >> 32) + (middle >> 32),
+            .lo = (middle << 32) | static_cast<std::uint32_t>(low_product),
+        };
+    }
+
+    constexpr U128 multiply_add_128(const U128 left,
+                                    const U128 right,
+                                    const U128 increment) {
+        const U128 low_product = multiply_u64(left.lo, right.lo);
+        U128 result{
+            .hi = low_product.hi + left.lo * right.hi + left.hi * right.lo,
+            .lo = low_product.lo + increment.lo,
+        };
+        result.hi += increment.hi + static_cast<u64>(result.lo < low_product.lo);
+        return result;
+    }
 
     std::string project_root() {
         return PROJECT_ROOT_PATH;
@@ -51,24 +83,30 @@ namespace {
         return t.to(lfs::core::DataType::Float32).to(lfs::core::Device::CPU).contiguous().to_vector();
     }
 
-    u64 pcg_xsl_rr(u128 state) {
-        const u64 hi = static_cast<u64>(state >> 64);
-        const u64 lo = static_cast<u64>(state);
-        const u64 xored = hi ^ lo;
-        const unsigned rot = static_cast<unsigned>(hi >> 58);
+    u64 pcg_xsl_rr(const U128 state) {
+        const u64 xored = state.hi ^ state.lo;
+        const unsigned rot = static_cast<unsigned>(state.hi >> 58);
         return (xored >> rot) | (xored << ((-rot) & 63));
     }
 
     // Numpy 2.x PCG64(0) after seeding. integers(0, 256, uint8) is raw bytes.
     std::vector<std::uint8_t> numpy_pcg64_bytes(std::size_t n) {
-        constexpr u128 kMult =
-            (static_cast<u128>(2549297995355413924ull) << 64) | 4865540595714422341ull;
-        u128 state = (static_cast<u128>(0x1aa1b5345996452dull) << 64) | 0x09585eb7a69561e3ull;
-        u128 inc = (static_cast<u128>(0x418ddadb3af71a82ull) << 64) | 0x588133bc447873a9ull;
+        constexpr U128 kMult{
+            .hi = 2549297995355413924ull,
+            .lo = 4865540595714422341ull,
+        };
+        U128 state{
+            .hi = 0x1aa1b5345996452dull,
+            .lo = 0x09585eb7a69561e3ull,
+        };
+        constexpr U128 inc{
+            .hi = 0x418ddadb3af71a82ull,
+            .lo = 0x588133bc447873a9ull,
+        };
         std::vector<std::uint8_t> out(n);
         std::size_t i = 0;
         while (i < n) {
-            state = state * kMult + inc;
+            state = multiply_add_128(state, kMult, inc);
             const u64 raw = pcg_xsl_rr(state);
             for (int b = 0; b < 8 && i < n; ++b) {
                 out[i++] = static_cast<std::uint8_t>(raw >> (8 * b));

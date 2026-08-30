@@ -708,19 +708,33 @@ namespace lfs::vis {
             auto& state = gm->getSequencerUIState();
             auto& s = *sequencer_ui_state_;
 
-            if (sequencer_ui_initialized_) {
-                state.show_camera_path = s.show_camera_path;
-                state.snap_to_grid = s.snap_to_grid;
-                state.snap_interval = s.snap_interval;
-                state.playback_speed = s.playback_speed;
-                gm->sequencer().setPlaybackSpeed(state.playback_speed);
-                state.playback_speed = gm->sequencer().playbackSpeed();
-                state.follow_playback = s.follow_playback;
-                state.show_pip_preview = s.show_pip_preview;
-                state.pip_preview_scale = s.pip_preview_scale;
-                state.show_film_strip = s.show_film_strip;
-                state.equirectangular = s.equirectangular;
-                state.sequence_fps = s.sequence_fps;
+            // Python writes land on this pointer; apply only fields it changed
+            // since the last hand-out so a pure read cannot clobber GUI state.
+            if (sequencer_ui_last_handed_out_) {
+                const auto& last = *sequencer_ui_last_handed_out_;
+                if (s.show_camera_path != last.show_camera_path)
+                    state.show_camera_path = s.show_camera_path;
+                if (s.snap_to_grid != last.snap_to_grid)
+                    state.snap_to_grid = s.snap_to_grid;
+                if (s.snap_interval != last.snap_interval)
+                    state.snap_interval = s.snap_interval;
+                if (s.playback_speed != last.playback_speed) {
+                    state.playback_speed = s.playback_speed;
+                    gm->sequencer().setPlaybackSpeed(state.playback_speed);
+                    state.playback_speed = gm->sequencer().playbackSpeed();
+                }
+                if (s.follow_playback != last.follow_playback)
+                    state.follow_playback = s.follow_playback;
+                if (s.show_pip_preview != last.show_pip_preview)
+                    state.show_pip_preview = s.show_pip_preview;
+                if (s.pip_preview_scale != last.pip_preview_scale)
+                    state.pip_preview_scale = s.pip_preview_scale;
+                if (s.show_film_strip != last.show_film_strip)
+                    state.show_film_strip = s.show_film_strip;
+                if (s.equirectangular != last.equirectangular)
+                    state.equirectangular = s.equirectangular;
+                if (s.sequence_fps != last.sequence_fps)
+                    state.sequence_fps = s.sequence_fps;
             }
 
             s.show_camera_path = state.show_camera_path;
@@ -735,7 +749,9 @@ namespace lfs::vis {
             s.sequence_fps = state.sequence_fps;
             const auto sel = gm->sequencer().selectedKeyframe();
             s.selected_keyframe = sel.has_value() ? static_cast<int>(*sel) : -1;
-            sequencer_ui_initialized_ = true;
+            if (!sequencer_ui_last_handed_out_)
+                sequencer_ui_last_handed_out_ = std::make_unique<python::SequencerUIStateData>();
+            *sequencer_ui_last_handed_out_ = s;
             return &s;
         });
         callback_cleanup_.add([] { python::set_sequencer_ui_state_callback({}); });

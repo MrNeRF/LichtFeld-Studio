@@ -1117,35 +1117,6 @@ namespace lfs::vis {
             }
         }
 
-        enum OverlayParamIndex : std::size_t {
-            CropFlags = 0,
-            CropMin = 1,
-            CropMax = 2,
-            CropTransform = 3,
-            EllipsoidFlags = 7,
-            EllipsoidRadii = 8,
-            EllipsoidTransform = 9,
-            ViewFlags = 13,
-            ViewMin = 14,
-            ViewMax = 15,
-            ViewTransform = 16,
-            EmphasisFlags = 20,
-            CursorFlags = 21,
-            MarkerFlags = 22,
-            SelectionCursor = 23,
-            SelectionFlags = 24,
-            VisibilityFlags = 25,
-            CropExtraBase = 26,
-            CropParamStride = 7,
-            CropExtraCount = 15,
-            EllipsoidExtraBase = CropExtraBase + CropParamStride * CropExtraCount,
-            EllipsoidParamStride = 5,
-            EllipsoidExtraCount = 15,
-            ParamCount = EllipsoidExtraBase + EllipsoidParamStride * EllipsoidExtraCount,
-        };
-        static_assert(EllipsoidFlags + EllipsoidParamStride <= ViewFlags);
-        static_assert(EllipsoidExtraBase + EllipsoidParamStride * EllipsoidExtraCount == ParamCount);
-
         [[nodiscard]] bool hasTransformIndices(const std::shared_ptr<Tensor>& tensor,
                                                const std::size_t num_splats) {
             return tensor && tensor->is_valid() && tensor->numel() >= num_splats;
@@ -1435,6 +1406,10 @@ namespace lfs::vis {
             }
         }
 
+    } // namespace
+
+    namespace detail {
+
         // Builds the overlay parameter table on CPU only. The H2D transfer is
         // performed at the call site, conditionally on an output-bytes diff.
         [[nodiscard]] std::expected<std::vector<float>, std::string> buildOverlayParamsCpuFloats(
@@ -1495,14 +1470,35 @@ namespace lfs::vis {
                 }
 
                 if (request.filters.view_volume) {
+                    const auto& screen_window = request.filters.screen_window;
                     writeVec4(dst,
                               ViewFlags,
-                              glm::vec4(1.0f,
+                              glm::vec4(screen_window ? 1.0f : 0.0f,
                                         request.filters.cull_outside_view_volume ? 1.0f : 0.0f,
-                                        0.0f,
-                                        0.0f));
-                    writeVec4(dst, ViewMin, glm::vec4(request.filters.view_volume->min, 0.0f));
-                    writeVec4(dst, ViewMax, glm::vec4(request.filters.view_volume->max, 0.0f));
+                                        request.filters.dim_outside_view_volume ? 1.0f : 0.0f,
+                                        screen_window ? screen_window->scale : 0.0f));
+                    writeVec4(dst,
+                              ViewMin,
+                              glm::vec4(request.filters.view_volume->min,
+                                        screen_window ? screen_window->offset_x : 0.0f));
+                    writeVec4(dst,
+                              ViewMax,
+                              glm::vec4(request.filters.view_volume->max,
+                                        screen_window ? screen_window->offset_y : 0.0f));
+                    // Containment intrinsics for the shader's screen-window test. Written only
+                    // for a non-orthographic, non-equirect request that carries them; the table
+                    // is zero-filled at construction, so slot 12 stays (0,0,0,0) otherwise and the
+                    // shader falls back to cam's own focals and the image centre.
+                    if (!request.frame_view.orthographic && !request.equirectangular) {
+                        if (const auto& containment = request.frame_view.containment_intrinsics) {
+                            writeVec4(dst,
+                                      ViewIntrinsics,
+                                      glm::vec4(containment->focal_x,
+                                                containment->focal_y,
+                                                containment->center_x,
+                                                containment->center_y));
+                        }
+                    }
                     writeMat4Rows(dst, ViewTransform, request.filters.view_volume->transform);
                 }
 
@@ -1551,6 +1547,10 @@ namespace lfs::vis {
                 return std::unexpected(std::format("VkSplat failed to stage overlay parameters: {}", e.what()));
             }
         }
+
+    } // namespace detail
+
+    namespace {
 
         [[nodiscard]] VksplatViewportRenderer::ModelInputSnapshot makeModelInputSnapshot(
             const lfs::core::SplatData& splat_data) {
@@ -4193,11 +4193,14 @@ namespace lfs::vis {
             request.filters.crop_region.has_value() && request.filters.crop_region->desaturate;
         const bool ellipsoid_dims =
             request.filters.ellipsoid_region.has_value() && request.filters.ellipsoid_region->desaturate;
+        const bool view_volume_dims =
+            request.filters.view_volume.has_value() && request.filters.dim_outside_view_volume;
         const bool raster_overlays_active =
             selection_enabled ||
             preview_enabled ||
             crop_dims ||
             ellipsoid_dims ||
+            view_volume_dims ||
             emphasis.dim_non_emphasized ||
             emphasis.flash_intensity > 0.0f ||
             emphasis.focused_gaussian_id >= 0 ||
@@ -4223,7 +4226,7 @@ namespace lfs::vis {
         const std::size_t node_mask_region_bytes =
             alignUp(std::max<std::size_t>(forward_node_mask_source.size(), 1), 4);
         const std::size_t overlay_params_region_bytes =
-            static_cast<std::size_t>(ParamCount) * 4 * sizeof(float);
+            static_cast<std::size_t>(detail::ParamCount) * 4 * sizeof(float);
         const std::size_t model_transforms_region_bytes =
             modelTransformCount(request.scene.model_transforms) * 16 * sizeof(float);
         std::array<std::size_t, kOverlayRegionCount> region_bytes{};
@@ -4355,7 +4358,7 @@ namespace lfs::vis {
                 // Output-bytes fingerprint cache. The CPU build is sub-µs; the
                 // former ~6 ms cost was entirely the .to(Device::CUDA) sync.
                 LOG_TIMER("uploadOverlayBindings.prepare_sources.overlay_params");
-                auto overlay_params_cpu = buildOverlayParamsCpuFloats(
+                auto overlay_params_cpu = detail::buildOverlayParamsCpuFloats(
                     request,
                     selection_enabled,
                     preview_enabled,

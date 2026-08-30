@@ -82,6 +82,19 @@ namespace {
         return mask->cpu().to_vector_uint8();
     }
 
+    void arm_viewer_camera_depth_band(lfs::vis::RenderingManager& rendering_manager) {
+        auto settings = rendering_manager.getSettings();
+        settings.depth_filter_enabled = true;
+        // Camera-depth band [8.0, 8.875]: keeps splat0 (8.5442), rejects splat1 (9.2063).
+        settings.depth_filter_min = {-0.5f, -0.5f, -8.875f};
+        settings.depth_filter_max = {0.5f, 0.5f, -8.0f};
+        // Full-viewport window so only depth can decide.
+        settings.depth_filter_scale = 1.0f;
+        settings.depth_filter_offset_x = 0.0f;
+        settings.depth_filter_offset_y = 0.0f;
+        rendering_manager.updateSettings(settings);
+    }
+
     ModalEvent mouse_move(const double x, const double y, const double dx = 0.0, const double dy = 0.0) {
         return ModalEvent{
             .type = ModalEvent::Type::MOUSE_MOVE,
@@ -283,11 +296,7 @@ TEST_F(SelectionOperatorModalTest, PolygonOperatorUsesConfiguredRightButtonForVe
 }
 
 TEST_F(SelectionOperatorModalTest, ColorSelectionAppliesDepthFilterToSimilarityMask) {
-    auto settings = rendering_manager_->getSettings();
-    settings.depth_filter_enabled = true;
-    settings.depth_filter_min = {-0.25f, -0.25f, -0.25f};
-    settings.depth_filter_max = {0.25f, 0.25f, 0.25f};
-    rendering_manager_->updateSettings(settings);
+    arm_viewer_camera_depth_band(*rendering_manager_);
 
     service().setTestingHoveredGaussianId(0);
 

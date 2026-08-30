@@ -499,6 +499,12 @@ namespace lfs::core {
             cropped_splat._densification_info =
                 splat_data._densification_info.index_select(0, indices).contiguous();
         }
+        if (splat_data._max_screen_share.is_valid() &&
+            splat_data._max_screen_share.ndim() == 1 &&
+            splat_data._max_screen_share.size(0) == num_points) {
+            cropped_splat._max_screen_share =
+                splat_data._max_screen_share.index_select(0, indices).contiguous();
+        }
 
         (void)cropped_splat.apply_shN_value_quant();
 
@@ -741,6 +747,12 @@ namespace lfs::core {
                 splat_data._densification_info =
                     splat_data._densification_info.index_select(1, indices_tensor).contiguous();
             }
+        }
+        if (splat_data._max_screen_share.is_valid() &&
+            splat_data._max_screen_share.ndim() == 1 &&
+            splat_data._max_screen_share.size(0) == num_points) {
+            splat_data._max_screen_share =
+                splat_data._max_screen_share.index_select(0, indices_tensor).contiguous();
         }
 
         // keep deleted mask sized to the new N (or invalidate).

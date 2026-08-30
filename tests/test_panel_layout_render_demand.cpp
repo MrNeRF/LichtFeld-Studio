@@ -175,3 +175,28 @@ TEST_F(PanelLayoutRenderDemandTest, BottomDockStartsAfterVisibleLeftDock) {
     EXPECT_FLOAT_EQ(bottom->last_cached_x, viewport.pos.x);
     EXPECT_FLOAT_EQ(bottom->last_cached_width, viewport.size.x);
 }
+
+TEST_F(PanelLayoutRenderDemandTest, LeftDockReservationAppliesOnTheFramePanelBecomesVisible) {
+    using namespace lfs::vis::gui;
+
+    PanelLayoutManager layout;
+    const auto s = screen();
+
+    const auto closed = layout.computeBottomDockHorizontalLayout(true, false, s);
+    EXPECT_FLOAT_EQ(closed.x, s.work_pos.x);
+
+    registerPanel("test.left", PanelSpace::LeftDock, 100.0f);
+
+    const auto open = layout.computeBottomDockHorizontalLayout(true, false, s);
+    EXPECT_GT(open.x, closed.x);
+    EXPECT_LT(open.width, closed.width);
+
+    const auto hidden_ui = layout.computeBottomDockHorizontalLayout(true, true, s);
+    EXPECT_FLOAT_EQ(hidden_ui.x, s.work_pos.x);
+    EXPECT_FLOAT_EQ(hidden_ui.width, s.work_size.x);
+
+    PanelRegistry::instance().set_panel_enabled("test.left", false);
+    const auto disabled = layout.computeBottomDockHorizontalLayout(true, false, s);
+    EXPECT_FLOAT_EQ(disabled.x, closed.x);
+    EXPECT_FLOAT_EQ(disabled.width, closed.width);
+}

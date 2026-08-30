@@ -663,7 +663,8 @@
             <div class="viewport-selection-depth-fields"
                  data-if="selection_depth_mode_active"
                  data-tooltip="tooltip.selection_depth_range">
-                <div class="viewport-transform-axis viewport-selection-depth-axis" data-tooltip="tooltip.selection_depth_near">
+                <div class="depth-axis-group depth-axis-group-nf">
+                <div class="viewport-transform-axis viewport-selection-depth-axis depth-axis-near" data-tooltip="tooltip.selection_depth_near">
                     <span class="viewport-transform-axis-label">{{ui_near_label}}</span>
                     <input type="range"
                            class="setting-slider viewport-selection-slider"
@@ -680,7 +681,7 @@
                            data-value="selection_depth_near_str"
                            data-attrif-disabled="!selection_has_scene" />
                 </div>
-                <div class="viewport-transform-axis viewport-selection-depth-axis" data-tooltip="tooltip.selection_depth_far">
+                <div class="viewport-transform-axis viewport-selection-depth-axis depth-axis-far" data-tooltip="tooltip.selection_depth_far">
                     <span class="viewport-transform-axis-label">{{ui_far_label}}</span>
                     <input type="range"
                            class="setting-slider viewport-selection-slider"
@@ -697,6 +698,66 @@
                            data-value="selection_depth_far_str"
                            data-attrif-disabled="!selection_has_scene" />
                 </div>
+                </div>
+                <div class="depth-axis-group depth-axis-group-sxy">
+                <div class="viewport-transform-axis viewport-selection-depth-axis depth-axis-size" data-tooltip="tooltip.selection_depth_size">
+                    <span class="viewport-transform-axis-label">{{ui_size_label}}</span>
+                    <input type="range"
+                           class="setting-slider viewport-selection-slider"
+                           min="5"
+                           max="100"
+                           data-attr-min="selection_depth_scale_slider_min"
+                           data-attr-max="selection_depth_scale_slider_max"
+                           step="1"
+                           data-value="selection_depth_scale_value"
+                           data-attrif-disabled="!selection_has_scene" />
+                    <input type="text"
+                           class="number-input viewport-selection-depth-input"
+                           id="selection-depth-scale"
+                           data-value="selection_depth_scale_str"
+                           data-attrif-disabled="!selection_has_scene" />
+                </div>
+                <div class="viewport-transform-axis viewport-selection-depth-axis depth-axis-x" data-tooltip="tooltip.selection_depth_offset_x">
+                    <span class="viewport-transform-axis-label">{{ui_offset_x_label}}</span>
+                    <input type="range"
+                           class="setting-slider viewport-selection-slider"
+                           min="-100"
+                           max="100"
+                           data-attr-min="selection_depth_offset_x_slider_min"
+                           data-attr-max="selection_depth_offset_x_slider_max"
+                           step="1"
+                           data-value="selection_depth_offset_x_value"
+                           data-attrif-disabled="!selection_has_scene" />
+                    <input type="text"
+                           class="number-input viewport-selection-depth-input"
+                           id="selection-depth-offset-x"
+                           data-value="selection_depth_offset_x_str"
+                           data-attrif-disabled="!selection_has_scene" />
+                </div>
+                <div class="viewport-transform-axis viewport-selection-depth-axis depth-axis-y" data-tooltip="tooltip.selection_depth_offset_y">
+                    <span class="viewport-transform-axis-label">{{ui_offset_y_label}}</span>
+                    <input type="range"
+                           class="setting-slider viewport-selection-slider"
+                           min="-100"
+                           max="100"
+                           data-attr-min="selection_depth_offset_y_slider_min"
+                           data-attr-max="selection_depth_offset_y_slider_max"
+                           step="1"
+                           data-value="selection_depth_offset_y_value"
+                           data-attrif-disabled="!selection_has_scene" />
+                    <input type="text"
+                           class="number-input viewport-selection-depth-input"
+                           id="selection-depth-offset-y"
+                           data-value="selection_depth_offset_y_str"
+                           data-attrif-disabled="!selection_has_scene" />
+                </div>
+                </div>
+                <button class="icon-btn viewport-transform-action"
+                        data-attr-title="selection_viz_mode_label"
+                        data-attrif-disabled="!selection_has_scene"
+                        data-event-click="selection_action('cycle_viz')">
+                    <img data-attr-src="selection_viz_mode_icon" />
+                </button>
             </div>
         </div>
     </div>

@@ -198,8 +198,30 @@ namespace lfs::training {
         mean_step_far_mask_n_ = mask != nullptr ? n : 0;
     }
 
+    void AdamOptimizer::set_screen_share_cap(const float* max_share, const int n,
+                                             const float limit, const float penalty) {
+        screen_share_max_ = max_share;
+        screen_share_n_ = max_share != nullptr ? n : 0;
+        screen_share_limit_ = limit;
+        screen_share_penalty_ = penalty;
+        refresh_screen_share_buffer();
+    }
+
+    void AdamOptimizer::refresh_screen_share_buffer() {
+        if (!(screen_share_limit_ > 0.0f && screen_share_limit_ < 1.0f) ||
+            !splat_data_._max_screen_share.is_valid() ||
+            splat_data_._max_screen_share.numel() == 0) {
+            screen_share_max_ = nullptr;
+            screen_share_n_ = 0;
+            return;
+        }
+        screen_share_max_ = splat_data_._max_screen_share.ptr<float>();
+        screen_share_n_ = static_cast<int>(splat_data_._max_screen_share.numel());
+    }
+
     void AdamOptimizer::step(const int iteration) {
         LFS_TRACE("kernel.adam.step");
+        refresh_screen_share_buffer();
         if (fused_step_iteration_ == iteration) {
             last_step_zeroed_gradients_ = true;
             return;
@@ -275,6 +297,9 @@ namespace lfs::training {
                     e.apply_mean_step = 1;
                 }
             }
+            if (type == ParamType::Scaling) {
+                e.apply_screen_share = 1;
+            }
             param_live.set_stream(batch_stream);
             state.exp_avg.set_stream(batch_stream);
             state.joint_bounds.set_stream(batch_stream);
@@ -301,7 +326,8 @@ namespace lfs::training {
                 batch_stream,
                 batch_mean_step_scale_raw, batch_mean_step_scale_n,
                 mean_step_median_extent_, mean_step_r_min_, mean_step_r_max_,
-                mean_step_far_mask_, mean_step_far_mask_n_);
+                mean_step_far_mask_, mean_step_far_mask_n_,
+                screen_share_max_, screen_share_n_, screen_share_limit_, screen_share_penalty_);
         }
         step_param(ParamType::ShN, iteration);
     }
@@ -751,6 +777,16 @@ namespace lfs::training {
                     mean_step_scale_n = static_cast<int>(scaling.numel());
                 }
             }
+            const float* share_max = nullptr;
+            int share_n = 0;
+            float share_limit = 0.0f;
+            float share_penalty = 0.0f;
+            if (type == ParamType::Scaling) {
+                share_max = screen_share_max_;
+                share_n = screen_share_n_;
+                share_limit = screen_share_limit_;
+                share_penalty = screen_share_penalty_;
+            }
             fast_lfs::optimizer::adam_step_joint_contiguous_raw(
                 param_live.ptr<float>(),
                 state.exp_avg.ptr<uint8_t>(),
@@ -778,7 +814,11 @@ namespace lfs::training {
                 mean_step_r_min_,
                 mean_step_r_max_,
                 mean_step_far_mask_,
-                mean_step_far_mask_n_);
+                mean_step_far_mask_n_,
+                share_max,
+                share_n,
+                share_limit,
+                share_penalty);
             param_live.set_stream(execution_stream);
             state.exp_avg.set_stream(execution_stream);
             state.joint_bounds.set_stream(execution_stream);
@@ -999,6 +1039,11 @@ namespace lfs::training {
             fused.shN.sh_value_n_cells = 0;
         }
         fused.scaling = prepare_param(ParamType::Scaling, 3, true);
+        refresh_screen_share_buffer();
+        fused.scaling.screen_share_max = screen_share_max_;
+        fused.scaling.screen_share_n = screen_share_n_;
+        fused.scaling.screen_share_limit = screen_share_limit_;
+        fused.scaling.screen_share_penalty = screen_share_penalty_;
         fused.rotation = prepare_param(ParamType::Rotation, 4, true);
         fused.opacity = prepare_param(ParamType::Opacity, 1, true);
         fused.per_splat_mean_step = per_splat_mean_step_;

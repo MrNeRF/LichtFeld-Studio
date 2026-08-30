@@ -312,6 +312,14 @@ namespace lfs::training::morton {
         if (splat._densification_info.is_valid() && splat._densification_info.numel() > 0) {
             permute_row_tensor(splat._densification_info, result.permutation);
         }
+        if (splat._max_screen_share.is_valid() && splat._max_screen_share.numel() > 0) {
+            LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(),
+                               "wait fused adam before screen-share morton permute");
+            permute_row_tensor(splat._max_screen_share, result.permutation);
+            if (optimizer != nullptr) {
+                optimizer->refresh_screen_share_buffer();
+            }
+        }
         if (splat.has_deleted_mask()) {
             permute_row_tensor(splat.deleted(), result.permutation);
             splat.notify_deleted_mask_changed();

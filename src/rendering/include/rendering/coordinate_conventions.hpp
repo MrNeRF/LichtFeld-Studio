@@ -306,7 +306,8 @@ namespace lfs::rendering {
                                                       const glm::vec3& world_point,
                                                       const float focal_length_mm,
                                                       const bool orthographic = false,
-                                                      const float ortho_scale = DEFAULT_ORTHO_SCALE) {
+                                                      const float ortho_scale = DEFAULT_ORTHO_SCALE,
+                                                      std::optional<CameraIntrinsics> intrinsics = std::nullopt) {
         const glm::vec3 view = glm::transpose(rotation) * (world_point - translation);
         if (!isFiniteVec3(view) || view.z >= -1e-6f) {
             return std::nullopt;
@@ -314,8 +315,12 @@ namespace lfs::rendering {
 
         const float width = static_cast<float>(viewport_size.x);
         const float height = static_cast<float>(viewport_size.y);
-        const float cx = width * 0.5f;
-        const float cy = height * 0.5f;
+        float cx = width * 0.5f;
+        float cy = height * 0.5f;
+        if (intrinsics) {
+            cx = intrinsics->center_x;
+            cy = intrinsics->center_y;
+        }
 
         if (orthographic) {
             if (!std::isfinite(ortho_scale) || ortho_scale <= 0.0f) {
@@ -327,7 +332,9 @@ namespace lfs::rendering {
                 cy - view.y * ortho_scale);
         }
 
-        const auto [fx, fy] = computePixelFocalLengths(viewport_size, focal_length_mm);
+        const auto [derived_fx, derived_fy] = computePixelFocalLengths(viewport_size, focal_length_mm);
+        const float fx = intrinsics ? intrinsics->focal_x : derived_fx;
+        const float fy = intrinsics ? intrinsics->focal_y : derived_fy;
         const float depth = -view.z;
 
         return glm::vec2(

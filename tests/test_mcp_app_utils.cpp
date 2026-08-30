@@ -322,3 +322,23 @@ TEST(McpAppUtilsTest, WaitForProjectWritePollsUntilTerminalThenInfosOnce) {
     EXPECT_EQ(viewer.infoCalls(), 1);
     EXPECT_GE(viewer.pollCalls(), 3);
 }
+
+// This test pins the seam's default and the shared constant, so a reverted default fails here. It
+// does not show that every tool routes through the seam: selection.rect, .polygon, .lasso, .ring,
+// .brush and .click call it, while selection.by_description parses camera_index inline and keeps
+// an explicit 0. Nothing automated enforces that split, and the tools compile only into the
+// application binary, so a future call site could re-inline `args.value("camera_index", 0)`
+// without failing any test.
+TEST(McpAppUtilsTest, SelectionCameraIndexDefaultsToViewerWhenOmitted) {
+    using lfs::app::selection_camera_index_from_args;
+    using lfs::app::SELECTION_VIEWER_CAMERA_INDEX;
+
+    EXPECT_EQ(selection_camera_index_from_args(nlohmann::json::object()), -1);
+    EXPECT_EQ(selection_camera_index_from_args(nlohmann::json::object()), SELECTION_VIEWER_CAMERA_INDEX);
+    EXPECT_EQ(selection_camera_index_from_args(nlohmann::json{{"camera_index", -1}}), -1);
+    EXPECT_EQ(selection_camera_index_from_args(nlohmann::json{{"camera_index", 0}}), 0);
+    EXPECT_EQ(selection_camera_index_from_args(nlohmann::json{{"camera_index", 5}}), 5);
+    // The seam itself does not validate: -2 passes through unchanged, and the service rejects it
+    // as out of range rather than treating it as the viewer.
+    EXPECT_EQ(selection_camera_index_from_args(nlohmann::json{{"camera_index", -2}}), -2);
+}
