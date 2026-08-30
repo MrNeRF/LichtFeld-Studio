@@ -574,11 +574,10 @@ namespace lfs::mcp {
 
         const auto listener_url = std::format("http://{}:{}/mcp", bind_address, config.port);
         const bool announce_listener = listener_url != last_announced_listener_url_;
-        listener_thread_ = std::jthread([this, listener_url, announce_listener,
-                                         listener_generation](
+        if (announce_listener)
+            LOG_INFO("MCP HTTP server listening on {}", listener_url);
+        listener_thread_ = std::jthread([this, listener_generation](
                                             std::stop_token /*st*/) {
-            if (announce_listener)
-                LOG_INFO("MCP HTTP server listening on {}", listener_url);
             bool listener_completed_normally = false;
             lfs::core::run_guarded<void>(
                 lfs::core::TaskContext{

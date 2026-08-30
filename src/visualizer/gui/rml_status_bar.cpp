@@ -1050,8 +1050,10 @@ namespace lfs::vis::gui {
                 tooltip = details;
                 color = colorToRml(p.error);
             } else {
-                summary = status.network_exposed ? LOC("status_bar.mcp_network")
-                                                 : LOC("status_bar.mcp_local");
+                summary = std::format("{} ({})",
+                                      status.network_exposed ? LOC("status_bar.mcp_network")
+                                                             : LOC("status_bar.mcp_local"),
+                                      status.port);
                 for (const auto& endpoint : status.endpoints) {
                     if (!details.empty())
                         details += '\n';
