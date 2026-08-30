@@ -62,6 +62,7 @@ namespace lfs::vis {
     class VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
     class VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
     class VisualizerImplResetTest_AdoptedStepBoundaryPublishRebasesAutosaveBase_Test;
+    class VisualizerImplResetTest_LightAutosaveRebasesWhenSnapshotCountersMissNewMaster_Test;
     class VisualizerImplResetTest_ExplicitSaveAfterUnadoptedTrainerAppendUsesCurrentHead_Test;
     class VisualizerImplResetTest_ExplicitSaveAfterTrainerRewriteUsesCurrentHead_Test;
     class VisualizerImplResetTest_UntitledTrainerRewriteAdoptThenSaveAsUsesCurrentHead_Test;
@@ -340,7 +341,7 @@ namespace lfs::training {
         /// Check if PPISP is enabled, initialized, and ready for rendering
         bool hasPPISP() const {
             const auto params = getParams();
-            return ppisp_ != nullptr && params.optimization.use_ppisp && ppisp_->isFinalized();
+            return ppisp_ != nullptr && params.optimization.ppisp_active() && ppisp_->isFinalized();
         }
 
         /// Held-out eval appearance hook is installed iff PPISP was enabled and finalized.
@@ -425,6 +426,7 @@ namespace lfs::training {
         friend class lfs::vis::VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
         friend class lfs::vis::VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
         friend class lfs::vis::VisualizerImplResetTest_AdoptedStepBoundaryPublishRebasesAutosaveBase_Test;
+        friend class lfs::vis::VisualizerImplResetTest_LightAutosaveRebasesWhenSnapshotCountersMissNewMaster_Test;
         friend class lfs::vis::VisualizerImplResetTest_ExplicitSaveAfterUnadoptedTrainerAppendUsesCurrentHead_Test;
         friend class lfs::vis::VisualizerImplResetTest_ExplicitSaveAfterTrainerRewriteUsesCurrentHead_Test;
         friend class lfs::vis::VisualizerImplResetTest_UntitledTrainerRewriteAdoptThenSaveAsUsesCurrentHead_Test;
@@ -591,12 +593,12 @@ namespace lfs::training {
             const std::filesystem::path& sidecar_path) const;
         [[nodiscard]] bool is_ppisp_frozen() const {
             const auto params = getParams();
-            return params.optimization.use_ppisp &&
+            return params.optimization.ppisp_active() &&
                    params.optimization.ppisp_freeze_from_sidecar;
         }
         [[nodiscard]] bool should_apply_ppisp_sidecar_on_init() const {
             const auto params = getParams();
-            return params.optimization.use_ppisp &&
+            return params.optimization.ppisp_active() &&
                    params.optimization.ppisp_freeze_from_sidecar &&
                    !params.resume_checkpoint.has_value() &&
                    !params.resume_project.has_value() &&

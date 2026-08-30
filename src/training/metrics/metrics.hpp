@@ -57,6 +57,12 @@ namespace lfs::training {
         bool valid = false;
         std::optional<float> normal_angle_deg;
         std::optional<float> depth_absrel;
+        float bias_r = 0.0f;
+        float bias_g = 0.0f;
+        float bias_b = 0.0f;
+        float bias_corr_r = 0.0f;
+        float bias_corr_g = 0.0f;
+        float bias_corr_b = 0.0f;
 
         [[nodiscard]] std::string to_string() const {
             if (!valid) {
@@ -67,7 +73,9 @@ namespace lfs::training {
             ss << "PSNR: " << psnr
                << ", SSIM: " << ssim
                << ", Time: " << elapsed_time << "s/image"
-               << ", #GS: " << num_gaussians;
+               << ", #GS: " << num_gaussians
+               << ", bias=(" << bias_r << "," << bias_g << "," << bias_b << ")"
+               << ", bias_corr=(" << bias_corr_r << "," << bias_corr_g << "," << bias_corr_b << ")";
             if (normal_angle_deg && std::isfinite(*normal_angle_deg)) {
                 ss << ", normal_angle_deg: " << *normal_angle_deg;
             }
@@ -78,7 +86,7 @@ namespace lfs::training {
         }
 
         static std::string to_csv_header() {
-            return "iteration,psnr,ssim,time_per_image,num_gaussians,normal_angle_deg,depth_absrel";
+            return "iteration,psnr,ssim,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b";
         }
 
         [[nodiscard]] std::string to_csv_row() const {
@@ -96,6 +104,8 @@ namespace lfs::training {
             if (depth_absrel && std::isfinite(*depth_absrel)) {
                 ss << *depth_absrel;
             }
+            ss << "," << bias_r << "," << bias_g << "," << bias_b
+               << "," << bias_corr_r << "," << bias_corr_g << "," << bias_corr_b;
             return ss.str();
         }
     };

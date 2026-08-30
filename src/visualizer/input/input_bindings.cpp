@@ -23,8 +23,8 @@ namespace lfs::vis::input {
 
         std::atomic<bool> g_persistence_enabled{true};
 
-        constexpr int PROFILE_VERSION = 25; // Version 25 finalizes Scene Graph selection actions.
-        constexpr Action LAST_ACTION = Action::TOGGLE_SCENE_SELECTION_TRAINING;
+        constexpr int PROFILE_VERSION = 26; // Version 26 adds DEPTH_ADJUST_SIZE (window scale scroll).
+        constexpr Action LAST_ACTION = Action::DEPTH_ADJUST_SIZE;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -191,6 +191,7 @@ namespace lfs::vis::input {
                 case Action::TOGGLE_SELECTION_DEPTH_FILTER:
                 case Action::TOGGLE_SELECTION_CROP_FILTER:
                 case Action::DEPTH_ADJUST_FAR:
+                case Action::DEPTH_ADJUST_SIZE:
                     added += mirrorLegacyBindingToModes(bindings, binding, binding.action, std::array<ToolMode, 1>{ToolMode::SELECTION});
                     break;
                 default:
@@ -534,7 +535,8 @@ namespace lfs::vis::input {
                 (version < 25 &&
                  (def.action == Action::SELECT_ALL_SCENE_NODES ||
                   def.action == Action::TOGGLE_SCENE_SELECTION_VISIBILITY ||
-                  def.action == Action::TOGGLE_SCENE_SELECTION_TRAINING));
+                  def.action == Action::TOGGLE_SCENE_SELECTION_TRAINING)) ||
+                (version < 26 && def.action == Action::DEPTH_ADJUST_SIZE);
             if (!should_add) {
                 continue;
             }
@@ -1099,6 +1101,10 @@ namespace lfs::vis::input {
                                     Action::DEPTH_ADJUST_FAR,
                                     "Depth"});
         profile.bindings.push_back({ToolMode::SELECTION,
+                                    MouseScrollTrigger{MODIFIER_SHIFT | MODIFIER_ALT},
+                                    Action::DEPTH_ADJUST_SIZE,
+                                    "Window size"});
+        profile.bindings.push_back({ToolMode::SELECTION,
                                     MouseScrollTrigger{MODIFIER_CTRL},
                                     Action::BRUSH_RESIZE,
                                     "Brush size"});
@@ -1177,6 +1183,7 @@ namespace lfs::vis::input {
         case Action::DEPTH_ADJUST_NEAR: return "Adjust Depth Box";
         case Action::DEPTH_ADJUST_FAR: return "Adjust Depth Box";
         case Action::DEPTH_ADJUST_SIDE: return "Adjust Depth Box";
+        case Action::DEPTH_ADJUST_SIZE: return "Adjust Window Size";
         case Action::TOGGLE_SELECTION_DEPTH_FILTER: return "Toggle Depth Box";
         case Action::TOGGLE_SELECTION_CROP_FILTER: return "Toggle Selection Crop Filter";
         case Action::BRUSH_RESIZE: return "Resize Brush";
@@ -1266,6 +1273,7 @@ namespace lfs::vis::input {
         case Action::DEPTH_ADJUST_NEAR: return "depth_adjust_near";
         case Action::DEPTH_ADJUST_FAR: return "depth_adjust_far";
         case Action::DEPTH_ADJUST_SIDE: return "depth_adjust_side";
+        case Action::DEPTH_ADJUST_SIZE: return "depth_adjust_size";
         case Action::TOGGLE_SELECTION_DEPTH_FILTER: return "toggle_selection_depth_filter";
         case Action::TOGGLE_SELECTION_CROP_FILTER: return "toggle_selection_crop_filter";
         case Action::BRUSH_RESIZE: return "brush_resize";
@@ -1953,6 +1961,7 @@ namespace lfs::vis::input {
         case Action::DEPTH_ADJUST_FAR:
         case Action::DEPTH_ADJUST_NEAR:
         case Action::DEPTH_ADJUST_SIDE:
+        case Action::DEPTH_ADJUST_SIZE:
             return d_depth_scroll;
 
         case Action::BRUSH_RESIZE:

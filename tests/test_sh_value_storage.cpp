@@ -24,6 +24,7 @@
 #include <cstring>
 #include <cuda_runtime.h>
 #include <filesystem>
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/mat4x4.hpp>
 #include <gtest/gtest.h>
 #include <random>
@@ -88,6 +89,33 @@ namespace {
         ASSERT_EQ(ac.numel(), bc.numel()) << name;
         ASSERT_EQ(ac.shape().str(), bc.shape().str()) << name;
         ASSERT_EQ(std::memcmp(ac.data_ptr(), bc.data_ptr(), ac.bytes()), 0) << name;
+    }
+
+    [[nodiscard]] float max_abs_diff(const Tensor& a, const Tensor& b) {
+        auto ac = a.cpu().contiguous();
+        auto bc = b.cpu().contiguous();
+        EXPECT_EQ(ac.numel(), bc.numel());
+        EXPECT_EQ(ac.dtype(), DataType::Float32);
+        EXPECT_EQ(bc.dtype(), DataType::Float32);
+        const auto* pa = ac.ptr<float>();
+        const auto* pb = bc.ptr<float>();
+        float m = 0.0f;
+        for (size_t i = 0; i < ac.numel(); ++i) {
+            const float d = std::fabs(pa[i] - pb[i]);
+            if (d > m)
+                m = d;
+        }
+        return m;
+    }
+
+    void fill_float_noise(Tensor& t, const uint32_t seed) {
+        std::mt19937 rng(seed);
+        std::normal_distribution<float> nd(0.0f, 1.0f);
+        auto cpu = t.cpu();
+        auto* p = cpu.ptr<float>();
+        for (size_t i = 0; i < cpu.numel(); ++i)
+            p[i] = nd(rng);
+        t = cpu.to(Device::CUDA);
     }
 
     [[nodiscard]] double psnr_from_mse(double mse) {
@@ -384,6 +412,95 @@ TEST(ShValueStorageTest, Q16BorrowSingleIdentityMergePreservesQuantAndPly) {
 
     std::filesystem::remove(source_path);
     std::filesystem::remove(merged_path);
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST(ShValueStorageTest, Q16MultiSourceIdentityMergeDecodesFloat) {
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    auto a = make_random_sh3(64, /*seed=*/0xA101);
+    auto b = make_random_sh3(64, /*seed=*/0xB202);
+    fill_float_noise(a.means_raw(), 0xA103);
+    fill_float_noise(a.sh0_raw(), 0xA104);
+    fill_float_noise(a.opacity_raw(), 0xA105);
+    fill_float_noise(b.means_raw(), 0xB203);
+    fill_float_noise(b.sh0_raw(), 0xB204);
+    fill_float_noise(b.opacity_raw(), 0xB205);
+
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(a));
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(b));
+    ASSERT_TRUE(a.shN_value_quantized());
+    ASSERT_TRUE(b.shN_value_quantized());
+
+    const auto a_canon = a.shN_canonical_cpu();
+    const auto b_canon = b.shN_canonical_cpu();
+    const auto a_means = a.means_raw().clone();
+    const auto a_sh0 = a.sh0_raw().clone();
+    const auto a_opacity = a.opacity_raw().clone();
+    const auto b_means = b.means_raw().clone();
+    const auto b_sh0 = b.sh0_raw().clone();
+    const auto b_opacity = b.opacity_raw().clone();
+
+    auto merged = Scene::mergeSplatsWithTransforms(
+        {{&a, glm::mat4{1.0f}}, {&b, glm::mat4{1.0f}}}, Scene::MergeStorageMode::Clone);
+    ASSERT_NE(merged, nullptr);
+    ASSERT_EQ(merged->size(), 128);
+    EXPECT_EQ(merged->shN_raw().dtype(), DataType::Float32);
+    EXPECT_FALSE(merged->shN_value_quantized());
+
+    const auto merged_canon = merged->shN_canonical_cpu();
+    expect_tensors_bitwise_equal(merged_canon.slice(0, 0, 64).contiguous(), a_canon,
+                                 "identity merge a shN");
+    expect_tensors_bitwise_equal(merged_canon.slice(0, 64, 128).contiguous(), b_canon,
+                                 "identity merge b shN");
+    expect_tensors_bitwise_equal(merged->means_raw().slice(0, 0, 64).contiguous(), a_means,
+                                 "identity merge a means");
+    expect_tensors_bitwise_equal(merged->means_raw().slice(0, 64, 128).contiguous(), b_means,
+                                 "identity merge b means");
+    expect_tensors_bitwise_equal(merged->sh0_raw().slice(0, 0, 64).contiguous(), a_sh0,
+                                 "identity merge a sh0");
+    expect_tensors_bitwise_equal(merged->sh0_raw().slice(0, 64, 128).contiguous(), b_sh0,
+                                 "identity merge b sh0");
+    expect_tensors_bitwise_equal(merged->opacity_raw().slice(0, 0, 64).contiguous(), a_opacity,
+                                 "identity merge a opacity");
+    expect_tensors_bitwise_equal(merged->opacity_raw().slice(0, 64, 128).contiguous(), b_opacity,
+                                 "identity merge b opacity");
+
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST(ShValueStorageTest, Q16MultiSourceTranslationMergeDecodesFloat) {
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    auto a = make_random_sh3(64, /*seed=*/0xA301);
+    auto b = make_random_sh3(64, /*seed=*/0xB302);
+    fill_float_noise(b.means_raw(), 0xB303);
+
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(a));
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(b));
+    ASSERT_TRUE(a.shN_value_quantized());
+    ASSERT_TRUE(b.shN_value_quantized());
+
+    const auto b_canon = b.shN_canonical_cpu();
+    auto expected_b_means = b.means_raw().cpu().contiguous();
+    {
+        auto* p = expected_b_means.ptr<float>();
+        for (size_t i = 0; i < 64; ++i)
+            p[i * 3 + 0] += 1.0f;
+    }
+
+    const glm::mat4 translation = glm::translate(glm::mat4{1.0f}, glm::vec3{1.0f, 0.0f, 0.0f});
+    auto merged = Scene::mergeSplatsWithTransforms(
+        {{&a, glm::mat4{1.0f}}, {&b, translation}}, Scene::MergeStorageMode::Clone);
+    ASSERT_NE(merged, nullptr);
+    ASSERT_EQ(merged->size(), 128);
+    EXPECT_EQ(merged->shN_raw().dtype(), DataType::Float32);
+    EXPECT_FALSE(merged->shN_value_quantized());
+
+    const auto merged_canon = merged->shN_canonical_cpu();
+    expect_tensors_bitwise_equal(merged_canon.slice(0, 64, 128).contiguous(), b_canon,
+                                 "translation merge b shN");
+    EXPECT_LT(max_abs_diff(merged->means_raw().slice(0, 64, 128).contiguous(), expected_b_means),
+              1e-5f);
+
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 

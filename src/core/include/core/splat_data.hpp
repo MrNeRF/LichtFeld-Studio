@@ -484,6 +484,8 @@ namespace lfs::core {
     public:
         // Holds the magnitude of the screen space gradient (used for densification)
         Tensor _densification_info;
+        // Per-splat max screen-share over the current refine window. [N] fp32.
+        Tensor _max_screen_share;
 
         // Optional LOD tree (populated by RAD loader, null for training/non-RAD scenes)
         std::unique_ptr<SplatLodTree> lod_tree;

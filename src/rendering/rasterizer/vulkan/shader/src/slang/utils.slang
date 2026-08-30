@@ -1081,6 +1081,11 @@ static const uint OVERLAY_PARAM_CROP_TRANSFORM = 3;
 static const uint OVERLAY_PARAM_ELLIPSOID_FLAGS = 7;
 static const uint OVERLAY_PARAM_ELLIPSOID_RADII = 8;
 static const uint OVERLAY_PARAM_ELLIPSOID_TRANSFORM = 9;
+// Unjittered containment intrinsics (fx, fy, cx, cy) for the depth-window test.
+// Slot 12 is the gap between the primary ellipsoid block (7..11) and the view block (13..15);
+// the host asserts EllipsoidFlags + EllipsoidParamStride <= ViewFlags, which reserves it.
+// x <= 0 means "not supplied": fall back to cam.fx/cam.fy and the image centre.
+static const uint OVERLAY_PARAM_VIEW_INTRINSICS = 12;
 static const uint OVERLAY_PARAM_VIEW_FLAGS = 13;
 static const uint OVERLAY_PARAM_VIEW_MIN = 14;
 static const uint OVERLAY_PARAM_VIEW_MAX = 15;

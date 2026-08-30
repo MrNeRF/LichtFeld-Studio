@@ -876,7 +876,8 @@ namespace lfs::app {
                                  {"use_ellipsoid", settings.use_ellipsoid},
                                  {"desaturate_unselected", settings.desaturate_unselected},
                                  {"desaturate_cropping", settings.desaturate_cropping},
-                                 {"hide_outside_depth_box", settings.hide_outside_depth_box},
+                                 {"hide_outside_depth_box", settings.depth_filter_viz_mode == 2},
+                                 {"depth_filter_viz_mode", settings.depth_filter_viz_mode},
                                  {"crop_filter_for_selection", settings.crop_filter_for_selection},
                                  {"apply_appearance_correction", settings.apply_appearance_correction},
                                  {"ppisp_mode", settings.ppisp_mode},
@@ -1085,7 +1086,11 @@ namespace lfs::app {
             set_bool("use_ellipsoid", settings.use_ellipsoid);
             set_bool("desaturate_unselected", settings.desaturate_unselected);
             set_bool("desaturate_cropping", settings.desaturate_cropping);
-            set_bool("hide_outside_depth_box", settings.hide_outside_depth_box);
+            if (args.contains("hide_outside_depth_box") && !args.contains("depth_filter_viz_mode")) {
+                settings.depth_filter_viz_mode = args["hide_outside_depth_box"].get<bool>() ? 2 : 0;
+                touched = true;
+            }
+            set_int("depth_filter_viz_mode", settings.depth_filter_viz_mode);
             set_bool("crop_filter_for_selection", settings.crop_filter_for_selection);
             set_bool("apply_appearance_correction", settings.apply_appearance_correction);
             set_int("ppisp_mode", settings.ppisp_mode);
@@ -3043,6 +3048,8 @@ namespace lfs::app {
                         {"use_crop_box", json{{"type", "boolean"}}},
                         {"show_ellipsoid", json{{"type", "boolean"}}},
                         {"use_ellipsoid", json{{"type", "boolean"}}},
+                        {"hide_outside_depth_box", json{{"type", "boolean"}}},
+                        {"depth_filter_viz_mode", json{{"type", "integer"}, {"minimum", 0}, {"maximum", 2}}},
                         {"ppisp_exposure", json{{"type", "number"}}},
                         {"ppisp", json{{"type", "object"}}}},
                     .required = {}}},
@@ -3781,7 +3788,7 @@ namespace lfs::app {
                         {"y0", json{{"type", "number"}, {"description", "Top edge Y coordinate"}}},
                         {"x1", json{{"type", "number"}, {"description", "Right edge X coordinate"}}},
                         {"y1", json{{"type", "number"}, {"description", "Bottom edge Y coordinate"}}},
-                        {"camera_index", json{{"type", "integer"}, {"description", "Camera index (default: 0)"}}},
+                        {"camera_index", json{{"type", "integer"}, {"description", "-1 = the current viewer (default; matches render.capture omitted-index behavior); >= 0 = dataset camera index; out-of-range fails with an error"}}},
                         {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"x0", "y0", "x1", "y1"}}},
             [viewer_impl](const json& args) -> json {
@@ -3790,7 +3797,7 @@ namespace lfs::app {
                 const float x1 = args["x1"].get<float>();
                 const float y1 = args["y1"].get<float>();
                 const std::string mode = args.value("mode", "replace");
-                const int camera_index = args.value("camera_index", 0);
+                const int camera_index = selection_camera_index_from_args(args);
 
                 return post_and_wait(viewer_impl, [viewer_impl, x0, y0, x1, y1, mode, camera_index]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
@@ -3809,7 +3816,7 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"points", json{{"type", "array"}, {"items", json{{"type", "array"}, {"items", json{{"type", "number"}}}}}, {"description", "Polygon vertices [[x0,y0], [x1,y1], ...]"}}},
-                        {"camera_index", json{{"type", "integer"}, {"description", "Camera index (default: 0)"}}},
+                        {"camera_index", json{{"type", "integer"}, {"description", "-1 = the current viewer (default; matches render.capture omitted-index behavior); >= 0 = dataset camera index; out-of-range fails with an error"}}},
                         {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"points"}}},
             [viewer_impl](const json& args) -> json {
@@ -3825,7 +3832,7 @@ namespace lfs::app {
                 }
 
                 const std::string mode = args.value("mode", "replace");
-                const int camera_index = args.value("camera_index", 0);
+                const int camera_index = selection_camera_index_from_args(args);
 
                 return post_and_wait(viewer_impl, [viewer_impl, vertex_data = std::move(vertex_data), mode, camera_index]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
@@ -3844,7 +3851,7 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"points", json{{"type", "array"}, {"items", json{{"type", "array"}, {"items", json{{"type", "number"}}}}}, {"description", "Lasso points [[x0,y0], [x1,y1], ...]"}}},
-                        {"camera_index", json{{"type", "integer"}, {"description", "Camera index (default: 0)"}}},
+                        {"camera_index", json{{"type", "integer"}, {"description", "-1 = the current viewer (default; matches render.capture omitted-index behavior); >= 0 = dataset camera index; out-of-range fails with an error"}}},
                         {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"points"}}},
             [viewer_impl](const json& args) -> json {
@@ -3860,7 +3867,7 @@ namespace lfs::app {
                 }
 
                 const std::string mode = args.value("mode", "replace");
-                const int camera_index = args.value("camera_index", 0);
+                const int camera_index = selection_camera_index_from_args(args);
 
                 return post_and_wait(viewer_impl, [viewer_impl, vertex_data = std::move(vertex_data), mode, camera_index]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
@@ -3880,14 +3887,14 @@ namespace lfs::app {
                     .properties = json{
                         {"x", json{{"type", "number"}, {"description", "X coordinate"}}},
                         {"y", json{{"type", "number"}, {"description", "Y coordinate"}}},
-                        {"camera_index", json{{"type", "integer"}, {"description", "Camera index (default: 0)"}}},
+                        {"camera_index", json{{"type", "integer"}, {"description", "-1 = the current viewer (default; matches render.capture omitted-index behavior); >= 0 = dataset camera index; out-of-range fails with an error"}}},
                         {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"x", "y"}}},
             [viewer_impl](const json& args) -> json {
                 const float x = args["x"].get<float>();
                 const float y = args["y"].get<float>();
                 const std::string mode = args.value("mode", "replace");
-                const int camera_index = args.value("camera_index", 0);
+                const int camera_index = selection_camera_index_from_args(args);
 
                 return post_and_wait(viewer_impl, [viewer_impl, x, y, mode, camera_index]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
@@ -3908,7 +3915,7 @@ namespace lfs::app {
                         {"x", json{{"type", "number"}, {"description", "X coordinate"}}},
                         {"y", json{{"type", "number"}, {"description", "Y coordinate"}}},
                         {"radius", json{{"type", "number"}, {"description", "Selection radius in pixels (default: 20)"}}},
-                        {"camera_index", json{{"type", "integer"}, {"description", "Camera index (default: 0)"}}},
+                        {"camera_index", json{{"type", "integer"}, {"description", "-1 = the current viewer (default; matches render.capture omitted-index behavior); >= 0 = dataset camera index; out-of-range fails with an error"}}},
                         {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"x", "y"}}},
             [viewer_impl](const json& args) -> json {
@@ -3916,7 +3923,7 @@ namespace lfs::app {
                 const float y = args["y"].get<float>();
                 const float radius = args.value("radius", 20.0f);
                 const std::string mode = args.value("mode", "replace");
-                const int camera_index = args.value("camera_index", 0);
+                const int camera_index = selection_camera_index_from_args(args);
 
                 return post_and_wait(viewer_impl, [viewer_impl, x, y, radius, mode, camera_index]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
@@ -3937,7 +3944,7 @@ namespace lfs::app {
                         {"x", json{{"type", "number"}, {"description", "X coordinate"}}},
                         {"y", json{{"type", "number"}, {"description", "Y coordinate"}}},
                         {"radius", json{{"type", "number"}, {"description", "Selection radius in pixels (default: 20)"}}},
-                        {"camera_index", json{{"type", "integer"}, {"description", "Camera index (default: 0)"}}},
+                        {"camera_index", json{{"type", "integer"}, {"description", "-1 = the current viewer (default; matches render.capture omitted-index behavior); >= 0 = dataset camera index; out-of-range fails with an error"}}},
                         {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"x", "y"}}},
             [viewer_impl](const json& args) -> json {
@@ -3945,7 +3952,7 @@ namespace lfs::app {
                 const float y = args["y"].get<float>();
                 const float radius = args.value("radius", 20.0f);
                 const std::string mode = args.value("mode", "replace");
-                const int camera_index = args.value("camera_index", 0);
+                const int camera_index = selection_camera_index_from_args(args);
 
                 return post_and_wait(viewer_impl, [viewer_impl, x, y, radius, mode, camera_index]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();

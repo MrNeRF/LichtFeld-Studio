@@ -8,6 +8,7 @@
 #include "lfs/core/warp_reduce.cuh"
 #include "lfs/training/joint_adam_codec.cuh"
 #include "lfs/training/mean_step_scale.cuh"
+#include "lfs/training/screen_share.cuh"
 
 #include <cstdint>
 
@@ -44,7 +45,11 @@ namespace fast_lfs::optimizer::kernels::adam {
         const float mean_step_r_min,
         const float mean_step_r_max,
         const bool* mean_step_far_mask,
-        const int mean_step_far_mask_n) {
+        const int mean_step_far_mask_n,
+        const float* screen_share_max,
+        const int screen_share_n,
+        const float screen_share_limit,
+        const float screen_share_penalty) {
         using C = lfs::training::joint_adam::DeviceCodec<BITS>;
         constexpr float kInf = 1e30f;
         constexpr int kBS = lfs::training::joint_adam::kBlockSizeDevice;
@@ -104,7 +109,12 @@ namespace fast_lfs::optimizer::kernels::adam {
                 float m = mv.x;
                 float v = mv.y;
                 if (apply_step) {
-                    const float grad = param_grad[static_cast<int64_t>(prim) * n_attr + i];
+                    float grad = param_grad[static_cast<int64_t>(prim) * n_attr + i];
+                    if (screen_share_max != nullptr && prim < screen_share_n) {
+                        grad += lfs::training::screen_share_hinge_extra_grad(
+                            screen_share_max[prim], screen_share_limit, screen_share_penalty,
+                            mv.y, bias_correction2_sqrt_rcp, eps);
+                    }
                     m = beta1 * mv.x + beta1_comp * grad;
                     v = beta2 * mv.y + beta2_comp * grad * grad;
                     const float denom = sqrtf(v) * bias_correction2_sqrt_rcp + eps;
@@ -172,7 +182,11 @@ namespace fast_lfs::optimizer::kernels::adam {
         const float mean_step_r_min,
         const float mean_step_r_max,
         const bool* mean_step_far_mask,
-        const int mean_step_far_mask_n) {
+        const int mean_step_far_mask_n,
+        const float* screen_share_max,
+        const int screen_share_n,
+        const float screen_share_limit,
+        const float screen_share_penalty) {
         using C = lfs::training::joint_adam::DeviceCodec<BITS>;
         constexpr float kInf = 1e30f;
         constexpr int kBS = lfs::training::joint_adam::kBlockSizeDevice;
@@ -247,7 +261,13 @@ namespace fast_lfs::optimizer::kernels::adam {
                 float m = mv.x;
                 float v = mv.y;
                 if (apply_step) {
-                    const float grad = param_grad[static_cast<int64_t>(prim) * n_attr + i];
+                    float grad = param_grad[static_cast<int64_t>(prim) * n_attr + i];
+                    if (ent.apply_screen_share && screen_share_max != nullptr &&
+                        prim < screen_share_n) {
+                        grad += lfs::training::screen_share_hinge_extra_grad(
+                            screen_share_max[prim], screen_share_limit, screen_share_penalty,
+                            mv.y, bias_correction2_sqrt_rcp, eps);
+                    }
                     m = beta1 * mv.x + beta1_comp * grad;
                     v = beta2 * mv.y + beta2_comp * grad * grad;
                     const float denom = sqrtf(v) * bias_correction2_sqrt_rcp + eps;

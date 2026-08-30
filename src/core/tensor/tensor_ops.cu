@@ -697,6 +697,126 @@ namespace lfs::core::tensor_ops {
         LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.scale_inplace");
     }
 
+    // Permute a contiguous tensor so kept axes sit at the front and reduced
+    // axes become a contiguous trailing block. Metadata is passed by value
+    // (no per-call device allocations). Used to turn a general multi-axis
+    // reduction into the existing trailing-axis fast path.
+    struct PermuteGeom {
+        size_t in_strides[MAX_TENSOR_RANK];
+        size_t out_strides[MAX_TENSOR_RANK];
+        int perm[MAX_TENSOR_RANK];
+        size_t rank;
+    };
+
+    __global__ void permute_copy_kernel(const float* __restrict__ in,
+                                        float* __restrict__ out,
+                                        PermuteGeom geom,
+                                        size_t n) {
+        const size_t stride = static_cast<size_t>(blockDim.x) * gridDim.x;
+        for (size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+             idx < n; idx += stride) {
+            size_t rem = idx;
+            size_t in_idx = 0;
+            for (size_t oa = 0; oa < geom.rank; ++oa) {
+                const size_t out_stride = geom.out_strides[oa];
+                const size_t coord = (out_stride == 0) ? 0 : rem / out_stride;
+                rem -= coord * out_stride;
+                in_idx += coord * geom.in_strides[geom.perm[oa]];
+            }
+            out[idx] = in[in_idx];
+        }
+    }
+
+    void launch_permute_copy(const float* in, float* out, const PermuteGeom& geom,
+                             size_t n, cudaStream_t stream) {
+        if (n == 0)
+            return;
+        constexpr int BLOCK = 256;
+        int grid = static_cast<int>((n + BLOCK - 1) / BLOCK);
+        const int optimal = GPUConfig::get().optimal_grid_size(BLOCK);
+        if (grid > optimal)
+            grid = optimal;
+        if (grid < 1)
+            grid = 1;
+        permute_copy_kernel<<<grid, BLOCK, 0, stream>>>(in, out, geom, n);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.permute_copy");
+    }
+
+    // Trailing-axis (inner_size == 1) multi-axis reduce after the permute.
+    void launch_trailing_multi_axis_reduce(const float* input, float* output,
+                                           size_t outer_size, size_t reduce_count,
+                                           size_t n, ReduceOp op, cudaStream_t stream) {
+        if (outer_size == 1 && should_use_warp_reduce(n, 1)) {
+            float init_val = 0.0f;
+            switch (op) {
+            case ReduceOp::Sum:
+            case ReduceOp::Mean:
+                init_val = 0.0f;
+                break;
+            case ReduceOp::Max:
+                init_val = -std::numeric_limits<float>::infinity();
+                break;
+            case ReduceOp::Min:
+                init_val = std::numeric_limits<float>::infinity();
+                break;
+            case ReduceOp::Prod:
+                init_val = 1.0f;
+                break;
+            default:
+                LFS_ASSERT_MSG(false,
+                               "trailing multi-axis Float32 reduction encountered an unsupported operation");
+            }
+            init_scalar_gpu(output, init_val, stream);
+            launch_warp_reduce_full(input, output, n, op, stream);
+            if (op == ReduceOp::Mean) {
+                launch_scale_inplace(output, 1.0f / static_cast<float>(reduce_count), 1, stream);
+            }
+            return;
+        }
+        if (should_use_warp_reduce(n, outer_size)) {
+            launch_warp_segmented_reduce(input, output, outer_size, reduce_count, op, stream);
+            return;
+        }
+        const bool use_warp_multi_axis = outer_size < 100000 &&
+                                         reduce_count < 10000000 &&
+                                         n < 100000000;
+        if (use_warp_multi_axis) {
+            launch_warp_multi_axis_reduce(input, output, outer_size, reduce_count, 1, op, stream);
+            return;
+        }
+        float init_val = 0.0f;
+        switch (op) {
+        case ReduceOp::Sum:
+        case ReduceOp::Mean:
+            init_val = 0.0f;
+            launch_segmented_reduce(input, output, outer_size, reduce_count, 1,
+                                    init_val, ops::add_op{}, stream);
+            if (op == ReduceOp::Mean) {
+                launch_scale_inplace(output, 1.0f / static_cast<float>(reduce_count),
+                                     outer_size, stream);
+            }
+            break;
+        case ReduceOp::Max:
+            init_val = -std::numeric_limits<float>::infinity();
+            launch_segmented_reduce(input, output, outer_size, reduce_count, 1,
+                                    init_val, ops::maximum_op{}, stream);
+            break;
+        case ReduceOp::Min:
+            init_val = std::numeric_limits<float>::infinity();
+            launch_segmented_reduce(input, output, outer_size, reduce_count, 1,
+                                    init_val, ops::minimum_op{}, stream);
+            break;
+        case ReduceOp::Prod:
+            init_val = 1.0f;
+            launch_segmented_reduce(input, output, outer_size, reduce_count, 1,
+                                    init_val, ops::mul_op{}, stream);
+            break;
+        default:
+            LFS_ASSERT_MSG(false,
+                           "trailing multi-axis Float32 reduction encountered an unsupported operation");
+        }
+    }
+
     // ============= MAIN REDUCE OPERATION DISPATCH =============
 
     // Internal Float32 implementation (original)
@@ -1014,20 +1134,92 @@ namespace lfs::core::tensor_ops {
             }
         }
 
-        // SLOW PATH: Generic multi-axis reduction
-        thrust::device_vector<bool> d_is_reduced(rank, false);
+        // General multi-axis case: permute kept axes to the front (a contiguous
+        // bandwidth-bound copy) then take the trailing-axis fast path above.
+        // Dense contiguous tensors of rank <= MAX_TENSOR_RANK can always be
+        // expressed this way. The generic one-thread-per-output kernel remains
+        // only as a fallback if rank exceeds MAX_TENSOR_RANK (Tensor forbids that)
+        // or the permute workspace cannot be allocated.
+        if (rank > 0 && rank <= MAX_TENSOR_RANK && num_axes > 0 && num_axes < rank) {
+            bool reduced[MAX_TENSOR_RANK] = {};
+            bool axes_valid = true;
+            for (size_t i = 0; i < num_axes; ++i) {
+                const int axis = axes[i];
+                if (axis < 0 || axis >= static_cast<int>(rank) || reduced[axis]) {
+                    axes_valid = false;
+                    break;
+                }
+                reduced[axis] = true;
+            }
+            if (axes_valid) {
+                PermuteGeom geom{};
+                geom.rank = rank;
+                size_t perm_shape[MAX_TENSOR_RANK];
+                size_t n_kept = 0;
+                for (size_t i = 0; i < rank; ++i) {
+                    if (!reduced[i]) {
+                        geom.perm[n_kept] = static_cast<int>(i);
+                        perm_shape[n_kept] = shape[i];
+                        ++n_kept;
+                    }
+                }
+                size_t n_red = 0;
+                size_t reduce_count = 1;
+                for (size_t i = 0; i < rank; ++i) {
+                    if (reduced[i]) {
+                        geom.perm[n_kept + n_red] = static_cast<int>(i);
+                        perm_shape[n_kept + n_red] = shape[i];
+                        reduce_count *= shape[i];
+                        ++n_red;
+                    }
+                }
+
+                geom.in_strides[rank - 1] = 1;
+                for (int i = static_cast<int>(rank) - 2; i >= 0; --i) {
+                    geom.in_strides[i] = geom.in_strides[i + 1] * shape[i + 1];
+                }
+                geom.out_strides[rank - 1] = 1;
+                for (int i = static_cast<int>(rank) - 2; i >= 0; --i) {
+                    geom.out_strides[i] = geom.out_strides[i + 1] * perm_shape[i + 1];
+                }
+
+                size_t outer_size = 1;
+                for (size_t i = 0; i < n_kept; ++i) {
+                    outer_size *= perm_shape[i];
+                }
+
+                ScopedDeviceBuffer permuted(n * sizeof(float), stream, "tensor.reduce.permute");
+                launch_permute_copy(input_f, permuted.as<float>(), geom, n, stream);
+                launch_trailing_multi_axis_reduce(
+                    permuted.as<float>(), output_f, outer_size, reduce_count, n, op, stream);
+                return;
+            }
+        }
+
+        // Fallback: generic multi-axis kernel. Unreachable for dense contiguous
+        // Float32 tensors (rank is capped at MAX_TENSOR_RANK). Kept so a future
+        // non-dense or out-of-rank path has a correct-if-slow implementation.
+        // Host metadata is copied by value into the kernel; no thrust allocations.
+        bool is_reduced_host[MAX_TENSOR_RANK] = {};
         for (size_t i = 0; i < num_axes; ++i) {
-            d_is_reduced[axes[i]] = true;
+            if (axes[i] >= 0 && axes[i] < static_cast<int>(rank)) {
+                is_reduced_host[axes[i]] = true;
+            }
         }
 
         size_t output_elements = 1;
         for (size_t i = 0; i < rank; ++i) {
-            if (!d_is_reduced[i] || keepdim) {
-                output_elements *= (d_is_reduced[i] ? 1 : shape[i]);
+            if (!is_reduced_host[i] || keepdim) {
+                output_elements *= (is_reduced_host[i] ? 1 : shape[i]);
             }
         }
 
-        thrust::device_vector<size_t> d_input_shape(shape, shape + rank);
+        ScopedDeviceBuffer d_is_reduced(rank * sizeof(bool), stream, "tensor.reduce.is_reduced");
+        ScopedDeviceBuffer d_input_shape(rank * sizeof(size_t), stream, "tensor.reduce.input_shape");
+        LFS_CUDA_CHECK(cudaMemcpyAsync(d_is_reduced.as<bool>(), is_reduced_host,
+                                       rank * sizeof(bool), cudaMemcpyHostToDevice, stream));
+        LFS_CUDA_CHECK(cudaMemcpyAsync(d_input_shape.as<size_t>(), shape,
+                                       rank * sizeof(size_t), cudaMemcpyHostToDevice, stream));
 
         float init_val = 0.0f;
         switch (op) {
@@ -1052,8 +1244,8 @@ namespace lfs::core::tensor_ops {
         launch_multi_axis_reduce(
             input_f,
             output_f,
-            thrust::raw_pointer_cast(d_input_shape.data()),
-            thrust::raw_pointer_cast(d_is_reduced.data()),
+            d_input_shape.as<size_t>(),
+            d_is_reduced.as<bool>(),
             rank, output_elements, init_val, op, stream);
 
         if (op == ReduceOp::Mean) {

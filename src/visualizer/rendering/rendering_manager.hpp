@@ -370,6 +370,12 @@ namespace lfs::vis {
         };
         ContentBounds getContentBounds(const glm::ivec2& viewport_size) const;
 
+        struct GTSelectionContext {
+            GTRenderCamera camera;
+            glm::ivec2 size{0, 0};
+        };
+        [[nodiscard]] std::optional<GTSelectionContext> gtComparisonSelectionContext() const;
+
         // Current camera tracking for GT comparison
         void setCurrentCameraId(int cam_id) {
             const bool changed = camera_interaction_service_.currentCameraId() != cam_id;
@@ -848,6 +854,13 @@ namespace lfs::vis {
         glm::ivec2 vulkan_viewport_coordinate_size_{0, 0};
         bool vulkan_viewport_image_flip_y_ = false;
         glm::ivec2 vulkan_gt_comparison_content_size_{0, 0};
+        // GT compare-panel camera for the frame currently presented, for the selection lane.
+        // Written and cleared at exactly the same sites as vulkan_gt_comparison_content_size_.
+        struct GTPresentedView {
+            GTRenderCamera camera;
+            glm::ivec2 size{0, 0};
+        };
+        std::optional<GTPresentedView> vulkan_gt_comparison_selection_view_;
         struct GTComparisonImageCacheEntry {
             int camera_uid = -1;
             bool undistort_requested = false;
@@ -883,9 +896,14 @@ namespace lfs::vis {
         std::optional<lfs::rendering::CameraIntrinsics> gt_async_ticket_intrinsics_;
         bool gt_async_ticket_flip_y_ = false;
         lfs::rendering::FrameMetadata gt_async_ticket_metadata_{};
+        // The GT camera and size that produced a given async depth/normal image. Carried with
+        // the ticket and promoted with the held display, so the selection lane can only ever see
+        // the camera of the image the panel is ACTUALLY showing (#1574 hold-then-swap).
+        std::optional<GTPresentedView> gt_async_ticket_view_;
         std::shared_ptr<lfs::core::Tensor> gt_async_held_display_;
         bool gt_async_held_flip_y_ = false;
         lfs::rendering::FrameMetadata gt_async_held_metadata_{};
+        std::optional<GTPresentedView> gt_async_held_view_;
         TrainerManager* resize_training_pause_trainer_ = nullptr;
         bool resize_training_pause_active_ = false;
 

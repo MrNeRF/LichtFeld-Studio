@@ -20,8 +20,6 @@ namespace lfs::vis {
         constexpr float MIN_KEYFRAME_SPACING = 0.1f;
         constexpr float DOUBLE_CLICK_TIME = 0.3f;
         constexpr float DRAG_THRESHOLD_PX = 3.0f;
-        constexpr float PLAYHEAD_HIT_RADIUS = 6.0f;
-        constexpr float PLAYHEAD_HANDLE_WIDTH = 8.0f;
     } // namespace
 
     using namespace panel_config;

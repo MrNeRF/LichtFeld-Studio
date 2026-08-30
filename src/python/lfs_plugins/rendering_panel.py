@@ -76,7 +76,7 @@ LOD_BUDGET_HARD_MAX = 500_000_000
 
 BOOL_PROPS = [
     "show_coord_axes", "show_pivot", "show_grid", "show_camera_frustums",
-    "point_cloud_mode", "desaturate_unselected", "desaturate_cropping", "hide_outside_depth_box",
+    "point_cloud_mode", "desaturate_unselected", "desaturate_cropping",
     "equirectangular", "mip_filter",
     "mesh_wireframe", "mesh_backface_culling", "mesh_shadow_enabled",
     "apply_appearance_correction", "ppisp_vignette_enabled",
@@ -138,6 +138,7 @@ SCRUB_FIELD_DEFS = {
 
 SELECT_PROPS = [
     "grid_plane", "sh_degree", "raster_backend", "camera_metrics_mode", "mesh_shadow_resolution",
+    "depth_filter_viz_mode",
 ]
 RASTER_BACKENDS = {"3dgs", "3dgut"}
 
@@ -183,7 +184,7 @@ LOCALE_KEY = {
     "point_cloud_mode": "main_panel.point_cloud_mode",
     "desaturate_unselected": "main_panel.desaturate_unselected",
     "desaturate_cropping": "main_panel.desaturate_cropping",
-    "hide_outside_depth_box": "main_panel.hide_outside_depth_box",
+    "depth_filter_viz_mode": "main_panel.depth_filter_viz_mode",
     "equirectangular": "main_panel.equirectangular",
     "raster_backend": "main_panel.raster_backend",
     "mip_filter": "main_panel.mip_filter",
@@ -453,6 +454,10 @@ class RenderingPanel(Panel):
                 model.bind(prop_id,
                            lambda p=prop_id: _normalize_raster_backend(getattr(s(), p, "")),
                            lambda v: self._set_raster_backend(v))
+            elif prop_id == "depth_filter_viz_mode":
+                model.bind(prop_id,
+                           lambda: str(int(getattr(s(), "depth_filter_viz_mode", 1) or 0)),
+                           lambda v: self._set_depth_filter_viz_mode(v))
             else:
                 model.bind(prop_id,
                            lambda p=prop_id: str(getattr(s(), p, "")),
@@ -758,6 +763,17 @@ class RenderingPanel(Panel):
         backend = _normalize_raster_backend(value)
         settings.raster_backend = backend
         self._sync_projection_state()
+
+    def _set_depth_filter_viz_mode(self, value):
+        settings = lf.get_render_settings()
+        if not settings:
+            return
+        try:
+            mode = int(value)
+        except (TypeError, ValueError):
+            return
+        settings.depth_filter_viz_mode = max(0, min(2, mode))
+        self._dirty_model("depth_filter_viz_mode")
 
     def _set_equirectangular(self, value):
         settings = lf.get_render_settings()

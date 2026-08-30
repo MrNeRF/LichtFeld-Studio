@@ -195,6 +195,7 @@ struct SplatActiveState {
     bool active;
     uint overlay_flags;
     float3 mean_ws;
+    float3 projected_center;
     uint model_transform_base;
     bool model_transform_enabled;
 };
@@ -274,6 +275,7 @@ void apply_ellipsoid_filter(
 SplatActiveState compute_splat_active_state(
     uint logical_idx,
     float3 xyz_ws_in,
+    Camera cam,
     uint model_transform_count,
     ByteAddressBuffer transform_indices,
     ByteAddressBuffer node_mask,
@@ -335,16 +337,57 @@ SplatActiveState compute_splat_active_state(
         }
     }
 
+    float3 projected_center = project_point(mean_ws, cam);
     float4 view_flags = overlay_params[OVERLAY_PARAM_VIEW_FLAGS];
     if (active && overlay_enabled(view_flags.x)) {
-        float3 local = transform_point_rows(overlay_params, OVERLAY_PARAM_VIEW_TRANSFORM, mean_ws);
-        float3 vmin = overlay_params[OVERLAY_PARAM_VIEW_MIN].xyz;
-        float3 vmax = overlay_params[OVERLAY_PARAM_VIEW_MAX].xyz;
-        bool inside = local.x >= vmin.x && local.x <= vmax.x &&
-                      local.y >= vmin.y && local.y <= vmax.y &&
-                      local.z >= vmin.z && local.z <= vmax.z;
+        // KEEP IN SYNC: the screen-window formula lives in four places —
+        // this block, filterSelectionByScreenWindowKernel (selection_ops.cu),
+        // the CPU reference in tests/test_selection_screen_window.cpp, and
+        // (rect only, no depth test) the 2D overlay in gui_manager.cpp
+        // appendScreenWindowOverlay.
+        // Contract: the window RECTANGLE is framebuffer-centred (0.5*W/H plus the user
+        // offsets) in all four copies, but the SPLAT is projected with the displayed
+        // camera's real, unjittered intrinsics. The host supplies those in
+        // OVERLAY_PARAM_VIEW_INTRINSICS; when the slot is empty (x <= 0) the displayed
+        // camera is image-centred anyway and cam's own focals with the image centre are
+        // the correct value. Temporal jitter moves cam.cx/cy but never this slot, so the
+        // containment boundary does not move while the frame settles. Equirectangular and
+        // orthographic ignore cx/cy, and the host does not write the slot for them.
+        Camera containment_cam = cam;
+        float4 containment_intrinsics = overlay_params[OVERLAY_PARAM_VIEW_INTRINSICS];
+        if (containment_intrinsics.x > 0.0f) {
+            containment_cam.fx = containment_intrinsics.x;
+            containment_cam.fy = containment_intrinsics.y;
+            containment_cam.cx = containment_intrinsics.z;
+            containment_cam.cy = containment_intrinsics.w;
+        } else {
+            containment_cam.cx = 0.5f * float(cam.W);
+            containment_cam.cy = 0.5f * float(cam.H);
+        }
+        float3 containment_center = project_point(mean_ws, containment_cam);
+        float4 vmin = overlay_params[OVERLAY_PARAM_VIEW_MIN];
+        float4 vmax = overlay_params[OVERLAY_PARAM_VIEW_MAX];
+        float half_w = 0.5f * view_flags.w * float(cam.W);
+        float half_h = 0.5f * view_flags.w * float(cam.H);
+        float cx = 0.5f * float(cam.W) + vmin.w * (0.5f * float(cam.W) - half_w);
+        float cy = 0.5f * float(cam.H) + vmax.w * (0.5f * float(cam.H) - half_h);
+        bool inside_rect = abs(containment_center.x - cx) <= half_w &&
+                           abs(containment_center.y - cy) <= half_h;
+        float near_depth = -vmax.z;
+        float far_depth = -vmin.z;
+        // Also excludes the equirect degenerate sentinel (project_point_equirect
+        // returns z = -1) and the OpenCV/fisheye out-of-domain sentinel, both of
+        // which return z = -1 before any principal point is applied; real depths
+        // here are always positive.
+        bool positive_depth = containment_center.z > 0.0f;
+        bool inside = inside_rect &&
+                      containment_center.z >= near_depth && containment_center.z <= far_depth &&
+                      positive_depth;
         if (!inside) {
             overlay_flags |= OVERLAY_FLAG_NONSELECTABLE;
+            if (overlay_enabled(view_flags.z)) {
+                overlay_flags |= OVERLAY_FLAG_DIM;
+            }
             if (overlay_enabled(view_flags.y)) {
                 active = false;
             }
@@ -374,6 +417,7 @@ SplatActiveState compute_splat_active_state(
     state.active = active;
     state.overlay_flags = overlay_flags;
     state.mean_ws = mean_ws;
+    state.projected_center = projected_center;
     state.model_transform_base = model_transform_base;
     state.model_transform_enabled = model_transform_enabled;
     return state;
@@ -934,7 +978,7 @@ void main(
 
 #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
     const SplatActiveState active_state = compute_splat_active_state(
-        logical_idx, gauss.xyz_ws, model_transform_count,
+        logical_idx, gauss.xyz_ws, cam, model_transform_count,
         transform_indices, node_mask, overlay_params, model_transforms);
     uint overlay_flags = active_state.overlay_flags;
     uint model_transform_base = active_state.model_transform_base;

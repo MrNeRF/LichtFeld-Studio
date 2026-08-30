@@ -410,6 +410,8 @@ namespace lfs::core {
                 return std::format("mask_opacity_penalty_power must be finite and positive (got {})", mask_opacity_penalty_power);
             if (!std::isfinite(steps_scaler))
                 return std::format("steps_scaler must be finite (got {})", steps_scaler);
+            if (!std::isfinite(max_screen_share))
+                return std::format("max_screen_share must be finite (got {})", max_screen_share);
             if (ppisp_warmup_steps < 0)
                 return std::format("ppisp_warmup_steps must be nonnegative (got {})", ppisp_warmup_steps);
             if (debug_python && (debug_python_port <= 0 || debug_python_port > 65535))
@@ -435,6 +437,7 @@ namespace lfs::core {
                 std::pair{"growth_grad_threshold", growth_grad_threshold},
                 std::pair{"means_noise_weight", means_noise_weight},
                 std::pair{"init_rho", init_rho},
+                std::pair{"screen_share_penalty", screen_share_penalty},
             };
             for (const auto& [name, value] : nonnegative_fields) {
                 if (auto error = invalid_nonnegative(value, name); !error.empty())
@@ -449,6 +452,7 @@ namespace lfs::core {
                 std::pair{"mask_threshold", mask_threshold},
                 std::pair{"prune_opacity", prune_opacity},
                 std::pair{"grow_fraction", grow_fraction},
+                std::pair{"oversize_split_fraction", oversize_split_fraction},
                 std::pair{"opacity_decay", opacity_decay},
                 std::pair{"scale_decay", scale_decay},
                 std::pair{"bounds_percentile", bounds_percentile},
@@ -476,6 +480,12 @@ namespace lfs::core {
                                    bilateral_grid_X, bilateral_grid_Y, bilateral_grid_W);
             if (gut && canonical_strategy_name(strategy) == kStrategyIGSPlus)
                 return "GUT and igs+ strategy cannot be used together";
+            if (use_exposure_correction &&
+                (use_bilateral_grid || use_ppisp || ppisp_use_controller || ppisp_freeze_from_sidecar)) {
+                return "use_exposure_correction cannot be combined with use_bilateral_grid, "
+                       "use_ppisp, ppisp_use_controller, or ppisp_freeze_from_sidecar; "
+                       "exposure correction replaces the standalone bilateral grid and PPISP options";
+            }
             if (ppisp_freeze_from_sidecar && !use_ppisp)
                 return "PPISP sidecar freeze requires PPISP enabled";
             if (depth_loss_mode != "ssi" && depth_loss_mode != "ssi-disparity" && depth_loss_mode != "ssi-depth")

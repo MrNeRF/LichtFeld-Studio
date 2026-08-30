@@ -97,13 +97,21 @@ namespace lfs::rendering {
         int parent_node_index = -1;
     };
 
+    struct SelectionScreenWindow {
+        float scale = 0.35f;
+        float offset_x = 0.0f;
+        float offset_y = 0.0f;
+    };
+
     struct GaussianFilterState {
         std::optional<GaussianScopedBoxFilter> crop_region;
         std::optional<GaussianScopedEllipsoidFilter> ellipsoid_region;
         std::vector<GaussianScopedBoxFilter> crop_regions;
         std::vector<GaussianScopedEllipsoidFilter> ellipsoid_regions;
         std::optional<BoundingBox> view_volume;
+        std::optional<SelectionScreenWindow> screen_window;
         bool cull_outside_view_volume = false;
+        bool dim_outside_view_volume = false;
     };
 
     struct GaussianMarkerOverlayState {

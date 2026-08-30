@@ -63,18 +63,18 @@ void main(
 
         if (valid) {
             const float3 xyz = read_t3_float3(int32_t(g_idx), xyz_ws);
+            const uint camera_height =
+                uniforms.camera_height == 0 ? uniforms.image_height : uniforms.camera_height;
+            const uint camera_width =
+                uniforms.camera_width == 0 ? uniforms.image_width : uniforms.camera_width;
+            const Camera cam = load_camera(uniforms.world_view_transform,
+                uniforms.fx, uniforms.fy, uniforms.cx, uniforms.cy,
+                base_camera_model(uniforms.camera_model), uniforms.dist_coeffs,
+                camera_height, camera_width);
             const SplatActiveState state = compute_splat_active_state(
-                logical_idx, xyz, uniforms.step,
+                logical_idx, xyz, cam, uniforms.step,
                 transform_indices, node_mask, overlay_params, model_transforms);
             if (state.active) {
-                const uint camera_height =
-                    uniforms.camera_height == 0 ? uniforms.image_height : uniforms.camera_height;
-                const uint camera_width =
-                    uniforms.camera_width == 0 ? uniforms.image_width : uniforms.camera_width;
-                const Camera cam = load_camera(uniforms.world_view_transform,
-                    uniforms.fx, uniforms.fy, uniforms.cx, uniforms.cy,
-                    base_camera_model(uniforms.camera_model), uniforms.dist_coeffs,
-                    camera_height, camera_width);
               // LFS_3DGUT_PROJECTION is never set on cull SPVs today (CMake only
               // enables it on projection shaders). Kept for a future HiGS-cull +
               // 3DGUT product combo so the center test matches GUT projection.

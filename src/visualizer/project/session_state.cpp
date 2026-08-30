@@ -616,7 +616,52 @@ namespace lfs::vis::project {
                 required_field("use_ellipsoid", &RenderSettings::use_ellipsoid),
                 required_field("desaturate_unselected", &RenderSettings::desaturate_unselected),
                 required_field("desaturate_cropping", &RenderSettings::desaturate_cropping),
-                required_field("hide_outside_depth_box", &RenderSettings::hide_outside_depth_box),
+                custom_field<RenderSettings>(
+                    "hide_outside_depth_box",
+                    [](const RenderSettings& settings) {
+                        return Json(settings.depth_filter_viz_mode == 2);
+                    },
+                    [](const Json& json, RenderSettings& settings,
+                       std::string_view prefix, std::string_view field) {
+                        if (json.contains("depth_filter_viz_mode")) {
+                            return lfs::Result<void>{};
+                        }
+                        bool value = false;
+                        if (auto status = assign_required(json, field, value, prefix); !status) {
+                            return status;
+                        }
+                        settings.depth_filter_viz_mode = value ? 2 : 0;
+                        return lfs::Result<void>{};
+                    }),
+                custom_field<RenderSettings>(
+                    "depth_filter_viz_mode",
+                    [](const RenderSettings& settings) {
+                        return Json(settings.depth_filter_viz_mode);
+                    },
+                    [](const Json& json, RenderSettings& settings,
+                       std::string_view prefix, std::string_view field) {
+                        if (!json.contains(field)) {
+                            if (json.contains("hide_outside_depth_box")) {
+                                return lfs::Result<void>{};
+                            }
+                            return fail<void>(
+                                lfs::ErrorCode::DataLoss,
+                                "VIEW depth-filter visualization mode is missing",
+                                std::string(prefix) + "." + std::string(field));
+                        }
+                        int value = 0;
+                        if (auto status = assign_required(json, field, value, prefix); !status) {
+                            return status;
+                        }
+                        if (value < 0 || value > 2) {
+                            return fail<void>(
+                                lfs::ErrorCode::DataLoss,
+                                "Unsupported depth-filter visualization mode",
+                                std::string(prefix) + "." + std::string(field));
+                        }
+                        settings.depth_filter_viz_mode = value;
+                        return lfs::Result<void>{};
+                    }),
                 required_field("crop_filter_for_selection", &RenderSettings::crop_filter_for_selection),
                 required_field("apply_appearance_correction", &RenderSettings::apply_appearance_correction),
                 enum_field("ppisp_mode", &RenderSettings::ppisp_mode,
@@ -3530,30 +3575,6 @@ namespace lfs::vis::project {
                                 renderSettingsFromProjectJson(
                                     *render_json,
                                     rendering->getSettings())) {
-                            // Disabled constructor-default boxes are not in near/far encoding.
-                            if (settings
-                                    ->depth_filter_enabled) {
-                                const float near_plane =
-                                    std::max(0.0f,
-                                             -settings
-                                                  ->depth_filter_max.z);
-                                const float far_plane =
-                                    std::max(near_plane + 0.01f,
-                                             -settings
-                                                  ->depth_filter_min.z);
-                                const float half_width =
-                                    std::max(
-                                        std::abs(settings
-                                                     ->depth_filter_min.x),
-                                        std::abs(settings
-                                                     ->depth_filter_max.x));
-                                selection_tool
-                                    ->setDepthFilterRange(
-                                        settings
-                                            ->depth_filter_enabled,
-                                        near_plane, far_plane,
-                                        half_width);
-                            }
                             auto restored =
                                 rendering->getSettings();
                             restored.crop_filter_for_selection =
@@ -3567,6 +3588,35 @@ namespace lfs::vis::project {
                             restored.depth_filter_transform =
                                 settings->depth_filter_transform;
                             rendering->updateSettings(restored);
+
+                            // Seed the tool from what the manager actually kept,
+                            // never from the saved box. A project written while
+                            // the filter was enabled can still hold the legacy
+                            // positive-Z box; decoding that raw yields near 0 /
+                            // far 0.01, and the tool's per-frame writer would
+                            // then stamp that 1cm band back over the migrated
+                            // settings. updateSettings normalizes it first, so
+                            // read the applied copy - `restored` is this
+                            // function's own local and still holds the raw box.
+                            const auto applied =
+                                rendering->getSettings();
+                            if (applied.depth_filter_enabled) {
+                                const float near_plane =
+                                    std::max(0.0f,
+                                             -applied.depth_filter_max.z);
+                                const float far_plane =
+                                    std::max(near_plane + 0.01f,
+                                             -applied.depth_filter_min.z);
+                                const float half_width =
+                                    std::max(
+                                        std::abs(applied.depth_filter_min.x),
+                                        std::abs(applied.depth_filter_max.x));
+                                selection_tool
+                                    ->setDepthFilterRange(
+                                        applied.depth_filter_enabled,
+                                        near_plane, far_plane,
+                                        half_width);
+                            }
                         }
                     }
                 }

@@ -322,6 +322,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
         friend class VisualizerImplResetTest_AdoptCompletedTrainingSnapshotSkipsOpenWhenCountersEqual_Test;
         friend class VisualizerImplResetTest_AdoptedStepBoundaryPublishRebasesAutosaveBase_Test;
+        friend class VisualizerImplResetTest_LightAutosaveRebasesWhenSnapshotCountersMissNewMaster_Test;
         friend class VisualizerImplResetTest_ExplicitSaveAfterUnadoptedTrainerAppendUsesCurrentHead_Test;
         friend class VisualizerImplResetTest_ExplicitSaveAfterTrainerRewriteUsesCurrentHead_Test;
         friend class VisualizerImplResetTest_UntitledTrainerRewriteAdoptThenSaveAsUsesCurrentHead_Test;
@@ -628,8 +629,8 @@ namespace lfs::vis {
         bool update_work_processed_ = false;
         std::chrono::high_resolution_clock::time_point last_frame_time_ = std::chrono::high_resolution_clock::now();
         float live_scene_clip_time_ = 0.0f;
-        bool sequencer_ui_initialized_ = false;
         std::unique_ptr<python::SequencerUIStateData> sequencer_ui_state_;
+        std::unique_ptr<python::SequencerUIStateData> sequencer_ui_last_handed_out_;
         std::vector<std::filesystem::path> pending_view_paths_;
         std::filesystem::path pending_dataset_path_;
         project::GuiSessionRestoreCoordinator

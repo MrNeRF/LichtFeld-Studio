@@ -261,7 +261,6 @@ namespace lfs::vis {
         bool use_ellipsoid = false;
         bool desaturate_unselected = false;     // Desaturate unselected PLYs when one is selected
         bool desaturate_cropping = false;       // Desaturate outside crop box/ellipsoid instead of hiding
-        bool hide_outside_depth_box = false;    // Hide gaussians outside the selection depth box
         bool crop_filter_for_selection = false; // Use crop box/ellipsoid as selection filter
 
         // Appearance correction (PPISP)
@@ -347,6 +346,10 @@ namespace lfs::vis {
         glm::vec3 depth_filter_min = glm::vec3(-50.0f, -10000.0f, 0.0f);
         glm::vec3 depth_filter_max = glm::vec3(50.0f, 10000.0f, 100.0f);
         lfs::geometry::EuclideanTransform depth_filter_transform;
+        float depth_filter_scale = 0.35f;
+        float depth_filter_offset_x = 0.0f;
+        float depth_filter_offset_y = 0.0f;
+        int depth_filter_viz_mode = 1;
 
         // ---- LOD (Spark-style) ----
         bool lod_enabled = false;                       // Master toggle

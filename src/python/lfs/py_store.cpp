@@ -37,6 +37,41 @@ namespace lfs::python {
         std::atomic_uint64_t g_next_subscription_id{1};
         thread_local bool g_test_drain_with_current_gil = false;
 
+        template <typename Invoke>
+        void invoke_python_subscription(
+            const std::weak_ptr<PyStoreSubscription>& weak_subscription,
+            Invoke&& invoke) {
+            const bool can_acquire = can_acquire_gil();
+            const bool use_current_gil =
+                !can_acquire && g_test_drain_with_current_gil && PyGILState_Check();
+            if (!can_acquire && !use_current_gil)
+                return;
+
+            const auto invoke_callback = [&] {
+                // Lock inside the GIL-held scope so self-unsubscription cannot
+                // release the final Python callback reference without the GIL.
+                const auto subscription = weak_subscription.lock();
+                if (!subscription)
+                    return;
+
+                try {
+                    invoke(subscription->callback);
+                } catch (nb::python_error& e) {
+                    (void)contain_python_callback(e, PyCallbackPolicy::WarnAndContinue);
+                } catch (const std::exception& e) {
+                    (void)contain_cxx_callback(e.what(), PyCallbackPolicy::WarnAndContinue);
+                }
+            };
+
+            if (can_acquire) {
+                const GilAcquire gil;
+                invoke_callback();
+            } else {
+                // Test drain already entered from Python with the GIL held.
+                invoke_callback();
+            }
+        }
+
         template <typename Observable>
         std::uint64_t subscribe_observable(Observable& observable, nb::object callback) {
             const auto id = g_next_subscription_id.fetch_add(1, std::memory_order_relaxed);
@@ -44,32 +79,9 @@ namespace lfs::python {
             subscription->callback = std::move(callback);
             const std::weak_ptr<PyStoreSubscription> weak_subscription = subscription;
             subscription->token = observable.subscribe([weak_subscription](const auto& value) {
-                const auto subscription = weak_subscription.lock();
-                if (!subscription)
-                    return;
-                const bool can_acquire = can_acquire_gil();
-                const bool use_current_gil = !can_acquire && g_test_drain_with_current_gil && PyGILState_Check();
-                if (!can_acquire && !use_current_gil)
-                    return;
-                try {
-                    if (can_acquire) {
-                        const GilAcquire gil;
-                        subscription->callback(value);
-                    } else {
-                        subscription->callback(value);
-                    }
-                } catch (nb::python_error& e) {
-                    // Containment needs the GIL to extract and report; if it is
-                    // gone the interpreter is dead or finalizing, and swallowing
-                    // here is deliberate — the pre-Phase 9 e.what() log ran
-                    // GIL-unsafe and was itself a shutdown crash class.
-                    if (can_acquire_gil()) {
-                        const GilAcquire gil;
-                        (void)contain_python_callback(e, PyCallbackPolicy::WarnAndContinue);
-                    }
-                } catch (const std::exception& e) {
-                    (void)contain_cxx_callback(e.what(), PyCallbackPolicy::WarnAndContinue);
-                }
+                invoke_python_subscription(
+                    weak_subscription,
+                    [&value](const nb::object& callback) { callback(value); });
             });
 
             {
@@ -86,32 +98,9 @@ namespace lfs::python {
             subscription->callback = std::move(callback);
             const std::weak_ptr<PyStoreSubscription> weak_subscription = subscription;
             subscription->token = observable.subscribe([weak_subscription, convert = std::move(convert)](const auto& value) {
-                const auto subscription = weak_subscription.lock();
-                if (!subscription)
-                    return;
-                const bool can_acquire = can_acquire_gil();
-                const bool use_current_gil = !can_acquire && g_test_drain_with_current_gil && PyGILState_Check();
-                if (!can_acquire && !use_current_gil)
-                    return;
-                try {
-                    if (can_acquire) {
-                        const GilAcquire gil;
-                        subscription->callback(convert(value));
-                    } else {
-                        subscription->callback(convert(value));
-                    }
-                } catch (nb::python_error& e) {
-                    // Containment needs the GIL to extract and report; if it is
-                    // gone the interpreter is dead or finalizing, and swallowing
-                    // here is deliberate — the pre-Phase 9 e.what() log ran
-                    // GIL-unsafe and was itself a shutdown crash class.
-                    if (can_acquire_gil()) {
-                        const GilAcquire gil;
-                        (void)contain_python_callback(e, PyCallbackPolicy::WarnAndContinue);
-                    }
-                } catch (const std::exception& e) {
-                    (void)contain_cxx_callback(e.what(), PyCallbackPolicy::WarnAndContinue);
-                }
+                invoke_python_subscription(
+                    weak_subscription,
+                    [&](const nb::object& callback) { callback(convert(value)); });
             });
 
             {

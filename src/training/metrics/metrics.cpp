@@ -467,6 +467,9 @@ namespace lfs::training {
             report_file << "SSIM:  " << final.ssim << "\n";
             report_file << "Time per image: " << final.elapsed_time << " seconds\n";
             report_file << "Number of Gaussians: " << final.num_gaussians << "\n";
+            report_file << "Bias (raw):  (" << final.bias_r << ", " << final.bias_g << ", " << final.bias_b << ")\n";
+            report_file << "Bias (corrected):  (" << final.bias_corr_r << ", " << final.bias_corr_g << ", "
+                        << final.bias_corr_b << ")\n";
             if (final.normal_angle_deg && std::isfinite(*final.normal_angle_deg)) {
                 report_file << "Normal angle (deg): " << *final.normal_angle_deg << "\n";
             }
@@ -616,6 +619,8 @@ namespace lfs::training {
         result.iteration = iteration;
 
         std::vector<float> psnr_values, ssim_values, normal_values, depth_values;
+        std::vector<float> bias_r_values, bias_g_values, bias_b_values;
+        std::vector<float> bias_corr_r_values, bias_corr_g_values, bias_corr_b_values;
         const auto start_time = std::chrono::steady_clock::now();
 
         // Create directory for evaluation images
@@ -686,6 +691,9 @@ namespace lfs::training {
                 r_output = fast_rasterize(*cam, splatData_mutable, background,
                                           _params.optimization.mip_filter, {}, render_normal);
             }
+            const auto render_raw = r_output.image.is_valid()
+                                        ? r_output.image.clamp(0.0f, 1.0f)
+                                        : lfs::core::Tensor{};
             if (appearance_ && r_output.image.is_valid()) {
                 r_output.image = appearance_(r_output.image, *cam);
             }
@@ -712,6 +720,25 @@ namespace lfs::training {
             psnr_values.push_back(psnr);
             ssim_values.push_back(ssim);
             evaluated_images++;
+
+            const auto gt_float = image_as_float01(gt_image).clamp(0.0f, 1.0f);
+            auto accumulate_bias = [&](const lfs::core::Tensor& image,
+                                       std::vector<float>& br,
+                                       std::vector<float>& bg,
+                                       std::vector<float>& bb) {
+                if (!image.is_valid() || image.shape() != gt_float.shape() ||
+                    image.ndim() != 3 || image.shape()[0] != 3) {
+                    return;
+                }
+                const auto channel_mean = (image - gt_float).mean({1, 2});
+                const auto channel_cpu = channel_mean.cpu().contiguous();
+                const float* const bias = channel_cpu.ptr<float>();
+                br.push_back(bias[0]);
+                bg.push_back(bias[1]);
+                bb.push_back(bias[2]);
+            };
+            accumulate_bias(render_raw, bias_r_values, bias_g_values, bias_b_values);
+            accumulate_bias(r_output.image, bias_corr_r_values, bias_corr_g_values, bias_corr_b_values);
 
             try {
                 if (render_normal && cam->has_normal()) {
@@ -844,6 +871,18 @@ namespace lfs::training {
         if (!psnr_values.empty()) {
             result.psnr = std::accumulate(psnr_values.begin(), psnr_values.end(), 0.0f) / psnr_values.size();
             result.ssim = std::accumulate(ssim_values.begin(), ssim_values.end(), 0.0f) / ssim_values.size();
+        }
+        if (!bias_r_values.empty()) {
+            const auto n = static_cast<float>(bias_r_values.size());
+            result.bias_r = std::accumulate(bias_r_values.begin(), bias_r_values.end(), 0.0f) / n;
+            result.bias_g = std::accumulate(bias_g_values.begin(), bias_g_values.end(), 0.0f) / n;
+            result.bias_b = std::accumulate(bias_b_values.begin(), bias_b_values.end(), 0.0f) / n;
+        }
+        if (!bias_corr_r_values.empty()) {
+            const auto n = static_cast<float>(bias_corr_r_values.size());
+            result.bias_corr_r = std::accumulate(bias_corr_r_values.begin(), bias_corr_r_values.end(), 0.0f) / n;
+            result.bias_corr_g = std::accumulate(bias_corr_g_values.begin(), bias_corr_g_values.end(), 0.0f) / n;
+            result.bias_corr_b = std::accumulate(bias_corr_b_values.begin(), bias_corr_b_values.end(), 0.0f) / n;
         }
         result.normal_angle_deg = mean_of_finite(normal_values);
         result.depth_absrel = mean_of_finite(depth_values);
