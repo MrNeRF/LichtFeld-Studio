@@ -127,6 +127,12 @@ namespace lfs::python {
               "Return whether Scene Graph selection markers are visible");
         m.def("set_scene_graph_selection_markers", &lfs::vis::saveSceneGraphSelectionMarkersPreference,
               nb::arg("enabled"), "Show or hide Scene Graph selection markers");
+        m.def("get_progress_bar_style", &lfs::vis::loadProgressBarStylePreference,
+              "Return the status bar progress style (classic or minecraft)");
+        m.def(
+            "set_progress_bar_style",
+            [](const std::string& style) { lfs::vis::saveProgressBarStylePreference(style); },
+            nb::arg("style"), "Set the status bar progress style (classic or minecraft)");
     }
 
 } // namespace lfs::python

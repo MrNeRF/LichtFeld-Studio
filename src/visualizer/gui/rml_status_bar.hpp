@@ -9,6 +9,7 @@
 #include "gui/gpu_memory_query.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
+#include "gui/status_bar_mining.hpp"
 #include "visualizer/visualizer.hpp"
 #include <RmlUi/Core/DataModelHandle.h>
 #include <chrono>
@@ -73,6 +74,10 @@ namespace lfs::vis::gui {
                     int screen_w, int screen_h);
         void renderCached(const PanelDrawContext& ctx, float x, float y, float w, float h,
                           int screen_w, int screen_h);
+        [[nodiscard]] LFS_VIS_API bool animationFrameDue(
+            std::chrono::steady_clock::time_point now) const;
+        [[nodiscard]] LFS_VIS_API std::optional<double> secondsUntilAnimationFrame(
+            std::chrono::steady_clock::time_point now) const;
         void processInput(const PanelInputState& input, float bar_x, float bar_y,
                           float bar_w, float bar_h);
         [[nodiscard]] LFS_VIS_API float overlayHeight() const;
@@ -106,6 +111,10 @@ namespace lfs::vis::gui {
         void setModelString(const char* name, std::string& field, std::string value);
         void setModelBool(const char* name, bool& field, bool value);
         void setProgressMarkersRml(std::string value);
+        void setProgressWallRml(std::string value);
+        void setProgressDebrisRml(std::string value);
+        void updateMiningScene(float progress, std::chrono::steady_clock::time_point now,
+                               bool paused);
         std::optional<ProgressBarGeometry> progressBarGeometry() const;
         void resetSaveStepInteraction();
         std::optional<size_t> hitSaveStep(float local_x, float local_y,
@@ -166,13 +175,43 @@ namespace lfs::vis::gui {
 
         SaveStepInteractionState save_step_interaction_;
 
+        struct MiningSceneState {
+            float bar_dp = -1.0f;
+            int block_count = -1;
+            int current_block = -1;
+            int crack_stage = -1;
+            std::vector<mining::MiningParticle> particles;
+            std::chrono::steady_clock::time_point last_step{};
+            std::chrono::steady_clock::time_point pause_started{};
+            int prev_pause_ms = -1;
+            bool strike_was_active = false;
+            uint32_t strike_seed = 0;
+        };
+        MiningSceneState mining_scene_;
+        std::string mining_wall_rml_;
+        std::string mining_debris_rml_;
+        bool progress_minecraft_pref_ = false;
+        std::chrono::steady_clock::time_point progress_style_checked_at_{};
+
         struct ModelState {
             bool safe_mode = false;
             std::string safe_mode_text;
             std::string mode_text;
             std::string mode_color;
             bool show_training = false;
+            bool progress_minecraft = false;
+            bool miner_raised = false;
+            bool miner_step_a = false;
+            bool miner_strike = false;
+            bool miner_step_b = false;
+            bool miner_smoke_1 = false;
+            bool miner_smoke_2 = false;
+            bool miner_smoke_3 = false;
+            bool miner_smoke_4 = false;
+            bool miner_smoke_5 = false;
+            bool miner_smoke_6 = false;
             std::string progress_width = "0%";
+            std::string progress_text_left = "0dp";
             std::string progress_text;
             std::string progress_markers_rml;
             std::string step_label;
@@ -259,6 +298,7 @@ namespace lfs::vis::gui {
         static constexpr auto kIdleRefreshInterval = std::chrono::milliseconds(200);
         static constexpr auto kBusyRefreshInterval = std::chrono::milliseconds(100);
         static constexpr auto kAnimatedRefreshInterval = std::chrono::milliseconds(16);
+        static constexpr auto kMiningRefreshInterval = std::chrono::milliseconds(33);
         static constexpr auto kGpuRefreshInterval = std::chrono::milliseconds(500);
     };
 

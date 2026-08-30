@@ -823,7 +823,7 @@ namespace lfs::app {
                                 rebound.error()));
                         return 1;
                     }
-                    export_final_splats(*trainer, *params);
+                    training::export_final_splats(*trainer, *params);
                     trainer->shutdown();
                     static_cast<void>(
                         trainer.release());
@@ -871,7 +871,7 @@ namespace lfs::app {
                         }
                         return 1;
                     }
-                    export_final_splats(*trainer, *params);
+                    training::export_final_splats(*trainer, *params);
                     trainer->shutdown();
                     static_cast<void>(trainer.release());
                 } else {
@@ -917,7 +917,7 @@ namespace lfs::app {
                         }
                         return 1;
                     }
-                    export_final_splats(*trainer, *params);
+                    training::export_final_splats(*trainer, *params);
                     trainer->shutdown();
                     static_cast<void>(trainer.release());
                 }

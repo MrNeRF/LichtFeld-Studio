@@ -247,12 +247,53 @@ body {
     width: 0%;
 }
 
+#progress-wall,
+#progress-debris {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+#progress-debris {
+    z-index: 2;
+}
+
+.wall-block {
+    position: absolute;
+    top: 0;
+    width: 16dp;
+    height: 16dp;
+    pointer-events: none;
+}
+
 #progress-markers {
     position: absolute;
     left: 0;
     top: 0;
     width: 100%;
     height: 100%;
+}
+
+.progress-figure {
+    position: absolute;
+    top: 1dp;
+    width: 14dp;
+    height: 15dp;
+    margin-left: -4dp;
+    pointer-events: none;
+    z-index: 2;
+}
+
+.progress-figure.smoke {
+    width: 18dp;
+}
+
+.mining-particle {
+    position: absolute;
+    pointer-events: none;
 }
 
 .progress-marker {
@@ -273,6 +314,25 @@ body {
     margin-left: -4dp;
 }
 
+#progress-container.minecraft .progress-marker {
+    top: 2dp;
+    width: 12dp;
+    height: 12dp;
+    margin-left: -6dp;
+    bottom: auto;
+    border-radius: 0;
+    background-color: transparent;
+}
+
+#progress-container.minecraft .progress-marker.is-hovered,
+#progress-container.minecraft .progress-marker.is-preview {
+    top: 1dp;
+    width: 14dp;
+    height: 14dp;
+    margin-left: -7dp;
+    bottom: auto;
+}
+
 #progress-text {
     position: absolute;
     left: 0;
@@ -281,6 +341,12 @@ body {
     height: 100%;
     text-align: center;
     line-height: 16dp;
+    z-index: 1;
+}
+
+#progress-text.progress-text--minecraft {
+    width: auto;
+    text-align: left;
 }
 
 #account-chip {

@@ -6,6 +6,7 @@
 
 #include "core/argument_parser.hpp"
 #include "core/optimization_properties.hpp"
+#include "core/parameter_manager.hpp"
 #include "core/parameters.hpp"
 #include "core/property_registry.hpp"
 #include "io/project_path.hpp"
@@ -349,6 +350,39 @@ TEST(ArgumentParserMetadataTest, BuiltHelpContainsRegistryDescriptionsAndDefault
         EXPECT_NE(help.find(meta->description), std::string::npos);
         EXPECT_NE(help.find("(default: "), std::string::npos);
     }
+}
+
+TEST(ArgumentParserTest, CliOutputPathSetsExplicitAndSurvivesCreateForDataset) {
+    const auto data_path = make_test_path("lfs_arg_parser_cli_output_data");
+    const auto output_path = make_test_path("lfs_arg_parser_cli_output_out");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "-d",
+        data_path.c_str(),
+        "-o",
+        output_path.c_str(),
+        "--export",
+        "ply",
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->dataset.output_path_explicit);
+    EXPECT_EQ((*parsed)->dataset.output_path, std::filesystem::path(output_path));
+    ASSERT_EQ((*parsed)->export_formats.size(), 1u);
+    EXPECT_EQ((*parsed)->export_formats.front(), lfs::core::param::OutputFormat::PLY);
+
+    lfs::vis::ParameterManager manager;
+    const auto load_result = manager.ensureLoaded();
+    ASSERT_TRUE(load_result.has_value()) << load_result.error();
+    manager.setSessionDefaults(**parsed);
+    const auto recreated = manager.createForDataset(
+        "/tmp/override_dataset", "/tmp/override_output");
+    EXPECT_TRUE(recreated.dataset.output_path_explicit);
+    EXPECT_EQ(recreated.dataset.output_path, std::filesystem::path("/tmp/override_output"));
+    ASSERT_EQ(recreated.export_formats.size(), 1u);
+    EXPECT_EQ(recreated.export_formats.front(), lfs::core::param::OutputFormat::PLY);
 }
 
 TEST(ArgumentParserTest, TrainingDefaultsApplyMaxWidthCap) {
@@ -1459,4 +1493,63 @@ TEST(ArgumentParserTest, ResumeConfigKeysPopulateExplicitOverrides) {
     EXPECT_EQ(restored.optimization.eval_steps, std::vector<size_t>({30100}));
     EXPECT_EQ(restored.optimization.save_steps, std::vector<size_t>({30100}));
     EXPECT_EQ(restored.dataset.test_every, 64);
+}
+
+TEST(ArgumentParserTest, ViewModeHonorsMcpPortOverride) {
+    const auto directory = make_test_path("lfs_arg_parser_view_mcp_port");
+    const auto ply = std::filesystem::path(directory) / "some.ply";
+    std::ofstream(ply).put('\n');
+    const auto ply_text = ply.string();
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "-v",
+        ply_text.c_str(),
+        "--mcp-port",
+        "45690",
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_EQ((*parsed)->mcp_port, std::optional<int>(45690));
+}
+
+#ifndef LFS_BUILD_PORTABLE
+TEST(ArgumentParserTest, ViewModeHonorsNoSplash) {
+    const auto directory = make_test_path("lfs_arg_parser_view_no_splash");
+    const auto ply = std::filesystem::path(directory) / "some.ply";
+    std::ofstream(ply).put('\n');
+    const auto ply_text = ply.string();
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "-v",
+        ply_text.c_str(),
+        "--no-splash",
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->optimization.no_splash);
+}
+#endif
+
+TEST(ArgumentParserTest, ViewModeRejectsOutOfRangeMcpPort) {
+    const auto directory = make_test_path("lfs_arg_parser_view_mcp_port_invalid");
+    const auto ply = std::filesystem::path(directory) / "some.ply";
+    std::ofstream(ply).put('\n');
+    const auto ply_text = ply.string();
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "-v",
+        ply_text.c_str(),
+        "--mcp-port",
+        "70000",
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_NE(parsed.error().find("must be between 1 and 65535"),
+              std::string::npos);
 }

@@ -171,6 +171,8 @@ def preferences_panel_module(monkeypatch):
         ),
         set_scene_reconstruction=set_scene_reconstruction,
         reset_scene_reconstruction_preferences=reset_scene_reconstruction_preferences,
+        get_progress_bar_style=lambda: "classic",
+        set_progress_bar_style=lambda *_a, **_k: None,
     )
     lf_stub.keymap = SimpleNamespace(
         ToolMode=IntEnum(

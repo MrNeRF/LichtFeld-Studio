@@ -277,7 +277,8 @@ namespace lfs::vis {
         void reportSceneUpscalerRuntimeSelection(SceneUpscalerSelection selection);
         [[nodiscard]] SceneUpscalerSelection sceneUpscalerRuntimeSelection() const;
 
-        // Toggle orthographic mode, calculating ortho_scale to preserve size at pivot
+        // Entering computes ortho_scale so the view at the pivot matches the current
+        // lens. Leaving ortho keeps the focal length the user set.
         void setOrthographic(bool enabled, float viewport_height, float distance_to_pivot);
 
         float getFovDegrees() const;

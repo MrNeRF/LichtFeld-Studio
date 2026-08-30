@@ -42,6 +42,12 @@ namespace lfs::training {
         const lfs::core::param::TrainingParameters& params,
         const std::filesystem::path& destination = {});
 
+    /// Write `--export` formats next to project.licht after a terminal project
+    /// save. No-op when `params.export_formats` is empty.
+    void export_final_splats(
+        const Trainer& trainer,
+        const lfs::core::param::TrainingParameters& params);
+
     /// Construct + initialize Trainer on the live scene, then stream the
     /// document's CKPT payload via load_checkpoint(istream). Does not clear
     /// the scene and does not install into TrainerManager.
@@ -81,8 +87,9 @@ namespace lfs::training {
     /**
      * @brief Initialize training model from point cloud
      *
-     * Called when training starts. Creates SplatData from the POINTCLOUD node,
-     * optionally filtering by any CropBox attached to the point cloud.
+     * Called when training starts. If a Gaussian-splat init file is set, that
+     * file is loaded as the training model. Otherwise creates SplatData from the
+     * POINTCLOUD node, optionally filtering by any CropBox attached to the point cloud.
      *
      * The POINTCLOUD node is replaced with a SPLAT node containing the initialized model.
      *

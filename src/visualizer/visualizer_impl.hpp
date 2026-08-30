@@ -301,6 +301,8 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_CloseSaveRoutesTrainingSnapshotToLiveDocument_Test;
         friend class VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
         friend class VisualizerImplResetTest_StartTrainingUntitledBindsTempProjectAndStaysUntitled_Test;
+        friend class VisualizerImplResetTest_PrepareTrainingStartProjectSucceedsAfterInitPlyLoad_Test;
+        friend class VisualizerImplResetTest_StartTrainingWithCliOutputPathBindsProjectThere_Test;
         friend class VisualizerImplResetTest_UntitledTrainingSnapshotAdoptionKeepsSessionUntitledAndOutOfMru_Test;
         friend class VisualizerImplResetTest_SaveAsAfterUntitledTrainingMigratesTempIncludingCheckpoint_Test;
         friend class VisualizerImplResetTest_UntitledStartConflictNeverReportsExistingOutputProject_Test;

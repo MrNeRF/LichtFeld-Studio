@@ -416,7 +416,7 @@ namespace lfs::vis {
         EXPECT_EQ(pose.translation, glm::vec3(1.0f, 2.0f, 3.0f));
     }
 
-    TEST_F(RenderingManagerEventsTest, OrthographicTogglePreservesApparentZoomAtPivotInBothDirections) {
+    TEST_F(RenderingManagerEventsTest, OrthographicEnterSetsScaleFromCurrentFocal) {
         RenderingManager manager;
         auto settings = manager.getSettings();
         settings.focal_length_mm = 50.0f;
@@ -433,19 +433,33 @@ namespace lfs::vis {
                                      (2.0f * distance_to_pivot *
                                       std::tan(glm::radians(lfs::rendering::focalLengthToVFov(50.0f)) * 0.5f));
         EXPECT_NEAR(ortho_settings.ortho_scale, expected_scale, 1e-4f);
+    }
 
-        settings = ortho_settings;
-        settings.ortho_scale *= 1.75f;
+    TEST_F(RenderingManagerEventsTest, OrthographicLeaveKeepsFocalLength) {
+        RenderingManager manager;
+        auto settings = manager.getSettings();
+        settings.focal_length_mm = 35.0f;
+        manager.updateSettings(settings);
+
+        constexpr float viewport_height = 900.0f;
+        constexpr float distance_to_pivot = 7.5f;
+
+        manager.setOrthographic(true, viewport_height, distance_to_pivot);
+        manager.setOrthographic(false, viewport_height, distance_to_pivot);
+        const auto after_round_trip = manager.getSettings();
+        ASSERT_FALSE(after_round_trip.orthographic);
+        EXPECT_FLOAT_EQ(after_round_trip.focal_length_mm, 35.0f);
+
+        manager.setOrthographic(true, viewport_height, distance_to_pivot);
+        settings = manager.getSettings();
+        ASSERT_TRUE(settings.orthographic);
+        settings.ortho_scale *= std::pow(1.1f, 20.0f);
         manager.updateSettings(settings);
 
         manager.setOrthographic(false, viewport_height, distance_to_pivot);
-        const auto perspective_settings = manager.getSettings();
-        ASSERT_FALSE(perspective_settings.orthographic);
-
-        const float expected_vfov = glm::degrees(2.0f * std::atan(
-                                                            viewport_height / (2.0f * distance_to_pivot * settings.ortho_scale)));
-        const float expected_focal = lfs::rendering::vFovToFocalLength(expected_vfov);
-        EXPECT_NEAR(perspective_settings.focal_length_mm, expected_focal, 1e-4f);
+        const auto after_zoom = manager.getSettings();
+        ASSERT_FALSE(after_zoom.orthographic);
+        EXPECT_FLOAT_EQ(after_zoom.focal_length_mm, 35.0f);
     }
 
     TEST(SplitViewServiceTest, GtComparisonPlanPreservesGtTextureOrigin) {

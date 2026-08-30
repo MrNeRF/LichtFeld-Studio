@@ -332,6 +332,9 @@ namespace lfs::core {
         struct LFS_CORE_API DatasetConfig {
             std::filesystem::path data_path = "";
             std::filesystem::path output_path = "";
+            // True when -o/--output-path was given on this process's command line.
+            // Runtime-only: to_json, from_json, and PRMS dataset_json omit it.
+            bool output_path_explicit = false;
             std::string output_name = "";
             std::string images = "images";
             int resize_factor = -1;
@@ -452,7 +455,7 @@ namespace lfs::core {
             std::vector<std::filesystem::path> python_scripts;
 
             // Additional final-splat exports written next to project.licht after
-            // headless training completes. Empty = only the .licht project is written.
+            // training completes. Empty = only the .licht project is written.
             std::vector<OutputFormat> export_formats;
 
             // True when --bg-color was provided on the command line.

@@ -107,6 +107,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/vram_hud_overlay.cpp
         gui/perf_sampler.cpp
         gui/rml_status_bar.cpp
+        gui/status_bar_mining.cpp
         gui/gpu_memory_query.cpp
         gui/line_renderer.cpp
         gui/film_strip_renderer.cpp

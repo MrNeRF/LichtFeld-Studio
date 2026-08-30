@@ -19,6 +19,7 @@
 #include "gui/scene_tree_session.hpp"
 #include "gui/string_keys.hpp"
 #include "input/input_controller.hpp"
+#include "io/loader.hpp"
 #include "io/project_chapters.hpp"
 #include "io/project_container.hpp"
 #include "io/project_document.hpp"
@@ -37,6 +38,7 @@
 #include "training/dataset.hpp"
 #include "training/strategies/mcmc.hpp"
 #include "training/trainer.hpp"
+#include "training/training_setup.hpp"
 #include "training/training_state.hpp"
 #include "visualizer/core/data_loading_service.hpp"
 #include "visualizer/include/visualizer/visualizer.hpp"
@@ -8126,6 +8128,7 @@ namespace lfs::vis {
             ASSERT_NE(trainer, nullptr);
             auto params = trainer->getParams();
             params.dataset.output_path = output_path;
+            params.dataset.output_path_explicit = false;
             trainer->setParams(params);
 
             auto prepared =
@@ -8149,6 +8152,154 @@ namespace lfs::vis {
                 lifecycle->document_->source_path()
                     ->lexically_normal());
             EXPECT_FALSE(std::filesystem::exists(
+                output_path / "project.licht"));
+            const auto policy =
+                trainer->trainer_project_save_policy();
+            EXPECT_TRUE(policy.on_completion);
+            EXPECT_TRUE(policy.at_step_boundaries);
+            EXPECT_FALSE(policy.on_stop_or_error);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           PrepareTrainingStartProjectSucceedsAfterInitPlyLoad) {
+        const auto& temporary = temporary_.path;
+        const auto output_path =
+            temporary / "init-ply-train-out";
+        std::filesystem::create_directories(output_path);
+        const auto init_path = temporary / "init_points.ply";
+        {
+            std::ofstream ply(init_path);
+            ASSERT_TRUE(ply.is_open());
+            ply << "ply\n"
+                   "format ascii 1.0\n"
+                   "element vertex 12\n"
+                   "property float x\n"
+                   "property float y\n"
+                   "property float z\n"
+                   "property uchar red\n"
+                   "property uchar green\n"
+                   "property uchar blue\n"
+                   "end_header\n";
+            for (int i = 0; i < 12; ++i) {
+                ply << i << " 0 0 10 20 30\n";
+            }
+        }
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr, viewer.getViewport());
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+
+            lfs::core::param::TrainingParameters params;
+            params.dataset.data_path = temporary / "dataset";
+            params.init_path = lfs::core::path_to_utf8(init_path);
+
+            lfs::io::LoadedScene loaded_scene;
+            loaded_scene.cameras.push_back(
+                make_project_request_test_camera());
+            lfs::io::LoadResult load_result;
+            load_result.data = std::move(loaded_scene);
+            load_result.scene_center =
+                lfs::core::Tensor::from_vector(
+                    std::vector<float>{0.0f, 0.0f, 0.0f},
+                    {size_t{3}},
+                    lfs::core::Device::CPU);
+            load_result.loader_used = "test";
+
+            auto apply_result =
+                lfs::training::applyLoadResultToScene(
+                    params, viewer.getScene(),
+                    std::move(load_result));
+            ASSERT_TRUE(apply_result.has_value())
+                << apply_result.error();
+            EXPECT_EQ(
+                viewer.getScene().getTrainingModel(),
+                nullptr);
+
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<lfs::training::Trainer>(
+                    viewer.getScene()));
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            auto trainer_params = trainer->getParams();
+            trainer_params.dataset.output_path = output_path;
+            trainer->setParams(trainer_params);
+
+            auto prepared =
+                lifecycle->prepareTrainingStartProject();
+            ASSERT_TRUE(prepared)
+                << lfs::format_for_developer(
+                       prepared.error());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           StartTrainingWithCliOutputPathBindsProjectThere) {
+        const auto& temporary = temporary_.path;
+        const auto output_path =
+            temporary / "train-cli-out";
+        std::filesystem::create_directories(output_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_FALSE(lifecycle->hasSourcePath());
+
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<
+                    lfs::training::Trainer>(scene));
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            auto params = trainer->getParams();
+            params.dataset.output_path = output_path;
+            params.dataset.output_path_explicit = true;
+            trainer->setParams(params);
+
+            auto prepared =
+                lifecycle->prepareTrainingStartProject();
+            ASSERT_TRUE(prepared)
+                << lfs::format_for_developer(
+                       prepared.error());
+            EXPECT_TRUE(lifecycle->hasSourcePath());
+            EXPECT_FALSE(lifecycle->isTempProject());
+            const auto expected =
+                std::filesystem::absolute(
+                    output_path / "project.licht")
+                    .lexically_normal();
+            const auto bound =
+                trainer->bound_project_path();
+            ASSERT_TRUE(bound.has_value());
+            EXPECT_EQ(
+                bound->lexically_normal(), expected);
+            ASSERT_TRUE(
+                lifecycle->document_->source_path());
+            EXPECT_EQ(
+                lifecycle->document_->source_path()
+                    ->lexically_normal(),
+                expected);
+            EXPECT_TRUE(std::filesystem::exists(
                 output_path / "project.licht"));
             const auto policy =
                 trainer->trainer_project_save_policy();

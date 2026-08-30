@@ -3461,7 +3461,52 @@ namespace lfs::vis::project {
                 "project.training");
         }
 
-        if (!hasSourcePath()) {
+        const auto dataset = trainer->getParams().dataset;
+        if (dataset.output_path_explicit &&
+            !dataset.output_path.empty()) {
+            std::error_code create_error;
+            std::filesystem::create_directories(
+                dataset.output_path, create_error);
+            if (create_error) {
+                return fail<void>(
+                    lfs::ErrorCode::PermissionDenied,
+                    "The training output folder could not be created.",
+                    create_error.message(),
+                    "project.training");
+            }
+            const auto destination =
+                dataset.output_path / "project.licht";
+            std::error_code abs_error;
+            const auto absolute_destination =
+                std::filesystem::absolute(
+                    destination, abs_error);
+            const bool already_bound_there =
+                !abs_error && hasSourcePath() &&
+                document_ && document_->source_path() &&
+                document_->source_path()
+                        ->lexically_normal() ==
+                    absolute_destination.lexically_normal();
+            if (!already_bound_there) {
+                if (auto saved = saveAs(
+                        destination, false, true);
+                    !saved) {
+                    return saved;
+                }
+                if (project_write_thread_.joinable()) {
+                    project_write_thread_.join();
+                    settleProjectWrite();
+                }
+                if (!hasSourcePath()) {
+                    return fail<void>(
+                        lfs::ErrorCode::Unavailable,
+                        "The training project could not be created.",
+                        last_project_write_error_.empty()
+                            ? "CLI output path first bind did not set a source path"
+                            : last_project_write_error_,
+                        "project.training");
+                }
+            }
+        } else if (!hasSourcePath()) {
             if (auto waited =
                     waitOutBackgroundAutosaveForExplicitSave();
                 !waited) {

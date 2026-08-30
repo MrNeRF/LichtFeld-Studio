@@ -63,7 +63,7 @@ cmake -B build
 cmake --build build -j 16
 ./build/LichtFeld-Studio --help
 
-# Example training run
+# Example training run (writes /path/to/output/project.licht; add --headless and --export ply for a CLI-only splat export)
 ./build/LichtFeld-Studio -d /path/to/data -o /path/to/output
 ```
 
@@ -86,7 +86,7 @@ cmake --install build --prefix ./dist
 
 ./dist/bin/run_lichtfeld.sh --help
 
-# Example training run
+# Example training run (writes /path/to/output/project.licht)
 ./dist/bin/run_lichtfeld.sh -d /path/to/data -o /path/to/output
 
 # Portable package without the NVIDIA plugin:
