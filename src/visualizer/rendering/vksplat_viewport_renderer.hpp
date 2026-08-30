@@ -467,6 +467,10 @@ namespace lfs::vis {
         void detachSharedScratchBuffers();
         void releaseSharedScratchImportOnly();
         void releaseSharedScratchArena();
+        // Called by the training arena after its CUDA/Vulkan release timeline
+        // has drained, before exportable VMM chunks are unmapped.
+        bool prepareSharedScratchForArenaShrink(
+            const std::shared_ptr<lfs::core::ExportableBlock>& block);
         // evict=true: pool entries destroy on drain instead of free-list reuse.
         void releaseOutputSlot(OutputSlot output_slot, bool evict = false);
         // Queues a no-longer-current shared-scratch import for destruction once
@@ -687,7 +691,7 @@ namespace lfs::vis {
             std::size_t bytes = 0;
             // Viewer high-water is measured from offset zero. The trainer arena
             // deliberately reuses that same prefix during its exclusive epoch.
-            std::size_t viewer_high_water_bytes = 0;
+            std::atomic<std::size_t> viewer_high_water_bytes{0};
             std::uint64_t generation = 0;
             bool installed_in_training_arena = false;
         };

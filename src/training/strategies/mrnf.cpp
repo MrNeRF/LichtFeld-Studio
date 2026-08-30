@@ -930,11 +930,6 @@ namespace lfs::training {
                 _densify_n_required_peak_bytes, _densify_n_scratch.required_bytes());
             _densify_n_allocated_peak_bytes = std::max(
                 _densify_n_allocated_peak_bytes, _densify_n_scratch.resident_bytes());
-            _densify_child_required_peak_bytes = std::max(
-                _densify_child_required_peak_bytes, _densify_ws.required_bytes());
-            _densify_child_allocated_peak_bytes = std::max(
-                _densify_child_allocated_peak_bytes, _densify_ws.resident_bytes());
-
             if (publish_live) {
                 publish_required_allocated_pair(
                     profiler, "strategy_peak", _strategy_required_peak_bytes,
@@ -2310,14 +2305,23 @@ namespace lfs::training {
                              _splat_data->shN().is_valid() &&
                              _splat_data->shN().numel() > 0;
 
-        _densify_ws.ensure(K, sh_rest, use_shN, /*sh0_flat_layout=*/false, Device::CUDA);
+        // Child rows are consumed synchronously by the split/fill/append
+        // sequence below. Keep this staging allocation local to the refine
+        // event so its Tensor owners return storage to the CUDA pool before
+        // the next phase; no later refine reads the prior children.
+        DensifyChildWorkspace densify_ws;
+        densify_ws.ensure(K, sh_rest, use_shN, /*sh0_flat_layout=*/false, Device::CUDA);
+        _densify_child_required_peak_bytes = std::max(
+            _densify_child_required_peak_bytes, densify_ws.required_bytes());
+        _densify_child_allocated_peak_bytes = std::max(
+            _densify_child_allocated_peak_bytes, densify_ws.resident_bytes());
         publish_vram_attribution();
-        auto child_means = _densify_ws.means_view(K);
-        auto child_log_scales = _densify_ws.scales_view(K);
-        auto child_raw_opacities = _densify_ws.opacities_view(K);
-        auto child_rotations = _densify_ws.rotations_view(K);
-        auto child_sh0 = _densify_ws.sh0_view(K);
-        Tensor child_shN = use_shN ? _densify_ws.shN_view(K) : Tensor();
+        auto child_means = densify_ws.means_view(K);
+        auto child_log_scales = densify_ws.scales_view(K);
+        auto child_raw_opacities = densify_ws.opacities_view(K);
+        auto child_rotations = densify_ws.rotations_view(K);
+        auto child_sh0 = densify_ws.sh0_view(K);
+        Tensor child_shN = use_shN ? densify_ws.shN_view(K) : Tensor();
 
         // The LAS kernel only needs linear shN to copy child rows. shN itself is unchanged
         // for the parent rows, so keep the resident swizzled buffer in place and gather the

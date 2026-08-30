@@ -281,7 +281,6 @@ namespace lfs::training {
         float _logged_far_starvation = -1.0f;
         lfs::core::Tensor _free_mask;
 
-        DensifyChildWorkspace _densify_ws;
         DensifyNScratch _densify_n_scratch;
         GumbelTopKScratch _gumbel_scratch;
         PositiveMedianScratch _median_scratch;

@@ -3424,18 +3424,51 @@ namespace lfs::vis {
             };
         };
 
+        // Boundary trim runs after the arena has waited on the last Vulkan
+        // release timeline. Drop the current import before closing the export
+        // handles; otherwise NVIDIA may observe a live VkDeviceMemory import
+        // while cuMemUnmap/cuMemRelease tears down a chunk.
+        const auto make_shrink_fn = [this](std::shared_ptr<lfs::core::ExportableBlock> block) {
+            return [this, block = std::move(block)](std::size_t target) -> std::size_t {
+                if (!prepareSharedScratchForArenaShrink(block)) {
+                    return 0;
+                }
+                auto shrunk = lfs::core::shrinkExportableDeviceBlock(block, target);
+                if (!shrunk) {
+                    LOG_WARN("VkSplat shared scratch shrink failed: {}", shrunk.error());
+                    return 0;
+                }
+                shared_scratch_.bytes = block->committedPrefixBytes();
+                ++shared_scratch_.generation;
+                auto& profiler = lfs::diagnostics::VramProfiler::instance();
+                profiler.setGauge("vram.audit.shared_scratch.capacity",
+                                  static_cast<double>(shared_scratch_.bytes));
+                profiler.setSharedScratchBytes(shared_scratch_.bytes);
+                return shared_scratch_.bytes;
+            };
+        };
+        const auto make_minimum_size_fn = [this]() -> std::size_t {
+            return shared_scratch_.viewer_high_water_bytes.load(std::memory_order_acquire);
+        };
+
+        const auto make_external_backing = [&](const std::shared_ptr<lfs::core::ExportableBlock>& block) {
+            return lfs::core::RasterizerMemoryArena::ExternalBacking{
+                .device_ptr = block->device_ptr,
+                .size = block->committedPrefixBytes(),
+                .device = device,
+                .owner = std::shared_ptr<void>(block),
+                .label = "vksplat.shared_scratch",
+                .grow = make_grow_fn(block),
+                .shrink = make_shrink_fn(block),
+                .minimum_size = make_minimum_size_fn,
+            };
+        };
+
         const auto try_install_existing = [&]() -> bool {
             if (!shared_scratch_.block) {
                 return false;
             }
-            lfs::core::RasterizerMemoryArena::ExternalBacking backing{
-                .device_ptr = shared_scratch_.block->device_ptr,
-                .size = shared_scratch_.block->committedPrefixBytes(),
-                .device = device,
-                .owner = std::shared_ptr<void>(shared_scratch_.block),
-                .label = "vksplat.shared_scratch",
-                .grow = make_grow_fn(shared_scratch_.block),
-            };
+            auto backing = make_external_backing(shared_scratch_.block);
             return lfs::core::GlobalArenaManager::instance().try_install_external_backing(std::move(backing));
         };
 
@@ -3544,14 +3577,7 @@ namespace lfs::vis {
                                                context.lastError()));
         }
 
-        lfs::core::RasterizerMemoryArena::ExternalBacking backing{
-            .device_ptr = (*block_result)->device_ptr,
-            .size = (*block_result)->committedPrefixBytes(),
-            .device = device,
-            .owner = std::shared_ptr<void>(*block_result),
-            .label = "vksplat.shared_scratch",
-            .grow = make_grow_fn(*block_result),
-        };
+        auto backing = make_external_backing(*block_result);
         if (!lfs::core::GlobalArenaManager::instance().try_install_external_backing(std::move(backing))) {
             context.destroyExternalBuffer(imported);
             return std::unexpected("VkSplat shared scratch training rasterizer arena is busy");
@@ -3766,9 +3792,18 @@ namespace lfs::vis {
         // The viewer is the first occupant of the shared block in this epoch.
         // Its high-water starts at the same byte zero where a FastGS frame
         // starts; it must never be appended after the arena's high-water.
-        shared_scratch_.viewer_high_water_bytes = cursor;
+        std::size_t viewer_high_water =
+            shared_scratch_.viewer_high_water_bytes.load(std::memory_order_relaxed);
+        while (viewer_high_water < cursor &&
+               !shared_scratch_.viewer_high_water_bytes.compare_exchange_weak(
+                   viewer_high_water, cursor,
+                   std::memory_order_release,
+                   std::memory_order_relaxed)) {
+        }
+        viewer_high_water =
+            shared_scratch_.viewer_high_water_bytes.load(std::memory_order_acquire);
         LFS_DEBUG_ASSERT_MSG(
-            shared_scratch_.viewer_high_water_bytes <= shared_scratch_.bytes,
+            viewer_high_water <= shared_scratch_.bytes,
             "viewer shared-scratch high-water exceeds the committed shared block");
 
         // Attribute the committed arena exactly: each region's span comes straight from
@@ -3961,6 +3996,30 @@ namespace lfs::vis {
         drainRetiredScratchBuffers(false);
     }
 
+    bool VksplatViewportRenderer::prepareSharedScratchForArenaShrink(
+        const std::shared_ptr<lfs::core::ExportableBlock>& block) {
+        std::lock_guard<std::mutex> readback_lock(readback_mutex_);
+        if (!shared_scratch_.block || shared_scratch_.block != block) {
+            return false;
+        }
+
+        // The arena has already waited on the external release semaphore. Keep
+        // this independent timeline check as a fail-closed guard for callers
+        // that reach the callback through a future boundary path.
+        if (!renderTimelineValueRetired(last_submitted_render_value_)) {
+            return false;
+        }
+
+        detachSharedScratchBuffers();
+        if (shared_scratch_.imported_buffer.buffer != VK_NULL_HANDLE) {
+            if (context_ == nullptr) {
+                return false;
+            }
+            context_->destroyExternalBuffer(shared_scratch_.imported_buffer);
+        }
+        return true;
+    }
+
     void VksplatViewportRenderer::releaseSharedScratchImportOnly() {
         detachSharedScratchBuffers();
         if (shared_scratch_.imported_buffer.buffer != VK_NULL_HANDLE) {
@@ -3973,7 +4032,12 @@ namespace lfs::vis {
             profiler.setGauge("vram.audit.shared_scratch.vksplat_view_bytes", 0.0);
             profiler.setSharedScratchBytes(0);
         }
-        shared_scratch_ = {};
+        shared_scratch_.block.reset();
+        shared_scratch_.imported_buffer = {};
+        shared_scratch_.bytes = 0;
+        shared_scratch_.viewer_high_water_bytes.store(0, std::memory_order_release);
+        shared_scratch_.generation = 0;
+        shared_scratch_.installed_in_training_arena = false;
     }
 
     void VksplatViewportRenderer::releaseSharedScratchArena() {

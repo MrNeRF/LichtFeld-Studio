@@ -85,6 +85,16 @@ namespace lfs::core {
             // outgrows the current capacity. Optional; if unset the arena cannot
             // grow and an over-capacity request fails.
             std::function<size_t(size_t)> grow;
+            // Shrinks the committed physical prefix toward the requested size
+            // in place. The callback must decommit only whole VMM granules and
+            // return the resulting committed prefix, or 0 on failure. It runs
+            // after the arena has drained CUDA and any registered external
+            // release timeline. Importers of the backing must be retired by
+            // the callback before its physical handles are unmapped.
+            std::function<size_t(size_t)> shrink;
+            // Minimum prefix that must remain committed for a peer consumer
+            // (for example the viewer's shared-scratch high-water).
+            std::function<size_t()> minimum_size;
 
             [[nodiscard]] bool valid() const noexcept {
                 return device_ptr != nullptr && size > 0 && device >= 0 && static_cast<bool>(owner);
@@ -115,6 +125,8 @@ namespace lfs::core {
             std::shared_ptr<void> external_owner;
             std::string external_label;
             std::function<size_t(size_t)> external_grow;
+            std::function<size_t(size_t)> external_shrink;
+            std::function<size_t()> external_minimum_size;
             std::atomic<size_t> offset{0}; // Current allocation offset
             size_t capacity = 0;           // Same as committed_size for compatibility
             uint64_t generation = 0;
@@ -308,7 +320,7 @@ namespace lfs::core {
         size_t align_size(size_t size) const;
         void record_allocation(uint64_t frame_id, const BufferHandle& handle);
         bool commit_more_memory(Arena& arena, size_t required_size, uint64_t frame_id);
-        void decommit_unused_memory(Arena& arena);
+        void decommit_unused_memory(Arena& arena, bool release_all = false);
         bool shrink_at_boundary(bool release_all);
         void record_commit_timing(uint64_t frame_id, uint64_t elapsed_us, bool committed);
         void record_growth_path_timing(uint64_t frame_id, uint64_t elapsed_us,

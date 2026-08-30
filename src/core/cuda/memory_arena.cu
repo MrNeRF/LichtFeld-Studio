@@ -760,6 +760,8 @@ namespace lfs::core {
         arena.external_owner.reset();
         arena.external_label.clear();
         arena.external_grow = nullptr;
+        arena.external_shrink = nullptr;
+        arena.external_minimum_size = nullptr;
         arena.committed_size = 0;
         arena.capacity = 0;
         arena.offset.store(0, std::memory_order_release);
@@ -817,7 +819,7 @@ namespace lfs::core {
                     if (device_drained) {
                         arena->offset.store(0, std::memory_order_release);
                         try {
-                            decommit_unused_memory(*arena);
+                            decommit_unused_memory(*arena, true);
                         } catch (const std::exception& e) {
                             LOG_ERROR("RasterizerMemoryArena full_reset decommit failed "
                                       "(continuing teardown): {}",
@@ -931,6 +933,8 @@ namespace lfs::core {
         arena.external_owner = std::move(backing.owner);
         arena.external_label = std::move(backing.label);
         arena.external_grow = std::move(backing.grow);
+        arena.external_shrink = std::move(backing.shrink);
+        arena.external_minimum_size = std::move(backing.minimum_size);
         arena.committed_size = backing.size;
         arena.capacity = backing.size;
         arena.granularity = std::max(config_.alignment, config_.granularity);
@@ -1324,11 +1328,13 @@ namespace lfs::core {
         return true;
     }
 
-    void RasterizerMemoryArena::decommit_unused_memory(Arena& arena) {
+    void RasterizerMemoryArena::decommit_unused_memory(Arena& arena, const bool release_all) {
         // Called with arena_mutex_ held
         // The caller must additionally own the global frame gate and have
         // synchronized the device. cuMemUnmap/cudaFree are not stream ordered.
         const size_t current_offset = arena.offset.load(std::memory_order_acquire);
+        const size_t recent_peak = arena.peak_usage.load(std::memory_order_acquire);
+        const size_t granularity = std::max<size_t>(arena.granularity, 1);
         const auto reset_logical_peak = [&arena, current_offset]() {
             size_t lifetime_peak = arena.lifetime_peak_usage.load(std::memory_order_relaxed);
             while (current_offset > lifetime_peak) {
@@ -1341,6 +1347,41 @@ namespace lfs::core {
         };
 
         if (arena.external_backing) {
+            // External shared scratch has a second tenant (the viewer). Keep
+            // one growth granule above the larger recent trainer peak and
+            // peer high-water. The arena's timeline drain happens in
+            // shrink_at_boundary() before this callback is reached.
+            const size_t viewer_high_water = arena.external_minimum_size
+                                                 ? arena.external_minimum_size()
+                                                 : 0;
+            const size_t tenant_high_water = release_all
+                                                 ? viewer_high_water
+                                                 : std::max(recent_peak, viewer_high_water);
+            const size_t with_headroom =
+                tenant_high_water > std::numeric_limits<size_t>::max() - granularity
+                    ? std::numeric_limits<size_t>::max()
+                    : tenant_high_water + granularity;
+            const size_t desired_size = align_up(with_headroom, granularity);
+            if (arena.external_shrink && desired_size != 0 && desired_size < arena.committed_size) {
+                const size_t old_size = arena.committed_size;
+                const size_t shrunk_size = arena.external_shrink(desired_size);
+                if (shrunk_size != 0 && shrunk_size <= old_size) {
+                    arena.committed_size = shrunk_size;
+                    arena.capacity = shrunk_size;
+                    LOG_DEBUG("Shrank external arena '{}' from {} MiB to {} MiB "
+                              "(trainer_peak={} MiB, viewer_high_water={} MiB)",
+                              arena.external_label.empty() ? "unnamed" : arena.external_label.c_str(),
+                              old_size >> 20,
+                              shrunk_size >> 20,
+                              recent_peak >> 20,
+                              viewer_high_water >> 20);
+                } else if (shrunk_size != 0) {
+                    LOG_WARN("External arena '{}' shrink returned invalid size {} MiB (old {} MiB)",
+                             arena.external_label.empty() ? "unnamed" : arena.external_label.c_str(),
+                             shrunk_size >> 20,
+                             old_size >> 20);
+                }
+            }
             reset_logical_peak();
             return;
         }
@@ -1368,12 +1409,20 @@ namespace lfs::core {
             return;
         }
 
+        const size_t retained_floor = release_all
+                                          ? 0
+                                          : align_up(
+                                                recent_peak > std::numeric_limits<size_t>::max() - granularity
+                                                    ? std::numeric_limits<size_t>::max()
+                                                    : recent_peak + granularity,
+                                                granularity);
+
         std::lock_guard<std::mutex> chunk_lock(arena.chunks_mutex);
         size_t total_freed = 0;
         size_t chunks_removed = 0;
         while (!arena.chunks.empty()) {
             auto& chunk = arena.chunks.back();
-            if (chunk.offset < current_offset) {
+            if (chunk.offset < retained_floor) {
                 break;
             }
             if (chunk.is_mapped) {
@@ -1539,7 +1588,7 @@ namespace lfs::core {
                 if (release_all) {
                     arena_ptr->offset.store(0, std::memory_order_release);
                 }
-                decommit_unused_memory(*arena_ptr);
+                decommit_unused_memory(*arena_ptr, release_all);
             }
         }
 

@@ -543,4 +543,52 @@ namespace lfs::core {
         return block->chunks.size() > chunks_before;
     }
 
+    std::expected<bool, std::string>
+    shrinkExportableDeviceBlock(const std::shared_ptr<ExportableBlock>& block, std::size_t new_size) {
+        if (!block || !block->state) {
+            return std::unexpected("shrinkExportableDeviceBlock: null block");
+        }
+        auto* owned = static_cast<OwnedAllocation*>(block->state.get());
+        if (owned->granularity == 0) {
+            return std::unexpected("shrinkExportableDeviceBlock: invalid granularity");
+        }
+
+        const std::size_t prefix = block->committedPrefixBytes();
+        const std::size_t aligned_new = align_down(new_size, owned->granularity);
+        if (aligned_new >= prefix) {
+            return false;
+        }
+
+        LFS_CUDA_BREADCRUMB("exportable.cudaSetDevice.shrink");
+        if (const auto err = cudaSetDevice(owned->device); err != cudaSuccess) {
+            return std::unexpected(std::format("cudaSetDevice({}) failed: {}",
+                                               owned->device,
+                                               cudaGetErrorString(err)));
+        }
+
+        // Chunks are sorted and each is a whole allocation-granularity unit.
+        // A chunk crossing the requested floor is retained in full; this makes
+        // the resulting prefix conservative without ever partially unmapping a
+        // VMM allocation.
+        auto first_removed = std::lower_bound(
+            owned->slices.begin(), owned->slices.end(), aligned_new,
+            [](const CommittedSlice& slice, const std::size_t offset) {
+                return slice.offset < offset;
+            });
+        if (first_removed == owned->slices.end()) {
+            return false;
+        }
+
+        while (first_removed != owned->slices.end()) {
+            release_slice(*owned, *first_removed);
+            first_removed = owned->slices.erase(first_removed);
+        }
+
+        publish_chunks(*block, *owned);
+        LOG_DEBUG("Exportable CUDA block shrunk: committed={} MiB chunks={} (stable VA)",
+                  block->committed_bytes >> 20,
+                  block->chunks.size());
+        return true;
+    }
+
 } // namespace lfs::core
