@@ -49,7 +49,7 @@
     line-height: 18dp;
 }
 
-.mp-warning-note {
+.mp-intro > .mp-warning-note {
     display: block;
     padding: 6dp 8dp;
     border-left-width: 2dp;
@@ -220,6 +220,12 @@
 
 .mp-formats-label {
     font-size: 12dp;
+}
+
+#formats-content.section-content {
+    margin: 0;
+    padding: 0;
+    border-width: 0;
 }
 
 .mp-format-item {
@@ -456,6 +462,7 @@
 /* Panel rules are loaded after the shared .hidden utility, so keep the
  * visibility contract explicit for elements that have their own display mode. */
 .mp-empty-state.hidden,
+.card-grid.hidden,
 .card-feedback.hidden,
 .card-progress.hidden,
 .card-progress-text.hidden,

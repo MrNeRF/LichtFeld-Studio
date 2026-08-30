@@ -8,6 +8,9 @@
 
 .mp-warning-note {
     color: @{warning};
+}
+
+.mp-intro > .mp-warning-note {
     background-color: @{alpha(warning,0.10)};
     border-left-color: @{warning};
 }

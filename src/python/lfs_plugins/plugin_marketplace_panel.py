@@ -118,6 +118,7 @@ class PluginMarketplacePanel(Panel):
         self._view_mode = _VIEW_MODE_LIST
         self._last_lang = ""
         self._last_grid_signature: Optional[Tuple] = None
+        self._last_catalog_status_signature: Optional[Tuple[str, str]] = None
         self._escape_revert = w.EscapeRevertController()
         self._reactive_unsubscribers = []
         self._model_update_scheduled = False
@@ -193,6 +194,7 @@ class PluginMarketplacePanel(Panel):
         self._entries_dirty = True
         self._last_card_phases.clear()
         self._last_grid_signature = None
+        self._last_catalog_status_signature = None
         self._stable_layout_width = None
         self._escape_revert.clear()
 
@@ -564,13 +566,14 @@ class PluginMarketplacePanel(Panel):
     def _grid_viewport_width(self, doc, grid_el) -> int:
         # The grid and the manual-install section are siblings in #main-area;
         # measuring the grid itself keeps their outer edges identical.
+        dp_ratio = max(1.0, float(lf.ui.get_ui_scale() or 1.0))
         for element in (
             grid_el,
             doc.get_element_by_id("main-area"),
             doc.get_element_by_id("content"),
         ):
             if element and getattr(element, "client_width", 0):
-                return int(max(0.0, float(element.client_width or 0.0)))
+                return int(max(0.0, float(element.client_width or 0.0) / dp_ratio))
         return 0
 
     def _compute_grid_layout(self, width: int) -> Tuple[int, int]:
@@ -641,7 +644,7 @@ class PluginMarketplacePanel(Panel):
         )
         metrics_span = text_span(
             "has_metrics",
-            f'<span class="card-metrics mp-warning-text">{esc("metrics_text")}</span>',
+            f'<span class="card-metrics mp-warning-note">{esc("metrics_text")}</span>',
         )
         tags_span = text_span(
             "has_tags",
@@ -717,7 +720,7 @@ class PluginMarketplacePanel(Panel):
             else:
                 detail_meta_parts.append(f'<span class="plugin-list-meta-item text-disabled">{esc("repo_label")}</span>')
         if record.get("has_metrics"):
-            detail_meta_parts.append(f'<span class="plugin-list-meta-item mp-warning-text">{esc("metrics_text")}</span>')
+            detail_meta_parts.append(f'<span class="plugin-list-meta-item mp-warning-note">{esc("metrics_text")}</span>')
         if record.get("has_tags"):
             detail_meta_parts.append(f'<span class="plugin-list-meta-item text-disabled">{esc("tags_text")}</span>')
         if record.get("is_local"):
@@ -972,6 +975,11 @@ class PluginMarketplacePanel(Panel):
             text = localized_count("plugin_marketplace.registry_unavailable", entry_count)
             tone = "status-warning"
 
+        signature = (text, tone)
+        if signature == self._last_catalog_status_signature:
+            return
+        self._last_catalog_status_signature = signature
+
         status_el.set_text(text)
         status_el.set_class("status-info", tone == "status-info")
         status_el.set_class("status-success", tone == "status-success")
@@ -1209,10 +1217,19 @@ class PluginMarketplacePanel(Panel):
         list_btn = doc.get_element_by_id("view-list-btn")
         if cards_btn:
             cards_btn.set_class("selected", self._view_mode == _VIEW_MODE_CARD)
-            cards_btn.set_attribute("title", tr("plugin_marketplace.view.grid"))
+            self._set_attribute_if_changed(
+                cards_btn, "title", tr("plugin_marketplace.view.grid")
+            )
         if list_btn:
             list_btn.set_class("selected", self._view_mode == _VIEW_MODE_LIST)
-            list_btn.set_attribute("title", tr("plugin_marketplace.view.list"))
+            self._set_attribute_if_changed(
+                list_btn, "title", tr("plugin_marketplace.view.list")
+            )
+
+    @staticmethod
+    def _set_attribute_if_changed(element, name: str, value: str):
+        if element.get_attribute(name, "") != value:
+            element.set_attribute(name, value)
 
     def _is_list_row_expanded(self, card_id: str) -> bool:
         if card_id in self._expanded_list_rows:
