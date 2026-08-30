@@ -135,7 +135,9 @@ projects, and removing a mapping never deletes the directory or project files.
 
 Untitled crash files and untitled training snapshots live in
 `<working folder>/tmp/<session-uuid>.licht`, not under `dataset.output_path`.
-The temp directory is created lazily on first scratch write. Changing the
+An explicit CLI `-o` / `--output-path` is different: training binds a titled
+`<output_path>/project.licht` instead of the untitled temp file. The temp
+directory is created lazily on first scratch write. Changing the
 working folder applies to the next untitled session (New Project or restart);
 a live session keeps the temp file it already bound. Cache, logs, plugins,
 the venv, and ONNX models stay on the unified root and do not follow the

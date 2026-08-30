@@ -454,6 +454,7 @@ namespace {
                 "\n"
                 "EXAMPLES:\n"
                 "lichtfeld-studio -d ./data -o ./output\n"
+                "lichtfeld-studio --headless -d ./data -o ./output --export ply\n"
                 "lichtfeld-studio -v session.licht\n"
                 "lichtfeld-studio --headless --resume session.licht\n"
                 "lichtfeld-studio -d ./data -o ./output --save-project-at-iter 7000\n"
@@ -486,7 +487,7 @@ namespace {
             ::args::Group paths_sep(parser, " ");
             ::args::Group paths_group(parser, "TRAINING PATHS:");
             ::args::ValueFlag<std::string> data_path(paths_group, "data_path", "Path to training data", {'d', "data-path"});
-            ::args::ValueFlag<std::string> output_path(paths_group, "output_path", "Path to output", {'o', "output-path"});
+            ::args::ValueFlag<std::string> output_path(paths_group, "output_path", "Directory for project.licht and --export files", {'o', "output-path"});
             ::args::ValueFlag<std::string> output_name(paths_group, "output_name", "Output filename (replaces default splat_ITER.ply stem)", {"output-name"});
             ::args::ValueFlag<std::string> config_file(paths_group, "config_file", "LichtFeldStudio config file (json)", {"config"});
             ::args::ValueFlag<std::string> init_path(paths_group, "path", "Initialize from splat file (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume)", {"init"});
@@ -1260,6 +1261,7 @@ namespace {
                                             cli_option_present({"--save-project-path"})
                                                 ? std::optional<std::string>(::args::get(save_project_path))
                                                 : std::optional<std::string>(),
+                                        output_path_explicit_val = cli_option_present({"-o", "--output-path"}),
                                         output_name_val = cli_option_present({"--output-name"}) ? std::optional<std::string>(::args::get(output_name)) : std::optional<std::string>()]() {
                 auto& opt = params.optimization;
                 auto& svs = params.server;
@@ -1322,6 +1324,7 @@ namespace {
                 setVal(timelapse_images_val, ds.timelapse_images);
                 setVal(timelapse_every_val, ds.timelapse_every);
                 setVal(output_name_val, ds.output_name);
+                ds.output_path_explicit = output_path_explicit_val;
                 if (save_project_at_iteration_val) {
                     params.save_project_at_iteration =
                         static_cast<size_t>(*save_project_at_iteration_val);

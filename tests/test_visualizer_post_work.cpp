@@ -8128,6 +8128,7 @@ namespace lfs::vis {
             ASSERT_NE(trainer, nullptr);
             auto params = trainer->getParams();
             params.dataset.output_path = output_path;
+            params.dataset.output_path_explicit = false;
             trainer->setParams(params);
 
             auto prepared =
@@ -8237,6 +8238,74 @@ namespace lfs::vis {
             ASSERT_TRUE(prepared)
                 << lfs::format_for_developer(
                        prepared.error());
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           StartTrainingWithCliOutputPathBindsProjectThere) {
+        const auto& temporary = temporary_.path;
+        const auto output_path =
+            temporary / "train-cli-out";
+        std::filesystem::create_directories(output_path);
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            auto* const lifecycle =
+                viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_FALSE(lifecycle->hasSourcePath());
+
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Train cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<
+                    lfs::training::Trainer>(scene));
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            auto params = trainer->getParams();
+            params.dataset.output_path = output_path;
+            params.dataset.output_path_explicit = true;
+            trainer->setParams(params);
+
+            auto prepared =
+                lifecycle->prepareTrainingStartProject();
+            ASSERT_TRUE(prepared)
+                << lfs::format_for_developer(
+                       prepared.error());
+            EXPECT_TRUE(lifecycle->hasSourcePath());
+            EXPECT_FALSE(lifecycle->isTempProject());
+            const auto expected =
+                std::filesystem::absolute(
+                    output_path / "project.licht")
+                    .lexically_normal();
+            const auto bound =
+                trainer->bound_project_path();
+            ASSERT_TRUE(bound.has_value());
+            EXPECT_EQ(
+                bound->lexically_normal(), expected);
+            ASSERT_TRUE(
+                lifecycle->document_->source_path());
+            EXPECT_EQ(
+                lifecycle->document_->source_path()
+                    ->lexically_normal(),
+                expected);
+            EXPECT_TRUE(std::filesystem::exists(
+                output_path / "project.licht"));
+            const auto policy =
+                trainer->trainer_project_save_policy();
+            EXPECT_TRUE(policy.on_completion);
+            EXPECT_TRUE(policy.at_step_boundaries);
+            EXPECT_FALSE(policy.on_stop_or_error);
         }
     }
 
