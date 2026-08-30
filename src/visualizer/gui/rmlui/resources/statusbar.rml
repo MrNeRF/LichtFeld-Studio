@@ -10,9 +10,13 @@
         <div id="training-section" class="hidden" data-class-hidden="!show_training">
             <span class="separator section-sep">|</span>
             <div id="progress-group" class="status-item">
-                <div id="progress-container">
+                <div id="progress-container" data-class-minecraft="progress_minecraft">
+                    <div id="progress-wall"></div>
                     <div id="progress-fill" data-style-width="progress_width"></div>
+                    <div id="progress-debris"></div>
                     <div id="progress-markers"></div>
+                    <img class="progress-figure" src="../icon/mining/miner-raised.png" data-style-left="progress_width" data-class-hidden="!miner_raised"/>
+                    <img class="progress-figure" src="../icon/mining/miner-strike.png" data-style-left="progress_width" data-class-hidden="!miner_strike"/>
                     <span id="progress-text">{{ progress_text }}</span>
                 </div>
             </div>

@@ -15,9 +15,11 @@
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
+#include "gui/status_bar_mining.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/ui_context.hpp"
 #include "internal/resource_paths.hpp"
+#include "preferences.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
@@ -31,6 +33,7 @@
 #include <SDL3/SDL_video.h>
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <format>
@@ -181,7 +184,8 @@ namespace lfs::vis::gui {
                                      const int total_iterations,
                                      const bool past,
                                      const bool hovered,
-                                     const bool preview) {
+                                     const bool preview,
+                                     const bool minecraft) {
             const float left_pct = std::clamp(
                 100.0f * static_cast<float>(step) / static_cast<float>(total_iterations),
                 0.5f,
@@ -195,16 +199,25 @@ namespace lfs::vis::gui {
             if (preview)
                 classes += " is-preview";
 
-            markers += std::format(
-                "<div class=\"{}\" style=\"left:{:.3f}%;\"></div>",
-                classes,
-                left_pct);
+            if (minecraft) {
+                markers += std::format(
+                    "<img class=\"{}\" src=\"../icon/mining/{}\" style=\"left:{:.3f}%;\"/>",
+                    classes,
+                    past ? "gem-collected.png" : "gem.png",
+                    left_pct);
+            } else {
+                markers += std::format(
+                    "<div class=\"{}\" style=\"left:{:.3f}%;\"></div>",
+                    classes,
+                    left_pct);
+            }
         }
 
         std::string buildProgressMarkersRml(std::vector<size_t> save_steps,
                                             const int total_iterations,
                                             const int current_iteration,
-                                            const ProgressMarkerRenderState& state) {
+                                            const ProgressMarkerRenderState& state,
+                                            const bool minecraft) {
             if (total_iterations <= 0)
                 return {};
 
@@ -224,7 +237,8 @@ namespace lfs::vis::gui {
                                         total_iterations,
                                         save_step <= static_cast<size_t>(std::max(0, current_iteration)),
                                         !state.dragging && save_step == state.hover_step,
-                                        false);
+                                        false,
+                                        minecraft);
             }
 
             if (state.dragging && state.preview_step > 0 &&
@@ -234,7 +248,8 @@ namespace lfs::vis::gui {
                                         total_iterations,
                                         false,
                                         true,
-                                        true);
+                                        true,
+                                        minecraft);
             }
             return markers;
         }
@@ -379,6 +394,9 @@ namespace lfs::vis::gui {
         ctor.Bind("mode_text", &model_.mode_text);
         ctor.Bind("mode_color", &model_.mode_color);
         ctor.Bind("show_training", &model_.show_training);
+        ctor.Bind("progress_minecraft", &model_.progress_minecraft);
+        ctor.Bind("miner_raised", &model_.miner_raised);
+        ctor.Bind("miner_strike", &model_.miner_strike);
         ctor.Bind("progress_width", &model_.progress_width);
         ctor.Bind("progress_text", &model_.progress_text);
         ctor.Bind("step_label", &model_.step_label);
@@ -523,6 +541,10 @@ namespace lfs::vis::gui {
         base_rcss_.clear();
         has_theme_signature_ = false;
         model_.progress_markers_rml.clear();
+        mining_wall_rml_.clear();
+        mining_debris_rml_.clear();
+        mining_scene_ = {};
+        progress_style_checked_at_ = {};
         model_dirty_ = true;
         animation_active_ = true;
         fit_level_ = 0;
@@ -796,6 +818,75 @@ namespace lfs::vis::gui {
                 el->SetInnerRML(model_.progress_markers_rml);
         }
         model_dirty_ = true;
+    }
+
+    void RmlStatusBar::setProgressWallRml(std::string value) {
+        if (mining_wall_rml_ == value)
+            return;
+
+        mining_wall_rml_ = std::move(value);
+        if (document_) {
+            if (auto* el = document_->GetElementById("progress-wall"))
+                el->SetInnerRML(mining_wall_rml_);
+        }
+        model_dirty_ = true;
+    }
+
+    void RmlStatusBar::setProgressDebrisRml(std::string value) {
+        if (mining_debris_rml_ == value)
+            return;
+
+        mining_debris_rml_ = std::move(value);
+        if (document_) {
+            if (auto* el = document_->GetElementById("progress-debris"))
+                el->SetInnerRML(mining_debris_rml_);
+        }
+        model_dirty_ = true;
+    }
+
+    void RmlStatusBar::updateMiningScene(const float progress,
+                                         const std::chrono::steady_clock::time_point now) {
+        float dp_ratio = 1.0f;
+        if (document_ && document_->GetContext())
+            dp_ratio = document_->GetContext()->GetDensityIndependentPixelRatio();
+        float bar_dp = 360.0f;
+        if (const auto geom = progressBarGeometry(); geom && dp_ratio > 0.0f)
+            bar_dp = geom->w / dp_ratio;
+
+        const auto layout = mining::miningLayout(bar_dp);
+        const float fill_dp = progress * bar_dp - layout.offset_dp;
+        const int current_block =
+            std::clamp(static_cast<int>(fill_dp / 16.0f), 0, layout.block_count - 1);
+        const int crack = mining::miningCrackStage(fill_dp, current_block);
+
+        if (mining_scene_.block_count == layout.block_count && mining_scene_.current_block >= 0 &&
+            current_block > mining_scene_.current_block) {
+            mining_scene_.break_block = current_block - 1;
+            mining_scene_.break_start = now;
+        }
+        int break_frame = -1;
+        if (mining_scene_.break_block >= 0) {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     now - mining_scene_.break_start)
+                                     .count();
+            if (elapsed >= 450)
+                mining_scene_.break_block = -1;
+            else
+                break_frame = static_cast<int>(elapsed / 150);
+        }
+
+        if (bar_dp != mining_scene_.bar_dp || layout.block_count != mining_scene_.block_count ||
+            current_block != mining_scene_.current_block || crack != mining_scene_.crack_stage ||
+            break_frame != mining_scene_.break_frame) {
+            setProgressWallRml(mining::buildMiningWallRml(layout, current_block, crack));
+            setProgressDebrisRml(
+                mining::buildMiningDebrisRml(layout, mining_scene_.break_block, break_frame));
+            mining_scene_.bar_dp = bar_dp;
+            mining_scene_.block_count = layout.block_count;
+            mining_scene_.current_block = current_block;
+            mining_scene_.crack_stage = crack;
+            mining_scene_.break_frame = break_frame;
+        }
     }
 
     std::optional<RmlStatusBar::ProgressBarGeometry> RmlStatusBar::progressBarGeometry() const {
@@ -1170,6 +1261,21 @@ namespace lfs::vis::gui {
                              (training_state == TrainingState::Running ||
                               training_state == TrainingState::Paused);
         setModelBool("show_training", model_.show_training, show_training);
+        if (progress_style_checked_at_ == std::chrono::steady_clock::time_point{} ||
+            now - progress_style_checked_at_ >= std::chrono::seconds(1)) {
+            progress_style_checked_at_ = now;
+            progress_minecraft_pref_ = loadProgressBarStylePreference() == "minecraft";
+        }
+        setModelBool("progress_minecraft", model_.progress_minecraft, progress_minecraft_pref_);
+        const bool running = training_state == TrainingState::Running;
+        const auto swing_phase_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() %
+            550;
+        const bool strike_phase = running && swing_phase_ms >= 350;
+        setModelBool("miner_raised", model_.miner_raised,
+                     progress_minecraft_pref_ && show_training && !strike_phase);
+        setModelBool("miner_strike", model_.miner_strike,
+                     progress_minecraft_pref_ && running && strike_phase);
 
         setModelString("step_label", model_.step_label, LOC(lichtfeld::Strings::Status::STEP));
         setModelString("loss_label", model_.loss_label, LOC(lichtfeld::Strings::Status::LOSS));
@@ -1196,6 +1302,14 @@ namespace lfs::vis::gui {
 
             setModelString("progress_width", model_.progress_width, progress_pct);
             setModelString("progress_text", model_.progress_text, std::move(progress_text));
+
+            if (progress_minecraft_pref_) {
+                updateMiningScene(progress, now);
+            } else {
+                setProgressWallRml("");
+                setProgressDebrisRml("");
+                mining_scene_ = {};
+            }
             const ProgressMarkerRenderState marker_state{
                 .dragging = save_step_interaction_.dragging,
                 .adding = save_step_interaction_.adding,
@@ -1203,7 +1317,8 @@ namespace lfs::vis::gui {
                 .preview_step = save_step_interaction_.preview_step,
                 .hover_step = save_step_interaction_.hover_step,
             };
-            setProgressMarkersRml(buildProgressMarkersRml(tm->getSaveSteps(), total, cur, marker_state));
+            setProgressMarkersRml(buildProgressMarkersRml(tm->getSaveSteps(), total, cur, marker_state,
+                                                          progress_minecraft_pref_));
             setModelString("step_value", model_.step_value, std::format("{}/{}", cur, total));
             setModelString("loss_value", model_.loss_value, std::format("{:.4f}", loss));
             setModelString("gaussians_value", model_.gaussians_value,
@@ -1226,6 +1341,9 @@ namespace lfs::vis::gui {
         } else {
             resetSaveStepInteraction();
             setModelString("progress_width", model_.progress_width, "0%");
+            setProgressWallRml("");
+            setProgressDebrisRml("");
+            mining_scene_ = {};
             setModelString("progress_text", model_.progress_text, "");
             setProgressMarkersRml("");
             setModelString("step_value", model_.step_value, "");
