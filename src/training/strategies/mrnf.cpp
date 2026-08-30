@@ -1242,7 +1242,8 @@ namespace lfs::training {
         LOG_TIMER("MRNF::refine");
         LFS_VRAM_SCOPE("MRNF::refine");
         using namespace lfs::core;
-        (void)lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
+        // q16 stays authoritative for the refine window (gather/scatter/append
+        // re-encode only touched 256-splat blocks). IEEE-f16 still expands.
 
         ++_refine_windows_since_bounds;
         if (!_bounds_valid || _refine_windows_since_bounds >= MRNF_BOUNDS_RECOMPUTE_INTERVAL_REFINES) {
@@ -1402,10 +1403,8 @@ namespace lfs::training {
             _splat_data->_max_screen_share.zero_();
         }
 
-        // Always-commit q16 after every refine (exportable + headless). The
-        // multi-iter exportable float densify window is deleted: Scene cache
-        // rebuild and preview share Trainer::render_mutex_ with commit+trim, so
-        // the float workspace cannot be read/decommitted concurrently.
+        // q16 refine never expands; this commit is a safety net for IEEE-f16
+        // or any leftover float workspace (e.g. tests that still expand).
         if (lfs::core::sh_value_quant::enabled() &&
             _splat_data->shN().is_valid() &&
             _splat_data->shN().dtype() == lfs::core::DataType::Float32) {
@@ -1897,11 +1896,6 @@ namespace lfs::training {
         LOG_TIMER("MRNF::grow_and_split");
         LFS_VRAM_SCOPE("MRNF::grow_and_split");
         using namespace lfs::core;
-        // Expand q16 → float if needed. Do NOT re-encode here: refine() owns the single
-        // post-growth commit so bounds/codes always match the final N. Tests that call
-        // grow_and_split alone must commit themselves or force quant OFF (Legacy guard).
-        (void)lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
-
         const size_t n = static_cast<size_t>(_splat_data->size());
         if (!_far_growth.outside_mask.is_valid() || _far_growth.outside_mask.numel() != n) {
             begin_far_growth_window(n, 0);
@@ -2262,13 +2256,8 @@ namespace lfs::training {
             nullptr);
 
         if (use_shN) {
-            shN_swizzled_gather_to_linear_i64(
-                _splat_data->shN().ptr<float>(),
-                split_indices.ptr<int64_t>(),
-                child_shN.ptr<float>(),
-                K,
-                layout_rest,
-                layout_rest);
+            lfs::training::sh_value::gather_shN_to_canonical(
+                *_splat_data, split_indices, child_shN);
         }
 
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Means, split_indices);
@@ -2279,6 +2268,7 @@ namespace lfs::training {
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Opacity, split_indices);
 
         size_t append_start = 0;
+        lfs::training::sh_value::ShNMutationBatch shn_batch(*_splat_data);
         if (free_count() > 0) {
             auto [filled_indices, remaining_after_fill] = fill_free_slots_with_data(
                 child_means,
@@ -2287,7 +2277,8 @@ namespace lfs::training {
                 child_sh0,
                 child_shN,
                 child_raw_opacities,
-                static_cast<int64_t>(K));
+                static_cast<int64_t>(K),
+                &shn_batch);
             append_start = K - static_cast<size_t>(remaining_after_fill);
         }
 
@@ -2299,7 +2290,9 @@ namespace lfs::training {
             child_shN,
             child_raw_opacities,
             append_start,
-            K);
+            K,
+            &shn_batch);
+        shn_batch.flush();
 
         LOG_DEBUG("MRNF: split {} splats at iter {} (reused: {}, appended: {}, active: {}, total slots: {})",
                   K, iter, append_start, n_append, active_count(), _splat_data->size());
@@ -2349,8 +2342,6 @@ namespace lfs::training {
 
     void MRNF::compact_splats(const lfs::core::Tensor& keep_mask) {
         LOG_TIMER("MRNF::compact_splats");
-        // Float-native gather. Expand q16 if needed; refine() (or remove_gaussians) owns re-encode.
-        (void)lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
         using namespace lfs::core;
 
         const size_t old_size = static_cast<size_t>(_splat_data->size());
@@ -2414,8 +2405,14 @@ namespace lfs::training {
 
         compact(_splat_data->means());
         compact(_splat_data->sh0());
-        if (_splat_data->shN().is_valid() && _splat_data->shN().numel() > 0)
-            compact_shN_swizzled(_splat_data->shN(), cap);
+        if (_splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
+            if (_splat_data->shN_value_quantized()) {
+                lfs::training::sh_value::compact_shN_gather(
+                    *_splat_data, valid_indices, old_size, cap);
+            } else {
+                compact_shN_swizzled(_splat_data->shN(), cap);
+            }
+        }
         compact(_splat_data->scaling_raw());
         compact(_splat_data->rotation_raw());
         compact(_splat_data->opacity_raw());
@@ -2769,7 +2766,8 @@ namespace lfs::training {
         const lfs::core::Tensor& sh0,
         const lfs::core::Tensor& shN,
         const lfs::core::Tensor& opacities,
-        int64_t count) {
+        int64_t count,
+        lfs::training::sh_value::ShNMutationBatch* shn_batch) {
 
         using namespace lfs::core;
 
@@ -2826,17 +2824,13 @@ namespace lfs::training {
         const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
         if (layout_rest > 0 && shN.is_valid() && shN.numel() > 0 &&
             _splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
-            auto target_i32 = target_indices.dtype() == DataType::Int32
-                                  ? target_indices
-                                  : target_indices.to(DataType::Int32);
             auto shN_slice = shN.slice(0, 0, slots_to_fill);
-            shN_swizzled_scatter_linear(
-                _splat_data->shN().ptr<float>(),
-                target_i32.ptr<int>(),
-                shN_slice.ptr<float>(),
-                static_cast<size_t>(slots_to_fill),
-                layout_rest,
-                layout_rest);
+            if (shn_batch) {
+                shn_batch->scatter(target_indices, shN_slice);
+            } else {
+                lfs::training::sh_value::scatter_canonical_into_shN(
+                    *_splat_data, target_indices, shN_slice);
+            }
         }
 
         // Zero residual grads so the post-densify Adam step does not use
@@ -2856,7 +2850,8 @@ namespace lfs::training {
         const lfs::core::Tensor& child_shN,
         const lfs::core::Tensor& child_raw_opacities,
         const size_t append_start,
-        const size_t K) {
+        const size_t K,
+        lfs::training::sh_value::ShNMutationBatch* shn_batch) {
         using namespace lfs::core;
         if (K <= append_start) {
             return 0;
@@ -2907,40 +2902,12 @@ namespace lfs::training {
         _optimizer->add_new_params(ParamType::Sh0, append_sh0, true);
 
         if (use_shN && append_shN.is_valid() && append_shN.numel() > 0) {
-            const size_t new_size = old_size + n_append;
-            const size_t needed_floats = sh_swizzled_float_count(new_size, layout_rest);
-            auto& shN_buf = _splat_data->shN();
-            // Grow capacity to means/max_cap headroom so post-densify re-encode is not exact-N.
-            const size_t means_cap = _splat_data->means().is_valid()
-                                         ? std::max(_splat_data->means().capacity(), new_size)
-                                         : new_size;
-            const size_t cap_floats = sh_swizzled_float_count(means_cap, layout_rest);
-            if (shN_buf.capacity() < needed_floats) {
-                const size_t dest_cap = std::max(needed_floats, cap_floats);
-                auto grown = Tensor::zeros_direct(
-                    TensorShape({static_cast<size_t>(shN_buf.numel())}), dest_cap,
-                    shN_buf.device(), shN_buf.dtype());
-                if (shN_buf.numel() > 0) {
-                    // Sync copy before move-free of source (async UAF → illegal address).
-                    LFS_CUDA_CHECK(cudaMemcpy(grown.data_ptr(), shN_buf.data_ptr(),
-                                              shN_buf.bytes(), cudaMemcpyDeviceToDevice));
-                }
-                grown.set_name(shN_buf.name().empty() ? "splat.shN" : shN_buf.name());
-                shN_buf = std::move(grown);
+            if (shn_batch) {
+                shn_batch->append(append_shN, old_size);
+            } else {
+                lfs::training::sh_value::append_canonical_to_shN(
+                    *_splat_data, append_shN, old_size);
             }
-            if (shN_buf.numel() < needed_floats) {
-                shN_buf.append_zeros(needed_floats - shN_buf.numel());
-            }
-        }
-
-        if (use_shN && append_shN.is_valid() && append_shN.numel() > 0) {
-            shN_swizzled_gather_from_linear(
-                _splat_data->shN().ptr<float>(),
-                old_size,
-                append_shN.ptr<float>(),
-                n_append,
-                layout_rest,
-                layout_rest);
             _optimizer->extend_state_for_new_params(ParamType::ShN, n_append);
         } else {
             _optimizer->extend_state_for_new_params(ParamType::ShN, n_append);
@@ -2969,7 +2936,6 @@ namespace lfs::training {
             return;
         }
         LOG_TIMER("MRNF::seed_from_view");
-        (void)lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
 
         Tensor image = render_output.image;
         Tensor target = render_output.target_image;
@@ -3226,10 +3192,12 @@ namespace lfs::training {
             shN = Tensor::zeros({kept_n, sh_rest, 3}, Device::CUDA);
         }
 
+        lfs::training::sh_value::ShNMutationBatch shn_batch(*_splat_data);
         auto [filled, remaining_after_fill] = fill_free_slots_with_data(
-            pos, rot, scl, sh0, shN, opa, static_cast<int64_t>(kept_n));
+            pos, rot, scl, sh0, shN, opa, static_cast<int64_t>(kept_n), &shn_batch);
         const size_t append_start = kept_n - static_cast<size_t>(remaining_after_fill);
-        append_child_rows(pos, rot, scl, sh0, shN, opa, append_start, kept_n);
+        append_child_rows(pos, rot, scl, sh0, shN, opa, append_start, kept_n, &shn_batch);
+        shn_batch.flush();
 
         _far_growth.allocated += kept;
         _far_growth.outside_used += outside_kept;
@@ -3389,7 +3357,7 @@ namespace lfs::training {
             return;
 
         compact_splats(keep_mask);
-        // compact expands q16 → float; re-encode when quant is on.
+        // q16 compact stays packed; this commit is only for a leftover float workspace.
         if (lfs::core::sh_value_quant::enabled() &&
             _splat_data->shN().is_valid() &&
             _splat_data->shN().dtype() == lfs::core::DataType::Float32) {

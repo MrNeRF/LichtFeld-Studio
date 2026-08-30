@@ -14,6 +14,10 @@
 #include <cassert>
 #include <vector>
 
+namespace lfs::training::sh_value {
+    class ShNMutationBatch;
+}
+
 class CropDampingStrategyTest_IgsPlusRejectedRowsAreNeverSampledAtZeroScale_Test;
 
 namespace lfs::training {
@@ -120,7 +124,8 @@ namespace lfs::training {
             const lfs::core::Tensor& sh0,
             const lfs::core::Tensor& shN,
             const lfs::core::Tensor& opacities,
-            int64_t count);
+            int64_t count,
+            lfs::training::sh_value::ShNMutationBatch* shn_batch = nullptr);
 
         struct PendingFailureSnapshot {
             bool valid = false;

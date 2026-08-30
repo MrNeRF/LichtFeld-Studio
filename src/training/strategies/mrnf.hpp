@@ -15,6 +15,10 @@
 #include <cassert>
 #include <memory>
 
+namespace lfs::training::sh_value {
+    class ShNMutationBatch;
+}
+
 class MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
 class MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
 class MRNFStrategyTest_SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth_Test;
@@ -211,7 +215,8 @@ namespace lfs::training {
             const lfs::core::Tensor& child_shN,
             const lfs::core::Tensor& child_raw_opacities,
             size_t append_start,
-            size_t K);
+            size_t K,
+            lfs::training::sh_value::ShNMutationBatch* shn_batch = nullptr);
         void publish_vram_attribution() noexcept;
         size_t active_count() const;
         size_t free_count() const;
@@ -225,7 +230,8 @@ namespace lfs::training {
             const lfs::core::Tensor& sh0,
             const lfs::core::Tensor& shN,
             const lfs::core::Tensor& opacities,
-            int64_t count);
+            int64_t count,
+            lfs::training::sh_value::ShNMutationBatch* shn_batch = nullptr);
         [[nodiscard]] lfs::core::Tensor edge_guidance_factor();
 
         std::unique_ptr<AdamOptimizer> _optimizer;

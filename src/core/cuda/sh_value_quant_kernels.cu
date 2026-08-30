@@ -230,6 +230,129 @@ namespace lfs::core::sh_value_quant {
             }
         }
 
+        __global__ void decode_u16_range_to_float4_kernel(
+            const std::uint16_t* __restrict__ src_u16,
+            const float2* __restrict__ src_bounds,
+            float* __restrict__ dst_f4_as_float,
+            std::uint32_t src_offset,
+            std::uint32_t n_dst,
+            std::uint32_t n_src,
+            std::uint32_t slots_per_prim,
+            std::uint32_t n_cells_per_prim) {
+            using DC = lfs::core::sh_value::DeviceCodec16;
+            const std::uint32_t p_local = blockIdx.x * blockDim.x + threadIdx.x;
+            if (p_local >= n_dst)
+                return;
+
+            float4* dst = reinterpret_cast<float4*>(dst_f4_as_float);
+            for (std::uint32_t k = 0; k < slots_per_prim; ++k) {
+                dst[shAtF4(p_local, k, slots_per_prim)] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+            }
+
+            const std::uint32_t p_src = src_offset + p_local;
+            if (p_src >= n_src)
+                return;
+
+            const float2 mm = src_bounds[p_src / 256u];
+            for (std::uint32_t c = 0; c < n_cells_per_prim; ++c) {
+                const float v = DC::decode(
+                    src_u16[lfs::core::sh_value::shAtU16(p_src, c, n_cells_per_prim)],
+                    mm.x, mm.y);
+                const std::uint32_t slot = c / 4u;
+                const std::uint32_t comp = c % 4u;
+                if (slot >= slots_per_prim)
+                    break;
+                float4 f4 = dst[shAtF4(p_local, slot, slots_per_prim)];
+                if (comp == 0)
+                    f4.x = v;
+                else if (comp == 1)
+                    f4.y = v;
+                else if (comp == 2)
+                    f4.z = v;
+                else
+                    f4.w = v;
+                dst[shAtF4(p_local, slot, slots_per_prim)] = f4;
+            }
+        }
+
+        __global__ void decode_u16_gathered_to_canonical_kernel(
+            const std::uint16_t* __restrict__ src_u16,
+            const float2* __restrict__ src_bounds,
+            const std::int64_t* __restrict__ perm,
+            float* __restrict__ dst_canonical,
+            std::uint32_t n_dst,
+            std::uint32_t n_src,
+            std::uint32_t n_cells_per_prim) {
+            using DC = lfs::core::sh_value::DeviceCodec16;
+            const std::uint32_t p_local = blockIdx.x * blockDim.x + threadIdx.x;
+            if (p_local >= n_dst)
+                return;
+
+            float* row = dst_canonical +
+                         static_cast<std::size_t>(p_local) *
+                             static_cast<std::size_t>(n_cells_per_prim);
+            for (std::uint32_t c = 0; c < n_cells_per_prim; ++c) {
+                row[c] = 0.0f;
+            }
+
+            const std::int64_t src = perm[p_local];
+            if (src < 0 || src >= static_cast<std::int64_t>(n_src))
+                return;
+
+            const auto src_p = static_cast<std::uint32_t>(src);
+            const float2 mm = src_bounds[src_p / 256u];
+            for (std::uint32_t c = 0; c < n_cells_per_prim; ++c) {
+                row[c] = DC::decode(
+                    src_u16[lfs::core::sh_value::shAtU16(src_p, c, n_cells_per_prim)],
+                    mm.x, mm.y);
+            }
+        }
+
+        __global__ void overlay_canonical_into_float4_kernel(
+            const float* __restrict__ src_canonical,
+            const std::int64_t* __restrict__ dest_indices,
+            float* __restrict__ dst_f4_as_float,
+            std::uint32_t group_offset,
+            std::uint32_t n_group,
+            std::uint32_t block_start,
+            std::uint32_t n_chunk,
+            std::uint32_t slots_per_prim,
+            std::uint32_t n_cells_per_prim) {
+            const std::uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+            if (i >= n_group)
+                return;
+
+            const std::int64_t dest = dest_indices[group_offset + i];
+            const std::int64_t local64 = dest - static_cast<std::int64_t>(block_start);
+            if (local64 < 0 || local64 >= static_cast<std::int64_t>(n_chunk))
+                return;
+            const auto local = static_cast<std::uint32_t>(local64);
+
+            const float* row = src_canonical +
+                               static_cast<std::size_t>(group_offset + i) *
+                                   static_cast<std::size_t>(n_cells_per_prim);
+            float4* dst = reinterpret_cast<float4*>(dst_f4_as_float);
+            for (std::uint32_t k = 0; k < slots_per_prim; ++k) {
+                const std::uint32_t base = k * 4u;
+                const float x = base < n_cells_per_prim ? row[base] : 0.0f;
+                const float y = base + 1u < n_cells_per_prim ? row[base + 1u] : 0.0f;
+                const float z = base + 2u < n_cells_per_prim ? row[base + 2u] : 0.0f;
+                const float w = base + 3u < n_cells_per_prim ? row[base + 3u] : 0.0f;
+                dst[shAtF4(local, k, slots_per_prim)] = make_float4(x, y, z, w);
+            }
+        }
+
+        __global__ void fill_quant_block_ids_f32_kernel(
+            const std::int64_t* __restrict__ dest_indices,
+            float* __restrict__ block_ids,
+            std::uint32_t n) {
+            const std::uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+            if (i >= n)
+                return;
+            const std::int64_t dest = dest_indices[i];
+            block_ids[i] = dest < 0 ? -1.0f : static_cast<float>(dest / 256);
+        }
+
         void validate_canonical_range(
             const std::uint64_t canonical_float_offset,
             const std::uint64_t float_count,
@@ -312,6 +435,115 @@ namespace lfs::core::sh_value_quant {
             slots,
             n_cells);
         LFS_CUDA_CHECK_MSG(cudaGetLastError(), "decode_shN_u16_gathered_to_float4");
+    }
+
+    void decode_shN_u16_range_to_float4(
+        const std::uint16_t* src_u16,
+        const float* src_bounds_float2,
+        float* dst_float4_swizzled,
+        std::size_t src_offset,
+        std::size_t n_dst,
+        std::size_t n_src_primitives,
+        std::uint32_t coeffs_rest,
+        cudaStream_t stream) {
+        if (n_dst == 0 || coeffs_rest == 0)
+            return;
+        if (!src_u16 || !src_bounds_float2 || !dst_float4_swizzled) {
+            throw std::invalid_argument("Invalid ranged q16 SH decode arguments");
+        }
+        const auto slots = lfs::core::sh_float4_slots_for_rest(coeffs_rest);
+        const auto n_cells = lfs::core::sh_value_quant::n_value_cells_per_prim(coeffs_rest);
+        const unsigned blocks =
+            static_cast<unsigned>((n_dst + kThreads - 1) / kThreads);
+        decode_u16_range_to_float4_kernel<<<blocks, kThreads, 0, stream>>>(
+            src_u16,
+            reinterpret_cast<const float2*>(src_bounds_float2),
+            dst_float4_swizzled,
+            static_cast<std::uint32_t>(src_offset),
+            static_cast<std::uint32_t>(n_dst),
+            static_cast<std::uint32_t>(n_src_primitives),
+            slots,
+            n_cells);
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "decode_shN_u16_range_to_float4");
+    }
+
+    void decode_shN_u16_gathered_to_canonical(
+        const std::uint16_t* src_u16,
+        const float* src_bounds_float2,
+        const std::int64_t* perm,
+        float* dst_canonical,
+        std::size_t n_dst,
+        std::size_t n_src_primitives,
+        std::uint32_t coeffs_rest,
+        cudaStream_t stream) {
+        if (n_dst == 0 || coeffs_rest == 0)
+            return;
+        if (!src_u16 || !src_bounds_float2 || !perm || !dst_canonical) {
+            throw std::invalid_argument("Invalid gathered q16 SH canonical decode arguments");
+        }
+        const auto n_cells = lfs::core::sh_value_quant::n_value_cells_per_prim(coeffs_rest);
+        const unsigned blocks =
+            static_cast<unsigned>((n_dst + kThreads - 1) / kThreads);
+        decode_u16_gathered_to_canonical_kernel<<<blocks, kThreads, 0, stream>>>(
+            src_u16,
+            reinterpret_cast<const float2*>(src_bounds_float2),
+            perm,
+            dst_canonical,
+            static_cast<std::uint32_t>(n_dst),
+            static_cast<std::uint32_t>(n_src_primitives),
+            n_cells);
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "decode_shN_u16_gathered_to_canonical");
+    }
+
+    void overlay_canonical_into_float4_chunk(
+        const float* src_canonical,
+        const std::int64_t* dest_indices,
+        float* dst_float4_swizzled,
+        std::size_t group_offset,
+        std::size_t n_group,
+        std::size_t block_start,
+        std::size_t n_chunk,
+        std::uint32_t coeffs_rest,
+        cudaStream_t stream) {
+        if (n_group == 0 || n_chunk == 0 || coeffs_rest == 0)
+            return;
+        if (!src_canonical || !dest_indices || !dst_float4_swizzled) {
+            throw std::invalid_argument("Invalid q16 SH overlay arguments");
+        }
+        const auto slots = lfs::core::sh_float4_slots_for_rest(coeffs_rest);
+        const auto n_cells = lfs::core::sh_value_quant::n_value_cells_per_prim(coeffs_rest);
+        const unsigned blocks =
+            static_cast<unsigned>((n_group + kThreads - 1) / kThreads);
+        overlay_canonical_into_float4_kernel<<<blocks, kThreads, 0, stream>>>(
+            src_canonical,
+            dest_indices,
+            dst_float4_swizzled,
+            static_cast<std::uint32_t>(group_offset),
+            static_cast<std::uint32_t>(n_group),
+            static_cast<std::uint32_t>(block_start),
+            static_cast<std::uint32_t>(n_chunk),
+            slots,
+            n_cells);
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "overlay_canonical_into_float4_chunk");
+    }
+
+    void fill_quant_block_ids_f32(
+        const std::int64_t* dest_indices,
+        float* block_ids_f32,
+        std::size_t n,
+        cudaStream_t stream) {
+        if (n == 0)
+            return;
+        if (!dest_indices || !block_ids_f32) {
+            throw std::invalid_argument("Invalid q16 block-id fill arguments");
+        }
+        const unsigned blocks =
+            static_cast<unsigned>((n + kThreads - 1) / kThreads);
+        fill_quant_block_ids_f32_kernel<<<blocks, kThreads, 0, stream>>>(
+            dest_indices,
+            block_ids_f32,
+            static_cast<std::uint32_t>(n));
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "fill_quant_block_ids_f32");
     }
 
     void decode_shN_u16_to_float4(

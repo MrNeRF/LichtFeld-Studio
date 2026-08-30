@@ -42,6 +42,52 @@ namespace lfs::core::sh_value_quant {
         std::uint32_t coeffs_rest,
         cudaStream_t stream = nullptr);
 
+    /// Sequential decode of prims [src_offset, src_offset + n_dst) into a
+    /// compact float4-swizzled buffer that treats those prims as 0..n_dst-1.
+    /// Prims with source index >= n_src_primitives are written as zeros.
+    void decode_shN_u16_range_to_float4(
+        const std::uint16_t* src_u16,
+        const float* src_bounds_float2,
+        float* dst_float4_swizzled,
+        std::size_t src_offset,
+        std::size_t n_dst,
+        std::size_t n_src_primitives,
+        std::uint32_t coeffs_rest,
+        cudaStream_t stream = nullptr);
+
+    /// Gather-decode selected source prims into canonical [n_dst, rest, 3].
+    void decode_shN_u16_gathered_to_canonical(
+        const std::uint16_t* src_u16,
+        const float* src_bounds_float2,
+        const std::int64_t* perm,
+        float* dst_canonical,
+        std::size_t n_dst,
+        std::size_t n_src_primitives,
+        std::uint32_t coeffs_rest,
+        cudaStream_t stream = nullptr);
+
+    /// Overlay canonical [K, rest, 3] rows into a compact float4-swizzled
+    /// chunk of n_chunk prims that represents global prims
+    /// [block_start, block_start + n_chunk). dest_indices[group_offset + i]
+    /// is the global primitive for canonical row group_offset + i.
+    void overlay_canonical_into_float4_chunk(
+        const float* src_canonical,
+        const std::int64_t* dest_indices,
+        float* dst_float4_swizzled,
+        std::size_t group_offset,
+        std::size_t n_group,
+        std::size_t block_start,
+        std::size_t n_chunk,
+        std::uint32_t coeffs_rest,
+        cudaStream_t stream = nullptr);
+
+    /// block_id[i] = dest_indices[i] / 256 as float32 (exact for training-scale N).
+    void fill_quant_block_ids_f32(
+        const std::int64_t* dest_indices,
+        float* block_ids_f32,
+        std::size_t n,
+        cudaStream_t stream = nullptr);
+
     void decode_shN_u16_range_to_canonical(
         const std::uint16_t* src_u16,
         const float* bounds_float2,

@@ -9,6 +9,8 @@
 #include "core/tensor.hpp"
 #include "core/uuid.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
+#include "lfs/training/sh_value_codec.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 #include "training/checkpoint.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/project_snapshot_chapters.hpp"
@@ -28,6 +30,7 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <random>
 #include <ranges>
 #include <sstream>
 #include <string>
@@ -38,30 +41,56 @@ namespace {
     constexpr std::size_t MIB = 1024 * 1024;
 
     std::unique_ptr<lfs::core::SplatData>
-    make_snapshot_test_splat(const std::size_t count) {
+    make_snapshot_test_splat(
+        const std::size_t count,
+        const int sh_degree = 0) {
         std::vector<float> means(count * 3);
         std::vector<float> rotations(count * 4, 0.0f);
+        std::vector<float> sh0(count * 3);
+        const std::size_t rest =
+            sh_degree > 0
+                ? static_cast<std::size_t>(
+                      sh_degree * (sh_degree + 2))
+                : std::size_t{0};
+        std::vector<float> shN(count * rest * 3);
+        std::mt19937 rng(20260830);
+        std::uniform_real_distribution<float> dist(
+            -0.25f, 0.25f);
         for (std::size_t index = 0; index < count; ++index) {
             means[index * 3] =
                 static_cast<float>(index) * 0.001f;
             means[index * 3 + 1] = 1.0f;
             means[index * 3 + 2] = -2.0f;
             rotations[index * 4] = 1.0f;
+            sh0[index * 3] = 0.01f * static_cast<float>(index + 1);
+            sh0[index * 3 + 1] =
+                0.02f * static_cast<float>(index + 1);
+            sh0[index * 3 + 2] =
+                0.03f * static_cast<float>(index + 1);
+            for (std::size_t c = 0; c < rest * 3; ++c) {
+                shN[index * rest * 3 + c] = dist(rng);
+            }
         }
 
+        auto shN_tensor =
+            rest == 0
+                ? lfs::core::Tensor::zeros(
+                      {0}, lfs::core::Device::CUDA,
+                      lfs::core::DataType::Float32)
+                : lfs::core::Tensor::from_vector(
+                      shN,
+                      {count, rest, std::size_t{3}},
+                      lfs::core::Device::CUDA);
         auto result =
             std::make_unique<lfs::core::SplatData>(
-                0,
+                sh_degree,
                 lfs::core::Tensor::from_vector(
                     means, {count, 3},
                     lfs::core::Device::CUDA),
-                lfs::core::Tensor::zeros(
-                    {count, 1, 3},
-                    lfs::core::Device::CUDA,
-                    lfs::core::DataType::Float32),
-                lfs::core::Tensor::zeros(
-                    {0}, lfs::core::Device::CUDA,
-                    lfs::core::DataType::Float32),
+                lfs::core::Tensor::from_vector(
+                    sh0, {count, 1, 3},
+                    lfs::core::Device::CUDA),
+                std::move(shN_tensor),
                 lfs::core::Tensor::zeros(
                     {count, 3},
                     lfs::core::Device::CUDA,
@@ -78,7 +107,12 @@ namespace {
                   lfs::core::TensorShape({count, 3}));
         EXPECT_EQ(result->sh0().shape(),
                   lfs::core::TensorShape({count, 1, 3}));
-        EXPECT_EQ(result->shN().numel(), 0u);
+        if (sh_degree == 0) {
+            EXPECT_EQ(result->shN().numel(), 0u);
+        } else {
+            EXPECT_TRUE(result->shN().is_valid());
+            EXPECT_GT(result->shN().numel(), 0u);
+        }
         EXPECT_EQ(result->scaling_raw().shape(),
                   lfs::core::TensorShape({count, 3}));
         EXPECT_EQ(result->rotation_raw().shape(),
@@ -89,12 +123,14 @@ namespace {
     }
 
     lfs::core::param::TrainingParameters
-    make_snapshot_test_params(const std::size_t count) {
+    make_snapshot_test_params(
+        const std::size_t count,
+        const int sh_degree = 0) {
         lfs::core::param::TrainingParameters params;
         params.optimization.strategy = "mcmc";
         params.optimization.iterations = 500;
-        params.optimization.sh_degree = 0;
-        params.optimization.max_cap = count;
+        params.optimization.sh_degree = sh_degree;
+        params.optimization.max_cap = static_cast<int>(count);
         return params;
     }
 
@@ -392,6 +428,128 @@ namespace {
             expect_optimizer_moment_bytes_equal(
                 original_optimizer_moments,
                 target_strategy.get_optimizer());
+    }
+
+    TEST(TrainingSnapshotServiceTest,
+         Q16Sh3ChunkedCaptureMatchesHostSerializeBitIdentical) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+
+        lfs::training::sh_value::
+            set_sh_value_quant_enabled_for_testing(true);
+        struct QuantGuard {
+            ~QuantGuard() {
+                lfs::training::sh_value::
+                    set_sh_value_quant_enabled_for_testing(
+                        std::nullopt);
+            }
+        } quant_guard;
+
+        // Not a multiple of 256 (q16/Adam block) or 32 (swizzle).
+        constexpr std::size_t GAUSSIAN_COUNT = 70000;
+        constexpr int SH_DEGREE = 3;
+        constexpr int SAVED_ITERATION = 137;
+        auto params = make_snapshot_test_params(
+            GAUSSIAN_COUNT, SH_DEGREE);
+        auto model = make_snapshot_test_splat(
+            GAUSSIAN_COUNT, SH_DEGREE);
+        ASSERT_TRUE(
+            lfs::training::sh_value::apply_shN_value_quant(
+                *model));
+        ASSERT_TRUE(model->shN_value_quantized());
+        ASSERT_EQ(model->shN().dtype(),
+                  lfs::core::DataType::Float16);
+
+        lfs::training::MCMC strategy(*model);
+        strategy.initialize(params.optimization);
+        auto* source_moments =
+            strategy.get_optimizer().get_state_mutable(
+                lfs::training::ParamType::Means);
+        ASSERT_NE(source_moments, nullptr);
+        ASSERT_TRUE(source_moments->is_joint());
+        source_moments->joint_bounds.fill_(3.5f);
+        auto* shN_moments =
+            strategy.get_optimizer().get_state_mutable(
+                lfs::training::ParamType::ShN);
+        if (shN_moments && shN_moments->is_joint() &&
+            shN_moments->joint_bounds.is_valid()) {
+            shN_moments->joint_bounds.fill_(-1.25f);
+        }
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+        std::ostringstream reference_stream(
+            std::ios::binary | std::ios::out);
+        const auto reference_result =
+            lfs::training::serialize_checkpoint(
+                reference_stream, SAVED_ITERATION,
+                strategy, params, nullptr, nullptr,
+                nullptr, nullptr);
+        ASSERT_TRUE(reference_result.has_value())
+            << lfs::format_for_developer(
+                   reference_result.error());
+        const auto reference_bytes =
+            reference_stream.str();
+        ASSERT_EQ(reference_result->bytes,
+                  reference_bytes.size());
+        ASSERT_GT(reference_bytes.size(), 0u);
+
+        lfs::training::TrainingSnapshotService service({
+            .ring_slots = 4,
+            .band_bytes = 64 * 1024,
+            .calibration_bytes = 64,
+            .calibration_iterations = 4,
+        });
+        const auto assigned_snapshot_uuid =
+            lfs::core::generate_uuid_v4();
+        const lfs::training::TrainingSnapshotCaptureRequest
+            request{
+                .iteration = SAVED_ITERATION,
+                .snapshot_uuid = assigned_snapshot_uuid,
+                .strategy = strategy,
+                .params = params,
+            };
+
+        auto initialized = service.initialize(request);
+        ASSERT_TRUE(initialized.has_value())
+            << lfs::format_for_developer(
+                   initialized.error());
+        auto prepared = service.prepare(request);
+        ASSERT_TRUE(prepared.has_value())
+            << lfs::format_for_developer(
+                   prepared.error());
+        EXPECT_EQ(prepared->checkpoint_bytes(),
+                  reference_bytes.size());
+
+        auto capture_request = request;
+        capture_request.safe_point_entered_at =
+            std::chrono::steady_clock::now() -
+            std::chrono::milliseconds(1);
+        auto pending =
+            service.capture(
+                std::move(*prepared), capture_request);
+        ASSERT_TRUE(pending.has_value())
+            << lfs::format_for_developer(
+                   pending.error());
+        auto captured = pending->wait();
+        ASSERT_TRUE(captured.has_value())
+            << lfs::format_for_developer(
+                   captured.error());
+        ASSERT_TRUE(captured->checkpoint_bytes);
+        ASSERT_EQ(captured->checkpoint_bytes->size(),
+                  reference_bytes.size());
+        EXPECT_EQ(
+            std::memcmp(
+                captured->checkpoint_bytes->data(),
+                reference_bytes.data(),
+                reference_bytes.size()),
+            0);
+        EXPECT_GT(
+            captured->metrics.device_snapshot_bytes, 0u);
+        EXPECT_LE(
+            captured->metrics.device_snapshot_bytes,
+            captured->metrics.checkpoint_bytes);
+        EXPECT_TRUE(captured->metrics.consistency_proven);
     }
 
     TEST(TrainingSnapshotServiceTest,

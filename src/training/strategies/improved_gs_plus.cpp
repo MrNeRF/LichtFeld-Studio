@@ -437,9 +437,8 @@ namespace lfs::training {
     }
 
     void ImprovedGSPlus::LAS_densify(const lfs::core::Tensor& scores, const int64_t budget_for_alloc) {
-        // densify kernels read/write float shN; dequant q16 for the mutation
-        // window (mirrors MCMC ensure_shN_fp32_for_mutation).
         const bool shN_expanded =
+            !_splat_data->shN_value_quantized() &&
             lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
         lfs::training::sh_value::ShNCommitGuard shn_guard(
             *_splat_data, shN_expanded, "ImprovedGSPlus::LAS_densify");
@@ -500,13 +499,8 @@ namespace lfs::training {
             nullptr);
 
         if (use_shN) {
-            lfs::core::shN_swizzled_gather_to_linear_i64(
-                _splat_data->shN().ptr<float>(),
-                sampled_idxs.ptr<int64_t>(),
-                second_shN.ptr<float>(),
-                static_cast<size_t>(budget_for_alloc),
-                layout_rest_u32,
-                layout_rest_u32);
+            lfs::training::sh_value::gather_shN_to_canonical(
+                *_splat_data, sampled_idxs, second_shN);
         }
 
         // Merge: joint-codec state must reset via the optimizer API (fused scale-zero is a
@@ -580,10 +574,13 @@ namespace lfs::training {
             zero_adam_grads_at_indices(*_optimizer, sampled_idxs, layout_rest_u32);
         }
 
-        // Now place second split results: fill free slots first, then append
+        // Now place second split results: fill free slots first, then append.
+        // One q16 batch so fill dests and the append tail share a single
+        // decode/overlay/encode per touched 256-splat block.
+        lfs::training::sh_value::ShNMutationBatch shn_batch(*_splat_data);
         auto [filled_indices, remaining] = fill_free_slots_with_data(
             second_positions, second_rotations, second_scales,
-            second_sh0, second_shN, second_opacities, budget_for_alloc);
+            second_sh0, second_shN, second_opacities, budget_for_alloc, &shn_batch);
 
         const int64_t num_filled = budget_for_alloc - remaining;
         if (_pending_failure_snapshot.valid) {
@@ -642,18 +639,7 @@ namespace lfs::training {
 
             if (use_shN) {
                 auto append_shN = second_shN.slice(0, num_filled, budget_for_alloc);
-                const size_t new_size = old_size + n_remaining;
-                const size_t needed_floats = lfs::core::sh_swizzled_float_count(new_size, layout_rest_u32);
-                if (_splat_data->shN().numel() < needed_floats) {
-                    _splat_data->shN().append_zeros(needed_floats - _splat_data->shN().numel());
-                }
-                lfs::core::shN_swizzled_gather_from_linear(
-                    _splat_data->shN().ptr<float>(),
-                    old_size,
-                    append_shN.ptr<float>(),
-                    n_remaining,
-                    layout_rest_u32,
-                    layout_rest_u32);
+                shn_batch.append(append_shN, old_size);
             }
 
             // Update optimizer states
@@ -664,6 +650,7 @@ namespace lfs::training {
             _optimizer->extend_state_for_new_params(ParamType::ShN, n_remaining);
             _optimizer->extend_state_for_new_params(ParamType::Opacity, n_remaining);
         }
+        shn_batch.flush();
     }
 
     void ImprovedGSPlus::reset_opacity() {
@@ -1030,7 +1017,8 @@ namespace lfs::training {
         const lfs::core::Tensor& sh0,
         const lfs::core::Tensor& shN,
         const lfs::core::Tensor& opacities,
-        int64_t count) {
+        int64_t count,
+        lfs::training::sh_value::ShNMutationBatch* shn_batch) {
 
         if (!_free_mask.is_valid() || count == 0) {
             return {lfs::core::Tensor(), count};
@@ -1086,17 +1074,13 @@ namespace lfs::training {
         const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
         if (layout_rest > 0 && shN.is_valid() && shN.numel() > 0 &&
             _splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
-            auto target_i32 = target_indices.dtype() == lfs::core::DataType::Int32
-                                  ? target_indices
-                                  : target_indices.to(lfs::core::DataType::Int32);
             auto shN_slice = shN.slice(0, 0, slots_to_fill);
-            lfs::core::shN_swizzled_scatter_linear(
-                _splat_data->shN().ptr<float>(),
-                target_i32.ptr<int>(),
-                shN_slice.ptr<float>(),
-                static_cast<size_t>(slots_to_fill),
-                layout_rest,
-                layout_rest);
+            if (shn_batch) {
+                shn_batch->scatter(target_indices, shN_slice);
+            } else {
+                lfs::training::sh_value::scatter_canonical_into_shN(
+                    *_splat_data, target_indices, shN_slice);
+            }
         }
 
         // Zero residual grads so the post-densify Adam step does not use
