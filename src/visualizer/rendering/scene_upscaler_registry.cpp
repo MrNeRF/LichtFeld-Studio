@@ -4,6 +4,8 @@
 
 #include "rendering/scene_upscaler_registry.hpp"
 
+#include "rendering/nvidia_dlss_plugin.hpp"
+
 #include <algorithm>
 #include <array>
 
@@ -50,6 +52,23 @@ namespace lfs::vis {
                 .input_scale = 0.50f,
             },
         };
+        constexpr std::array NVIDIA_DLSS_PRESETS{
+            SceneUpscalerPreset{
+                .id = "quality",
+                .label_key = "preferences.scene_reconstruction_quality",
+                .input_scale = 2.0f / 3.0f,
+            },
+            SceneUpscalerPreset{
+                .id = "balanced",
+                .label_key = "preferences.scene_reconstruction_balanced",
+                .input_scale = 0.58f,
+            },
+            SceneUpscalerPreset{
+                .id = "performance",
+                .label_key = "preferences.scene_reconstruction_performance",
+                .input_scale = 0.50f,
+            },
+        };
         constexpr std::array DESCRIPTORS{
             SceneUpscalerDescriptor{
                 .backend = SceneUpscalerBackend::Native,
@@ -69,15 +88,45 @@ namespace lfs::vis {
                 .label_key = "preferences.scene_reconstruction_temporal",
                 .presets = TEMPORAL_PRESETS,
             },
+            SceneUpscalerDescriptor{
+                .backend = SceneUpscalerBackend::NvidiaDlss,
+                .id = "nvidia-dlss",
+                .label_key = "preferences.scene_reconstruction_nvidia_dlss",
+                .presets = NVIDIA_DLSS_PRESETS,
+            },
         };
+
+        [[nodiscard]] constexpr std::size_t descriptorCountExcludingNvidiaDlss() {
+            std::size_t count = 0;
+            for (const auto& descriptor : DESCRIPTORS) {
+                if (descriptor.backend != SceneUpscalerBackend::NvidiaDlss)
+                    ++count;
+            }
+            return count;
+        }
+
+        [[nodiscard]] constexpr auto makeDescriptorsWithoutNvidiaDlss() {
+            std::array<SceneUpscalerDescriptor, descriptorCountExcludingNvidiaDlss()> filtered{};
+            std::size_t count = 0;
+            for (const auto& descriptor : DESCRIPTORS) {
+                if (descriptor.backend != SceneUpscalerBackend::NvidiaDlss)
+                    filtered[count++] = descriptor;
+            }
+            return filtered;
+        }
+
+        constexpr auto DESCRIPTORS_WITHOUT_NVIDIA_DLSS = makeDescriptorsWithoutNvidiaDlss();
     } // namespace
 
     std::span<const SceneUpscalerDescriptor> sceneUpscalerDescriptors() {
-        return DESCRIPTORS;
+        if (nvidiaDlssPluginAvailable())
+            return DESCRIPTORS;
+        return DESCRIPTORS_WITHOUT_NVIDIA_DLSS;
     }
 
     const SceneUpscalerDescriptor& sceneUpscalerDescriptor(const SceneUpscalerBackend backend) {
-        const auto found = std::ranges::find(DESCRIPTORS, backend, &SceneUpscalerDescriptor::backend);
+        const auto found =
+            std::ranges::find(DESCRIPTORS, backend, &SceneUpscalerDescriptor::backend);
         return found != DESCRIPTORS.end() ? *found : DESCRIPTORS.front();
     }
 
@@ -86,6 +135,11 @@ namespace lfs::vis {
         if (found == DESCRIPTORS.end())
             return std::nullopt;
         return found->backend;
+    }
+
+    bool sceneUpscalerBackendAvailable(const SceneUpscalerBackend backend) {
+        return std::ranges::contains(
+            sceneUpscalerDescriptors(), backend, &SceneUpscalerDescriptor::backend);
     }
 
     std::string_view sceneUpscalerBackendId(const SceneUpscalerBackend backend) {

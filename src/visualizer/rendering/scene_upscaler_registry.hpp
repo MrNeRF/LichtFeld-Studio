@@ -17,6 +17,7 @@ namespace lfs::vis {
         Native = 0,
         Spatial,
         Temporal,
+        NvidiaDlss,
     };
 
     enum class SceneUpscalerFallback : std::uint8_t {
@@ -54,6 +55,7 @@ namespace lfs::vis {
         SceneUpscalerBackend backend);
     [[nodiscard]] LFS_VIS_API std::optional<SceneUpscalerBackend> sceneUpscalerBackendFromId(
         std::string_view id);
+    [[nodiscard]] LFS_VIS_API bool sceneUpscalerBackendAvailable(SceneUpscalerBackend backend);
     [[nodiscard]] LFS_VIS_API std::string_view sceneUpscalerBackendId(SceneUpscalerBackend backend);
     [[nodiscard]] LFS_VIS_API std::optional<SceneUpscalerPreset> sceneUpscalerPreset(
         SceneUpscalerBackend backend, std::string_view preset_id);

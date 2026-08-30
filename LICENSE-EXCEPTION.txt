@@ -1,0 +1,58 @@
+LichtFeld Studio NVIDIA DLSS Linking Exception
+Version 1.0
+
+Additional permission under GNU General Public License version 3, section 7
+
+
+PURPOSE
+
+This exception is an "additional permission" as described in section 7 of the
+GNU General Public License version 3 (GPLv3). It attaches to LichtFeld Studio,
+which is licensed under GPLv3 or, at your option, any later version. The GPLv3
+text in the LICENSE file is unmodified; this file adds permissions to it and
+does not remove any.
+
+
+GRANT
+
+The copyright holders of LichtFeld Studio who have adopted this exception give
+you permission to combine LichtFeld Studio with the NVIDIA DLSS SDK, the NVIDIA
+NGX SDK, and the redistributable runtime libraries shipped with either of them
+(together, the "NVIDIA DLSS Libraries"), and to convey the resulting combined
+work.
+
+You may convey such a combined work under the terms of GPLv3 for the LichtFeld
+Studio portions and under the terms of the applicable NVIDIA license for the
+NVIDIA DLSS Libraries. The GPLv3 obligation to provide Corresponding Source
+applies to the LichtFeld Studio portions of the combined work. It does not
+extend to the NVIDIA DLSS Libraries themselves.
+
+
+SCOPE AND LIMITS
+
+1. This exception covers only the NVIDIA DLSS Libraries. It grants no
+   permission to combine LichtFeld Studio with any other work that is not
+   licensed compatibly with GPLv3.
+
+2. This exception grants no permission with respect to third-party code
+   distributed with, linked into, or otherwise combined with LichtFeld Studio
+   whose own license does not permit such a combination. Only the copyright
+   holders of that code can grant permission for it.
+
+3. This exception is granted by those LichtFeld Studio copyright holders who
+   have adopted it. It does not purport to bind any copyright holder who has
+   not adopted it.
+
+4. If you modify LichtFeld Studio, you may extend this exception to your
+   modifications, but you are not obligated to do so. If you do not wish to
+   extend it, delete this exception statement from your version.
+
+5. Nothing in this exception grants you any right in the NVIDIA DLSS Libraries.
+   Your use and redistribution of those libraries is governed solely by NVIDIA's
+   own license terms, which you must obtain and accept separately. LichtFeld
+   Studio does not download, bundle the source of, or accept that license on
+   your behalf.
+
+6. This exception adds permissions only. As permitted by section 7 of GPLv3,
+   you may remove it, which leaves LichtFeld Studio available to you under the
+   unmodified terms of GPLv3.

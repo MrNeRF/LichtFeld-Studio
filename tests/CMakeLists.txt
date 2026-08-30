@@ -95,6 +95,7 @@ if(BUILD_TEMPORAL_CPU_TESTS)
         ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/scene_temporal_plan.cpp
         ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/scene_temporal_resolve.cpp
         ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/temporal_frame_tracker.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/passes/vulkan_scene_dlss_pipeline_contract.cpp
         ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/passes/vulkan_scene_temporal_pipeline_contract.cpp
     )
     target_include_directories(lichtfeld_temporal_cpu_tests PRIVATE
@@ -471,6 +472,7 @@ set(TEST_FILES
     test_uuid.cpp
     test_render_settings_defaults.cpp
     test_scene_upscaler_registry.cpp
+    test_scene_upscaler_plugin_api.cpp
     test_scene_motion_contract.cpp
     test_scene_temporal_coordinator.cpp
     test_scene_temporal_plan.cpp

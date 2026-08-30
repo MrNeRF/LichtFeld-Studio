@@ -5,6 +5,8 @@
 #include "visualizer/visualizer.hpp"
 #include "visualizer_impl.hpp"
 
+#include "rendering/nvidia_dlss_plugin.hpp"
+
 #include <atomic>
 #include <mutex>
 #include <utility>
@@ -51,6 +53,7 @@ namespace lfs::vis {
     }
 
     std::unique_ptr<Visualizer> Visualizer::create(const ViewerOptions& options) {
+        configureNvidiaDlssPluginLoading(!options.safe_mode);
         return std::make_unique<VisualizerImpl>(options);
     }
 

@@ -22,7 +22,7 @@ namespace lfs::io::video {
         cudaStream_t stream = nullptr);
 
     // Convert RGB float32 (0.0-1.0) to YUV420P (separate Y, U, V planes) on GPU
-    // Fallback for x264 if NVENC unavailable
+    // Software fallback when NVENC is unavailable
     void rgbToYuv420pCuda(
         const float* rgb_src, // GPU pointer, RGB float32
         uint8_t* y_dst,       // GPU pointer, Y plane [height * width]

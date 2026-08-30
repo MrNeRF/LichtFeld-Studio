@@ -487,6 +487,7 @@ find_package(Threads REQUIRED)
 find_package(Vulkan REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(volk CONFIG REQUIRED)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SetupNvidiaDlss.cmake")
 find_package(SDL3 REQUIRED)
 lfs_validate_linux_sdl_video_backends()
 find_package(glm REQUIRED)
@@ -591,6 +592,9 @@ add_subdirectory(src/rendering)  # Rendering module (lfs::rendering namespace)
 add_subdirectory(src/sequencer)  # Sequencer module (lfs::sequencer namespace)
 add_subdirectory(src/preprocessing) # CLI preprocessing module (ONNXRuntime)
 add_subdirectory(src/visualizer) # Visualizer module (lfs::vis namespace)
+if(LFS_NVIDIA_DLSS_AVAILABLE)
+    add_subdirectory(src/scene_upscalers/nvidia_dlss)
+endif()
 add_subdirectory(src/tcp)        # TCP event server (ZMQ responder + publisher)
 add_subdirectory(src/geometry)   # Geometry utilities
 add_subdirectory(src/mcp)        # MCP server (AI agent integration)
@@ -616,6 +620,9 @@ add_executable(${PROJECT_NAME}
     src/app/converter.cpp
     resources/lichtfeld-studio.rc
 )
+if(TARGET lfs_scene_upscaler_nvidia_dlss)
+    add_dependencies(${PROJECT_NAME} lfs_scene_upscaler_nvidia_dlss)
+endif()
 
 # The binary only carries code for these architectures; the app refuses to start on anything
 # lower instead of dying inside the first kernel launch (#1540).

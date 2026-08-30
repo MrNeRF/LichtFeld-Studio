@@ -22,11 +22,25 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <mutex>
 #include <stdexcept>
+#include <string>
+#include <unordered_set>
 
 namespace lfs::vis {
 
     namespace {
+        void warnUnavailableSceneUpscalerOnce(const std::string& attempted_id) {
+            static std::mutex mutex;
+            static std::unordered_set<std::string> warned_ids;
+            std::lock_guard lock(mutex);
+            if (!warned_ids.insert(attempted_id).second)
+                return;
+            LOG_WARN("Scene reconstruction backend '{}' is not available in this process; "
+                     "keeping the previous backend",
+                     attempted_id);
+        }
+
         // Sanitizes the screen-window fields, plus a one-shot migration of the
         // legacy positive-Z depth box. General near/far normalization still does
         // not belong here: the tool and GUI bindings rewrite depth_filter_min/max
@@ -501,6 +515,18 @@ namespace lfs::vis {
                                           const DirtyMask dirty_flags,
                                           const SceneUpscalerPresetUpdate preset_update) {
         RenderSettings sanitized_settings = new_settings;
+        if (const auto requested = sceneUpscalerBackendFromId(sanitized_settings.scene_upscaler);
+            requested && !sceneUpscalerBackendAvailable(*requested)) {
+            std::string previous_backend_id;
+            {
+                std::lock_guard lock(settings_mutex_);
+                previous_backend_id = settings_.scene_upscaler;
+            }
+            if (sanitized_settings.scene_upscaler != previous_backend_id) {
+                warnUnavailableSceneUpscalerOnce(sanitized_settings.scene_upscaler);
+                sanitized_settings.scene_upscaler = std::move(previous_backend_id);
+            }
+        }
         const auto backend = sceneUpscalerBackendFromId(sanitized_settings.scene_upscaler)
                                  .value_or(SceneUpscalerBackend::Native);
         const std::string backend_id(sceneUpscalerBackendId(backend));

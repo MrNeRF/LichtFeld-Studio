@@ -4,6 +4,8 @@
 
 #include "vulkan_context.hpp"
 
+#include "rendering/nvidia_dlss_plugin.hpp"
+
 #include "core/cuda_error.hpp"
 #include "core/environment.hpp"
 #include "core/exportable_storage.hpp"
@@ -677,6 +679,10 @@ namespace lfs::vis {
                           static_cast<int>(idle_result));
             }
         }
+        // Optional vendor runtimes retain the Vulkan device passed at lazy
+        // initialization. Shut them down after all GPU work is retired and
+        // before the allocator/device they reference are destroyed.
+        NvidiaDlssPlugin::instance().shutdownRuntime();
 
         // #1488: surface leaked External* counts after idle, before device destroy.
         {
@@ -2126,6 +2132,21 @@ namespace lfs::vis {
                 available_extension_count);
             available_extensions.resize(available_extension_count);
         }
+        const auto dlss_instance_extensions =
+            NvidiaDlssPlugin::instance().requiredInstanceExtensions();
+        const auto missing_dlss_instance_extension = std::ranges::find_if(
+            dlss_instance_extensions,
+            [&available_extensions](const std::string& name) {
+                return !extensionAvailable(available_extensions, name.c_str());
+            });
+        if (missing_dlss_instance_extension != dlss_instance_extensions.end()) {
+            NvidiaDlssPlugin::instance().markBootstrapFailed(std::format(
+                "required Vulkan instance extension '{}' is unavailable",
+                *missing_dlss_instance_extension));
+        } else {
+            for (const auto& name : dlss_instance_extensions)
+                appendUniqueExtension(extensions, name.c_str());
+        }
         instance_external_memory_capabilities_enabled_ =
             extensionAvailable(available_extensions, VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME);
         if (instance_external_memory_capabilities_enabled_) {
@@ -2559,6 +2580,21 @@ namespace lfs::vis {
         }
 
         std::vector<const char*> extensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+        const auto dlss_device_extensions =
+            NvidiaDlssPlugin::instance().requiredDeviceExtensions(instance_, physical_device_);
+        const auto missing_dlss_device_extension = std::ranges::find_if(
+            dlss_device_extensions,
+            [&available_extensions](const std::string& name) {
+                return !extensionAvailable(available_extensions, name.c_str());
+            });
+        if (missing_dlss_device_extension != dlss_device_extensions.end()) {
+            NvidiaDlssPlugin::instance().markBootstrapFailed(std::format(
+                "required Vulkan device extension '{}' is unavailable",
+                *missing_dlss_device_extension));
+        } else {
+            for (const auto& name : dlss_device_extensions)
+                appendUniqueExtension(extensions, name.c_str());
+        }
         const bool has_external_memory =
             instance_external_memory_capabilities_enabled_ &&
             extensionAvailable(available_extensions, VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME);

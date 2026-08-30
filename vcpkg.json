@@ -13,8 +13,8 @@
         "avfilter",
         "avformat",
         "nvcodec",
-        "swscale",
-        "x264"
+        "openh264",
+        "swscale"
       ]
     },
     "freetype",
