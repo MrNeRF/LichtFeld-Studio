@@ -16,13 +16,21 @@ namespace lfs::training {
             if (need == 0 || current >= need) {
                 return current;
             }
+            // The first reservation is supplied by the model allocator. Do
+            // not add another headroom multiplier to it; later refinements
+            // retain the bounded growth pattern.
+            if (current == 0) {
+                return need;
+            }
             return std::max(
                 need,
                 static_cast<size_t>(static_cast<double>(std::max(current, need)) * 1.2) + 1);
         }
     } // namespace detail
 
-    // Grow-only Gumbel-top-k sort buffers + CUB workspace, pre-sized to max_cap.
+    // Grow-only Gumbel-top-k sort buffers + CUB workspace. The initial N
+    // reservation is supplied by the model's reserved capacity; later
+    // refinements grow on demand.
     struct GumbelTopKScratch {
         lfs::core::Tensor keys;
         lfs::core::Tensor indices;

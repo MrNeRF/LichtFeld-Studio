@@ -67,6 +67,35 @@ namespace lfs::training {
         };
         FrozenMaskCache g_frozen_mask_cache;
 
+        void grow_score_preserving_prefix(
+            lfs::core::Tensor& scores,
+            const size_t desired_capacity,
+            const lfs::core::Device device) {
+            if (scores.capacity() >= desired_capacity) {
+                return;
+            }
+            const bool direct_cuda_storage =
+                device == lfs::core::Device::CUDA &&
+                (scores.is_external_storage() || !scores.external_storage_kind().empty());
+            if (!direct_cuda_storage) {
+                scores.reserve(desired_capacity);
+                return;
+            }
+
+            const lfs::core::Tensor source = scores;
+            auto grown = lfs::core::Tensor::zeros_direct(
+                source.shape(), desired_capacity, device, source.dtype());
+            if (source.numel() > 0) {
+                const auto stream = grown.stream();
+                source.sync_to_stream(stream);
+                LFS_CUDA_CHECK(cudaMemcpyAsync(
+                    grown.data_ptr(), source.data_ptr(), source.bytes(),
+                    cudaMemcpyDeviceToDevice, stream));
+                LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+            }
+            scores = std::move(grown);
+        }
+
     } // namespace
 
     std::uint64_t frozen_mask_rebuild_count() noexcept {
@@ -379,9 +408,12 @@ namespace lfs::training {
         if (n_capacity >= n) {
             return;
         }
-        // One-shot to max(n, 1.2×) so densify climb does not re-driver-alloc.
-        const size_t new_cap = std::max(
-            n, static_cast<size_t>(static_cast<double>(std::max(n_capacity, n)) * 1.2) + 1);
+        // Match the model reservation on first use; retain headroom only for
+        // subsequent growth beyond that reservation.
+        const size_t new_cap = n_capacity == 0
+                                   ? n
+                                   : std::max(
+                                         n, static_cast<size_t>(static_cast<double>(std::max(n_capacity, n)) * 1.2) + 1);
         f32_a = Tensor::zeros_direct(TensorShape({new_cap}), new_cap, device, DataType::Float32);
         bool_a = Tensor::zeros_direct(TensorShape({new_cap}), new_cap, device, DataType::Bool);
         n_capacity = new_cap;
@@ -396,8 +428,10 @@ namespace lfs::training {
         if (k_capacity >= k) {
             return;
         }
-        const size_t new_cap = std::max(
-            k, static_cast<size_t>(static_cast<double>(std::max(k_capacity, k)) * 1.2) + 1);
+        const size_t new_cap = k_capacity == 0
+                                   ? k
+                                   : std::max(
+                                         k, static_cast<size_t>(static_cast<double>(std::max(k_capacity, k)) * 1.2) + 1);
         i64_a = Tensor::empty({new_cap}, device, DataType::Int64);
         i64_b = Tensor::empty({new_cap}, device, DataType::Int64);
         k_capacity = new_cap;
@@ -550,13 +584,14 @@ namespace lfs::training {
         const size_t cur = scores.numel();
         if (cur == n) {
             if (desired_cap > n && scores.capacity() < desired_cap) {
-                scores.reserve(desired_cap);
+                grow_score_preserving_prefix(scores, desired_cap, device);
             }
             return;
         }
         if (cur < n) {
             if (scores.capacity() < desired_cap) {
-                if (scores.capacity() == 0 || scores.is_external_storage()) {
+                if (scores.capacity() == 0 || scores.is_external_storage() ||
+                    !scores.external_storage_kind().empty()) {
                     // Slow path: realloc with headroom.
                     auto fresh = desired_cap > n
                                      ? Tensor::zeros_direct(TensorShape({n}), desired_cap, device)

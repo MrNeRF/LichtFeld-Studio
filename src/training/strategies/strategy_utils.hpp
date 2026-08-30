@@ -97,7 +97,8 @@ namespace lfs::training {
 
     /**
      * Grow-only N-row densify scratch for masks and weights.
-     * Sized once to max_cap so refine never re-driver-allocs as live N climbs.
+     * Initially sized to the model's reserved capacity so refine does not
+     * over-allocate against the configured max cap from iteration zero.
      */
     struct DensifyNScratch {
         lfs::core::Tensor f32_a;  // weights / scores

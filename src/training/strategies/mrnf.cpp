@@ -197,6 +197,54 @@ namespace lfs::training {
             return std::pow(end / start, 1.0 / static_cast<double>(steps));
         }
 
+        [[nodiscard]] size_t splat_reserved_capacity(const lfs::core::SplatData& splat_data) {
+            const size_t n = static_cast<size_t>(splat_data.size());
+            if (!splat_data.means().is_valid()) {
+                return n;
+            }
+            // The GUI/exportable allocator commits live-N plus headroom and
+            // grows that reservation through preflight_grow_capacity().  The
+            // headless path may already be reserved to max_cap.  Use the
+            // parameter reservation in both cases, never the configured cap
+            // as an independent scratch allocation policy.
+            return std::max(splat_data.means().capacity(), n);
+        }
+
+        void grow_tensor_preserving_prefix(
+            lfs::core::Tensor& tensor,
+            const size_t desired_capacity) {
+            if (!tensor.is_valid() || tensor.capacity() >= desired_capacity) {
+                return;
+            }
+
+            const auto kind = tensor.external_storage_kind();
+            const bool direct_cuda_storage =
+                tensor.device() == lfs::core::Device::CUDA &&
+                (tensor.is_external_storage() || !kind.empty());
+            if (!direct_cuda_storage) {
+                tensor.reserve(desired_capacity);
+                return;
+            }
+
+            // Tensor::reserve() is deliberately forbidden for cuda.direct and
+            // externally-owned storage. Rebuild the owner, copy the logical
+            // prefix, and only then swap it in. All MRNF callers use private
+            // auxiliary tensors here; model/exportable tensors grow through
+            // SplatData::ensure_param_capacity() instead.
+            const lfs::core::Tensor source = tensor;
+            auto grown = lfs::core::Tensor::zeros_direct(
+                source.shape(), desired_capacity, source.device(), source.dtype());
+            if (source.numel() > 0) {
+                const cudaStream_t copy_stream = grown.stream();
+                source.sync_to_stream(copy_stream);
+                LFS_CUDA_CHECK(cudaMemcpyAsync(
+                    grown.data_ptr(), source.data_ptr(), source.bytes(),
+                    cudaMemcpyDeviceToDevice, copy_stream));
+                LFS_CUDA_CHECK(cudaStreamSynchronize(copy_stream));
+            }
+            tensor = std::move(grown);
+        }
+
         void reset_vector_buffer(
             lfs::core::Tensor& tensor,
             const size_t size,
@@ -238,7 +286,7 @@ namespace lfs::training {
 
             if (current_size == size) {
                 if (desired_capacity > size && tensor.capacity() < desired_capacity) {
-                    tensor.reserve(desired_capacity);
+                    grow_tensor_preserving_prefix(tensor, desired_capacity);
                 }
                 tensor.zero_();
                 return;
@@ -246,7 +294,7 @@ namespace lfs::training {
 
             if (current_size < size) {
                 if (tensor.capacity() < desired_capacity) {
-                    tensor.reserve(desired_capacity);
+                    grow_tensor_preserving_prefix(tensor, desired_capacity);
                 }
                 tensor.append_zeros(size - current_size);
                 tensor.zero_();
@@ -394,13 +442,13 @@ namespace lfs::training {
 
             if (!free_mask.is_valid()) {
                 splat_data.deleted() = lfs::core::Tensor::zeros_bool({current_size}, splat_data.means().device());
-                splat_data.deleted().reserve(desired_capacity);
+                grow_tensor_preserving_prefix(splat_data.deleted(), desired_capacity);
                 splat_data.notify_deleted_mask_changed();
                 return;
             }
 
             splat_data.deleted() = free_mask.slice(0, 0, current_size).clone();
-            splat_data.deleted().reserve(desired_capacity);
+            grow_tensor_preserving_prefix(splat_data.deleted(), desired_capacity);
             splat_data.notify_deleted_mask_changed();
         }
 
@@ -675,13 +723,14 @@ namespace lfs::training {
 
         ensure_densification_info_shape();
 
-        const size_t capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap)
-                                                     : static_cast<size_t>(_splat_data->size());
-        _free_mask = Tensor::zeros_bool({capacity}, _splat_data->means().device());
+        const size_t capacity = splat_reserved_capacity(*_splat_data);
+        _free_mask = Tensor::zeros_direct(
+            TensorShape({capacity}), capacity, _splat_data->means().device(), DataType::Bool);
         sync_deleted_mask_from_free_mask(*_splat_data, _free_mask);
 
-        // Pre-size densification scratch to max_cap so increasing live N does not
-        // allocate from the driver during refinement.
+        // Pre-size densification scratch to the parameter reservation so
+        // increasing live N within the allocator's headroom does not allocate
+        // from the driver during refinement.
         if (capacity > 0) {
             const auto device = _splat_data->means().device();
             _densify_n_scratch.ensure_n(capacity, device);
@@ -696,7 +745,7 @@ namespace lfs::training {
 
         const size_t n = static_cast<size_t>(_splat_data->size());
         _initial_sfm_point_count = n;
-        const size_t tracking_capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
+        const size_t tracking_capacity = splat_reserved_capacity(*_splat_data);
         reset_vector_buffer(_refine_weight_max, n, _splat_data->means().device(), tracking_capacity);
         reset_vector_buffer(_vis_count, n, _splat_data->means().device(), tracking_capacity);
         if (cfg_ratio_rank_on()) {
@@ -1390,7 +1439,7 @@ namespace lfs::training {
         ensure_mean_step_far_mask();
 
         const size_t new_n = static_cast<size_t>(_splat_data->size());
-        const size_t tracking_capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
+        const size_t tracking_capacity = splat_reserved_capacity(*_splat_data);
         reset_vector_buffer(_refine_weight_max, new_n, _splat_data->means().device(), tracking_capacity);
         reset_vector_buffer(_vis_count, new_n, _splat_data->means().device(), tracking_capacity);
         if (cfg_ratio_rank_on()) {
@@ -1901,8 +1950,8 @@ namespace lfs::training {
             begin_far_growth_window(n, 0);
         }
         const size_t current_active = active_count();
-        // densify N-scratch pre-sized to max_cap; views avoid per-refine
-        // driver allocs (post-refine trim_memory_pool would otherwise force
+        // densify N-scratch pre-sized to the parameter reservation; views avoid
+        // per-refine driver allocs (post-refine trim_memory_pool would otherwise force
         // pool misses on every growing exact size).
         _densify_n_scratch.ensure_n(n, Device::CUDA);
         if (PerfBenchCollector::enabled()) {
@@ -2877,13 +2926,10 @@ namespace lfs::training {
             return 0;
         }
 
-        // Grow free_mask bookkeeping first, then params (size()), then the
-        // deleted mask — never leave deleted.numel() != size() mid-grow
-        // (viewer packer rejects stale masks and freezes the viewport).
-        if (_free_mask.is_valid() && _free_mask.numel() < old_size + n_append) {
-            _free_mask.reserve(old_size + n_append);
-            _free_mask.append_zeros(n_append);
-        }
+        // Grow bookkeeping first, then params (size()), then the deleted mask
+        // — never leave deleted.numel() != size() mid-grow (the viewer packer
+        // rejects stale masks and freezes the viewport).
+        ensure_auxiliary_capacity_for_growth(old_size + n_append);
 
         auto append_means = child_means.slice(0, append_start, K);
         auto append_sh0 = child_sh0.slice(0, append_start, K);
@@ -2926,6 +2972,39 @@ namespace lfs::training {
         }
 
         return n_append;
+    }
+
+    void MRNF::ensure_auxiliary_capacity_for_growth(const size_t target_size) {
+        using namespace lfs::core;
+        if (target_size == 0) {
+            return;
+        }
+
+        const auto device = _splat_data->means().device();
+        const size_t reserved = std::max(target_size, splat_reserved_capacity(*_splat_data));
+        const auto ensure = [&](Tensor& tensor, const DataType dtype) {
+            if (!tensor.is_valid() || tensor.ndim() != 1 || tensor.device() != device ||
+                tensor.dtype() != dtype) {
+                tensor = Tensor::zeros_direct(TensorShape({target_size}), reserved, device, dtype);
+                return;
+            }
+            if (tensor.capacity() < reserved) {
+                grow_tensor_preserving_prefix(tensor, reserved);
+            }
+            if (tensor.numel() < target_size) {
+                tensor.append_zeros(target_size - tensor.numel());
+            }
+        };
+
+        ensure(_free_mask, DataType::Bool);
+        ensure(_refine_weight_max, DataType::Float32);
+        ensure(_vis_count, DataType::Float32);
+        if (cfg_ratio_rank_on() || _refine_ratio_max.is_valid()) {
+            ensure(_refine_ratio_max, DataType::Float32);
+        }
+        if (_explore_score_sum.is_valid()) {
+            ensure(_explore_score_sum, DataType::Float32);
+        }
     }
 
     void MRNF::seed_from_view(int iter, const RenderOutput& render_output) {
@@ -3497,17 +3576,22 @@ namespace lfs::training {
         }
 
         if (!_free_mask.is_valid()) {
-            const size_t capacity = (_params && _params->max_cap > 0)
-                                        ? static_cast<size_t>(_params->max_cap)
-                                        : static_cast<size_t>(_splat_data->size());
-            _free_mask = lfs::core::Tensor::zeros_bool({capacity}, _splat_data->means().device());
+            const size_t capacity = splat_reserved_capacity(*_splat_data);
+            _free_mask = lfs::core::Tensor::zeros_direct(
+                {capacity}, capacity, _splat_data->means().device(), lfs::core::DataType::Bool);
         }
         sync_deleted_mask_from_free_mask(*_splat_data, _free_mask);
 
         const size_t n = static_cast<size_t>(_splat_data->size());
-        const size_t tracking_capacity = (_params && _params->max_cap > 0)
-                                             ? static_cast<size_t>(_params->max_cap)
-                                             : 0;
+        const size_t capacity = splat_reserved_capacity(*_splat_data);
+        const auto device = _splat_data->means().device();
+        if (capacity > 0) {
+            _densify_n_scratch.ensure_n(capacity, device);
+            _densify_n_scratch.ensure_k(std::max(capacity / 20, size_t{1024}), device);
+            _gumbel_scratch.ensure_n(capacity, device);
+            _median_scratch.ensure_n(capacity, device);
+        }
+        const size_t tracking_capacity = capacity;
         reset_vector_buffer(_refine_weight_max, n, _splat_data->means().device(), tracking_capacity);
         reset_vector_buffer(_vis_count, n, _splat_data->means().device(), tracking_capacity);
         reset_vector_buffer(_explore_score_sum, n, _splat_data->means().device(), tracking_capacity);

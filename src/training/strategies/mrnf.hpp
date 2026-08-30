@@ -48,6 +48,7 @@ class MRNFStrategyTest_CadenceScaledMatchesRefineEvery_Test;
 class MRNFStrategyTest_FarStarvationFactorFromSyntheticPopulations_Test;
 class MRNFStrategyTest_CensusGateActivatesAndSuppressesFarFeatures_Test;
 class MRNFStrategyTest_ExploreStarvationWeights_Test;
+class MRNFStrategyTest_DirectAuxiliaryGrowthPreservesPrefix_Test;
 class MRNFStrategyTest_BackgroundImprovementsOffDisablesEveryProfileMechanism_Test;
 class MRNFStrategyTest_BackgroundImprovementsOnKeepsProfileMechanisms_Test;
 
@@ -139,6 +140,7 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_FarStarvationFactorFromSyntheticPopulations_Test;
         friend class ::MRNFStrategyTest_CensusGateActivatesAndSuppressesFarFeatures_Test;
         friend class ::MRNFStrategyTest_ExploreStarvationWeights_Test;
+        friend class ::MRNFStrategyTest_DirectAuxiliaryGrowthPreservesPrefix_Test;
         friend class ::MRNFStrategyTest_BackgroundImprovementsOffDisablesEveryProfileMechanism_Test;
         friend class ::MRNFStrategyTest_BackgroundImprovementsOnKeepsProfileMechanisms_Test;
 
@@ -302,6 +304,12 @@ namespace lfs::training {
             const lfs::core::Tensor& active_mask,
             const lfs::core::Tensor& trainable_mask,
             const lfs::core::Tensor& edge_guidance) const;
+
+        // Grow MRNF bookkeeping after parameter preflight and before any
+        // parameter append. This is intentionally grow-only: refine resets
+        // the buffers after the append, while this step preserves their live
+        // prefix across a reservation boundary.
+        void ensure_auxiliary_capacity_for_growth(size_t target_size);
 
         // MRNF uses independent exponential schedules for mean and scale learning rates.
         double _mean_lr_unscaled = 0.0;

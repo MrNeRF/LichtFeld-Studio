@@ -491,20 +491,28 @@ namespace lfs::io {
 
         cleanup_stale_run_spill_directories();
         config_.jpeg_batch_size = std::clamp<size_t>(config_.jpeg_batch_size, 1, 12);
+        if (config_.decode_frame_ring_capacity == 0) {
+            config_.decode_frame_ring_capacity = DECODE_FRAME_RING_CAPACITY;
+        }
+        config_.decode_frame_ring_capacity = std::clamp<size_t>(
+            config_.decode_frame_ring_capacity, 4, DECODE_FRAME_RING_CAPACITY);
         if (config_.max_cache_bytes == 0)
             config_.max_cache_bytes = static_cast<size_t>(
                 static_cast<double>(get_total_physical_memory()) * 0.90);
         {
             std::lock_guard<std::mutex> lock(adaptive_mutex_);
-            adaptive_target_ = std::clamp<size_t>(config_.prefetch_count, 2, 12);
+            adaptive_max_target_ = config_.decode_frame_ring_capacity - 2;
+            adaptive_target_ = std::clamp<size_t>(
+                config_.prefetch_count, 2, adaptive_max_target_);
         }
 
         ledger_.reserve(std::max(config_.prefetch_count, config_.output_queue_size) * 2);
 
-        LOG_INFO("[PipelinedImageLoader] batch_size={}, prefetch={}, output_queue={}, io_threads={}, cold_threads={}, 16bit_color={}",
+        LOG_INFO("[PipelinedImageLoader] batch_size={}, prefetch={}, output_queue={}, ring_capacity={}, io_threads={}, cold_threads={}, 16bit_color={}",
                  config_.jpeg_batch_size,
                  config_.prefetch_count,
                  config_.output_queue_size,
+                 config_.decode_frame_ring_capacity,
                  config_.io_threads,
                  config_.cold_process_threads,
                  config_.use_16bit_color);
@@ -534,7 +542,7 @@ namespace lfs::io {
 
         running_ = true;
         decoded_frame_ring_ = std::make_shared<DecodedFrameRing>(
-            DECODE_FRAME_RING_CAPACITY, &running_);
+            config_.decode_frame_ring_capacity, &running_);
         decoded_frame_ring_->set_capacity(adaptive_target_ + 2);
         decode_hwc_workspace_.resize(config_.jpeg_batch_size);
 
@@ -854,10 +862,10 @@ namespace lfs::io {
                                           std::max(0.01, train_latency_ema_ms_))) +
                 2,
             2,
-            12);
+            adaptive_max_target_);
         size_t next = adaptive_target_;
         if (window_dl_wait_ms > 0.05) {
-            next = std::min<size_t>(12, std::max(next + 1, recommended));
+            next = std::min(adaptive_max_target_, std::max(next + 1, recommended));
             adaptive_low_recommendation_windows_ = 0;
             adaptive_growth_cooldown_windows_ = 4;
         } else {
@@ -867,7 +875,7 @@ namespace lfs::io {
             } else if (recommended < adaptive_target_) {
                 ++adaptive_low_recommendation_windows_;
                 if (adaptive_low_recommendation_windows_ >= 4) {
-                    next = std::min<size_t>(12, std::max<size_t>(2, recommended + 1));
+                    next = std::min(adaptive_max_target_, std::max<size_t>(2, recommended + 1));
                     adaptive_low_recommendation_windows_ = 0;
                 }
             } else {

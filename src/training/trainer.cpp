@@ -1134,6 +1134,20 @@ namespace lfs::training {
                 std::max<size_t>(1, config.decoder_pool_size),
                 std::max<size_t>(1, config.jpeg_batch_size));
 
+            // The ring is only a reusable decode staging window. Keep two
+            // safety slots beyond the tuned prefetch target so the adaptive
+            // loader can absorb normal jitter, while avoiding the historical
+            // 14-slot resident allocation when the measured pipeline is
+            // shallower. A zero/oversized value still falls back to the
+            // loader's historical cap.
+            const size_t historical_ring_cap =
+                config.decode_frame_ring_capacity == 0
+                    ? lfs::io::DECODE_FRAME_RING_CAPACITY
+                    : config.decode_frame_ring_capacity;
+            const size_t tuned_target = std::clamp<size_t>(config.prefetch_count, 2, 12);
+            config.decode_frame_ring_capacity = std::min(
+                historical_ring_cap, tuned_target + 2);
+
             return config;
         }
 

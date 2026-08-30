@@ -24,6 +24,7 @@ class MRNFStrategyTest_CadenceScaledMatchesRefineEvery_Test;
 class MRNFStrategyTest_FarStarvationFactorFromSyntheticPopulations_Test;
 class MRNFStrategyTest_CensusGateActivatesAndSuppressesFarFeatures_Test;
 class MRNFStrategyTest_ExploreStarvationWeights_Test;
+class MRNFStrategyTest_DirectAuxiliaryGrowthPreservesPrefix_Test;
 
 #include "core/camera.hpp"
 #include "core/cuda/sh_layout.cuh"
@@ -629,6 +630,57 @@ TEST(MRNFStrategyTest, ShNReservationTracksMaxDegreeAndMaxCap) {
     const auto fused = scheduled_strategy.get_optimizer().prepare_fastgs_fused_adam(1001);
     EXPECT_TRUE(fused.shN.enabled);
     expect_shN_capacity(scheduled_splat, scheduled_strategy.get_optimizer(), 1);
+}
+
+TEST(MRNFStrategyTest, DirectAuxiliaryGrowthPreservesPrefix) {
+    constexpr size_t sfm_points = 8;
+    constexpr size_t grown_points = sfm_points * 3;
+
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(sfm_points));
+    MRNF strategy(splat_data);
+    auto params = vanilla_mrnf_params();
+    params.max_cap = 0;
+    params.growth_ratio_rank = true;
+    strategy.initialize(params);
+
+    // Model the post-SfM state immediately before a reservation boundary:
+    // every MRNF auxiliary is a direct-storage tensor with only SfM rows.
+    strategy._free_mask = Tensor::zeros_direct(
+        {sfm_points}, sfm_points, Device::CUDA, DataType::Bool);
+    const auto direct_float = [](const size_t n, const float value) {
+        auto tensor = Tensor::zeros_direct({n}, n, Device::CUDA, DataType::Float32);
+        tensor.copy_from(Tensor::full({n}, value, Device::CUDA));
+        return tensor;
+    };
+    strategy._refine_weight_max = direct_float(sfm_points, 1.25f);
+    strategy._vis_count = direct_float(sfm_points, 2.5f);
+    strategy._refine_ratio_max = direct_float(sfm_points, 3.75f);
+    strategy._explore_score_sum = direct_float(sfm_points, 5.0f);
+
+    EXPECT_TRUE(strategy.get_optimizer().preflight_grow_capacity(grown_points - sfm_points));
+    EXPECT_NO_THROW(strategy.ensure_auxiliary_capacity_for_growth(grown_points));
+
+    const auto expect_grown = [grown_points](const Tensor& tensor) {
+        EXPECT_EQ(tensor.numel(), grown_points);
+        EXPECT_GE(tensor.capacity(), grown_points);
+    };
+    expect_grown(strategy._free_mask);
+    expect_grown(strategy._refine_weight_max);
+    expect_grown(strategy._vis_count);
+    expect_grown(strategy._refine_ratio_max);
+    expect_grown(strategy._explore_score_sum);
+
+    const auto expect_prefix = [sfm_points](const Tensor& tensor, const float expected) {
+        const auto prefix = tensor.slice(0, 0, sfm_points).cpu();
+        const auto* values = prefix.ptr<float>();
+        for (size_t i = 0; i < sfm_points; ++i) {
+            EXPECT_FLOAT_EQ(values[i], expected);
+        }
+    };
+    expect_prefix(strategy._refine_weight_max, 1.25f);
+    expect_prefix(strategy._vis_count, 2.5f);
+    expect_prefix(strategy._refine_ratio_max, 3.75f);
+    expect_prefix(strategy._explore_score_sum, 5.0f);
 }
 
 TEST(MRNFStrategyTest, GrowAndSplitUsesIgsPlusSplitRule) {
