@@ -242,16 +242,11 @@ _vulkan_add_slang_shader(compose_tile_batches_plain      tile_batch_shader.slang
 # compact-slot outputs, visible-bounded sort/cumsum/key generation, and
 # compact-slot overlay raster variants.
 _vulkan_add_slang_shader(cull_splats                  cull_splats.slang EXPORT_MODE=0 CULL_ENTRY=1)
-_vulkan_add_slang_shader(cull_splats_3dgut            cull_splats.slang EXPORT_MODE=0 CULL_ENTRY=1 LFS_3DGUT_PROJECTION=1)
 _vulkan_add_slang_shader(cull_prepare                 cull_splats.slang EXPORT_MODE=0 CULL_ENTRY=2)
 _vulkan_add_slang_shader(projection_forward_survivors vertex_shader.slang EXPORT_MODE=0 LFS_PROJECTION_SURVIVORS=1)
-_vulkan_add_slang_shader(projection_forward_survivors_3dgut vertex_shader.slang EXPORT_MODE=0 LFS_PROJECTION_SURVIVORS=1 LFS_3DGUT_PROJECTION=1)
 _vulkan_add_slang_shader(projection_forward_quant_survivors vertex_shader.slang EXPORT_MODE=0 LFS_PROJECTION_SURVIVORS=1 LFS_QUANT_POOL=1)
-_vulkan_add_slang_shader(projection_forward_quant_survivors_3dgut vertex_shader.slang EXPORT_MODE=0 LFS_PROJECTION_SURVIVORS=1 LFS_QUANT_POOL=1 LFS_3DGUT_PROJECTION=1)
 _vulkan_add_slang_shader(projection_forward_shn_f16_survivors vertex_shader.slang EXPORT_MODE=0 LFS_PROJECTION_SURVIVORS=1 LFS_SHN_F16=1)
-_vulkan_add_slang_shader(projection_forward_shn_f16_survivors_3dgut vertex_shader.slang EXPORT_MODE=0 LFS_PROJECTION_SURVIVORS=1 LFS_SHN_F16=1 LFS_3DGUT_PROJECTION=1)
 _vulkan_add_slang_shader(projection_forward_shn_q16_survivors vertex_shader.slang EXPORT_MODE=0 LFS_PROJECTION_SURVIVORS=1 LFS_SHN_Q16=1)
-_vulkan_add_slang_shader(projection_forward_shn_q16_survivors_3dgut vertex_shader.slang EXPORT_MODE=0 LFS_PROJECTION_SURVIVORS=1 LFS_SHN_Q16=1 LFS_3DGUT_PROJECTION=1)
 _vulkan_add_slang_shader(prepare_visible_chain        prepare_visible_chain.slang)
 _vulkan_add_slang_shader(copy_visible_indices         copy_visible_indices.slang)
 _vulkan_add_slang_shader(cumsum_block_scan_indirect        cumsum.slang CUMSUM_PHASE=1 CUMSUM_INDIRECT=1)
