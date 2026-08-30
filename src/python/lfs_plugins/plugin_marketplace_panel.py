@@ -31,8 +31,7 @@ SUCCESS_DISMISS_SEC = 3.0
 ERROR_DISMISS_SEC = 5.0
 _CARD_GAP_DP = 12
 _CARD_MIN_WIDTH_DP = 220
-_GRID_SIDE_MARGIN_DP = 20
-_SCROLLBAR_GUTTER_DP = 16
+_MAX_CARD_DESCRIPTION_CHARS = 90
 
 _PHASE_MILESTONES: List[Tuple[str, float]] = [
     ("cloning", 0.05),
@@ -80,7 +79,10 @@ class PluginMarketplacePanel(Panel):
     template = "rmlui/plugin_marketplace.rml"
     height_mode = lf.ui.PanelHeightMode.FILL
     size = (770, 560)
-    update_policy = "dirty"
+    # The card slots depend on the live viewport width, which changes while a
+    # floating window is resized even when the model itself is not dirty.
+    update_policy = "interval"
+    update_interval_ms = 250
 
     def __init__(self):
         self._catalog = PluginMarketplaceCatalog()
@@ -116,6 +118,7 @@ class PluginMarketplacePanel(Panel):
         self._view_mode = _VIEW_MODE_LIST
         self._last_lang = ""
         self._last_grid_signature: Optional[Tuple] = None
+        self._last_catalog_status_signature: Optional[Tuple[str, str]] = None
         self._escape_revert = w.EscapeRevertController()
         self._reactive_unsubscribers = []
         self._model_update_scheduled = False
@@ -191,6 +194,7 @@ class PluginMarketplacePanel(Panel):
         self._entries_dirty = True
         self._last_card_phases.clear()
         self._last_grid_signature = None
+        self._last_catalog_status_signature = None
         self._stable_layout_width = None
         self._escape_revert.clear()
 
@@ -416,7 +420,10 @@ class PluginMarketplacePanel(Panel):
                 if p.name == plugin_name:
                     desc = p.description
                     break
-        description = self._truncate_text(desc or tr("plugin_marketplace.no_description"), 90)
+        # Keep the full copy for expanded list rows, while card view receives a
+        # bounded preview that ends in an explicit ellipsis.
+        description = desc or tr("plugin_marketplace.no_description")
+        card_description = self._truncate_text(description, _MAX_CARD_DESCRIPTION_CHARS)
 
         version_label = ""
         has_version = False
@@ -478,6 +485,7 @@ class PluginMarketplacePanel(Panel):
             "status_class": status_class,
             "has_error": bool(entry.error),
             "description": description,
+            "card_description": card_description,
             "info_action": "open-url" if has_github else "",
             "github_url": entry.github_url or "",
             "plugin_name": plugin_name or "",
@@ -519,10 +527,19 @@ class PluginMarketplacePanel(Panel):
             return
 
         viewport_width = self._grid_viewport_width(doc, grid_el)
-        layout_width = self._stabilize_layout_width(viewport_width)
-        columns, row_width = self._compute_grid_layout(layout_width)
+        columns, row_width = self._compute_grid_layout(viewport_width)
+        card_slot_width = max(
+            float(_CARD_MIN_WIDTH_DP),
+            (float(row_width) - float(max(0, columns - 1) * _CARD_GAP_DP)) / float(columns),
+        )
         card_ids = tuple(str(r.get("card_id", "")) for r in records)
-        signature = (self._view_mode, card_ids, columns, row_width)
+        signature = (
+            self._view_mode,
+            card_ids,
+            columns,
+            row_width,
+            round(card_slot_width, 2),
+        )
         if not force and signature == self._last_grid_signature:
             return
         self._last_grid_signature = signature
@@ -531,44 +548,39 @@ class PluginMarketplacePanel(Panel):
             grid_el.set_inner_rml("")
             return
 
-        rows: List[str] = []
-        for i in range(0, len(records), columns):
-            chunk = list(records[i:i + columns])
-            row_class = "card-row card-row--single" if columns == 1 else "card-row"
-            row_parts = [
-                f'<div class="{row_class}" style="width: {row_width}dp; margin-left: {_GRID_SIDE_MARGIN_DP}dp; margin-right: {_GRID_SIDE_MARGIN_DP}dp;">'
-            ]
-            for record in chunk:
-                row_parts.append(self._build_card_markup(record))
-            for _ in range(columns - len(chunk)):
-                row_parts.append(
-                    f'<div class="plugin-card plugin-card--placeholder" style="width: {_CARD_MIN_WIDTH_DP}dp;"></div>'
-                )
-            row_parts.append("</div>")
-            rows.append("".join(row_parts))
-        grid_el.set_inner_rml("".join(rows))
+        # Match the Asset Manager gallery: the viewport determines the slot
+        # width, and the flex container wraps cards naturally as it resizes.
+        # This avoids fixed rows/placeholders fighting the panel scrollbar and
+        # keeps every row aligned to the available content width.
+        card_width = f"{card_slot_width:.2f}dp"
+        parts = [f'<div class="card-grid-window" style="width: {row_width}dp;">']
+        for record in records:
+            parts.append(
+                f'<div class="card-slot" style="width: {card_width};">'
+                f'{self._build_card_markup(record, width="100%")}'
+                "</div>"
+            )
+        parts.append("</div>")
+        grid_el.set_inner_rml("".join(parts))
 
     def _grid_viewport_width(self, doc, grid_el) -> int:
-        dp_ratio = max(1.0, lf.ui.get_ui_scale())
-
-        main_area_el = doc.get_element_by_id("main-area")
-        if main_area_el and getattr(main_area_el, "client_width", 0):
-            return int(max(0.0, float(main_area_el.client_width or 0.0) / dp_ratio))
-
-        content_el = doc.get_element_by_id("content")
-        if content_el and getattr(content_el, "client_width", 0):
-            return int(max(0.0, float(content_el.client_width or 0.0) / dp_ratio))
-
-        return int(max(0.0, float(grid_el.client_width or 0.0) / dp_ratio))
-
-    def _stabilize_layout_width(self, width: int) -> int:
-        return max(0, width - _SCROLLBAR_GUTTER_DP)
+        # The grid and the manual-install section are siblings in #main-area;
+        # measuring the grid itself keeps their outer edges identical.
+        dp_ratio = max(1.0, float(lf.ui.get_ui_scale() or 1.0))
+        for element in (
+            grid_el,
+            doc.get_element_by_id("main-area"),
+            doc.get_element_by_id("content"),
+        ):
+            if element and getattr(element, "client_width", 0):
+                return int(max(0.0, float(element.client_width or 0.0) / dp_ratio))
+        return 0
 
     def _compute_grid_layout(self, width: int) -> Tuple[int, int]:
         if width <= 0:
             return 1, _CARD_MIN_WIDTH_DP
 
-        usable_width = max(0, width - (2 * _GRID_SIDE_MARGIN_DP))
+        usable_width = max(0, width)
         if usable_width <= 0:
             return 1, _CARD_MIN_WIDTH_DP
 
@@ -616,7 +628,11 @@ class PluginMarketplacePanel(Panel):
         description = (
             ""
             if record.get("has_error")
-            else f'<span class="card-description text-disabled">{esc("description")}</span>'
+            else (
+                '<span class="card-description text-disabled">'
+                f'{escape(str(record.get("card_description") or record.get("description", "")), quote=True)}'
+                '</span>'
+            )
         )
         version_span = text_span(
             "has_version",
@@ -628,7 +644,7 @@ class PluginMarketplacePanel(Panel):
         )
         metrics_span = text_span(
             "has_metrics",
-            f'<span class="card-metrics mp-warning-text">{esc("metrics_text")}</span>',
+            f'<span class="card-metrics mp-warning-note">{esc("metrics_text")}</span>',
         )
         tags_span = text_span(
             "has_tags",
@@ -642,8 +658,10 @@ class PluginMarketplacePanel(Panel):
 
         return (
             f'<div class="card-info"{info_attr_text}>'
+            '<div class="card-title-row">'
             f'<span class="card-name">{esc("name")}</span>'
             f'{version_span}'
+            '</div>'
             f'{repo_span}'
             f'{metrics_span}'
             f'{tags_span}'
@@ -659,13 +677,14 @@ class PluginMarketplacePanel(Panel):
             f'<div class="card-buttons" id="btns-{esc("card_id")}">{self._build_action_buttons_markup(record)}</div>'
         )
 
-    def _build_card_markup(self, record: Dict[str, object]) -> str:
+    def _build_card_markup(self, record: Dict[str, object], width: Optional[str] = None) -> str:
         def esc(key: str) -> str:
             return escape(str(record.get(key, "")), quote=True)
 
+        card_width = escape(str(width or f"{_CARD_MIN_WIDTH_DP}dp"), quote=True)
         return (
             f'<div class="plugin-card" id="card-{esc("card_id")}" data-card-id="{esc("card_id")}" '
-            f'style="width: {_CARD_MIN_WIDTH_DP}dp;">'
+            f'style="width: {card_width};">'
             f'{self._build_card_inner_markup(record)}'
             '</div>'
         )
@@ -701,7 +720,7 @@ class PluginMarketplacePanel(Panel):
             else:
                 detail_meta_parts.append(f'<span class="plugin-list-meta-item text-disabled">{esc("repo_label")}</span>')
         if record.get("has_metrics"):
-            detail_meta_parts.append(f'<span class="plugin-list-meta-item mp-warning-text">{esc("metrics_text")}</span>')
+            detail_meta_parts.append(f'<span class="plugin-list-meta-item mp-warning-note">{esc("metrics_text")}</span>')
         if record.get("has_tags"):
             detail_meta_parts.append(f'<span class="plugin-list-meta-item text-disabled">{esc("tags_text")}</span>')
         if record.get("is_local"):
@@ -956,10 +975,21 @@ class PluginMarketplacePanel(Panel):
             text = localized_count("plugin_marketplace.registry_unavailable", entry_count)
             tone = "status-warning"
 
+        signature = (text, tone)
+        if signature == self._last_catalog_status_signature:
+            return
+        self._last_catalog_status_signature = signature
+
         status_el.set_text(text)
         status_el.set_class("status-info", tone == "status-info")
         status_el.set_class("status-success", tone == "status-success")
         status_el.set_class("status-warning", tone == "status-warning")
+
+        dot_el = doc.get_element_by_id("catalog-status-dot")
+        if dot_el:
+            dot_el.set_class("status-info", tone == "status-info")
+            dot_el.set_class("status-success", tone == "status-success")
+            dot_el.set_class("status-warning", tone == "status-warning")
 
     def _sync_feedback_state(self, doc, element_prefix: str, state: CardOpState, working_text: str):
         feedback_el = doc.get_element_by_id(element_prefix)
@@ -1187,10 +1217,19 @@ class PluginMarketplacePanel(Panel):
         list_btn = doc.get_element_by_id("view-list-btn")
         if cards_btn:
             cards_btn.set_class("selected", self._view_mode == _VIEW_MODE_CARD)
-            cards_btn.set_attribute("title", tr("plugin_marketplace.view.grid"))
+            self._set_attribute_if_changed(
+                cards_btn, "title", tr("plugin_marketplace.view.grid")
+            )
         if list_btn:
             list_btn.set_class("selected", self._view_mode == _VIEW_MODE_LIST)
-            list_btn.set_attribute("title", tr("plugin_marketplace.view.list"))
+            self._set_attribute_if_changed(
+                list_btn, "title", tr("plugin_marketplace.view.list")
+            )
+
+    @staticmethod
+    def _set_attribute_if_changed(element, name: str, value: str):
+        if element.get_attribute(name, "") != value:
+            element.set_attribute(name, value)
 
     def _is_list_row_expanded(self, card_id: str) -> bool:
         if card_id in self._expanded_list_rows:

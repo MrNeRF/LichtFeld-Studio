@@ -5,27 +5,31 @@
 </head>
 <body template="floating-window" data-model="plugin_marketplace">
   <div id="main-area">
-    <span class="status-text status-info">@tr:plugin_marketplace.title_line</span>
-    <span class="mp-warning-text">@tr:plugin_marketplace.warning_body</span>
-
-    <div class="separator"></div>
+    <div class="mp-intro">
+      <span class="mp-title status-info">@tr:plugin_marketplace.title_line</span>
+      <span class="mp-warning-note">@tr:plugin_marketplace.warning_body</span>
+    </div>
 
     <!-- Filter / Sort controls -->
     <div class="mp-controls">
       <div class="mp-controls-main">
-        <span class="text-disabled">@tr:plugin_marketplace.filter_label</span>
-        <select data-value="filter_idx" class="mp-select">
-          <option value="0">@tr:plugin_marketplace.filter.all</option>
-          <option value="1">@tr:plugin_marketplace.filter.installed</option>
-          <option value="2">@tr:plugin_marketplace.filter.not_installed</option>
-        </select>
-        <span class="text-disabled mp-sort-label">@tr:plugin_marketplace.sort_label</span>
-        <select data-value="sort_idx" class="mp-select-sort">
-          <option value="0">@tr:plugin_marketplace.sort.popularity_desc</option>
-          <option value="1">@tr:plugin_marketplace.sort.popularity_asc</option>
-          <option value="2">@tr:plugin_marketplace.sort.name_asc</option>
-          <option value="3">@tr:plugin_marketplace.sort.name_desc</option>
-        </select>
+        <div class="mp-control-group">
+          <span class="mp-control-label text-disabled">@tr:plugin_marketplace.filter_label</span>
+          <select data-value="filter_idx" class="mp-select">
+            <option value="0">@tr:plugin_marketplace.filter.all</option>
+            <option value="1">@tr:plugin_marketplace.filter.installed</option>
+            <option value="2">@tr:plugin_marketplace.filter.not_installed</option>
+          </select>
+        </div>
+        <div class="mp-control-group">
+          <span class="mp-control-label text-disabled">@tr:plugin_marketplace.sort_label</span>
+          <select data-value="sort_idx" class="mp-select-sort">
+            <option value="0">@tr:plugin_marketplace.sort.popularity_desc</option>
+            <option value="1">@tr:plugin_marketplace.sort.popularity_asc</option>
+            <option value="2">@tr:plugin_marketplace.sort.name_asc</option>
+            <option value="3">@tr:plugin_marketplace.sort.name_desc</option>
+          </select>
+        </div>
       </div>
       <div class="mp-view-toggle">
         <button id="view-cards-btn" type="button" class="btn btn--secondary mp-view-btn" data-event-click="view_cards"><span class="mp-icon-grid"><span></span><span></span><span></span><span></span></span></button>
@@ -35,7 +39,9 @@
 
     <!-- Manual URL install -->
     <div class="mp-manual-section">
-      <span class="text-disabled">@tr:plugin_manager.github_url_or_shorthand</span>
+      <div class="mp-section-heading">
+        <span class="mp-section-title">@tr:plugin_manager.github_url_or_shorthand</span>
+      </div>
       <form id="manual-install-form">
         <div class="mp-manual-row">
           <input type="text" id="manual-url-input" class="mp-url-input" data-value="manual_url" />
@@ -53,7 +59,7 @@
       <!-- Supported formats (collapsible) -->
       <div id="formats-header" class="section-header mp-formats-header">
         <span class="section-arrow" id="formats-arrow">&#x25B6;</span>
-        <span>@tr:plugin_manager.supported_formats</span>
+        <span class="mp-formats-label">@tr:plugin_manager.supported_formats</span>
       </div>
       <div id="formats-content" class="section-content collapsed">
         <div class="mp-format-item">https://github.com/owner/repo</div>
@@ -62,12 +68,11 @@
       </div>
     </div>
 
-    <div class="separator"></div>
-
     <!-- Empty state -->
-    <div id="empty-state" class="hidden">
-      <span class="text-disabled">@tr:plugin_marketplace.no_plugins</span>
-      <span class="text-disabled">@tr:plugin_marketplace.edit_list_hint</span>
+    <div id="empty-state" class="mp-empty-state hidden">
+      <span class="mp-empty-mark">+</span>
+      <span class="mp-empty-title">@tr:plugin_marketplace.no_plugins</span>
+      <span class="mp-empty-description text-disabled">@tr:plugin_marketplace.edit_list_hint</span>
     </div>
 
     <!-- Marketplace results (card or list layout, rendered dynamically by the panel controller) -->
@@ -75,12 +80,14 @@
   </div>
 
   <div id="status-bar">
+    <span class="mp-status-dot" id="catalog-status-dot"></span>
     <span class="status-item" id="catalog-status">@tr:plugin_marketplace.loading</span>
   </div>
 
   <!-- Uninstall confirmation overlay -->
   <div id="confirm-overlay" class="confirm-overlay hidden">
     <div class="confirm-dialog">
+      <span class="confirm-title">@tr:plugin_manager.button.uninstall</span>
       <span id="confirm-message" class="confirm-message"></span>
       <div class="separator"></div>
       <div class="confirm-buttons">
