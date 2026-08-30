@@ -183,6 +183,53 @@ namespace lfs::core::sh_value_quant {
             dst[output_index] = __half2float(src_f16[packed_index]);
         }
 
+        __global__ void decode_u16_gathered_to_float4_kernel(
+            const std::uint16_t* __restrict__ src_u16,
+            const float2* __restrict__ src_bounds,
+            const std::int64_t* __restrict__ perm,
+            float* __restrict__ dst_f4_as_float,
+            std::uint32_t dest_offset,
+            std::uint32_t n_dst,
+            std::uint32_t n_src,
+            std::uint32_t slots_per_prim,
+            std::uint32_t n_cells_per_prim) {
+            using DC = lfs::core::sh_value::DeviceCodec16;
+            const std::uint32_t p_local = blockIdx.x * blockDim.x + threadIdx.x;
+            if (p_local >= n_dst)
+                return;
+
+            float4* dst = reinterpret_cast<float4*>(dst_f4_as_float);
+            for (std::uint32_t k = 0; k < slots_per_prim; ++k) {
+                dst[shAtF4(p_local, k, slots_per_prim)] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+            }
+
+            const std::int64_t src = perm[dest_offset + p_local];
+            if (src < 0 || src >= static_cast<std::int64_t>(n_src))
+                return;
+
+            const auto src_p = static_cast<std::uint32_t>(src);
+            const float2 mm = src_bounds[src_p / 256u];
+            for (std::uint32_t c = 0; c < n_cells_per_prim; ++c) {
+                const float v = DC::decode(
+                    src_u16[lfs::core::sh_value::shAtU16(src_p, c, n_cells_per_prim)],
+                    mm.x, mm.y);
+                const std::uint32_t slot = c / 4u;
+                const std::uint32_t comp = c % 4u;
+                if (slot >= slots_per_prim)
+                    break;
+                float4 f4 = dst[shAtF4(p_local, slot, slots_per_prim)];
+                if (comp == 0)
+                    f4.x = v;
+                else if (comp == 1)
+                    f4.y = v;
+                else if (comp == 2)
+                    f4.z = v;
+                else
+                    f4.w = v;
+                dst[shAtF4(p_local, slot, slots_per_prim)] = f4;
+            }
+        }
+
         void validate_canonical_range(
             const std::uint64_t canonical_float_offset,
             const std::uint64_t float_count,
@@ -233,6 +280,38 @@ namespace lfs::core::sh_value_quant {
             slots,
             n_cells);
         LFS_CUDA_CHECK_MSG(cudaGetLastError(), "encode_shN_float4_to_u16");
+    }
+
+    void decode_shN_u16_gathered_to_float4(
+        const std::uint16_t* src_u16,
+        const float* src_bounds_float2,
+        const std::int64_t* perm,
+        float* dst_float4_swizzled,
+        std::size_t dest_offset,
+        std::size_t n_dst,
+        std::size_t n_src_primitives,
+        std::uint32_t coeffs_rest,
+        cudaStream_t stream) {
+        if (n_dst == 0 || coeffs_rest == 0)
+            return;
+        if (!src_u16 || !src_bounds_float2 || !perm || !dst_float4_swizzled) {
+            throw std::invalid_argument("Invalid gathered q16 SH decode arguments");
+        }
+        const auto slots = lfs::core::sh_float4_slots_for_rest(coeffs_rest);
+        const auto n_cells = lfs::core::sh_value_quant::n_value_cells_per_prim(coeffs_rest);
+        const unsigned blocks =
+            static_cast<unsigned>((n_dst + kThreads - 1) / kThreads);
+        decode_u16_gathered_to_float4_kernel<<<blocks, kThreads, 0, stream>>>(
+            src_u16,
+            reinterpret_cast<const float2*>(src_bounds_float2),
+            perm,
+            dst_float4_swizzled,
+            static_cast<std::uint32_t>(dest_offset),
+            static_cast<std::uint32_t>(n_dst),
+            static_cast<std::uint32_t>(n_src_primitives),
+            slots,
+            n_cells);
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "decode_shN_u16_gathered_to_float4");
     }
 
     void decode_shN_u16_to_float4(

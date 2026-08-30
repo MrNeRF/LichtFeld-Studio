@@ -567,14 +567,26 @@ TEST(MRNFStrategyTest, ShNReservationTracksMaxDegreeAndMaxCap) {
         return opt_params;
     };
 
-    const auto expect_shN_capacity = [](const SplatData& splat_data,
-                                        const AdamOptimizer& optimizer,
-                                        const int max_degree) {
+    const auto expect_shN_capacity = [max_cap](const SplatData& splat_data,
+                                               const AdamOptimizer& optimizer,
+                                               const int max_degree) {
         const auto layout_rest = static_cast<uint32_t>(sh_rest_coefficients_for_degree(max_degree));
         // Adam moments always track float4-swizzle cell count (joint packed).
         const size_t expected_moment_logical =
             sh_swizzled_float_count(static_cast<size_t>(n_gaussians), layout_rest);
-        const size_t expected_moment_capacity = sh_swizzled_float_count(max_cap, layout_rest);
+        // Moments allocate at live N * growth_factor, clamped to max_cap — not
+        // max_cap from iter 0 (VRAM P0: grow packed moments on demand).
+        const float gf = optimizer.get_config().growth_factor;
+        size_t moment_prim_cap = static_cast<size_t>(n_gaussians);
+        if (n_gaussians > 0 && gf > 1.0f) {
+            moment_prim_cap = std::max(
+                moment_prim_cap,
+                static_cast<size_t>(static_cast<double>(n_gaussians) * static_cast<double>(gf)));
+        }
+        moment_prim_cap = std::min(moment_prim_cap, max_cap);
+        const size_t expected_moment_capacity =
+            sh_swizzled_float_count(moment_prim_cap, layout_rest);
+        const size_t expected_param_capacity = sh_swizzled_float_count(max_cap, layout_rest);
 
         ASSERT_TRUE(splat_data.shN().is_valid());
         // Param storage may be q16 (production) or float4-swizzle (if quant forced off).
@@ -588,7 +600,7 @@ TEST(MRNFStrategyTest, ShNReservationTracksMaxDegreeAndMaxCap) {
             EXPECT_GE(splat_data.shN().capacity(), expected_u16_cap);
         } else {
             EXPECT_EQ(splat_data.shN().numel(), expected_moment_logical);
-            EXPECT_EQ(splat_data.shN().capacity(), expected_moment_capacity);
+            EXPECT_EQ(splat_data.shN().capacity(), expected_param_capacity);
         }
 
         const auto* state = optimizer.get_state(ParamType::ShN);

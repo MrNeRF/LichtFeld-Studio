@@ -27,6 +27,21 @@ namespace lfs::core::sh_value_quant {
         std::uint32_t coeffs_rest,
         cudaStream_t stream = nullptr);
 
+    /// Gather-decode: dest-local primitive i (0..n_dst-1) reads source
+    /// primitive perm[dest_offset + i] and writes float4-swizzled storage as
+    /// if those n_dst primitives started at index 0. Source bounds are the
+    /// live per-256-block table indexed by the source primitive.
+    void decode_shN_u16_gathered_to_float4(
+        const std::uint16_t* src_u16,
+        const float* src_bounds_float2,
+        const std::int64_t* perm,
+        float* dst_float4_swizzled,
+        std::size_t dest_offset,
+        std::size_t n_dst,
+        std::size_t n_src_primitives,
+        std::uint32_t coeffs_rest,
+        cudaStream_t stream = nullptr);
+
     void decode_shN_u16_range_to_canonical(
         const std::uint16_t* src_u16,
         const float* bounds_float2,

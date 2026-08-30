@@ -1321,6 +1321,10 @@ namespace lfs::training {
             } else {
                 note_slow_path_grow("extend_state_for_new_params(joint)", name);
                 // Re-alloc with growth_factor headroom and restore capacity invariant.
+                // alloc_quantized_state zeros the new packed buffer — copy the live
+                // prefix so existing moments survive (otherwise a 1.5× grow would
+                // reset Adam state).
+                auto old_packed = std::move(state.exp_avg);
                 const size_t prim_cap = compute_new_capacity(
                     static_cast<size_t>(splat_data_.size()),
                     static_cast<size_t>(splat_data_.size()));
@@ -1336,6 +1340,17 @@ namespace lfs::training {
                 }
                 if (state.grad.is_valid())
                     state.grad.reserve(moment_cap);
+                if (old_packed.is_valid() && old_packed.numel() > 0 &&
+                    state.exp_avg.is_valid() && state.exp_avg.numel() > 0) {
+                    const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+                    lfs::core::waitForCUDAStream(stream, old_packed.stream());
+                    lfs::core::waitForCUDAStream(stream, state.exp_avg.stream());
+                    const size_t copy_bytes = std::min(old_packed.bytes(), state.exp_avg.bytes());
+                    LFS_CUDA_CHECK(cudaMemcpyAsync(
+                        state.exp_avg.data_ptr(), old_packed.data_ptr(),
+                        copy_bytes, cudaMemcpyDeviceToDevice, stream));
+                    LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                }
             }
             const size_t prim_n = static_cast<size_t>(splat_data_.size());
             const size_t prim_cap =

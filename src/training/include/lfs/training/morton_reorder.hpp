@@ -9,8 +9,8 @@
  * Densification appends rows in arbitrary order; reordering by Morton code of
  * the current AABB restores spatial locality for depth-sorted raster gathers.
  * q16 SH codes and joint Adam moments use per-256-splat block bounds, so a
- * raw row gather is invalid — this path decodes to float, permutes, and
- * re-encodes with fresh bounds.
+ * raw row gather is invalid — this path gather-decodes per dest 256-block,
+ * re-encodes with fresh dest bounds, and copies back into the live region.
  */
 
 #include "core/splat_data.hpp"
@@ -47,6 +47,13 @@ namespace lfs::training::morton {
     /// tensor is [C, N] with C != N (densification_info). Tensors longer than
     /// perm.n on dim 0 permute the live prefix and keep the tail.
     void permute_row_tensor(lfs::core::Tensor& tensor, const lfs::core::Tensor& perm);
+
+    /// dest[i] <- src[perm[i]] for shN. q16 uses a chunked gather-decode/encode
+    /// (no full fp32 expansion). fp32 / IEEE-f16 keep the swizzled gather path.
+    void permute_shN(
+        core::SplatData& splat,
+        const lfs::core::Tensor& perm,
+        cudaStream_t stream = nullptr);
 
     /// Apply Morton ordering to all per-Gaussian model parameters, optimizer
     /// moments, and row-indexed aux tensors on `splat`. Skips (and logs at

@@ -32,6 +32,7 @@ class MRNFStrategyTest_DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate_
 class MRNFStrategyTest_LineBoundsUseFiniteSceneScaleForMeanLearningRate_Test;
 class CropDampingStrategyTest_MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale_Test;
 class MRNFStrategyTest_CompactSplatsCorrectAndPeakBelowThreeX_Test;
+class MRNFStrategyTest_CompactSplatsFusedPathLeavesGradsEmpty_Test;
 class MRNFStrategyTest_ExploreSplitsAreDisjointAndRespectMaxCap_Test;
 class MRNFStrategyTest_FarGrowthCapConstrainsOutsideAllocations_Test;
 class MRNFStrategyTest_FarDecayScaleAppliesOnlyToFarUnfrozenRows_Test;
@@ -122,6 +123,7 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_LineBoundsUseFiniteSceneScaleForMeanLearningRate_Test;
         friend class ::CropDampingStrategyTest_MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale_Test;
         friend class ::MRNFStrategyTest_CompactSplatsCorrectAndPeakBelowThreeX_Test;
+        friend class ::MRNFStrategyTest_CompactSplatsFusedPathLeavesGradsEmpty_Test;
         friend class ::MRNFStrategyTest_ExploreSplitsAreDisjointAndRespectMaxCap_Test;
         friend class ::MRNFStrategyTest_FarGrowthCapConstrainsOutsideAllocations_Test;
         friend class ::MRNFStrategyTest_FarDecayScaleAppliesOnlyToFarUnfrozenRows_Test;

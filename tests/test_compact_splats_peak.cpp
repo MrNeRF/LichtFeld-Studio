@@ -2,12 +2,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 class MRNFStrategyTest_CompactSplatsCorrectAndPeakBelowThreeX_Test;
+class MRNFStrategyTest_CompactSplatsFusedPathLeavesGradsEmpty_Test;
 
 #include "core/alloc_counter.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "optimizer/adam_optimizer.hpp"
 #include "training/strategies/mrnf.hpp"
 
 #include <cuda_runtime.h>
@@ -192,5 +194,65 @@ TEST(MRNFStrategyTest, CompactSplatsCorrectAndPeakBelowThreeX) {
     if (used_after > used_before) {
         EXPECT_LT(used_after - used_before, 8 * one_means_at_cap)
             << "post-compact VRAM growth too large for gather-into-reserved";
+    }
+}
+
+TEST(MRNFStrategyTest, CompactSplatsFusedPathLeavesGradsEmpty) {
+    constexpr size_t old_n = 64;
+    constexpr size_t max_cap = 128;
+    constexpr size_t keep_n = 32;
+
+    auto splat_data = create_compact_test_splat(old_n, /*sh_degree=*/3);
+    MRNF strategy(splat_data);
+
+    auto opt_params = param::OptimizationParameters::mrnf_defaults();
+    opt_params.iterations = 100;
+    opt_params.max_cap = static_cast<int>(max_cap);
+    opt_params.refine_every = 1000;
+    strategy.initialize(opt_params);
+
+    auto& opt = strategy.get_optimizer();
+    for (const auto pt : AdamOptimizer::all_param_types()) {
+        const auto* state = opt.get_state(pt);
+        ASSERT_NE(state, nullptr) << "missing state for param " << static_cast<int>(pt);
+        EXPECT_FALSE(state->grad.is_valid() && state->grad.numel() > 0)
+            << "fused initialize must leave grads empty";
+    }
+
+    std::vector<int> keep_idx(keep_n);
+    std::vector<uint8_t> keep_mask_host(old_n, 0);
+    for (size_t i = 0; i < keep_n; ++i) {
+        keep_idx[i] = static_cast<int>(i * 2);
+        keep_mask_host[i * 2] = 1;
+    }
+    auto keep_indices = Tensor::from_vector(keep_idx, TensorShape({keep_n}), Device::CUDA);
+    auto ref_means = splat_data.means().index_select(0, keep_indices).contiguous();
+
+    auto keep_mask_cpu = Tensor::zeros_bool(TensorShape({old_n}), Device::CPU);
+    {
+        auto* p = keep_mask_cpu.ptr<unsigned char>();
+        for (size_t i = 0; i < old_n; ++i) {
+            p[i] = keep_mask_host[i];
+        }
+    }
+    auto keep_mask = keep_mask_cpu.to(Device::CUDA);
+
+    strategy.compact_splats(keep_mask);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    ASSERT_EQ(static_cast<size_t>(splat_data.size()), keep_n);
+    auto got_means = splat_data.means().contiguous().cpu();
+    auto exp_means = ref_means.contiguous().cpu();
+    ASSERT_EQ(got_means.numel(), exp_means.numel());
+    for (size_t i = 0; i < got_means.numel(); ++i) {
+        EXPECT_FLOAT_EQ(got_means.ptr<float>()[i], exp_means.ptr<float>()[i]) << "means i=" << i;
+    }
+
+    for (const auto pt : AdamOptimizer::all_param_types()) {
+        const auto* state = opt.get_state(pt);
+        ASSERT_NE(state, nullptr);
+        EXPECT_FALSE(state->grad.is_valid() && state->grad.numel() > 0)
+            << "compact must not allocate fused-path grads for param "
+            << static_cast<int>(pt);
     }
 }
