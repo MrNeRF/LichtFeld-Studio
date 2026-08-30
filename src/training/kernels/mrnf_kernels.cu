@@ -246,6 +246,34 @@ namespace lfs::training::mrnf_strategy {
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.fold_densification_and_zero");
     }
 
+    __global__ void fold_densification_error_and_zero_kernel(
+        float* __restrict__ refine_weight_max,
+        float* __restrict__ densification_info,
+        size_t N) {
+
+        const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
+        if (idx >= N)
+            return;
+
+        refine_weight_max[idx] = fmaxf(refine_weight_max[idx], densification_info[N + idx]);
+        densification_info[N + idx] = 0.0f;
+    }
+
+    void launch_fold_densification_error_and_zero(
+        float* refine_weight_max,
+        float* densification_info,
+        size_t N,
+        void* stream) {
+        if (N == 0)
+            return;
+        constexpr int threads = 256;
+        const int blocks = static_cast<int>((N + threads - 1) / threads);
+        cudaStream_t s = resolve_stream(stream);
+        fold_densification_error_and_zero_kernel<<<blocks, threads, 0, s>>>(
+            refine_weight_max, densification_info, N);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.fold_densification_error_and_zero");
+    }
+
     __global__ void extract_axis_kernel(
         const float* __restrict__ means,
         float* __restrict__ output,

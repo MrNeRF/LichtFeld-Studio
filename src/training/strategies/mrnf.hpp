@@ -178,6 +178,8 @@ namespace lfs::training {
         void seed_from_view(int iter, const RenderOutput& render_output);
         [[nodiscard]] bool cfg_ratio_rank_on() const;
         [[nodiscard]] float cfg_ratio_pow() const;
+        [[nodiscard]] bool has_separate_visibility_buffer() const;
+        [[nodiscard]] lfs::core::Tensor visibility_accumulator() const;
         [[nodiscard]] int cfg_fill_target_iter() const;
         [[nodiscard]] int cfg_seed_dose() const;
         [[nodiscard]] bool background_improvements_enabled() const;

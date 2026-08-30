@@ -747,8 +747,8 @@ namespace lfs::training {
         _initial_sfm_point_count = n;
         const size_t tracking_capacity = splat_reserved_capacity(*_splat_data);
         reset_vector_buffer(_refine_weight_max, n, _splat_data->means().device(), tracking_capacity);
-        reset_vector_buffer(_vis_count, n, _splat_data->means().device(), tracking_capacity);
         if (cfg_ratio_rank_on()) {
+            reset_vector_buffer(_vis_count, n, _splat_data->means().device(), tracking_capacity);
             reset_vector_buffer(_refine_ratio_max, n, _splat_data->means().device(), tracking_capacity);
         }
 
@@ -902,7 +902,9 @@ namespace lfs::training {
 
             account_tensor("refine_weight_max", _refine_weight_max);
             account_tensor("refine_ratio_max", _refine_ratio_max);
-            account_tensor("vis_count", _vis_count);
+            if (has_separate_visibility_buffer()) {
+                account_tensor("vis_count", _vis_count);
+            }
             account_tensor("free_mask", _free_mask);
             account_tensor("refine_counts_device", _refine_counts_dev);
             account_tensor("edge.precomputed_scores", _precomputed_edge_scores);
@@ -1217,20 +1219,32 @@ namespace lfs::training {
             if (cfg_ratio_rank_on() && _refine_ratio_max.numel() == n) {
                 ratio_max_ptr = _refine_ratio_max.ptr<float>();
             }
-            mrnf_strategy::launch_fold_densification_and_zero(
-                _vis_count.ptr<float>(),
-                _refine_weight_max.ptr<float>(),
-                _splat_data->_densification_info.ptr<float>(),
-                n,
-                nullptr,
-                densification_row_count(),
-                ratio_max_ptr,
-                cfg_ratio_pow());
+            if (has_separate_visibility_buffer()) {
+                mrnf_strategy::launch_fold_densification_and_zero(
+                    _vis_count.ptr<float>(),
+                    _refine_weight_max.ptr<float>(),
+                    _splat_data->_densification_info.ptr<float>(),
+                    n,
+                    nullptr,
+                    densification_row_count(),
+                    ratio_max_ptr,
+                    cfg_ratio_pow());
+            } else {
+                mrnf_strategy::launch_fold_densification_error_and_zero(
+                    _refine_weight_max.ptr<float>(),
+                    _splat_data->_densification_info.ptr<float>(),
+                    n);
+            }
             zero_frozen_scores_inplace(*_splat_data, _refine_weight_max);
             if (ratio_max_ptr != nullptr) {
                 zero_frozen_scores_inplace(*_splat_data, _refine_ratio_max);
             }
-            zero_frozen_scores_inplace(*_splat_data, _vis_count);
+            if (has_separate_visibility_buffer()) {
+                zero_frozen_scores_inplace(*_splat_data, _vis_count);
+            } else {
+                auto vis = _splat_data->_densification_info.slice(0, 0, 1).squeeze(0);
+                zero_frozen_scores_inplace(*_splat_data, vis);
+            }
         } else if (info.is_valid() && info.numel() > 0) {
             _splat_data->_densification_info.zero_();
         }
@@ -1256,7 +1270,9 @@ namespace lfs::training {
     void MRNF::permute_gaussian_rows(const lfs::core::Tensor& perm) {
         morton::permute_row_tensor(_refine_weight_max, perm);
         morton::permute_row_tensor(_refine_ratio_max, perm);
-        morton::permute_row_tensor(_vis_count, perm);
+        if (has_separate_visibility_buffer()) {
+            morton::permute_row_tensor(_vis_count, perm);
+        }
         morton::permute_row_tensor(_precomputed_edge_scores, perm);
         morton::permute_row_tensor(_edge_score_sum, perm);
         morton::permute_row_tensor(_explore_score_sum, perm);
@@ -1441,7 +1457,9 @@ namespace lfs::training {
         const size_t new_n = static_cast<size_t>(_splat_data->size());
         const size_t tracking_capacity = splat_reserved_capacity(*_splat_data);
         reset_vector_buffer(_refine_weight_max, new_n, _splat_data->means().device(), tracking_capacity);
-        reset_vector_buffer(_vis_count, new_n, _splat_data->means().device(), tracking_capacity);
+        if (has_separate_visibility_buffer()) {
+            reset_vector_buffer(_vis_count, new_n, _splat_data->means().device(), tracking_capacity);
+        }
         if (cfg_ratio_rank_on()) {
             reset_vector_buffer(_refine_ratio_max, new_n, _splat_data->means().device(), tracking_capacity);
         }
@@ -1475,6 +1493,23 @@ namespace lfs::training {
 
     float MRNF::cfg_ratio_pow() const {
         return cfg_ratio_rank_on() ? _params->growth_ratio_pow : 0.0f;
+    }
+
+    bool MRNF::has_separate_visibility_buffer() const {
+        return cfg_ratio_rank_on() ||
+               (_vis_count.is_valid() && !_vis_count.is_view());
+    }
+
+    lfs::core::Tensor MRNF::visibility_accumulator() const {
+        if (has_separate_visibility_buffer()) {
+            return _vis_count;
+        }
+        if (!_splat_data || !_splat_data->_densification_info.is_valid() ||
+            _splat_data->_densification_info.ndim() != 2 ||
+            _splat_data->_densification_info.shape()[0] < densification_row_count()) {
+            return {};
+        }
+        return _splat_data->_densification_info.slice(0, 0, 1).squeeze(0);
     }
 
     int MRNF::cfg_fill_target_iter() const {
@@ -1884,22 +1919,23 @@ namespace lfs::training {
 
     void MRNF::apply_explore_starvation_weights(lfs::core::Tensor& weights, const size_t n) {
         using namespace lfs::core;
+        auto vis_count = visibility_accumulator();
         if (!weights.is_valid() || weights.numel() != n ||
-            !_vis_count.is_valid() || _vis_count.numel() != n) {
+            !vis_count.is_valid() || vis_count.numel() != n) {
             return;
         }
 
         float median_vis = 0.0f;
-        Tensor live_vis = _vis_count;
+        Tensor live_vis = vis_count;
         if (_free_mask.is_valid() && _free_mask.numel() >= n) {
-            live_vis = _vis_count.masked_select(_free_mask.slice(0, 0, n).logical_not());
+            live_vis = vis_count.masked_select(_free_mask.slice(0, 0, n).logical_not());
         }
         if (live_vis.is_valid() && live_vis.numel() > 0) {
             mrnf_strategy::launch_sorted_median(
                 live_vis.ptr<float>(), live_vis.numel(), &median_vis, &_median_scratch);
         }
         mrnf_strategy::launch_apply_explore_starvation_weights(
-            weights.ptr<float>(), _vis_count.ptr<float>(), n, median_vis);
+            weights.ptr<float>(), vis_count.ptr<float>(), n, median_vis);
     }
 
     lfs::core::Tensor MRNF::build_explore_split_weights(
@@ -2364,7 +2400,7 @@ namespace lfs::training {
             auto opacities = _splat_data->get_opacity();
             if (opacities.ndim() == 2 && opacities.shape()[1] == 1)
                 opacities = opacities.squeeze(-1);
-            replace_weights = opacities * (_vis_count > 0.0f);
+            replace_weights = opacities * (visibility_accumulator() > 0.0f);
         }
         if (active_mask.is_valid()) {
             replace_weights = replace_weights * active_mask;
@@ -2386,7 +2422,8 @@ namespace lfs::training {
     lfs::core::Tensor MRNF::compute_refine_candidates() const {
         using namespace lfs::core;
         auto candidate_weights = apply_crop_damping_to_scores(*_optimizer, _refine_weight_max);
-        return (candidate_weights > _params->growth_grad_threshold) && (_vis_count > 0.0f);
+        return (candidate_weights > _params->growth_grad_threshold) &&
+               (visibility_accumulator() > 0.0f);
     }
 
     void MRNF::compact_splats(const lfs::core::Tensor& keep_mask) {
@@ -2621,7 +2658,7 @@ namespace lfs::training {
             compact(_refine_weight_max);
         if (_refine_ratio_max.is_valid() && _refine_ratio_max.numel() > new_size)
             compact(_refine_ratio_max);
-        if (_vis_count.is_valid() && _vis_count.numel() > new_size)
+        if (has_separate_visibility_buffer() && _vis_count.numel() > new_size)
             compact(_vis_count);
         if (_precomputed_edge_scores.is_valid() && _precomputed_edge_scores.numel() > new_size)
             compact(_precomputed_edge_scores);
@@ -2646,7 +2683,7 @@ namespace lfs::training {
         mrnf_strategy::launch_mrnf_noise_injection(
             _splat_data->means().ptr<float>(),
             _splat_data->opacity_raw().ptr<float>(),
-            _vis_count.ptr<float>(),
+            visibility_accumulator().ptr<float>(),
             frozen_mask.is_valid() ? frozen_mask.ptr<bool>() : nullptr,
             frozen_mask.is_valid() ? frozen_mask.numel() : 0,
             lr_mean,
@@ -2998,7 +3035,9 @@ namespace lfs::training {
 
         ensure(_free_mask, DataType::Bool);
         ensure(_refine_weight_max, DataType::Float32);
-        ensure(_vis_count, DataType::Float32);
+        if (has_separate_visibility_buffer()) {
+            ensure(_vis_count, DataType::Float32);
+        }
         if (cfg_ratio_rank_on() || _refine_ratio_max.is_valid()) {
             ensure(_refine_ratio_max, DataType::Float32);
         }
@@ -3593,14 +3632,22 @@ namespace lfs::training {
         }
         const size_t tracking_capacity = capacity;
         reset_vector_buffer(_refine_weight_max, n, _splat_data->means().device(), tracking_capacity);
-        reset_vector_buffer(_vis_count, n, _splat_data->means().device(), tracking_capacity);
         reset_vector_buffer(_explore_score_sum, n, _splat_data->means().device(), tracking_capacity);
+        if (has_separate_visibility_buffer()) {
+            reset_vector_buffer(_vis_count, n, _splat_data->means().device(), tracking_capacity);
+        }
         if (cfg_ratio_rank_on()) {
             reset_vector_buffer(_refine_ratio_max, n, _splat_data->means().device(), tracking_capacity);
         }
         _explore_sample_count = 0;
         _explore_last_sample_iter = -1;
         ensure_densification_info_shape();
+        if (!cfg_ratio_rank_on() && !_vis_count.is_valid()) {
+            // Keep the legacy transient handle usable for checkpoint/tests
+            // without allocating a second visibility storage; MRNF uses row 0
+            // as the authoritative visibility accumulator in this mode.
+            _vis_count = _splat_data->_densification_info.slice(0, 0, 1).squeeze(0);
+        }
         _precomputed_edge_scores = lfs::core::Tensor();
         _edge_precompute_valid = false;
 
