@@ -175,6 +175,7 @@ VulkanGSRenderer::~VulkanGSRenderer() noexcept {
 
 void VulkanGSRenderer::cleanup() {
     destroyVisibleCountReadback();
+    destroyVisibleCountGateReadback();
     destroyLodSelectionReadback();
     destroyInstanceCountReadback();
     destroyInstanceGateReadback();
@@ -573,6 +574,89 @@ VulkanGSRenderer::TileInstanceGate VulkanGSRenderer::synchronizeTileInstanceGate
     return gate;
 }
 
+VulkanGSRenderer::PrimitiveVisibilityStats
+VulkanGSRenderer::synchronizePrimitiveVisibilityGate(
+    VulkanGSPipelineBuffers& buffers,
+    const size_t num_splats) {
+    if (!commandBatchInProgress) {
+        lfs::rendering::throw_renderer_contract(
+            "Training primitive-visibility gate requires active batch A",
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    ensureVisibleCountGateReadback();
+    const auto& count = buffers.visible_count.deviceBuffer;
+    constexpr VkDeviceSize kCountBytes = 2 * sizeof(uint32_t);
+    if (count.buffer == VK_NULL_HANDLE || count.size != kCountBytes) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "Training primitive-visibility gate requires a two-word count buffer (buffer={:#x}, bytes={})",
+                lfs::rendering::vkHandleValue(count.buffer),
+                count.size),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+
+    using lfs::rendering::vulkan::BufferUse;
+    using lfs::rendering::vulkan::DeclaredAccess;
+    const DeclaredAccess pre_copy[] = {
+        {.buffer = &count, .use = BufferUse::TransferRead},
+        {.buffer = &visible_count_gate_readback_buffer_, .use = BufferUse::TransferWrite},
+    };
+    planTransfer(std::span{pre_copy});
+
+    const VkBufferCopy copy{
+        .srcOffset = count.offset,
+        .dstOffset = 0,
+        .size = kCountBytes,
+    };
+    validateBufferRange(count, 0, copy.size, "training primitive-visibility gate source");
+    validateBufferRange(visible_count_gate_readback_buffer_,
+                        0,
+                        copy.size,
+                        "training primitive-visibility gate destination");
+    if (vulkan_dispatch_.cmd_copy_buffer == nullptr) {
+        lfs::rendering::throw_renderer_contract(
+            "synchronizePrimitiveVisibilityGate requires VulkanDispatch::cmd_copy_buffer",
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    vulkan_dispatch_.cmd_copy_buffer(command_buffer,
+                                     count.buffer,
+                                     visible_count_gate_readback_buffer_.buffer,
+                                     1,
+                                     &copy);
+    const DeclaredAccess host_read{
+        .buffer = &visible_count_gate_readback_buffer_,
+        .use = BufferUse::HostRead,
+    };
+    planTransfer(std::span{&host_read, 1});
+
+    // Keep producer waits across the batch split. endCommandBatch clears the
+    // submitted wait list, but the reopened batch still reads the same CUDA
+    // upload/overlay payloads. Replaying the captured entries directly is
+    // intentional: addTimelineWait rejects equal values as duplicate requests
+    // within one recording, while this is the same wait in a new submission.
+    const auto pending_waits = pending_timeline_waits_;
+
+    // This is intentionally the training overflow gate's only synchronous
+    // point. The bounded prefix has not reached rasterization yet, so the
+    // caller can grow the compact domain and record the frame again without
+    // ever publishing a partially drawn image.
+    endCommandBatch(/*use_fence=*/true);
+    waitForPendingBatch();
+    if (!invalidateReadbackBuffer(visible_count_gate_readback_buffer_, copy.size)) {
+        lfs::rendering::throw_renderer_contract(
+            "Training primitive-visibility gate mapped allocation invalidation failed",
+            LFS_SOURCE_SITE_CURRENT());
+    }
+
+    PrimitiveVisibilityStats stats{};
+    stats.num_splats = num_splats;
+    stats.visible_count = std::min<size_t>(visible_count_gate_readback_mapped_[0], num_splats);
+    stats.raw_count = std::min<size_t>(visible_count_gate_readback_mapped_[1], num_splats);
+    beginCommandBatch();
+    pending_timeline_waits_ = pending_waits;
+    return stats;
+}
+
 void VulkanGSRenderer::ensureVisibleCountReadback() {
     if (visible_count_readback_initialized_)
         return;
@@ -653,6 +737,76 @@ void VulkanGSRenderer::destroyVisibleCountReadback() {
     visible_count_readback_signal_ = VK_NULL_HANDLE;
     visible_count_readback_value_ = 0;
     visible_count_readback_num_splats_ = 0;
+}
+
+void VulkanGSRenderer::ensureVisibleCountGateReadback() {
+    if (visible_count_gate_readback_initialized_)
+        return;
+
+    VkBufferCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    info.size = 2 * sizeof(uint32_t);
+    info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VmaAllocationCreateInfo aci{};
+    aci.usage = VMA_MEMORY_USAGE_AUTO;
+    aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+    VmaAllocationInfo alloc_info{};
+    const VkResult create_result = vmaCreateBuffer(allocator,
+                                                   &info,
+                                                   &aci,
+                                                   &visible_count_gate_readback_buffer_.buffer,
+                                                   &visible_count_gate_readback_buffer_.allocation,
+                                                   &alloc_info);
+    if (create_result != VK_SUCCESS) {
+        visible_count_gate_readback_buffer_.buffer = VK_NULL_HANDLE;
+        visible_count_gate_readback_buffer_.allocation = VK_NULL_HANDLE;
+        lfs::rendering::throw_vk_result(
+            create_result,
+            "vmaCreateBuffer",
+            std::format(
+                "Training primitive-visibility gate allocation failed (requested_bytes={}, allocator={:#x}, result={}({}))",
+                info.size,
+                lfs::rendering::vkHandleValue(allocator),
+                lfs::rendering::vkResultToString(create_result),
+                static_cast<int>(create_result)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    visible_count_gate_readback_buffer_.allocSize = info.size;
+    visible_count_gate_readback_buffer_.capacity = info.size;
+    visible_count_gate_readback_buffer_.size = info.size;
+    visible_count_gate_readback_mapped_ = static_cast<uint32_t*>(alloc_info.pMappedData);
+    if (visible_count_gate_readback_mapped_ == nullptr) {
+        vmaDestroyBuffer(allocator,
+                         visible_count_gate_readback_buffer_.buffer,
+                         visible_count_gate_readback_buffer_.allocation);
+        visible_count_gate_readback_buffer_ = {};
+        lfs::rendering::throw_renderer_contract(
+            "Training primitive-visibility gate allocation was not persistently mapped",
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    visible_count_gate_readback_mapped_[0] = 0;
+    visible_count_gate_readback_mapped_[1] = 0;
+    setDebugObjectName(VK_OBJECT_TYPE_BUFFER,
+                       visible_count_gate_readback_buffer_.buffer,
+                       "vksplat.readback.training_visible_count_gate");
+    visible_count_gate_readback_initialized_ = true;
+}
+
+void VulkanGSRenderer::destroyVisibleCountGateReadback() {
+    if (!visible_count_gate_readback_initialized_)
+        return;
+    if (visible_count_gate_readback_buffer_.buffer != VK_NULL_HANDLE) {
+        vmaDestroyBuffer(allocator,
+                         visible_count_gate_readback_buffer_.buffer,
+                         visible_count_gate_readback_buffer_.allocation);
+    }
+    visible_count_gate_readback_buffer_ = {};
+    visible_count_gate_readback_mapped_ = nullptr;
+    visible_count_gate_readback_initialized_ = false;
 }
 
 void VulkanGSRenderer::ensureLodSelectionReadback(const size_t chunk_capacity) {
@@ -971,6 +1125,7 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
                                           PFN_vkCmdBeginConditionalRenderingEXT begin_conditional_rendering,
                                           PFN_vkCmdEndConditionalRenderingEXT end_conditional_rendering) {
     destroyVisibleCountReadback();
+    destroyVisibleCountGateReadback();
     destroyLodSelectionReadback();
     destroyInstanceCountReadback();
     destroyInstanceGateReadback();
@@ -1056,19 +1211,24 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
         }
     };
     create_optional(pipeline_cull_splats, "cull_splats");
+    create_optional(pipeline_cull_splats_3dgut, "cull_splats_3dgut");
     create_optional(pipeline_cull_prepare, "cull_prepare");
     create_optional(pipeline_projection_forward_survivors, "projection_forward_survivors");
+    create_optional(pipeline_projection_forward_survivors_3dgut, "projection_forward_survivors_3dgut");
     // Quant-pool projection variants exist only where the viewer registers
     // them; a quant pool with a missing pipeline is a hard dispatch error.
     create_optional(pipeline_projection_forward_quant, "projection_forward_quant");
     create_optional(pipeline_projection_forward_quant_3dgut, "projection_forward_quant_3dgut");
     create_optional(pipeline_projection_forward_quant_survivors, "projection_forward_quant_survivors");
+    create_optional(pipeline_projection_forward_quant_survivors_3dgut, "projection_forward_quant_survivors_3dgut");
     create_optional(pipeline_projection_forward_shn_f16, "projection_forward_shn_f16");
     create_optional(pipeline_projection_forward_shn_f16_3dgut, "projection_forward_shn_f16_3dgut");
     create_optional(pipeline_projection_forward_shn_f16_survivors, "projection_forward_shn_f16_survivors");
+    create_optional(pipeline_projection_forward_shn_f16_survivors_3dgut, "projection_forward_shn_f16_survivors_3dgut");
     create_optional(pipeline_projection_forward_shn_q16, "projection_forward_shn_q16");
     create_optional(pipeline_projection_forward_shn_q16_3dgut, "projection_forward_shn_q16_3dgut");
     create_optional(pipeline_projection_forward_shn_q16_survivors, "projection_forward_shn_q16_survivors");
+    create_optional(pipeline_projection_forward_shn_q16_survivors_3dgut, "projection_forward_shn_q16_survivors_3dgut");
     create_optional(pipeline_prepare_visible_chain, "prepare_visible_chain");
     create_optional(pipeline_copy_visible_indices, "copy_visible_indices");
     create_optional(pipeline_cumsum_indirect.block_scan, "cumsum_block_scan_indirect");
@@ -2527,7 +2687,8 @@ void VulkanGSRenderer::executeCullSplats(
     const _VulkanBuffer& model_transforms,
     const _VulkanBuffer& lod_indices,
     const _VulkanBuffer& lod_logical_indices,
-    const _VulkanBuffer& lod_counts) {
+    const _VulkanBuffer& lod_counts,
+    const bool use_gut_projection) {
     PerfTimer::Timer<PerfTimer::CullSplats> timer(this);
     DEVICE_GUARD;
 
@@ -2560,7 +2721,7 @@ void VulkanGSRenderer::executeCullSplats(
     executeCompute(
         {{num_splats, 256}},
         &uniforms, sizeof(uniforms),
-        pipeline_cull_splats,
+        use_gut_projection ? pipeline_cull_splats_3dgut : pipeline_cull_splats,
         std::vector<TaggedBinding>{
             {buffers.xyz_ws.deviceBuffer, BufferUse::ComputeRead},
             {transform_indices, BufferUse::ComputeRead},
@@ -2602,6 +2763,7 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
     const _VulkanBuffer& lod_levels,
     const _VulkanBuffer& lod_weights,
     const _VulkanBuffer& lod_counts,
+    const bool use_gut_projection,
     const bool write_overlay_flags) {
     PerfTimer::Timer<PerfTimer::ProjectionSurvivors> timer(this);
     DEVICE_GUARD;
@@ -2690,14 +2852,24 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
     applyShNUniforms(survivor_uniforms, buffers, deviceInfo.maxStorageBufferRange);
 
     // Indirect: plan() adds implicit IndirectRead on survivor_state (replaces L2629 handoff).
+    auto& projection_pipeline =
+        buffers.quant_pool
+            ? (use_gut_projection ? pipeline_projection_forward_quant_survivors_3dgut
+                                  : pipeline_projection_forward_quant_survivors)
+        : buffers.shN_q16
+            ? (use_gut_projection ? pipeline_projection_forward_shn_q16_survivors_3dgut
+                                  : pipeline_projection_forward_shn_q16_survivors)
+        : buffers.shN_f16
+            ? (use_gut_projection ? pipeline_projection_forward_shn_f16_survivors_3dgut
+                                  : pipeline_projection_forward_shn_f16_survivors)
+            : (use_gut_projection ? pipeline_projection_forward_survivors_3dgut
+                                  : pipeline_projection_forward_survivors);
+
     executeComputeIndirect(
         buffers.survivor_state.deviceBuffer,
         indirect::byteOffset(indirect::SurvivorState::kProjectionWordOffset),
         &survivor_uniforms, sizeof(survivor_uniforms),
-        buffers.quant_pool ? pipeline_projection_forward_quant_survivors
-        : buffers.shN_q16  ? pipeline_projection_forward_shn_q16_survivors
-        : buffers.shN_f16  ? pipeline_projection_forward_shn_f16_survivors
-                           : pipeline_projection_forward_survivors,
+        projection_pipeline,
         tagged);
 }
 

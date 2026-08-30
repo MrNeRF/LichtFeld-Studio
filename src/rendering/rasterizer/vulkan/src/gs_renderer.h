@@ -246,6 +246,13 @@ public:
     // batch B before returning the raw count/sentinel result.
     [[nodiscard]] TileInstanceGate synchronizeTileInstanceGate(
         VulkanGSPipelineBuffers& buffers);
+    // Training viewport gate. The compact projection has already written
+    // visible_count in the active batch; fence-wait that batch, read the raw
+    // append total, and reopen a batch so the caller can grow/re-record before
+    // any raster work consumes a clamped prefix.
+    [[nodiscard]] PrimitiveVisibilityStats synchronizePrimitiveVisibilityGate(
+        VulkanGSPipelineBuffers& buffers,
+        size_t num_splats);
 
     void executeProjectionForward(const VulkanGSRendererUniforms& uniforms,
                                   VulkanGSPipelineBuffers& buffers,
@@ -274,7 +281,8 @@ public:
                            const _VulkanBuffer& model_transforms,
                            const _VulkanBuffer& lod_indices = _VulkanBuffer(),
                            const _VulkanBuffer& lod_logical_indices = _VulkanBuffer(),
-                           const _VulkanBuffer& lod_counts = _VulkanBuffer());
+                           const _VulkanBuffer& lod_counts = _VulkanBuffer(),
+                           bool use_gut_projection = false);
     void executeProjectionForwardSurvivors(const VulkanGSRendererUniforms& uniforms,
                                            VulkanGSPipelineBuffers& buffers,
                                            const _VulkanBuffer& transform_indices,
@@ -287,6 +295,7 @@ public:
                                            const _VulkanBuffer& lod_levels = _VulkanBuffer(),
                                            const _VulkanBuffer& lod_weights = _VulkanBuffer(),
                                            const _VulkanBuffer& lod_counts = _VulkanBuffer(),
+                                           bool use_gut_projection = false,
                                            bool write_overlay_flags = true);
     // prepare_visible_chain fan-out + indirect depth sort + sorted-id snapshot.
     void executeSortPrimitivesByDepthVisible(const VulkanGSRendererUniforms& uniforms,
@@ -443,17 +452,28 @@ protected:
     _ComputePipeline pipeline_lod_compact_touch = _ComputePipeline(4);
     // HiGS viewer chain
     _ComputePipeline pipeline_cull_splats = _ComputePipeline(10);
+    _ComputePipeline pipeline_cull_splats_3dgut = _ComputePipeline(10);
     _ComputePipeline pipeline_cull_prepare = _ComputePipeline(2);
     // Bindings 6 (tiles_touched) and 8 (legacy radii, now unused) are
     // absent from the survivor variant.
     _ComputePipeline pipeline_projection_forward_survivors = _ComputePipeline(std::vector<int>{
         0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28});
+    _ComputePipeline pipeline_projection_forward_survivors_3dgut = _ComputePipeline(std::vector<int>{
+        0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28});
     _ComputePipeline pipeline_projection_forward_quant_survivors = _ComputePipeline(std::vector<int>{
+        0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29});
+    _ComputePipeline pipeline_projection_forward_quant_survivors_3dgut = _ComputePipeline(std::vector<int>{
         0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29});
     _ComputePipeline pipeline_projection_forward_shn_f16_survivors = _ComputePipeline(vksplatWithout(
         {0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28},
         2));
+    _ComputePipeline pipeline_projection_forward_shn_f16_survivors_3dgut = _ComputePipeline(vksplatWithout(
+        {0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28},
+        2));
     _ComputePipeline pipeline_projection_forward_shn_q16_survivors = _ComputePipeline(vksplatWithout(
+        {0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29},
+        2));
+    _ComputePipeline pipeline_projection_forward_shn_q16_survivors_3dgut = _ComputePipeline(vksplatWithout(
         {0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29},
         2));
     _ComputePipeline pipeline_prepare_visible_chain = _ComputePipeline(4);
@@ -530,6 +550,10 @@ protected:
     std::uint64_t visible_count_readback_value_ = 0;
     size_t visible_count_readback_num_splats_ = 0;
 
+    _VulkanBuffer visible_count_gate_readback_buffer_{};
+    uint32_t* visible_count_gate_readback_mapped_ = nullptr;
+    bool visible_count_gate_readback_initialized_ = false;
+
     _VulkanBuffer instance_count_readback_buffer_{};
     uint32_t* instance_count_readback_mapped_ = nullptr;
     bool instance_count_readback_initialized_ = false;
@@ -552,6 +576,8 @@ protected:
 
     void ensureVisibleCountReadback();
     void destroyVisibleCountReadback();
+    void ensureVisibleCountGateReadback();
+    void destroyVisibleCountGateReadback();
     void recordVisibleCountReadback(VulkanGSPipelineBuffers& buffers, size_t num_splats);
     void ensureInstanceCountReadback();
     void destroyInstanceCountReadback();

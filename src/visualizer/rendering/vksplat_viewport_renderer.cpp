@@ -73,6 +73,11 @@ namespace lfs::vis {
         // protection window (3) and the eviction freshness window (12), so
         // only a genuinely unevictable pool qualifies.
         constexpr std::uint32_t kLodAdmissionFrozenFrames = 30u;
+        // Training keeps projection over the full model, but the compact
+        // survivor outputs are bounded. The raw append counter below makes
+        // this a lossless bound: an unusually dense view grows and rerenders
+        // before rasterization consumes the clamped prefix.
+        constexpr std::size_t kTrainingVisibleSplatBudget = 2'000'000;
 
         // Bytes one pool page occupies on the GPU: canonical quantized
         // page-input regions (mirrors ensureLodPageInputStorage's layout)
@@ -3314,12 +3319,13 @@ namespace lfs::vis {
         };
         const std::size_t dense_batch_capacity =
             denseTileBatchCapacity(HIGS_DEPTH_WAVE_INSTANCES, alloc_tiles);
-        // CUDA training can require N-wide sort scratch while the Vulkan wave
-        // chain is fixed at K. Both consumers share this arena layout.
-        const std::size_t sort_region_elems = std::max(num_splats, sort_capacity);
         // Macro chain: per-splat outputs live at compact slots (visible
         // capacity), and the legacy-only buffers are not part of the frame.
         const std::size_t per_visible = macro_chain ? visible_capacity : num_splats;
+        // CUDA training can require N-wide sort scratch on the legacy path;
+        // the compact chain's ping-pong follows its bounded visible domain.
+        const std::size_t sort_region_elems =
+            std::max(macro_chain ? visible_capacity : num_splats, sort_capacity);
         const std::size_t cumsum_elements = std::max(per_visible, alloc_tiles);
 
         if (!macro_chain) {
@@ -3729,7 +3735,8 @@ namespace lfs::vis {
                    indirect::VisibleSortDispatch::kLayout.word_count);
         bind_count(buffers_.index_buffer_offset, per_visible);
         const std::size_t per_splat_end = cursor;
-        const std::size_t sort_region_elems = std::max(num_splats, sort_capacity);
+        const std::size_t sort_region_elems =
+            std::max(macro_chain ? visible_capacity : num_splats, sort_capacity);
         bind_count(buffers_.sorting_keys_1, sort_region_elems);
         bind_count(buffers_.sorting_keys_2, sort_region_elems);
         bind_count(buffers_.sorting_gauss_idx_1, sort_region_elems);
@@ -8753,10 +8760,14 @@ namespace lfs::vis {
             uniforms.lod_enabled |= 2u;
         }
 
-        // HiGS requires compact-slot-safe indexing, 16-bit storage, and immutable
-        // input. 3DGUT and live training use the legacy per-render-tile chain.
+        // HiGS requires compact-slot-safe indexing and 16-bit storage. The
+        // training render owns the model-read epoch through GPU completion, so
+        // its synchronized zero-copy inputs are safe for the same cull +
+        // compact projection path. Depth capture stays legacy because it
+        // requires the full per-pixel depth coverage path.
         const bool higs_candidate =
-            !request.gut && renderer_.supportsFloat16Storage() && !synchronize_input_upload &&
+            (!request.gut || synchronize_input_upload) &&
+            renderer_.supportsFloat16Storage() &&
             !depth_capture_mode_;
         // Depth view colorizes the per-pixel median depth. mip_filter bit 1
         // switches the macro compose to an exact per-pixel replay of the single
@@ -8766,7 +8777,8 @@ namespace lfs::vis {
         if (request.depth_view) {
             uniforms.mip_filter |= 2u;
         }
-        const bool higs_warmup_frame = higs_candidate && macro_chain_warmup_pending_;
+        const bool higs_warmup_frame = higs_candidate && !synchronize_input_upload &&
+                                       macro_chain_warmup_pending_;
         const bool higs_active = higs_candidate && !higs_warmup_frame;
         // Capture forces the non-batched per-pixel rasterizer (full pixel_depth
         // coverage); the batched compose only writes a subset of pixels.
@@ -8776,8 +8788,14 @@ namespace lfs::vis {
         // far plane doubles as the expected-mode flag and bounds out junk far splats.
         uniforms.expected_far = depth_capture_expected_ ? request.frame_view.far_plane : 0.0f;
         // Projection/compaction storage is exact for the active render domain;
-        // tile-instance scratch is independently fixed at K and reused per wave.
-        const std::size_t visible_capacity = active_splat_count;
+        // training uses a bounded compact domain and grows it synchronously on
+        // raw append overflow before any raster pass is recorded. Free-view
+        // retains the exact active-domain size.
+        std::size_t visible_capacity = active_splat_count;
+        if (synchronize_input_upload && higs_active) {
+            visible_capacity = std::min(active_splat_count,
+                                        kTrainingVisibleSplatBudget);
+        }
 
         if (uniforms.lod_enabled != 0u) {
             static std::uint32_t lod_dispatch_log_counter = 0;
@@ -8813,8 +8831,9 @@ namespace lfs::vis {
         const std::size_t num_tiles =
             static_cast<std::size_t>(uniforms.grid_width) *
             static_cast<std::size_t>(uniforms.grid_height);
-        const std::size_t sort_region_elems =
-            std::max(active_splat_count, std::size_t{HIGS_DEPTH_WAVE_INSTANCES});
+        std::size_t sort_region_elems =
+            std::max(higs_active ? visible_capacity : active_splat_count,
+                     std::size_t{HIGS_DEPTH_WAVE_INSTANCES});
         // Logical image extents for shared-scratch estimate/bind (bucketed inside).
         const std::size_t image_width = static_cast<std::size_t>(uniforms.image_width);
         const std::size_t image_height = static_cast<std::size_t>(uniforms.image_height);
@@ -8925,144 +8944,151 @@ namespace lfs::vis {
                                      completion_value,
                                      vulkan_render_complete_timeline_,
                                      completion_value);
-            {
-                LOG_TIMER("vksplat.render.record");
+            for (;;) {
+                depth_wave_sort_bits = 0;
+                // An overflow gate may end and reopen the command batch. Keep
+                // all projection/sort recording inside this retry loop so a
+                // grown compact domain is fully rebuilt before rasterization.
                 {
-                    LOG_TIMER("vksplat.render.record.executeProjectionForward");
-                    if (buffers_.has_lod_indices && lod_indices_upload_pending_ && !buffers_.lod_indices.empty()) {
-                        recordUpdateBufferChunks(renderer_.activeCommandBuffer(),
-                                                 buffers_.lod_indices.deviceBuffer,
-                                                 buffers_.lod_indices.data(),
-                                                 buffers_.lod_indices.size() * sizeof(std::uint32_t));
-                    }
-                    if (buffers_.has_lod_logical_indices &&
-                        lod_logical_indices_upload_pending_ &&
-                        !buffers_.lod_logical_indices.empty()) {
-                        recordUpdateBufferChunks(renderer_.activeCommandBuffer(),
-                                                 buffers_.lod_logical_indices.deviceBuffer,
-                                                 buffers_.lod_logical_indices.data(),
-                                                 buffers_.lod_logical_indices.size() * sizeof(std::uint32_t));
-                    }
-                    if (buffers_.has_lod_levels && lod_levels_upload_pending_ && !buffers_.lod_levels.empty()) {
-                        recordUpdateBufferChunks(renderer_.activeCommandBuffer(),
-                                                 buffers_.lod_levels.deviceBuffer,
-                                                 buffers_.lod_levels.data(),
-                                                 buffers_.lod_levels.size() * sizeof(std::uint32_t));
-                    }
-                    if (buffers_.has_lod_weights && lod_weights_upload_pending_ && !buffers_.lod_weights.empty()) {
-                        recordUpdateBufferChunks(renderer_.activeCommandBuffer(),
-                                                 buffers_.lod_weights.deviceBuffer,
-                                                 buffers_.lod_weights.data(),
-                                                 buffers_.lod_weights.size() * sizeof(float));
-                    }
-                    if (gpu_lod_select_dispatch_active) {
-                        LOG_TIMER("vksplat.render.record.executeSelectLodThreshold");
-                        auto gpu_lod_traversal = request.lod_gpu_traversal;
-                        gpu_lod_traversal.pixel_scale_limit *= gpu_lod_pixel_scale_feedback_;
-                        const VulkanGSLodSelectUniforms lod_select_uniforms =
-                            makeGpuLodSelectUniforms(gpu_lod_traversal,
-                                                     gpu_lod_select_capacity,
-                                                     gpu_lod_tree_.physical_node_capacity,
-                                                     gpu_lod_tree_.logical_chunks,
-                                                     static_cast<std::uint32_t>(lod_page_cache_.frameIndex()),
-                                                     partial_lod_page_inputs ? lod_fade_frames_ : 0u);
-                        renderer_.executeSelectLodThreshold(
-                            lod_select_uniforms,
-                            buffers_,
-                            gpu_lod_tree_.node_bounds.deviceBuffer,
-                            gpu_lod_tree_.node_links.deviceBuffer,
-                            gpu_lod_tree_.chunk_to_page.deviceBuffer,
-                            gpu_lod_tree_.page_age.deviceBuffer,
-                            buffers_.page_frames.deviceBuffer.buffer != VK_NULL_HANDLE
-                                ? buffers_.page_frames.deviceBuffer
-                                : gpu_lod_tree_.page_frames.deviceBuffer,
-                            gpu_lod_tree_.page_to_chunk.deviceBuffer);
-                        static std::uint32_t gpu_lod_select_log_counter = 0;
-                        const std::uint32_t gpu_lod_log_counter = ++gpu_lod_select_log_counter;
-                        if (gpu_lod_log_counter <= 5u || (gpu_lod_log_counter % 120u) == 0u) {
-                            LOG_INFO(
-                                "LOD GPU selector: nodes={} capacity={} cpu_lod_count={} pixel_limit={:.3e}",
-                                lod_select_uniforms.node_count,
-                                lod_select_uniforms.output_capacity,
-                                request.lod_count,
-                                lod_select_uniforms.pixel_scale_limit);
+                    LOG_TIMER("vksplat.render.record");
+                    {
+                        LOG_TIMER("vksplat.render.record.executeProjectionForward");
+                        if (buffers_.has_lod_indices && lod_indices_upload_pending_ && !buffers_.lod_indices.empty()) {
+                            recordUpdateBufferChunks(renderer_.activeCommandBuffer(),
+                                                     buffers_.lod_indices.deviceBuffer,
+                                                     buffers_.lod_indices.data(),
+                                                     buffers_.lod_indices.size() * sizeof(std::uint32_t));
+                        }
+                        if (buffers_.has_lod_logical_indices &&
+                            lod_logical_indices_upload_pending_ &&
+                            !buffers_.lod_logical_indices.empty()) {
+                            recordUpdateBufferChunks(renderer_.activeCommandBuffer(),
+                                                     buffers_.lod_logical_indices.deviceBuffer,
+                                                     buffers_.lod_logical_indices.data(),
+                                                     buffers_.lod_logical_indices.size() * sizeof(std::uint32_t));
+                        }
+                        if (buffers_.has_lod_levels && lod_levels_upload_pending_ && !buffers_.lod_levels.empty()) {
+                            recordUpdateBufferChunks(renderer_.activeCommandBuffer(),
+                                                     buffers_.lod_levels.deviceBuffer,
+                                                     buffers_.lod_levels.data(),
+                                                     buffers_.lod_levels.size() * sizeof(std::uint32_t));
+                        }
+                        if (buffers_.has_lod_weights && lod_weights_upload_pending_ && !buffers_.lod_weights.empty()) {
+                            recordUpdateBufferChunks(renderer_.activeCommandBuffer(),
+                                                     buffers_.lod_weights.deviceBuffer,
+                                                     buffers_.lod_weights.data(),
+                                                     buffers_.lod_weights.size() * sizeof(float));
+                        }
+                        if (gpu_lod_select_dispatch_active) {
+                            LOG_TIMER("vksplat.render.record.executeSelectLodThreshold");
+                            auto gpu_lod_traversal = request.lod_gpu_traversal;
+                            gpu_lod_traversal.pixel_scale_limit *= gpu_lod_pixel_scale_feedback_;
+                            const VulkanGSLodSelectUniforms lod_select_uniforms =
+                                makeGpuLodSelectUniforms(gpu_lod_traversal,
+                                                         gpu_lod_select_capacity,
+                                                         gpu_lod_tree_.physical_node_capacity,
+                                                         gpu_lod_tree_.logical_chunks,
+                                                         static_cast<std::uint32_t>(lod_page_cache_.frameIndex()),
+                                                         partial_lod_page_inputs ? lod_fade_frames_ : 0u);
+                            renderer_.executeSelectLodThreshold(
+                                lod_select_uniforms,
+                                buffers_,
+                                gpu_lod_tree_.node_bounds.deviceBuffer,
+                                gpu_lod_tree_.node_links.deviceBuffer,
+                                gpu_lod_tree_.chunk_to_page.deviceBuffer,
+                                gpu_lod_tree_.page_age.deviceBuffer,
+                                buffers_.page_frames.deviceBuffer.buffer != VK_NULL_HANDLE
+                                    ? buffers_.page_frames.deviceBuffer
+                                    : gpu_lod_tree_.page_frames.deviceBuffer,
+                                gpu_lod_tree_.page_to_chunk.deviceBuffer);
+                            static std::uint32_t gpu_lod_select_log_counter = 0;
+                            const std::uint32_t gpu_lod_log_counter = ++gpu_lod_select_log_counter;
+                            if (gpu_lod_log_counter <= 5u || (gpu_lod_log_counter % 120u) == 0u) {
+                                LOG_INFO(
+                                    "LOD GPU selector: nodes={} capacity={} cpu_lod_count={} pixel_limit={:.3e}",
+                                    lod_select_uniforms.node_count,
+                                    lod_select_uniforms.output_capacity,
+                                    request.lod_count,
+                                    lod_select_uniforms.pixel_scale_limit);
+                            }
+                        }
+                        if (!gpu_lod_render_active && gpu_lod_index_map_active) {
+                            LOG_TIMER("vksplat.render.record.executeMapLodIndices");
+                            renderer_.executeMapLodIndices(
+                                uniforms.lod_count,
+                                static_cast<std::uint32_t>(lfs::core::SplatLodTree::kChunkSplats),
+                                lfs::core::SplatLodTree::kInvalidPage,
+                                buffers_,
+                                gpu_lod_tree_.chunk_to_page.deviceBuffer);
+                        }
+                        const _VulkanBuffer lod_indices_buffer =
+                            buffers_.has_lod_indices
+                                ? (gpu_lod_render_active
+                                       ? buffers_.lod_gpu_indices.deviceBuffer
+                                       : buffers_.lod_indices.deviceBuffer)
+                                : _VulkanBuffer();
+                        const _VulkanBuffer lod_logical_indices_buffer =
+                            buffers_.has_lod_logical_indices
+                                ? (gpu_lod_render_active
+                                       ? buffers_.lod_gpu_logical_indices.deviceBuffer
+                                       : buffers_.lod_logical_indices.deviceBuffer)
+                                : _VulkanBuffer();
+                        const _VulkanBuffer lod_levels_buffer =
+                            buffers_.has_lod_levels
+                                ? (gpu_lod_render_active
+                                       ? buffers_.lod_gpu_levels.deviceBuffer
+                                       : buffers_.lod_levels.deviceBuffer)
+                                : _VulkanBuffer();
+                        const _VulkanBuffer lod_weights_buffer =
+                            buffers_.has_lod_weights
+                                ? (gpu_lod_render_active
+                                       ? buffers_.lod_gpu_weights.deviceBuffer
+                                       : buffers_.lod_weights.deviceBuffer)
+                                : _VulkanBuffer();
+                        const _VulkanBuffer lod_counts_buffer =
+                            gpu_lod_render_active
+                                ? buffers_.lod_gpu_counts.deviceBuffer
+                                : _VulkanBuffer();
+                        if (higs_active) {
+                            renderer_.executeCullSplats(uniforms,
+                                                        buffers_,
+                                                        overlay_bindings->transform_indices,
+                                                        overlay_bindings->node_mask,
+                                                        overlay_bindings->overlay_params,
+                                                        overlay_bindings->model_transforms,
+                                                        lod_indices_buffer,
+                                                        lod_logical_indices_buffer,
+                                                        lod_counts_buffer,
+                                                        request.gut);
+                            renderer_.executeProjectionForwardSurvivors(uniforms,
+                                                                        buffers_,
+                                                                        overlay_bindings->transform_indices,
+                                                                        overlay_bindings->node_mask,
+                                                                        overlay_bindings->overlay_params,
+                                                                        overlay_bindings->model_transforms,
+                                                                        visible_capacity,
+                                                                        lod_indices_buffer,
+                                                                        lod_logical_indices_buffer,
+                                                                        lod_levels_buffer,
+                                                                        lod_weights_buffer,
+                                                                        lod_counts_buffer,
+                                                                        request.gut);
+                        } else {
+                            renderer_.executeProjectionForward(uniforms,
+                                                               buffers_,
+                                                               overlay_bindings->transform_indices,
+                                                               overlay_bindings->node_mask,
+                                                               overlay_bindings->overlay_params,
+                                                               overlay_bindings->model_transforms,
+                                                               0,
+                                                               request.gut,
+                                                               lod_indices_buffer,
+                                                               lod_logical_indices_buffer,
+                                                               lod_levels_buffer,
+                                                               lod_weights_buffer,
+                                                               lod_counts_buffer);
                         }
                     }
-                    if (!gpu_lod_render_active && gpu_lod_index_map_active) {
-                        LOG_TIMER("vksplat.render.record.executeMapLodIndices");
-                        renderer_.executeMapLodIndices(
-                            uniforms.lod_count,
-                            static_cast<std::uint32_t>(lfs::core::SplatLodTree::kChunkSplats),
-                            lfs::core::SplatLodTree::kInvalidPage,
-                            buffers_,
-                            gpu_lod_tree_.chunk_to_page.deviceBuffer);
-                    }
-                    const _VulkanBuffer lod_indices_buffer =
-                        buffers_.has_lod_indices
-                            ? (gpu_lod_render_active
-                                   ? buffers_.lod_gpu_indices.deviceBuffer
-                                   : buffers_.lod_indices.deviceBuffer)
-                            : _VulkanBuffer();
-                    const _VulkanBuffer lod_logical_indices_buffer =
-                        buffers_.has_lod_logical_indices
-                            ? (gpu_lod_render_active
-                                   ? buffers_.lod_gpu_logical_indices.deviceBuffer
-                                   : buffers_.lod_logical_indices.deviceBuffer)
-                            : _VulkanBuffer();
-                    const _VulkanBuffer lod_levels_buffer =
-                        buffers_.has_lod_levels
-                            ? (gpu_lod_render_active
-                                   ? buffers_.lod_gpu_levels.deviceBuffer
-                                   : buffers_.lod_levels.deviceBuffer)
-                            : _VulkanBuffer();
-                    const _VulkanBuffer lod_weights_buffer =
-                        buffers_.has_lod_weights
-                            ? (gpu_lod_render_active
-                                   ? buffers_.lod_gpu_weights.deviceBuffer
-                                   : buffers_.lod_weights.deviceBuffer)
-                            : _VulkanBuffer();
-                    const _VulkanBuffer lod_counts_buffer =
-                        gpu_lod_render_active
-                            ? buffers_.lod_gpu_counts.deviceBuffer
-                            : _VulkanBuffer();
-                    if (higs_active) {
-                        renderer_.executeCullSplats(uniforms,
-                                                    buffers_,
-                                                    overlay_bindings->transform_indices,
-                                                    overlay_bindings->node_mask,
-                                                    overlay_bindings->overlay_params,
-                                                    overlay_bindings->model_transforms,
-                                                    lod_indices_buffer,
-                                                    lod_logical_indices_buffer,
-                                                    lod_counts_buffer);
-                        renderer_.executeProjectionForwardSurvivors(uniforms,
-                                                                    buffers_,
-                                                                    overlay_bindings->transform_indices,
-                                                                    overlay_bindings->node_mask,
-                                                                    overlay_bindings->overlay_params,
-                                                                    overlay_bindings->model_transforms,
-                                                                    visible_capacity,
-                                                                    lod_indices_buffer,
-                                                                    lod_logical_indices_buffer,
-                                                                    lod_levels_buffer,
-                                                                    lod_weights_buffer,
-                                                                    lod_counts_buffer);
-                    } else {
-                        renderer_.executeProjectionForward(uniforms,
-                                                           buffers_,
-                                                           overlay_bindings->transform_indices,
-                                                           overlay_bindings->node_mask,
-                                                           overlay_bindings->overlay_params,
-                                                           overlay_bindings->model_transforms,
-                                                           0,
-                                                           request.gut,
-                                                           lod_indices_buffer,
-                                                           lod_logical_indices_buffer,
-                                                           lod_levels_buffer,
-                                                           lod_weights_buffer,
-                                                           lod_counts_buffer);
-                    }
-                }
                 // Two-stage sort (Splatshop, matches gsplat_fwd reference):
                 //   1. Depth-sort N primitives by radial distance (full 32-bit key).
                 //   2. Reorder tiles_touched into depth-rank order so the cumsum
@@ -9077,6 +9103,59 @@ namespace lfs::vis {
                     {
                         LOG_TIMER("vksplat.render.record.executeSortPrimitivesByDepth");
                         renderer_.executeSortPrimitivesByDepthVisible(uniforms, buffers_, visible_capacity);
+                    }
+                    if (synchronize_input_upload &&
+                        visible_capacity < active_splat_count) {
+                        const auto visibility = renderer_.synchronizePrimitiveVisibilityGate(
+                            buffers_, active_splat_count);
+                        if (visibility.raw_count > visible_capacity) {
+                            const std::size_t old_capacity = visible_capacity;
+                            visible_capacity = std::min(
+                                active_splat_count,
+                                std::max(visibility.raw_count,
+                                         old_capacity > active_splat_count / 2
+                                             ? active_splat_count
+                                             : old_capacity * 2));
+                            sort_region_elems = std::max(
+                                visible_capacity,
+                                std::size_t{HIGS_DEPTH_WAVE_INSTANCES});
+                            LOG_PERF(
+                                "vksplat.training_visible_overflow raw={} old_capacity={} new_capacity={} splats={}",
+                                visibility.raw_count,
+                                old_capacity,
+                                visible_capacity,
+                                active_splat_count);
+
+                            // Batch A is complete at this point, so the
+                            // shared arena can be rebound safely. The next
+                            // loop iteration repeats cull + compact projection
+                            // and the visible sort with the larger capacity.
+                            detachSharedScratchBuffers();
+                            const std::size_t required_shared_scratch =
+                                estimateSharedScratchBytes(active_splat_count,
+                                                           visible_capacity,
+                                                           higs_active,
+                                                           sort_region_elems,
+                                                           image_width,
+                                                           image_height);
+                            if (auto ok = ensureSharedScratchArena(context, required_shared_scratch); !ok) {
+                                throw std::runtime_error(std::format(
+                                    "VkSplat training visible-domain growth failed: {}",
+                                    ok.error()));
+                            }
+                            if (auto rok = reimportSharedScratchIfGrown(context); !rok) {
+                                throw std::runtime_error(std::format(
+                                    "VkSplat training visible-domain reimport failed: {}",
+                                    rok.error()));
+                            }
+                            bindSharedScratchBuffers(active_splat_count,
+                                                     visible_capacity,
+                                                     higs_active,
+                                                     sort_region_elems,
+                                                     image_width,
+                                                     image_height);
+                            continue;
+                        }
                     }
                     {
                         LOG_TIMER("vksplat.render.record.executeMacroCoverage");
@@ -9200,6 +9279,8 @@ namespace lfs::vis {
                     request.depth_view_min,
                     request.depth_view_max,
                     request.depth_visualization_mode);
+                }
+                break;
             }
             // record/composePixelState timer scope ends here.
             // On try-block exit, `batch` submits and publishes its timeline signal before the
