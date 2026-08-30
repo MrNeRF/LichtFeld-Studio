@@ -1,10 +1,9 @@
-/* Plugin Marketplace panel styles. Theme-dependent colors live in plugin_marketplace.theme.rcss. */
+/* Plugin Marketplace panel layout.
+ * Colors and state treatments live in plugin_marketplace.theme.rcss so the
+ * window follows the active application theme like the other floating panels.
+ */
 
-.mp-warning-text {
-    display: block;
-    font-size: 12dp;
-    margin-bottom: 4dp;
-}
+/* ── Window layout ───────────────────────────────────────── */
 
 #content-wrap {
     padding: 0;
@@ -25,65 +24,107 @@
 
 #main-area {
     flex: 1;
-    overflow-y: scroll;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
     overflow-x: hidden;
     min-width: 0;
     min-height: 0;
-    padding: 8dp;
+    padding: 12dp 16dp 16dp;
 }
 
-/* ── Controls row ─────────────────────────────────────── */
+/* ── Intro and controls ──────────────────────────────────── */
+
+.mp-intro {
+    display: flex;
+    flex-direction: column;
+    gap: 4dp;
+    margin-bottom: 12dp;
+}
+
+.mp-title {
+    display: block;
+    font-size: 13dp;
+    font-weight: 600;
+    line-height: 18dp;
+}
+
+.mp-intro > .mp-warning-note {
+    display: block;
+    padding: 6dp 8dp;
+    border-left-width: 2dp;
+    border-radius: 4dp;
+    font-size: 12dp;
+    line-height: 16dp;
+}
 
 .mp-controls {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 6dp;
-    margin-bottom: 6dp;
+    flex-wrap: wrap;
+    gap: 8dp 12dp;
+    margin-bottom: 12dp;
+    padding: 8dp 10dp;
+    border-width: 1dp;
+    border-radius: 6dp;
 }
 
 .mp-controls-main {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8dp 14dp;
+    flex: 1;
+    min-width: 0;
+}
+
+.mp-control-group {
     display: flex;
     align-items: center;
     gap: 6dp;
     min-width: 0;
 }
 
-.mp-select {
-    min-width: 120dp;
+.mp-control-label {
+    font-size: 12dp;
+    white-space: nowrap;
 }
 
-.mp-sort-label {
-    margin-left: 4dp;
+.mp-select,
+.mp-select-sort {
+    height: 24dp;
+    min-height: 24dp;
+    min-width: 112dp;
 }
 
 .mp-select-sort {
-    min-width: 150dp;
+    min-width: 148dp;
 }
 
 .mp-view-toggle {
     display: flex;
     align-items: center;
-    gap: 4dp;
+    gap: 3dp;
     margin-left: auto;
     flex-shrink: 0;
 }
 
 .mp-view-btn {
-    width: 22dp;
-    min-width: 22dp;
-    height: 20dp;
+    width: 28dp;
+    min-width: 28dp;
+    height: 24dp;
+    min-height: 24dp;
     padding: 0;
-    line-height: 18dp;
-    font-size: 12dp;
+    line-height: 22dp;
     text-align: center;
 }
 
 .mp-icon-grid {
     display: inline-flex;
     flex-wrap: wrap;
-    width: 11dp;
-    height: 11dp;
+    width: 12dp;
+    height: 12dp;
     gap: 1dp;
     vertical-align: middle;
 }
@@ -98,54 +139,141 @@
     display: inline-flex;
     flex-direction: column;
     justify-content: center;
-    width: 11dp;
-    height: 11dp;
+    width: 12dp;
+    height: 12dp;
     gap: 2dp;
     vertical-align: middle;
 }
 
 .mp-icon-list > span {
     display: block;
-    width: 11dp;
+    width: 12dp;
     height: 1.5dp;
 }
 
-/* ── Manual URL install ───────────────────────────────── */
+/* ── Manual URL install ───────────────────────────────────── */
 
 .mp-manual-section {
-    margin-bottom: 4dp;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    margin-bottom: 12dp;
+    padding: 12dp;
+    border-width: 1dp;
+    border-radius: 6dp;
+}
+
+.mp-section-heading {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 6dp 10dp;
+    min-width: 0;
+}
+
+.mp-section-title {
+    font-size: 12dp;
+    font-weight: 600;
+}
+
+.mp-section-hint {
+    font-size: 12dp;
 }
 
 .mp-manual-row {
     display: flex;
     align-items: center;
     gap: 8dp;
-    margin-top: 4dp;
+    margin-top: 8dp;
+    min-width: 0;
 }
 
 .mp-url-input {
     flex: 1;
     min-width: 120dp;
+    height: 28dp;
+    min-height: 28dp;
 }
 
 .mp-install-btn {
     flex-shrink: 0;
+    height: 28dp;
+    min-height: 28dp;
 }
 
 .mp-formats-header {
     display: flex;
     align-items: center;
-    cursor: pointer;
-    margin-top: 4dp;
-    gap: 4dp;
+    gap: 5dp;
+    min-height: 24dp;
+    margin: 8dp 0 0;
+    padding: 6dp 0 0;
+    border-top-width: 1dp;
+    border-radius: 0;
+    font-weight: 600;
+}
+
+.mp-formats-header .section-arrow {
+    width: 12dp;
+    flex-shrink: 0;
+}
+
+.mp-formats-label {
+    font-size: 12dp;
+}
+
+#formats-content.section-content {
+    margin: 0;
+    padding: 0;
+    border-width: 0;
 }
 
 .mp-format-item {
-    font-size: 12dp;
-    padding: 1dp 0 1dp 18dp;
+    padding: 3dp 0 1dp 17dp;
+    font-family: "JetBrains Mono";
+    font-size: 11dp;
+    line-height: 15dp;
 }
 
-/* ── Card grid ────────────────────────────────────────── */
+.mp-manual-section .card-feedback {
+    margin-top: 8dp;
+}
+
+/* ── Empty state ──────────────────────────────────────────── */
+
+.mp-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4dp;
+    margin: 8dp 0 12dp;
+    padding: 24dp 16dp;
+    border-width: 1dp;
+    border-radius: 6dp;
+    text-align: center;
+}
+
+.mp-empty-mark {
+    display: block;
+    width: 24dp;
+    height: 24dp;
+    border-width: 1dp;
+    border-radius: 12dp;
+    font-size: 16dp;
+    line-height: 21dp;
+    text-align: center;
+}
+
+.mp-empty-title {
+    font-size: 12dp;
+    font-weight: 600;
+}
+
+.mp-empty-description {
+    font-size: 12dp;
+}
+
+/* ── Result grid and cards ───────────────────────────────── */
 
 .card-grid {
     display: block;
@@ -154,180 +282,420 @@
 }
 
 .card-grid.card-grid--list {
-    border-width: 1dp;
+    display: flex;
+    flex-direction: column;
+    gap: 4dp;
+    border-width: 0;
 }
 
-.card-row {
+.card-grid-window {
     display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 0;
-    margin-bottom: 12dp;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    gap: 12dp;
     min-width: 0;
 }
 
-.card-row--single {
-    justify-content: center;
-    gap: 12dp;
-}
-#status-bar {
+.card-slot {
     display: flex;
-    align-items: center;
-    height: 24dp;
-    padding: 0 10dp;
+    min-width: 0;
     flex-shrink: 0;
-    border-top-width: 1dp;
 }
 
-.status-item {
-    font-size: 12dp;
-    margin-right: 16dp;
-    letter-spacing: 0.2dp;
+.plugin-card {
+    box-sizing: border-box;
+    width: 100%;
+    height: 220dp;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    padding: 12dp;
+    border-width: 1dp;
+    border-radius: 6dp;
+    transition: background-color 0.14s quadratic-out, border-color 0.14s quadratic-out;
 }
-
-/* ── Card info area ───────────────────────────────────── */
 
 .card-info {
-    cursor: pointer;
+    display: flex;
+    flex-direction: column;
     flex: 1;
     min-height: 0;
-    height: 144dp;
+    min-width: 0;
     overflow: hidden;
+    cursor: pointer;
+}
+
+.card-title-row {
+    display: flex;
+    align-items: baseline;
+    gap: 6dp;
+    min-width: 0;
+    margin-bottom: 4dp;
+    flex: 0 0 auto;
 }
 
 .card-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
+    line-height: 16dp;
 }
 
 .card-version {
-    font-size: 12dp;
-    margin-left: 6dp;
+    flex-shrink: 0;
+    font-size: 11dp;
 }
 
 .card-repo {
     display: block;
+    flex: 0 0 auto;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    font-family: "JetBrains Mono";
+    font-size: 11dp;
+    line-height: 15dp;
+}
+
+.card-metrics,
+.card-tags,
+.card-local,
+.card-status,
+.card-error {
+    display: block;
+    flex: 0 0 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11dp;
+    line-height: 15dp;
 }
 
 .card-metrics {
-    font-size: 12dp;
-    display: block;
-    margin-top: 2dp;
-}
-
-.card-tags {
-    font-size: 12dp;
-    display: block;
-}
-
-.card-local {
-    font-size: 12dp;
-    display: block;
+    margin-top: 4dp;
 }
 
 .card-status {
-    font-size: 12dp;
-    display: block;
-    margin-top: 2dp;
-}
-
-.card-error {
-    font-size: 12dp;
-    display: block;
+    margin-top: 3dp;
 }
 
 .card-description {
     display: block;
-    margin-top: 2dp;
-    max-height: 42dp;
+    min-width: 0;
+    max-height: 45dp;
+    margin-top: 6dp;
     overflow: hidden;
+    text-overflow: ellipsis;
+    word-break: break-word;
+    font-size: 12dp;
+    line-height: 15dp;
 }
 
-/* ── Card buttons ─────────────────────────────────────── */
+.card-info .separator {
+    margin: 8dp 0 0;
+    flex: 0 0 auto;
+}
 
 .card-buttons {
     display: flex;
-    gap: 6dp;
-    margin-top: 4dp;
-    min-height: 22dp;
+    flex-wrap: wrap;
+    gap: 5dp;
+    margin-top: 8dp;
+    min-height: 24dp;
 }
 
 .card-buttons .btn {
-    flex: 1;
-    font-size: 12dp;
-    padding: 2dp 4dp;
+    flex: 1 1 auto;
+    min-width: 64dp;
+    height: 24dp;
+    min-height: 24dp;
+    padding: 2dp 6dp;
+    font-size: 11dp;
 }
 
 .card-startup-row,
 .card-git-row {
     display: flex;
     align-items: center;
-    margin-top: 4dp;
-    min-height: 18dp;
+    min-height: 20dp;
+    margin-top: 5dp;
+}
+
+.card-startup-row label,
+.card-git-row label,
+.plugin-list-option-row label {
+    display: flex;
+    align-items: center;
+    gap: 5dp;
+    min-width: 0;
+}
+
+.card-startup-row input[type="checkbox"],
+.card-git-row input[type="checkbox"],
+.plugin-list-option-row input[type="checkbox"] {
+    margin: 0;
 }
 
 .card-startup-label {
-    font-size: 12dp;
+    font-size: 11dp;
 }
 
-/* ── Card feedback ────────────────────────────────────── */
+/* ── Operation feedback ──────────────────────────────────── */
 
 .card-feedback {
-    margin-top: 4dp;
+    display: block;
+    margin-top: 6dp;
+    padding: 6dp 8dp;
+    border-width: 1dp;
+    border-radius: 4dp;
+}
+
+/* Panel rules are loaded after the shared .hidden utility, so keep the
+ * visibility contract explicit for elements that have their own display mode. */
+.mp-empty-state.hidden,
+.card-grid.hidden,
+.card-feedback.hidden,
+.card-progress.hidden,
+.card-progress-text.hidden,
+.card-feedback .status-text.hidden {
+    display: none;
 }
 
 .card-progress {
     display: block;
     width: 100%;
-    height: 14dp;
+    height: 6dp;
+    border-width: 0;
 }
 
 .card-progress-text {
-    font-size: 12dp;
     display: block;
+    margin-top: 4dp;
+    font-size: 11dp;
+    line-height: 14dp;
 }
 
-/* ── List layout ──────────────────────────────────────── */
+/* ── List layout ──────────────────────────────────────────── */
 
 .plugin-list-row {
     display: block;
     min-width: 0;
-    border-top-width: 1dp;
-    border-left-width: 2dp;
-    border-left-color: transparent;
-    transition: background-color 0.18s quadratic-out, border-left-color 0.18s quadratic-out;
+    border-width: 1dp;
+    border-left-width: 3dp;
+    border-radius: 6dp;
+    transition: background-color 0.14s quadratic-out, border-color 0.14s quadratic-out;
 }
 
-.plugin-list-row:first-child {
-    border-top-width: 0;
+.plugin-list-summary {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 6dp;
+    min-width: 0;
+    height: 32dp;
+    min-height: 32dp;
+    padding: 3dp 9dp;
+    overflow: hidden;
 }
+
+.plugin-list-disclosure {
+    width: 16dp;
+    min-width: 16dp;
+    height: 22dp;
+    min-height: 22dp;
+    padding: 0;
+    border-width: 0;
+    background-color: transparent;
+    text-align: center;
+    line-height: 20dp;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+
+.plugin-list-name-btn {
+    display: flex;
+    align-items: baseline;
+    gap: 7dp;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    padding: 0;
+    border-width: 0;
+    background-color: transparent;
+    text-align: left;
+    cursor: pointer;
+}
+
+.plugin-list-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12dp;
+    font-weight: 600;
+}
+
+.plugin-list-version {
+    flex-shrink: 0;
+    font-size: 11dp;
+}
+
+.plugin-list-summary-right {
+    display: flex;
+    align-items: center;
+    gap: 6dp;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+.plugin-list-summary-status {
+    max-width: 150dp;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11dp;
+    text-align: right;
+}
+
+.plugin-list-marker {
+    width: 12dp;
+    min-width: 12dp;
+    font-size: 12dp;
+    text-align: center;
+}
+
+.plugin-list-details {
+    display: flex;
+    flex-direction: column;
+    gap: 5dp;
+    min-width: 0;
+    padding: 0 11dp 7dp 38dp;
+    border-top-width: 1dp;
+    overflow: hidden;
+}
+
+.plugin-list-details.hidden {
+    display: none;
+}
+
 .plugin-list-detail-meta {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 8dp;
-}
-.plugin-list-option-row {
-    min-height: 18dp;
+    gap: 3dp 8dp;
+    min-width: 0;
+    padding-top: 5dp;
+    overflow: hidden;
 }
 
-.plugin-list-option-row label {
+.plugin-list-meta-item {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11dp;
+    line-height: 15dp;
+}
+
+.plugin-list-link {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+    padding: 0;
+    border-width: 0;
+    background-color: transparent;
+    font-family: "JetBrains Mono";
+    font-size: 11dp;
+    cursor: pointer;
+}
+
+.plugin-list-description,
+.plugin-list-error {
+    display: block;
+    min-width: 0;
+    word-break: break-word;
+    font-size: 12dp;
+    line-height: 15dp;
+}
+
+.plugin-list-feedback {
+    margin-top: 0;
+}
+
+.plugin-list-options {
     display: flex;
     align-items: center;
-    gap: 4dp;
+    flex-wrap: wrap;
+    gap: 6dp;
+    min-width: 0;
 }
 
-.plugin-list-option-row input[type="checkbox"] {
-    margin: 0;
+.plugin-list-option-row {
+    min-height: 20dp;
 }
 
 .plugin-list-option-label {
-    font-size: 12dp;
+    font-size: 11dp;
 }
-/* ── Confirm overlay ──────────────────────────────────── */
+
+.plugin-list-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5dp;
+    min-width: 0;
+}
+
+.plugin-list-buttons .btn {
+    min-width: 64dp;
+    height: 24dp;
+    min-height: 24dp;
+    padding: 2dp 6dp;
+    font-size: 11dp;
+}
+
+/* ── Catalog status ───────────────────────────────────────── */
+
+#status-bar {
+    display: flex;
+    align-items: center;
+    gap: 7dp;
+    height: 28dp;
+    min-height: 28dp;
+    padding: 0 16dp;
+    flex-shrink: 0;
+    border-top-width: 1dp;
+}
+
+.mp-status-dot {
+    display: block;
+    width: 6dp;
+    height: 6dp;
+    border-radius: 3dp;
+    flex-shrink: 0;
+}
+
+.status-item {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11dp;
+}
+
+/* ── Confirm overlay ──────────────────────────────────────── */
 
 .confirm-overlay {
     position: absolute;
@@ -346,26 +714,42 @@
 }
 
 .confirm-dialog {
-    border-width: 1dp;
-    padding: 16dp;
+    box-sizing: border-box;
+    width: 360dp;
     min-width: 280dp;
-    max-width: 380dp;
+    max-width: 100%;
+    padding: 16dp;
+    border-width: 1dp;
+    border-radius: 8dp;
+}
+
+.confirm-title {
+    display: block;
+    margin-bottom: 6dp;
+    font-size: 12dp;
+    font-weight: 600;
+    text-align: left;
 }
 
 .confirm-message {
     display: block;
     font-size: 12dp;
-    text-align: center;
-    margin-bottom: 8dp;
+    line-height: 16dp;
+    text-align: left;
+}
+
+.confirm-dialog .separator {
+    margin: 12dp 0;
 }
 
 .confirm-buttons {
     display: flex;
-    justify-content: center;
+    justify-content: flex-end;
     gap: 8dp;
-    margin-top: 8dp;
 }
 
 .confirm-buttons .btn {
-    min-width: 80dp;
+    min-width: 76dp;
+    height: 26dp;
+    min-height: 26dp;
 }
