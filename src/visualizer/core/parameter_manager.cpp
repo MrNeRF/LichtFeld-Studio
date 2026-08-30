@@ -254,6 +254,7 @@ namespace lfs::vis {
         dataset_config_ = lfs::core::param::DatasetConfig{};
         dataset_config_.centralize_dataset = "off";
         dataset_config_.loading_params = lfs::core::param::LoadingParams{};
+        export_formats_.clear();
         dirty_.store(false, std::memory_order_release);
     }
 
@@ -308,6 +309,11 @@ namespace lfs::vis {
         dataset_config_.timelapse_every = ds.timelapse_every;
         dataset_config_.invert_masks = ds.invert_masks;
         dataset_config_.mask_threshold = ds.mask_threshold;
+        dataset_config_.output_path_explicit = ds.output_path_explicit;
+        if (ds.output_path_explicit) {
+            dataset_config_.output_path = ds.output_path;
+        }
+        export_formats_ = params.export_formats;
 
         LOG_INFO("Session: strategy={}, iter={}, resize={}", opt.strategy, opt.iterations, dataset_config_.resize_factor);
     }
@@ -365,6 +371,7 @@ namespace lfs::vis {
         }
 
         dataset_config_ = params.dataset;
+        export_formats_ = params.export_formats;
         dirty_.store(false, std::memory_order_release);
 
         LOG_INFO("Imported training params: strategy={}, iter={}, images={}, resize={}",
@@ -413,6 +420,7 @@ namespace lfs::vis {
         params.dataset = dataset_config_;
         params.dataset.data_path = data_path;
         params.dataset.output_path = output_path;
+        params.export_formats = export_formats_;
         return params;
     }
 

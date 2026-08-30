@@ -42,6 +42,12 @@ namespace lfs::training {
         const lfs::core::param::TrainingParameters& params,
         const std::filesystem::path& destination = {});
 
+    /// Write `--export` formats next to project.licht after a terminal project
+    /// save. No-op when `params.export_formats` is empty.
+    void export_final_splats(
+        const Trainer& trainer,
+        const lfs::core::param::TrainingParameters& params);
+
     /// Construct + initialize Trainer on the live scene, then stream the
     /// document's CKPT payload via load_checkpoint(istream). Does not clear
     /// the scene and does not install into TrainerManager.

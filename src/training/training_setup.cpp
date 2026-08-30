@@ -10,6 +10,7 @@
 #include "core/mesh_data.hpp"
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
+#include "core/provenance.hpp"
 #include "core/scene.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/shareable_allocation_limit.hpp"
@@ -17,6 +18,7 @@
 #include "core/splat_data.hpp"
 #include "core/splat_data_transform.hpp"
 #include "dataset.hpp"
+#include "io/exporter.hpp"
 #include "io/loader.hpp"
 #include "io/project_document.hpp"
 #include "lfs/training/sh_value_storage.hpp"
@@ -1304,6 +1306,77 @@ namespace lfs::training {
             .on_stop_or_error = true,
             .at_step_boundaries = true,
         });
+    }
+
+    namespace {
+        const char* final_export_extension(const lfs::core::param::OutputFormat format) {
+            using lfs::core::param::OutputFormat;
+            switch (format) {
+            case OutputFormat::PLY: return ".ply";
+            case OutputFormat::SOG: return ".sog";
+            case OutputFormat::SPZ: return ".spz";
+            case OutputFormat::HTML: return ".html";
+            case OutputFormat::USD: return ".usd";
+            case OutputFormat::USDA: return ".usda";
+            case OutputFormat::USDC: return ".usdc";
+            case OutputFormat::RAD: return ".rad";
+            }
+            return ".ply";
+        }
+
+        lfs::io::Result<void> save_final_splat(const lfs::core::SplatData& splat,
+                                               const std::filesystem::path& output,
+                                               const lfs::core::param::OutputFormat format,
+                                               const lfs::core::ProvenanceStamp& provenance) {
+            using lfs::core::param::OutputFormat;
+            switch (format) {
+            case OutputFormat::PLY:
+                return lfs::io::save_ply(splat, {.output_path = output, .binary = true, .provenance = provenance});
+            case OutputFormat::SOG:
+                return lfs::io::save_sog(splat, {.output_path = output, .kmeans_iterations = 10, .provenance = provenance});
+            case OutputFormat::SPZ:
+                return lfs::io::save_spz(splat, {.output_path = output, .version = 4, .provenance = provenance});
+            case OutputFormat::HTML:
+                return lfs::io::export_html(splat, {.output_path = output, .kmeans_iterations = 10, .provenance = provenance});
+            case OutputFormat::USD:
+            case OutputFormat::USDA:
+            case OutputFormat::USDC:
+                return lfs::io::save_usd(splat, {.output_path = output, .provenance = provenance});
+            case OutputFormat::RAD:
+                return lfs::io::save_rad(splat, {.output_path = output, .provenance = provenance});
+            }
+            return lfs::io::save_ply(splat, {.output_path = output, .binary = true, .provenance = provenance});
+        }
+    } // namespace
+
+    void export_final_splats(const Trainer& trainer,
+                             const lfs::core::param::TrainingParameters& params) {
+        if (params.export_formats.empty()) {
+            return;
+        }
+        const auto& model = trainer.get_strategy().get_model();
+        const std::filesystem::path out_dir = params.dataset.output_path;
+        const std::string stem = params.dataset.output_name.empty()
+                                     ? std::format("splat_{}", trainer.get_current_iteration())
+                                     : params.dataset.output_name;
+
+        lfs::core::ProvenanceStamp stamp = params.include_provenance
+                                               ? lfs::core::make_provenance_stamp()
+                                               : lfs::core::make_minimal_provenance_stamp();
+        if (params.include_provenance) {
+            stamp.iteration = trainer.get_current_iteration();
+            stamp.strategy = params.optimization.strategy;
+        }
+
+        for (const auto format : params.export_formats) {
+            const std::filesystem::path path = out_dir / (stem + final_export_extension(format));
+            if (const auto result = save_final_splat(model, path, format, stamp); !result) {
+                LOG_ERROR("Failed to export final splat to {}: {}",
+                          lfs::core::path_to_utf8(path), result.error().message);
+            } else {
+                LOG_INFO("Exported final splat: {}", lfs::core::path_to_utf8(path));
+            }
+        }
     }
 
 } // namespace lfs::training
