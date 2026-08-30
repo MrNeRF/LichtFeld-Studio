@@ -278,6 +278,8 @@ def _install_lf_stub(monkeypatch):
         remember_camera_view_snap=lambda: False,
         scene_graph_selection_markers=lambda: False,
         set_scene_graph_selection_markers=lambda _enabled: None,
+        get_progress_bar_style=lambda: "classic",
+        set_progress_bar_style=lambda _style: None,
         get_scene_reconstruction_options=lambda: [
             {
                 "id": "native",
