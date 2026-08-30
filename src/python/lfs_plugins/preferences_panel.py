@@ -41,6 +41,11 @@ class PreferencesPanel(Panel):
         ("drone", "preferences.navigation_drone"),
     )
 
+    PROGRESS_BAR_OPTIONS = (
+        ("classic", "preferences.progress_bar_classic"),
+        ("minecraft", "preferences.progress_bar_minecraft"),
+    )
+
     EXPANDABLE_SECTIONS = (
         "language",
         "working_directory",
@@ -104,6 +109,7 @@ class PreferencesPanel(Panel):
                 lambda section=section: section in self._expanded_sections,
             )
         model.bind("theme_idx", self._theme_index, self._set_theme_index)
+        model.bind("progress_bar_idx", self._progress_bar_index, self._set_progress_bar_index)
         model.bind("scale_idx", self._scale_index, self._set_scale_index)
         model.bind(
             "scene_upscaler_idx",
@@ -186,6 +192,7 @@ class PreferencesPanel(Panel):
         model.bind_event("open_mcp_log_folder", self._on_open_mcp_log_folder)
         model.bind_event("toggle_section", self._on_toggle_section)
         model.bind_record_list("themes")
+        model.bind_record_list("progress_bar_styles")
         model.bind_record_list("scales")
         model.bind_record_list("scene_upscalers")
         model.bind_record_list("scene_upscaler_presets")
@@ -235,6 +242,7 @@ class PreferencesPanel(Panel):
     def _state(self):
         return (
             lf.ui.get_theme(),
+            lf.ui.get_progress_bar_style(),
             float(lf.ui.get_ui_scale_preference()),
             self._scene_upscaler(),
             self._scene_upscaler_preset(),
@@ -263,6 +271,13 @@ class PreferencesPanel(Panel):
                     "label": lf.ui.tr(theme.get("label_key") or theme.get("name") or theme["id"]),
                 }
                 for index, theme in enumerate(self._theme_catalog)
+            ],
+        )
+        self._handle.update_record_list(
+            "progress_bar_styles",
+            [
+                {"index": str(index), "label": lf.ui.tr(label)}
+                for index, (_style, label) in enumerate(self.PROGRESS_BAR_OPTIONS)
             ],
         )
         self._handle.update_record_list(
@@ -313,6 +328,22 @@ class PreferencesPanel(Panel):
             return
         if 0 <= index < len(self._theme_catalog):
             lf.ui.set_theme(self._theme_catalog[index]["id"])
+            self._refresh_selection()
+
+    def _progress_bar_index(self):
+        current = lf.ui.get_progress_bar_style()
+        for index, (style, _label) in enumerate(self.PROGRESS_BAR_OPTIONS):
+            if style == current:
+                return str(index)
+        return "0"
+
+    def _set_progress_bar_index(self, value):
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            return
+        if 0 <= index < len(self.PROGRESS_BAR_OPTIONS):
+            lf.ui.set_progress_bar_style(self.PROGRESS_BAR_OPTIONS[index][0])
             self._refresh_selection()
 
     def _scale_index(self):
@@ -1048,6 +1079,7 @@ class PreferencesPanel(Panel):
             self._read_asset_manager_directory()
         elif section == "appearance":
             lf.ui.set_theme("dark")
+            lf.ui.set_progress_bar_style("classic")
             lf.ui.set_ui_scale(0.0)
             lf.ui.set_scene_reconstruction("native", "native")
             lf.ui.reset_scene_reconstruction_preferences()
@@ -1075,6 +1107,7 @@ class PreferencesPanel(Panel):
     def _dirty_selection(self):
         if self._handle:
             self._handle.dirty("theme_idx")
+            self._handle.dirty("progress_bar_idx")
             self._handle.dirty("scale_idx")
             self._handle.dirty("scene_upscaler_idx")
             self._handle.dirty("scene_upscaler_preset_idx")

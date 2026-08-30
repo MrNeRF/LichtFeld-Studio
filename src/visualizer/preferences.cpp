@@ -20,6 +20,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 
 #ifdef _WIN32
@@ -38,6 +39,10 @@ namespace lfs::vis {
 
         [[nodiscard]] bool knownCameraMode(const std::string& mode) {
             return mode == "orbit" || mode == "trackball" || mode == "fpv" || mode == "drone";
+        }
+
+        [[nodiscard]] bool knownProgressBarStyle(std::string_view style) {
+            return style == "classic" || style == "minecraft";
         }
 
         [[nodiscard]] lfs::Error workingDirectoryError(
@@ -420,6 +425,22 @@ namespace lfs::vis {
         impl_->loadLocked();
         return impl_->values.value("scene_graph_selection_markers", false);
     }
+    void UserPreferences::setProgressBarStyle(const std::string_view value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["status_bar_progress_style"] =
+            knownProgressBarStyle(value) ? std::string(value) : "classic";
+        impl_->saveLocked();
+    }
+    std::string UserPreferences::progressBarStyle() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("status_bar_progress_style");
+        if (it == impl_->values.end() || !it->is_string())
+            return "classic";
+        const std::string style = it->get<std::string>();
+        return knownProgressBarStyle(style) ? style : "classic";
+    }
 
     void UserPreferences::setMcp(const McpPreferenceState& state) {
         std::scoped_lock lock(impl_->mutex);
@@ -525,6 +546,12 @@ namespace lfs::vis {
     }
     bool loadSceneGraphSelectionMarkersPreference() {
         return UserPreferences::instance().sceneGraphSelectionMarkers();
+    }
+    void saveProgressBarStylePreference(const std::string_view style) {
+        UserPreferences::instance().setProgressBarStyle(style);
+    }
+    std::string loadProgressBarStylePreference() {
+        return UserPreferences::instance().progressBarStyle();
     }
     void saveMcpPreferences(const McpPreferenceState& state) { UserPreferences::instance().setMcp(state); }
     McpPreferenceState loadMcpPreferences() { return UserPreferences::instance().mcp(); }
