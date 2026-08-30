@@ -134,9 +134,21 @@ namespace lfs::vis::gui {
                                  clamped_radius, h - clamped_radius);
         }
 
-        FloatingPanelAnchor floatingAnchorRect(const PanelDrawContext& ctx) {
+        FloatingPanelAnchor floatingAnchorRect(const PanelDrawContext& ctx,
+                                               const bool in_viewport = false) {
             // Floating panels may overlap docked panels. Constraining them to
             // the viewport makes their usable area shrink with the docks.
+            // FLOAT_IN_VIEWPORT panels instead use the 3D viewport hole as their anchor.
+            if (in_viewport && ctx.viewport && ctx.viewport->size.x > 0.0f &&
+                ctx.viewport->size.y > 0.0f) {
+                return {
+                    .x = ctx.viewport->pos.x,
+                    .y = ctx.viewport->pos.y,
+                    .width = ctx.viewport->size.x,
+                    .height = ctx.viewport->size.y,
+                };
+            }
+
             if (ctx.screen_bounds && ctx.screen_bounds->valid()) {
                 const auto& screen = *ctx.screen_bounds;
                 const float screen_bottom = screen.y + screen.height;
@@ -161,6 +173,100 @@ namespace lfs::vis::gui {
             }
 
             return {};
+        }
+
+        struct LayoutContextCache {
+            ViewportLayout viewport{};
+            PanelDrawBounds screen{};
+            bool has_viewport = false;
+            bool has_screen = false;
+        };
+
+        LayoutContextCache g_layout_cache;
+
+        void rememberLayoutContext(const PanelDrawContext& ctx) {
+            if (ctx.viewport && ctx.viewport->size.x > 0.0f && ctx.viewport->size.y > 0.0f) {
+                g_layout_cache.viewport = *ctx.viewport;
+                g_layout_cache.has_viewport = true;
+            }
+            if (ctx.screen_bounds && ctx.screen_bounds->valid()) {
+                g_layout_cache.screen = *ctx.screen_bounds;
+                g_layout_cache.has_screen = true;
+            }
+        }
+
+        PanelDrawContext cachedLayoutDrawContext() {
+            PanelDrawContext ctx;
+            if (g_layout_cache.has_viewport)
+                ctx.viewport = &g_layout_cache.viewport;
+            if (g_layout_cache.has_screen)
+                ctx.screen_bounds = g_layout_cache.screen;
+            return ctx;
+        }
+
+        float clampedFloatingPanelWidth(const float initial_width, const float anchor_width,
+                                        const float dpi) {
+            const float min_panel_width = 320.0f * dpi;
+            const float max_panel_width = std::max(min_panel_width, anchor_width);
+            const float w = initial_width > 0.0f ? initial_width : 560.0f * dpi;
+            return std::clamp(w, min_panel_width, max_panel_width);
+        }
+
+        struct FloatingPanelBox {
+            float x = 0.0f;
+            float y = 0.0f;
+            float width = 0.0f;
+            float height = 0.0f;
+        };
+
+        FloatingPanelBox resolveFloatingPanelBox(const FloatingPanelAnchor& anchor,
+                                                 const float initial_width,
+                                                 const float initial_height,
+                                                 const float stored_x,
+                                                 const float stored_y,
+                                                 const bool auto_center,
+                                                 const bool park_at_bottom,
+                                                 const float dpi,
+                                                 const float override_height = 0.0f) {
+            const float w = clampedFloatingPanelWidth(initial_width, anchor.width, dpi);
+            const float h = override_height > 0.0f
+                                ? override_height
+                                : (initial_height > 0.0f ? initial_height : 400.0f * dpi);
+            float px = stored_x;
+            float py = stored_y;
+            bool center = auto_center;
+            if (center && park_at_bottom) {
+                px = anchor.x + (anchor.width - w) * 0.5f;
+                py = anchor.y + anchor.height - h;
+                center = false;
+            }
+            const auto placement = computeFloatingPanelPlacement(
+                anchor, w, h, px, py, center, 30.0f * dpi, 0.1f);
+            return {placement.x, placement.y, w, h};
+        }
+
+        void writeProvisionalFloatingBounds(const PanelInfo& panel,
+                                            FloatingPanelInteraction& interaction) {
+            const auto seed = cachedLayoutDrawContext();
+            const bool in_viewport = panel.has_option(PanelOption::FLOAT_IN_VIEWPORT);
+            const auto anchor = floatingAnchorRect(seed, in_viewport);
+            if (anchor.width <= 0.0f || anchor.height <= 0.0f)
+                return;
+
+            const auto box = resolveFloatingPanelBox(anchor,
+                                                     panel.initial_width,
+                                                     panel.initial_height,
+                                                     interaction.x,
+                                                     interaction.y,
+                                                     interaction.auto_center,
+                                                     in_viewport,
+                                                     floatingUiScale(),
+                                                     interaction.last_height);
+            interaction.last_x = box.x;
+            interaction.last_y = box.y;
+            interaction.last_width = box.width;
+            interaction.last_height = box.height;
+            interaction.last_bounds_valid = true;
         }
     } // namespace
 
@@ -586,14 +692,12 @@ apply_registered_chrome:
                 snap.has_option(PanelOption::SELF_MANAGED))
                 return;
 
-            const auto anchor = floatingAnchorRect(ctx);
+            const bool in_viewport = snap.has_option(PanelOption::FLOAT_IN_VIEWPORT);
+            const auto anchor = floatingAnchorRect(ctx, in_viewport);
             if (anchor.width <= 0.0f || anchor.height <= 0.0f)
                 return;
 
-            const float min_panel_width = 320.0f * dpi;
-            const float max_panel_width = std::max(min_panel_width, anchor.width);
-            float w = snap.initial_width > 0 ? snap.initial_width : 560.0f * dpi;
-            w = std::clamp(w, min_panel_width, max_panel_width);
+            float w = clampedFloatingPanelWidth(snap.initial_width, anchor.width, dpi);
             const float max_h = snap.initial_height > 0
                                     ? std::min(snap.initial_height, anchor.height)
                                     : anchor.height;
@@ -669,10 +773,19 @@ apply_registered_chrome:
                     }
                 }
             }
-            const auto placement =
-                computeFloatingPanelPlacement(anchor, w, h, px, py, auto_center, kTitleH, kVisibleFrac);
-            px = placement.x;
-            py = placement.y;
+            const auto box = resolveFloatingPanelBox(anchor,
+                                                     snap.initial_width,
+                                                     snap.initial_height,
+                                                     px,
+                                                     py,
+                                                     auto_center,
+                                                     in_viewport,
+                                                     dpi,
+                                                     h);
+            w = box.width;
+            h = box.height;
+            px = box.x;
+            py = box.y;
 
             layout.valid = true;
             layout.width = w;
@@ -875,7 +988,8 @@ apply_registered_chrome:
                                 }
                                 has_user_height = interaction.user_height > 0.0f;
 
-                                const auto anchor = floatingAnchorRect(ctx);
+                                const auto anchor = floatingAnchorRect(
+                                    ctx, snap.has_option(PanelOption::FLOAT_IN_VIEWPORT));
                                 const auto placement = computeFloatingPanelPlacement(
                                     anchor, w, h, px, py, false, kTitleH, kVisibleFrac);
                                 px = placement.x;
@@ -993,6 +1107,10 @@ apply_registered_chrome:
 
     float PanelRegistry::render_panels(const PanelRenderOptions& options,
                                        const PanelDrawContext& ctx) {
+        {
+            std::lock_guard lock(mutex_);
+            rememberLayoutContext(ctx);
+        }
         switch (options.mode) {
         case PanelRenderMode::Standard:
             if (options.target.kind == PanelRenderTargetKind::Space) {
@@ -1353,6 +1471,8 @@ apply_registered_chrome:
                 if (saved.float_stack_order != 0)
                     interaction.stack_order =
                         saved.float_stack_order;
+                if (found->has_option(PanelOption::FLOAT_IN_VIEWPORT))
+                    writeProvisionalFloatingBounds(*found, interaction);
                 requested_project_floating_state_.insert_or_assign(
                     saved.id, saved);
                 next_float_stack_order_ = std::max(
@@ -1778,6 +1898,7 @@ apply_registered_chrome:
                     interaction.y = NAN;
                     interaction.auto_center = true;
                     resetFloatingPanelSize(p, interaction, floatingUiScale());
+                    writeProvisionalFloatingBounds(p, interaction);
                     bring_floating_panel_to_front_locked(p);
                 } else if (was_floating && new_space != PanelSpace::Floating) {
                     p.initial_width = p.original_width;

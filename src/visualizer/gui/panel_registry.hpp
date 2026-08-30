@@ -89,6 +89,7 @@ namespace lfs::vis::gui {
         DEFAULT_CLOSED = 1 << 0,
         HIDE_HEADER = 1 << 1,
         SELF_MANAGED = 1 << 2,
+        FLOAT_IN_VIEWPORT = 1 << 3,
     };
 
     using PollDependency = lfs::vis::op::PollDependency;
