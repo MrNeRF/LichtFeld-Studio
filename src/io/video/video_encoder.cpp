@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
+#include <algorithm>
 #include <cuda_runtime.h>
 #include <format>
 
@@ -66,8 +67,8 @@ namespace lfs::io::video {
 
             if (!tryInitNvenc(path, opts)) {
                 cleanup();
-                LOG_INFO("NVENC unavailable, falling back to x264");
-                if (const auto result = initX264(path, opts); !result) {
+                LOG_INFO("NVENC unavailable, falling back to software H.264");
+                if (const auto result = initSoftwareH264(path, opts); !result) {
                     cleanup();
                     return result;
                 }
@@ -100,7 +101,7 @@ namespace lfs::io::video {
             // jthread is not terminate-on-exception (Phase 6B-3c-2).
             try {
                 return use_nvenc_ ? writeFrameNvenc(rgb_gpu_ptr, stream)
-                                  : writeFrameX264Gpu(rgb_gpu_ptr, stream);
+                                  : writeFrameSoftwareH264Gpu(rgb_gpu_ptr, stream);
             } catch (const lfs::Exception& e) {
                 lfs::Error error = lfs::Error(e.error())
                                        .with_context("write video frame", LFS_SOURCE_SITE_CURRENT(),
@@ -265,7 +266,7 @@ namespace lfs::io::video {
             return true;
         }
 
-        std::expected<void, std::string> initX264(
+        std::expected<void, std::string> initSoftwareH264(
             const std::filesystem::path& path,
             const VideoExportOptions& opts) {
 
@@ -301,8 +302,11 @@ namespace lfs::io::video {
             codec_ctx_->max_b_frames = 2;
             codec_ctx_->thread_count = 0;
 
-            av_opt_set_int(codec_ctx_->priv_data, "crf", opts.crf, 0);
-            av_opt_set(codec_ctx_->priv_data, "preset", "fast", 0);
+            // Map CRF 18 to 0.1 bits per pixel per frame, with a 250 kbps floor and linear quality scaling.
+            const int64_t crf_scale = 51 - opts.crf;
+            codec_ctx_->bit_rate = std::max<int64_t>(
+                250'000, static_cast<int64_t>(width_) * height_ * framerate_ * crf_scale / 330);
+            av_opt_set(codec_ctx_->priv_data, "rc_mode", "bitrate", 0);
 
             if (fmt_ctx_->oformat->flags & AVFMT_GLOBALHEADER) {
                 codec_ctx_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
@@ -359,7 +363,7 @@ namespace lfs::io::video {
 
             if (const auto allocation = allocateGpuBuffers(); !allocation)
                 return allocation;
-            LOG_INFO("x264: {}x{} @ {} fps, CRF {}", width_, height_, framerate_, opts.crf);
+            LOG_INFO("Software H.264: {}x{} @ {} fps, bitrate {} bps", width_, height_, framerate_, codec_ctx_->bit_rate);
             return {};
         }
 
@@ -410,7 +414,7 @@ namespace lfs::io::video {
             return {};
         }
 
-        std::expected<void, std::string> writeFrameX264Gpu(
+        std::expected<void, std::string> writeFrameSoftwareH264Gpu(
             const void* const rgb_gpu_ptr,
             const cudaStream_t stream) {
 

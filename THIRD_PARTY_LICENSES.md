@@ -69,8 +69,8 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 ## Video Encoding
 | Project | Description | License |
 |---------|-------------|---------|
-| [FFmpeg](https://ffmpeg.org/) | Video encoding (libavcodec, libavformat, libswscale) | LGPL-2.1+ / GPL-2.0+ |
-| [x264](https://www.videolan.org/developers/x264.html) | H.264 software encoder | GPL-2.0+ |
+| [FFmpeg](https://ffmpeg.org/) | Video encoding (libavcodec, libavformat, libswscale) | LGPL-2.1+ |
+| [OpenH264](https://www.openh264.org/) | Cisco H.264 software encoder | BSD-2-Clause |
 
 ## Data & I/O Libraries
 | Project | Description | License |

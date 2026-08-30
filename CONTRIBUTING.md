@@ -130,4 +130,4 @@ values before using the new rule in UI code.
 
 ## License
 
-Contributions are licensed under GPLv3.
+Contributions are made under GPLv3 and the additional NVIDIA DLSS linking exception. See [LICENSE-EXCEPTION.txt](LICENSE-EXCEPTION.txt) for details.
