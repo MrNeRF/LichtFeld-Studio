@@ -352,49 +352,6 @@ namespace lfs::training {
             LFS_CUDA_CHECK(cudaStreamSynchronize(copy_stream));
         }
 
-        [[nodiscard]] size_t splat_reserved_capacity(const lfs::core::SplatData& splat_data) {
-            const size_t n = static_cast<size_t>(splat_data.size());
-            if (!splat_data.means().is_valid()) {
-                return n;
-            }
-            return std::max(splat_data.means().capacity(), n);
-        }
-
-        void ensure_free_mask_capacity(
-            lfs::core::Tensor& mask,
-            const size_t n,
-            const size_t cap,
-            const lfs::core::Device device) {
-            const size_t want = std::max(n, cap);
-            const bool usable = mask.is_valid() &&
-                                mask.ndim() == 1 &&
-                                mask.device() == device &&
-                                lfs::core::is_bool_like(mask.dtype());
-            if (!usable) {
-                mask = lfs::core::Tensor::zeros_direct(
-                    lfs::core::TensorShape({want}), want, device, lfs::core::DataType::Bool);
-                return;
-            }
-            if (mask.capacity() >= want && mask.numel() >= want) {
-                return;
-            }
-            if (mask.capacity() < want) {
-                // zeros_direct / cuda.direct rejects Tensor::reserve on realloc.
-                if (!mask.external_storage_kind().empty()) {
-                    const size_t keep = std::min(mask.numel(), want);
-                    auto grown = lfs::core::Tensor::zeros_direct(
-                        lfs::core::TensorShape({keep}), want, device, mask.dtype());
-                    copy_deleted_mask_prefix(grown, mask, keep);
-                    mask = std::move(grown);
-                } else {
-                    mask.reserve(want);
-                }
-            }
-            if (mask.numel() < want) {
-                mask.append_zeros(want - mask.numel());
-            }
-        }
-
         void ensure_deleted_mask_size(
             lfs::core::SplatData& splat_data,
             const lfs::core::Tensor& free_mask) {
@@ -709,22 +666,7 @@ namespace lfs::training {
         lfs::training::sh_value::apply_shN_value_quant(*_splat_data);
 
         _optimizer = create_optimizer(*_splat_data, *_params);
-        {
-            const size_t live_n = static_cast<size_t>(_splat_data->size());
-            const size_t max_cap = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
-            size_t moment_cap = live_n;
-            const float growth_factor = _optimizer->get_config().growth_factor;
-            if (live_n > 0 && growth_factor > 1.0f) {
-                moment_cap = std::max(
-                    moment_cap,
-                    static_cast<size_t>(static_cast<double>(live_n) *
-                                        static_cast<double>(growth_factor)));
-            }
-            if (max_cap > 0) {
-                moment_cap = std::min(moment_cap, max_cap);
-            }
-            _optimizer->allocate_gradients(moment_cap);
-        }
+        _optimizer->allocate_gradients(_params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0);
         _scheduler = create_scheduler(*_params, *_optimizer);
         _mean_lr_unscaled = _params->means_lr;
         _scale_lr_current = _params->scaling_lr;
@@ -733,34 +675,32 @@ namespace lfs::training {
 
         ensure_densification_info_shape();
 
-        const size_t n = static_cast<size_t>(_splat_data->size());
-        const auto device = _splat_data->means().device();
-        const size_t aux_capacity = splat_reserved_capacity(*_splat_data);
-        const size_t densify_capacity = _params->max_cap > 0
-                                            ? static_cast<size_t>(_params->max_cap)
-                                            : aux_capacity;
-        ensure_free_mask_capacity(_free_mask, n, aux_capacity, device);
+        const size_t capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap)
+                                                     : static_cast<size_t>(_splat_data->size());
+        _free_mask = Tensor::zeros_bool({capacity}, _splat_data->means().device());
         sync_deleted_mask_from_free_mask(*_splat_data, _free_mask);
 
         // Pre-size densification scratch to max_cap so increasing live N does not
         // allocate from the driver during refinement.
-        if (densify_capacity > 0) {
-            _densify_n_scratch.ensure_n(densify_capacity, device);
-            _densify_n_scratch.ensure_k(std::max(densify_capacity / 20, size_t{1024}), device);
-            _gumbel_scratch.ensure_n(densify_capacity, device);
-            _median_scratch.ensure_n(densify_capacity, device);
+        if (capacity > 0) {
+            const auto device = _splat_data->means().device();
+            _densify_n_scratch.ensure_n(capacity, device);
+            _densify_n_scratch.ensure_k(std::max(capacity / 20, size_t{1024}), device);
+            _gumbel_scratch.ensure_n(capacity, device);
+            _median_scratch.ensure_n(capacity, device);
             if (lfs::training::PerfBenchCollector::enabled()) {
                 lfs::training::PerfBenchCollector::instance().set_densify_workspace_bytes(
                     _densify_n_scratch.resident_bytes());
             }
         }
 
+        const size_t n = static_cast<size_t>(_splat_data->size());
         _initial_sfm_point_count = n;
-        const size_t tracking_capacity = splat_reserved_capacity(*_splat_data);
-        reset_vector_buffer(_refine_weight_max, n, device, tracking_capacity);
-        reset_vector_buffer(_vis_count, n, device, tracking_capacity);
+        const size_t tracking_capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
+        reset_vector_buffer(_refine_weight_max, n, _splat_data->means().device(), tracking_capacity);
+        reset_vector_buffer(_vis_count, n, _splat_data->means().device(), tracking_capacity);
         if (cfg_ratio_rank_on()) {
-            reset_vector_buffer(_refine_ratio_max, n, device, tracking_capacity);
+            reset_vector_buffer(_refine_ratio_max, n, _splat_data->means().device(), tracking_capacity);
         }
 
         publish_vram_attribution();
@@ -1449,7 +1389,7 @@ namespace lfs::training {
         ensure_mean_step_far_mask();
 
         const size_t new_n = static_cast<size_t>(_splat_data->size());
-        const size_t tracking_capacity = splat_reserved_capacity(*_splat_data);
+        const size_t tracking_capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
         reset_vector_buffer(_refine_weight_max, new_n, _splat_data->means().device(), tracking_capacity);
         reset_vector_buffer(_vis_count, new_n, _splat_data->means().device(), tracking_capacity);
         if (cfg_ratio_rank_on()) {
@@ -2945,9 +2885,10 @@ namespace lfs::training {
         // Grow free_mask bookkeeping first, then params (size()), then the
         // deleted mask — never leave deleted.numel() != size() mid-grow
         // (viewer packer rejects stale masks and freezes the viewport).
-        const auto device = _splat_data->means().device();
-        ensure_free_mask_capacity(
-            _free_mask, old_size + n_append, splat_reserved_capacity(*_splat_data), device);
+        if (_free_mask.is_valid() && _free_mask.numel() < old_size + n_append) {
+            _free_mask.reserve(old_size + n_append);
+            _free_mask.append_zeros(n_append);
+        }
 
         auto append_means = child_means.slice(0, append_start, K);
         auto append_sh0 = child_sh0.slice(0, append_start, K);
@@ -3007,26 +2948,6 @@ namespace lfs::training {
         _optimizer->add_new_params(ParamType::Scaling, append_scaling, true);
         _optimizer->add_new_params(ParamType::Rotation, append_rotation, true);
         _optimizer->add_new_params(ParamType::Opacity, append_opacity, true);
-
-        {
-            const size_t grown_n = old_size + n_append;
-            const size_t cap = splat_reserved_capacity(*_splat_data);
-            auto grow_tracking = [&](Tensor& tensor) {
-                if (!tensor.is_valid() || tensor.ndim() != 1 || tensor.device() != device) {
-                    return;
-                }
-                if (tensor.capacity() < cap) {
-                    tensor.reserve(cap);
-                }
-                if (tensor.numel() < grown_n) {
-                    tensor.append_zeros(grown_n - tensor.numel());
-                }
-            };
-            grow_tracking(_vis_count);
-            grow_tracking(_refine_weight_max);
-            grow_tracking(_refine_ratio_max);
-        }
-
         // Append live (false) deleted rows now that size() has advanced.
         append_live_deleted_rows(*_splat_data, _free_mask, n_append);
         if (_splat_data->has_deleted_mask() &&
@@ -3608,12 +3529,10 @@ namespace lfs::training {
         }
 
         if (!_free_mask.is_valid()) {
-            const size_t loaded_n = static_cast<size_t>(_splat_data->size());
-            ensure_free_mask_capacity(
-                _free_mask,
-                loaded_n,
-                splat_reserved_capacity(*_splat_data),
-                _splat_data->means().device());
+            const size_t capacity = (_params && _params->max_cap > 0)
+                                        ? static_cast<size_t>(_params->max_cap)
+                                        : static_cast<size_t>(_splat_data->size());
+            _free_mask = lfs::core::Tensor::zeros_bool({capacity}, _splat_data->means().device());
         }
         sync_deleted_mask_from_free_mask(*_splat_data, _free_mask);
 
