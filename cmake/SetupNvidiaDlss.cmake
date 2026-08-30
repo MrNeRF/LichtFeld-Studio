@@ -58,6 +58,12 @@ foreach(_header IN ITEMS
     endif()
 endforeach()
 
+if(NOT EXISTS "${_lfs_dlss_root}/LICENSE.txt")
+    message(FATAL_ERROR
+        "NVIDIA DLSS SDK at '${_lfs_dlss_root}' is missing LICENSE.txt. "
+        "Official SDK repository: ${_lfs_nvidia_dlss_download_url}")
+endif()
+
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "The NVIDIA DLSS plugin currently supports 64-bit builds only")
 endif()
@@ -116,6 +122,8 @@ set_target_properties(NVIDIA::NGX PROPERTIES
 
 set(LFS_NVIDIA_DLSS_ROOT_RESOLVED "${_lfs_dlss_root}" CACHE INTERNAL
     "Validated NVIDIA DLSS SDK root" FORCE)
+set(LFS_NVIDIA_DLSS_LICENSE "${_lfs_dlss_root}/LICENSE.txt" CACHE INTERNAL
+    "NVIDIA DLSS license" FORCE)
 set(LFS_NVIDIA_DLSS_RUNTIME_RELEASE "${_lfs_dlss_runtime_release}" CACHE INTERNAL
     "NVIDIA DLSS release runtime" FORCE)
 set(LFS_NVIDIA_DLSS_RUNTIME_DEBUG "${_lfs_dlss_runtime_debug}" CACHE INTERNAL

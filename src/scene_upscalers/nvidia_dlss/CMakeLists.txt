@@ -32,8 +32,9 @@ set(_lfs_dlss_runtime
 add_custom_command(TARGET lfs_scene_upscaler_nvidia_dlss POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
         "${_lfs_dlss_runtime}"
+        "${LFS_NVIDIA_DLSS_LICENSE}"
         "$<TARGET_FILE_DIR:lfs_scene_upscaler_nvidia_dlss>"
-    COMMENT "Staging the NVIDIA DLSS runtime beside the optional plugin")
+    COMMENT "Staging the NVIDIA DLSS runtime and license beside the optional plugin")
 
 include(GNUInstallDirs)
 if(WIN32)
@@ -51,6 +52,5 @@ install(FILES "${LFS_NVIDIA_DLSS_RUNTIME_DEBUG}"
 install(FILES "${LFS_NVIDIA_DLSS_RUNTIME_RELEASE}"
     DESTINATION "${_lfs_dlss_install_dir}"
     CONFIGURATIONS Release RelWithDebInfo MinSizeRel)
-install(FILES "${LFS_NVIDIA_DLSS_ROOT_RESOLVED}/LICENSE.txt"
-    DESTINATION "${CMAKE_INSTALL_DATADIR}/licenses/NVIDIA-DLSS"
-    OPTIONAL)
+install(FILES "${LFS_NVIDIA_DLSS_LICENSE}"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/licenses/NVIDIA-DLSS")
