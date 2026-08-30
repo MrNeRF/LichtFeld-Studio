@@ -45,6 +45,12 @@ namespace lfs::vis::gui::mining {
         EXPECT_FLOAT_EQ(narrow.offset_dp, 12.0f);
     }
 
+    TEST(StatusBarMiningLayoutTest, ProgressTextMovesAheadAndClampsAtTheRightEdge) {
+        EXPECT_FLOAT_EQ(miningProgressTextLeftDp(0.0f, 360.0f, 28.0f), 48.0f);
+        EXPECT_FLOAT_EQ(miningProgressTextLeftDp(340.0f, 360.0f, 28.0f), 330.0f);
+        EXPECT_FLOAT_EQ(miningProgressTextLeftDp(10.0f, 20.0f, 28.0f), 0.0f);
+    }
+
     TEST(StatusBarMiningBlockTypeTest, LastBlockIsDiamondOre) {
         for (const int count : {1, 8, 13, 22, 40}) {
             EXPECT_STREQ(miningBlockType(count - 1, count), "diamond-ore");

@@ -406,6 +406,7 @@ namespace lfs::vis::gui {
         ctor.Bind("miner_smoke_5", &model_.miner_smoke_5);
         ctor.Bind("miner_smoke_6", &model_.miner_smoke_6);
         ctor.Bind("progress_width", &model_.progress_width);
+        ctor.Bind("progress_text_left", &model_.progress_text_left);
         ctor.Bind("progress_text", &model_.progress_text);
         ctor.Bind("step_label", &model_.step_label);
         ctor.Bind("step_value", &model_.step_value);
@@ -619,6 +620,23 @@ namespace lfs::vis::gui {
     void RmlStatusBar::markModelDirty() {
         model_dirty_ = true;
         next_refresh_at_ = {};
+    }
+
+    bool RmlStatusBar::animationFrameDue(
+        const std::chrono::steady_clock::time_point now) const {
+        return animation_active_ &&
+               (next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
+                now >= next_refresh_at_);
+    }
+
+    std::optional<double> RmlStatusBar::secondsUntilAnimationFrame(
+        const std::chrono::steady_clock::time_point now) const {
+        if (!animation_active_)
+            return std::nullopt;
+        if (next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
+            now >= next_refresh_at_)
+            return 0.0;
+        return std::chrono::duration<double>(next_refresh_at_ - now).count();
     }
 
     void RmlStatusBar::postStatusMessage(std::string text, const ErrorNoticeLevel level) {
@@ -837,7 +855,7 @@ namespace lfs::vis::gui {
             if (auto* el = document_->GetElementById("progress-wall"))
                 el->SetInnerRML(mining_wall_rml_);
         }
-        model_dirty_ = true;
+        markModelDirty();
     }
 
     void RmlStatusBar::setProgressDebrisRml(std::string value) {
@@ -849,7 +867,7 @@ namespace lfs::vis::gui {
             if (auto* el = document_->GetElementById("progress-debris"))
                 el->SetInnerRML(mining_debris_rml_);
         }
-        model_dirty_ = true;
+        markModelDirty();
     }
 
     void RmlStatusBar::updateMiningScene(const float progress,
@@ -1343,6 +1361,27 @@ namespace lfs::vis::gui {
             setModelString("progress_width", model_.progress_width, progress_pct);
             setModelString("progress_text", model_.progress_text, std::move(progress_text));
 
+            float dp_ratio = 1.0f;
+            if (document_ && document_->GetContext())
+                dp_ratio = document_->GetContext()->GetDensityIndependentPixelRatio();
+            float bar_dp = 360.0f;
+            if (const auto geom = progressBarGeometry(); geom && dp_ratio > 0.0f)
+                bar_dp = geom->w / dp_ratio;
+            float text_width_dp = 28.0f;
+            if (document_ && dp_ratio > 0.0f) {
+                if (auto* progress_text_el = document_->GetElementById("progress-text")) {
+                    const float measured_width_dp = progress_text_el->GetOffsetWidth() / dp_ratio;
+                    if (measured_width_dp > 0.0f)
+                        text_width_dp = measured_width_dp;
+                }
+            }
+            const float text_left_dp = progress_minecraft_pref_
+                                           ? mining::miningProgressTextLeftDp(progress * bar_dp, bar_dp,
+                                                                              text_width_dp)
+                                           : 0.0f;
+            setModelString("progress_text_left", model_.progress_text_left,
+                           std::format("{:.2f}dp", text_left_dp));
+
             if (progress_minecraft_pref_) {
                 updateMiningScene(progress, now, training_state == TrainingState::Paused);
             } else {
@@ -1381,6 +1420,7 @@ namespace lfs::vis::gui {
         } else {
             resetSaveStepInteraction();
             setModelString("progress_width", model_.progress_width, "0%");
+            setModelString("progress_text_left", model_.progress_text_left, "0dp");
             setProgressWallRml("");
             setProgressDebrisRml("");
             mining_scene_ = {};
@@ -1592,12 +1632,12 @@ namespace lfs::vis::gui {
             [](const mining::MiningParticle& particle) { return particle.gravity && !particle.landed; });
         const bool minecraft_visible = progress_minecraft_pref_ && show_training;
         animation_active_ = wasd_visible || zoom_visible || status_msg.visible ||
-                            gravity_debris_airborne;
-        next_refresh_at_ = now + (animation_active_   ? kAnimatedRefreshInterval
-                                  : minecraft_visible ? kMiningRefreshInterval
-                                                      : (ctx.is_training
-                                                             ? kBusyRefreshInterval
-                                                             : kIdleRefreshInterval));
+                            minecraft_visible;
+        next_refresh_at_ = now + (gravity_debris_airborne ? kAnimatedRefreshInterval
+                                  : minecraft_visible     ? kMiningRefreshInterval
+                                  : animation_active_     ? kAnimatedRefreshInterval
+                                  : ctx.is_training       ? kBusyRefreshInterval
+                                                          : kIdleRefreshInterval);
         return model_dirty_;
     }
 
@@ -1749,8 +1789,8 @@ namespace lfs::vis::gui {
         const bool refresh_due =
             next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
             now >= next_refresh_at_;
-        const bool can_reuse = theme_current && !dp_changed && !model_dirty_ && !animation_active_ &&
-                               !refresh_due && render_w == last_render_w_ &&
+        const bool can_reuse = theme_current && !dp_changed && !model_dirty_ && !refresh_due &&
+                               render_w == last_render_w_ &&
                                render_h == last_render_h_;
         if (!can_reuse) {
             render(ctx, x, y, w_px, h_px, screen_w, screen_h);
@@ -1783,7 +1823,7 @@ namespace lfs::vis::gui {
         const bool theme_changed = updateTheme();
         const auto now = std::chrono::steady_clock::now();
         const bool refresh_due =
-            size_changed || dp_changed || theme_changed || had_pending_model_dirty || animation_active_ ||
+            size_changed || dp_changed || theme_changed || had_pending_model_dirty ||
             next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
             now >= next_refresh_at_;
         const bool content_changed = updateContent(ctx, refresh_due);

@@ -74,6 +74,10 @@ namespace lfs::vis::gui {
                     int screen_w, int screen_h);
         void renderCached(const PanelDrawContext& ctx, float x, float y, float w, float h,
                           int screen_w, int screen_h);
+        [[nodiscard]] LFS_VIS_API bool animationFrameDue(
+            std::chrono::steady_clock::time_point now) const;
+        [[nodiscard]] LFS_VIS_API std::optional<double> secondsUntilAnimationFrame(
+            std::chrono::steady_clock::time_point now) const;
         void processInput(const PanelInputState& input, float bar_x, float bar_y,
                           float bar_w, float bar_h);
         [[nodiscard]] LFS_VIS_API float overlayHeight() const;
@@ -207,6 +211,7 @@ namespace lfs::vis::gui {
             bool miner_smoke_5 = false;
             bool miner_smoke_6 = false;
             std::string progress_width = "0%";
+            std::string progress_text_left = "0dp";
             std::string progress_text;
             std::string progress_markers_rml;
             std::string step_label;

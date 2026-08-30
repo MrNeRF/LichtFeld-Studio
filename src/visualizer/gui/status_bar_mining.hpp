@@ -32,6 +32,8 @@ namespace lfs::vis::gui::mining {
     };
 
     [[nodiscard]] LFS_VIS_API MiningLayout miningLayout(float bar_dp);
+    [[nodiscard]] LFS_VIS_API float miningProgressTextLeftDp(float fill_edge_dp, float bar_dp,
+                                                             float text_width_dp);
     [[nodiscard]] LFS_VIS_API const char* miningBlockType(int index, int block_count);
     [[nodiscard]] LFS_VIS_API int miningCrackStage(float fill_dp, int current_block);
     [[nodiscard]] LFS_VIS_API std::string buildMiningWallRml(const MiningLayout& layout,

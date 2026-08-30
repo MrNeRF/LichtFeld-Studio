@@ -109,6 +109,12 @@ namespace lfs::vis::gui::mining {
         return {block_count, offset_dp};
     }
 
+    float miningProgressTextLeftDp(const float fill_edge_dp, const float bar_dp,
+                                   const float text_width_dp) {
+        const float max_left_dp = std::max(0.0f, bar_dp - text_width_dp - 2.0f);
+        return std::clamp(fill_edge_dp + 48.0f, 0.0f, max_left_dp);
+    }
+
     const char* miningBlockType(const int index, const int block_count) {
         if (index == block_count - 1)
             return "diamond-ore";

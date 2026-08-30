@@ -7081,6 +7081,8 @@ namespace lfs::vis::gui {
             return true;
         if (rml_right_panel_.needsAnimationFrame())
             return true;
+        if (rml_status_bar_.animationFrameDue(now))
+            return true;
         if (!python::is_plugin_preload_running() &&
             PanelRegistry::instance().needsAnimationFrameForVisiblePanels(
                 panelAnimationVisibility()))
@@ -7108,6 +7110,7 @@ namespace lfs::vis::gui {
         };
 
         std::optional<double> result;
+        const auto now = std::chrono::steady_clock::now();
 
         if (!python::is_plugin_preload_running()) {
             result = min_delay(result,
@@ -7116,10 +7119,10 @@ namespace lfs::vis::gui {
         }
 
         result = min_delay(result, rml_viewport_overlay_.nextScheduledUpdateDelay());
+        result = min_delay(result, rml_status_bar_.secondsUntilAnimationFrame(now));
 
         // VRAM HUD cadence: when armed and not yet due, wake at the publish deadline.
         if (isVramHudOverlayVisible()) {
-            const auto now = std::chrono::steady_clock::now();
             if (next_vram_hud_publish_ != std::chrono::steady_clock::time_point{} &&
                 now < next_vram_hud_publish_) {
                 const double remaining =
