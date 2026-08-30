@@ -685,6 +685,9 @@ namespace lfs::vis {
             std::shared_ptr<lfs::core::ExportableBlock> block;
             VulkanContext::ExternalBuffer imported_buffer{};
             std::size_t bytes = 0;
+            // Viewer high-water is measured from offset zero. The trainer arena
+            // deliberately reuses that same prefix during its exclusive epoch.
+            std::size_t viewer_high_water_bytes = 0;
             std::uint64_t generation = 0;
             bool installed_in_training_arena = false;
         };

@@ -172,6 +172,7 @@ namespace lfs::core {
         uint64_t active_frames_ = 0;
         uint64_t pending_render_frames_ = 0;
         uint64_t active_training_frames_ = 0;
+        uint64_t last_handoff_frame_id_ = 0;
 
         // Completion event of the most recent stream-aware frame. Invalid when
         // the last frame was legacy (no stream) — the next begin then falls back
@@ -214,6 +215,10 @@ namespace lfs::core {
         uint64_t begin_frame(cudaStream_t stream, bool from_rendering = false);
         std::optional<uint64_t> try_begin_frame(bool from_rendering = false) { return try_begin_frame(nullptr, from_rendering); }
         std::optional<uint64_t> try_begin_frame(cudaStream_t stream, bool from_rendering = false);
+        // Debug-only ownership assertion for the shared CUDA/Vulkan scratch
+        // epoch. The preceding frame's CUDA event or imported Vulkan timeline
+        // wait must have been installed before this frame can touch offset zero.
+        void assert_frame_handoff(uint64_t frame_id) const;
 
         // Bounded wait: with a render pending (set_rendering_active), the trainer
         // cannot START a new frame, so waiting out its current one takes ~one

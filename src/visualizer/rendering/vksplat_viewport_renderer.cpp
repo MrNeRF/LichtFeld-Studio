@@ -222,6 +222,11 @@ namespace lfs::vis {
                     }
                     frame_id_ = *frame_id;
                     frame_active_ = true;
+                    // The guard claims the same offset-zero epoch as FastGS.
+                    // The arena assertion covers the existing CUDA-event or
+                    // imported Vulkan-timeline handoff before Vulkan records
+                    // any reads from the shared block.
+                    arena_->assert_frame_handoff(frame_id_);
                     arena_->set_rendering_active(false);
                     render_pending_ = false;
                 } catch (...) {
@@ -3757,6 +3762,14 @@ namespace lfs::vis {
         bind_count(buffers_._sorting_histogram, 8 * 256);
         bind_count(buffers_._sorting_histogram_cumsum,
                    _CEIL_DIV(sort_region_elems, std::size_t{512 * 8}) * 256);
+
+        // The viewer is the first occupant of the shared block in this epoch.
+        // Its high-water starts at the same byte zero where a FastGS frame
+        // starts; it must never be appended after the arena's high-water.
+        shared_scratch_.viewer_high_water_bytes = cursor;
+        LFS_DEBUG_ASSERT_MSG(
+            shared_scratch_.viewer_high_water_bytes <= shared_scratch_.bytes,
+            "viewer shared-scratch high-water exceeds the committed shared block");
 
         // Attribute the committed arena exactly: each region's span comes straight from
         // the bind cursor, and reserve_unbound is the committed-but-unbound remainder.

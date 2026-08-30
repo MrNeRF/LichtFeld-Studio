@@ -90,6 +90,7 @@ namespace lfs::core {
         active_frames_ = other.active_frames_;
         pending_render_frames_ = other.pending_render_frames_;
         active_training_frames_ = other.active_training_frames_;
+        last_handoff_frame_id_ = other.last_handoff_frame_id_;
         last_frame_event_ = other.last_frame_event_;
         last_frame_event_valid_ = other.last_frame_event_valid_;
         external_release_semaphore_ = other.external_release_semaphore_;
@@ -126,6 +127,7 @@ namespace lfs::core {
             active_frames_ = other.active_frames_;
             pending_render_frames_ = other.pending_render_frames_;
             active_training_frames_ = other.active_training_frames_;
+            last_handoff_frame_id_ = other.last_handoff_frame_id_;
             if (last_frame_event_) {
                 const cudaError_t destroy_status = cudaEventDestroy(last_frame_event_);
                 if (destroy_status != cudaSuccess) {
@@ -394,6 +396,17 @@ namespace lfs::core {
                 detail::format_cuda_safe("frame_id={}, stream={}", frame_id, static_cast<void*>(stream)));
         }
 
+        // This is the ownership handoff point for the shared external block.
+        // wait_for_previous_frame consumes the existing CUDA event or the
+        // viewer's imported Vulkan completion timeline before offset zero is
+        // reset below. For a stream-aware CUDA frame the Vulkan wait is queued
+        // on `stream`; the first CUDA access is therefore ordered after the
+        // Vulkan release without adding a new synchronization primitive.
+        {
+            std::lock_guard<std::mutex> sync_lock(sync_mutex_);
+            last_handoff_frame_id_ = frame_id;
+        }
+
         // CRITICAL FIX: Reset arena offset at the beginning of each frame!
         int device = -1;
         const cudaError_t device_status = cudaGetDevice(&device);
@@ -426,6 +439,16 @@ namespace lfs::core {
         total_frames_processed_.fetch_add(1, std::memory_order_relaxed);
 
         return frame_id;
+    }
+
+    void RasterizerMemoryArena::assert_frame_handoff(const uint64_t frame_id) const {
+        std::lock_guard<std::mutex> sync_lock(sync_mutex_);
+        LFS_DEBUG_ASSERT_MSG(
+            active_frames_ == 1,
+            "shared scratch frame claim requires the sole active arena frame");
+        LFS_DEBUG_ASSERT_MSG(
+            last_handoff_frame_id_ == frame_id,
+            "shared scratch frame claim bypassed the prior-owner handoff");
     }
 
     void RasterizerMemoryArena::end_frame(uint64_t frame_id, cudaStream_t stream, bool from_rendering) {
@@ -602,6 +625,11 @@ namespace lfs::core {
             if (size == 0) {
                 return nullptr;
             }
+
+            // FastGS claims the shared block at the first allocation of its
+            // frame. This checks that the prior viewer epoch was handed off
+            // through the existing event/timeline path before that claim.
+            assert_frame_handoff(frame_id);
 
             int device;
             LFS_CUDA_CHECK_MSG(cudaGetDevice(&device),
