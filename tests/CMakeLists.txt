@@ -1107,6 +1107,28 @@ target_link_libraries(bench_tensor_launch_overhead PRIVATE
     CUDA::cudart
 )
 
+# Lane F throwaway q16 permute/scatter wall-time bench (not ctest).
+# Source lives outside the test tree so unit tests stay unmodified.
+add_executable(bench_q16_batch
+    /home/gauss/lfs-runs/vram10m/bench_q16_batch.cpp
+)
+set_target_properties(bench_q16_batch PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+    EXCLUDE_FROM_ALL ON
+)
+target_include_directories(bench_q16_batch PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/training
+    ${CUDAToolkit_INCLUDE_DIRS}
+)
+target_link_libraries(bench_q16_batch PRIVATE
+    ${LFS_TEST_INTERNAL_LINK_LIBS}
+    CUDA::cudart
+)
+
 # Phase 6C-P3 negative nvcc TU fixtures (Ruling 1 / §1.11) live under
 # tests/cuda_fixtures/ and are intentionally NOT listed in any target SOURCES.
 # Positive nvcc TU: device_fault_cuda_utils.cu (compiled into lichtfeld_tests;

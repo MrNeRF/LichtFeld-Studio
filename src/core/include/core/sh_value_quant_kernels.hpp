@@ -88,6 +88,47 @@ namespace lfs::core::sh_value_quant {
         std::size_t n,
         cudaStream_t stream = nullptr);
 
+    /// Compact unique block-ids and run starts from already-sorted float block ids.
+    /// unique_block_ids[0..n_runs) and run_offsets[0..n_runs) stay on device.
+    /// n_runs_device[0] is the run count. No host readback of block ids.
+    void build_sorted_block_runs(
+        const float* sorted_block_ids,
+        std::int32_t* unique_block_ids,
+        std::int32_t* run_offsets,
+        std::int32_t* n_runs_device,
+        std::size_t n,
+        cudaStream_t stream = nullptr);
+
+    /// One launch over unique touched 256-splat blocks: decode (or zero-init
+    /// past n_decode_src), overlay the sorted canonical run, reduce bounds,
+    /// encode in place. Grid may be K; extra blocks no-op via n_runs_device.
+    void reencode_touched_q16_blocks(
+        std::uint16_t* codes,
+        float* bounds_float2,
+        const float* sorted_canonical,
+        const std::int64_t* sorted_dest,
+        const std::int32_t* unique_block_ids,
+        const std::int32_t* run_offsets,
+        const std::int32_t* n_runs_device,
+        std::size_t n_sorted,
+        std::size_t n_prims,
+        std::size_t n_decode_src,
+        std::uint32_t coeffs_rest,
+        cudaStream_t stream = nullptr);
+
+    /// Gather-decode perm[dest] with source per-block bounds, reduce dest
+    /// bounds, encode dest 256-splat blocks. One launch for the whole dest.
+    void encode_shN_u16_gathered(
+        const std::uint16_t* src_u16,
+        const float* src_bounds_float2,
+        const std::int64_t* perm,
+        std::uint16_t* dest_u16,
+        float* dest_bounds_float2,
+        std::size_t n_dst,
+        std::size_t n_src_primitives,
+        std::uint32_t coeffs_rest,
+        cudaStream_t stream = nullptr);
+
     void decode_shN_u16_range_to_canonical(
         const std::uint16_t* src_u16,
         const float* bounds_float2,

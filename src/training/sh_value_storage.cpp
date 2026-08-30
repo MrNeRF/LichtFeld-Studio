@@ -285,33 +285,20 @@ namespace lfs::training::sh_value {
             dest_bounds.set_stream(stream);
             dest_bounds.set_name("splat.shN_value_bounds");
 
-            constexpr std::size_t kChunk = static_cast<std::size_t>(core::sh_value_quant::kBlockSize);
-            Tensor fp32_chunk = make_fp32_chunk(rest, stream);
             auto* dest_codes = reinterpret_cast<std::uint16_t*>(
                 lfs::core::resolve_exportable_device_ptr(dest_u16));
             auto* dest_mm = static_cast<float*>(
                 lfs::core::resolve_exportable_device_ptr(dest_bounds));
-
-            for (std::size_t offset = 0; offset < n_dst; offset += kChunk) {
-                const std::size_t chunk = std::min(kChunk, n_dst - offset);
-                core::sh_value_quant::decode_shN_u16_gathered_to_float4(
-                    src_u16,
-                    src_bounds,
-                    perm_ptr,
-                    fp32_chunk.ptr<float>(),
-                    offset,
-                    chunk,
-                    n_src,
-                    rest,
-                    stream);
-                core::sh_value_quant::encode_shN_float4_to_u16(
-                    fp32_chunk.ptr<float>(),
-                    dest_codes + core::sh_value_quant::sh_value_u16_count(offset, rest),
-                    dest_mm + core::sh_value_quant::n_bounds_for_prims(offset) * 2,
-                    chunk,
-                    rest,
-                    stream);
-            }
+            core::sh_value_quant::encode_shN_u16_gathered(
+                src_u16,
+                src_bounds,
+                perm_ptr,
+                dest_codes,
+                dest_mm,
+                n_dst,
+                n_src,
+                rest,
+                stream);
 
             live = std::move(dest_u16);
             bounds = std::move(dest_bounds);
@@ -349,61 +336,43 @@ namespace lfs::training::sh_value {
             if (!sorted_can.is_contiguous()) {
                 sorted_can = sorted_can.contiguous();
             }
+            sorted.first.set_stream(stream);
+            order.set_stream(stream);
             sorted_dest.set_stream(stream);
             sorted_can.set_stream(stream);
 
-            std::vector<float> bids(K);
-            LFS_CUDA_CHECK(cudaMemcpyAsync(
-                bids.data(),
+            Tensor unique_blocks = Tensor::empty(TensorShape({K}), Device::CUDA, DataType::Int32);
+            Tensor run_offsets = Tensor::empty(TensorShape({K}), Device::CUDA, DataType::Int32);
+            Tensor n_runs = Tensor::zeros(TensorShape({1}), Device::CUDA, DataType::Int32);
+            unique_blocks.set_stream(stream);
+            run_offsets.set_stream(stream);
+            n_runs.set_stream(stream);
+
+            core::sh_value_quant::build_sorted_block_runs(
                 sorted.first.ptr<float>(),
-                K * sizeof(float),
-                cudaMemcpyDeviceToHost,
-                stream));
-            LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "q16 scatter block-id D2H");
+                unique_blocks.ptr<int>(),
+                run_offsets.ptr<int>(),
+                n_runs.ptr<int>(),
+                K,
+                stream);
 
-            Tensor fp32_chunk = make_fp32_chunk(rest, stream);
-            constexpr std::size_t kChunk = static_cast<std::size_t>(core::sh_value_quant::kBlockSize);
-
-            std::size_t run_start = 0;
-            while (run_start < K) {
-                if (bids[run_start] < 0.0f) {
-                    ++run_start;
-                    continue;
-                }
-                const auto block = static_cast<std::size_t>(bids[run_start]);
-                std::size_t run_end = run_start + 1;
-                while (run_end < K && bids[run_end] == bids[run_start]) {
-                    ++run_end;
-                }
-                const std::size_t block_start = block * kChunk;
-                if (block_start >= n_prims) {
-                    run_start = run_end;
-                    continue;
-                }
-                const std::size_t n_in = std::min(kChunk, n_prims - block_start);
-                LFS_CUDA_CHECK(cudaMemsetAsync(
-                    fp32_chunk.data_ptr(), 0, fp32_chunk.bytes(), stream));
-                const std::size_t n_decode =
-                    n_decode_src > block_start
-                        ? std::min(n_in, n_decode_src - block_start)
-                        : 0;
-                if (n_decode > 0) {
-                    decode_block_to_chunk(
-                        live, bounds, fp32_chunk, block_start, n_decode, n_decode_src, rest, stream);
-                }
-                core::sh_value_quant::overlay_canonical_into_float4_chunk(
-                    sorted_can.ptr<float>(),
-                    sorted_dest.ptr<std::int64_t>(),
-                    fp32_chunk.ptr<float>(),
-                    run_start,
-                    run_end - run_start,
-                    block_start,
-                    n_in,
-                    rest,
-                    stream);
-                encode_chunk_into_q16(fp32_chunk, live, bounds, block_start, n_in, rest, stream);
-                run_start = run_end;
-            }
+            auto* codes = reinterpret_cast<std::uint16_t*>(
+                lfs::core::resolve_exportable_device_ptr(live));
+            auto* mm = static_cast<float*>(
+                lfs::core::resolve_exportable_device_ptr(bounds));
+            core::sh_value_quant::reencode_touched_q16_blocks(
+                codes,
+                mm,
+                sorted_can.ptr<float>(),
+                sorted_dest.ptr<std::int64_t>(),
+                unique_blocks.ptr<int>(),
+                run_offsets.ptr<int>(),
+                n_runs.ptr<int>(),
+                K,
+                n_prims,
+                n_decode_src,
+                rest,
+                stream);
         }
     } // namespace
 

@@ -48,8 +48,9 @@ namespace lfs::training::morton {
     /// perm.n on dim 0 permute the live prefix and keep the tail.
     void permute_row_tensor(lfs::core::Tensor& tensor, const lfs::core::Tensor& perm);
 
-    /// dest[i] <- src[perm[i]] for shN. q16 uses a chunked gather-decode/encode
-    /// (no full fp32 expansion). fp32 / IEEE-f16 keep the swizzled gather path.
+    /// dest[i] <- src[perm[i]] for shN. q16 gather-decodes each dest 256-block
+    /// in one launch (no full fp32 expansion). fp32 / IEEE-f16 keep the
+    /// swizzled gather path.
     void permute_shN(
         core::SplatData& splat,
         const lfs::core::Tensor& perm,

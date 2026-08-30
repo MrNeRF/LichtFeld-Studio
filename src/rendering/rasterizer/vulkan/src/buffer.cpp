@@ -25,7 +25,6 @@ size_t VulkanGSPipelineBuffers::getTotalOwnedAllocSize() const {
     ADD_OWNED(page_frames);
     ADD_OWNED(tiles_touched);
     ADD_OWNED(rect_tile_space);
-    ADD_OWNED(radii);
     ADD_OWNED(xy_vs);
     ADD_OWNED(depths);
     ADD_OWNED(inv_cov_vs_opacity);
@@ -107,7 +106,6 @@ std::map<std::string, size_t> VulkanGSPipelineBuffers::getOwnedVramBreakdown() c
     ADD_OWNED(page_frames);
     ADD_OWNED(tiles_touched);
     ADD_OWNED(rect_tile_space);
-    ADD_OWNED(radii);
     ADD_OWNED(xy_vs);
     ADD_OWNED(depths);
     ADD_OWNED(inv_cov_vs_opacity);

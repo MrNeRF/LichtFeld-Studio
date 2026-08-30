@@ -3327,9 +3327,6 @@ namespace lfs::vis {
             add_count(num_splats, sizeof(std::int32_t));  // tiles_touched
         }
         add_count(per_visible, sizeof(std::int64_t)); // rect_tile_space
-        if (!macro_chain) {
-            add_count(num_splats, sizeof(std::int32_t)); // radii
-        }
         add_count(2 * per_visible, sizeof(float));    // xy_vs
         add_count(per_visible, sizeof(float));        // depths
         add_count(4 * per_visible, sizeof(float));    // inv_cov_vs_opacity
@@ -3716,9 +3713,6 @@ namespace lfs::vis {
             bind_count(buffers_.tiles_touched, num_splats);
         }
         bind_count(buffers_.rect_tile_space, per_visible);
-        if (!macro_chain) {
-            bind_count(buffers_.radii, num_splats);
-        }
         bind_count(buffers_.xy_vs, 2 * per_visible);
         bind_count(buffers_.depths, per_visible);
         bind_count(buffers_.inv_cov_vs_opacity, 4 * per_visible);
@@ -3808,7 +3802,6 @@ namespace lfs::vis {
 #define RELEASE_PRIVATE_SCRATCH(name) release(buffers_.name)
         RELEASE_PRIVATE_SCRATCH(tiles_touched);
         RELEASE_PRIVATE_SCRATCH(rect_tile_space);
-        RELEASE_PRIVATE_SCRATCH(radii);
         RELEASE_PRIVATE_SCRATCH(xy_vs);
         RELEASE_PRIVATE_SCRATCH(depths);
         RELEASE_PRIVATE_SCRATCH(inv_cov_vs_opacity);
@@ -3903,7 +3896,6 @@ namespace lfs::vis {
 #define DETACH_SHARED(name) detach(buffers_.name.deviceBuffer)
         DETACH_SHARED(tiles_touched);
         DETACH_SHARED(rect_tile_space);
-        DETACH_SHARED(radii);
         DETACH_SHARED(xy_vs);
         DETACH_SHARED(depths);
         DETACH_SHARED(inv_cov_vs_opacity);

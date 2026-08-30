@@ -119,37 +119,20 @@ namespace lfs::training::morton {
                 TensorShape({n_bound_floats}), Device::CUDA, DataType::Float32);
             dest_bounds.set_stream(stream);
 
-            constexpr std::size_t kChunk = static_cast<std::size_t>(sh_value::kBlockSize);
-            const std::size_t chunk_floats = core::sh_swizzled_float_count(kChunk, rest);
-            Tensor fp32_chunk = Tensor::zeros(
-                TensorShape({chunk_floats}), Device::CUDA, DataType::Float32);
-            fp32_chunk.set_stream(stream);
-
             auto* dest_codes = reinterpret_cast<std::uint16_t*>(
                 lfs::core::resolve_exportable_device_ptr(dest_u16));
             auto* dest_mm = static_cast<float*>(
                 lfs::core::resolve_exportable_device_ptr(dest_bounds));
-
-            for (std::size_t offset = 0; offset < n; offset += kChunk) {
-                const std::size_t chunk = std::min(kChunk, n - offset);
-                core::sh_value_quant::decode_shN_u16_gathered_to_float4(
-                    src_u16,
-                    src_bounds,
-                    perm_ptr,
-                    fp32_chunk.ptr<float>(),
-                    offset,
-                    chunk,
-                    n,
-                    rest,
-                    stream);
-                core::sh_value_quant::encode_shN_float4_to_u16(
-                    fp32_chunk.ptr<float>(),
-                    dest_codes + core::sh_value_quant::sh_value_u16_count(offset, rest),
-                    dest_mm + core::sh_value_quant::n_bounds_for_prims(offset) * 2,
-                    chunk,
-                    rest,
-                    stream);
-            }
+            core::sh_value_quant::encode_shN_u16_gathered(
+                src_u16,
+                src_bounds,
+                perm_ptr,
+                dest_codes,
+                dest_mm,
+                n,
+                n,
+                rest,
+                stream);
 
             LFS_CUDA_CHECK(cudaMemcpyAsync(
                 lfs::core::resolve_exportable_device_ptr(live),

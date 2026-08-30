@@ -1173,6 +1173,9 @@ namespace {
         const VkDeviceSize bytes = elements * sizeof(std::uint16_t);
         buf.deviceBuffer = makeBuffer(id, bytes);
     }
+    void forge_owned_u8(Buffer<std::uint8_t>& buf, const std::uintptr_t id, const std::size_t elements) {
+        buf.deviceBuffer = makeBuffer(id, elements);
+    }
 
     void track_buf(TestableRenderer& r, const _VulkanBuffer& b) {
         if (b.buffer != VK_NULL_HANDLE) {
@@ -1563,12 +1566,11 @@ TEST(VkSplatTaggedDispatch, ProjectionForwardAuditWithinBaseline) {
     forge_owned_f(buffers.opacity_raw, 0xD006, kAuditSplatCount);
     forge_owned_i32(buffers.tiles_touched, 0xD007, kAuditSplatCount);
     forge_owned_i64(buffers.rect_tile_space, 0xD008, kAuditSplatCount);
-    forge_owned_i32(buffers.radii, 0xD009, kAuditSplatCount);
     forge_owned_f(buffers.xy_vs, 0xD00A, kAuditSplatCount * 2);
     forge_owned_f(buffers.depths, 0xD00B, kAuditSplatCount);
     forge_owned_f(buffers.inv_cov_vs_opacity, 0xD00C, kAuditSplatCount * 4);
     forge_owned_f(buffers.rgb, 0xD00D, kAuditSplatCount * 3);
-    forge_owned_i32(buffers.overlay_flags, 0xD00E, kAuditSplatCount);
+    forge_owned_u8(buffers.overlay_flags, 0xD00E, kAuditSplatCount);
     forge_owned(buffers.primitive_depth_keys, 0xD00F, kAuditSplatCount);
 
     auto transform_indices = makeBuffer(0xD020, kAuditSplatCount * 4);
@@ -1586,7 +1588,7 @@ TEST(VkSplatTaggedDispatch, ProjectionForwardAuditWithinBaseline) {
                     &buffers.shN.deviceBuffer, &buffers.rotations.deviceBuffer,
                     &buffers.scaling_raw.deviceBuffer, &buffers.opacity_raw.deviceBuffer,
                     &buffers.tiles_touched.deviceBuffer, &buffers.rect_tile_space.deviceBuffer,
-                    &buffers.radii.deviceBuffer, &buffers.xy_vs.deviceBuffer,
+                    &buffers.xy_vs.deviceBuffer,
                     &buffers.depths.deviceBuffer, &buffers.inv_cov_vs_opacity.deviceBuffer,
                     &buffers.rgb.deviceBuffer, &buffers.overlay_flags.deviceBuffer,
                     &buffers.primitive_depth_keys.deviceBuffer,
@@ -1715,7 +1717,7 @@ TEST(VkSplatTaggedDispatch, CullAndSurvivorsProjectionAuditWithinBaseline) {
     forge_owned_f(buffers.depths, 0xE010, kAuditSplatCount);
     forge_owned_f(buffers.inv_cov_vs_opacity, 0xE011, kAuditSplatCount * 4);
     forge_owned_f(buffers.rgb, 0xE012, kAuditSplatCount * 3);
-    forge_owned_i32(buffers.overlay_flags, 0xE013, kAuditSplatCount);
+    forge_owned_u8(buffers.overlay_flags, 0xE013, kAuditSplatCount);
     forge_owned_i32(buffers.orig_ids, 0xE014, kAuditSplatCount);
 
     auto transform_indices = makeBuffer(0xE020, kAuditSplatCount * 4);
@@ -2267,7 +2269,7 @@ namespace {
         forge_owned_f(buffers.rotations, 0xF609, kAuditSplatCount * 4);
         forge_owned_f(buffers.scaling_raw, 0xF60A, kAuditSplatCount * 3);
         forge_owned_f(buffers.opacity_raw, 0xF60B, kAuditSplatCount);
-        forge_owned_i32(buffers.overlay_flags, 0xF60C, kAuditSplatCount);
+        forge_owned_u8(buffers.overlay_flags, 0xF60C, kAuditSplatCount);
         forge_owned(buffers.visible_count, 0xF60D, 2);
         forge_owned_i32(buffers.orig_ids, 0xF60E, kAuditSplatCount);
 

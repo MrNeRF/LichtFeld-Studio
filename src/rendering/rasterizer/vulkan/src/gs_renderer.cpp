@@ -1239,7 +1239,8 @@ void VulkanGSRenderer::executeProjectionForward(
     const _VulkanBuffer& lod_logical_indices,
     const _VulkanBuffer& lod_levels,
     const _VulkanBuffer& lod_weights,
-    const _VulkanBuffer& lod_counts) {
+    const _VulkanBuffer& lod_counts,
+    bool write_overlay_flags) {
     PerfTimer::Timer<PerfTimer::ProjectionForward> timer(this);
     DEVICE_GUARD;
 
@@ -1286,16 +1287,24 @@ void VulkanGSRenderer::executeProjectionForward(
 
     auto& tiles_touched = resizeDeviceBuffer(buffers.tiles_touched, alloc_size);
     auto& rect_tile_space = resizeDeviceBuffer(buffers.rect_tile_space, alloc_size);
-    auto& radii = resizeDeviceBuffer(buffers.radii, alloc_size);
     auto& xy_vs = resizeDeviceBuffer(buffers.xy_vs, 2 * alloc_size);
     auto& depths = resizeDeviceBuffer(buffers.depths, alloc_size);
     auto& inv_cov = resizeDeviceBuffer(buffers.inv_cov_vs_opacity, 4 * alloc_size);
     auto& rgb = resizeDeviceBuffer(buffers.rgb, 3 * alloc_size);
-    auto& overlay_flags = resizeDeviceBuffer(buffers.overlay_flags, alloc_size);
+    auto& overlay_flags = resizeDeviceBuffer(
+        buffers.overlay_flags, write_overlay_flags ? alloc_size : size_t{1});
+    // A2: keys die after compact (L4); sort indices are born at the post-radix
+    // copy (L6). Same int32 allocation, existing L5 barrier between them.
+    aliasDeviceView(buffers.primitive_sort_indices.deviceBuffer, primitive_depth_keys);
+    // A3: last tiles_touched read is apply_depth_ordering (L7); offset cumsum
+    // dest is born at L8.
+    aliasDeviceView(buffers.index_buffer_offset.deviceBuffer, tiles_touched);
 
     // Binding order: catalog appendix "executeProjectionForward L1266 projection_buffers".
     // Tags: attrs/transform/node/overlay/model/LOD reads; projection outputs write;
-    // primitive_depth_keys write (sentinel RMW after fill).
+    // primitive_depth_keys write (sentinel RMW after fill). Binding 8 is unused
+    // (legacy radii deleted); the placeholder keeps tagged indices aligned with
+    // shader binding numbers.
     std::vector<TaggedBinding> tagged = {
         {buffers.xyz_ws.deviceBuffer, BufferUse::ComputeRead},
         {buffers.sh0.deviceBuffer, BufferUse::ComputeRead},
@@ -1305,12 +1314,12 @@ void VulkanGSRenderer::executeProjectionForward(
         {buffers.opacity_raw.deviceBuffer, BufferUse::ComputeRead},
         {tiles_touched, BufferUse::ComputeWrite},
         {rect_tile_space, BufferUse::ComputeWrite},
-        {radii, BufferUse::ComputeWrite},
+        {tiles_touched, BufferUse::ComputeWrite}, // 8: unused (was radii)
         {xy_vs, BufferUse::ComputeWrite},
         {depths, BufferUse::ComputeWrite},
         {inv_cov, BufferUse::ComputeWrite},
         {rgb, BufferUse::ComputeWrite},
-        {overlay_flags, BufferUse::ComputeWrite},
+        {overlay_flags, write_overlay_flags ? BufferUse::ComputeWrite : BufferUse::ComputeRead},
         {transform_indices, BufferUse::ComputeRead},
         {node_mask, BufferUse::ComputeRead},
         {overlay_params, BufferUse::ComputeRead},
@@ -1324,6 +1333,11 @@ void VulkanGSRenderer::executeProjectionForward(
     };
 
     VulkanGSRendererUniforms projection_uniforms = uniforms;
+    if (write_overlay_flags) {
+        projection_uniforms.lod_enabled |= kLodEnabledWriteOverlayFlags;
+    } else {
+        projection_uniforms.lod_enabled &= ~kLodEnabledWriteOverlayFlags;
+    }
     if (buffers.quant_pool) {
         projection_uniforms.lod_page_splats = buffers.pool_page_splats;
         tagged.push_back({buffers.page_frames.deviceBuffer, BufferUse::ComputeRead});
@@ -2587,7 +2601,8 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
     const _VulkanBuffer& lod_logical_indices,
     const _VulkanBuffer& lod_levels,
     const _VulkanBuffer& lod_weights,
-    const _VulkanBuffer& lod_counts) {
+    const _VulkanBuffer& lod_counts,
+    const bool write_overlay_flags) {
     PerfTimer::Timer<PerfTimer::ProjectionSurvivors> timer(this);
     DEVICE_GUARD;
 
@@ -2600,6 +2615,11 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
     survivor_uniforms.sort_capacity = static_cast<uint32_t>(
         std::min<size_t>(visible_capacity,
                          static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
+    if (write_overlay_flags) {
+        survivor_uniforms.lod_enabled |= kLodEnabledWriteOverlayFlags;
+    } else {
+        survivor_uniforms.lod_enabled &= ~kLodEnabledWriteOverlayFlags;
+    }
     if (buffers.quant_pool) {
         survivor_uniforms.lod_page_splats = buffers.pool_page_splats;
     }
@@ -2611,7 +2631,8 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
     auto& depths = resizeDeviceBuffer(buffers.depths, visible_capacity);
     auto& inv_cov = resizeDeviceBuffer(buffers.inv_cov_vs_opacity, 4 * visible_capacity);
     auto& rgb = resizeDeviceBuffer(buffers.rgb, 3 * visible_capacity);
-    auto& overlay_flags = resizeDeviceBuffer(buffers.overlay_flags, visible_capacity);
+    auto& overlay_flags = resizeDeviceBuffer(
+        buffers.overlay_flags, write_overlay_flags ? visible_capacity : size_t{1});
     auto& orig_ids = resizeDeviceBuffer(buffers.orig_ids, visible_capacity);
 
     const _VulkanBuffer lod_indices_binding =
@@ -2629,20 +2650,21 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
     // Pipeline layouts skip bindings 6 and 8 (placeholders still occupy slots).
     // Tags: attr/LOD/survivors/state reads; compact outputs write; emit_count R/W atomic.
     std::vector<TaggedBinding> tagged = {
-        {buffers.xyz_ws.deviceBuffer, BufferUse::ComputeRead},                  // 0
-        {buffers.sh0.deviceBuffer, BufferUse::ComputeRead},                     // 1
-        {buffers.shN.deviceBuffer, BufferUse::ComputeRead},                     // 2
-        {buffers.rotations.deviceBuffer, BufferUse::ComputeRead},               // 3
-        {buffers.scaling_raw.deviceBuffer, BufferUse::ComputeRead},             // 4
-        {buffers.opacity_raw.deviceBuffer, BufferUse::ComputeRead},             // 5
-        {unsorted_keys, BufferUse::ComputeWrite},                               // 6 placeholder
-        {rect_tile_space, BufferUse::ComputeWrite},                             // 7
-        {unsorted_keys, BufferUse::ComputeWrite},                               // 8 placeholder
-        {xy_vs, BufferUse::ComputeWrite},                                       // 9
-        {depths, BufferUse::ComputeWrite},                                      // 10
-        {inv_cov, BufferUse::ComputeWrite},                                     // 11
-        {rgb, BufferUse::ComputeWrite},                                         // 12
-        {overlay_flags, BufferUse::ComputeWrite},                               // 13
+        {buffers.xyz_ws.deviceBuffer, BufferUse::ComputeRead},      // 0
+        {buffers.sh0.deviceBuffer, BufferUse::ComputeRead},         // 1
+        {buffers.shN.deviceBuffer, BufferUse::ComputeRead},         // 2
+        {buffers.rotations.deviceBuffer, BufferUse::ComputeRead},   // 3
+        {buffers.scaling_raw.deviceBuffer, BufferUse::ComputeRead}, // 4
+        {buffers.opacity_raw.deviceBuffer, BufferUse::ComputeRead}, // 5
+        {unsorted_keys, BufferUse::ComputeWrite},                   // 6 placeholder
+        {rect_tile_space, BufferUse::ComputeWrite},                 // 7
+        {unsorted_keys, BufferUse::ComputeWrite},                   // 8 placeholder
+        {xy_vs, BufferUse::ComputeWrite},                           // 9
+        {depths, BufferUse::ComputeWrite},                          // 10
+        {inv_cov, BufferUse::ComputeWrite},                         // 11
+        {rgb, BufferUse::ComputeWrite},                             // 12
+        {overlay_flags, write_overlay_flags ? BufferUse::ComputeWrite
+                                            : BufferUse::ComputeRead},          // 13
         {transform_indices, BufferUse::ComputeRead},                            // 14
         {node_mask, BufferUse::ComputeRead},                                    // 15
         {overlay_params, BufferUse::ComputeRead},                               // 16
