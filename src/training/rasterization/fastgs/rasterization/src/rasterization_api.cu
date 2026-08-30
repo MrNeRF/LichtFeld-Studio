@@ -32,7 +32,8 @@ namespace fast_lfs::rasterization {
         std::atomic<std::uint64_t> g_preflight_pointer_attr_calls{0};
 
         void free_sorted_primitive_indices(void* ptr, cudaStream_t stream) noexcept {
-            // persistent retained sort buffers — no cudaFree.
+            // The pointer belongs to the active rasterizer arena frame; the
+            // frame release returns it after backward has finished.
             release_sorted_primitive_indices(ptr, stream);
         }
 

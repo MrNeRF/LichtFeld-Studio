@@ -25,24 +25,24 @@ namespace fast_lfs::rasterization {
         size_t per_instance_sort_total_size = 0;
     };
 
-    /// Sorted indices live in the persistent exact thread-local block — no free.
+    /// Sorted indices live in the owning rasterizer arena frame. The frame
+    /// release returns the whole allocation after backward has finished.
     void release_sorted_primitive_indices(void* ptr, cudaStream_t stream) noexcept;
 
-    /// Release the consolidated FastGS sort workspace on the calling thread
-    /// (keys×2, indices×2, CUB WS; pinned n_instances slot kept). Call at an
-    /// established workspace boundary so VRAM is returned before worker join.
+    /// Source-compatible no-op retained for callers of the removed TLS cache.
+    /// Sort storage is released with its rasterizer arena frame.
     void release_sort_workspace_buffers() noexcept;
 
-    /// mid-pipeline n_instances hard-sync fallback count (warmup/growth).
+    /// Legacy compatibility counter; exact arena sizing has no fallback path.
     [[nodiscard]] std::uint64_t n_instances_fallback_sync_count() noexcept;
     void reset_n_instances_fallback_sync_count() noexcept;
-    /// Testing: force the next forward(s) onto the mid-pipeline sync path.
+    /// Compatibility hook; exact sizing always resolves n_instances first.
     void set_force_n_instances_sync_for_testing(bool force) noexcept;
-    /// Testing: drop retained capacity so the next forward must grow+sync.
+    /// Compatibility hook; there is no retained sort capacity to drop.
     void reset_sort_capacity_for_testing() noexcept;
 
-    /// Exact retained sort TLS residency on the calling thread
-    /// (keys×2 + indices×2 + alignment padding + CUB WS).
+    /// Legacy TLS telemetry accessors. Sort storage is now reported through
+    /// the rasterizer arena and these return zero.
     [[nodiscard]] std::size_t sort_workspace_required_bytes() noexcept;
     [[nodiscard]] std::size_t sort_workspace_allocated_bytes() noexcept;
     [[nodiscard]] int sort_workspace_capacity_n_instances() noexcept;

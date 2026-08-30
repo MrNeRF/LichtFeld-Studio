@@ -31,6 +31,7 @@ namespace fast_lfs::rasterization {
     struct ForwardContext {
         void* per_primitive_buffers = nullptr;
         void* per_tile_buffers = nullptr;
+        // Points into the active rasterizer arena frame; released with frame_id.
         void* sorted_primitive_indices = nullptr;
         size_t per_primitive_buffers_size = 0;
         size_t per_tile_buffers_size = 0;

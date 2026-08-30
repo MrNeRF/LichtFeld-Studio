@@ -527,8 +527,8 @@ namespace lfs::training {
             }));
         }
 
-        // Take ownership before any post-forward tensor work so exceptions cannot leak
-        // the retained sorted-index buffer or leave the arena frame active.
+        // Take ownership before any post-forward tensor work so exceptions cannot leave
+        // the arena frame active.
         FastRasterizeContext ctx;
         ctx.set_forward_context(forward_ctx);
 
@@ -874,17 +874,15 @@ namespace lfs::training {
     }
 
     void release_fastgs_sort_workspace_buffers() noexcept {
+        // Kept for source compatibility; FastGS sort storage is arena-owned.
         fast_lfs::rasterization::release_sort_workspace_buffers();
     }
 
     namespace {
-        // training-thread release is not enough for the test binary
-        // process exit path — main-thread TLS FastGS sort + rasterizer caches
-        // survive until after CudaMemoryPool shutdown. Register the same
-        // release sequence as a process pre-shutdown hook.
+        // Register the main-thread rasterizer cache release sequence as a
+        // process pre-shutdown hook.
         void release_main_thread_fastgs_cuda_caches() noexcept {
             (void)release_fast_rasterizer_thread_local_caches();
-            release_fastgs_sort_workspace_buffers();
         }
 
         const bool g_fastgs_tls_release_hook_registered = [] {

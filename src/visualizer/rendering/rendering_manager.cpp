@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "rendering_manager.hpp"
-#include "core/events.hpp"
 #include "core/cuda/memory_arena.hpp"
+#include "core/events.hpp"
 #include "core/logger.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
 #include "preferences.hpp"

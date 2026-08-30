@@ -53,7 +53,6 @@
 #include "optimizer/adam_optimizer.hpp"
 #include "python/runner.hpp"
 #include "rasterization/fast_rasterizer.hpp"
-#include "rasterization/fastgs/rasterization/include/forward.h"
 #include "rasterization/gsplat/Ops.h"
 #include "rasterization/gsplat_rasterizer.hpp"
 #include "strategies/mcmc.hpp"
@@ -801,12 +800,7 @@ namespace lfs::training {
                 // boundary after the arena has drained.
                 (void)release_gsplat_rasterizer_thread_local_caches();
                 (void)gsplat_lfs::release_intersect_thread_local_cache();
-                // FastGS keeps its sort keys/indices and CUB radix workspace
-                // outside the arena in thread-local exact blocks. They have
-                // the same lifetime as the arena frame and must be released
-                // at B3 as well.
                 (void)release_fast_rasterizer_thread_local_caches();
-                release_fastgs_sort_workspace_buffers();
 
                 // The viewer may have installed its exportable block as the
                 // arena backing. release_at_boundary intentionally preserves
@@ -884,33 +878,29 @@ namespace lfs::training {
             record_vram_current(scope, "forward.per_primitive_buffers", ctx.forward_ctx.per_primitive_buffers_size);
             record_vram_current(scope, "forward.per_tile_buffers", ctx.forward_ctx.per_tile_buffers_size);
             record_vram_current(scope, "forward.sorted_indices_live", ctx.forward_ctx.sorted_primitive_indices_size);
+            record_vram_current(scope,
+                                "forward.sort_workspace_arena",
+                                ctx.forward_ctx.per_instance_sort_total_size,
+                                false,
+                                lfs::diagnostics::VramAllocationMethod::Arena);
             record_rasterizer_arena_disclosure(scope);
             const std::size_t raster_arena_live =
                 ctx.forward_ctx.per_primitive_buffers_size +
-                ctx.forward_ctx.per_tile_buffers_size;
-            const std::size_t raster_sort_live =
-                ctx.forward_ctx.sorted_primitive_indices_size;
+                ctx.forward_ctx.per_tile_buffers_size +
+                ctx.forward_ctx.per_instance_sort_total_size;
+            const std::size_t raster_sort_live = 0;
             const std::size_t raster_live = raster_arena_live + raster_sort_live;
             auto& profiler = lfs::diagnostics::VramProfiler::instance();
             profiler.setGauge("vram.audit.fastgs_raster_live.required_bytes",
                               static_cast<double>(raster_live));
             profiler.setGauge("vram.audit.fastgs_raster_live.allocated_bytes",
                               static_cast<double>(raster_live));
-            profiler.setGauge(
-                "vram.audit.fastgs_sort.required_bytes",
-                static_cast<double>(
-                    fast_lfs::rasterization::sort_workspace_required_bytes()));
-            profiler.setGauge(
-                "vram.audit.fastgs_sort.allocated_bytes",
-                static_cast<double>(
-                    fast_lfs::rasterization::sort_workspace_allocated_bytes()));
             if (PerfBenchCollector::enabled()) {
                 PerfBenchCollector::instance().set_fastgs_raster_live_bytes(
                     raster_arena_live, raster_sort_live);
             }
-            // The exact sort block is disclosed by the gauges above and includes
-            // sorted_indices_live. Keep legacy transient rows clear so the HUD
-            // does not count the retained block twice.
+            // Sort storage is part of the arena frame. Keep legacy transient
+            // rows clear so the HUD does not count the arena allocation twice.
             record_vram_current(scope, "forward.sort_scratch_transient", 0, true);
             record_vram_current(scope, "forward.sort_total_transient", 0, true);
             record_vram_current(scope, "backward.grad_mean2d_helper", num_primitives * 2 * sizeof(float));

@@ -181,8 +181,7 @@ namespace lfs::training {
     // Release per-thread renderer caches before the owning CUDA stream is torn down.
     bool release_fast_rasterizer_thread_local_caches() noexcept;
 
-    // Release FastGS sort high-water workspaces on the calling thread.
-    // Invoked from training-thread shutdown alongside other TLS CUDA caches.
+    // Compatibility no-op for callers of the removed FastGS sort TLS cache.
     void release_fastgs_sort_workspace_buffers() noexcept;
 
     // Convenience wrapper for inference (no backward needed)
