@@ -106,6 +106,9 @@ namespace lfs::vis::gui {
         void setModelString(const char* name, std::string& field, std::string value);
         void setModelBool(const char* name, bool& field, bool value);
         void setProgressMarkersRml(std::string value);
+        void setProgressWallRml(std::string value);
+        void setProgressDebrisRml(std::string value);
+        void updateMiningScene(float progress, std::chrono::steady_clock::time_point now);
         std::optional<ProgressBarGeometry> progressBarGeometry() const;
         void resetSaveStepInteraction();
         std::optional<size_t> hitSaveStep(float local_x, float local_y,
@@ -166,12 +169,30 @@ namespace lfs::vis::gui {
 
         SaveStepInteractionState save_step_interaction_;
 
+        struct MiningSceneState {
+            float bar_dp = -1.0f;
+            int block_count = -1;
+            int current_block = -1;
+            int crack_stage = -1;
+            int break_block = -1;
+            int break_frame = -1;
+            std::chrono::steady_clock::time_point break_start{};
+        };
+        MiningSceneState mining_scene_;
+        std::string mining_wall_rml_;
+        std::string mining_debris_rml_;
+        bool progress_minecraft_pref_ = false;
+        std::chrono::steady_clock::time_point progress_style_checked_at_{};
+
         struct ModelState {
             bool safe_mode = false;
             std::string safe_mode_text;
             std::string mode_text;
             std::string mode_color;
             bool show_training = false;
+            bool progress_minecraft = false;
+            bool miner_raised = false;
+            bool miner_strike = false;
             std::string progress_width = "0%";
             std::string progress_text;
             std::string progress_markers_rml;
