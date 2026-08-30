@@ -154,13 +154,14 @@ namespace lfs::vis::gui::mining {
                                    const int crack_stage) {
         std::string wall_rml;
         for (int i = current_block; i < layout.block_count; ++i) {
-            const float left = layout.offset_dp + static_cast<float>(i * kBlockDp);
+            const int left = static_cast<int>(std::round(
+                layout.offset_dp + static_cast<float>(i * kBlockDp)));
             wall_rml += std::format(
-                "<img class=\"wall-block\" style=\"left: {:.2f}dp\" src=\"../icon/mining/{}.png\"/>",
+                "<img class=\"wall-block\" style=\"left:{}dp\" src=\"../icon/mining/{}.png\"/>",
                 left, miningBlockType(i, layout.block_count));
             if (i == current_block && crack_stage > 0) {
                 wall_rml += std::format(
-                    "<img class=\"wall-block\" style=\"left: {:.2f}dp\" src=\"../icon/mining/crack-{}.png\"/>",
+                    "<img class=\"wall-block\" style=\"left:{}dp\" src=\"../icon/mining/crack-{}.png\"/>",
                     left, crack_stage);
             }
         }
@@ -243,10 +244,12 @@ namespace lfs::vis::gui::mining {
     std::string buildMiningParticlesRml(const std::vector<MiningParticle>& particles) {
         std::string rml;
         for (const auto& particle : particles) {
+            const int x = static_cast<int>(std::round(particle.x));
+            const int y = static_cast<int>(std::round(particle.y));
             const uint32_t rgba = (particle.rgb << 8) | miningParticleAlpha(particle);
             rml += std::format(
-                "<div class=\"mining-particle\" style=\"left:{:.2f}dp;top:{:.2f}dp;width:{}dp;height:{}dp;background-color:#{:08x}\"></div>",
-                particle.x, particle.y, particle.size, particle.size, rgba);
+                "<div class=\"mining-particle\" style=\"left:{}dp;top:{}dp;width:{}dp;height:{}dp;background-color:#{:08x}\"></div>",
+                x, y, particle.size, particle.size, rgba);
         }
         return rml;
     }

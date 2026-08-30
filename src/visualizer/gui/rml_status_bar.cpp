@@ -31,7 +31,6 @@
 #include <RmlUi/Core/Element.h>
 #include <SDL3/SDL_clipboard.h>
 #include <SDL3/SDL_video.h>
-#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -1627,17 +1626,15 @@ namespace lfs::vis::gui {
             (model_.show_gpu_model ? uint32_t{1} << 7 : 0) |
             (model_.account_show_tier ? uint32_t{1} << 8 : 0);
 
-        const bool gravity_debris_airborne = std::any_of(
-            mining_scene_.particles.begin(), mining_scene_.particles.end(),
-            [](const mining::MiningParticle& particle) { return particle.gravity && !particle.landed; });
         const bool minecraft_visible = progress_minecraft_pref_ && show_training;
         animation_active_ = wasd_visible || zoom_visible || status_msg.visible ||
                             minecraft_visible;
-        next_refresh_at_ = now + (gravity_debris_airborne ? kAnimatedRefreshInterval
-                                  : minecraft_visible     ? kMiningRefreshInterval
-                                  : animation_active_     ? kAnimatedRefreshInterval
-                                  : ctx.is_training       ? kBusyRefreshInterval
-                                                          : kIdleRefreshInterval);
+        next_refresh_at_ = now + (minecraft_visible && training_state == TrainingState::Running
+                                      ? kBusyRefreshInterval
+                                  : minecraft_visible ? kMiningRefreshInterval
+                                  : animation_active_ ? kAnimatedRefreshInterval
+                                  : ctx.is_training   ? kBusyRefreshInterval
+                                                      : kIdleRefreshInterval);
         return model_dirty_;
     }
 

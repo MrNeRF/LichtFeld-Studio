@@ -161,9 +161,32 @@ namespace lfs::vis::gui::mining {
                                                      .life = 1.0f}};
         const auto rml = buildMiningParticlesRml(particles);
         EXPECT_EQ(countNeedle(rml, "class=\"mining-particle\""), 2);
-        EXPECT_NE(rml.find("left:1.23dp;top:5.68dp;width:2dp;height:2dp;background-color:#123abcff"),
+        EXPECT_NE(rml.find("left:1dp;top:6dp;width:2dp;height:2dp;background-color:#123abcff"),
                   std::string::npos);
         EXPECT_TRUE(buildMiningParticlesRml({}).empty());
+    }
+
+    TEST(StatusBarMiningParticlesTest, QuantizedSmokeRmlSkipsSubDpMotion) {
+        std::vector<MiningParticle> particles;
+        std::string previous_rml;
+        int previous_pause_ms = -1;
+        int distinct_rml_count = 0;
+
+        for (int tick = 0; tick < 180; ++tick) {
+            const int pause_ms = (tick + 1) * 1000 / 30;
+            spawnSmokeLetters(particles, 100.0f, 1.0f, previous_pause_ms, pause_ms);
+            previous_pause_ms = pause_ms;
+            stepMiningParticles(particles, 1.0f / 30.0f);
+
+            const std::string rml = buildMiningParticlesRml(particles);
+            if (rml != previous_rml) {
+                ++distinct_rml_count;
+                previous_rml = rml;
+            }
+        }
+
+        EXPECT_EQ(distinct_rml_count, 166);
+        EXPECT_LT(distinct_rml_count, 180);
     }
 
     TEST(StatusBarMiningSmokeTest, SpriteIndexFollowsPausePhases) {
