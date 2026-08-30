@@ -4,6 +4,7 @@
 
 #include "training_setup.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/error.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
@@ -12,6 +13,7 @@
 #include "core/scene.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/shareable_allocation_limit.hpp"
+#include "core/source_site.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_data_transform.hpp"
 #include "dataset.hpp"
@@ -154,6 +156,15 @@ namespace lfs::training {
 
         constexpr float kShC0 = 0.28209479177387814f;
 
+        lfs::Error initFileError(std::string message) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+
         bool isPlainPointCloudPly(const std::filesystem::path& path) {
             return path.extension().string() == ".ply" && !lfs::io::is_gaussian_splat_ply(path);
         }
@@ -206,7 +217,7 @@ namespace lfs::training {
             return std::make_shared<lfs::core::PointCloud>(std::move(means), std::move(colors));
         }
 
-        std::expected<std::shared_ptr<lfs::core::PointCloud>, std::string>
+        lfs::Result<std::shared_ptr<lfs::core::PointCloud>>
         loadInitReplacementPointCloud(const std::filesystem::path& init_file) {
             const auto filename = lfs::core::path_to_utf8(init_file.filename());
             const auto path_utf8 = lfs::core::path_to_utf8(init_file);
@@ -214,10 +225,11 @@ namespace lfs::training {
             if (isPlainPointCloudPly(init_file)) {
                 auto pc_result = lfs::io::load_ply_point_cloud(init_file);
                 if (!pc_result) {
-                    return std::unexpected(std::format("Failed to load '{}': {}", path_utf8, pc_result.error()));
+                    return initFileError(
+                        std::format("Failed to load '{}': {}", path_utf8, pc_result.error()));
                 }
                 if (pc_result->size() <= 0) {
-                    return std::unexpected(std::format("'{}' contains no points", path_utf8));
+                    return initFileError(std::format("'{}' contains no points", path_utf8));
                 }
                 LOG_INFO("Init {} points from {} (replaces points3D)", pc_result->size(), filename);
                 return std::make_shared<lfs::core::PointCloud>(std::move(*pc_result));
@@ -226,24 +238,24 @@ namespace lfs::training {
             auto loader = lfs::io::Loader::create();
             auto init_result = loader->load(init_file);
             if (!init_result) {
-                return std::unexpected(std::format("Failed to load '{}': {}",
-                                                   path_utf8, init_result.error().format()));
+                return initFileError(std::format(
+                    "Failed to load '{}': {}", path_utf8, init_result.error().format()));
             }
 
             auto* splat_ptr = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&init_result->data);
             if (!splat_ptr || !*splat_ptr) {
-                return std::unexpected(std::format("'{}': invalid SplatData", path_utf8));
+                return initFileError(std::format("'{}': invalid SplatData", path_utf8));
             }
 
             auto preview = pointCloudPreviewFromSplat(**splat_ptr);
             if (!preview || preview->size() <= 0) {
-                return std::unexpected(std::format("'{}' contains no points", path_utf8));
+                return initFileError(std::format("'{}' contains no points", path_utf8));
             }
             LOG_INFO("Init {} points from splat {} (preview)", preview->size(), filename);
             return preview;
         }
 
-        std::expected<void, std::string> attachDatasetPointCloud(
+        lfs::Result<void> attachDatasetPointCloud(
             const lfs::core::param::TrainingParameters& params,
             lfs::core::Scene& scene,
             const lfs::core::NodeId dataset_id,
@@ -253,7 +265,7 @@ namespace lfs::training {
             if (params.init_path.has_value() && !params.init_path->empty()) {
                 auto loaded = loadInitReplacementPointCloud(lfs::core::utf8_to_path(*params.init_path));
                 if (!loaded) {
-                    return std::unexpected(std::move(loaded.error()));
+                    return lfs::Status::failure(loaded.error());
                 }
                 point_cloud = std::move(*loaded);
             } else if (data.point_cloud && data.point_cloud->size() > 0) {
@@ -276,22 +288,22 @@ namespace lfs::training {
             return {};
         }
 
-        std::expected<void, std::string> installGaussianInitAsTrainingModel(
+        lfs::Result<void> installGaussianInitAsTrainingModel(
             const lfs::core::param::TrainingParameters& params,
             lfs::core::Scene& scene,
             const std::filesystem::path& init_file) {
             auto loader = lfs::io::Loader::create();
             auto init_result = loader->load(init_file);
             if (!init_result) {
-                return std::unexpected(std::format("Failed to load '{}': {}",
-                                                   lfs::core::path_to_utf8(init_file),
-                                                   init_result.error().format()));
+                return lfs::Status::failure(initFileError(std::format("Failed to load '{}': {}",
+                                                                      lfs::core::path_to_utf8(init_file),
+                                                                      init_result.error().format())));
             }
 
             auto* splat_ptr = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&init_result->data);
             if (!splat_ptr || !*splat_ptr) {
-                return std::unexpected(std::format("'{}': invalid SplatData",
-                                                   lfs::core::path_to_utf8(init_file)));
+                return lfs::Status::failure(initFileError(std::format("'{}': invalid SplatData",
+                                                                      lfs::core::path_to_utf8(init_file))));
             }
 
             auto model = std::make_unique<lfs::core::SplatData>(std::move(**splat_ptr));
@@ -321,7 +333,7 @@ namespace lfs::training {
 
             const auto model_id = scene.addSplat("Model", std::move(model), parent_id);
             if (model_id == lfs::core::NULL_NODE) {
-                return std::unexpected("Failed to add loaded training model to scene");
+                return lfs::Status::failure(initFileError("Failed to add loaded training model to scene"));
             }
             if (node_transform != glm::mat4{1.0f}) {
                 scene.setNodeTransform(model_id, node_transform);
@@ -772,7 +784,7 @@ namespace lfs::training {
 
                 if (auto attached = attachDatasetPointCloud(params, scene, dataset_id, data, true);
                     !attached) {
-                    return attached;
+                    return std::unexpected(std::string(attached.error().user_message()));
                 }
 
                 const auto& cameras = data.cameras;
@@ -852,7 +864,7 @@ namespace lfs::training {
             if (const auto init_file = gaussianSplatInitPath(params)) {
                 if (auto installed = installGaussianInitAsTrainingModel(params, scene, *init_file);
                     !installed) {
-                    return installed;
+                    return std::unexpected(std::string(installed.error().user_message()));
                 }
             }
         }
@@ -1122,7 +1134,7 @@ namespace lfs::training {
 
                 if (auto attached = attachDatasetPointCloud(params, scene, dataset_id, data, false);
                     !attached) {
-                    return attached;
+                    return std::unexpected(std::string(attached.error().user_message()));
                 }
 
                 const auto& cameras = data.cameras;
