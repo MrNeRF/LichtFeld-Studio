@@ -27,6 +27,15 @@ MINER_PAL = {
     "g": (150, 152, 160, 255),
     "K": (255, 200, 48, 255),
     "k": (255, 236, 140, 255),
+    "G": (66, 68, 76, 255),
+    "M": (150, 92, 72, 255),
+    "O": (88, 46, 38, 255),
+    "C": (236, 232, 220, 255),
+    "R": (214, 70, 24, 255),
+    "r": (255, 150, 48, 255),
+    "m": (150, 150, 160, 255),
+    "s": (200, 200, 208, 235),
+    "w": (228, 228, 234, 170),
     ".": (0, 0, 0, 0),
 }
 
@@ -64,6 +73,96 @@ MINER_STRIKE = [
     "..FFFF........",
 ]
 
+
+def with_mouth_and_floor(grid: list[str]) -> list[str]:
+    rows = [row[:3] + "SMM" + row[6:] if y == 3 else row for y, row in enumerate(grid)]
+    return rows[:12] + [rows[11]] + rows[12:]
+
+
+STRIDE_A = [
+    "..ppPPP.......",
+    ".pp...PP......",
+    ".pp...PP......",
+    ".FF...FF......",
+]
+STRIDE_B = [
+    "..PPPpp.......",
+    ".PP...pp......",
+    ".PP...pp......",
+    ".FF...FF......",
+]
+
+
+def with_legs(grid: list[str], stride: list[str]) -> list[str]:
+    return grid[:11] + stride
+
+
+MINER_RAISED = with_mouth_and_floor(MINER_RAISED)
+MINER_STRIKE = with_mouth_and_floor(MINER_STRIKE)
+MINER_RAISED_STEP_A = with_legs(MINER_RAISED, STRIDE_A)
+MINER_RAISED_STEP_B = with_legs(MINER_RAISED, STRIDE_B)
+
+SMOKE_BODY = [
+    "..................",
+    ".HHHHH............",
+    ".HSSES............",
+    ".HSSMMCCR.........",
+    "..TTTT............",
+    "..tTTTSSW.........",
+    "..tTTT..W.........",
+    "..tTTT..W.........",
+    "..tTTT..W.........",
+    "..pPPP..W.........",
+    "..pPPP..W.........",
+    "..pPPP..W.........",
+    "..pPPP..W.........",
+    "..pPPPg.W.g.......",
+    "..FFFF.GGG........",
+]
+
+SMOKE_TOPS = [
+    [
+        "..................",
+        "..................",
+        "..................",
+    ],
+    [
+        "..................",
+        ".........m........",
+        "........mm........",
+    ],
+    [
+        "..........ss......",
+        ".........s..s.....",
+        "..........ss......",
+    ],
+    [
+        "............ss....",
+        "...........s..s...",
+        "............ss....",
+    ],
+    [
+        "..............ww..",
+        ".............w..w.",
+        "..............ww..",
+    ],
+    [
+        "................ww",
+        "...............w..",
+        "................ww",
+    ],
+]
+EMBER = ["r", "R", "R", "R", "R", "R"]
+MOUTH = ["M", "O", "O", "M", "M", "M"]
+
+
+def smoke_frame(index: int) -> list[str]:
+    rows = list(SMOKE_BODY)
+    for y, top in enumerate(SMOKE_TOPS[index]):
+        rows[y] = "".join(t if b == "." else b for b, t in zip(rows[y], top))
+    rows[3] = rows[3].replace("R", EMBER[index]).replace("M", MOUTH[index])
+    return rows
+
 STONE = [(125, 125, 125), (110, 110, 110), (96, 96, 96)]
 DIRT = [(134, 96, 67), (115, 81, 53), (97, 67, 42)]
 
@@ -87,34 +186,6 @@ CRACK_STAGES = [
         (11, 2), (12, 1), (13, 9), (14, 11), (4, 14), (2, 8), (1, 9), (7, 2),
         (7, 1), (13, 7), (8, 13), (9, 14), (2, 12), (14, 4),
     ],
-]
-
-DEBRIS_GRAY = (105, 105, 105)
-DEBRIS_DARK = (78, 78, 78)
-DEBRIS_BROWN = (115, 81, 53)
-SPARK = (255, 236, 140)
-
-BREAK_FRAMES = [
-    {
-        "chunks": [
-            (2, 2, DEBRIS_GRAY, 2), (9, 1, DEBRIS_DARK, 2), (4, 7, DEBRIS_BROWN, 2),
-            (11, 6, DEBRIS_GRAY, 2), (2, 11, DEBRIS_DARK, 2), (8, 10, DEBRIS_GRAY, 2),
-            (13, 11, DEBRIS_BROWN, 1), (6, 4, DEBRIS_DARK, 1), (13, 3, SPARK, 1),
-        ],
-    },
-    {
-        "chunks": [
-            (1, 6, DEBRIS_GRAY, 2), (10, 5, DEBRIS_DARK, 1), (5, 10, DEBRIS_BROWN, 2),
-            (12, 10, DEBRIS_GRAY, 1), (3, 13, DEBRIS_DARK, 1), (8, 13, DEBRIS_GRAY, 2),
-            (14, 13, DEBRIS_BROWN, 1), (6, 7, SPARK, 1),
-        ],
-    },
-    {
-        "chunks": [
-            (2, 14, DEBRIS_DARK, 1), (6, 13, DEBRIS_GRAY, 1), (9, 14, DEBRIS_BROWN, 1),
-            (13, 14, DEBRIS_GRAY, 1), (11, 12, SPARK, 1),
-        ],
-    },
 ]
 
 GEM_W, GEM_L, GEM_C = (245, 255, 255), (150, 240, 235), (70, 200, 210)
@@ -228,15 +299,6 @@ def crack_overlay(stage: int) -> list[list[tuple[int, int, int] | None]]:
     return pixels
 
 
-def break_frame(index: int) -> list[list[tuple[int, int, int] | None]]:
-    pixels: list[list[tuple[int, int, int] | None]] = [[None] * 16 for _ in range(16)]
-    for x, y, color, size in BREAK_FRAMES[index]["chunks"]:
-        for dy in range(size):
-            for dx in range(size):
-                pixels[min(y + dy, 15)][min(x + dx, 15)] = color
-    return pixels
-
-
 def gem(past: bool = False) -> list[list[tuple[int, int, int] | None]]:
     pal = {"W": GEM_W, "L": GEM_L, "C": GEM_C, ".": None}
     pixels: list[list[tuple[int, int, int] | None]] = [
@@ -256,8 +318,12 @@ def gem(past: bool = False) -> list[list[tuple[int, int, int] | None]]:
 
 def write_sprites(output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
+    write_png(output_dir / "miner-raised-step-a.png", render_miner(MINER_RAISED_STEP_A, 8))
     write_png(output_dir / "miner-raised.png", render_miner(MINER_RAISED, 8))
     write_png(output_dir / "miner-strike.png", render_miner(MINER_STRIKE, 8))
+    write_png(output_dir / "miner-raised-step-b.png", render_miner(MINER_RAISED_STEP_B, 8))
+    for index in range(len(SMOKE_TOPS)):
+        write_png(output_dir / f"miner-smoke-{index + 1}.png", render_miner(smoke_frame(index), 8))
     for kind, name in (
         ("stone", "stone.png"),
         ("dirt", "dirt.png"),
@@ -269,7 +335,6 @@ def write_sprites(output_dir: Path) -> None:
         write_png(output_dir / name, upscale(block(kind, seed=BLOCK_SEEDS[kind]), 8))
     for index in range(3):
         write_png(output_dir / f"crack-{index + 1}.png", upscale(crack_overlay(index), 8))
-        write_png(output_dir / f"break-{index + 1}.png", upscale(break_frame(index), 8))
     write_png(output_dir / "gem.png", upscale(gem(False), 8))
     write_png(output_dir / "gem-collected.png", upscale(gem(True), 8))
 
@@ -280,7 +345,7 @@ def main() -> int:
         "output_dir",
         nargs="?",
         default=str(DEFAULT_OUT),
-        help="Directory to write the 16 PNG files",
+        help="Directory to write the mining PNG files",
     )
     args = parser.parse_args()
     write_sprites(Path(args.output_dir))

@@ -257,6 +257,10 @@ body {
     pointer-events: none;
 }
 
+#progress-debris {
+    z-index: 2;
+}
+
 .wall-block {
     position: absolute;
     top: 0;
@@ -277,8 +281,18 @@ body {
     position: absolute;
     top: 1dp;
     width: 14dp;
-    height: 14dp;
+    height: 15dp;
     margin-left: -4dp;
+    pointer-events: none;
+    z-index: 2;
+}
+
+.progress-figure.smoke {
+    width: 18dp;
+}
+
+.mining-particle {
+    position: absolute;
     pointer-events: none;
 }
 
@@ -327,6 +341,12 @@ body {
     height: 100%;
     text-align: center;
     line-height: 16dp;
+    z-index: 1;
+}
+
+#progress-text.progress-text--minecraft {
+    width: auto;
+    text-align: left;
 }
 
 #account-chip {
