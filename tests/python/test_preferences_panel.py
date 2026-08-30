@@ -275,6 +275,7 @@ def preferences_panel_module(monkeypatch):
             TOGGLE_SCENE_SELECTION_TRAINING=SimpleNamespace(
                 name="TOGGLE_SCENE_SELECTION_TRAINING", value=84
             ),
+            DEPTH_ADJUST_SIZE=SimpleNamespace(name="DEPTH_ADJUST_SIZE", value=85),
         ),
         get_available_profiles=lambda: ["Default"],
         get_current_profile=lambda: "Default",
