@@ -488,6 +488,11 @@ namespace lfs::training {
         lfs::core::Tensor get_background_image_for_camera(int width, int height);
         void clearBackgroundImageCache();
 
+        // Release GPU state that is only needed while a train step is active.
+        // The model, optimizer, and source background image remain resident so
+        // a finished/stopped trainer can be resumed without reinitialization.
+        void release_training_transient_state_at_boundary();
+
         lfs::core::Tensor get_random_background_for_camera(int width, int height, int iteration);
 
         // Protected method for processing a single training step

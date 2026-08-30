@@ -1531,6 +1531,15 @@ namespace lfs::vis {
         if (context.vulkan_context) {
             last_vulkan_context_ = context.vulkan_context;
         }
+        if (!is_training && vksplat_viewport_renderer_ &&
+            vksplat_terminal_release_pending_.exchange(false, std::memory_order_acq_rel)) {
+            // TrainingCompleted is posted by the training side, but Vulkan
+            // resources must be released on this render thread. The event is
+            // emitted only after the trainer's B3 cleanup has detached its
+            // arena backing, so this also drops the viewer's final import.
+            vksplat_viewport_renderer_->releaseScratchOnIdle(true);
+            vksplat_idle_frame_count_ = 0;
+        }
 
         const auto framebuffer_region =
             resolveFramebufferViewportRegion(context.viewport, context.logical_screen_size, context.viewport_region);

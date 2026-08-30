@@ -2343,6 +2343,9 @@ namespace lfs::vis {
             if (!python::is_plugin_preload_running()) {
                 python::flush_signals();
             }
+            if (rendering_manager_) {
+                rendering_manager_->noteVksplatIdleFrame(is_training);
+            }
             waitForNextEvent(is_training);
             return;
         }

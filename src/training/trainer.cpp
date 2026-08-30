@@ -801,6 +801,21 @@ namespace lfs::training {
                 // boundary after the arena has drained.
                 (void)release_gsplat_rasterizer_thread_local_caches();
                 (void)gsplat_lfs::release_intersect_thread_local_cache();
+                // FastGS keeps its sort keys/indices and CUB radix workspace
+                // outside the arena in thread-local exact blocks. They have
+                // the same lifetime as the arena frame and must be released
+                // at B3 as well.
+                (void)release_fast_rasterizer_thread_local_caches();
+                release_fastgs_sort_workspace_buffers();
+
+                // The viewer may have installed its exportable block as the
+                // arena backing. release_at_boundary intentionally preserves
+                // such a block for the peer owner; once the trainer is idle it
+                // must relinquish the arena's reference so the next resume
+                // starts from a zero-sized training arena.
+                if (arena->using_external_backing()) {
+                    lfs::core::GlobalArenaManager::instance().clear_external_backing();
+                }
             }
         }
 
@@ -1154,6 +1169,42 @@ namespace lfs::training {
             return r;
         }
     } // namespace
+
+    void Trainer::release_training_transient_state_at_boundary() {
+        // These tensors are recreated lazily by train_step. Keep the model,
+        // optimizer, evaluator, and source background image for resume.
+        bg_mix_buffer_ = {};
+        random_bg_buffer_ = {};
+        clearBackgroundImageCache();
+        pipelined_mask_ = {};
+        pipelined_depth_ = {};
+        pipelined_normal_ = {};
+
+        photometric_loss_ = {};
+        loss_accumulator_ = {};
+        fused_scale_reg_loss_ = {};
+        fused_opacity_reg_loss_ = {};
+        cropbox_damping_cached_mask_ = {};
+        cropbox_damping_cached_n_ = 0;
+        cropbox_damping_geom_fp_ = 0;
+        cropbox_damping_cached_scale_ = 1.0f;
+        cropbox_damping_cache_valid_ = false;
+        depth_loss_scalar_ = {};
+        depth_loss_grad_ = {};
+        depth_loss_grad_alpha_ = {};
+        depth_loss_partials_ = {};
+        normal_loss_scalar_ = {};
+        normal_loss_grad_ = {};
+        normal_loss_partials_ = {};
+        normal_consistency_scalar_ = {};
+        normal_consistency_partials_ = {};
+        normal_prior_depth_scalar_ = {};
+        roi_weight_map_ = {};
+        densification_ssim_workspace_ = {};
+        densification_error_map_ = {};
+        edge_map_buffer_ = {};
+        mask_preprocess_workspace_ = {};
+    }
 
     Trainer::CameraLossHeatmapState::~CameraLossHeatmapState() {
         if (copy_stream) {
@@ -8584,8 +8635,9 @@ namespace lfs::training {
         }
 
         // B3: training has stopped or completed; the editor may remain alive.
-        photometric_loss_.arena().reset();
+        release_training_transient_state_at_boundary();
         resize_rasterizer_arena_at_boundary("B3 training end", true);
+        lfs::core::Tensor::trim_memory_pool();
 
         auto& command_center = lfs::training::CommandCenter::instance();
         auto snapshot_guard = makeScopeGuard([&command_center, this]() {

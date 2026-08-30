@@ -3935,6 +3935,19 @@ namespace lfs::vis {
         buffers_.is_unsorted_1 = true;
     }
 
+    void VksplatViewportRenderer::releaseScratchOnIdle(const bool release_shared) {
+        std::lock_guard<std::mutex> readback_lock(readback_mutex_);
+        if (context_ == nullptr) {
+            return;
+        }
+
+        releasePrivateScratchBuffers();
+        if (release_shared) {
+            releaseSharedScratchArena();
+        }
+        drainRetiredScratchBuffers(false);
+    }
+
     void VksplatViewportRenderer::releaseSharedScratchImportOnly() {
         detachSharedScratchBuffers();
         if (shared_scratch_.imported_buffer.buffer != VK_NULL_HANDLE) {

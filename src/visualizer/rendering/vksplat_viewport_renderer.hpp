@@ -173,6 +173,10 @@ namespace lfs::vis {
             std::size_t num_splats,
             glm::ivec2 viewport_size);
 
+        // Release viewer-owned scratch after an idle boundary. Shared training
+        // scratch is released only when the caller explicitly permits it.
+        void releaseScratchOnIdle(bool release_shared);
+
         // Invoked with the completion value immediately after each live-model
         // submit, BEFORE the shared arena frame is released — the trainer's
         // borrow wait must cover the in-flight Vulkan batch before the trainer
