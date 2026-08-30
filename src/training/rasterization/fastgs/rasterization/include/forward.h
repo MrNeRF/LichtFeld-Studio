@@ -14,6 +14,11 @@ namespace fast_lfs::rasterization {
 
     struct ForwardResult {
         int n_instances = 0;
+        int n_visible = 0;
+        char* per_primitive_buffers = nullptr;
+        size_t per_primitive_buffers_size = 0;
+        uint* primitive_work_indices = nullptr;
+        float3* primitive_normals = nullptr;
         uint* sorted_primitive_indices = nullptr;
         size_t sorted_primitive_indices_size = 0;
         size_t per_instance_sort_scratch_size = 0;
@@ -68,10 +73,9 @@ namespace fast_lfs::rasterization {
         float* image,
         float* alpha,
         float* depth,
-        float* normal,             // [3*H*W] or nullptr
-        float3* primitive_normals, // [N] scratch, required when normal != nullptr
-        const float* bg_color,     // [3] device solid bg, or nullptr
-        const float* bg_image,     // [3*H*W] CHW per-pixel bg, or nullptr (wins over bg_color)
+        float* normal,         // [3*H*W] or nullptr
+        const float* bg_color, // [3] device solid bg, or nullptr
+        const float* bg_image, // [3*H*W] CHW per-pixel bg, or nullptr (wins over bg_color)
         const int n_primitives,
         const int active_sh_bases,
         const int sh_layout_bases,

@@ -33,6 +33,7 @@ void fast_lfs::rasterization::backward(
     char* per_primitive_buffers_blob,
     char* per_tile_buffers_blob,
     const uint* sorted_primitive_indices,
+    const uint* primitive_work_indices,
     float* grad_opacity_helper,
     float3* grad_color_helper,
     float2* grad_mean2d_helper,
@@ -43,6 +44,7 @@ void fast_lfs::rasterization::backward(
     float* densification_info,
     const int n_primitives,
     const int n_instances,
+    const int n_visible,
     const int active_sh_bases,
     const int sh_layout_bases,
     const int width,
@@ -68,7 +70,7 @@ void fast_lfs::rasterization::backward(
     const uint sh_layout_slots = kernels::shSlotsForBases(static_cast<uint>(sh_layout_bases));
 
     // These blobs are from the arena and are guaranteed to be valid
-    PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, n_primitives);
+    PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, n_visible);
     PerTileBuffers per_tile_buffers = PerTileBuffers::from_blob(per_tile_buffers_blob, n_tiles);
     auto* fastgs_status = per_primitive_buffers.forward_status;
 
@@ -90,6 +92,7 @@ void fast_lfs::rasterization::backward(
                     <<<n_tiles, config::block_size_blend_backward, 0, stream>>>(
                         per_tile_buffers.instance_ranges,
                         sorted_primitive_indices,
+                        primitive_work_indices,
                         per_primitive_buffers.mean2d,
                         per_primitive_buffers.conic_opacity,
                         per_primitive_buffers.color,
@@ -114,6 +117,7 @@ void fast_lfs::rasterization::backward(
                         fastgs_status,
                         static_cast<uint>(n_instances),
                         n_primitives,
+                        static_cast<uint>(n_visible),
                         width,
                         height,
                         grid.x,
@@ -159,7 +163,7 @@ void fast_lfs::rasterization::backward(
                 w2c,
                 cam_position,
                 raw_opacities,
-                per_primitive_buffers.n_touched_tiles,
+                primitive_work_indices,
                 grad_mean2d_helper,
                 grad_conic_helper,
                 grad_depth_helper,

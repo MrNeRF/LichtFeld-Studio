@@ -254,6 +254,33 @@ namespace fast_lfs::rasterization {
         return ((size_t)size) + 128;
     }
 
+    // The visibility pass is deliberately kept separate from the retained
+    // primitive working set.  Its three N-sized uint arrays are temporary
+    // bookkeeping: flags becomes the original->workset map, offsets is the
+    // stable prefix sum, and visible_indices is consumed by the compact pass.
+    struct VisibilityBuffers {
+        uint* flags_or_work_indices;
+        uint* offsets;
+        uint* visible_indices;
+        char* cub_workspace;
+        size_t cub_workspace_size;
+
+        static VisibilityBuffers from_blob(char*& blob, int n_primitives) {
+            VisibilityBuffers buffers{};
+            obtain(blob, buffers.flags_or_work_indices, n_primitives, 128);
+            obtain(blob, buffers.offsets, n_primitives, 128);
+            obtain(blob, buffers.visible_indices, n_primitives, 128);
+            LFS_CUDA_CHECK_MSG(
+                cub::DeviceScan::InclusiveSum(
+                    nullptr, buffers.cub_workspace_size,
+                    buffers.flags_or_work_indices, buffers.offsets,
+                    n_primitives),
+                "FastGS visibility workspace query (n_primitives={})", n_primitives);
+            obtain(blob, buffers.cub_workspace, buffers.cub_workspace_size, 128);
+            return buffers;
+        }
+    };
+
     /// 128-bit packed screen position + pixel-space AABB for warp sub-tile culling.
     /// Layout: float2 mean2d (8B) + ushort4 pixel_bbox (8B) = 16B, one 128-bit load.
     /// pixel_bbox = (x_min, x_max_excl, y_min, y_max_excl) in absolute pixel coords.
@@ -277,27 +304,29 @@ namespace fast_lfs::rasterization {
         float4* color; // float3 padded to float4 for 128-bit shared/global loads
         FastGSForwardStatus* forward_status;
 
-        static PerPrimitiveBuffers from_blob(char*& blob, int n_primitives) {
+        static PerPrimitiveBuffers from_blob(char*& blob, int n_visible) {
             PerPrimitiveBuffers buffers{};
-            obtain(blob, buffers.depth_keys, n_primitives, 128);
-            obtain(blob, buffers.depths, n_primitives, 128);
-            obtain(blob, buffers.n_touched_tiles, n_primitives, 128);
-            obtain(blob, buffers.offset, n_primitives, 128);
-            obtain(blob, buffers.screen_bounds, n_primitives, 128);
-            obtain(blob, buffers.mean2d, n_primitives, 128);
-            obtain(blob, buffers.conic_opacity, n_primitives, 128);
-            obtain(blob, buffers.color, n_primitives, 128);
+            obtain(blob, buffers.depth_keys, n_visible, 128);
+            obtain(blob, buffers.depths, n_visible, 128);
+            obtain(blob, buffers.n_touched_tiles, n_visible, 128);
+            obtain(blob, buffers.offset, n_visible, 128);
+            obtain(blob, buffers.screen_bounds, n_visible, 128);
+            obtain(blob, buffers.mean2d, n_visible, 128);
+            obtain(blob, buffers.conic_opacity, n_visible, 128);
+            obtain(blob, buffers.color, n_visible, 128);
             obtain(blob, buffers.forward_status, 1, 128);
-            LFS_CUDA_CHECK_MSG(
-                cub::DeviceScan::InclusiveSum(
-                    nullptr, buffers.cub_workspace_size,
-                    buffers.n_touched_tiles, buffers.offset,
-                    n_primitives),
-                "FastGS workspace query (n_primitives={})", n_primitives);
-            LFS_ASSERT_MSG(
-                buffers.cub_workspace_size > 0,
-                "FastGS CUB scan returned an empty workspace for nonempty primitive input");
-            obtain(blob, buffers.cub_workspace, buffers.cub_workspace_size, 128);
+            if (n_visible > 0) {
+                LFS_CUDA_CHECK_MSG(
+                    cub::DeviceScan::InclusiveSum(
+                        nullptr, buffers.cub_workspace_size,
+                        buffers.n_touched_tiles, buffers.offset,
+                        n_visible),
+                    "FastGS workspace query (n_visible={})", n_visible);
+                LFS_ASSERT_MSG(
+                    buffers.cub_workspace_size > 0,
+                    "FastGS CUB scan returned an empty workspace for nonempty primitive input");
+                obtain(blob, buffers.cub_workspace, buffers.cub_workspace_size, 128);
+            }
             return buffers;
         }
     };

@@ -828,6 +828,7 @@ namespace lfs::training {
             ctx.forward_ctx,
             nullptr,
             n_primitives,
+            ctx.forward_ctx.n_visible,
             ctx.active_sh_bases,
             ctx.forward_ctx.sh_layout_bases,
             ctx.width,

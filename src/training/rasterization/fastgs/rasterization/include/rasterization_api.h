@@ -38,6 +38,7 @@ namespace fast_lfs::rasterization {
         size_t per_instance_sort_scratch_size = 0;
         size_t per_instance_sort_total_size = 0;
         int n_instances = 0;
+        int n_visible = 0;
         int sh_layout_bases = 1;
         uint64_t frame_id = 0;
         // The stream all of this context's kernels/allocations are ordered on;
@@ -50,6 +51,7 @@ namespace fast_lfs::rasterization {
         void* grad_opacity_helper = nullptr;
         void* grad_color_helper = nullptr;
         void* primitive_normals = nullptr;
+        const uint* primitive_work_indices = nullptr;
         // Error handling for OOM / pathological frames
         bool success = false;
         bool resource_exhausted = false;
@@ -118,6 +120,7 @@ namespace fast_lfs::rasterization {
         const ForwardContext& forward_ctx,
         float* grad_w2c_ptr, // Device pointer [4*4] - output or nullptr
         int n_primitives,
+        int n_visible,
         int active_sh_bases,
         int sh_layout_bases,
         int width,

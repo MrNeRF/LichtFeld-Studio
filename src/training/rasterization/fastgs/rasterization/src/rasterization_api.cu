@@ -295,48 +295,19 @@ namespace fast_lfs::rasterization {
             // Get arena allocator for this frame
             auto arena_allocator = arena->get_allocator(frame_id);
 
-            // Allocate buffers through arena
-            const size_t per_primitive_size = required<PerPrimitiveBuffers>(n_primitives);
+            // The tile buffers remain image-sized.  FastGS allocates its
+            // visibility bookkeeping and compact primitive buffers through the
+            // primitive callback after it knows this step's visible count.
             const size_t per_tile_size = required<PerTileBuffers>(n_tiles);
-
-            char* per_primitive_buffers_blob = arena_allocator(per_primitive_size);
             char* per_tile_buffers_blob = arena_allocator(per_tile_size);
 
-            if (!per_primitive_buffers_blob || !per_tile_buffers_blob) {
-                return fail("OUT_OF_MEMORY: Failed to allocate initial buffers from arena", true);
-            }
-
-            // Allocate helper buffers for backward pass upfront to avoid allocation failures later
-            const size_t grad_mean2d_size = static_cast<size_t>(n_primitives) * sizeof(float2);
-            const size_t grad_conic_size = static_cast<size_t>(n_primitives) * sizeof(float3);
-            const size_t grad_depth_size = static_cast<size_t>(n_primitives) * sizeof(float);
-            char* grad_mean2d_helper = arena_allocator(grad_mean2d_size);
-            char* grad_conic_helper = arena_allocator(grad_conic_size);
-            char* grad_depth_helper = arena_allocator(grad_depth_size);
-
-            if (!grad_mean2d_helper || !grad_conic_helper || !grad_depth_helper) {
-                return fail("OUT_OF_MEMORY: Failed to allocate backward helper buffers from arena", true);
-            }
-
-            float3* primitive_normals = nullptr;
-            if (normal_ptr != nullptr) {
-#ifndef NDEBUG
-                checked_device_pointer_on_current_device(normal_ptr, "normal_ptr",
-                                                         checked_current_cuda_device("FastGS forward preflight"));
-#endif
-                primitive_normals = reinterpret_cast<float3*>(
-                    arena_allocator(static_cast<size_t>(n_primitives) * sizeof(float3)));
-                if (!primitive_normals) {
-                    return fail("OUT_OF_MEMORY: Failed to allocate primitive normal buffer from arena", true);
-                }
+            if (!per_tile_buffers_blob) {
+                return fail("OUT_OF_MEMORY: Failed to allocate tile buffers from arena", true);
             }
 
             // Create allocation wrappers
             std::function<char*(size_t)> per_primitive_buffers_func =
-                [&per_primitive_buffers_blob](size_t size) -> char* {
-                // Already allocated, just return the pointer
-                return per_primitive_buffers_blob;
-            };
+                arena_allocator;
 
             std::function<char*(size_t)> per_tile_buffers_func =
                 [&per_tile_buffers_blob](size_t size) -> char* {
@@ -361,7 +332,6 @@ namespace fast_lfs::rasterization {
                                                    alpha_ptr,
                                                    depth_ptr,
                                                    normal_ptr,
-                                                   primitive_normals,
                                                    bg_color_ptr,
                                                    bg_image_ptr,
                                                    n_primitives,
@@ -386,26 +356,53 @@ namespace fast_lfs::rasterization {
                 // this firing means broken bookkeeping — must not classify retryable.
                 return fail("OUT_OF_MEMORY: Sorted primitive indices were not allocated despite n_instances > 0", false);
             }
+
+            // Backward helpers are compact too: blend only ever contributes for
+            // visible primitives, while the full-N backward preprocess uses the
+            // original->workset map to apply Adam/momentum to invisible rows.
+            const size_t n_visible = static_cast<size_t>(forward_result.n_visible);
+            char* grad_mean2d_helper = n_visible > 0
+                                           ? arena_allocator(n_visible * sizeof(float2))
+                                           : nullptr;
+            char* grad_conic_helper = n_visible > 0
+                                          ? arena_allocator(n_visible * sizeof(float3))
+                                          : nullptr;
+            char* grad_depth_helper = n_visible > 0
+                                          ? arena_allocator(n_visible * sizeof(float))
+                                          : nullptr;
+            char* grad_opacity_helper = n_visible > 0
+                                            ? arena_allocator(n_visible * sizeof(float))
+                                            : nullptr;
+            char* grad_color_helper = n_visible > 0
+                                          ? arena_allocator(n_visible * 3 * sizeof(float))
+                                          : nullptr;
+            if (n_visible > 0 && (!grad_mean2d_helper || !grad_conic_helper ||
+                                  !grad_depth_helper || !grad_opacity_helper ||
+                                  !grad_color_helper)) {
+                return fail("OUT_OF_MEMORY: Failed to allocate compact backward helpers from arena", true);
+            }
             // Create and return context
             ForwardContext ctx;
-            ctx.per_primitive_buffers = per_primitive_buffers_blob;
+            ctx.per_primitive_buffers = forward_result.per_primitive_buffers;
             ctx.per_tile_buffers = per_tile_buffers_blob;
             ctx.sorted_primitive_indices = forward_result.sorted_primitive_indices;
-            ctx.per_primitive_buffers_size = per_primitive_size;
+            ctx.per_primitive_buffers_size = forward_result.per_primitive_buffers_size;
             ctx.per_tile_buffers_size = per_tile_size;
             ctx.sorted_primitive_indices_size = forward_result.sorted_primitive_indices_size;
             ctx.per_instance_sort_scratch_size = forward_result.per_instance_sort_scratch_size;
             ctx.per_instance_sort_total_size = forward_result.per_instance_sort_total_size;
             ctx.n_instances = forward_result.n_instances;
+            ctx.n_visible = forward_result.n_visible;
             ctx.sh_layout_bases = sh_layout_bases;
             ctx.frame_id = frame_id;
             ctx.stream = stream;
             ctx.grad_mean2d_helper = grad_mean2d_helper;
             ctx.grad_conic_helper = grad_conic_helper;
             ctx.grad_depth_helper = grad_depth_helper;
-            ctx.grad_opacity_helper = nullptr;
-            ctx.grad_color_helper = nullptr;
-            ctx.primitive_normals = primitive_normals;
+            ctx.grad_opacity_helper = grad_opacity_helper;
+            ctx.grad_color_helper = grad_color_helper;
+            ctx.primitive_normals = forward_result.primitive_normals;
+            ctx.primitive_work_indices = forward_result.primitive_work_indices;
             ctx.success = true;
             ctx.error_message = nullptr;
 
@@ -471,6 +468,7 @@ namespace fast_lfs::rasterization {
         const ForwardContext& forward_ctx,
         float* grad_w2c_ptr,
         int n_primitives,
+        int n_visible,
         int active_sh_bases,
         int sh_layout_bases,
         int width,
@@ -500,7 +498,8 @@ namespace fast_lfs::rasterization {
             outputs.error_message = "FastGS backward requires fused Adam settings";
             return outputs;
         }
-        if (n_primitives <= 0 || width <= 0 || height <= 0 || forward_ctx.n_instances < 0) {
+        if (n_primitives <= 0 || n_visible < 0 || n_visible > n_primitives || width <= 0 ||
+            height <= 0 || forward_ctx.n_instances < 0) {
             release_forward_context(forward_ctx);
             outputs.error_message = "Invalid dimensions in backward_raw";
             return outputs;
@@ -559,8 +558,11 @@ namespace fast_lfs::rasterization {
             return outputs;
         }
 
-        // Use pre-allocated helper buffers from forward context
-        if (!forward_ctx.grad_mean2d_helper || !forward_ctx.grad_conic_helper || !forward_ctx.grad_depth_helper) {
+        // Use compact helper buffers from the forward context.
+        if (forward_ctx.n_visible > 0 &&
+            (!forward_ctx.grad_mean2d_helper || !forward_ctx.grad_conic_helper ||
+             !forward_ctx.grad_depth_helper || !forward_ctx.grad_opacity_helper ||
+             !forward_ctx.grad_color_helper || !forward_ctx.primitive_work_indices)) {
             release_forward_context(forward_ctx);
             outputs.error_message = "Missing pre-allocated helper buffers in forward context";
             return outputs;
@@ -572,50 +574,45 @@ namespace fast_lfs::rasterization {
         float* grad_color_helper = nullptr;
         float3* grad_normal_helper = nullptr;
         const float3* primitive_normals = nullptr;
-
+        const size_t visible_count = static_cast<size_t>(forward_ctx.n_visible);
         try {
             grad_opacity_helper = static_cast<float*>(forward_ctx.grad_opacity_helper);
             grad_color_helper = static_cast<float*>(forward_ctx.grad_color_helper);
-            if (!grad_opacity_helper || !grad_color_helper) {
-                auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
-                auto arena_allocator = arena.get_allocator(forward_ctx.frame_id);
-                grad_opacity_helper = reinterpret_cast<float*>(arena_allocator(static_cast<size_t>(n_primitives) * sizeof(float)));
-                grad_color_helper = reinterpret_cast<float*>(arena_allocator(static_cast<size_t>(n_primitives) * 3 * sizeof(float)));
-                if (!grad_opacity_helper || !grad_color_helper) {
-                    throw std::runtime_error("OUT_OF_MEMORY: Failed to allocate fused Adam helper buffers from arena");
-                }
-            }
             if (grad_normal_ptr != nullptr) {
                 primitive_normals = static_cast<const float3*>(forward_ctx.primitive_normals);
-                if (!primitive_normals) {
+                if (visible_count > 0 && !primitive_normals) {
                     throw std::runtime_error("Missing primitive normal buffer in forward context");
                 }
                 auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
                 auto arena_allocator = arena.get_allocator(forward_ctx.frame_id);
                 grad_normal_helper = reinterpret_cast<float3*>(
-                    arena_allocator(static_cast<size_t>(n_primitives) * sizeof(float3)));
-                if (!grad_normal_helper) {
+                    visible_count > 0 ? arena_allocator(visible_count * sizeof(float3)) : nullptr);
+                if (visible_count > 0 && !grad_normal_helper) {
                     throw std::runtime_error("OUT_OF_MEMORY: Failed to allocate normal gradient helper buffer from arena");
                 }
-                LFS_CUDA_CHECK_MSG(
-                    cudaMemsetAsync(grad_normal_helper, 0, static_cast<size_t>(n_primitives) * sizeof(float3), stream),
-                    "cudaMemsetAsync(grad_normal_helper)");
+                if (visible_count > 0) {
+                    LFS_CUDA_CHECK_MSG(
+                        cudaMemsetAsync(grad_normal_helper, 0, visible_count * sizeof(float3), stream),
+                        "cudaMemsetAsync(grad_normal_helper)");
+                }
             }
 
             // Zero out helper buffers
-            const size_t grad_mean2d_size = static_cast<size_t>(n_primitives) * sizeof(float2);
-            const size_t grad_conic_size = static_cast<size_t>(n_primitives) * sizeof(float3);
-            const size_t grad_depth_size = static_cast<size_t>(n_primitives) * sizeof(float);
-            LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(grad_mean2d_helper, 0, grad_mean2d_size, stream),
-                                 "cudaMemsetAsync(grad_mean2d_helper)");
-            LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(grad_conic_helper, 0, grad_conic_size, stream),
-                                 "cudaMemsetAsync(grad_conic_helper)");
-            LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(grad_depth_helper, 0, grad_depth_size, stream),
-                                 "cudaMemsetAsync(grad_depth_helper)");
-            LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(grad_opacity_helper, 0, static_cast<size_t>(n_primitives) * sizeof(float), stream),
-                                 "cudaMemsetAsync(grad_opacity_helper)");
-            LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(grad_color_helper, 0, static_cast<size_t>(n_primitives) * 3 * sizeof(float), stream),
-                                 "cudaMemsetAsync(grad_color_helper)");
+            if (visible_count > 0) {
+                const size_t grad_mean2d_size = visible_count * sizeof(float2);
+                const size_t grad_conic_size = visible_count * sizeof(float3);
+                const size_t grad_depth_size = visible_count * sizeof(float);
+                LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(grad_mean2d_helper, 0, grad_mean2d_size, stream),
+                                     "cudaMemsetAsync(grad_mean2d_helper)");
+                LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(grad_conic_helper, 0, grad_conic_size, stream),
+                                     "cudaMemsetAsync(grad_conic_helper)");
+                LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(grad_depth_helper, 0, grad_depth_size, stream),
+                                     "cudaMemsetAsync(grad_depth_helper)");
+                LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(grad_opacity_helper, 0, visible_count * sizeof(float), stream),
+                                     "cudaMemsetAsync(grad_opacity_helper)");
+                LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(grad_color_helper, 0, visible_count * 3 * sizeof(float), stream),
+                                     "cudaMemsetAsync(grad_color_helper)");
+            }
 
             if (grad_w2c_ptr) {
                 LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(grad_w2c_ptr, 0, 4 * 4 * sizeof(float), stream),
@@ -642,6 +639,7 @@ namespace fast_lfs::rasterization {
                 static_cast<char*>(forward_ctx.per_primitive_buffers),
                 static_cast<char*>(forward_ctx.per_tile_buffers),
                 static_cast<const uint*>(forward_ctx.sorted_primitive_indices),
+                forward_ctx.primitive_work_indices,
                 grad_opacity_helper,
                 reinterpret_cast<float3*>(grad_color_helper),
                 reinterpret_cast<float2*>(grad_mean2d_helper),
@@ -652,6 +650,7 @@ namespace fast_lfs::rasterization {
                 densification_info_ptr,
                 n_primitives,
                 forward_ctx.n_instances,
+                forward_ctx.n_visible,
                 active_sh_bases,
                 sh_layout_bases,
                 width,
@@ -792,7 +791,7 @@ namespace fast_lfs::rasterization {
                 nullptr, nullptr, grad_image, grad_alpha, nullptr, nullptr, image, alpha,
                 means, scales, rotations, opacities, nullptr, w2c, cam_pos, ctx,
                 nullptr,
-                NUM_GAUSSIANS, 1, 1,
+                NUM_GAUSSIANS, NUM_GAUSSIANS, 1, 1,
                 IMG_WIDTH, IMG_HEIGHT, FOCAL, FOCAL, CENTER_X, CENTER_Y, true,
                 DensificationType::None, &warmup_adam);
 
