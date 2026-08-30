@@ -840,7 +840,7 @@ body {
 #film-strip-panel {
     display: block;
     width: auto;
-    height: 56px;
+    height: 56dp;
     position: relative;
     margin-top: -1px;
     margin-left: -16dp;

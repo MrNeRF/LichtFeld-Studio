@@ -4077,7 +4077,8 @@ namespace lfs::vis::gui {
         reg_panel("native.sequencer", "Sequencer",
                   make_panel(SequencerPanel(&sequencer_ui_, &panel_layout_)),
                   PanelSpace::BottomDock, 500,
-                  0, 8192.0f);
+                  static_cast<uint32_t>(PanelOption::FLOAT_IN_VIEWPORT),
+                  8192.0f);
 
         reg_panel("native.python_overlay", "Python Overlay",
                   make_panel(PythonOverlayPanel(this)),

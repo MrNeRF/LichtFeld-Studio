@@ -591,8 +591,11 @@ namespace lfs::vis::gui {
         rml_context_->ProcessMouseMove(static_cast<int>(mx), static_cast<int>(my), mods);
 
         auto* hover = rml_context_->GetHoverElement();
+        const auto hover_id = hover ? hover->GetId() : Rml::String{};
+        const bool over_backdrop =
+            hover_id == "menu-backdrop" || hover_id == "popup-backdrop";
         const bool over_interactive = hover && hover->GetTagName() != "body" &&
-                                      hover->GetId() != "body";
+                                      hover_id != "body" && !over_backdrop;
 
         if (edit_overlay_visible_ && el_edit_overlay_) {
             const float h = el_edit_overlay_->GetOffsetHeight();
@@ -601,11 +604,18 @@ namespace lfs::vis::gui {
         }
 
         const bool over_edit_overlay = isMouseOverEditOverlay(mx, my);
+        wants_input_ = over_interactive || over_edit_overlay;
 
-        if (over_interactive || over_edit_overlay ||
-            context_menu_open_ || time_edit_active_ || focal_edit_active_) {
+        const bool menu_or_popup_open =
+            context_menu_open_ || time_edit_active_ || focal_edit_active_;
+        const bool consume_outside_click =
+            menu_or_popup_open && !wants_input_ &&
+            (input.mouse_clicked[0] || input.mouse_clicked[1] ||
+             input.mouse_released[0] || input.mouse_released[1]);
+        if (consume_outside_click)
             wants_input_ = true;
 
+        if (wants_input_) {
             if (skip_next_click_) {
                 skip_next_click_ = false;
             } else {
