@@ -570,11 +570,23 @@ namespace lfs::core::sh_value_quant {
             const int* in,
             int* out,
             int n,
-            cudaStream_t stream) {
+            cudaStream_t stream,
+            const SortedBlockRunScratch* scratch) {
             std::size_t bytes = 0;
             LFS_CUDA_CHECK_MSG(
                 cub::DeviceScan::ExclusiveSum(nullptr, bytes, in, out, n, stream),
                 "q16 block-run exclusive-sum workspace query");
+            if (scratch) {
+                if (bytes > scratch->scan_bytes || (bytes > 0 && !scratch->scan)) {
+                    throw std::invalid_argument(
+                        "q16 block-run scratch scan buffer is undersized");
+                }
+                LFS_CUDA_CHECK_MSG(
+                    cub::DeviceScan::ExclusiveSum(
+                        scratch->scan, bytes, in, out, n, stream),
+                    "q16 block-run exclusive-sum");
+                return;
+            }
             lfs::core::UniqueCudaAllocation<lfs::core::StreamOrderedCudaAllocator> workspace;
             void* ws = nullptr;
             if (bytes > 0) {
@@ -785,7 +797,8 @@ namespace lfs::core::sh_value_quant {
         std::int32_t* run_offsets,
         std::int32_t* n_runs_device,
         std::size_t n,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        const SortedBlockRunScratch* scratch) {
         if (n == 0)
             return;
         if (!sorted_block_ids || !unique_block_ids || !run_offsets || !n_runs_device) {
@@ -796,19 +809,28 @@ namespace lfs::core::sh_value_quant {
         }
         const int n_i = static_cast<int>(n);
         const std::size_t bytes = static_cast<std::size_t>(n_i) * sizeof(int);
-        lfs::core::UniqueCudaAllocation<lfs::core::StreamOrderedCudaAllocator> flags_alloc(
-            bytes, stream, "q16.block_runs.flags");
-        lfs::core::UniqueCudaAllocation<lfs::core::StreamOrderedCudaAllocator> compact_alloc(
-            bytes, stream, "q16.block_runs.compact");
-        auto* flags = flags_alloc.as<int>();
-        auto* compact_idx = compact_alloc.as<int>();
+        lfs::core::UniqueCudaAllocation<lfs::core::StreamOrderedCudaAllocator> flags_alloc;
+        lfs::core::UniqueCudaAllocation<lfs::core::StreamOrderedCudaAllocator> compact_alloc;
+        auto* flags = scratch ? scratch->flags : nullptr;
+        auto* compact_idx = scratch ? scratch->compact : nullptr;
+        if (scratch) {
+            if (!flags || !compact_idx) {
+                throw std::invalid_argument(
+                    "q16 block-run scratch buffers are missing");
+            }
+        } else {
+            flags_alloc.allocate(bytes, stream, "q16.block_runs.flags");
+            compact_alloc.allocate(bytes, stream, "q16.block_runs.compact");
+            flags = flags_alloc.as<int>();
+            compact_idx = compact_alloc.as<int>();
+        }
 
         const unsigned blocks =
             static_cast<unsigned>((n + kThreads - 1) / kThreads);
         mark_sorted_block_run_starts_kernel<<<blocks, kThreads, 0, stream>>>(
             sorted_block_ids, flags, n_i);
         LFS_CUDA_CHECK_MSG(cudaGetLastError(), "mark_sorted_block_run_starts");
-        exclusive_sum_i32(flags, compact_idx, n_i, stream);
+        exclusive_sum_i32(flags, compact_idx, n_i, stream, scratch);
         compact_sorted_block_runs_kernel<<<blocks, kThreads, 0, stream>>>(
             sorted_block_ids,
             flags,
@@ -818,6 +840,24 @@ namespace lfs::core::sh_value_quant {
             n_runs_device,
             n_i);
         LFS_CUDA_CHECK_MSG(cudaGetLastError(), "compact_sorted_block_runs");
+    }
+
+    std::size_t sorted_block_runs_scan_workspace_bytes(
+        const std::size_t n,
+        cudaStream_t stream) {
+        if (n == 0)
+            return 0;
+        if (n > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+            throw std::out_of_range("q16 block-run item count exceeds int range");
+        }
+        std::size_t bytes = 0;
+        int input = 0;
+        int output = 0;
+        LFS_CUDA_CHECK_MSG(
+            cub::DeviceScan::ExclusiveSum(
+                nullptr, bytes, &input, &output, static_cast<int>(n), stream),
+            "q16 block-run exclusive-sum workspace query");
+        return bytes;
     }
 
     void reencode_touched_q16_blocks(

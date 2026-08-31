@@ -9,6 +9,13 @@
 
 namespace lfs::core::sh_value_quant {
 
+    struct SortedBlockRunScratch {
+        std::int32_t* flags = nullptr;
+        std::int32_t* compact = nullptr;
+        void* scan = nullptr;
+        std::size_t scan_bytes = 0;
+    };
+
     /// Encode float4-swizzled SH-rest into pad-dropped u16 + float2 bounds / 256.
     void encode_shN_float4_to_u16(
         const float* src_float4_swizzled,
@@ -96,6 +103,12 @@ namespace lfs::core::sh_value_quant {
         std::int32_t* unique_block_ids,
         std::int32_t* run_offsets,
         std::int32_t* n_runs_device,
+        std::size_t n,
+        cudaStream_t stream = nullptr,
+        const SortedBlockRunScratch* scratch = nullptr);
+
+    /// Query the CUB scan storage needed by build_sorted_block_runs.
+    std::size_t sorted_block_runs_scan_workspace_bytes(
         std::size_t n,
         cudaStream_t stream = nullptr);
 

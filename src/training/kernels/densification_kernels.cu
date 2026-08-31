@@ -5,6 +5,7 @@
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
 #include "densification_kernels.hpp"
+#include "lfs/cuda_scratch.hpp"
 #include "lfs/training/refine_scratch.hpp"
 #include "lfs/training/screen_share.cuh"
 #include <cub/cub.cuh>
@@ -592,14 +593,13 @@ namespace lfs::training::kernels {
 
         // Compact positives into a scratch buffer, radix-sort that only, pick mid.
         // Falls back to no-op (leave data) when zero positives.
-        float* d_selected = nullptr;
-        int* d_count = nullptr;
-        LFS_CUDA_CHECK_MSG(
-            cudaMallocAsync(reinterpret_cast<void**>(&d_selected), n * sizeof(float), stream),
-            "positive_median selected");
-        LFS_CUDA_CHECK_MSG(
-            cudaMallocAsync(reinterpret_cast<void**>(&d_count), sizeof(int), stream),
-            "positive_median count");
+        cuda_scratch::DeviceBuffer selected_buffer(
+            cuda_scratch::checked_bytes(n, sizeof(float), "positive-median selected"),
+            stream, "training.densify.positive_median.selected");
+        cuda_scratch::DeviceBuffer count_buffer(
+            sizeof(int), stream, "training.densify.positive_median.count");
+        float* d_selected = selected_buffer.as<float>();
+        int* d_count = count_buffer.as<int>();
         LFS_CUDA_CHECK_MSG(cudaMemsetAsync(d_count, 0, sizeof(int), stream), "positive_median count z");
 
         // CUB DeviceSelect::If
@@ -608,10 +608,12 @@ namespace lfs::training::kernels {
             cub::DeviceSelect::If(nullptr, temp_bytes, data, d_selected, d_count,
                                   static_cast<int>(n), PositivePred{}, stream),
             "positive_median select size");
+        cuda_scratch::DeviceBuffer select_temp_buffer;
         void* d_temp = nullptr;
         if (temp_bytes > 0) {
-            LFS_CUDA_CHECK_MSG(
-                cudaMallocAsync(&d_temp, temp_bytes, stream), "positive_median select temp");
+            select_temp_buffer = cuda_scratch::DeviceBuffer(
+                temp_bytes, stream, "training.densify.positive_median.select_temp");
+            d_temp = select_temp_buffer.get();
         }
         LFS_CUDA_CHECK_MSG(
             cub::DeviceSelect::If(d_temp, temp_bytes, data, d_selected, d_count,
@@ -628,28 +630,26 @@ namespace lfs::training::kernels {
             // No positives → zero the tensor (match prior masked_select empty path).
             LFS_CUDA_CHECK_MSG(cudaMemsetAsync(data, 0, n * sizeof(float), stream),
                                "positive_median zero empty");
-            if (d_temp)
-                cudaFreeAsync(d_temp, stream);
-            cudaFreeAsync(d_selected, stream);
-            cudaFreeAsync(d_count, stream);
             return;
         }
 
         // Radix sort the compacted positives only (O(P log P), P << n for sparse edges).
-        float* d_sorted = nullptr;
-        LFS_CUDA_CHECK_MSG(
-            cudaMallocAsync(reinterpret_cast<void**>(&d_sorted),
-                            static_cast<size_t>(h_count) * sizeof(float), stream),
-            "positive_median sorted");
+        cuda_scratch::DeviceBuffer sorted_buffer(
+            cuda_scratch::checked_bytes(
+                static_cast<size_t>(h_count), sizeof(float), "positive-median sorted"),
+            stream, "training.densify.positive_median.sorted");
+        float* d_sorted = sorted_buffer.as<float>();
         size_t sort_bytes = 0;
         LFS_CUDA_CHECK_MSG(
             cub::DeviceRadixSort::SortKeys(nullptr, sort_bytes, d_selected, d_sorted,
                                            h_count, 0, sizeof(float) * 8, stream),
             "positive_median sort size");
+        cuda_scratch::DeviceBuffer sort_temp_buffer;
         void* d_sort_temp = nullptr;
         if (sort_bytes > 0) {
-            LFS_CUDA_CHECK_MSG(
-                cudaMallocAsync(&d_sort_temp, sort_bytes, stream), "positive_median sort temp");
+            sort_temp_buffer = cuda_scratch::DeviceBuffer(
+                sort_bytes, stream, "training.densify.positive_median.sort_temp");
+            d_sort_temp = sort_temp_buffer.get();
         }
         LFS_CUDA_CHECK_MSG(
             cub::DeviceRadixSort::SortKeys(d_sort_temp, sort_bytes, d_selected, d_sorted,
@@ -661,13 +661,6 @@ namespace lfs::training::kernels {
         div_by_device_scalar_kernel<<<grid, block, 0, stream>>>(data, n, d_median, 0.0f);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.div_by_median");
 
-        if (d_sort_temp)
-            cudaFreeAsync(d_sort_temp, stream);
-        if (d_temp)
-            cudaFreeAsync(d_temp, stream);
-        cudaFreeAsync(d_sorted, stream);
-        cudaFreeAsync(d_selected, stream);
-        cudaFreeAsync(d_count, stream);
     }
 
     namespace {

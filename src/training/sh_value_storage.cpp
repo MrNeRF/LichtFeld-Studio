@@ -11,6 +11,7 @@
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
+#include "lfs/cuda_scratch.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 
@@ -32,6 +33,11 @@ namespace lfs::training::sh_value {
         using core::Device;
         using core::Tensor;
         using core::TensorShape;
+
+        [[nodiscard]] cuda_scratch::Q16BlockRunWorkspace& q16_block_run_workspace() {
+            static cuda_scratch::Q16BlockRunWorkspace workspace;
+            return workspace;
+        }
 
         [[nodiscard]] std::uint32_t layout_rest(const core::SplatData& splat) {
             return static_cast<std::uint32_t>(splat.max_sh_coeffs_rest());
@@ -348,13 +354,26 @@ namespace lfs::training::sh_value {
             run_offsets.set_stream(stream);
             n_runs.set_stream(stream);
 
+            auto& run_workspace = q16_block_run_workspace();
+            run_workspace.ensure(
+                K,
+                core::sh_value_quant::sorted_block_runs_scan_workspace_bytes(K, stream),
+                stream);
+            const core::sh_value_quant::SortedBlockRunScratch run_scratch{
+                .flags = run_workspace.flags.as<std::int32_t>(),
+                .compact = run_workspace.compact.as<std::int32_t>(),
+                .scan = run_workspace.scan.get(),
+                .scan_bytes = run_workspace.scan_bytes,
+            };
+
             core::sh_value_quant::build_sorted_block_runs(
                 sorted.first.ptr<float>(),
                 unique_blocks.ptr<int>(),
                 run_offsets.ptr<int>(),
                 n_runs.ptr<int>(),
                 K,
-                stream);
+                stream,
+                &run_scratch);
 
             auto* codes = reinterpret_cast<std::uint16_t*>(
                 lfs::core::resolve_exportable_device_ptr(live));

@@ -31,7 +31,7 @@ namespace lfs::training {
 
     struct TrainingSnapshotServiceConfig {
         std::size_t ring_slots = 4;
-        std::size_t band_bytes = 128ull * 1024 * 1024;
+        std::size_t band_bytes = 64ull * 1024 * 1024;
         std::size_t calibration_bytes = 32ull * 1024 * 1024;
         int calibration_iterations = 4;
     };
