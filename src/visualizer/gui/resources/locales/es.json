@@ -8,6 +8,7 @@
     "file.save_project": "Guardar proyecto",
     "file.save_project_as": "Guardar proyecto como...",
     "file.compact_project": "Compactar proyecto",
+    "file.embed_dataset": "Incrustar dataset en el proyecto",
     "file.auto_save_on_close": "Guardar al cerrar sin preguntar",
     "file.no_recent_projects": "No hay proyectos recientes",
     "file.clear_recent_projects": "Borrar proyectos recientes",
@@ -733,7 +734,12 @@
     "dataset_ready": "Dataset (Listo)",
     "training_paused": "Entrenamiento (En Pausa)",
     "training_finished": "Entrenamiento Finalizado",
-    "ply_models_count": "Modelos PLY: {}"
+    "ply_models_count": "Modelos PLY: {}",
+    "dataset_embed_prepare": "Preparar el dataset incrustado",
+    "dataset_embed_extracting": "Extraer el dataset incrustado",
+    "dataset_embed_scanning": "Analizar archivos del dataset",
+    "dataset_embed_batch": "Incrustar un lote del dataset",
+    "dataset_embed_complete": "Dataset incrustado"
   },
   "mode": {
     "empty": "Vacío",
@@ -751,6 +757,8 @@
     "project_location": "Ubicación de proyectos",
     "project_location_hint": "Proyectos nuevos y carpeta predeterminada del Gestor de Activos: {path}",
     "project_location_description": "Los proyectos nuevos se crean aquí y esta carpeta se usa como carpeta predeterminada del Gestor de Activos.",
+    "embed_dataset_by_default": "Copiar datasets en proyectos nuevos",
+    "embed_dataset_by_default_description": "Los proyectos nuevos pueden copiar los archivos originales sin cambios para compartirlos.",
     "project_location_invalid": "Esta carpeta no se puede usar como ubicación de proyectos.",
     "use_default": "Usar predeterminado",
     "title": "Preferencias",
@@ -1273,6 +1281,8 @@
     "invalid_name": "Introduce un nombre de proyecto válido.",
     "source_invalid": "El origen no es un dataset ni un archivo splat compatible.",
     "advanced": "Avanzado",
+    "embed_dataset": "Copiar dataset en el proyecto",
+    "embed_dataset_description": "Conservar archivos del dataset idénticos a los originales.",
     "create": "Crear"
   },
   "notification": {

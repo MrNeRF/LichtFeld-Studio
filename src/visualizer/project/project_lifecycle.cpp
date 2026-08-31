@@ -80,6 +80,9 @@ namespace lfs::vis::project {
 
         using Json = nlohmann::json;
         using lfs::io::project::ChunkKey;
+        using lfs::io::project::DatasetEmbedSource;
+        using lfs::io::project::EmbeddedDatasetEntry;
+        using lfs::io::project::EmbeddedDatasetManifest;
         using lfs::io::project::Fourcc;
         using lfs::io::project::PayloadBinding;
         using lfs::io::project::ProjectDocument;
@@ -228,6 +231,17 @@ namespace lfs::vis::project {
             return lfs::format_for_developer(error);
         }
 
+        [[nodiscard]] lfs::Result<void>
+        reportDatasetEmbedStartFailure(
+            lfs::Result<void> result) {
+            if (!result) {
+                LOG_ERROR(
+                    "Dataset embed could not start: {}",
+                    developerError(result.error()));
+            }
+            return result;
+        }
+
         [[nodiscard]] std::filesystem::path
         projectRootFor(
             const ProjectDocument& document) {
@@ -315,6 +329,7 @@ namespace lfs::vis::project {
             const std::filesystem::path& dataset_hint) {
             const auto project_root =
                 projectRootFor(document);
+            std::optional<std::filesystem::path> missing_external;
             if (const auto dataset_ref =
                     document.project()
                         .dataset_reference();
@@ -327,13 +342,330 @@ namespace lfs::vis::project {
                                 project_root,
                                 **dataset_ref,
                                 dataset_hint)) {
-                    return *resolved;
+                    if (std::filesystem::exists(*resolved)) {
+                        return *resolved;
+                    }
+                    missing_external = *resolved;
                 }
+            }
+            if (auto embedded = document.parameters().embedded_dataset();
+                embedded && *embedded && (*embedded)->complete) {
+                if (const auto paths = lfs::core::UserPaths::resolve(); paths) {
+                    const auto cache = paths->rootDir() / "cache" /
+                                       "embedded_datasets" /
+                                       document.project_uuid().to_string();
+                    const auto marker = cache / ".complete";
+                    std::error_code marker_error;
+                    if (std::filesystem::is_regular_file(marker, marker_error) &&
+                        !marker_error) {
+                        return cache;
+                    }
+                }
+            }
+            if (missing_external) {
+                return missing_external;
             }
             if (!dataset_hint.empty()) {
                 return dataset_hint;
             }
             return std::nullopt;
+        }
+
+        [[nodiscard]] std::optional<std::filesystem::path>
+        resolveExternalDatasetRoot(const ProjectDocument& document) {
+            const auto dataset_ref = document.project().dataset_reference();
+            if (!dataset_ref || !*dataset_ref) {
+                return std::nullopt;
+            }
+            const auto resolved = lfs::io::project::resolve_path_reference(
+                document.references(), projectRootFor(document), **dataset_ref, {});
+            if (!resolved || !std::filesystem::is_directory(*resolved)) {
+                return std::nullopt;
+            }
+            return *resolved;
+        }
+
+        lfs::Result<lfs::io::project::Hash128>
+        hashDatasetFile(const std::filesystem::path& path) {
+            std::ifstream input(path, std::ios::binary);
+            if (!input) {
+                return lifecycleError(
+                    lfs::ErrorCode::PermissionDenied,
+                    "A dataset file could not be opened.", path.string(),
+                    "project.dataset_embed");
+            }
+            lfs::io::project::Hash128Stream hasher;
+            std::array<char, 1024 * 1024> buffer{};
+            while (input) {
+                input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+                const auto count = input.gcount();
+                if (count <= 0) {
+                    break;
+                }
+                if (!hasher.update(std::span<const std::byte>(
+                        reinterpret_cast<const std::byte*>(buffer.data()),
+                        static_cast<std::size_t>(count)))) {
+                    return lifecycleError(
+                        lfs::ErrorCode::DataLoss,
+                        "A dataset file could not be hashed.", path.string(),
+                        "project.dataset_embed");
+                }
+            }
+            if (!input.eof() || !hasher.valid()) {
+                return lifecycleError(
+                    lfs::ErrorCode::DataLoss,
+                    "A dataset file could not be hashed.", path.string(),
+                    "project.dataset_embed");
+            }
+            return hasher.digest();
+        }
+
+        std::vector<std::pair<std::filesystem::path, std::string>>
+        datasetFiles(const std::filesystem::path& directory,
+                     const std::string_view kind) {
+            std::vector<std::pair<std::filesystem::path, std::string>> result;
+            if (!std::filesystem::is_directory(directory)) {
+                return result;
+            }
+            std::error_code error;
+            for (std::filesystem::recursive_directory_iterator it(directory, error), end;
+                 !error && it != end; it.increment(error)) {
+                if (it->is_regular_file(error) && !error) {
+                    result.emplace_back(it->path(), std::string(kind));
+                }
+            }
+            return result;
+        }
+
+        std::vector<std::pair<std::filesystem::path, std::string>>
+        discoverDatasetFiles(const std::filesystem::path& root,
+                             std::string& images_folder) {
+            const auto info = lfs::io::detect_dataset_info(root);
+            images_folder = info.images_path.lexically_relative(root).generic_string();
+            std::vector<std::pair<std::filesystem::path, std::string>> result;
+            const auto append = [&](const auto& directory, const std::string_view kind) {
+                auto files = datasetFiles(directory, kind);
+                result.insert(result.end(), files.begin(), files.end());
+            };
+            append(info.images_path, "image");
+            if (info.has_masks)
+                append(info.masks_path, "mask");
+            if (info.has_depths)
+                append(info.depths_path, "depth");
+            if (info.has_normals)
+                append(info.normals_path, "normal");
+            append(info.sparse_path, "sparse");
+            for (const auto name : {"project.ini", "transforms.json",
+                                    "transforms_train.json", "transforms_test.json",
+                                    "transforms_val.json"}) {
+                const auto path = root / name;
+                if (std::filesystem::is_regular_file(path)) {
+                    result.emplace_back(path, "meta");
+                }
+            }
+            std::set<std::string> seen_paths;
+            std::erase_if(result, [&](const auto& item) {
+                return !seen_paths.insert(
+                                      item.first.lexically_relative(root).generic_string())
+                            .second;
+            });
+            std::ranges::sort(result, {}, [&](const auto& item) {
+                return item.first.lexically_relative(root).generic_string();
+            });
+            return result;
+        }
+
+        lfs::Result<std::optional<std::filesystem::path>>
+        extractEmbeddedDatasetIfNeeded(
+            const ProjectDocument& document,
+            const std::function<bool(float)>& progress = {}) {
+            auto manifest = document.parameters().embedded_dataset();
+            if (!manifest) {
+                return std::move(manifest).error();
+            }
+            if (!*manifest || !(*manifest)->complete || (*manifest)->entries.empty()) {
+                return std::optional<std::filesystem::path>{};
+            }
+            const auto dataset_ref = document.project().dataset_reference();
+            if (!dataset_ref) {
+                return std::move(dataset_ref).error();
+            }
+            if (!*dataset_ref) {
+                return std::optional<std::filesystem::path>{};
+            }
+            const auto external = lfs::io::project::resolve_path_reference(
+                document.references(), projectRootFor(document), **dataset_ref, {});
+            if (external && std::filesystem::exists(*external)) {
+                return std::optional<std::filesystem::path>{};
+            }
+            const auto paths = lfs::core::UserPaths::resolve();
+            if (!paths) {
+                return std::move(paths).error();
+            }
+            const auto cache = paths->rootDir() / "cache" / "embedded_datasets" /
+                               document.project_uuid().to_string();
+            std::error_code error;
+            std::filesystem::create_directories(cache, error);
+            if (error) {
+                return lifecycleError(lfs::ErrorCode::PermissionDenied,
+                                      "The embedded dataset cache could not be created.",
+                                      error.message(), "project.dataset_embed");
+            }
+            const auto marker = cache / ".complete";
+            std::filesystem::remove(marker, error);
+            const auto total_bytes = std::ranges::fold_left(
+                (*manifest)->entries, std::uint64_t{0},
+                [](const std::uint64_t total, const auto& entry) {
+                    return total + entry.bytes;
+                });
+            LOG_INFO(
+                "Embedded dataset extraction started: {} files, {} bytes, cache {}",
+                (*manifest)->entries.size(), total_bytes,
+                lfs::core::path_to_utf8(cache));
+            std::uint64_t completed_bytes = 0;
+            std::size_t reused_files = 0;
+            std::size_t extracted_files = 0;
+            for (const auto& entry : (*manifest)->entries) {
+                if (progress && !progress(
+                                    total_bytes == 0
+                                        ? 0.0F
+                                        : static_cast<float>(completed_bytes) /
+                                              static_cast<float>(total_bytes))) {
+                    return lifecycleError(
+                        lfs::ErrorCode::Cancelled,
+                        "Embedded dataset extraction was canceled.",
+                        "The project-open job requested cancellation",
+                        "project.dataset_embed");
+                }
+                const auto relative = std::filesystem::path(entry.rel_path);
+                if (relative.empty() || relative.is_absolute() ||
+                    relative.lexically_normal() != relative) {
+                    return lifecycleError(
+                        lfs::ErrorCode::DataLoss,
+                        "The embedded dataset manifest contains an unsafe path.",
+                        entry.rel_path, "project.dataset_embed");
+                }
+                const auto destination = (cache / relative).lexically_normal();
+                const auto source = document.find_dataset_source(entry.chunk_uuid);
+                if (!source) {
+                    return lifecycleError(
+                        lfs::ErrorCode::DataLoss,
+                        "The embedded dataset chunk is missing.",
+                        entry.chunk_uuid.to_string(), "project.dataset_embed");
+                }
+                if (source->size() != entry.bytes) {
+                    return lifecycleError(
+                        lfs::ErrorCode::DataLoss,
+                        "The embedded dataset chunk size does not match its manifest.",
+                        std::format("{} has {} bytes, manifest expected {}",
+                                    entry.chunk_uuid.to_string(), source->size(),
+                                    entry.bytes),
+                        "project.dataset_embed");
+                }
+                bool valid_existing = false;
+                if (std::filesystem::is_regular_file(destination)) {
+                    std::error_code size_error;
+                    valid_existing = std::filesystem::file_size(destination, size_error) ==
+                                         entry.bytes &&
+                                     !size_error;
+                    if (valid_existing) {
+                        auto hash = hashDatasetFile(destination);
+                        valid_existing = hash && *hash == entry.xxh3_128;
+                    }
+                }
+                if (valid_existing) {
+                    completed_bytes += entry.bytes;
+                    ++reused_files;
+                    continue;
+                }
+                std::filesystem::create_directories(destination.parent_path(), error);
+                if (error) {
+                    return lifecycleError(
+                        lfs::ErrorCode::PermissionDenied,
+                        "The embedded dataset cache could not be created.",
+                        error.message(), "project.dataset_embed");
+                }
+                const auto temporary = destination.string() + ".part";
+                std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+                if (!output) {
+                    return lifecycleError(
+                        lfs::ErrorCode::PermissionDenied,
+                        "An embedded dataset file could not be extracted.",
+                        destination.string(), "project.dataset_embed");
+                }
+                lfs::io::project::Hash128Stream hasher;
+                auto copied = source->visit_stream(
+                    [&](std::istream& input, const std::uint64_t size) -> lfs::Result<void> {
+                        std::array<char, 1024 * 1024> buffer{};
+                        std::uint64_t copied_bytes = 0;
+                        while (input && copied_bytes < size) {
+                            const auto remaining = size - copied_bytes;
+                            const auto request = static_cast<std::streamsize>(
+                                std::min<std::uint64_t>(remaining, buffer.size()));
+                            input.read(buffer.data(), request);
+                            const auto count = input.gcount();
+                            if (count <= 0)
+                                break;
+                            const auto bytes = std::span<const std::byte>(
+                                reinterpret_cast<const std::byte*>(buffer.data()),
+                                static_cast<std::size_t>(count));
+                            if (!hasher.update(bytes)) {
+                                return lfs::Result<void>::failure(lifecycleError(
+                                    lfs::ErrorCode::DataLoss,
+                                    "An embedded dataset file could not be extracted.",
+                                    destination.string(), "project.dataset_embed"));
+                            }
+                            output.write(buffer.data(), count);
+                            copied_bytes += static_cast<std::uint64_t>(count);
+                        }
+                        if (!output || copied_bytes != size) {
+                            return lfs::Result<void>::failure(lifecycleError(
+                                lfs::ErrorCode::DataLoss,
+                                "An embedded dataset file could not be extracted.",
+                                destination.string(), "project.dataset_embed"));
+                        }
+                        return {};
+                    });
+                output.close();
+                if (!copied || !hasher.valid() || hasher.digest() != entry.xxh3_128) {
+                    std::filesystem::remove(temporary, error);
+                    return copied ? lifecycleError(
+                                        lfs::ErrorCode::DataLoss,
+                                        "The embedded dataset file failed hash verification.",
+                                        destination.string(), "project.dataset_embed")
+                                  : std::move(copied).error();
+                }
+                std::filesystem::rename(temporary, destination, error);
+                if (error) {
+                    std::filesystem::remove(temporary);
+                    return lifecycleError(
+                        lfs::ErrorCode::PermissionDenied,
+                        "The embedded dataset file could not be published.",
+                        error.message(), "project.dataset_embed");
+                }
+                completed_bytes += entry.bytes;
+                ++extracted_files;
+            }
+            if (progress && !progress(1.0F)) {
+                return lifecycleError(
+                    lfs::ErrorCode::Cancelled,
+                    "Embedded dataset extraction was canceled.",
+                    "The project-open job requested cancellation",
+                    "project.dataset_embed");
+            }
+            std::ofstream complete_marker(marker,
+                                          std::ios::binary | std::ios::trunc);
+            if (!complete_marker) {
+                return lifecycleError(
+                    lfs::ErrorCode::PermissionDenied,
+                    "The embedded dataset cache could not be finalized.",
+                    marker.string(), "project.dataset_embed");
+            }
+            LOG_INFO(
+                "Embedded dataset extraction completed: {} files extracted, {} files reused, cache {}",
+                extracted_files, reused_files,
+                lfs::core::path_to_utf8(cache));
+            return std::optional<std::filesystem::path>{cache};
         }
 
         struct PersistedDatasetScene {
@@ -1891,6 +2223,8 @@ namespace lfs::vis::project {
                     json.value(
                         "auto_save_on_close", false);
             }
+            settings.embed_dataset_by_default =
+                json.value("embed_dataset_by_default", false);
             settings.autosave_interval_seconds =
                 json.value(
                     "autosave_interval_seconds",
@@ -2029,6 +2363,8 @@ namespace lfs::vis::project {
                  settings.reopen_last_project},
                 {"auto_save_on_close",
                  settings.auto_save_on_close},
+                {"embed_dataset_by_default",
+                 settings.embed_dataset_by_default},
                 {"autosave_interval_seconds",
                  settings
                      .autosave_interval_seconds},
@@ -2355,7 +2691,8 @@ namespace lfs::vis::project {
                 "project.save");
         }
         if (viewer_.jobs().anyRunning(
-                JobType::ProjectWrite)) {
+                JobType::ProjectWrite) ||
+            viewer_.jobs().anyRunning(JobType::DatasetEmbed)) {
             return fail<void>(
                 lfs::ErrorCode::FailedPrecondition,
                 "A project write is still running.",
@@ -2782,6 +3119,25 @@ namespace lfs::vis::project {
     }
 
     lfs::Result<void>
+    ProjectLifecycle::setEmbedDatasetByDefault(const bool enabled) {
+        bool previous = false;
+        {
+            const std::lock_guard lock(settings_mutex_);
+            if (settings_.embed_dataset_by_default == enabled) {
+                return {};
+            }
+            previous = settings_.embed_dataset_by_default;
+            settings_.embed_dataset_by_default = enabled;
+        }
+        if (auto saved = persistSettings(); !saved) {
+            const std::lock_guard lock(settings_mutex_);
+            settings_.embed_dataset_by_default = previous;
+            return saved;
+        }
+        return {};
+    }
+
+    lfs::Result<void>
     ProjectLifecycle::clearRecentProjects() {
         std::vector<ProjectMruEntry> previous;
         {
@@ -3150,6 +3506,13 @@ namespace lfs::vis::project {
                         const std::lock_guard lock(
                             settings_mutex_);
                         return settings_.auto_save_on_close; }(),
+                    .embed_dataset_by_default = [&] {
+                        const std::lock_guard lock(
+                            settings_mutex_);
+                        return settings_.embed_dataset_by_default; }(),
+                    .dataset_external_available = false,
+                    .embedded_dataset_complete = false,
+                    .embedded_dataset_entries = 0,
                     .autosave_interval_seconds =
                         settings_
                             .autosave_interval_seconds,
@@ -3192,6 +3555,13 @@ namespace lfs::vis::project {
                 };
         }
         auto& jobs = viewer_.jobs();
+        if (jobs.anyRunning(JobType::DatasetEmbed)) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "A dataset embed is already running.",
+                "Project saves wait for dataset embedding to finish",
+                "project.job");
+        }
         auto handle = jobs.init(
             JobType::ProjectWrite,
             autosave ? "Preparing autosave"
@@ -3308,6 +3678,288 @@ namespace lfs::vis::project {
                 lfs::ErrorCode::Unavailable,
                 "The project writer could not start.",
                 error.what(), "project.job");
+        }
+        return {};
+    }
+
+    lfs::Result<void> ProjectLifecycle::startDatasetEmbed() {
+        if (!document_ || !hasSourcePath()) {
+            return reportDatasetEmbedStartFailure(fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "The active project is not bound to a .licht file.",
+                "Dataset embedding requires a titled project",
+                "project.dataset_embed"));
+        }
+        if (isTrainingWriteWindowOpen()) {
+            return reportDatasetEmbedStartFailure(fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "Stop training before embedding the dataset.",
+                "The training write window is closed",
+                "project.dataset_embed"));
+        }
+        if (viewer_.jobs().anyRunning(JobType::ProjectWrite) ||
+            viewer_.jobs().anyRunning(JobType::DatasetEmbed)) {
+            return reportDatasetEmbedStartFailure(fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "Another project write is already running.",
+                "Dataset embedding requires an exclusive project write slot",
+                "project.dataset_embed"));
+        }
+        auto document = document_;
+        auto dataset_reference = document->project().dataset_reference();
+        if (!dataset_reference) {
+            return reportDatasetEmbedStartFailure(
+                lfs::Result<void>::failure(
+                    std::move(dataset_reference).error()));
+        }
+        const auto* const parameter_manager = viewer_.getParameterManager();
+        const bool needs_project_save =
+            !*dataset_reference ||
+            scene_dirty_.load(std::memory_order_acquire) ||
+            payload_dirty_.load(std::memory_order_acquire) ||
+            hasHardDirtyChapters(*document) ||
+            (parameter_manager && parameter_manager->isDirty());
+        if (needs_project_save) {
+            // save() performs the existing synchronization step before starting
+            // the writer; joinPendingWrite() makes the reference durable before
+            // the DatasetEmbed worker resolves it.
+            if (auto saved = save(false); !saved) {
+                return reportDatasetEmbedStartFailure(std::move(saved));
+            }
+            joinPendingWrite();
+            if (!last_project_write_error_.empty()) {
+                return reportDatasetEmbedStartFailure(fail<void>(
+                    last_project_write_error_code_.value_or(
+                        lfs::ErrorCode::Unavailable),
+                    "The project could not be synchronized before embedding.",
+                    last_project_write_error_, "project.dataset_embed"));
+            }
+            document = document_;
+        }
+        const auto root = resolveExternalDatasetRoot(*document);
+        if (!root || root->empty() || !std::filesystem::is_directory(*root)) {
+            return reportDatasetEmbedStartFailure(fail<void>(
+                lfs::ErrorCode::NotFound,
+                "The external dataset could not be found.",
+                root ? root->string() : "dataset reference did not resolve",
+                "project.dataset_embed"));
+        }
+        auto handle = viewer_.jobs().init(
+            JobType::DatasetEmbed,
+            LOC("status.dataset_embed_prepare"));
+        if (!handle) {
+            return reportDatasetEmbedStartFailure(fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "Another dataset embed is already running.",
+                "The dataset embed job slot is occupied",
+                "project.dataset_embed"));
+        }
+        if (project_write_thread_.joinable()) {
+            project_write_thread_.join();
+        }
+        project_write_job_ = *handle;
+        project_write_purpose_ = ProjectWritePurpose::DatasetEmbed;
+        project_write_destination_ = *document->source_path();
+        const auto destination = project_write_destination_;
+        last_project_write_error_.clear();
+        last_project_write_error_code_.reset();
+        try {
+            project_write_thread_ = std::jthread(
+                [this, document = std::move(document), root = *root,
+                 destination, handle = *handle](const std::stop_token stop) mutable {
+                    auto& jobs = viewer_.jobs();
+                    jobs.work(handle);
+                    jobs.report(handle, 0.01F,
+                                LOC("status.dataset_embed_scanning"));
+                    const auto fail_worker = [&](const lfs::Error& error) {
+                        const auto detail = developerError(error);
+                        LOG_ERROR("Dataset embed failed: {}", detail);
+                        jobs.finishWork(handle, false, detail, error.code());
+                        queueProjectWriteSettlement(handle);
+                    };
+                    std::string images_folder;
+                    const auto discovered = discoverDatasetFiles(root, images_folder);
+                    EmbeddedDatasetManifest final_manifest{
+                        .schema_version = 1,
+                        .images_folder = std::move(images_folder),
+                        .complete = true,
+                        .entries = {},
+                    };
+                    std::vector<DatasetEmbedSource> pending;
+                    std::uint64_t total_bytes = 0;
+                    for (const auto& [path, kind] : discovered) {
+                        if (stop.stop_requested() || jobs.cancelRequested(handle)) {
+                            jobs.finishWork(handle, true);
+                            queueProjectWriteSettlement(handle);
+                            return;
+                        }
+                        std::error_code error;
+                        const auto size = std::filesystem::file_size(path, error);
+                        if (error) {
+                            fail_worker(lifecycleError(
+                                lfs::ErrorCode::DataLoss,
+                                "A dataset file could not be inspected.",
+                                std::format("{}: {}", path.string(), error.message()),
+                                "project.dataset_embed"));
+                            return;
+                        }
+                        auto hash = hashDatasetFile(path);
+                        if (!hash) {
+                            fail_worker(hash.error());
+                            return;
+                        }
+                        auto previous = document->parameters().embedded_dataset();
+                        if (!previous) {
+                            fail_worker(previous.error());
+                            return;
+                        }
+                        const auto rel = path.lexically_relative(root).generic_string();
+                        const EmbeddedDatasetEntry* old = nullptr;
+                        if (previous->has_value()) {
+                            const auto old_it = std::ranges::find_if(
+                                (*previous)->entries,
+                                [&](const auto& entry) {
+                                    return entry.rel_path == rel && entry.kind == kind;
+                                });
+                            if (old_it != (*previous)->entries.end()) {
+                                old = &*old_it;
+                            }
+                        }
+                        EmbeddedDatasetEntry entry;
+                        if (old && old->bytes == size && old->xxh3_128 == *hash &&
+                            document->find_dataset_source(old->chunk_uuid)) {
+                            entry = *old;
+                        } else {
+                            entry = EmbeddedDatasetEntry{
+                                .rel_path = rel,
+                                .kind = kind,
+                                .chunk_uuid = lfs::core::generate_uuid_v4(),
+                                .bytes = size,
+                                .xxh3_128 = *hash,
+                            };
+                            pending.push_back({.entry = entry, .source_path = path});
+                        }
+                        final_manifest.entries.push_back(entry);
+                        total_bytes += size;
+                    }
+                    LOG_INFO(
+                        "Dataset embed started: {} files, {} bytes, destination {}",
+                        discovered.size(), total_bytes,
+                        lfs::core::path_to_utf8(destination));
+                    EmbeddedDatasetManifest committed_manifest{
+                        .schema_version = final_manifest.schema_version,
+                        .images_folder = final_manifest.images_folder,
+                        .complete = false,
+                        .entries = {},
+                    };
+                    if (auto previous = document->parameters().embedded_dataset();
+                        previous && *previous) {
+                        for (const auto& entry : (*previous)->entries) {
+                            if (document->find_dataset_source(entry.chunk_uuid) &&
+                                std::ranges::any_of(final_manifest.entries,
+                                                    [&](const auto& current) {
+                                                        return current.chunk_uuid == entry.chunk_uuid;
+                                                    })) {
+                                committed_manifest.entries.push_back(entry);
+                            }
+                        }
+                    }
+                    constexpr std::uint64_t default_batch_limit = 512ull * 1024 * 1024;
+                    const auto batch_limit =
+                        lfs::core::environment::unsigned_integer<std::uint64_t>(
+                            "LFS_DATASET_EMBED_BATCH_BYTES")
+                            .value_or(default_batch_limit);
+                    const auto batch_pause_ms =
+                        lfs::core::environment::unsigned_integer<std::uint64_t>(
+                            "LFS_DATASET_EMBED_BATCH_PAUSE_MS");
+                    std::uint64_t done_bytes = 0;
+                    std::size_t pending_index = 0;
+                    while (pending_index < pending.size()) {
+                        std::vector<DatasetEmbedSource> batch;
+                        std::uint64_t batch_bytes = 0;
+                        while (pending_index < pending.size()) {
+                            const auto bytes = pending[pending_index].entry.bytes;
+                            if (!batch.empty() && batch_bytes + bytes > batch_limit) {
+                                break;
+                            }
+                            batch_bytes += bytes;
+                            batch.push_back(pending[pending_index++]);
+                        }
+                        for (const auto& item : batch) {
+                            committed_manifest.entries.push_back(item.entry);
+                        }
+                        committed_manifest.images_folder = final_manifest.images_folder;
+                        committed_manifest.complete = pending_index == pending.size();
+                        {
+                            const std::lock_guard lock(document_access_mutex_);
+                            auto saved = document->embed_dataset_batch(
+                                committed_manifest, batch,
+                                ProjectDocumentSaveOptions{});
+                            if (!saved) {
+                                fail_worker(saved.error());
+                                return;
+                            }
+                        }
+                        LOG_INFO(
+                            "Dataset embed batch committed: {} files, {} bytes, destination {}",
+                            pending_index, batch_bytes,
+                            lfs::core::path_to_utf8(destination));
+                        done_bytes += batch_bytes;
+                        jobs.report(handle,
+                                    total_bytes == 0
+                                        ? 1.0F
+                                        : static_cast<float>(done_bytes) /
+                                              static_cast<float>(total_bytes),
+                                    std::format(
+                                        "{} ({}/{} files)",
+                                        LOC("status.dataset_embed_batch"),
+                                        pending_index, pending.size()));
+                        if (batch_pause_ms && *batch_pause_ms > 0) {
+                            std::this_thread::sleep_for(
+                                std::chrono::milliseconds(*batch_pause_ms));
+                        }
+                        if (stop.stop_requested() || jobs.cancelRequested(handle)) {
+                            LOG_INFO(
+                                "Dataset embed canceled between batches: {} of {} files committed",
+                                pending_index, pending.size());
+                            jobs.finishWork(handle, true);
+                            queueProjectWriteSettlement(handle);
+                            return;
+                        }
+                    }
+                    const bool needs_final_commit =
+                        pending.empty() &&
+                        (!committed_manifest.complete ||
+                         committed_manifest.entries != final_manifest.entries ||
+                         committed_manifest.images_folder != final_manifest.images_folder);
+                    if (needs_final_commit) {
+                        committed_manifest = final_manifest;
+                        const std::lock_guard lock(document_access_mutex_);
+                        auto saved = document->embed_dataset_batch(
+                            committed_manifest, {}, ProjectDocumentSaveOptions{});
+                        if (!saved) {
+                            fail_worker(saved.error());
+                            return;
+                        }
+                    }
+                    LOG_INFO(
+                        "Dataset embed completed: {} files, {} bytes, destination {}",
+                        final_manifest.entries.size(), total_bytes,
+                        lfs::core::path_to_utf8(destination));
+                    jobs.report(handle, 1.0F,
+                                LOC("status.dataset_embed_complete"));
+                    jobs.finishWork(handle, false);
+                    queueProjectWriteSettlement(handle);
+                });
+        } catch (const std::exception& error) {
+            // LFS-CENSUS-OK(empty-catch): worker startup failure is returned as a typed lifecycle error.
+            viewer_.jobs().failed(*handle, error.what());
+            viewer_.jobs().free(*handle);
+            project_write_job_.reset();
+            project_write_purpose_ = ProjectWritePurpose::None;
+            return reportDatasetEmbedStartFailure(fail<void>(lfs::ErrorCode::Unavailable,
+                                                             "The dataset embed worker could not start.",
+                                                             error.what(), "project.dataset_embed"));
         }
         return {};
     }
@@ -4270,6 +4922,13 @@ namespace lfs::vis::project {
             error =
                 "The project write was canceled.";
         }
+        if (!error.empty() &&
+            project_write_purpose_ ==
+                ProjectWritePurpose::DatasetEmbed) {
+            LOG_ERROR(
+                "Dataset embed settlement failed: {}",
+                error);
+        }
         if (error.empty() &&
             (project_write_purpose_ ==
                  ProjectWritePurpose::
@@ -4619,7 +5278,8 @@ namespace lfs::vis::project {
         }
         if (!document_ ||
             viewer_.jobs().anyRunning(
-                JobType::ProjectWrite)) {
+                JobType::ProjectWrite) ||
+            viewer_.jobs().anyRunning(JobType::DatasetEmbed)) {
             return;
         }
         if (isBlankUntitledSession()) {
@@ -6743,7 +7403,10 @@ namespace lfs::vis::project {
                     }
                     const auto hydration_started =
                         std::chrono::steady_clock::now();
-                    if (stop.stop_requested()) {
+                    if (stop.stop_requested() ||
+                        (project_open_job &&
+                         viewer_.jobs().cancelRequested(
+                             *project_open_job))) {
                         return;
                     }
                     auto opened_source =
@@ -6783,6 +7446,36 @@ namespace lfs::vis::project {
                                     opened_source
                                         ->generation()));
                         }
+                        return;
+                    }
+                    if (project_open_job) {
+                        viewer_.jobs().report(
+                            *project_open_job, 0.06F,
+                            LOC("status.dataset_embed_extracting"));
+                    }
+                    auto extracted = extractEmbeddedDatasetIfNeeded(
+                        *opened_source,
+                        [this, project_open_job, &stop](
+                            const float progress) {
+                            if (project_open_job) {
+                                viewer_.jobs().report(
+                                    *project_open_job,
+                                    0.06F + 0.14F * progress,
+                                    LOC("status.dataset_embed_extracting"));
+                            }
+                            return !stop.stop_requested() &&
+                                   (!project_open_job ||
+                                    !viewer_.jobs().cancelRequested(
+                                        *project_open_job));
+                        });
+                    if (!extracted && !stop.stop_requested()) {
+                        LOG_ERROR("Embedded dataset extraction failed: {}",
+                                  developerError(extracted.error()));
+                    }
+                    if (stop.stop_requested() ||
+                        (project_open_job &&
+                         viewer_.jobs().cancelRequested(
+                             *project_open_job))) {
                         return;
                     }
                     const auto source_opened_at =
@@ -7661,6 +8354,8 @@ namespace lfs::vis::project {
                 settings_.reopen_last_project,
             .auto_save_on_close =
                 settings_.auto_save_on_close,
+            .embed_dataset_by_default =
+                settings_.embed_dataset_by_default,
             .autosave_interval_seconds =
                 settings_.autosave_interval_seconds,
             .recent_projects = {},
@@ -7788,6 +8483,20 @@ namespace lfs::vis::project {
             viewer_.getSceneManager();
         const auto* trainer_manager =
             viewer_.getTrainerManager();
+        const bool live_dataset_available = [&] {
+            if (!manager || !manager->hasDataset()) {
+                return false;
+            }
+            auto dataset_path = manager->getDatasetPath();
+            if (dataset_path.empty()) {
+                if (const auto* trainer = viewer_.getTrainer()) {
+                    dataset_path = trainer->getParams()
+                                       .dataset.data_path;
+                }
+            }
+            return !dataset_path.empty() &&
+                   std::filesystem::is_directory(dataset_path);
+        }();
         const bool training_active =
             viewer_.getTrainer() && trainer_manager &&
             trainer_manager->isTrainingActive();
@@ -7843,6 +8552,19 @@ namespace lfs::vis::project {
                 settings_.reopen_last_project,
             .auto_save_on_close =
                 settings_.auto_save_on_close,
+            .embed_dataset_by_default =
+                settings_.embed_dataset_by_default,
+            .dataset_external_available =
+                resolveExternalDatasetRoot(*document_).has_value() ||
+                live_dataset_available,
+            .embedded_dataset_complete = [&] {
+                auto embedded = document_->parameters().embedded_dataset();
+                return embedded && *embedded && (*embedded)->complete; }(),
+            .embedded_dataset_entries = [&] {
+                auto embedded = document_->parameters().embedded_dataset();
+                return embedded && *embedded
+                           ? static_cast<std::uint64_t>((*embedded)->entries.size())
+                           : 0; }(),
             .autosave_interval_seconds =
                 settings_
                     .autosave_interval_seconds,

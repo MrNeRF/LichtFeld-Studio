@@ -8,6 +8,7 @@
     "file.save_project": "Projekt speichern",
     "file.save_project_as": "Projekt speichern unter...",
     "file.compact_project": "Projekt komprimieren",
+    "file.embed_dataset": "Datensatz ins Projekt einbetten",
     "file.auto_save_on_close": "Beim Schließen speichern ohne Nachfrage",
     "file.no_recent_projects": "Keine zuletzt geöffneten Projekte",
     "file.clear_recent_projects": "Zuletzt geöffnete leeren",
@@ -733,7 +734,12 @@
     "dataset_ready": "Datensatz (Bereit)",
     "training_paused": "Training (Pausiert)",
     "training_finished": "Training abgeschlossen",
-    "ply_models_count": "PLY Modelle: {}"
+    "ply_models_count": "PLY Modelle: {}",
+    "dataset_embed_prepare": "Eingebetteten Datensatz vorbereiten",
+    "dataset_embed_extracting": "Eingebetteten Datensatz extrahieren",
+    "dataset_embed_scanning": "Datensatzdateien durchsuchen",
+    "dataset_embed_batch": "Datensatz-Batch einbetten",
+    "dataset_embed_complete": "Datensatz eingebettet"
   },
   "mode": {
     "empty": "Leer",
@@ -751,6 +757,8 @@
     "project_location": "Projekt-Speicherort",
     "project_location_hint": "Neue Projekte und der Standardordner des Asset-Managers: {path}",
     "project_location_description": "Neue Projekte werden hier erstellt und dieser Projekt-Speicherort als Standardordner des Asset-Managers verwendet.",
+    "embed_dataset_by_default": "Datensätze in neue Projekte kopieren",
+    "embed_dataset_by_default_description": "Neue Projekte können die unveränderten Originaldateien des Datensatzes zum Teilen in die .licht-Datei kopieren.",
     "project_location_invalid": "Dieser Ordner kann nicht als Projekt-Speicherort verwendet werden.",
     "use_default": "Standard verwenden",
     "title": "Einstellungen",
@@ -1273,6 +1281,8 @@
     "invalid_name": "Geben Sie einen gültigen Projektnamen ein.",
     "source_invalid": "Die Quelle ist kein unterstützter Datensatz und keine unterstützte Splat-Datei.",
     "advanced": "Erweitert",
+    "embed_dataset": "Datensatz ins Projekt kopieren",
+    "embed_dataset_description": "Byte-identische Datensatzdateien mit diesem Projekt speichern.",
     "create": "Erstellen"
   },
   "notification": {

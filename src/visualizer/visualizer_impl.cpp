@@ -1367,6 +1367,7 @@ namespace lfs::vis {
 
         cmd::ProjectCreate::when(
             [this](const auto& command) {
+                pending_project_dataset_embed_ = false;
                 handleCreateProject(
                     command.path,
                     command.discard_changes
@@ -1481,6 +1482,7 @@ namespace lfs::vis {
 
         cmd::ProjectOpen::when(
             [this](const auto& command) {
+                pending_project_dataset_embed_ = false;
                 auto path = command.path;
                 if (path.empty()) {
                     path =
@@ -1510,6 +1512,52 @@ namespace lfs::vis {
                         "Compact Project",
                         compacted.error(),
                         gui::error_op::kCompact);
+                }
+            });
+
+        cmd::ProjectEmbedDataset::when(
+            [this, publish_project_error](const auto&) {
+                const bool importing =
+                    gui_manager_ &&
+                    gui_manager_->asyncTasks().isImporting();
+                LOG_INFO(
+                    "Dataset embed command received (importing={})",
+                    importing);
+                if (importing) {
+                    pending_project_dataset_embed_ = true;
+                    LOG_INFO(
+                        "Dataset embedding deferred until dataset load completes");
+                    return;
+                }
+                if (auto embedded = projectEmbedDataset(); !embedded) {
+                    publish_project_error(
+                        "Embed Dataset in Project", embedded.error(),
+                        gui::error_op::kSave);
+                }
+            });
+
+        state::DatasetLoadCompleted::when(
+            [this, publish_project_error](const auto& event) {
+                if (!pending_project_dataset_embed_) {
+                    return;
+                }
+                pending_project_dataset_embed_ = false;
+                if (event.success) {
+                    if (auto embedded = projectEmbedDataset(); !embedded) {
+                        auto error = std::move(embedded).error();
+                        LOG_ERROR(
+                            "Deferred dataset embedding failed: {}",
+                            lfs::format_for_developer(error));
+                        publish_project_error(
+                            "Deferred dataset embedding", error,
+                            gui::error_op::kSave);
+                    }
+                } else {
+                    publish_project_error(
+                        "Deferred dataset embedding",
+                        event.error.value_or(
+                            "The dataset load completed unsuccessfully."),
+                        gui::error_op::kSave);
                 }
             });
 
@@ -1672,6 +1720,24 @@ namespace lfs::vis {
                     publish_project_error(
                         "Update Project Settings",
                         saved.error(),
+                        gui::error_op::kProjectSettings);
+                }
+            });
+
+        cmd::SetEmbedDatasetByDefault::when(
+            [this, publish_project_error](const auto& command) {
+                if (!project_lifecycle_) {
+                    publish_project_error(
+                        "Update Project Settings",
+                        "Project lifecycle is unavailable.",
+                        gui::error_op::kProjectSettings);
+                    return;
+                }
+                if (auto saved = project_lifecycle_->setEmbedDatasetByDefault(
+                        command.enabled);
+                    !saved) {
+                    publish_project_error(
+                        "Update Project Settings", saved.error(),
                         gui::error_op::kProjectSettings);
                 }
             });
@@ -3878,6 +3944,17 @@ namespace lfs::vis {
                 "project.lifecycle");
         }
         return project_lifecycle_->compact();
+    }
+
+    lfs::Result<void> VisualizerImpl::projectEmbedDataset() {
+        if (!project_lifecycle_) {
+            return visualizerFailure<void>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
+        }
+        return project_lifecycle_->startDatasetEmbed();
     }
 
     void VisualizerImpl::performReset() {

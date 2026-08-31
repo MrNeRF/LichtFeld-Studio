@@ -45,6 +45,11 @@
           </div>
           <span class="preferences-description">{{ project_location_hint }}</span>
           <span class="preferences-description">@tr:preferences.project_location_description</span>
+          <div class="preferences-row preferences-checkbox-row">
+            <span class="preferences-label">@tr:preferences.embed_dataset_by_default</span>
+            <input type="checkbox" data-checked="embed_dataset_by_default" />
+          </div>
+          <span class="preferences-description">@tr:preferences.embed_dataset_by_default_description</span>
         </div>
       </div>
 

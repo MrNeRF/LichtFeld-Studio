@@ -97,6 +97,7 @@ namespace lfs::io::project {
     inline constexpr Fourcc FOURCC_SEQR = make_fourcc('S', 'E', 'Q', 'R');
     inline constexpr Fourcc FOURCC_METR = make_fourcc('M', 'E', 'T', 'R');
     inline constexpr Fourcc FOURCC_THMB = make_fourcc('T', 'H', 'M', 'B');
+    inline constexpr Fourcc FOURCC_DSRC = make_fourcc('D', 'S', 'R', 'C');
 
     struct ChunkKey {
         Fourcc fourcc;

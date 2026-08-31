@@ -8,6 +8,7 @@
     "file.save_project": "Save Project",
     "file.save_project_as": "Save Project As...",
     "file.compact_project": "Compact Project",
+    "file.embed_dataset": "Embed Dataset in Project",
     "file.auto_save_on_close": "Save on Close Without Asking",
     "file.no_recent_projects": "No Recent Projects",
     "file.clear_recent_projects": "Clear Recently Opened",
@@ -733,7 +734,12 @@
     "dataset_ready": "Dataset (Ready)",
     "training_paused": "Training (Paused)",
     "training_finished": "Training Finished",
-    "ply_models_count": "PLY Models: {}"
+    "ply_models_count": "PLY Models: {}",
+    "dataset_embed_prepare": "Preparing embedded dataset",
+    "dataset_embed_extracting": "Extracting embedded dataset",
+    "dataset_embed_scanning": "Scanning dataset files",
+    "dataset_embed_batch": "Embedding dataset batch",
+    "dataset_embed_complete": "Dataset embedded"
   },
   "mode": {
     "empty": "Empty",
@@ -751,6 +757,8 @@
     "project_location": "Project location",
     "project_location_hint": "New projects and the Asset Manager Default folder: {path}",
     "project_location_description": "New projects are created here and this folder is used as the Asset Manager Default folder.",
+    "embed_dataset_by_default": "Copy datasets into new projects",
+    "embed_dataset_by_default_description": "New projects can copy the original dataset files into the .licht project for sharing.",
     "project_location_invalid": "This folder cannot be used as the project location.",
     "use_default": "Use default",
     "title": "Preferences",
@@ -1273,6 +1281,8 @@
     "invalid_name": "Enter a valid project name.",
     "source_invalid": "Source is not a supported dataset or splat file.",
     "advanced": "Advanced",
+    "embed_dataset": "Copy dataset into project",
+    "embed_dataset_description": "Keep byte-identical dataset files with this project.",
     "create": "Create"
   },
   "notification": {
