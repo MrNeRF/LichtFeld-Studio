@@ -30,6 +30,7 @@ namespace lfs::training::test {
     struct AdamStateByteSnapshot {
         bool present = false;
         std::int64_t step_count = 0;
+        std::array<std::int64_t, 3> sh_band_step_count{};
         std::size_t capacity = 0;
         std::size_t size = 0;
         // Serializer writes only these two tensors (joint codec).
@@ -106,6 +107,7 @@ namespace lfs::training::test {
             auto& captured = result.states[index];
             captured.present = true;
             captured.step_count = state->step_count;
+            captured.sh_band_step_count = state->sh_band_step_count;
             captured.capacity = state->capacity;
             captured.size = state->size;
             captured.exp_avg =
@@ -184,6 +186,10 @@ namespace lfs::training::test {
                 captured.step_count,
                 state->step_count)
                 << "Adam state index " << index;
+            EXPECT_EQ(
+                captured.sh_band_step_count,
+                state->sh_band_step_count)
+                << "Adam SH band state index " << index;
             EXPECT_EQ(captured.capacity, state->capacity)
                 << "Adam state index " << index;
             EXPECT_EQ(captured.size, state->size)

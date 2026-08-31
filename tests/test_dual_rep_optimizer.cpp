@@ -18,6 +18,7 @@
 
 #include "adam_api.h"
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -80,6 +81,61 @@ namespace {
     }
 
 } // namespace
+
+TEST(DualRepOptimizer, ShNBandsUseIndependentAdamAges) {
+    CodecsOnGuard guard;
+    constexpr size_t n = 32;
+    constexpr size_t cap = 64;
+    constexpr float lr = 1e-3f;
+
+    auto splat = make_sh_splat(n, 3);
+    splat.set_active_sh_degree(1);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+
+    AdamOptimizer opt(splat, make_cfg(cap));
+    opt.allocate_gradients(cap);
+
+    auto degree1 = opt.prepare_fastgs_fused_adam(1001);
+    ASSERT_TRUE(degree1.shN.enabled);
+    ASSERT_TRUE(degree1.shN.use_sh_band_corrections);
+    EXPECT_NEAR(degree1.shN.sh_band_step_size[0], lr / (1.0f - 0.9f), 1e-6f);
+    EXPECT_NEAR(
+        degree1.shN.sh_band_bias_correction2_sqrt_rcp[0],
+        1.0f / std::sqrt(1.0f - 0.999f), 1e-4f);
+    EXPECT_FLOAT_EQ(degree1.shN.sh_band_step_size[1], 0.0f);
+    EXPECT_FLOAT_EQ(degree1.shN.sh_band_step_size[2], 0.0f);
+    opt.commit_fastgs_fused_adam(1001);
+
+    auto* state = opt.get_state_mutable(ParamType::ShN);
+    ASSERT_NE(state, nullptr);
+    EXPECT_EQ(state->sh_band_step_count, (std::array<int64_t, 3>{1, 0, 0}));
+
+    // Emulate the degree-1 band having trained for 1,000 updates. Degree 2 must
+    // still start with t=1 rather than inheriting that age.
+    state->step_count = 1000;
+    state->sh_band_step_count = {1000, 0, 0};
+    splat.set_active_sh_degree(2);
+    auto degree2 = opt.prepare_fastgs_fused_adam(2001);
+    ASSERT_TRUE(degree2.shN.enabled);
+    EXPECT_LT(degree2.shN.sh_band_step_size[0], 0.002f);
+    EXPECT_NEAR(degree2.shN.sh_band_step_size[1], lr / (1.0f - 0.9f), 1e-6f);
+    EXPECT_FLOAT_EQ(degree2.shN.sh_band_step_size[2], 0.0f);
+    opt.commit_fastgs_fused_adam(2001);
+    EXPECT_EQ(state->sh_band_step_count, (std::array<int64_t, 3>{1001, 1, 0}));
+
+    // Degree 3 receives its own fresh correction while both older bands keep
+    // their accumulated ages.
+    state->step_count = 2000;
+    state->sh_band_step_count = {2000, 1000, 0};
+    splat.set_active_sh_degree(3);
+    auto degree3 = opt.prepare_fastgs_fused_adam(3001);
+    ASSERT_TRUE(degree3.shN.enabled);
+    EXPECT_LT(degree3.shN.sh_band_step_size[0], 0.002f);
+    EXPECT_LT(degree3.shN.sh_band_step_size[1], 0.002f);
+    EXPECT_NEAR(degree3.shN.sh_band_step_size[2], lr / (1.0f - 0.9f), 1e-6f);
+    opt.commit_fastgs_fused_adam(3001);
+    EXPECT_EQ(state->sh_band_step_count, (std::array<int64_t, 3>{2001, 1001, 1}));
+}
 
 // ---------------------------------------------------------------------------
 // joint shN moments sized from float layout, not q16 cell count

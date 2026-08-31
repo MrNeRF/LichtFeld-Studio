@@ -11,6 +11,7 @@
 #include "lfs/training/sh_value_storage.hpp"
 #include "optimizer/adam_optimizer.hpp"
 
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <cuda_runtime.h>
@@ -181,10 +182,12 @@ TEST(GutShNJointAdam, StandaloneStepMatchesFusedKernelQ16Sh3) {
         fused.shN.sh_value_bits,
         fused.shN.sh_value_n_cells,
         fused.shN.step_size,
+        fused.shN.sh_band_step_size,
         fused.beta1,
         fused.beta2,
         fused.eps,
         fused.shN.bias_correction2_sqrt_rcp,
+        fused.shN.sh_band_bias_correction2_sqrt_rcp,
         nullptr);
     opt_fused.commit_fastgs_fused_adam(past_warmup);
 
@@ -214,4 +217,48 @@ TEST(GutShNJointAdam, StandaloneStepMatchesFusedKernelQ16Sh3) {
     const auto jbounds_step = tensor_bytes(st_step->joint_bounds);
     ASSERT_EQ(jbounds_fused.size(), jbounds_step.size());
     EXPECT_EQ(jbounds_fused, jbounds_step) << "joint moment bounds must match";
+}
+
+TEST(GutShNJointAdam, DegreeOneDoesNotUpdateDegreeTwoCellsInSharedSlot) {
+    constexpr size_t n = 32;
+    constexpr size_t cap = 32;
+    constexpr int past_warmup = 1001;
+
+    auto splat = make_mixed_splat(n, 3);
+    splat.set_active_sh_degree(1);
+    ASSERT_EQ(splat.shN().dtype(), DataType::Float32);
+
+    AdamOptimizer opt(splat, make_cfg(cap));
+    opt.allocate_gradients(cap);
+
+    const auto layout_rest = static_cast<uint32_t>(splat.max_sh_coeffs_rest());
+    const size_t float_layout = sh_swizzled_float_count(n, layout_rest);
+    auto& grad = opt.get_grad(ParamType::ShN);
+    ASSERT_EQ(static_cast<size_t>(grad.numel()), float_layout);
+
+    // Slot 2 straddles the exact degree boundary: component 0 is logical cell
+    // 8 (degree 1), while component 1 is cell 9 (degree 2).
+    const size_t slot = sh_swizzled_index(0, 2, layout_rest);
+    const size_t degree1_cell = slot * 4;
+    const size_t degree2_cell = degree1_cell + 1;
+    std::vector<float> grads_h(float_layout, 0.0f);
+    grads_h[degree1_cell] = 0.25f;
+    grads_h[degree2_cell] = 0.25f;
+    ASSERT_EQ(cudaMemcpy(grad.ptr<float>(), grads_h.data(),
+                         float_layout * sizeof(float), cudaMemcpyHostToDevice),
+              cudaSuccess);
+
+    const auto before = splat.shN().cpu();
+    ASSERT_NO_THROW(opt.step(past_warmup));
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    const auto after = splat.shN().cpu();
+    const auto* before_values = before.ptr<float>();
+    const auto* after_values = after.ptr<float>();
+
+    EXPECT_NE(after_values[degree1_cell], before_values[degree1_cell]);
+    EXPECT_FLOAT_EQ(after_values[degree2_cell], before_values[degree2_cell]);
+
+    const auto* state = opt.get_state(ParamType::ShN);
+    ASSERT_NE(state, nullptr);
+    EXPECT_EQ(state->sh_band_step_count, (std::array<int64_t, 3>{1, 0, 0}));
 }

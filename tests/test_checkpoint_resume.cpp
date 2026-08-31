@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -575,6 +576,11 @@ namespace {
         ASSERT_NE(means_state, nullptr);
         ASSERT_TRUE(means_state->is_joint()) << "expected joint codec moments";
         means_state->step_count = 11;
+        auto* shN_state = source_strategy.get_optimizer().get_state_mutable(
+            lfs::training::ParamType::ShN);
+        ASSERT_NE(shN_state, nullptr);
+        shN_state->step_count = 11;
+        shN_state->sh_band_step_count = {11, 7, 3};
         const int expected_joint_bits = means_state->joint_bits;
         const auto packed_shape = means_state->exp_avg.shape();
         const auto bounds_shape = means_state->joint_bounds.shape();
@@ -620,6 +626,12 @@ namespace {
         EXPECT_TRUE(restored_means->is_joint());
         EXPECT_EQ(restored_means->joint_bits, expected_joint_bits);
         EXPECT_EQ(restored_means->step_count, 11);
+        const auto* restored_shN = restored_opt.get_state(lfs::training::ParamType::ShN);
+        ASSERT_NE(restored_shN, nullptr);
+        EXPECT_EQ(restored_shN->step_count, 11);
+        EXPECT_EQ(
+            restored_shN->sh_band_step_count,
+            (std::array<int64_t, 3>{11, 7, 3}));
         EXPECT_EQ(restored_means->exp_avg.shape(), packed_shape);
         EXPECT_EQ(restored_means->joint_bounds.shape(), bounds_shape);
 
