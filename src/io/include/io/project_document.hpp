@@ -169,6 +169,11 @@ namespace lfs::io::project {
         std::uint64_t erased_chunks = 0;
     };
 
+    struct LFS_IO_API DatasetEmbedSource {
+        EmbeddedDatasetEntry entry;
+        std::filesystem::path source_path;
+    };
+
     struct ProjectDocumentHydrationReport {
         SelectionHydrationReport selection;
         ParameterManagerSnapshot pending_parameters;
@@ -280,6 +285,15 @@ namespace lfs::io::project {
         remove_checkpoint(const lfs::core::Uuid& instance_uuid);
         [[nodiscard]] std::vector<lfs::core::Uuid>
         checkpoint_uuids() const;
+
+        [[nodiscard]] const LazyChunkValue*
+        find_dataset_source(const lfs::core::Uuid& instance_uuid) const noexcept;
+        [[nodiscard]] std::vector<lfs::core::Uuid>
+        dataset_source_uuids() const;
+        [[nodiscard]] lfs::Result<ProjectDocumentSaveReport>
+        embed_dataset_batch(const EmbeddedDatasetManifest& manifest,
+                            std::span<const DatasetEmbedSource> sources,
+                            const ProjectDocumentSaveOptions& options = {});
 
         [[nodiscard]] const LazyChunkValue*
         find_ppisp(const lfs::core::Uuid& instance_uuid) const noexcept;

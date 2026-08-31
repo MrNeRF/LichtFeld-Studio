@@ -8,6 +8,7 @@
     "file.save_project": "プロジェクトを保存",
     "file.save_project_as": "プロジェクトを別名で保存...",
     "file.compact_project": "プロジェクトを圧縮",
+    "file.embed_dataset": "データセットをプロジェクトに埋め込む",
     "file.auto_save_on_close": "確認なしで終了時に保存",
     "file.no_recent_projects": "最近使ったプロジェクトはありません",
     "file.clear_recent_projects": "最近使ったプロジェクトをクリア",
@@ -733,7 +734,12 @@
     "dataset_ready": "データセット (準備完了)",
     "training_paused": "トレーニング (一時停止)",
     "training_finished": "トレーニング終了",
-    "ply_models_count": "PLYモデル: {}"
+    "ply_models_count": "PLYモデル: {}",
+    "dataset_embed_prepare": "埋め込みデータセットを準備中",
+    "dataset_embed_extracting": "埋め込みデータセットを展開中",
+    "dataset_embed_scanning": "データセットファイルをスキャン中",
+    "dataset_embed_batch": "データセットのバッチを埋め込み中",
+    "dataset_embed_complete": "データセットを埋め込みました"
   },
   "mode": {
     "empty": "空",
@@ -751,6 +757,8 @@
     "project_location": "プロジェクトの場所",
     "project_location_hint": "新規プロジェクトとアセットマネージャーのデフォルトフォルダー: {path}",
     "project_location_description": "新規プロジェクトはここに作成され、このフォルダーがアセットマネージャーのデフォルトフォルダーになります。",
+    "embed_dataset_by_default": "新しいプロジェクトにデータセットをコピー",
+    "embed_dataset_by_default_description": "共有できるよう、変更していない元のデータセットファイルをコピーします。",
     "project_location_invalid": "このフォルダーはプロジェクトの場所として使用できません。",
     "use_default": "デフォルトを使用",
     "title": "環境設定",
@@ -1273,6 +1281,8 @@
     "invalid_name": "有効なプロジェクト名を入力してください。",
     "source_invalid": "ソースは対応するデータセットまたはスプラットファイルではありません。",
     "advanced": "詳細設定",
+    "embed_dataset": "データセットをプロジェクトにコピー",
+    "embed_dataset_description": "元データとバイト単位で同一のファイルを保存します。",
     "create": "作成"
   },
   "notification": {

@@ -5764,4 +5764,129 @@ namespace {
     }
 #endif
 
+    TEST(ProjectDocumentTest, EmbeddedDatasetRoundTripAndCompaction) {
+        TemporaryDirectory temporary;
+        const auto dataset = temporary.path / "dataset";
+        const auto image = dataset / "images" / "frame.bin";
+        const auto sparse = dataset / "sparse" / "0" / "cameras.bin";
+        std::filesystem::create_directories(image.parent_path());
+        std::filesystem::create_directories(sparse.parent_path());
+        const std::vector<std::byte> image_bytes{
+            std::byte{0x10}, std::byte{0x20}, std::byte{0x30}, std::byte{0x40}};
+        const std::vector<std::byte> sparse_bytes{
+            std::byte{0x01}, std::byte{0x03}, std::byte{0x05}};
+        write_file_bytes(image, image_bytes);
+        write_file_bytes(sparse, sparse_bytes);
+
+        auto document = require_result_ptr(ProjectDocument::create(
+            fixed_uuid(2401), 100));
+        bind_dataset(*document, dataset);
+        const auto project_path = temporary.path / "embedded.licht";
+        (void)require_result(document->save(project_path, save_options(2402, 200)));
+
+        const auto entry_for = [](const fs::path& path,
+                                  const std::string& rel,
+                                  const std::string& kind,
+                                  const Uuid& uuid) {
+            const auto bytes = read_file_bytes(path);
+            return EmbeddedDatasetEntry{
+                .rel_path = rel,
+                .kind = kind,
+                .chunk_uuid = uuid,
+                .bytes = bytes.size(),
+                .xxh3_128 = xxh3_128(bytes),
+            };
+        };
+        const auto image_entry = entry_for(
+            image, "images/frame.bin", "image", fixed_uuid(2403));
+        const auto sparse_entry = entry_for(
+            sparse, "sparse/0/cameras.bin", "sparse", fixed_uuid(2404));
+        const EmbeddedDatasetManifest manifest{
+            .schema_version = 1,
+            .images_folder = "images",
+            .complete = true,
+            .entries = {image_entry, sparse_entry},
+        };
+        const std::array sources{
+            DatasetEmbedSource{.entry = image_entry, .source_path = image},
+            DatasetEmbedSource{.entry = sparse_entry, .source_path = sparse},
+        };
+        const EmbeddedDatasetManifest partial_manifest{
+            .schema_version = 1,
+            .images_folder = "images",
+            .complete = false,
+            .entries = {image_entry},
+        };
+        (void)require_result(document->embed_dataset_batch(
+            partial_manifest, std::span(sources).first(1),
+            save_options(2405, 300)));
+        const auto partial = require_result(
+            document->parameters().embedded_dataset());
+        ASSERT_TRUE(partial);
+        EXPECT_FALSE(partial->complete);
+        (void)require_result(document->embed_dataset_batch(
+            manifest, std::span(sources).subspan(1),
+            save_options(2406, 400)));
+
+        auto reopened = require_result_ptr(ProjectDocument::open(project_path));
+        const auto reopened_manifest =
+            require_result(reopened->parameters().embedded_dataset());
+        ASSERT_TRUE(reopened_manifest);
+        EXPECT_EQ(*reopened_manifest, manifest);
+        auto reader = require_result(ProjectReader::open(project_path));
+        ASSERT_TRUE(reader.commit().required_writer_capabilities.contains(
+            OPAQUE_CHUNK_PRESERVATION));
+        for (const auto& entry : manifest.entries) {
+            const auto* row = reader.find(FOURCC_DSRC, entry.chunk_uuid);
+            ASSERT_NE(row, nullptr);
+            EXPECT_EQ(row->compression,
+                      entry.kind == "sparse" ? Compression::ZstdFramed
+                                             : Compression::Stored);
+            const auto expected = read_file_bytes(dataset / entry.rel_path);
+            const auto actual = require_result(reader.read_chunk(*row));
+            EXPECT_EQ(actual, expected);
+            const auto* lazy = reopened->find_dataset_source(entry.chunk_uuid);
+            ASSERT_NE(lazy, nullptr);
+            auto streamed = lazy->visit_stream(
+                [&](std::istream& input, const std::uint64_t size) -> lfs::Result<void> {
+                    std::vector<std::byte> bytes(size);
+                    input.read(reinterpret_cast<char*>(bytes.data()),
+                               static_cast<std::streamsize>(bytes.size()));
+                    EXPECT_EQ(input.gcount(),
+                              static_cast<std::streamsize>(bytes.size()));
+                    EXPECT_EQ(bytes, expected);
+                    return {};
+                });
+            require_status(std::move(streamed));
+        }
+
+        const auto before_save = require_result(ProjectReader::open(project_path));
+        const auto before_image = require_result(before_save.read_chunk(
+            *before_save.find(FOURCC_DSRC, image_entry.chunk_uuid)));
+        (void)require_result(reopened->save(project_path, save_options(2407, 500)));
+        const auto after_save = require_result(ProjectReader::open(project_path));
+        const auto after_image = require_result(after_save.read_chunk(
+            *after_save.find(FOURCC_DSRC, image_entry.chunk_uuid)));
+        EXPECT_EQ(after_image, before_image);
+        ASSERT_TRUE(after_save.commit().required_writer_capabilities.contains(
+            OPAQUE_CHUNK_PRESERVATION));
+
+        require_status(ProjectWriter::compact(
+            project_path,
+            CompactionOptions{.disk_reserve_bytes = 0}));
+        auto compacted = require_result_ptr(ProjectDocument::open(project_path));
+        const auto compacted_manifest =
+            require_result(compacted->parameters().embedded_dataset());
+        ASSERT_TRUE(compacted_manifest);
+        EXPECT_EQ(*compacted_manifest, manifest);
+        auto compacted_reader = require_result(ProjectReader::open(project_path));
+        for (const auto& entry : manifest.entries) {
+            const auto* row = compacted_reader.find(
+                FOURCC_DSRC, entry.chunk_uuid);
+            ASSERT_NE(row, nullptr);
+            EXPECT_EQ(require_result(compacted_reader.read_chunk(*row)),
+                      read_file_bytes(dataset / entry.rel_path));
+        }
+    }
+
 } // namespace

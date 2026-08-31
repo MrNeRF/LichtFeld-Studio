@@ -103,6 +103,37 @@ namespace {
         std::optional<std::string> previous_;
     };
 
+    class ScopedEnvironment {
+    public:
+        ScopedEnvironment(const char* name, const std::string& value)
+            : name_(name) {
+            if (const char* previous = std::getenv(name_)) {
+                previous_ = previous;
+            }
+#ifdef _WIN32
+            (void)_putenv_s(name_, value.c_str());
+#else
+            (void)setenv(name_, value.c_str(), 1);
+#endif
+        }
+
+        ~ScopedEnvironment() {
+#ifdef _WIN32
+            (void)_putenv_s(name_, previous_ ? previous_->c_str() : "");
+#else
+            if (previous_) {
+                (void)setenv(name_, previous_->c_str(), 1);
+            } else {
+                (void)unsetenv(name_);
+            }
+#endif
+        }
+
+    private:
+        const char* name_;
+        std::optional<std::string> previous_;
+    };
+
     class NoopUndoEntry final
         : public lfs::vis::op::UndoEntry {
     public:
@@ -1405,6 +1436,88 @@ namespace {
 } // namespace
 
 namespace lfs::vis {
+
+    std::filesystem::path make_real_dataset_subset(
+        const std::filesystem::path& destination,
+        const std::size_t image_count = 4) {
+        const auto source =
+            std::filesystem::path(PROJECT_ROOT_PATH) /
+            "data/bicycle";
+        const auto images = destination / "images_8";
+        const auto sparse = destination / "sparse" / "0";
+        std::filesystem::create_directories(images);
+        std::filesystem::create_directories(sparse);
+        for (std::size_t index = 0; index < image_count; ++index) {
+            const auto name =
+                std::format("_DSC{:04}.JPG", 8679 + index);
+            if (!std::filesystem::is_regular_file(
+                    source / "images_8" / name)) {
+                throw std::runtime_error("real bicycle image is missing");
+            }
+            std::filesystem::copy_file(
+                source / "images_8" / name,
+                images / name,
+                std::filesystem::copy_options::overwrite_existing);
+        }
+        for (const auto name : {"cameras.bin", "images.bin", "points3D.bin"}) {
+            if (!std::filesystem::is_regular_file(
+                    source / "sparse" / "0" / name)) {
+                throw std::runtime_error("real bicycle sparse file is missing");
+            }
+            std::filesystem::copy_file(
+                source / "sparse" / "0" / name,
+                sparse / name,
+                std::filesystem::copy_options::overwrite_existing);
+        }
+        return destination;
+    }
+
+    struct EmbeddedDatasetInspection {
+        lfs::io::project::EmbeddedDatasetManifest manifest;
+        std::unordered_map<std::string, lfs::core::Uuid> chunk_by_path;
+    };
+
+    EmbeddedDatasetInspection inspect_embedded_dataset(
+        const std::filesystem::path& project_path) {
+        auto document = lfs::test::licht::require_result_ptr(
+            lfs::io::project::ProjectDocument::open(project_path));
+        auto manifest = lfs::test::licht::require_result(
+            document->parameters().embedded_dataset());
+        if (!manifest) {
+            throw std::runtime_error("embedded dataset manifest is absent");
+        }
+        EmbeddedDatasetInspection result{.manifest = *manifest};
+        for (const auto& entry : result.manifest.entries) {
+            result.chunk_by_path.emplace(entry.rel_path, entry.chunk_uuid);
+        }
+        return result;
+    }
+
+    void expect_embedded_dataset_matches_source(
+        const std::filesystem::path& project_path,
+        const std::filesystem::path& dataset_root) {
+        auto document = lfs::test::licht::require_result_ptr(
+            lfs::io::project::ProjectDocument::open(project_path));
+        auto manifest = lfs::test::licht::require_result(
+            document->parameters().embedded_dataset());
+        ASSERT_TRUE(manifest);
+        ASSERT_TRUE(manifest->complete);
+        for (const auto& entry : manifest->entries) {
+            const auto source_bytes = lfs::test::licht::read_file_bytes(
+                dataset_root / entry.rel_path);
+            ASSERT_EQ(source_bytes.size(), entry.bytes);
+            EXPECT_EQ(lfs::io::project::xxh3_128(source_bytes),
+                      entry.xxh3_128);
+            const auto* chunk = document->find_dataset_source(entry.chunk_uuid);
+            ASSERT_NE(chunk, nullptr);
+            ASSERT_EQ(chunk->size(), entry.bytes);
+            std::vector<std::byte> embedded(entry.bytes);
+            auto read = chunk->read_at(
+                0, std::span<std::byte>(embedded.data(), embedded.size()));
+            ASSERT_TRUE(read);
+            EXPECT_EQ(embedded, source_bytes);
+        }
+    }
 
     TEST_F(VisualizerImplResetTest,
            UiVisibilityWaitsForMatchingFrame) {
@@ -12726,6 +12839,9 @@ namespace lfs::vis {
             viewer.getTrainerManager()->hasTrainer());
         EXPECT_FALSE(
             viewer.getSceneManager()->hasDataset());
+        const auto info = viewer.projectGetInfo();
+        ASSERT_TRUE(info);
+        EXPECT_FALSE(info->dataset_external_available);
         EXPECT_NE(
             viewer.getScene().getNode(
                 "PLY-only marker"),
@@ -14005,6 +14121,274 @@ namespace lfs::vis {
             viewer.getScene().getActiveCameras().size(),
             2u);
         EXPECT_TRUE(viewer.getTrainer()->isInitialized());
+    }
+
+    class DatasetEmbedIntegrationTest : public VisualizerImplResetTest {};
+
+    TEST_F(DatasetEmbedIntegrationTest,
+           DatasetEmbedJobLifecycleAndResume) {
+        const auto dataset_path = make_real_dataset_subset(
+            temporary_.path / "embed-dataset");
+        const auto project_path = temporary_.path / "embed-job.licht";
+        write_dataset_project_without_checkpoint(
+            project_path, dataset_path);
+
+        ScopedEnvironment batch_limit(
+            "LFS_DATASET_EMBED_BATCH_BYTES", "1");
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(viewer.projectOpen(
+            project_path,
+            ProjectSwitchDisposition::DiscardChanges));
+        ASSERT_TRUE(waitForHydrationComplete(
+            viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+        ASSERT_TRUE(viewer.projectEmbedDataset());
+        viewer.projectWaitWrite();
+
+        auto initial = inspect_embedded_dataset(project_path);
+        ASSERT_TRUE(initial.manifest.complete);
+        ASSERT_FALSE(initial.manifest.entries.empty());
+        expect_embedded_dataset_matches_source(
+            project_path, dataset_path);
+
+        const auto replacement = dataset_path / "images_8" / "_DSC8680.JPG";
+        std::filesystem::copy_file(
+            replacement,
+            dataset_path / "images_8" / "_DSC8679.JPG",
+            std::filesystem::copy_options::overwrite_existing);
+        ASSERT_TRUE(viewer.projectEmbedDataset());
+        viewer.projectWaitWrite();
+
+        const auto resumed = inspect_embedded_dataset(project_path);
+        ASSERT_TRUE(resumed.manifest.complete);
+        ASSERT_EQ(resumed.manifest.entries.size(),
+                  initial.manifest.entries.size());
+        for (const auto& [path, uuid] : initial.chunk_by_path) {
+            ASSERT_TRUE(resumed.chunk_by_path.contains(path));
+            if (path == "images_8/_DSC8679.JPG") {
+                EXPECT_NE(resumed.chunk_by_path.at(path), uuid);
+            } else {
+                EXPECT_EQ(resumed.chunk_by_path.at(path), uuid);
+            }
+        }
+        expect_embedded_dataset_matches_source(
+            project_path, dataset_path);
+    }
+
+    TEST_F(DatasetEmbedIntegrationTest,
+           DatasetEmbedCancelLeavesConsistentManifest) {
+        const auto dataset_path = make_real_dataset_subset(
+            temporary_.path / "cancel-dataset");
+        const auto project_path = temporary_.path / "cancel-embed.licht";
+        write_dataset_project_without_checkpoint(
+            project_path, dataset_path);
+
+        ScopedEnvironment batch_limit(
+            "LFS_DATASET_EMBED_BATCH_BYTES", "1");
+        ScopedEnvironment batch_pause(
+            "LFS_DATASET_EMBED_BATCH_PAUSE_MS", "250");
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(viewer.projectOpen(
+            project_path,
+            ProjectSwitchDisposition::DiscardChanges));
+        ASSERT_TRUE(waitForHydrationComplete(
+            viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+        ASSERT_TRUE(viewer.projectEmbedDataset());
+
+        ASSERT_TRUE(waitUntil(
+            [&] {
+                try {
+                    const auto inspection = inspect_embedded_dataset(project_path);
+                    return !inspection.manifest.complete &&
+                           !inspection.manifest.entries.empty();
+                } catch (...) {
+                    return false;
+                }
+            },
+            std::chrono::seconds(30)));
+        const auto active = viewer.jobs().active(JobType::DatasetEmbed);
+        ASSERT_TRUE(active.has_value());
+        viewer.jobs().requestCancel(active->handle);
+        viewer.projectWaitWrite();
+
+        const auto canceled = inspect_embedded_dataset(project_path);
+        EXPECT_FALSE(canceled.manifest.complete);
+        auto document = lfs::test::licht::require_result_ptr(
+            lfs::io::project::ProjectDocument::open(project_path));
+        EXPECT_EQ(document->dataset_source_uuids().size(),
+                  canceled.manifest.entries.size());
+        for (const auto& entry : canceled.manifest.entries) {
+            EXPECT_NE(document->find_dataset_source(entry.chunk_uuid), nullptr);
+        }
+    }
+
+    TEST_F(DatasetEmbedIntegrationTest,
+           DatasetEmbedExtractionReopenIsIdempotent) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto dataset_path = make_real_dataset_subset(
+            temporary_.path / "extract-dataset");
+        const auto project_path = temporary_.path / "extract.licht";
+        write_dataset_project_without_checkpoint(
+            project_path, dataset_path);
+
+        std::string project_uuid;
+        {
+            VisualizerImpl viewer(projectOptions());
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::DiscardChanges));
+            ASSERT_TRUE(waitForHydrationComplete(
+                viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+            ASSERT_TRUE(viewer.projectEmbedDataset());
+            viewer.projectWaitWrite();
+            const auto document = lfs::test::licht::require_result_ptr(
+                lfs::io::project::ProjectDocument::open(project_path));
+            project_uuid = document->project_uuid().to_string();
+        }
+
+        const auto moved_dataset = temporary_.path / "moved-dataset";
+        std::filesystem::rename(dataset_path, moved_dataset);
+        const auto cache = temporary_.path / "home" / "cache" /
+                           "embedded_datasets" / project_uuid;
+        std::filesystem::path cached_image;
+        std::filesystem::file_time_type cached_image_time;
+        {
+            VisualizerImpl viewer(projectOptions());
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::DiscardChanges));
+            ASSERT_TRUE(waitForHydrationComplete(
+                viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+            ASSERT_TRUE(std::filesystem::is_regular_file(cache / ".complete"));
+            const auto inspection = inspect_embedded_dataset(project_path);
+            for (const auto& entry : inspection.manifest.entries) {
+                const auto destination = cache / entry.rel_path;
+                ASSERT_TRUE(std::filesystem::is_regular_file(destination));
+                const auto bytes = lfs::test::licht::read_file_bytes(destination);
+                EXPECT_EQ(bytes.size(), entry.bytes);
+                EXPECT_EQ(lfs::io::project::xxh3_128(bytes), entry.xxh3_128);
+                if (entry.kind == "image") {
+                    cached_image = destination;
+                    cached_image_time =
+                        std::filesystem::last_write_time(destination);
+                }
+            }
+            ASSERT_FALSE(cached_image.empty());
+            ASSERT_TRUE(restoreTrainerAndWait(
+                viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+            ASSERT_NE(viewer.getTrainer(), nullptr);
+            EXPECT_EQ(viewer.getTrainer()->getParams().dataset.data_path,
+                      cache);
+        }
+
+        {
+            VisualizerImpl viewer(projectOptions());
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::DiscardChanges));
+            ASSERT_TRUE(waitForHydrationComplete(
+                viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+        }
+        EXPECT_EQ(std::filesystem::last_write_time(cached_image),
+                  cached_image_time);
+        EXPECT_TRUE(std::filesystem::is_regular_file(cache / ".complete"));
+    }
+
+    TEST_F(DatasetEmbedIntegrationTest,
+           CreateLoadDeferredDatasetEmbedCompletes) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto dataset_path =
+            std::filesystem::path(PROJECT_ROOT_PATH) / "data/bicycle";
+        const auto project_path = temporary_.path / "create-load-embed.licht";
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.input_controller_ =
+            std::make_unique<InputController>(nullptr, viewer.getViewport());
+        viewer.getParameterManager()->getDatasetConfig().images = "images_8";
+        ASSERT_TRUE(viewer.projectCreateAt(project_path));
+
+        lfs::core::events::cmd::LoadFile{
+            .path = dataset_path,
+            .is_dataset = true,
+            .discard_changes = true}
+            .emit();
+        auto* const gui = viewer.getGuiManager();
+        ASSERT_NE(gui, nullptr);
+        ASSERT_TRUE(waitUntil(
+            [&] { return gui->asyncTasks().isImporting(); },
+            std::chrono::seconds(5)));
+        auto before_embed = lfs::test::licht::require_result_ptr(
+            lfs::io::project::ProjectDocument::open(project_path));
+        auto before_reference =
+            lfs::test::licht::require_result(
+                before_embed->project().dataset_reference());
+        ASSERT_FALSE(before_reference.has_value());
+
+        lfs::core::events::cmd::ProjectEmbedDataset{}.emit();
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_, viewer.work_queue_,
+            [&] {
+                gui->asyncTasks().pollImportCompletion();
+                const auto info = viewer.projectGetInfo();
+                return !viewer.jobs().anyRunning(JobType::Import) &&
+                       !viewer.jobs().anyRunning(JobType::DatasetEmbed) &&
+                       info && info->embedded_dataset_complete;
+            },
+            std::chrono::seconds(60)));
+        expect_embedded_dataset_matches_source(
+            project_path, dataset_path);
+    }
+
+    TEST_F(DatasetEmbedIntegrationTest,
+           ProjectInfoReportsLiveDatasetBeforeFirstSave) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto dataset_path =
+            std::filesystem::path(PROJECT_ROOT_PATH) /
+            "data/bicycle";
+        const auto project_path =
+            temporary_.path / "project-info-live-dataset.licht";
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.input_controller_ =
+            std::make_unique<InputController>(nullptr, viewer.getViewport());
+        viewer.getParameterManager()->getDatasetConfig().images = "images_8";
+        ASSERT_TRUE(viewer.projectCreateAt(project_path));
+
+        lfs::core::events::cmd::LoadFile{
+            .path = dataset_path,
+            .is_dataset = true,
+            .discard_changes = true}
+            .emit();
+        auto* const gui = viewer.getGuiManager();
+        ASSERT_NE(gui, nullptr);
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_, viewer.work_queue_,
+            [&] {
+                gui->asyncTasks().pollImportCompletion();
+                return !gui->asyncTasks().isImporting() &&
+                       viewer.getSceneManager()->hasDataset();
+            },
+            std::chrono::seconds(60)));
+
+        const auto document = lfs::test::licht::require_result_ptr(
+            lfs::io::project::ProjectDocument::open(project_path));
+        const auto reference = lfs::test::licht::require_result(
+            document->project().dataset_reference());
+        ASSERT_FALSE(reference.has_value());
+        const auto info = viewer.projectGetInfo();
+        ASSERT_TRUE(info);
+        EXPECT_TRUE(info->dataset_external_available);
+        EXPECT_FALSE(info->embedded_dataset_complete);
     }
 
 } // namespace lfs::vis

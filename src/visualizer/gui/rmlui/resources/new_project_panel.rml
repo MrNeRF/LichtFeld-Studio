@@ -69,6 +69,15 @@
           </div>
         </div>
       </div>
+      <div class="impdlg-control-group" data-if="embed_dataset_visible">
+        <span class="impdlg-field-label text-muted">@tr:new_project.embed_dataset</span>
+        <div class="impdlg-control-main">
+          <label class="impdlg-checkbox-label">
+            <input type="checkbox" data-checked="embed_dataset" />
+            <span class="text-muted">@tr:new_project.embed_dataset_description</span>
+          </label>
+        </div>
+      </div>
       <div class="impdlg-control-group" data-if="source_is_dataset">
         <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.ppisp_sidecar</span>
         <div class="impdlg-control-main">

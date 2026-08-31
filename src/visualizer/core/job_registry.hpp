@@ -25,6 +25,7 @@ namespace lfs::vis {
         SplatSimplify,
         ProjectWrite,
         ProjectOpen,
+        DatasetEmbed,
     };
 
     enum class JobStatus : std::uint8_t {

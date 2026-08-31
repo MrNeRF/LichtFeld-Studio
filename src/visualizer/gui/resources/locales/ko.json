@@ -8,6 +8,7 @@
     "file.save_project": "프로젝트 저장",
     "file.save_project_as": "다른 이름으로 프로젝트 저장...",
     "file.compact_project": "프로젝트 압축",
+    "file.embed_dataset": "프로젝트에 데이터셋 포함",
     "file.auto_save_on_close": "닫을 때 묻지 않고 저장",
     "file.no_recent_projects": "최근 프로젝트 없음",
     "file.clear_recent_projects": "최근 프로젝트 지우기",
@@ -733,7 +734,12 @@
     "dataset_ready": "데이터셋 (준비됨)",
     "training_paused": "학습 (일시정지됨)",
     "training_finished": "학습 완료",
-    "ply_models_count": "PLY 모델: {}"
+    "ply_models_count": "PLY 모델: {}",
+    "dataset_embed_prepare": "임베드된 데이터셋 준비 중",
+    "dataset_embed_extracting": "임베드된 데이터셋 추출 중",
+    "dataset_embed_scanning": "데이터셋 파일 검색 중",
+    "dataset_embed_batch": "데이터셋 배치 포함 중",
+    "dataset_embed_complete": "데이터셋을 포함했습니다"
   },
   "mode": {
     "empty": "비어있음",
@@ -751,6 +757,8 @@
     "project_location": "프로젝트 위치",
     "project_location_hint": "새 프로젝트 및 에셋 매니저 기본 폴더: {path}",
     "project_location_description": "새 프로젝트는 여기에 생성되며 이 폴더가 에셋 매니저 기본 폴더로 사용됩니다.",
+    "embed_dataset_by_default": "새 프로젝트에 데이터셋 복사",
+    "embed_dataset_by_default_description": "공유할 수 있도록 원본 데이터셋 파일을 변경 없이 복사합니다.",
     "project_location_invalid": "이 폴더는 프로젝트 위치로 사용할 수 없습니다.",
     "use_default": "기본값 사용",
     "title": "환경설정",
@@ -1273,6 +1281,8 @@
     "invalid_name": "올바른 프로젝트 이름을 입력하세요.",
     "source_invalid": "소스가 지원되는 데이터셋 또는 스플랫 파일이 아닙니다.",
     "advanced": "고급",
+    "embed_dataset": "프로젝트에 데이터셋 복사",
+    "embed_dataset_description": "원본과 바이트 단위로 동일한 데이터셋 파일을 보관합니다.",
     "create": "만들기"
   },
   "notification": {

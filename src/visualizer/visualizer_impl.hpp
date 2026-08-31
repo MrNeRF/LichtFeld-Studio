@@ -127,6 +127,7 @@ namespace lfs::vis {
                 ProjectSwitchDisposition::RequireClean) override;
         lfs::Result<void>
         projectCompact() override;
+        lfs::Result<void> projectEmbedDataset() override;
         lfs::Result<bool>
         projectIsDirty() override;
         lfs::Result<bool>
@@ -415,6 +416,11 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_DatasetLoadIntoTitledProjectStartsUntitledSessionAndKeepsProjectFile_Test;
         friend class VisualizerImplResetTest_DatasetLoadPreservesImportParameters_Test;
         friend class VisualizerImplResetTest_DatasetLoadIntoTrainedAutoCreatedProjectStartsUntitledSessionAndKeepsProjectFile_Test;
+        friend class DatasetEmbedIntegrationTest_DatasetEmbedJobLifecycleAndResume_Test;
+        friend class DatasetEmbedIntegrationTest_DatasetEmbedCancelLeavesConsistentManifest_Test;
+        friend class DatasetEmbedIntegrationTest_DatasetEmbedExtractionReopenIsIdempotent_Test;
+        friend class DatasetEmbedIntegrationTest_CreateLoadDeferredDatasetEmbedCompletes_Test;
+        friend class DatasetEmbedIntegrationTest_ProjectInfoReportsLiveDatasetBeforeFirstSave_Test;
         friend class VisualizerImplResetTest_SplatDropOntoTitledDatasetProjectStartsUntitledSessionAndKeepsProjectFile_Test;
         friend class VisualizerImplResetTest_SplatAddOntoSplatSceneKeepsTitledProject_Test;
         friend class VisualizerImplResetTest_PreTrainingProjectSaveRestoresCameraEnabledAndHidden_Test;
@@ -648,6 +654,7 @@ namespace lfs::vis {
         bool startup_project_open_attempted_ = false;
         bool close_save_notice_posted_ = false;
         std::atomic<bool> project_save_started_{false};
+        bool pending_project_dataset_embed_ = false;
         std::optional<std::filesystem::path>
             pending_close_save_path_;
         std::jthread force_exit_completion_watcher_;

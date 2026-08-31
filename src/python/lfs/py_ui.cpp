@@ -5085,6 +5085,30 @@ namespace lfs::python {
             "Clear the project location preference so the default is used.");
 
         m.def(
+            "get_embed_dataset_by_default",
+            []() {
+                auto* const viewer = lfs::python::get_visualizer();
+                if (!viewer) {
+                    return false;
+                }
+                auto info = viewer->projectGetMenuInfo();
+                return info && info->embed_dataset_by_default;
+            },
+            "Get whether new projects copy datasets into the project by default.");
+
+        m.def(
+            "set_embed_dataset_by_default",
+            [](const bool enabled) {
+                nb::gil_scoped_release release;
+                lfs::core::events::cmd::SetEmbedDatasetByDefault{
+                    .enabled = enabled}
+                    .emit();
+                return true;
+            },
+            nb::arg("enabled"),
+            "Set whether new projects copy datasets into the project by default.");
+
+        m.def(
             "get_mcp_status",
             [] {
                 mcp::McpHttpStatus status;

@@ -136,6 +136,11 @@ class PreferencesPanel(Panel):
         model.bind("mcp_port", lambda: self._mcp_port, self._set_mcp_port)
         model.bind("project_location", lambda: self._project_location, self._set_project_location_draft)
         model.bind_func("project_location_hint", self._project_location_hint)
+        model.bind(
+            "embed_dataset_by_default",
+            getattr(lf.ui, "get_embed_dataset_by_default", lambda: False),
+            self._set_embed_dataset_by_default,
+        )
         model.bind("mcp_request_logging", lambda: self._mcp_request_logging, self._set_mcp_request_logging)
         model.bind_func("mcp_safe_mode", lambda: self._mcp_safe_mode)
         model.bind_func("mcp_status", self._mcp_status_text)
@@ -221,6 +226,7 @@ class PreferencesPanel(Panel):
             lf.ui.get_current_language(),
             lf.get_camera_navigation_mode(),
             lf.get_camera_view_snap_enabled(),
+            getattr(lf.ui, "get_embed_dataset_by_default", lambda: False)(),
             lf.ui.remember_camera_navigation(),
             lf.ui.remember_camera_view_snap(),
             self._mcp_status_signature(),
@@ -521,6 +527,12 @@ class PreferencesPanel(Panel):
     def _set_project_location_draft(self, value):
         self._project_location = str(value).strip()
         self._dirty_project_location()
+
+    @staticmethod
+    def _set_embed_dataset_by_default(enabled):
+        setter = getattr(lf.ui, "set_embed_dataset_by_default", None)
+        if setter:
+            setter(bool(enabled))
 
     def _on_project_location_change(self, _handle, event, args):
         if args:
@@ -972,6 +984,9 @@ class PreferencesPanel(Panel):
         if section == "general":
             lf.ui.set_language("en")
             lf.ui.clear_project_location()
+            setter = getattr(lf.ui, "set_embed_dataset_by_default", None)
+            if setter:
+                setter(False)
             self._read_project_location()
         elif section == "appearance":
             lf.ui.set_theme("dark")
@@ -1016,3 +1031,4 @@ class PreferencesPanel(Panel):
             self._handle.dirty("scene_graph_selection_markers")
             self._dirty_mcp()
             self._dirty_project_location()
+            self._handle.dirty("embed_dataset_by_default")

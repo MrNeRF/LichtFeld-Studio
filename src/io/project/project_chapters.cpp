@@ -22,6 +22,7 @@
 #include <ranges>
 #include <set>
 #include <span>
+#include <stdexcept>
 #include <system_error>
 #include <type_traits>
 #include <unordered_set>
@@ -3327,6 +3328,142 @@ namespace lfs::io::project {
             return result;
         }
         return merge_at("dataset", dataset_json(value.dataset));
+    }
+
+    lfs::Result<std::optional<EmbeddedDatasetManifest>>
+    ParametersChapter::embedded_dataset() const {
+        const auto dataset = dom_.get_json("dataset");
+        if (!dataset || !dataset->is_object()) {
+            return fail<std::optional<EmbeddedDatasetManifest>>(
+                lfs::ErrorCode::DataLoss,
+                "The pending dataset parameters are invalid.",
+                "PRMS.dataset must be an object", "PRMS", "dataset");
+        }
+        const auto embedded = dataset->find("embedded_dataset");
+        if (embedded == dataset->end() || embedded->is_null()) {
+            return std::optional<EmbeddedDatasetManifest>{};
+        }
+        if (!embedded->is_object()) {
+            return fail<std::optional<EmbeddedDatasetManifest>>(
+                lfs::ErrorCode::DataLoss,
+                "The embedded dataset manifest is invalid.",
+                "PRMS.dataset.embedded_dataset must be an object", "PRMS",
+                "dataset.embedded_dataset");
+        }
+        const auto schema = embedded->find("schema_version");
+        const auto images_folder = embedded->find("images_folder");
+        const auto complete = embedded->find("complete");
+        const auto entries = embedded->find("entries");
+        if (schema == embedded->end() || !schema->is_number_unsigned() ||
+            images_folder == embedded->end() || !images_folder->is_string() ||
+            complete == embedded->end() || !complete->is_boolean() ||
+            entries == embedded->end() || !entries->is_array()) {
+            return fail<std::optional<EmbeddedDatasetManifest>>(
+                lfs::ErrorCode::DataLoss,
+                "The embedded dataset manifest is incomplete.",
+                "schema_version, images_folder, complete, and entries are required",
+                "PRMS", "dataset.embedded_dataset");
+        }
+        EmbeddedDatasetManifest result{
+            .schema_version = schema->get<std::uint32_t>(),
+            .images_folder = images_folder->get<std::string>(),
+            .complete = complete->get<bool>(),
+            .entries = {},
+        };
+        std::unordered_set<std::string> paths;
+        std::unordered_set<lfs::core::Uuid> uuids;
+        for (const auto& item : *entries) {
+            if (!item.is_object()) {
+                return fail<std::optional<EmbeddedDatasetManifest>>(
+                    lfs::ErrorCode::DataLoss,
+                    "The embedded dataset manifest contains an invalid entry.",
+                    "entries must contain objects", "PRMS",
+                    "dataset.embedded_dataset.entries");
+            }
+            try {
+                const auto rel_path = item.at("rel_path").get<std::string>();
+                const auto kind = item.at("kind").get<std::string>();
+                const auto uuid = lfs::core::Uuid::from_string(
+                    item.at("chunk_uuid").get<std::string>());
+                const auto hash = Hash128::from_hex(
+                    item.at("xxh3_128").get<std::string>());
+                const bool valid_kind = kind == "image" || kind == "mask" ||
+                                        kind == "depth" || kind == "normal" ||
+                                        kind == "sparse" || kind == "meta";
+                const auto relative = std::filesystem::path(rel_path);
+                if (rel_path.empty() || kind.empty() || !uuid || uuid->is_nil() ||
+                    !hash || !valid_kind || relative.is_absolute() ||
+                    relative.lexically_normal() != relative ||
+                    !paths.insert(rel_path).second ||
+                    !uuids.insert(*uuid).second) {
+                    throw std::invalid_argument("entry identity or hash is invalid");
+                }
+                result.entries.push_back({
+                    .rel_path = rel_path,
+                    .kind = kind,
+                    .chunk_uuid = *uuid,
+                    .bytes = item.at("bytes").get<std::uint64_t>(),
+                    .xxh3_128 = *hash,
+                });
+            } catch (const std::exception& error) {
+                // LFS-CENSUS-OK(empty-catch): JSON entry parsing is converted to a typed chapter error.
+                return fail<std::optional<EmbeddedDatasetManifest>>(
+                    lfs::ErrorCode::DataLoss,
+                    "The embedded dataset manifest contains an invalid entry.",
+                    std::format("PRMS.dataset.embedded_dataset.entries: {}", error.what()),
+                    "PRMS", "dataset.embedded_dataset.entries");
+            }
+        }
+        return std::optional<EmbeddedDatasetManifest>{std::move(result)};
+    }
+
+    lfs::Result<void> ParametersChapter::set_embedded_dataset(
+        const EmbeddedDatasetManifest& value) {
+        if (value.schema_version == 0) {
+            return fail<void>(lfs::ErrorCode::InvalidArgument,
+                              "The embedded dataset schema version is invalid.",
+                              "schema_version must be positive", "PRMS",
+                              "dataset.embedded_dataset.schema_version");
+        }
+        Json entries = Json::array();
+        std::unordered_set<std::string> paths;
+        std::unordered_set<lfs::core::Uuid> uuids;
+        for (const auto& entry : value.entries) {
+            const bool valid_kind = entry.kind == "image" || entry.kind == "mask" ||
+                                    entry.kind == "depth" || entry.kind == "normal" ||
+                                    entry.kind == "sparse" || entry.kind == "meta";
+            const auto relative = std::filesystem::path(entry.rel_path);
+            if (entry.rel_path.empty() || entry.chunk_uuid.is_nil() ||
+                !valid_kind || relative.is_absolute() ||
+                relative.lexically_normal() != relative ||
+                !paths.insert(entry.rel_path).second ||
+                !uuids.insert(entry.chunk_uuid).second) {
+                return fail<void>(
+                    lfs::ErrorCode::InvalidArgument,
+                    "The embedded dataset manifest contains an invalid entry.",
+                    "rel_path, kind, and chunk_uuid are required", "PRMS",
+                    "dataset.embedded_dataset.entries");
+            }
+            entries.push_back({
+                {"rel_path", entry.rel_path},
+                {"kind", entry.kind},
+                {"chunk_uuid", entry.chunk_uuid.to_string()},
+                {"bytes", entry.bytes},
+                {"xxh3_128", entry.xxh3_128.to_hex()},
+            });
+        }
+        return dom_.set_json(
+            "dataset.embedded_dataset",
+            Json{
+                {"schema_version", value.schema_version},
+                {"images_folder", value.images_folder},
+                {"complete", value.complete},
+                {"entries", std::move(entries)},
+            });
+    }
+
+    void ParametersChapter::clear_embedded_dataset() {
+        (void)dom_.remove("dataset.embedded_dataset");
     }
 
     lfs::Result<ReverseReferenceIndex> build_reverse_reference_index(

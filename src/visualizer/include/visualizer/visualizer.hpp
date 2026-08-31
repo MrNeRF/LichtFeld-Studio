@@ -100,6 +100,7 @@ namespace lfs::vis {
     struct LFS_VIS_API ProjectMenuInfo {
         bool reopen_last_project = true;
         bool auto_save_on_close = false;
+        bool embed_dataset_by_default = false;
         std::uint64_t autosave_interval_seconds = 5 * 60;
         std::vector<ProjectRecentInfo> recent_projects;
     };
@@ -125,6 +126,10 @@ namespace lfs::vis {
         bool contains_embedded_secrets = false;
         bool reopen_last_project = true;
         bool auto_save_on_close = false;
+        bool embed_dataset_by_default = false;
+        bool dataset_external_available = false;
+        bool embedded_dataset_complete = false;
+        std::uint64_t embedded_dataset_entries = 0;
         std::uint64_t autosave_interval_seconds =
             5 * 60;
         std::uint64_t autosave_dirty_epoch_threshold =
@@ -213,6 +218,10 @@ namespace lfs::vis {
                 ProjectSwitchDisposition::RequireClean) = 0;
         virtual lfs::Result<void>
         projectCompact() = 0;
+        virtual lfs::Result<void>
+        projectEmbedDataset() {
+            return {};
+        }
         virtual lfs::Result<bool>
         projectIsDirty() = 0;
         virtual lfs::Result<bool>
@@ -246,6 +255,8 @@ namespace lfs::vis {
                     info->reopen_last_project,
                 .auto_save_on_close =
                     info->auto_save_on_close,
+                .embed_dataset_by_default =
+                    info->embed_dataset_by_default,
                 .autosave_interval_seconds =
                     info->autosave_interval_seconds,
                 .recent_projects =
