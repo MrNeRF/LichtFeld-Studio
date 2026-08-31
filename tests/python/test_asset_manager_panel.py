@@ -78,7 +78,7 @@ def _install_lf_stub(monkeypatch):
         reveal_in_file_manager=lambda path: state.revealed.append(path) or True,
         open_project_file_dialog=lambda _start="": state.dialog_path,
         open_folder_dialog=lambda _title, _start="": state.folder_dialog_path,
-        get_asset_manager_directory=lambda: "/home/tester/.lichtfeld/assets",
+        get_project_location=lambda: "/home/tester/.lichtfeld/projects",
         input_dialog=lambda *_args: None,
         set_panel_enabled=lambda panel_id, enabled: state.enabled.append(
             (panel_id, enabled)
@@ -1436,25 +1436,25 @@ def test_repair_only_and_newer_version_status_labels(panel_module):
     )
 
 
-def test_completed_save_registers_new_project_inside_folder(panel_module):
+def test_completed_save_registers_new_project_inside_project_location(panel_module):
     registered = []
     panel = panel_module.AssetManagerPanel()
     panel._handle = _Handle()
     panel._asset_index = _index(
         find_asset_by_path=lambda _path: None,
-        folder_id_for_path=lambda path: "default" if path.startswith("/tmp/assets") else None,
+        folder_id_for_path=lambda path: "default" if path.startswith("/tmp/projects") else None,
         register_licht_asset=lambda path: registered.append(path) or SimpleNamespace(id="new"),
         verify_projects=lambda: (0, 0),
     )
     polls = [
         {"running": False, "generation": 4, "path": "", "error": ""},
-        {"running": False, "generation": 5, "path": "/tmp/assets/new.licht", "error": ""},
+        {"running": False, "generation": 5, "path": "/tmp/projects/new.licht", "error": ""},
     ]
     panel_module.lf.project_poll_write = lambda: polls.pop(0)
 
     assert panel._refresh_after_project_write() is False
     assert panel._refresh_after_project_write() is True
-    assert registered == ["/tmp/assets/new.licht"]
+    assert registered == ["/tmp/projects/new.licht"]
 
 
 def test_completed_save_outside_folder_is_ignored(panel_module):

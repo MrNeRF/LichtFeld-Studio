@@ -5,11 +5,12 @@
 import json
 import logging
 import os
+import sys
 import threading
 import time
 import uuid
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 from lfs_plugins.asset_index import AssetIndex
 from lfs_plugins import asset_watch
@@ -241,6 +242,28 @@ def test_discovery_prunes_dataset_directories(tmp_path: Path):
         (directory / "hidden.licht").write_bytes(b"hidden")
 
     assert discover_licht_projects(str(tmp_path)) == [str(visible.resolve())]
+
+
+def test_discovery_prunes_user_root_tmp_and_recovery_by_exact_path(monkeypatch, tmp_path: Path):
+    user_root = tmp_path / "user"
+    projects = user_root / "projects"
+    projects.mkdir(parents=True)
+    for name in ("tmp", "recovery"):
+        directory = user_root / name
+        directory.mkdir()
+        (directory / "scratch.licht").write_bytes(b"scratch")
+    similarly_named = tmp_path / "selected" / "tmp"
+    similarly_named.mkdir(parents=True)
+    (similarly_named / "kept.licht").write_bytes(b"kept")
+
+    lf_stub = ModuleType("lichtfeld")
+    lf_stub.ui = SimpleNamespace(
+        get_default_project_location=lambda: str(projects),
+    )
+    monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
+
+    assert discover_licht_projects(str(user_root)) == []
+    assert discover_licht_projects(str(similarly_named)) == [str((similarly_named / "kept.licht").resolve())]
 
 
 def test_scan_skips_inspection_for_unchanged_cataloged_path(tmp_path: Path):

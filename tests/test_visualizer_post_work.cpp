@@ -66,6 +66,7 @@
 #include <iostream>
 #include <iterator>
 #include <mutex>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -8784,19 +8785,13 @@ namespace lfs::vis {
            ProjectLocationPreferenceGovernsTrainingAutoCreate) {
         const auto& temporary = temporary_.path;
         const auto home = temporary / "pref-home";
-        const auto first_root = temporary / "working-a";
-        const auto second_root = temporary / "working-b";
+        const auto second_root = temporary / "project-location-b";
         const auto project_location = temporary / "project-location";
         std::filesystem::create_directories(home);
-        std::filesystem::create_directories(first_root);
         std::filesystem::create_directories(second_root);
         const ScopedLfsHome lfs_home(home);
         ASSERT_TRUE(lfs::vis::setProjectLocationPreference(
             project_location));
-        auto first_set =
-            lfs::vis::setWorkingDirectoryPreference(first_root);
-        ASSERT_TRUE(first_set)
-            << lfs::format_for_developer(first_set.error());
         lfs::vis::ViewerOptions options;
         options.show_startup_overlay = false;
         std::filesystem::path first_bound;
@@ -8818,11 +8813,10 @@ namespace lfs::vis {
                 viewer.getTrainer()->bound_project_path();
             ASSERT_TRUE(bound.has_value());
             first_bound = *bound;
-            EXPECT_EQ(
-                bound->parent_path().lexically_normal(),
-                project_location.lexically_normal());
+            EXPECT_EQ(bound->parent_path().lexically_normal(),
+                      project_location.lexically_normal());
             ASSERT_TRUE(
-                lfs::vis::setWorkingDirectoryPreference(second_root));
+                lfs::vis::setProjectLocationPreference(second_root));
             EXPECT_EQ(
                 viewer.getTrainer()
                     ->bound_project_path()
@@ -8846,15 +8840,46 @@ namespace lfs::vis {
             const auto bound =
                 viewer.getTrainer()->bound_project_path();
             ASSERT_TRUE(bound.has_value());
-            EXPECT_EQ(
-                bound->parent_path().lexically_normal(),
-                project_location.lexically_normal());
+            EXPECT_EQ(bound->parent_path().lexically_normal(),
+                      second_root.lexically_normal());
             EXPECT_NE(
                 bound->lexically_normal(),
                 first_bound.lexically_normal());
         }
-        lfs::vis::clearWorkingDirectoryPreference();
         lfs::vis::clearProjectLocationPreference();
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           StartupScansLegacyWorkingTmpDirectory) {
+        const auto home = temporary_.path / "legacy-home";
+        std::filesystem::create_directories(home);
+        const ScopedLfsHome lfs_home(home);
+        const auto legacy_root = temporary_.path / "legacy-working";
+        {
+            const auto paths = lfs::core::UserPaths::resolve();
+            ASSERT_TRUE(paths);
+            ASSERT_TRUE(paths->ensureDirectories());
+            std::ofstream(paths->preferencesFile())
+                << R"({"working_directory":")" << legacy_root.string() << R"("})";
+        }
+        const auto scratch = lfs::io::project::scratch_autosave_path(
+            legacy_root / "tmp", lfs::core::generate_uuid_v4());
+        write_project_with_specified_checkpoint(
+            scratch, lfs::core::generate_uuid_v4(),
+            lfs::core::generate_uuid_v4());
+        lfs::vis::ViewerOptions options;
+        options.show_startup_overlay = false;
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        const auto paths = lfs::core::UserPaths::resolve();
+        ASSERT_TRUE(paths);
+        std::ifstream migrated_input(paths->preferencesFile());
+        ASSERT_TRUE(migrated_input);
+        const auto migrated = nlohmann::json::parse(migrated_input);
+        ASSERT_EQ(migrated.at("legacy_working_directory"), legacy_root.string());
+        EXPECT_FALSE(migrated.contains("working_directory"));
+        viewer.project_lifecycle_->openStartupProject(std::nullopt);
+        EXPECT_TRUE(viewer.project_lifecycle_->recovery_prompt_pending_);
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -8863,7 +8888,7 @@ namespace lfs::vis {
         std::filesystem::create_directories(home);
         const ScopedLfsHome lfs_home(home);
         const auto working = temporary_.path / "legacy-working";
-        ASSERT_TRUE(lfs::vis::setWorkingDirectoryPreference(working));
+        ASSERT_TRUE(lfs::vis::setProjectLocationPreference(working));
         const auto paths = lfs::core::UserPaths::resolve();
         ASSERT_TRUE(paths);
         lfs::vis::ViewerOptions options;
@@ -8876,7 +8901,7 @@ namespace lfs::vis {
         EXPECT_NE(
             viewer.project_lifecycle_->scratchAutosaveDirectory(),
             (working / "tmp").lexically_normal());
-        lfs::vis::clearWorkingDirectoryPreference();
+        lfs::vis::clearProjectLocationPreference();
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -11004,34 +11029,13 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
-           StartupScansLegacyWorkingTmpDirectory) {
-        const auto home = temporary_.path / "legacy-home";
-        std::filesystem::create_directories(home);
-        const ScopedLfsHome lfs_home(home);
-        const auto legacy_root = temporary_.path / "legacy-working";
-        ASSERT_TRUE(lfs::vis::setWorkingDirectoryPreference(legacy_root));
-        const auto scratch = lfs::io::project::scratch_autosave_path(
-            legacy_root / "tmp", lfs::core::generate_uuid_v4());
-        write_project_with_specified_checkpoint(
-            scratch, lfs::core::generate_uuid_v4(),
-            lfs::core::generate_uuid_v4());
-        lfs::vis::ViewerOptions options;
-        options.show_startup_overlay = false;
-        VisualizerImpl viewer(options);
-        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
-        viewer.project_lifecycle_->openStartupProject(std::nullopt);
-        EXPECT_TRUE(viewer.project_lifecycle_->recovery_prompt_pending_);
-        lfs::vis::clearWorkingDirectoryPreference();
-    }
-
-    TEST_F(VisualizerImplResetTest,
            StartupPruneNeverTouchesProjectLocation) {
         const auto home = temporary_.path / "prune-home";
         std::filesystem::create_directories(home);
         const ScopedLfsHome lfs_home(home);
         const auto working = temporary_.path / "project-parent";
         const auto project_location = working / "tmp";
-        ASSERT_TRUE(lfs::vis::setWorkingDirectoryPreference(working));
+        ASSERT_TRUE(lfs::vis::setProjectLocationPreference(working));
         ASSERT_TRUE(lfs::vis::setProjectLocationPreference(project_location));
         const auto scratch = lfs::io::project::scratch_autosave_path(
             project_location, lfs::core::generate_uuid_v4());
@@ -11044,7 +11048,6 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.project_lifecycle_->pruneUnlockedScratchFilesExcept(std::nullopt);
         EXPECT_TRUE(std::filesystem::is_regular_file(scratch));
-        lfs::vis::clearWorkingDirectoryPreference();
         lfs::vis::clearProjectLocationPreference();
     }
 
