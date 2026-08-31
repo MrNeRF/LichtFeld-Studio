@@ -8344,6 +8344,20 @@ namespace lfs::training {
                 cam = example.data.camera;
                 gt_image = std::move(example.data.image);
 
+                // The 8-bit decode ring keeps its leases compact. Widen only the
+                // frame being consumed, on the training stream, using the exact
+                // normalization used by the original float decode path.
+                if (gt_image.dtype() == lfs::core::DataType::UInt8) {
+                    gt_image.sync_to_stream(training_stream_);
+                    auto gt_image_fp32 = lfs::core::Tensor::empty(
+                        gt_image.shape(), lfs::core::Device::CUDA,
+                        lfs::core::DataType::Float32);
+                    lfs::io::cuda::launch_uint8_chw_to_float32_chw(
+                        gt_image.ptr<uint8_t>(), gt_image_fp32.ptr<float>(),
+                        gt_image.numel(), training_stream_);
+                    gt_image = std::move(gt_image_fp32);
+                }
+
                 for (CUevent_st** event : {&example.depth_ready_event, &example.normal_ready_event}) {
                     if (!*event) {
                         continue;
