@@ -14,7 +14,7 @@ from .layouts.menus import (
     menu_toggle,
     register_menu,
 )
-from .import_panels import open_dataset_import_panel, open_resume_checkpoint_panel
+from .import_panels import open_new_project_panel, open_resume_checkpoint_panel
 from .training_confirm import _project_has_path, confirm_discard_work_then
 
 __lfs_menu_classes__ = ["FileMenu"]
@@ -62,7 +62,7 @@ def _open_dataset_import_checked(path: str) -> None:
             "dataset format was not recognized",
             "menu.file.dataset_not_recognized",
         )
-    if not open_dataset_import_panel(path):
+    if not open_new_project_panel(path):
         raise RuntimeError("dataset import dialog is unavailable")
 
 
@@ -180,13 +180,10 @@ def format_recent_project_entry(path: str, tr) -> tuple[str, str]:
 
 class NewProjectOperator(Operator):
     label = "menu.file.new_project"
-    description = "Clear the scene to start a new project"
+    description = "Create a new project"
 
     def execute(self, context) -> set:
-        confirm_discard_work_then(
-            lf.ui.tr("menu.file.new_project"),
-            lambda stop_training: _new_project(True, stop_training),
-        )
+        open_new_project_panel("")
         return {"FINISHED"}
 
 
@@ -401,10 +398,16 @@ def _show_project_switch_confirmation(
     new_project: bool,
     path: str,
     keep_asset_manager_open: bool = False,
+    create_path: str = "",
 ) -> None:
     if new_project:
         title = lf.ui.tr("menu.file.new_project")
-        callback = lambda stop_training: _new_project(True, stop_training)
+        if create_path:
+            callback = lambda stop_training: lf.project_create(
+                create_path, discard_changes=True, stop_training=stop_training
+            )
+        else:
+            callback = lambda stop_training: _new_project(True, stop_training)
     else:
         title = lf.ui.tr("menu.file.open_project")
         callback = lambda stop_training: _open_project(
@@ -418,6 +421,7 @@ def _show_stop_training_confirmation(
     path: str,
     discard_changes: bool = False,
     keep_asset_manager_open: bool = False,
+    create_path: str = "",
 ) -> None:
     tr = lf.ui.tr
     yes_label = tr("common.yes")
@@ -426,7 +430,9 @@ def _show_stop_training_confirmation(
     def _on_result(button):
         if button != yes_label:
             return
-        if new_project:
+        if new_project and create_path:
+            lf.project_create(create_path, discard_changes=True, stop_training=True)
+        elif new_project:
             _new_project(discard_changes, True)
         else:
             _open_project(
@@ -462,8 +468,8 @@ def _show_load_file_confirmation(paths, is_dataset: bool, replace: bool) -> None
     confirm_discard_work_then(title, _proceed)
 
 
-def _on_show_dataset_load_popup(path: str):
-    open_dataset_import_panel(path)
+def _on_show_new_project_dialog(path: str):
+    open_new_project_panel(path)
 
 
 def _on_show_resume_checkpoint_popup(path: str):
@@ -580,7 +586,7 @@ def register():
     for cls in _operator_classes:
         lf.register_class(cls)
 
-    lf.ui.on_show_dataset_load_popup(_on_show_dataset_load_popup)
+    lf.ui.on_show_new_project_dialog(_on_show_new_project_dialog)
     lf.ui.on_show_resume_checkpoint_popup(_on_show_resume_checkpoint_popup)
     lf.ui.on_request_exit(_show_exit_confirmation)
     lf.ui.on_project_switch_confirmation(

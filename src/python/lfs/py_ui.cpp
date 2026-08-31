@@ -250,7 +250,7 @@ namespace lfs::python {
 
         // Python event callbacks
         nb::object g_popup_draw_callback;
-        nb::object g_show_dataset_popup_callback;
+        nb::object g_show_new_project_callback;
         nb::object g_show_resume_popup_callback;
         nb::object g_request_exit_callback;
         lfs::event::HandlerId g_request_exit_handler_id = 0;
@@ -3640,22 +3640,22 @@ namespace lfs::python {
             nb::arg("callback"), "Unregister a legacy popup draw callback");
 
         m.def(
-            "on_show_dataset_load_popup",
+            "on_show_new_project_dialog",
             [](nb::object callback) {
-                g_show_dataset_popup_callback = callback;
-                lfs::core::events::cmd::ShowDatasetLoadPopup::when([](const auto& e) {
-                    if (g_show_dataset_popup_callback && !g_show_dataset_popup_callback.is_none()) {
+                g_show_new_project_callback = callback;
+                lfs::core::events::cmd::ShowNewProjectDialog::when([](const auto& e) {
+                    if (g_show_new_project_callback && !g_show_new_project_callback.is_none()) {
                         nb::gil_scoped_acquire guard;
                         try {
-                            g_show_dataset_popup_callback(lfs::core::path_to_utf8(e.dataset_path));
+                            g_show_new_project_callback(lfs::core::path_to_utf8(e.source_path));
                         } catch (const std::exception& ex) {
-                            LOG_ERROR("ShowDatasetLoadPopup callback error: {}", ex.what());
+                            LOG_ERROR("ShowNewProjectDialog callback error: {}", ex.what());
                         }
                     }
                 });
             },
             nb::arg("callback"),
-            "Register callback for ShowDatasetLoadPopup event");
+            "Register callback for ShowNewProjectDialog event");
 
         m.def(
             "on_show_resume_checkpoint_popup",
@@ -3734,7 +3734,8 @@ namespace lfs::python {
                                         lfs::core::
                                             path_to_utf8(
                                                 event.path),
-                                        event.keep_asset_manager_open);
+                                        event.keep_asset_manager_open,
+                                        lfs::core::path_to_utf8(event.create_path));
                                 } catch (
                                     const std::
                                         exception& error) {
@@ -3808,7 +3809,8 @@ namespace lfs::python {
                                             path_to_utf8(
                                                 event.path),
                                         event.discard_changes,
-                                        event.keep_asset_manager_open);
+                                        event.keep_asset_manager_open,
+                                        lfs::core::path_to_utf8(event.create_path));
                                 } catch (
                                     const std::
                                         exception& error) {
@@ -5035,44 +5037,36 @@ namespace lfs::python {
             "Persist and immediately apply MCP HTTP server preferences");
 
         m.def(
-            "get_working_directory",
+            "get_project_location",
             []() -> std::string {
                 nb::gil_scoped_release release;
-                return lfs::core::path_to_utf8(vis::loadWorkingDirectoryPreference());
+                return lfs::core::path_to_utf8(vis::loadProjectLocationPreference());
             },
-            "Get the effective working folder (absolute). Empty preference uses the default root.");
+            "Get the effective project location.");
 
         m.def(
-            "get_working_directory_preference",
+            "get_project_location_preference",
             []() -> std::string {
                 nb::gil_scoped_release release;
-                return lfs::core::path_to_utf8(vis::workingDirectoryPreferenceRaw());
+                return lfs::core::path_to_utf8(vis::projectLocationPreferenceRaw());
             },
-            "Get the raw working folder preference. Empty string means the default root.");
+            "Get the raw project location preference.");
 
         m.def(
-            "get_default_working_directory",
+            "get_default_project_location",
             []() -> std::string {
                 nb::gil_scoped_release release;
-                return lfs::core::path_to_utf8(vis::defaultWorkingDirectory());
+                return lfs::core::path_to_utf8(vis::defaultProjectLocation());
             },
-            "Get the default working folder (UserPaths root).");
+            "Get the default project location.");
 
         m.def(
-            "get_temp_project_directory",
-            []() -> std::string {
-                nb::gil_scoped_release release;
-                return lfs::core::path_to_utf8(vis::tempProjectDirectoryPreference());
-            },
-            "Get the temp project directory for the next untitled session (<working folder>/tmp).");
-
-        m.def(
-            "set_working_directory",
+            "set_project_location",
             [](const std::string& path) -> std::string {
                 lfs::Status result;
                 {
                     nb::gil_scoped_release release;
-                    result = vis::setWorkingDirectoryPreference(
+                    result = vis::setProjectLocationPreference(
                         lfs::core::utf8_to_path(path));
                 }
                 if (!result)
@@ -5080,63 +5074,15 @@ namespace lfs::python {
                 return {};
             },
             nb::arg("path"),
-            "Set the working folder. Returns an empty string on success, or a user-facing error.");
+            "Set the project location. Returns an empty string on success, or a user-facing error.");
 
         m.def(
-            "clear_working_directory",
+            "clear_project_location",
             [] {
                 nb::gil_scoped_release release;
-                vis::clearWorkingDirectoryPreference();
+                vis::clearProjectLocationPreference();
             },
-            "Clear the working folder preference so the default root is used.");
-
-        m.def(
-            "get_asset_manager_directory",
-            []() -> std::string {
-                nb::gil_scoped_release release;
-                return lfs::core::path_to_utf8(vis::loadAssetManagerDirectoryPreference());
-            },
-            "Get the effective Asset Manager folder (absolute).");
-
-        m.def(
-            "get_asset_manager_directory_preference",
-            []() -> std::string {
-                nb::gil_scoped_release release;
-                return lfs::core::path_to_utf8(vis::assetManagerDirectoryPreferenceRaw());
-            },
-            "Get the raw Asset Manager folder preference. Empty means the default folder.");
-
-        m.def(
-            "get_default_asset_manager_directory",
-            []() -> std::string {
-                nb::gil_scoped_release release;
-                return lfs::core::path_to_utf8(vis::defaultAssetManagerDirectory());
-            },
-            "Get the default Asset Manager folder under the LichtFeld user root.");
-
-        m.def(
-            "set_asset_manager_directory",
-            [](const std::string& path) -> std::string {
-                lfs::Status result;
-                {
-                    nb::gil_scoped_release release;
-                    result = vis::setAssetManagerDirectoryPreference(
-                        lfs::core::utf8_to_path(path));
-                }
-                if (!result)
-                    return std::string(result.error().user_message());
-                return {};
-            },
-            nb::arg("path"),
-            "Set the Asset Manager folder. Returns empty on success or a user-facing error.");
-
-        m.def(
-            "clear_asset_manager_directory",
-            [] {
-                nb::gil_scoped_release release;
-                vis::clearAssetManagerDirectoryPreference();
-            },
-            "Clear the Asset Manager folder preference so the default is used.");
+            "Clear the project location preference so the default is used.");
 
         m.def(
             "get_mcp_status",
@@ -5369,7 +5315,7 @@ namespace lfs::python {
             g_cancel_operator_py_callback = nb::callable();
             g_modal_event_py_callback = nb::callable();
             g_popup_draw_callback = nb::object();
-            g_show_dataset_popup_callback = nb::object();
+            g_show_new_project_callback = nb::object();
             g_show_resume_popup_callback = nb::object();
             g_request_exit_callback = nb::object();
             if (g_request_exit_handler_id != 0) {

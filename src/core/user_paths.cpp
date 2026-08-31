@@ -275,8 +275,7 @@ namespace lfs::core {
                                                         {"language", "en"},
                                                         {"theme", "dark"},
                                                         {"ui_scale", "auto"},
-                                                        {"working_directory", ""},
-                                                        {"asset_manager_directory", ""},
+                                                        {"project_location", ""},
                                                         {"mcp", {
                                                                     {"enabled", true},
                                                                     {"expose_network", false},
