@@ -132,6 +132,75 @@ namespace {
         lfs::core::save_image_u8(path, image);
     }
 
+    TEST(ProjectDocumentTest, LicensePersistsAcrossSaveAsAndCompaction) {
+        TemporaryDirectory temporary;
+        const auto source = temporary.path / "license-source.licht";
+        const auto destination = temporary.path / "license-destination.licht";
+
+        auto document = make_empty_document(fixed_uuid(19'150), 100);
+        ASSERT_TRUE(document->set_license(ProjectLicense{
+            .identifier = "CC BY-NC",
+            .notice = "Use with attribution",
+        }));
+        ASSERT_TRUE(document->save(source, save_options(19'151, 200)));
+
+        auto source_reader = require_result(ProjectReader::open(source));
+        EXPECT_TRUE(source_reader.commit().required_writer_capabilities.contains(
+            RETAINED_JSON_FIELDS));
+        auto source_project = require_result(ProjectDocument::open(source));
+        auto source_license = require_result(source_project.project().license());
+        ASSERT_TRUE(source_license.has_value());
+        EXPECT_EQ(*source_license, (ProjectLicense{
+                                       .identifier = "CC BY-NC",
+                                       .notice = "Use with attribution",
+                                   }));
+
+        ASSERT_TRUE(source_project.save_as(destination, save_options(19'152, 300)));
+        auto destination_reader = require_result(ProjectReader::open(destination));
+        const auto* destination_project_row = destination_reader.find(
+            FOURCC_PROJ, destination_reader.superblock().project_uuid);
+        ASSERT_NE(destination_project_row, nullptr);
+        const auto before_compaction =
+            require_result(destination_reader.read_chunk(*destination_project_row));
+        auto destination_project = require_result(ProjectDocument::open(destination));
+        auto destination_license = require_result(destination_project.project().license());
+        ASSERT_TRUE(destination_license.has_value());
+        EXPECT_EQ(*destination_license, *source_license);
+
+        ASSERT_TRUE(ProjectWriter::compact(
+            destination,
+            CompactionOptions{
+                .new_file_uuid = fixed_uuid(19'153),
+                .commit_uuid = fixed_uuid(19'154),
+                .snapshot_uuid = destination_reader.commit().snapshot_uuid,
+                .creation_time_unix_ns = 400,
+                .wallclock_unix_ns = 500,
+                .disk_reserve_bytes = 0,
+            }));
+        auto compacted_reader = require_result(ProjectReader::open(destination));
+        const auto* compacted_project_row = compacted_reader.find(
+            FOURCC_PROJ, compacted_reader.superblock().project_uuid);
+        ASSERT_NE(compacted_project_row, nullptr);
+        EXPECT_EQ(require_result(compacted_reader.read_chunk(*compacted_project_row)),
+                  before_compaction);
+
+        destination_project = require_result(ProjectDocument::open(destination));
+        ASSERT_TRUE(destination_project.clear_license());
+        auto cleared_save = destination_project.save(destination, save_options(19'155, 600));
+        ASSERT_TRUE(cleared_save) << lfs::format_for_developer(cleared_save.error());
+        auto cleared = require_result(ProjectDocument::open(destination));
+        auto cleared_license = require_result(cleared.project().license());
+        EXPECT_FALSE(cleared_license.has_value());
+
+        auto plain = make_empty_document(fixed_uuid(19'156), 100);
+        ASSERT_TRUE(plain->save(temporary.path / "license-absent.licht",
+                                save_options(19'157, 700)));
+        auto plain_reader = require_result(ProjectReader::open(
+            temporary.path / "license-absent.licht"));
+        EXPECT_FALSE(plain_reader.commit().required_writer_capabilities.contains(
+            RETAINED_JSON_FIELDS));
+    }
+
     lfs::core::Uuid bind_dataset(ProjectDocument& document,
                                  const fs::path& dataset_root) {
         const auto uuid = require_result(upsert_path_reference(

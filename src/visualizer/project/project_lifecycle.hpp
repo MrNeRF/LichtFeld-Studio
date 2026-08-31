@@ -223,6 +223,11 @@ namespace lfs::vis::project {
         [[nodiscard]] bool isBlankProject() const;
         [[nodiscard]] bool isBlankUntitledSession() const;
         [[nodiscard]] lfs::Result<ProjectInfo> info();
+        [[nodiscard]] lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
+        license();
+        [[nodiscard]] lfs::Result<void>
+        setLicense(const lfs::io::project::ProjectLicense& license);
+        [[nodiscard]] lfs::Result<void> clearLicense();
         [[nodiscard]] ProjectWritePoll pollWrite();
         void joinPendingWrite();
         [[nodiscard]] ProjectMenuInfo menuInfo() const;

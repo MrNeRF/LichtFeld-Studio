@@ -3784,6 +3784,41 @@ namespace lfs::vis {
         return project_lifecycle_->info();
     }
 
+    lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
+    VisualizerImpl::projectGetLicense() {
+        if (!project_lifecycle_) {
+            return visualizerFailure<std::optional<lfs::io::project::ProjectLicense>>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
+        }
+        return project_lifecycle_->license();
+    }
+
+    lfs::Result<void> VisualizerImpl::projectSetLicense(
+        const lfs::io::project::ProjectLicense& license) {
+        if (!project_lifecycle_) {
+            return visualizerFailure<void>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
+        }
+        return project_lifecycle_->setLicense(license);
+    }
+
+    lfs::Result<void> VisualizerImpl::projectClearLicense() {
+        if (!project_lifecycle_) {
+            return visualizerFailure<void>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
+        }
+        return project_lifecycle_->clearLicense();
+    }
+
     lfs::Result<ProjectWritePoll>
     VisualizerImpl::projectPollWrite() {
         if (!project_lifecycle_) {

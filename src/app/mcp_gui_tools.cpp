@@ -156,6 +156,7 @@ namespace lfs::app {
                            *info.path))
                      : json(nullptr)},
                 {"project_uuid", info.project_uuid},
+                {"license_identifier", info.license_identifier},
                 {"generation", info.generation},
                 {"dirty", info.dirty},
                 {"session_dirty",

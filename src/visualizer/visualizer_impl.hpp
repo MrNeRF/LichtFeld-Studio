@@ -133,6 +133,11 @@ namespace lfs::vis {
         projectHasPath() override;
         lfs::Result<ProjectInfo>
         projectGetInfo() override;
+        lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
+        projectGetLicense() override;
+        lfs::Result<void> projectSetLicense(
+            const lfs::io::project::ProjectLicense& license) override;
+        lfs::Result<void> projectClearLicense() override;
         lfs::Result<ProjectWritePoll>
         projectPollWrite() override;
         bool consumeProjectSaveStarted() override;

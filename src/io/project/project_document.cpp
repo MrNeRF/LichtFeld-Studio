@@ -189,7 +189,7 @@ namespace lfs::io::project {
                 known = {"schema_version", "manifest", "project_uuid",
                          "created_at_unix_ns", "modified_at_unix_ns",
                          "dataset_reference_uuid", "project_lineage",
-                         "georeference", "embed_decisions", "provenance",
+                         "georeference", "license", "embed_decisions", "provenance",
                          "embedded_payloads"};
             } else if (fourcc == FOURCC_REFS) {
                 known = {"schema_version", "references"};
@@ -2333,6 +2333,14 @@ namespace lfs::io::project {
         return impl_->project;
     }
 
+    lfs::Result<void> ProjectDocument::set_license(const ProjectLicense& value) {
+        return edit_project().set_license(value);
+    }
+
+    lfs::Result<void> ProjectDocument::clear_license() {
+        return edit_project().clear_license();
+    }
+
     const ReferencesChapter& ProjectDocument::references() const noexcept {
         return impl_->references;
     }
@@ -3023,6 +3031,7 @@ namespace lfs::io::project {
 
         CommitOptions commit = options.commit;
         const bool retains_unknown_json =
+            impl_->project.dom().get_json("license").has_value() ||
             has_unknown_json_root(FOURCC_PROJ, impl_->project.dom()) ||
             has_unknown_json_root(FOURCC_REFS, impl_->references.dom()) ||
             has_unknown_json_root(FOURCC_SCNG, impl_->scene_graph.dom()) ||

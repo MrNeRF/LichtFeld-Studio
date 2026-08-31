@@ -289,6 +289,15 @@ def project_save(wait: bool = False, regenerate_preview: bool = True) -> bool:
 def project_save_as(path: str = '', wait: bool = False) -> bool:
     """Save the active project to a new .licht path"""
 
+def project_get_license() -> dict | None:
+    """Return the license metadata for the active project, or None"""
+
+def project_set_license(identifier: str, notice: str = '') -> None:
+    """Set the license metadata for the active project"""
+
+def project_clear_license() -> None:
+    """Clear the license metadata for the active project"""
+
 def project_poll_write() -> dict:
     """Return the active .licht project write state"""
 

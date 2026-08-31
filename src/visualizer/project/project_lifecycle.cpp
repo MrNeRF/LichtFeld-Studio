@@ -3112,6 +3112,10 @@ namespace lfs::vis::project {
             lfs::io::project::
                 ProjectDocumentAutosaveOptions>
             autosave) {
+        auto license = document->project().license();
+        if (!license) {
+            return lfs::Status::failure(std::move(license).error());
+        }
         if (!cached_project_info_) {
             cached_project_info_ =
                 ProjectInfo{
@@ -3124,6 +3128,10 @@ namespace lfs::vis::project {
                         document
                             ->project_uuid()
                             .to_string(),
+                    .license_identifier =
+                        license->has_value()
+                            ? (*license)->identifier
+                            : std::string{},
                     .generation =
                         document->generation(),
                     .dirty =
@@ -7252,6 +7260,46 @@ namespace lfs::vis::project {
         return hasDirtyProject();
     }
 
+    lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
+    ProjectLifecycle::license() {
+        if (!document_) {
+            return fail<std::optional<lfs::io::project::ProjectLicense>>(
+                lfs::ErrorCode::FailedPrecondition,
+                "There is no active project document.",
+                "Project lifecycle has not created or opened a document",
+                "project.document");
+        }
+        const std::lock_guard document_lock(document_access_mutex_);
+        return document_->project().license();
+    }
+
+    lfs::Result<void> ProjectLifecycle::setLicense(
+        const lfs::io::project::ProjectLicense& license) {
+        if (!document_) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "There is no active project document.",
+                "Project lifecycle has not created or opened a document",
+                "project.document");
+        }
+        const std::lock_guard document_lock(document_access_mutex_);
+        cached_project_info_.reset();
+        return document_->set_license(license);
+    }
+
+    lfs::Result<void> ProjectLifecycle::clearLicense() {
+        if (!document_) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "There is no active project document.",
+                "Project lifecycle has not created or opened a document",
+                "project.document");
+        }
+        const std::lock_guard document_lock(document_access_mutex_);
+        cached_project_info_.reset();
+        return document_->clear_license();
+    }
+
     lfs::Result<void>
     ProjectLifecycle::bindUntitledSessionToMaster(
         const std::filesystem::path& destination) {
@@ -7819,6 +7867,10 @@ namespace lfs::vis::project {
         const bool session_dirty =
             !blank_untitled &&
             hasSessionSoftDirtyChapters(*document_);
+        auto license = document_->project().license();
+        if (!license) {
+            return std::move(license).error();
+        }
         ProjectInfo result{
             .path =
                 isScratchBoundSession()
@@ -7828,6 +7880,10 @@ namespace lfs::vis::project {
                            : document_->source_path()),
             .project_uuid =
                 document_->project_uuid().to_string(),
+            .license_identifier =
+                license->has_value()
+                    ? (*license)->identifier
+                    : std::string{},
             .generation = document_->generation(),
             .dirty = hard_dirty,
             .session_dirty = session_dirty,
