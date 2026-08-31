@@ -246,6 +246,8 @@ namespace lfs::io::project {
 
         [[nodiscard]] const ProjectChapter& project() const noexcept;
         [[nodiscard]] ProjectChapter& edit_project() noexcept;
+        [[nodiscard]] lfs::Result<void> set_license(const ProjectLicense& value);
+        [[nodiscard]] lfs::Result<void> clear_license();
         [[nodiscard]] const ReferencesChapter& references() const noexcept;
         [[nodiscard]] ReferencesChapter& edit_references() noexcept;
         [[nodiscard]] const SceneGraphChapter& scene_graph() const noexcept;

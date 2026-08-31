@@ -6,6 +6,7 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "io/project_chapters.hpp"
 
 #include <cstdint>
 #include <expected>
@@ -114,6 +115,7 @@ namespace lfs::vis {
     struct LFS_VIS_API ProjectInfo {
         std::optional<std::filesystem::path> path;
         std::string project_uuid;
+        std::string license_identifier;
         std::uint64_t generation = 0;
         bool dirty = false;
         bool session_dirty = false;
@@ -212,6 +214,12 @@ namespace lfs::vis {
         projectHasPath() = 0;
         virtual lfs::Result<ProjectInfo>
         projectGetInfo() = 0;
+        virtual lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
+        projectGetLicense() = 0;
+        virtual lfs::Result<void>
+        projectSetLicense(const lfs::io::project::ProjectLicense& license) = 0;
+        virtual lfs::Result<void>
+        projectClearLicense() = 0;
         virtual lfs::Result<ProjectWritePoll>
         projectPollWrite() {
             return ProjectWritePoll{};

@@ -23,6 +23,41 @@ namespace {
     using namespace lfs::io::project;
     using namespace lfs::test::licht;
 
+    TEST(ProjectChapterTest, LicenseRoundTripsAndOmitsEmptyNotice) {
+        ProjectChapter chapter;
+        ASSERT_TRUE(chapter.set_license(ProjectLicense{
+            .identifier = "CC BY-NC",
+            .notice = "Copyright 2026",
+        }));
+
+        auto license = chapter.license();
+        ASSERT_TRUE(license);
+        ASSERT_TRUE(license->has_value());
+        EXPECT_EQ(*license, (ProjectLicense{
+                                .identifier = "CC BY-NC",
+                                .notice = "Copyright 2026",
+                            }));
+
+        ASSERT_TRUE(chapter.set_license(ProjectLicense{
+            .identifier = "CC BY-NC",
+        }));
+        license = chapter.license();
+        ASSERT_TRUE(license);
+        ASSERT_TRUE(license->has_value());
+        EXPECT_TRUE((*license)->notice.empty());
+        EXPECT_FALSE(chapter.dom().get_json("license.notice"));
+
+        ASSERT_TRUE(chapter.clear_license());
+        license = chapter.license();
+        ASSERT_TRUE(license);
+        EXPECT_FALSE(license->has_value());
+        EXPECT_FALSE(chapter.dom().get_json("license"));
+
+        const auto rejected = chapter.set_license(ProjectLicense{});
+        ASSERT_FALSE(rejected);
+        EXPECT_EQ(rejected.error().code(), lfs::ErrorCode::InvalidArgument);
+    }
+
     ParameterManagerSnapshot parameter_snapshot() {
         ParameterManagerSnapshot result;
         result.active_strategy = "mrnf";

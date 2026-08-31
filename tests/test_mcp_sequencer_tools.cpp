@@ -109,6 +109,15 @@ namespace {
         projectGetInfo() override {
             return lfs::vis::ProjectInfo{};
         }
+        lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
+        projectGetLicense() override {
+            return std::optional<lfs::io::project::ProjectLicense>{};
+        }
+        lfs::Result<void> projectSetLicense(
+            const lfs::io::project::ProjectLicense&) override {
+            return {};
+        }
+        lfs::Result<void> projectClearLicense() override { return {}; }
 
     private:
         lfs::core::Scene scene_;

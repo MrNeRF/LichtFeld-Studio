@@ -81,6 +81,8 @@ crashes happen, and files outlive programs.
 - **Checksummed throughout.** Every record and payload carries a CRC32c to catch corruption.
 - **Organized into chapters.** State is split into typed chapters (model, scene graph, parameters,
   layout, sequencer, camera, …); each chapter is the single source of truth for its fields.
+- The `PROJ` chapter may optionally carry a `license` object with a non-empty `identifier` and an
+  optional `notice`; omitted `license` means that no project license is declared.
 - **Autosave & recovery.** A periodic autosave writes to a separate `<project>.licht.autosave`
   sidecar. Recovery validates that sidecar against the master head and can materialize it into a
   retained recovery session before the next durable save. Compaction and recovery publication
