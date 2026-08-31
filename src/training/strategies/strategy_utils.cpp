@@ -6,10 +6,12 @@
 #include "core/assert.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
+#include "core/training_churn_metrics.hpp"
 #include "kernels/pruning_kernels.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <vector>
@@ -472,6 +474,7 @@ namespace lfs::training {
             (use_shN && (!shN.is_valid() || shN.ndim() != 3));
 
         if (capacity < need || layout_changed) {
+            const auto alloc_start = std::chrono::steady_clock::now();
             const size_t new_cap = std::max(
                 need,
                 static_cast<size_t>(static_cast<double>(std::max(capacity, need)) * 1.2) + 1);
@@ -494,11 +497,40 @@ namespace lfs::training {
                 shN = Tensor();
             }
             capacity = new_cap;
+            lfs::core::TrainingChurnMetrics::instance().record_child_alloc(static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - alloc_start)
+                    .count()));
         } else if (use_shN && sh_rest_in > 0 &&
                    (!shN.is_valid() || shN.shape()[0] < capacity || shN.shape()[1] != sh_rest_in)) {
+            const auto alloc_start = std::chrono::steady_clock::now();
             sh_rest = sh_rest_in;
             shN = Tensor::empty({capacity, sh_rest_in, 3}, device);
+            lfs::core::TrainingChurnMetrics::instance().record_child_alloc(static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - alloc_start)
+                    .count()));
         }
+    }
+
+    DensifyChildWorkspace::~DensifyChildWorkspace() {
+        if (!means.is_valid() && !rotations.is_valid() && !scales.is_valid() &&
+            !sh0.is_valid() && !sh0_flat.is_valid() && !shN.is_valid() &&
+            !opacities.is_valid()) {
+            return;
+        }
+        const auto free_start = std::chrono::steady_clock::now();
+        means = {};
+        rotations = {};
+        scales = {};
+        sh0 = {};
+        sh0_flat = {};
+        shN = {};
+        opacities = {};
+        lfs::core::TrainingChurnMetrics::instance().record_child_free(static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - free_start)
+                .count()));
     }
 
     namespace {

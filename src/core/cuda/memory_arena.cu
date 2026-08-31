@@ -6,6 +6,7 @@
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
+#include "core/training_churn_metrics.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "memory_arena.hpp"
 #include <algorithm>
@@ -1041,14 +1042,20 @@ namespace lfs::core {
         // device is drained and no frame is active. device_ptr must stay constant.
         // The last submitted batch may still be in flight (#1621): commit must
         // retire the old import timeline-deferred, never destroy it inline.
+        const auto recommit_start = std::chrono::steady_clock::now();
         if (!commit(new_size)) {
             sync_lock.unlock();
             sync_cv_.notify_all();
             return false;
         }
+        TrainingChurnMetrics::instance().record_arena_recommit(static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - recommit_start)
+                .count()));
 
         target->committed_size = new_size;
         target->capacity = new_size;
+        target->boundaries_since_growth = 0;
         target->realloc_count.fetch_add(1, std::memory_order_relaxed);
         target->offset.store(0, std::memory_order_release);
         frame_contexts_.clear();
@@ -1205,11 +1212,15 @@ namespace lfs::core {
         prop.location.id = arena.device;
 
         const auto timing_start = std::chrono::steady_clock::now();
-        const auto record_timing = [this, frame_id, &timing_start](bool committed) {
+        const auto record_timing = [this, frame_id, &arena, &timing_start](bool committed) {
             const auto elapsed_us = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
                                                               std::chrono::steady_clock::now() - timing_start)
                                                               .count());
             record_commit_timing(frame_id, elapsed_us, committed);
+            if (committed) {
+                arena.boundaries_since_growth = 0;
+                TrainingChurnMetrics::instance().record_arena_recommit(elapsed_us);
+            }
         };
 
         CUmemGenericAllocationHandle handle;
@@ -1328,13 +1339,22 @@ namespace lfs::core {
         return true;
     }
 
-    void RasterizerMemoryArena::decommit_unused_memory(Arena& arena, const bool release_all) {
+    void RasterizerMemoryArena::decommit_unused_memory(Arena& arena,
+                                                       const bool release_all,
+                                                       const bool allow_reclaim) {
         // Called with arena_mutex_ held
         // The caller must additionally own the global frame gate and have
         // synchronized the device. cuMemUnmap/cudaFree are not stream ordered.
         const size_t current_offset = arena.offset.load(std::memory_order_acquire);
         const size_t recent_peak = arena.peak_usage.load(std::memory_order_acquire);
         const size_t granularity = std::max<size_t>(arena.granularity, 1);
+        const auto decommit_start = std::chrono::steady_clock::now();
+        const auto record_decommit = [&decommit_start]() noexcept {
+            TrainingChurnMetrics::instance().record_arena_decommit(static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - decommit_start)
+                    .count()));
+        };
         const auto reset_logical_peak = [&arena, current_offset]() {
             size_t lifetime_peak = arena.lifetime_peak_usage.load(std::memory_order_relaxed);
             while (current_offset > lifetime_peak) {
@@ -1362,7 +1382,9 @@ namespace lfs::core {
                     ? std::numeric_limits<size_t>::max()
                     : tenant_high_water + granularity;
             const size_t desired_size = align_up(with_headroom, granularity);
-            if (arena.external_shrink && desired_size != 0 && desired_size < arena.committed_size) {
+            if (arena.external_shrink && desired_size != 0 && desired_size < arena.committed_size &&
+                (release_all ||
+                 (allow_reclaim && arena.committed_size - desired_size > granularity))) {
                 const size_t old_size = arena.committed_size;
                 const size_t shrunk_size = arena.external_shrink(desired_size);
                 if (shrunk_size != 0 && shrunk_size <= old_size) {
@@ -1375,6 +1397,7 @@ namespace lfs::core {
                               shrunk_size >> 20,
                               recent_peak >> 20,
                               viewer_high_water >> 20);
+                    record_decommit();
                 } else if (shrunk_size != 0) {
                     LOG_WARN("External arena '{}' shrink returned invalid size {} MiB (old {} MiB)",
                              arena.external_label.empty() ? "unnamed" : arena.external_label.c_str(),
@@ -1417,6 +1440,13 @@ namespace lfs::core {
                                                     : recent_peak + granularity,
                                                 granularity);
 
+        if (!release_all &&
+            (!allow_reclaim || retained_floor >= arena.committed_size ||
+             arena.committed_size - retained_floor <= granularity)) {
+            reset_logical_peak();
+            return;
+        }
+
         std::lock_guard<std::mutex> chunk_lock(arena.chunks_mutex);
         size_t total_freed = 0;
         size_t chunks_removed = 0;
@@ -1457,6 +1487,7 @@ namespace lfs::core {
         if (chunks_removed > 0) {
             LOG_DEBUG("Decommitted %zu MB (%zu chunks), arena now at %zu MB",
                       total_freed >> 20, chunks_removed, arena.committed_size >> 20);
+            record_decommit();
         } else {
             LOG_TRACE("No unused chunks to decommit");
         }
@@ -1541,6 +1572,21 @@ namespace lfs::core {
                  static_cast<unsigned long long>(growth_timing_->b1_time_us),
                  static_cast<unsigned long long>(growth_timing_->b3_events),
                  static_cast<unsigned long long>(growth_timing_->b3_time_us));
+
+        const auto churn = TrainingChurnMetrics::instance().snapshot();
+        LOG_INFO("Training churn timing: trims=%llu (%llu us); "
+                 "arena_decommit=%llu (%llu us) arena_recommit=%llu (%llu us); "
+                 "child_alloc=%llu (%llu us) child_free=%llu (%llu us)",
+                 static_cast<unsigned long long>(churn.trim_calls),
+                 static_cast<unsigned long long>(churn.trim_time_us),
+                 static_cast<unsigned long long>(churn.arena_decommit_events),
+                 static_cast<unsigned long long>(churn.arena_decommit_time_us),
+                 static_cast<unsigned long long>(churn.arena_recommit_events),
+                 static_cast<unsigned long long>(churn.arena_recommit_time_us),
+                 static_cast<unsigned long long>(churn.child_alloc_events),
+                 static_cast<unsigned long long>(churn.child_alloc_time_us),
+                 static_cast<unsigned long long>(churn.child_free_events),
+                 static_cast<unsigned long long>(churn.child_free_time_us));
     }
 
     bool RasterizerMemoryArena::shrink_at_boundary(bool release_all) {
@@ -1587,8 +1633,14 @@ namespace lfs::core {
 
                 if (release_all) {
                     arena_ptr->offset.store(0, std::memory_order_release);
+                } else {
+                    arena_ptr->boundaries_since_growth = std::min<std::uint32_t>(
+                        arena_ptr->boundaries_since_growth + 1,
+                        std::numeric_limits<std::uint32_t>::max());
                 }
-                decommit_unused_memory(*arena_ptr, release_all);
+                const bool allow_reclaim =
+                    release_all || arena_ptr->boundaries_since_growth >= 2;
+                decommit_unused_memory(*arena_ptr, release_all, allow_reclaim);
             }
         }
 
@@ -1689,6 +1741,7 @@ namespace lfs::core {
 
             // external_grow preserves the stable virtual base and returns the new
             // committed size. The Vulkan side re-imports its new handle later.
+            const auto recommit_start = std::chrono::steady_clock::now();
             const size_t new_committed = arena.external_grow(need);
             if (new_committed < need) {
                 LOG_ERROR("External rasterizer arena '%s' grow failed (need=%zu MiB, capacity=%zu MiB)",
@@ -1699,7 +1752,12 @@ namespace lfs::core {
             }
             arena.committed_size = new_committed;
             arena.capacity = new_committed;
+            arena.boundaries_since_growth = 0;
             arena.realloc_count.fetch_add(1, std::memory_order_relaxed);
+            TrainingChurnMetrics::instance().record_arena_recommit(static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - recommit_start)
+                    .count()));
             LOG_INFO("External rasterizer arena '%s' grew in place to %zu MiB (need %zu MiB)",
                      arena.external_label.empty() ? "unnamed" : arena.external_label.c_str(),
                      static_cast<size_t>(new_committed >> 20),
@@ -1970,6 +2028,7 @@ namespace lfs::core {
         arena.fallback_buffer = new_buffer;
         arena.capacity = new_capacity;
         arena.committed_size = new_capacity;
+        arena.boundaries_since_growth = 0;
         arena.generation = generation_counter_.fetch_add(1, std::memory_order_relaxed);
         arena.realloc_count.fetch_add(1, std::memory_order_relaxed);
 

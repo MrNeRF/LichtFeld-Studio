@@ -7,8 +7,8 @@
 #include "core/cuda_allocation.hpp"
 #include "diagnostics/vram_profiler.hpp"
 
-#include <cuda_runtime.h>
 #include <cstdint>
+#include <cuda_runtime.h>
 #include <string_view>
 
 namespace lfs::training::cuda_scratch {

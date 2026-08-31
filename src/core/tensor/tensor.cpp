@@ -947,6 +947,10 @@ namespace lfs::core {
         PinnedMemoryAllocator::instance().empty_cache();
     }
 
+    void Tensor::trim_memory_pool_if_reserved_unused_exceeds(const size_t threshold_bytes) {
+        CudaMemoryPool::instance().trim_cached_memory_if_reserved_unused_exceeds(threshold_bytes);
+    }
+
     void Tensor::trim_device_memory_pool() {
         CudaMemoryPool::instance().trim_cached_memory();
     }

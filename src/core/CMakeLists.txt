@@ -57,6 +57,7 @@ set(CORE_SOURCES
         abi.cpp
         alloc_counter.cpp
         crash_handler.cpp
+        training_churn_metrics.cpp
         cuda_error.cpp
         cuda_error_typed.cpp
         device_fault.cpp

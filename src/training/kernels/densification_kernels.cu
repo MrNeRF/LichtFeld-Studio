@@ -660,7 +660,6 @@ namespace lfs::training::kernels {
         const float* d_median = d_sorted + (h_count / 2);
         div_by_device_scalar_kernel<<<grid, block, 0, stream>>>(data, n, d_median, 0.0f);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.div_by_median");
-
     }
 
     namespace {

@@ -157,6 +157,8 @@ namespace lfs::training {
      * Avoids per-refine empty() allocs for means/rot/scale/sh0/shN/opacity.
      */
     struct DensifyChildWorkspace {
+        ~DensifyChildWorkspace();
+
         lfs::core::Tensor means;     // [cap, 3]
         lfs::core::Tensor rotations; // [cap, 4]
         lfs::core::Tensor scales;    // [cap, 3]

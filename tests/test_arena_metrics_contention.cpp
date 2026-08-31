@@ -70,6 +70,7 @@ TEST_F(ArenaMetricsContentionTest, TrainerMetricsOppositeOrderNoDeadlock) {
     RasterizerMemoryArena arena;
     std::shared_mutex render_mutex;
     std::atomic<bool> trainer_done{false};
+    std::atomic<bool> metrics_started{false};
     std::atomic<int> metrics_attempts{0};
     std::atomic<int> metrics_acquired{0};
 
@@ -77,6 +78,9 @@ TEST_F(ArenaMetricsContentionTest, TrainerMetricsOppositeOrderNoDeadlock) {
         // Trainer: frame-then-lock, exclusive on "refine" iterations.
         std::thread trainer([&] {
             cudaSetDevice(0);
+            while (!metrics_started.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
             for (int i = 1; i <= 400; ++i) {
                 const uint64_t frame = arena.begin_frame(nullptr, false);
                 std::optional<std::unique_lock<std::shared_mutex>> excl;
@@ -91,6 +95,7 @@ TEST_F(ArenaMetricsContentionTest, TrainerMetricsOppositeOrderNoDeadlock) {
         // Metrics: lock-then-(bounded)-frame, the opposite order.
         std::thread metrics([&] {
             cudaSetDevice(0);
+            metrics_started.store(true, std::memory_order_release);
             while (!trainer_done.load(std::memory_order_acquire)) {
                 std::shared_lock<std::shared_mutex> shared(render_mutex);
                 const RasterizerMemoryArena::ScopedBeginFrameTimeout timeout(20);

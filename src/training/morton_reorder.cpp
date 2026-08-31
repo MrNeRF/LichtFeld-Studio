@@ -422,7 +422,13 @@ namespace lfs::training::morton {
 
         splat.note_param_layout_changed();
         LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(), "morton reorder device barrier");
-        lfs::core::Tensor::trim_memory_pool();
+        // Morton's temporary permutation buffers normally return to the CUDA
+        // pool immediately. Keep the VRAM hygiene trim when that leaves a
+        // substantial reserved/unused tail, but avoid paying a device-wide
+        // sync for small tails on every reorder.
+        constexpr std::size_t MORTON_TRIM_UNUSED_THRESHOLD = 64ULL << 20;
+        lfs::core::Tensor::trim_memory_pool_if_reserved_unused_exceeds(
+            MORTON_TRIM_UNUSED_THRESHOLD);
         result.applied = true;
         LOG_INFO("Morton reordered {} Gaussians", n);
         return result;

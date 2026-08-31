@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <functional>
@@ -142,6 +143,8 @@ namespace lfs::core {
             std::atomic<size_t> total_allocated{0};
             std::atomic<size_t> realloc_count{0};
             std::chrono::steady_clock::time_point last_log_time;
+            // B1 hysteresis: avoid immediately undoing a recent recommit.
+            std::uint32_t boundaries_since_growth = 0;
         };
 
         struct GrowthTiming {
@@ -320,7 +323,8 @@ namespace lfs::core {
         size_t align_size(size_t size) const;
         void record_allocation(uint64_t frame_id, const BufferHandle& handle);
         bool commit_more_memory(Arena& arena, size_t required_size, uint64_t frame_id);
-        void decommit_unused_memory(Arena& arena, bool release_all = false);
+        void decommit_unused_memory(Arena& arena, bool release_all = false,
+                                    bool allow_reclaim = true);
         bool shrink_at_boundary(bool release_all);
         void record_commit_timing(uint64_t frame_id, uint64_t elapsed_us, bool committed);
         void record_growth_path_timing(uint64_t frame_id, uint64_t elapsed_us,

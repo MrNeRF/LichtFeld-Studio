@@ -1687,6 +1687,7 @@ namespace lfs::core {
         }
 
         static void trim_memory_pool();
+        static void trim_memory_pool_if_reserved_unused_exceeds(size_t threshold_bytes);
         // CUDA device pool only; leaves the pinned host cache intact.
         static void trim_device_memory_pool();
         static void shutdown_memory_pool();
