@@ -43,7 +43,7 @@ class PreferencesPanel(Panel):
 
     PROGRESS_BAR_OPTIONS = (
         ("classic", "preferences.progress_bar_classic"),
-        ("minecraft", "preferences.progress_bar_minecraft"),
+        ("miner", "preferences.progress_bar_miner"),
     )
 
     EXPANDABLE_SECTIONS = (

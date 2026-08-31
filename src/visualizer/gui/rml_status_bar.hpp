@@ -190,7 +190,7 @@ namespace lfs::vis::gui {
         MiningSceneState mining_scene_;
         std::string mining_wall_rml_;
         std::string mining_debris_rml_;
-        bool progress_minecraft_pref_ = false;
+        bool progress_miner_pref_ = false;
         std::chrono::steady_clock::time_point progress_style_checked_at_{};
 
         struct ModelState {
@@ -199,7 +199,7 @@ namespace lfs::vis::gui {
             std::string mode_text;
             std::string mode_color;
             bool show_training = false;
-            bool progress_minecraft = false;
+            bool progress_miner = false;
             bool miner_raised = false;
             bool miner_step_a = false;
             bool miner_strike = false;
