@@ -1503,9 +1503,17 @@ namespace lfs::vis::project {
                             if (auto started =
                                     viewer_.startTraining();
                                 !started) {
-                                LOG_ERROR(
-                                    "Failed to start training after session restore: {}",
-                                    started.error());
+                                const auto session =
+                                    trainingSessionState();
+                                if (session.completed) {
+                                    LOG_WARN(
+                                        "Training start after session restore was not accepted: {}",
+                                        started.error());
+                                } else {
+                                    LOG_ERROR(
+                                        "Failed to start training after session restore: {}",
+                                        started.error());
+                                }
                             }
                         },
                     .cancel = {},
@@ -3630,6 +3638,7 @@ namespace lfs::vis::project {
                 : 0;
         last_project_write_error_.clear();
         last_project_write_error_code_.reset();
+        last_project_write_typed_error_.reset();
         std::vector<std::byte> owned_preview(
             options.preview_png.begin(),
             options.preview_png.end());
@@ -3688,8 +3697,10 @@ namespace lfs::vis::project {
                                                      options));
                         std::string error;
                         std::optional<lfs::ErrorCode> error_code;
+                        std::optional<lfs::Error> typed_error;
                         if (!saved) {
                             error_code = saved.error().code();
+                            typed_error = saved.error();
                             error =
                                 developerError(
                                     saved.error());
@@ -3702,7 +3713,8 @@ namespace lfs::vis::project {
                             handle,
                             stop.stop_requested(),
                             std::move(error),
-                            error_code);
+                            error_code,
+                            std::move(typed_error));
                         queueProjectWriteSettlement(
                             handle);
                     });
@@ -3803,6 +3815,7 @@ namespace lfs::vis::project {
         const auto destination = project_write_destination_;
         last_project_write_error_.clear();
         last_project_write_error_code_.reset();
+        last_project_write_typed_error_.reset();
         try {
             project_write_thread_ = std::jthread(
                 [this, document = std::move(document), root = *root,
@@ -3814,7 +3827,8 @@ namespace lfs::vis::project {
                     const auto fail_worker = [&](const lfs::Error& error) {
                         const auto detail = developerError(error);
                         LOG_ERROR("Dataset embed failed: {}", detail);
-                        jobs.finishWork(handle, false, detail, error.code());
+                        jobs.finishWork(
+                            handle, false, detail, error.code(), error);
                         queueProjectWriteSettlement(handle);
                     };
                     std::string images_folder;
@@ -4052,6 +4066,7 @@ namespace lfs::vis::project {
                 : 0;
         last_project_write_error_.clear();
         last_project_write_error_code_.reset();
+        last_project_write_typed_error_.reset();
         try {
             project_write_thread_ =
                 std::jthread(
@@ -4819,6 +4834,7 @@ namespace lfs::vis::project {
             automatic;
         last_project_write_error_.clear();
         last_project_write_error_code_.reset();
+        last_project_write_typed_error_.reset();
         try {
             project_write_thread_ =
                 std::jthread(
@@ -4879,6 +4895,10 @@ namespace lfs::vis::project {
                                 ? std::optional<lfs::ErrorCode>{}
                                 : std::optional{
                                       compacted.error().code()};
+                        const auto compact_typed_error =
+                            compacted
+                                ? std::optional<lfs::Error>{}
+                                : std::optional{compacted.error()};
                         jobs.finishWork(
                             handle,
                             stop.stop_requested(),
@@ -4887,7 +4907,8 @@ namespace lfs::vis::project {
                                 : developerError(
                                       compacted
                                           .error()),
-                            compact_error_code);
+                            compact_error_code,
+                            compact_typed_error);
                         queueProjectWriteSettlement(
                             handle);
                     });
@@ -4955,12 +4976,18 @@ namespace lfs::vis::project {
 
         std::string error = snapshot->error;
         last_project_write_error_code_ = snapshot->error_code;
+        last_project_write_typed_error_ = snapshot->typed_error;
         if (snapshot->worker_canceled &&
             error.empty()) {
             last_project_write_error_code_ =
                 lfs::ErrorCode::Cancelled;
             error =
                 "The project write was canceled.";
+            last_project_write_typed_error_ = lifecycleError(
+                lfs::ErrorCode::Cancelled,
+                error,
+                "Project write worker reported cancellation",
+                "project.job");
         }
         if (!error.empty() &&
             project_write_purpose_ ==
@@ -4995,6 +5022,8 @@ namespace lfs::vis::project {
                     !adopted) {
                     last_project_write_error_code_ =
                         adopted.error().code();
+                    last_project_write_typed_error_ =
+                        adopted.error();
                     error =
                         developerError(
                             adopted.error());
@@ -5010,6 +5039,8 @@ namespace lfs::vis::project {
                 !adopted) {
                 last_project_write_error_code_ =
                     adopted.error().code();
+                last_project_write_typed_error_ =
+                    adopted.error();
                 error =
                     developerError(
                         adopted.error());
@@ -5098,6 +5129,8 @@ namespace lfs::vis::project {
             if (!reopened) {
                 last_project_write_error_code_ =
                     reopened.error().code();
+                last_project_write_typed_error_ =
+                    reopened.error();
                 error = developerError(
                     reopened.error());
             } else {
@@ -5249,8 +5282,13 @@ namespace lfs::vis::project {
                     LOG_WARN(
                         "Autosave deferred: {}",
                         error);
-                    publishAutosaveMemoryWarning(
-                        error, error);
+                    if (last_project_write_typed_error_) {
+                        publishAutosaveMemoryWarning(
+                            *last_project_write_typed_error_);
+                    } else {
+                        publishAutosaveMemoryWarning(
+                            error, error);
+                    }
                     autosave_memory_warning_published_ = true;
                 } else {
                     LOG_ERROR(

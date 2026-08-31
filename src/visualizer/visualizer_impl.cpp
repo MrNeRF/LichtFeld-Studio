@@ -3608,6 +3608,16 @@ namespace lfs::vis {
             trainer_manager_->resumeTraining();
             return {};
         }
+        if (!trainer_manager_->canStart()) {
+            if (trainer_manager_->isFinished()) {
+                return std::unexpected(std::format(
+                    "Training already completed at iteration {}; starting a new training run requires overwrite consent.",
+                    trainer_manager_->getCurrentIteration()));
+            }
+            return std::unexpected(std::string(
+                trainer_manager_->getActionBlockedReason(
+                    TrainingAction::Start)));
+        }
         if (project_lifecycle_) {
             if (auto prepared =
                     project_lifecycle_
@@ -3619,7 +3629,7 @@ namespace lfs::vis {
             }
         }
         if (!trainer_manager_->startTraining())
-            return std::unexpected("Failed to start training");
+            return std::unexpected("The training manager rejected the start request");
         return {};
     }
 

@@ -695,6 +695,7 @@ namespace lfs::vis::project {
         bool project_write_automatic_ = false;
         std::string last_project_write_error_;
         std::optional<lfs::ErrorCode> last_project_write_error_code_;
+        std::optional<lfs::Error> last_project_write_typed_error_;
         lfs::io::project::ProjectStorageStats
             storage_stats_;
         bool compaction_suggested_ = false;
