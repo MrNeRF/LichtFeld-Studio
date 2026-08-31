@@ -1452,6 +1452,9 @@ namespace lfs::io {
                     } else {
                         output = Tensor::empty(output_shape, Device::CUDA, DataType::UInt8);
                     }
+                    if (cuda_stream) {
+                        output.set_stream(static_cast<cudaStream_t>(cuda_stream));
+                    }
                     cuda::launch_uint8_hwc_to_uint8_chw(
                         hwc[i].ptr<uint8_t>(), output.ptr<uint8_t>(),
                         heights[i], widths[i], 3, static_cast<cudaStream_t>(cuda_stream));
@@ -1471,6 +1474,9 @@ namespace lfs::io {
                     } else {
                         output = Tensor::empty(output_shape, Device::CUDA, DataType::Float32);
                     }
+                    if (cuda_stream) {
+                        output.set_stream(static_cast<cudaStream_t>(cuda_stream));
+                    }
                     cuda::launch_uint8_hwc_to_float32_chw(
                         hwc[i].ptr<uint8_t>(), output.ptr<float>(),
                         heights[i], widths[i], 3, static_cast<cudaStream_t>(cuda_stream));
@@ -1478,9 +1484,6 @@ namespace lfs::io {
                         *(*reusable_outputs)[i] = output;
                     }
                     outputs.push_back(std::move(output));
-                }
-                if (cuda_stream) {
-                    outputs.back().set_stream(static_cast<cudaStream_t>(cuda_stream));
                 }
             }
             if (synchronize) {
