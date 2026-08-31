@@ -10,6 +10,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/source_site.hpp"
+#include "gui/error_surface_types.hpp"
 #include "gui/string_keys.hpp"
 
 #include <algorithm>
@@ -92,6 +93,9 @@ namespace lfs::vis::gui {
         const lfs::ErrorCode code =
             e.resource_exhausted ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::Internal;
         std::string message = e.error.value_or(LOC(lichtfeld::Strings::Runtime::TRAINING_UNKNOWN_ERROR));
+        if (isHostMemorySaveMessage(message)) {
+            message = LOCF("runtime.training_save_no_memory", message);
+        }
         return makeNotification(code, lfs::ErrorDomain::Training, lfs::Severity::Error,
                                 std::move(message), error_op::kTrain, LFS_SOURCE_SITE_CURRENT());
     }

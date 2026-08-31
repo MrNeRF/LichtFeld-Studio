@@ -2279,6 +2279,8 @@
     "perf_hud_tooltip": "Show or hide the performance HUD"
   },
   "runtime": {
+    "training_save_no_memory": "No se pudo guardar el proyecto: {}",
+    "autosave_deferred_no_memory": "El guardado automático está en pausa: no hay suficiente memoria libre ({}). El entrenamiento continúa; el guardado automático se reanudará cuando se libere memoria.",
     "grouped_changes": "Cambios agrupados",
     "untitled_change": "Cambio sin título",
     "history_summary": "{0} deshacer / {1} rehacer · {2} en total",

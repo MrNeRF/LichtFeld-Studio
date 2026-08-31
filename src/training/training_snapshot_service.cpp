@@ -9,6 +9,7 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/cuda_error_typed.hpp"
 #include "core/logger.hpp"
+#include "core/resource_messages.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/sh_value_quant_kernels.hpp"
 #include "core/splat_exportable_storage.hpp"
@@ -21,6 +22,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <exception>
@@ -93,6 +95,45 @@ namespace lfs::training {
             });
         }
 
+        [[nodiscard]] std::string format_memory_size(
+            const std::uint64_t bytes) {
+            constexpr double BYTES_PER_MIB =
+                1024.0 * 1024.0;
+            constexpr double BYTES_PER_GIB =
+                1024.0 * 1024.0 * 1024.0;
+            if (bytes >=
+                static_cast<std::uint64_t>(BYTES_PER_GIB)) {
+                return std::format(
+                    "{:.1f} GiB",
+                    static_cast<double>(bytes) /
+                        BYTES_PER_GIB);
+            }
+            return std::format(
+                "{:.1f} MiB",
+                static_cast<double>(bytes) /
+                    BYTES_PER_MIB);
+        }
+
+        [[nodiscard]] lfs::Error snapshot_host_memory_error(
+            const std::uint64_t required_bytes,
+            const std::uint64_t available_bytes,
+            std::string detail,
+            const lfs::core::SourceSite source) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::ResourceExhausted,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = std::format(
+                    "{}: needed {}, available {}.",
+                    lfs::core::HOST_MEMORY_SAVE_ERROR_PREFIX,
+                    format_memory_size(required_bytes),
+                    format_memory_size(available_bytes)),
+                .detail = std::move(detail),
+                .detection = source,
+                .fields = lfs::SmallFields{}.add(
+                    "resource", "host_memory"),
+            });
+        }
+
         std::uint64_t read_rss_bytes() {
 #if defined(__linux__)
             std::ifstream input("/proc/self/status");
@@ -121,11 +162,12 @@ namespace lfs::training {
         };
 
         HostMemoryInfo read_host_memory_info() {
+            HostMemoryInfo result;
 #if defined(_WIN32)
             MEMORYSTATUSEX status{};
             status.dwLength = sizeof(status);
             if (GlobalMemoryStatusEx(&status)) {
-                return {
+                result = {
                     .total_bytes = status.ullTotalPhys,
                     .available_bytes = status.ullAvailPhys,
                 };
@@ -133,7 +175,6 @@ namespace lfs::training {
 #elif defined(__linux__)
             std::ifstream input("/proc/meminfo");
             std::string line;
-            HostMemoryInfo result;
             while (std::getline(input, line)) {
                 unsigned long long kib = 0;
                 if (std::sscanf(
@@ -149,9 +190,29 @@ namespace lfs::training {
                         static_cast<std::uint64_t>(kib) * 1024;
                 }
             }
-            return result;
 #endif
-            return {};
+            const auto read_override = [](const char* name)
+                -> std::optional<std::uint64_t> {
+                const auto* value = std::getenv(name);
+                if (!value) {
+                    return std::nullopt;
+                }
+                unsigned long long bytes = 0;
+                char trailing = '\0';
+                if (std::sscanf(value, "%llu %c", &bytes, &trailing) != 1) {
+                    return std::nullopt;
+                }
+                return static_cast<std::uint64_t>(bytes);
+            };
+            if (const auto total = read_override(
+                    "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_TOTAL_BYTES")) {
+                result.total_bytes = *total;
+            }
+            if (const auto available = read_override(
+                    "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES")) {
+                result.available_bytes = *available;
+            }
+            return result;
         }
 
 #if defined(__x86_64__) || defined(_M_X64)
@@ -1953,9 +2014,11 @@ namespace lfs::training {
             const auto host_memory =
                 read_host_memory_info();
             const auto reserve_bytes =
-                std::max<std::uint64_t>(
-                    MIN_HOST_MEMORY_RESERVE_BYTES,
-                    host_memory.total_bytes / 5);
+                request.relaxed_host_memory_gate
+                    ? HOST_MEMORY_GATE_HEADROOM_BYTES
+                    : std::max<std::uint64_t>(
+                          MIN_HOST_MEMORY_RESERVE_BYTES,
+                          host_memory.total_bytes / 5);
             if (prepared->checkpoint_bytes >
                 std::numeric_limits<std::uint64_t>::max() -
                     reserve_bytes) {
@@ -1969,11 +2032,15 @@ namespace lfs::training {
             if (host_memory.available_bytes == 0 ||
                 host_memory.available_bytes <
                     required_host_memory) {
-                return snapshot_error(
-                    lfs::ErrorCode::ResourceExhausted,
+                return snapshot_host_memory_error(
+                    required_host_memory,
+                    host_memory.available_bytes,
                     std::format(
-                        "Training snapshot deferred: {} bytes available, "
+                        "Training snapshot {}: {} bytes available, "
                         "{} required ({} snapshot + {} reserve)",
+                        request.relaxed_host_memory_gate
+                            ? "rejected"
+                            : "deferred",
                         host_memory.available_bytes,
                         required_host_memory,
                         prepared->checkpoint_bytes,

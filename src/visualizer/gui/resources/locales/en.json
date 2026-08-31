@@ -2279,6 +2279,8 @@
     "perf_hud_tooltip": "Show or hide the performance HUD"
   },
   "runtime": {
+    "training_save_no_memory": "Project save failed: {}",
+    "autosave_deferred_no_memory": "Autosave is paused: not enough free memory ({}). Training continues; autosave resumes when memory frees up.",
     "grouped_changes": "Grouped changes",
     "untitled_change": "Untitled change",
     "history_summary": "{0} undo / {1} redo · {2} total",

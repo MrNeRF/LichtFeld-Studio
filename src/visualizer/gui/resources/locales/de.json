@@ -2279,6 +2279,8 @@
     "perf_hud_tooltip": "Show or hide the performance HUD"
   },
   "runtime": {
+    "training_save_no_memory": "Projekt konnte nicht gespeichert werden: {}",
+    "autosave_deferred_no_memory": "Automatisches Speichern ist pausiert: nicht genug freier Speicher ({}). Das Training läuft weiter; das automatische Speichern wird fortgesetzt, sobald wieder Speicher frei ist.",
     "grouped_changes": "Gruppierte Änderungen",
     "untitled_change": "Unbenannte Änderung",
     "history_summary": "{0} Rückgängig / {1} Wiederholen · {2} gesamt",

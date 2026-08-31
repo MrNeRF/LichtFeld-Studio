@@ -4154,6 +4154,8 @@ namespace lfs::training {
         const TrainingSnapshotCaptureRequest request{
             .iteration = capture_iteration,
             .snapshot_uuid = snapshot_uuid,
+            .relaxed_host_memory_gate =
+                write_kind == ProjectSnapshotWriteKind::Explicit,
             .strategy = *strategy_,
             .params = checkpoint_params,
             .bilateral_grid = bilateral_grid_.get(),
@@ -4178,6 +4180,8 @@ namespace lfs::training {
                 "at iteration {}: {}",
                 capture_iteration, message);
             std::lock_guard lock(project_snapshot_mutex_);
+            last_project_writer_typed_error_ =
+                prepared.error();
             fail_project_request_locked(
                 request_id, message);
             if (prestaged_project_request_id_ ==
@@ -4398,6 +4402,8 @@ namespace lfs::training {
         TrainingSnapshotCaptureRequest request{
             .iteration = iteration,
             .snapshot_uuid = snapshot_uuid,
+            .relaxed_host_memory_gate =
+                cpu_write_kind == ProjectSnapshotWriteKind::Explicit,
             .strategy = *strategy_,
             .params = checkpoint_params,
             .bilateral_grid = bilateral_grid_.get(),
@@ -4513,6 +4519,8 @@ namespace lfs::training {
                 std::lock_guard lock(
                     project_snapshot_mutex_);
                 last_project_writer_error_ = message;
+                last_project_writer_typed_error_ =
+                    pending.error();
                 // A topology-changing step may invalidate a preplanned
                 // layout. Coalesce and replan at the next post-step point.
                 if (!requested_project_path_) {
@@ -4548,6 +4556,7 @@ namespace lfs::training {
                 project_snapshot_mutex_);
             last_project_writer_error_ =
                 "Snapshot CPU-state UUID/iteration proof failed";
+            last_project_writer_typed_error_.reset();
             last_failed_project_request_id_ =
                 std::max(
                     last_failed_project_request_id_,
@@ -5318,6 +5327,8 @@ namespace lfs::training {
                                 lfs::format_for_developer(
                                     writer_result
                                         .error());
+                            last_project_writer_typed_error_ =
+                                writer_result.error();
                             last_failed_project_request_id_ =
                                 std::max(
                                     last_failed_project_request_id_,
@@ -8503,14 +8514,25 @@ namespace lfs::training {
                         *terminal_project_path,
                         terminal_iteration);
                     !save_result) {
-                    append_terminal_error(lfs::make_error(lfs::ErrorInit{
-                        .code = lfs::ErrorCode::Internal,
-                        .domain = lfs::ErrorDomain::Training,
-                        .user_message = "Terminal training save failed.",
-                        .detail = std::format("Terminal save failed at iteration {}: {}",
-                                              terminal_iteration, save_result.error()),
-                        .detection = LFS_SOURCE_SITE_CURRENT(),
-                    }));
+                    std::optional<lfs::Error> typed_save_error;
+                    {
+                        std::lock_guard lock(project_snapshot_mutex_);
+                        typed_save_error =
+                            last_project_writer_typed_error_;
+                    }
+                    if (typed_save_error) {
+                        append_terminal_error(
+                            std::move(*typed_save_error));
+                    } else {
+                        append_terminal_error(lfs::make_error(lfs::ErrorInit{
+                            .code = lfs::ErrorCode::Internal,
+                            .domain = lfs::ErrorDomain::Training,
+                            .user_message = "Terminal training save failed.",
+                            .detail = std::format("Terminal save failed at iteration {}: {}",
+                                                  terminal_iteration, save_result.error()),
+                            .detection = LFS_SOURCE_SITE_CURRENT(),
+                        }));
+                    }
                 } else {
                     const auto params = getParams();
                     if (!params.optimization.headless) {
@@ -8743,6 +8765,7 @@ namespace lfs::training {
                 std::move(*chapters);
             prestaged_project_request_id_ = 0;
             last_project_writer_error_.clear();
+            last_project_writer_typed_error_.reset();
         }
 
         prepare_project_snapshot_at_safe_point(

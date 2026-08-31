@@ -22,6 +22,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <format>
@@ -139,6 +140,45 @@ namespace {
                count > 0;
     }
 
+    class ScopedEnvironmentVariable {
+    public:
+        ScopedEnvironmentVariable(const char* name, const std::string& value)
+            : name_(name) {
+            if (const char* previous = std::getenv(name)) {
+                previous_ = previous;
+            }
+            set(value);
+        }
+
+        ~ScopedEnvironmentVariable() {
+            set(previous_);
+        }
+
+        void set(const std::string& value) const {
+#if defined(_WIN32)
+            (void)_putenv_s(name_.c_str(), value.c_str());
+#else
+            (void)setenv(name_.c_str(), value.c_str(), 1);
+#endif
+        }
+
+        void set(const std::optional<std::string>& value) const {
+#if defined(_WIN32)
+            (void)_putenv_s(name_.c_str(), value ? value->c_str() : "");
+#else
+            if (value) {
+                (void)setenv(name_.c_str(), value->c_str(), 1);
+            } else {
+                (void)unsetenv(name_.c_str());
+            }
+#endif
+        }
+
+    private:
+        std::string name_;
+        std::optional<std::string> previous_;
+    };
+
     TEST(TrainingSnapshotServiceConfigTest,
          RejectsPinnedRingLargerThan512MiB) {
         EXPECT_THROW(
@@ -152,10 +192,71 @@ namespace {
     }
 
     TEST(TrainingSnapshotServiceTest,
+         ExplicitSavesUseRelaxedHostMemoryGate) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+
+        constexpr std::size_t GAUSSIAN_COUNT = 8192;
+        constexpr std::uint64_t GIB = 1024ull * 1024 * 1024;
+        constexpr std::uint64_t MIB = 1024ull * 1024;
+        auto params = make_snapshot_test_params(GAUSSIAN_COUNT);
+        auto model = make_snapshot_test_splat(GAUSSIAN_COUNT);
+        lfs::training::MCMC strategy(*model);
+        strategy.initialize(params.optimization);
+
+        std::ostringstream reference_stream(std::ios::binary | std::ios::out);
+        const auto reference = lfs::training::serialize_checkpoint(
+            reference_stream, 500, strategy, params, nullptr, nullptr, nullptr, nullptr);
+        ASSERT_TRUE(reference.has_value())
+            << lfs::format_for_developer(reference.error());
+
+        const auto checkpoint_bytes = reference->bytes;
+        const ScopedEnvironmentVariable total_memory(
+            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_TOTAL_BYTES", std::to_string(16 * GIB));
+        ScopedEnvironmentVariable available_memory(
+            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
+            std::to_string(checkpoint_bytes + GIB));
+
+        lfs::training::TrainingSnapshotService service({
+            .ring_slots = 4,
+            .band_bytes = 64 * 1024,
+            .calibration_bytes = 64,
+            .calibration_iterations = 4,
+        });
+        lfs::training::TrainingSnapshotCaptureRequest request{
+            .iteration = 500,
+            .strategy = strategy,
+            .params = params,
+        };
+        ASSERT_TRUE(service.initialize(request));
+
+        auto autosave = service.prepare(request);
+        ASSERT_FALSE(autosave.has_value());
+        EXPECT_NE(lfs::format_for_developer(autosave.error()).find("deferred"),
+                  std::string::npos);
+
+        request.relaxed_host_memory_gate = true;
+        auto explicit_save = service.prepare(request);
+        ASSERT_TRUE(explicit_save.has_value())
+            << lfs::format_for_developer(explicit_save.error());
+
+        available_memory.set(std::to_string(checkpoint_bytes + 768 * MIB - 1));
+        auto near_oom_explicit_save = service.prepare(request);
+        ASSERT_FALSE(near_oom_explicit_save.has_value());
+        EXPECT_NE(
+            lfs::format_for_developer(near_oom_explicit_save.error()).find("rejected"),
+            std::string::npos);
+    }
+
+    TEST(TrainingSnapshotServiceTest,
          CapturesByteExactLfkpAndOwnsPostResumeBytes) {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
         }
+        const ScopedEnvironmentVariable pinned_host_memory(
+            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
+            std::to_string(64ull * 1024 * 1024 * 1024));
 
         constexpr std::size_t GAUSSIAN_COUNT = 8192;
         constexpr int SAVED_ITERATION = 137;
@@ -399,6 +500,9 @@ namespace {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
         }
+        const ScopedEnvironmentVariable pinned_host_memory(
+            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
+            std::to_string(64ull * 1024 * 1024 * 1024));
 
         constexpr std::size_t GAUSSIAN_COUNT = 4096;
         constexpr int SAVED_ITERATION = 6;
@@ -613,6 +717,9 @@ namespace {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
         }
+        const ScopedEnvironmentVariable pinned_host_memory(
+            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
+            std::to_string(64ull * 1024 * 1024 * 1024));
 
         constexpr std::size_t GAUSSIAN_COUNT =
             1'300'000;

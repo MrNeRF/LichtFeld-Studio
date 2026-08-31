@@ -2279,6 +2279,8 @@
     "perf_hud_tooltip": "Show or hide the performance HUD"
   },
   "runtime": {
+    "training_save_no_memory": "Échec de l'enregistrement du projet : {}",
+    "autosave_deferred_no_memory": "L'enregistrement automatique est en pause : mémoire libre insuffisante ({}). L'entraînement continue ; l'enregistrement automatique reprendra dès que de la mémoire sera libérée.",
     "grouped_changes": "Modifications groupées",
     "untitled_change": "Modification sans titre",
     "history_summary": "{0} annulations / {1} rétablissements · {2} au total",

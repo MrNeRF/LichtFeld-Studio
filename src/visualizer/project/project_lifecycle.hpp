@@ -665,6 +665,7 @@ namespace lfs::vis::project {
         std::uint64_t
             last_autosaved_scene_serial_ = 0;
         std::uint64_t autosave_sequence_ = 0;
+        bool autosave_memory_warning_published_ = false;
         bool application_close_pending_ = false;
         bool close_discard_requested_ = false;
         bool suppress_training_adoption_ = false;
