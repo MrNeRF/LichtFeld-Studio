@@ -83,6 +83,30 @@ namespace lfs::io {
             }
         }
 
+        uint32_t jpeg_batch_sentinel_seed(const size_t sample_idx, const bool cuda_retry) {
+            constexpr uint32_t PRIMARY_SALT = 0xa511e9b3u;
+            constexpr uint32_t RETRY_SALT = 0x63d83595u;
+            const uint32_t member = static_cast<uint32_t>(sample_idx + 1);
+            return member * 0x9e3779b9u ^ (cuda_retry ? RETRY_SALT : PRIMARY_SALT);
+        }
+
+        void get_exact_processing_statuses(
+            nvimgcodecFuture_t future,
+            std::vector<nvimgcodecProcessingStatus_t>& statuses,
+            const size_t expected_count,
+            const char* operation) {
+            size_t returned_count = expected_count;
+            const nvimgcodecStatus_t status = nvimgcodecFutureGetProcessingStatus(
+                future, statuses.data(), &returned_count);
+            if (status != NVIMGCODEC_STATUS_SUCCESS || returned_count != expected_count) {
+                throw std::runtime_error(
+                    std::string(operation) + " processing-status query failed: status=" +
+                    nvimgcodec_status_to_string(status) + ", expected=" +
+                    std::to_string(expected_count) + ", returned=" +
+                    std::to_string(returned_count));
+            }
+        }
+
         bool is_fatal_cuda_context_error(const cudaError_t error) noexcept {
             switch (error) {
             case cudaErrorIllegalAddress:
@@ -778,18 +802,97 @@ namespace lfs::io {
 
         nvimgcodecInstance_t instance = nullptr;
         std::vector<nvimgcodecDecoder_t> decoder_pool;
+        // Created only after overwrite validation finds a skipped destination.
+        // The allowed-backend list excludes HW_GPU_ONLY, so a retry cannot return
+        // to the fixed-function nvJPEG path that produced the false success.
+        std::vector<nvimgcodecDecoder_t> cuda_fallback_decoder_pool;
         std::vector<bool> decoder_available;
+        std::vector<uint32_t*> sentinel_flag_scratch;
+        std::vector<size_t> sentinel_flag_capacity;
         std::mutex pool_mutex;
         std::condition_variable pool_cv;
         nvimgcodecEncoder_t encoder = nullptr;
         std::mutex encoder_mutex;
         int device_id = 0;
+        int max_num_cpu_threads = 0;
         bool fallback_enabled = true;
+        int sentinel_test_skipped_member = -1;
+        bool sentinel_test_skip_cuda_retry = false;
         cudaMemPool_t decode_pool = nullptr;
         nvimgcodecDeviceAllocator_t device_allocator{};
         size_t device_budget_bytes = 0;
         std::atomic<size_t> device_bytes_in_use{0};
         NvCodecVramAccount vram_account;
+
+        nvimgcodecDecoder_t ensure_cuda_fallback_decoder(const size_t idx) {
+            auto& decoder = cuda_fallback_decoder_pool.at(idx);
+            if (decoder) {
+                return decoder;
+            }
+
+            nvimgcodecBackend_t cuda_backend{};
+            cuda_backend.struct_type = NVIMGCODEC_STRUCTURE_TYPE_BACKEND;
+            cuda_backend.struct_size = sizeof(nvimgcodecBackend_t);
+            cuda_backend.kind = NVIMGCODEC_BACKEND_KIND_HYBRID_CPU_GPU;
+            cuda_backend.params.struct_type = NVIMGCODEC_STRUCTURE_TYPE_BACKEND_PARAMS;
+            cuda_backend.params.struct_size = sizeof(nvimgcodecBackendParams_t);
+            cuda_backend.params.load_hint = 1.0f;
+            cuda_backend.params.load_hint_policy = NVIMGCODEC_LOAD_HINT_POLICY_IGNORE;
+
+            nvimgcodecExecutionParams_t retry_params{};
+            retry_params.struct_type = NVIMGCODEC_STRUCTURE_TYPE_EXECUTION_PARAMS;
+            retry_params.struct_size = sizeof(nvimgcodecExecutionParams_t);
+            retry_params.device_allocator = decode_pool ? &device_allocator : nullptr;
+            retry_params.max_num_cpu_threads = max_num_cpu_threads;
+            retry_params.device_id = device_id;
+            retry_params.num_backends = 1;
+            retry_params.backends = &cuda_backend;
+
+            const nvimgcodecStatus_t status = nvimgcodecDecoderCreate(
+                instance, &decoder, &retry_params, nullptr);
+            if (status != NVIMGCODEC_STATUS_SUCCESS) {
+                decoder = nullptr;
+                throw std::runtime_error(
+                    "CUDA-only retry decoder creation failed: " +
+                    std::string(nvimgcodec_status_to_string(status)));
+            }
+            return decoder;
+        }
+
+        uint32_t* ensure_sentinel_flag_scratch(const size_t idx, const size_t count) {
+            if (sentinel_flag_capacity.at(idx) >= count) {
+                return sentinel_flag_scratch.at(idx);
+            }
+
+            size_t new_capacity = 1;
+            while (new_capacity < count) {
+                new_capacity *= 2;
+            }
+            uint32_t* replacement = nullptr;
+            if (const cudaError_t status = cudaMalloc(
+                    reinterpret_cast<void**>(&replacement), new_capacity * sizeof(uint32_t));
+                status != cudaSuccess) {
+                throw std::runtime_error(
+                    std::string("Sentinel validation scratch allocation failed: ") +
+                    cudaGetErrorString(status));
+            }
+            if (sentinel_flag_scratch[idx]) {
+                if (const cudaError_t status = cudaFree(sentinel_flag_scratch[idx]);
+                    status != cudaSuccess) {
+                    if (const cudaError_t release_status = cudaFree(replacement);
+                        release_status != cudaSuccess) {
+                        LOG_WARN("[NvCodecImageLoader] Sentinel scratch rollback free failed: {}",
+                                 cudaGetErrorString(release_status));
+                    }
+                    throw std::runtime_error(
+                        std::string("Sentinel validation scratch release failed: ") +
+                        cudaGetErrorString(status));
+                }
+            }
+            sentinel_flag_scratch[idx] = replacement;
+            sentinel_flag_capacity[idx] = new_capacity;
+            return replacement;
+        }
 
         size_t acquire_decoder() {
             std::unique_lock<std::mutex> lock(pool_mutex);
@@ -821,7 +924,10 @@ namespace lfs::io {
                     if (cuda_context_poisoned_for_nvcodec_teardown()) {
                         encoder = nullptr;
                         decoder_pool.clear();
+                        cuda_fallback_decoder_pool.clear();
                         decoder_available.clear();
+                        sentinel_flag_scratch.clear();
+                        sentinel_flag_capacity.clear();
                         instance = nullptr;
                         vram_account.unregister();
                         return;
@@ -839,7 +945,27 @@ namespace lfs::io {
                         }
                     }
                     decoder_pool.clear();
+                    for (auto& decoder : cuda_fallback_decoder_pool) {
+                        if (decoder) {
+                            nvimgcodecDecoderDestroy(decoder);
+                            decoder = nullptr;
+                        }
+                    }
+                    cuda_fallback_decoder_pool.clear();
                     decoder_available.clear();
+
+                    for (auto*& scratch : sentinel_flag_scratch) {
+                        if (scratch) {
+                            if (const cudaError_t status = cudaFree(scratch);
+                                status != cudaSuccess) {
+                                LOG_WARN("[NvCodecImageLoader] Sentinel scratch free failed at teardown: {}",
+                                         cudaGetErrorString(status));
+                            }
+                            scratch = nullptr;
+                        }
+                    }
+                    sentinel_flag_scratch.clear();
+                    sentinel_flag_capacity.clear();
 
                     if (instance) {
                         nvimgcodecInstanceDestroy(instance);
@@ -875,7 +1001,10 @@ namespace lfs::io {
                  options.device_id, options.decoder_pool_size, options.enable_fallback);
 
         impl_->device_id = options.device_id;
+        impl_->max_num_cpu_threads = options.max_num_cpu_threads;
         impl_->fallback_enabled = options.enable_fallback;
+        impl_->sentinel_test_skipped_member = options.sentinel_validation_test_seam.skipped_member;
+        impl_->sentinel_test_skip_cuda_retry = options.sentinel_validation_test_seam.skip_cuda_retry;
         const cudaError_t set_device_status = cudaSetDevice(impl_->device_id);
         if (set_device_status == cudaSuccess && options.enable_device_allocator) {
             impl_->configure_device_allocator(options.device_id, options.device_allocator_budget_bytes);
@@ -915,7 +1044,10 @@ namespace lfs::io {
 
         const size_t pool_size = options.decoder_pool_size > 0 ? options.decoder_pool_size : DECODER_POOL_SIZE;
         impl_->decoder_pool.resize(pool_size);
+        impl_->cuda_fallback_decoder_pool.resize(pool_size, nullptr);
         impl_->decoder_available.resize(pool_size, true);
+        impl_->sentinel_flag_scratch.resize(pool_size, nullptr);
+        impl_->sentinel_flag_capacity.resize(pool_size, 0);
 
         const nvimgcodecExecutionParams_t exec_params{
             NVIMGCODEC_STRUCTURE_TYPE_EXECUTION_PARAMS,
@@ -932,7 +1064,11 @@ namespace lfs::io {
             nullptr};
 
         for (size_t i = 0; i < pool_size; ++i) {
-            status = nvimgcodecDecoderCreate(impl_->instance, &impl_->decoder_pool[i], &exec_params, nullptr);
+            status = nvimgcodecDecoderCreate(
+                impl_->instance,
+                &impl_->decoder_pool[i],
+                &exec_params,
+                "nvjpeg_hw_decoder:force_batch_single=1");
             if (status != NVIMGCODEC_STATUS_SUCCESS) {
                 throw std::runtime_error("Decoder creation failed: " +
                                          std::string(nvimgcodec_status_to_string(status)));
@@ -1329,15 +1465,29 @@ namespace lfs::io {
         const size_t count = jpeg_spans.size();
         std::vector<nvimgcodecCodeStream_t> streams(count, nullptr);
         std::vector<nvimgcodecImage_t> images(count, nullptr);
+        std::vector<nvimgcodecImage_t> retry_images;
         std::vector<Tensor> hwc(count);
         std::vector<size_t> heights(count), widths(count);
         std::vector<nvimgcodecProcessingStatus_t> statuses(
             count, NVIMGCODEC_PROCESSING_STATUS_UNKNOWN);
         nvimgcodecFuture_t future = nullptr;
+        nvimgcodecFuture_t retry_future = nullptr;
+        Tensor primary_discard;
+        Tensor retry_discard;
         const auto cleanup = [&] {
             if (future) {
                 nvimgcodecFutureDestroy(future);
                 future = nullptr;
+            }
+            if (retry_future) {
+                nvimgcodecFutureDestroy(retry_future);
+                retry_future = nullptr;
+            }
+            for (auto& image : retry_images) {
+                if (image) {
+                    nvimgcodecImageDestroy(image);
+                    image = nullptr;
+                }
             }
             for (size_t i = 0; i < count; ++i) {
                 if (images[i]) {
@@ -1390,6 +1540,10 @@ namespace lfs::io {
                 if (reusable_hwc && i < reusable_hwc->size() && (*reusable_hwc)[i]) {
                     *(*reusable_hwc)[i] = hwc[i];
                 }
+                cuda::launch_fill_u8_sentinel(
+                    hwc[i].ptr<uint8_t>(), hwc[i].bytes(),
+                    jpeg_batch_sentinel_seed(i, false),
+                    static_cast<cudaStream_t>(cuda_stream));
 
                 nvimgcodecImageInfo_t output{};
                 output.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
@@ -1405,6 +1559,13 @@ namespace lfs::io {
                 output.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT8;
                 output.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
                 output.buffer = hwc[i].data_ptr();
+                if (impl_->sentinel_test_skipped_member == static_cast<int>(i)) {
+                    primary_discard = Tensor::empty(hwc_shape, Device::CUDA, DataType::UInt8);
+                    if (cuda_stream) {
+                        primary_discard.set_stream(static_cast<cudaStream_t>(cuda_stream));
+                    }
+                    output.buffer = primary_discard.data_ptr();
+                }
                 output.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
                 status = nvimgcodecImageCreate(impl_->instance, &images[i], &output);
                 if (status != NVIMGCODEC_STATUS_SUCCESS) {
@@ -1427,19 +1588,166 @@ namespace lfs::io {
                 if (nvimgcodecFutureWaitForAll(future) != NVIMGCODEC_STATUS_SUCCESS) {
                     throw std::runtime_error("Failed to wait for JPEG batch decode");
                 }
-                size_t status_count = count;
-                nvimgcodecFutureGetProcessingStatus(future, statuses.data(), &status_count);
+                get_exact_processing_statuses(
+                    future, statuses, count, "JPEG batch decode");
             }
-            cleanup();
 
-            std::vector<Tensor> outputs;
-            outputs.reserve(count);
+            nvimgcodecFutureDestroy(future);
+            future = nullptr;
             for (size_t i = 0; i < count; ++i) {
                 if (statuses[i] != NVIMGCODEC_PROCESSING_STATUS_SUCCESS) {
                     log_decode_failure(statuses[i], widths[i], heights[i], jpeg_spans[i].second);
                     throw std::runtime_error("JPEG batch item failed: " +
                                              std::string(processing_status_to_string(statuses[i])));
                 }
+            }
+
+            const cudaStream_t stream = static_cast<cudaStream_t>(cuda_stream);
+            const auto find_unchanged_members = [&](const std::vector<size_t>& members,
+                                                    const bool cuda_retry) {
+                std::vector<size_t> unchanged_members;
+                if (members.empty()) {
+                    return unchanged_members;
+                }
+
+                uint32_t* device_flags = impl_->ensure_sentinel_flag_scratch(
+                    decoder_idx, members.size());
+                if (const cudaError_t err = cudaMemsetAsync(
+                        device_flags, 0xff, members.size() * sizeof(uint32_t), stream);
+                    err != cudaSuccess) {
+                    throw std::runtime_error(
+                        std::string("Sentinel flag initialization failed: ") +
+                        cudaGetErrorString(err));
+                }
+                for (size_t pos = 0; pos < members.size(); ++pos) {
+                    const size_t member = members[pos];
+                    cuda::launch_flag_u8_sentinel_unchanged(
+                        hwc[member].ptr<uint8_t>(), hwc[member].bytes(),
+                        jpeg_batch_sentinel_seed(member, cuda_retry),
+                        device_flags + pos, stream);
+                }
+
+                std::vector<uint32_t> host_flags(members.size(), 0);
+                if (const cudaError_t err = cudaMemcpyAsync(
+                        host_flags.data(), device_flags,
+                        host_flags.size() * sizeof(uint32_t),
+                        cudaMemcpyDeviceToHost, stream);
+                    err != cudaSuccess) {
+                    throw std::runtime_error(
+                        std::string("Sentinel flag readback failed: ") +
+                        cudaGetErrorString(err));
+                }
+                if (const cudaError_t err = cudaStreamSynchronize(stream);
+                    err != cudaSuccess) {
+                    throw std::runtime_error(
+                        std::string("CUDA sync failed during JPEG overwrite validation: ") +
+                        cudaGetErrorString(err));
+                }
+                for (size_t pos = 0; pos < members.size(); ++pos) {
+                    if (host_flags[pos] != 0) {
+                        unchanged_members.push_back(members[pos]);
+                    }
+                }
+                return unchanged_members;
+            };
+
+            std::vector<size_t> all_members(count);
+            for (size_t i = 0; i < count; ++i) {
+                all_members[i] = i;
+            }
+            const std::vector<size_t> skipped_members =
+                find_unchanged_members(all_members, false);
+            if (!skipped_members.empty()) {
+                LOG_WARN("[NvCodecImageLoader] Detected {} JPEG batch destination(s) left wholly unchanged; retrying through the CUDA backend",
+                         skipped_members.size());
+
+                retry_images.assign(skipped_members.size(), nullptr);
+                std::vector<nvimgcodecCodeStream_t> retry_streams(skipped_members.size(), nullptr);
+                std::vector<nvimgcodecProcessingStatus_t> retry_statuses(
+                    skipped_members.size(), NVIMGCODEC_PROCESSING_STATUS_UNKNOWN);
+                for (size_t pos = 0; pos < skipped_members.size(); ++pos) {
+                    const size_t member = skipped_members[pos];
+                    cuda::launch_fill_u8_sentinel(
+                        hwc[member].ptr<uint8_t>(), hwc[member].bytes(),
+                        jpeg_batch_sentinel_seed(member, true), stream);
+
+                    nvimgcodecImageInfo_t output{};
+                    output.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
+                    output.struct_size = sizeof(nvimgcodecImageInfo_t);
+                    output.sample_format = NVIMGCODEC_SAMPLEFORMAT_I_RGB;
+                    output.color_spec = NVIMGCODEC_COLORSPEC_SRGB;
+                    output.chroma_subsampling = NVIMGCODEC_SAMPLING_444;
+                    output.num_planes = 1;
+                    output.plane_info[0].height = heights[member];
+                    output.plane_info[0].width = widths[member];
+                    output.plane_info[0].row_stride = widths[member] * 3;
+                    output.plane_info[0].num_channels = 3;
+                    output.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT8;
+                    output.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
+                    output.buffer = hwc[member].data_ptr();
+                    if (impl_->sentinel_test_skip_cuda_retry &&
+                        impl_->sentinel_test_skipped_member == static_cast<int>(member)) {
+                        retry_discard = Tensor::empty(
+                            TensorShape({heights[member], widths[member], size_t{3}}),
+                            Device::CUDA, DataType::UInt8);
+                        if (cuda_stream) {
+                            retry_discard.set_stream(stream);
+                        }
+                        output.buffer = retry_discard.data_ptr();
+                    }
+                    output.cuda_stream = stream;
+                    const nvimgcodecStatus_t create_status = nvimgcodecImageCreate(
+                        impl_->instance, &retry_images[pos], &output);
+                    if (create_status != NVIMGCODEC_STATUS_SUCCESS) {
+                        throw std::runtime_error(
+                            "Failed to create CUDA retry image descriptor");
+                    }
+                    retry_streams[pos] = streams[member];
+                }
+
+                nvimgcodecDecoder_t cuda_decoder =
+                    impl_->ensure_cuda_fallback_decoder(decoder_idx);
+                const nvimgcodecStatus_t retry_launch_status = nvimgcodecDecoderDecode(
+                    cuda_decoder,
+                    retry_streams.data(),
+                    retry_images.data(),
+                    static_cast<int>(skipped_members.size()),
+                    &params,
+                    &retry_future);
+                if (retry_launch_status != NVIMGCODEC_STATUS_SUCCESS) {
+                    throw std::runtime_error(
+                        "JPEG CUDA retry launch failed: " +
+                        std::string(nvimgcodec_status_to_string(retry_launch_status)));
+                }
+                if (nvimgcodecFutureWaitForAll(retry_future) != NVIMGCODEC_STATUS_SUCCESS) {
+                    throw std::runtime_error("Failed to wait for JPEG CUDA retry");
+                }
+                get_exact_processing_statuses(
+                    retry_future, retry_statuses, skipped_members.size(),
+                    "JPEG CUDA retry");
+                nvimgcodecFutureDestroy(retry_future);
+                retry_future = nullptr;
+                for (size_t pos = 0; pos < retry_statuses.size(); ++pos) {
+                    if (retry_statuses[pos] != NVIMGCODEC_PROCESSING_STATUS_SUCCESS) {
+                        throw std::runtime_error(
+                            "JPEG CUDA retry item failed: " +
+                            std::string(processing_status_to_string(retry_statuses[pos])));
+                    }
+                }
+
+                const std::vector<size_t> retry_skipped_members =
+                    find_unchanged_members(skipped_members, true);
+                if (!retry_skipped_members.empty()) {
+                    throw std::runtime_error(
+                        "JPEG decode hard failure: destination remained wholly unchanged after one CUDA retry");
+                }
+            }
+
+            cleanup();
+
+            std::vector<Tensor> outputs;
+            outputs.reserve(count);
+            for (size_t i = 0; i < count; ++i) {
                 if (output_uint8) {
                     const TensorShape output_shape({size_t{3}, heights[i], widths[i]});
                     Tensor output;
@@ -2234,9 +2542,9 @@ namespace lfs::io {
                 if (nvimgcodecFutureWaitForAll(decode_future) != NVIMGCODEC_STATUS_SUCCESS) {
                     throw std::runtime_error("Failed to wait for JPEG2000 batch decode");
                 }
-                size_t status_size = batch_size;
-                nvimgcodecFutureGetProcessingStatus(
-                    decode_future, decode_statuses.data(), &status_size);
+                get_exact_processing_statuses(
+                    decode_future, decode_statuses, batch_size,
+                    "JPEG2000 batch decode");
             }
             cleanup();
 

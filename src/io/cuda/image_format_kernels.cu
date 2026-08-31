@@ -11,7 +11,75 @@ namespace lfs::io::cuda {
         constexpr int BLOCK_SIZE = 256;
         constexpr float NORMALIZE_SCALE_U8 = 1.0f / 255.0f;
         constexpr float NORMALIZE_SCALE_U16 = 1.0f / 65535.f;
+
+        __device__ __forceinline__ uint8_t sentinel_byte(const size_t index, const uint32_t seed) {
+            uint32_t value = static_cast<uint32_t>(index) ^ seed;
+            value ^= value >> 16u;
+            value *= 0x7feb352du;
+            value ^= value >> 15u;
+            value *= 0x846ca68bu;
+            value ^= value >> 16u;
+            return static_cast<uint8_t>(value);
+        }
     } // namespace
+
+    __global__ void fill_u8_sentinel_kernel(
+        uint8_t* __restrict__ output,
+        const size_t byte_count,
+        const uint32_t seed) {
+        const size_t stride = static_cast<size_t>(blockDim.x) * gridDim.x;
+        for (size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+             idx < byte_count;
+             idx += stride) {
+            output[idx] = sentinel_byte(idx, seed);
+        }
+    }
+
+    __global__ void flag_u8_sentinel_unchanged_kernel(
+        const uint8_t* __restrict__ input,
+        const size_t byte_count,
+        const uint32_t seed,
+        uint32_t* unchanged) {
+        const size_t stride = static_cast<size_t>(blockDim.x) * gridDim.x;
+        for (size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+             idx < byte_count;
+             idx += stride) {
+            if (input[idx] != sentinel_byte(idx, seed)) {
+                atomicExch(unchanged, 0u);
+                return;
+            }
+        }
+    }
+
+    void launch_fill_u8_sentinel(
+        uint8_t* output,
+        const size_t byte_count,
+        const uint32_t seed,
+        cudaStream_t stream) {
+        assert(output != nullptr);
+        assert(byte_count > 0);
+        int num_blocks = static_cast<int>((byte_count + BLOCK_SIZE - 1) / BLOCK_SIZE);
+        num_blocks = num_blocks > 1024 ? 1024 : num_blocks;
+        fill_u8_sentinel_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
+            output, byte_count, seed);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.fill_u8_sentinel");
+    }
+
+    void launch_flag_u8_sentinel_unchanged(
+        const uint8_t* input,
+        const size_t byte_count,
+        const uint32_t seed,
+        uint32_t* unchanged,
+        cudaStream_t stream) {
+        assert(input != nullptr);
+        assert(unchanged != nullptr);
+        assert(byte_count > 0);
+        int num_blocks = static_cast<int>((byte_count + BLOCK_SIZE - 1) / BLOCK_SIZE);
+        num_blocks = num_blocks > 1024 ? 1024 : num_blocks;
+        flag_u8_sentinel_unchanged_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
+            input, byte_count, seed, unchanged);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.flag_u8_sentinel_unchanged");
+    }
 
     __global__ void uint8_hwc_to_float32_chw_kernel(
         const uint8_t* __restrict__ input,
