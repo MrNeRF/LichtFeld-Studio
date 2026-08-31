@@ -2279,6 +2279,8 @@
     "perf_hud_tooltip": "Show or hide the performance HUD"
   },
   "runtime": {
+    "training_save_no_memory": "Salvataggio del progetto non riuscito: {}",
+    "autosave_deferred_no_memory": "Il salvataggio automatico è in pausa: memoria libera insufficiente ({}). L'addestramento continua; il salvataggio automatico riprenderà quando si libererà memoria.",
     "grouped_changes": "Modifiche raggruppate",
     "untitled_change": "Modifica senza titolo",
     "history_summary": "{0} annullamenti / {1} ripetizioni · {2} totali",

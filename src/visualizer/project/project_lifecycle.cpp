@@ -279,6 +279,38 @@ namespace lfs::vis::project {
                 operation);
         }
 
+        void publishAutosaveMemoryWarning(
+            std::string shortfall,
+            std::string detail) {
+            auto warning = lfs::make_error(
+                lfs::ErrorInit{
+                    .code = lfs::ErrorCode::ResourceExhausted,
+                    .domain = lfs::ErrorDomain::Training,
+                    .severity = lfs::Severity::Warning,
+                    .retryability =
+                        lfs::Retryability::RetryableWithBackoff,
+                    .operation_id = {},
+                    .user_message = LOCF(
+                        "runtime.autosave_deferred_no_memory",
+                        shortfall),
+                    .detail = std::move(detail),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                    .fields = {},
+                    .native = std::nullopt,
+                });
+            publishProjectToast(std::move(warning), "autosave");
+        }
+
+        void publishAutosaveMemoryWarning(
+            const lfs::Error& cause) {
+            const auto shortfall =
+                cause.user_message().empty()
+                    ? developerError(cause)
+                    : std::string(cause.user_message());
+            publishAutosaveMemoryWarning(
+                shortfall, developerError(cause));
+        }
+
         void notifyTrainerRestoreFailure(
             VisualizerImpl& viewer,
             const std::string& detail) {
@@ -4468,6 +4500,7 @@ namespace lfs::vis::project {
                 last_autosave_at_ =
                     std::chrono::steady_clock::
                         now();
+                autosave_memory_warning_published_ = false;
                 LOG_INFO(
                     "Autosave sidecar sequence {} published",
                     autosave_sequence_);
@@ -4545,15 +4578,32 @@ namespace lfs::vis::project {
                     "Autosave skipped because the master moved: {}",
                     error);
             } else {
-                LOG_ERROR(
-                    "Project background write failed: {}",
-                    error);
-                publishProjectToast(
-                    last_project_write_error_code_.value_or(
-                        lfs::ErrorCode::Unavailable),
-                    lfs::ErrorDomain::IO,
-                    error,
-                    gui::error_op::kSave);
+                const bool memory_deferred =
+                    was_autosave &&
+                    last_project_write_error_code_ ==
+                        lfs::ErrorCode::ResourceExhausted &&
+                    viewer_.getTrainerManager() &&
+                    viewer_.getTrainerManager()
+                        ->isTrainingActive() &&
+                    !autosave_memory_warning_published_;
+                if (memory_deferred) {
+                    LOG_WARN(
+                        "Autosave deferred: {}",
+                        error);
+                    publishAutosaveMemoryWarning(
+                        error, error);
+                    autosave_memory_warning_published_ = true;
+                } else {
+                    LOG_ERROR(
+                        "Project background write failed: {}",
+                        error);
+                    publishProjectToast(
+                        last_project_write_error_code_.value_or(
+                            lfs::ErrorCode::Unavailable),
+                        lfs::ErrorDomain::IO,
+                        error,
+                        gui::error_op::kSave);
+                }
             }
             if (was_autosave &&
                 !isStaleAutosaveBasePublicationError(
@@ -4639,6 +4689,9 @@ namespace lfs::vis::project {
             viewer_.getTrainerManager() &&
             viewer_.getTrainerManager()
                 ->isTrainingActive();
+        if (!training) {
+            autosave_memory_warning_published_ = false;
+        }
         const bool training_write_window =
             isTrainingWriteWindowOpen();
         if (!training_write_window &&
@@ -4729,12 +4782,28 @@ namespace lfs::vis::project {
         }
         if (auto started = startAutosave();
             !started) {
+            const auto& cause = started.error();
             last_project_write_error_ =
                 developerError(
-                    started.error());
-            LOG_WARN(
-                "Autosave deferred: {}",
-                last_project_write_error_);
+                    cause);
+            if (training &&
+                cause.code() ==
+                    lfs::ErrorCode::ResourceExhausted &&
+                !autosave_memory_warning_published_) {
+                const auto message =
+                    cause.user_message().empty()
+                        ? last_project_write_error_
+                        : std::string(cause.user_message());
+                LOG_WARN(
+                    "Autosave deferred: {}",
+                    message);
+                publishAutosaveMemoryWarning(cause);
+                autosave_memory_warning_published_ = true;
+            } else {
+                LOG_WARN(
+                    "Autosave deferred: {}",
+                    last_project_write_error_);
+            }
             scheduleAutosaveFailureBackoff();
         }
     }

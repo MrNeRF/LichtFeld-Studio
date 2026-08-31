@@ -2279,6 +2279,8 @@
     "perf_hud_tooltip": "Show or hide the performance HUD"
   },
   "runtime": {
+    "training_save_no_memory": "Nie udało się zapisać projektu: {}",
+    "autosave_deferred_no_memory": "Autozapis został wstrzymany: za mało wolnej pamięci ({}). Trening jest kontynuowany; autozapis wznowi się, gdy pamięć zostanie zwolniona.",
     "grouped_changes": "Zgrupowane zmiany",
     "untitled_change": "Zmiana bez tytułu",
     "history_summary": "{0} cofnięć / {1} ponowień · łącznie {2}",

@@ -2279,6 +2279,8 @@
     "perf_hud_tooltip": "Show or hide the performance HUD"
   },
   "runtime": {
+    "training_save_no_memory": "Project opslaan mislukt: {}",
+    "autosave_deferred_no_memory": "Automatisch opslaan is gepauzeerd: onvoldoende vrij geheugen ({}). De training gaat door; automatisch opslaan wordt hervat zodra er geheugen vrijkomt.",
     "grouped_changes": "Gegroepeerde wijzigingen",
     "untitled_change": "Naamloze wijziging",
     "history_summary": "{0} ongedaan maken / {1} opnieuw uitvoeren · {2} totaal",

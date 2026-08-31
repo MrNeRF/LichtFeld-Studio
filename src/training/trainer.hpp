@@ -794,6 +794,8 @@ namespace lfs::training {
             project_step_regression_;
         std::filesystem::path last_project_snapshot_path_;
         std::string last_project_writer_error_;
+        std::optional<lfs::Error>
+            last_project_writer_typed_error_;
         std::optional<std::filesystem::path>
             live_project_path_;
         TrainerProjectSavePolicy trainer_project_save_policy_{};

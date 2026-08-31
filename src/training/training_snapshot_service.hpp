@@ -146,6 +146,9 @@ namespace lfs::training {
         // inter-step work can overlap rendering, never optimizer mutation.
         // A nil UUID asks the service to generate one during prepare().
         lfs::core::Uuid snapshot_uuid;
+        // Explicit saves may use the smaller headroom-only host-memory
+        // reserve; autosave captures retain the full safety reserve.
+        bool relaxed_host_memory_gate = false;
         // Optional origin for the one optimizer-pause clock. The caller sets
         // this immediately before draining model readers/locks so those waits
         // are included with the service-side stream synchronizations.

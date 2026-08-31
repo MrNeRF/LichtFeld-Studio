@@ -2279,6 +2279,8 @@
     "perf_hud_tooltip": "Show or hide the performance HUD"
   },
   "runtime": {
+    "training_save_no_memory": "项目保存失败：{}",
+    "autosave_deferred_no_memory": "自动保存已暂停：可用内存不足（{}）。训练将继续；内存释放后自动保存会恢复。",
     "grouped_changes": "已分组的更改",
     "untitled_change": "未命名更改",
     "history_summary": "撤销 {0} 次 / 重做 {1} 次 · 共计 {2}",
