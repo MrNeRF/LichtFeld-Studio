@@ -147,6 +147,11 @@ namespace lfs::training {
         int sparsity_n = 0;
         float sparsity_rho = 0.0f;
         float sparsity_grad_loss = 0.0f;
+        // Optional edge guidance folded into the main blend backward. The map
+        // is a median-normalized row-major float32 [H,W], and the destination
+        // is a zeroed float32 [N] per-view scratch vector.
+        const float* edge_weight_map = nullptr;
+        float* edge_score_out = nullptr;
     };
 
     // Explicit forward pass - returns render output and context for backward
@@ -181,8 +186,7 @@ namespace lfs::training {
     // Release per-thread renderer caches before the owning CUDA stream is torn down.
     bool release_fast_rasterizer_thread_local_caches() noexcept;
 
-    // Release FastGS sort high-water workspaces on the calling thread.
-    // Invoked from training-thread shutdown alongside other TLS CUDA caches.
+    // Compatibility no-op for callers of the removed FastGS sort TLS cache.
     void release_fastgs_sort_workspace_buffers() noexcept;
 
     // Convenience wrapper for inference (no backward needed)

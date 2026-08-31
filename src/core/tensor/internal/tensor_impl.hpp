@@ -1687,6 +1687,7 @@ namespace lfs::core {
         }
 
         static void trim_memory_pool();
+        static void trim_memory_pool_if_reserved_unused_exceeds(size_t threshold_bytes);
         // CUDA device pool only; leaves the pinned host cache intact.
         static void trim_device_memory_pool();
         static void shutdown_memory_pool();
@@ -1718,6 +1719,7 @@ namespace lfs::core {
                     ((std::is_same_v<Value, int> || std::is_same_v<Value, int32_t> ||
                       std::is_same_v<Value, uint32_t>) &&
                      dtype_ == DataType::Int32) ||
+                    (std::is_same_v<Value, uint32_t> && dtype_ == DataType::UInt32) ||
                     (std::is_same_v<Value, int64_t> && dtype_ == DataType::Int64) ||
                     ((std::is_same_v<Value, bool> || std::is_same_v<Value, unsigned char> ||
                       std::is_same_v<Value, uint8_t>) &&
@@ -3225,6 +3227,8 @@ namespace lfs::core {
                     return copy_and_convert.template operator()<float>();
                 case DataType::Int32:
                     return copy_and_convert.template operator()<int32_t>();
+                case DataType::UInt32:
+                    return copy_and_convert.template operator()<uint32_t>();
                 case DataType::Int64:
                     return copy_and_convert.template operator()<int64_t>();
                 case DataType::UInt8:
@@ -3239,6 +3243,8 @@ namespace lfs::core {
                     return static_cast<T>(tensor_->ptr<float>()[linear_index]);
                 } else if (tensor_->dtype() == DataType::Int32) {
                     return static_cast<T>(tensor_->ptr<int32_t>()[linear_index]);
+                } else if (tensor_->dtype() == DataType::UInt32) {
+                    return static_cast<T>(tensor_->ptr<uint32_t>()[linear_index]);
                 } else if (tensor_->dtype() == DataType::Int64) {
                     return static_cast<T>(tensor_->ptr<int64_t>()[linear_index]);
                 } else if (tensor_->dtype() == DataType::Bool ||

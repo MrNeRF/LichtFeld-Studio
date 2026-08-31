@@ -12,8 +12,9 @@ namespace edge_compute::rasterization {
 
     int edge_forward(
         std::function<char*(size_t)> per_primitive_buffers_func,
+        std::function<void(size_t)> begin_phase_func,
+        std::function<char*(size_t)> phase_buffers_func,
         std::function<char*(size_t)> per_tile_buffers_func,
-        std::function<char*(size_t)> per_instance_buffers_func,
         const float3* means,
         const float3* scales_raw,
         const float4* rotations_raw,
@@ -28,6 +29,30 @@ namespace edge_compute::rasterization {
         const float cy,
         const float near,
         const float far,
+        bool mip_filter,
+        const float* pixel_weights,
+        float* accum_weights,
+        cudaStream_t stream = nullptr);
+
+    // Full-N implementation retained solely for the old-vs-new parity test.
+    int edge_forward_legacy(
+        std::function<char*(size_t)> per_primitive_buffers_func,
+        std::function<char*(size_t)> per_tile_buffers_func,
+        std::function<char*(size_t)> per_instance_buffers_func,
+        const float3* means,
+        const float3* scales_raw,
+        const float4* rotations_raw,
+        const float* opacities_raw,
+        const float4* w2c,
+        int n_primitives,
+        int width,
+        int height,
+        float fx,
+        float fy,
+        float cx,
+        float cy,
+        float near,
+        float far,
         bool mip_filter,
         const float* pixel_weights,
         float* accum_weights,

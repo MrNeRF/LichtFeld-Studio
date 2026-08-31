@@ -17,6 +17,7 @@
 #include "io/project_recovery.hpp"
 #include "kernels/depth_loss.hpp"
 #include "lfs/kernels/ssim.cuh"
+#include "lfs/training/refine_scratch.hpp"
 #include "losses/mask_loss.hpp"
 #include "losses/photometric_loss.hpp"
 #include "metrics/metrics.hpp"
@@ -487,6 +488,13 @@ namespace lfs::training {
         // Returns empty tensor if no background image is set
         lfs::core::Tensor get_background_image_for_camera(int width, int height);
         void clearBackgroundImageCache();
+        lfs::core::Tensor get_edge_weight_map(int camera_uid, const lfs::core::Tensor& gt_image);
+        void clearEdgeWeightCache();
+
+        // Release GPU state that is only needed while a train step is active.
+        // The model, optimizer, and source background image remain resident so
+        // a finished/stopped trainer can be resumed without reinitialization.
+        void release_training_transient_state_at_boundary();
 
         lfs::core::Tensor get_random_background_for_camera(int width, int height, int iteration);
 
@@ -860,6 +868,22 @@ namespace lfs::training {
 
         // Reusable buffer for Sobel edge map (lfs edge-importance densification)
         core::Tensor edge_map_buffer_;
+        struct EdgeWeightCacheEntry {
+            core::Tensor tensor;
+            size_t height = 0;
+            size_t width = 0;
+            size_t allocation_bytes = 0;
+            uint64_t preprocessing_generation = 0;
+            uint64_t last_used = 0;
+        };
+        static constexpr size_t EDGE_WEIGHT_CACHE_MAX_ENTRIES = 32;
+        static constexpr size_t EDGE_WEIGHT_CACHE_BUDGET_BYTES = 40ULL * 1024 * 1024;
+        std::unordered_map<int, EdgeWeightCacheEntry> edge_weight_cache_;
+        size_t edge_weight_cache_bytes_ = 0;
+        uint64_t edge_weight_cache_clock_ = 0;
+        uint64_t edge_weight_preprocessing_generation_ = 0;
+        bool edge_weight_scoring_active_ = false;
+        PositiveMedianScratch edge_weight_median_scratch_;
 
         // Metrics evaluator - handles all evaluation logic
         std::unique_ptr<lfs::training::MetricsEvaluator> evaluator_;

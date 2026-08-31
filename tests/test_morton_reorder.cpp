@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda/sh_layout.cuh"
 #include "core/error.hpp"
 #include "core/event_bridge/control_boundary.hpp"
 #include "core/parameters.hpp"
@@ -9,7 +10,9 @@
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
+#include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
@@ -24,6 +27,8 @@
 #include <cuda_runtime.h>
 #include <filesystem>
 #include <gtest/gtest.h>
+#include <numeric>
+#include <random>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -663,4 +668,122 @@ TEST(MortonReorderTest, ExportableAliasingAllocatorPermutesRowsExactly) {
     check_rows(rot_before, splat.rotation_raw(), 4, "rotation");
     check_rows(opa_before, splat.opacity_raw(), 1, "opacity");
     check_rows(shN_before, splat.shN_canonical(), 3 * 3, "shN");
+}
+
+void permute_shN_old_fp32_roundtrip(
+    SplatData& splat, const Tensor& perm, cudaStream_t stream) {
+    LiveModelMutationGuard guard("permute_shN_old_fp32_roundtrip");
+    const bool expanded = sh_value::ensure_shN_fp32_for_mutation(splat);
+    auto& live = splat.shN();
+    const auto rest = static_cast<std::uint32_t>(splat.max_sh_coeffs_rest());
+    const std::size_t n = static_cast<std::size_t>(splat.size());
+    ASSERT_TRUE(live.is_valid());
+    ASSERT_EQ(live.dtype(), DataType::Float32);
+    const std::size_t logical = sh_swizzled_float_count(n, rest);
+    Tensor scratch = Tensor::zeros_direct(
+        TensorShape({logical}), logical, Device::CUDA, DataType::Float32);
+    scratch.set_stream(stream);
+    if (live.stream() != stream) {
+        live.set_stream(stream);
+    }
+    shN_swizzled_gather_self_i64(
+        live.ptr<float>(),
+        scratch.ptr<float>(),
+        perm.ptr<std::int64_t>(),
+        n,
+        0,
+        rest,
+        stream);
+    if (live.numel() == logical) {
+        live.copy_from(scratch);
+    } else {
+        live.slice(0, 0, logical).copy_from(scratch);
+    }
+    if (expanded) {
+        ASSERT_TRUE(sh_value::commit_shN_after_mutation(splat));
+    }
+}
+
+TEST(MortonReorderTest, Q16ChunkedPermuteMatchesOldRoundtripBitIdentical) {
+    const ShValueQuantGuard quant_guard{true};
+    constexpr size_t n = 70000; // not a multiple of 256 or 32
+    auto splat = make_mixed_splat(n, 3);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+    ASSERT_TRUE(splat.shN_value_quantized());
+
+    Tensor snapshot_fp32;
+    {
+        LiveModelMutationGuard guard("q16_permute_snapshot");
+        ASSERT_TRUE(sh_value::ensure_shN_fp32_for_mutation(splat));
+        snapshot_fp32 = splat.shN().clone();
+        ASSERT_TRUE(sh_value::commit_shN_after_mutation(splat));
+    }
+    ASSERT_TRUE(splat.shN_value_quantized());
+
+    std::vector<int> perm_host(n);
+    std::iota(perm_host.begin(), perm_host.end(), 0);
+    std::mt19937 rng(20260830);
+    std::shuffle(perm_host.begin(), perm_host.end(), rng);
+    auto perm = Tensor::from_vector(perm_host, TensorShape({n}), Device::CUDA)
+                    .to(DataType::Int64);
+
+    auto splat_new = splat.clone();
+    auto splat_old = splat.clone();
+    ASSERT_TRUE(splat_new.shN_value_quantized());
+    ASSERT_TRUE(splat_old.shN_value_quantized());
+
+    const cudaStream_t stream = getCurrentCUDAStream();
+    morton::permute_shN(splat_new, perm, stream);
+    permute_shN_old_fp32_roundtrip(splat_old, perm, stream);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    ASSERT_EQ(splat_new.shN().numel(), splat_old.shN().numel());
+    std::vector<std::uint16_t> codes_new(splat_new.shN().numel());
+    std::vector<std::uint16_t> codes_old(splat_old.shN().numel());
+    ASSERT_EQ(cudaMemcpy(codes_new.data(), splat_new.shN().data_ptr(),
+                         codes_new.size() * sizeof(std::uint16_t), cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(codes_old.data(), splat_old.shN().data_ptr(),
+                         codes_old.size() * sizeof(std::uint16_t), cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    EXPECT_EQ(codes_new, codes_old) << "chunked q16 permute must match old expand/gather/encode u16 cells";
+
+    ASSERT_TRUE(splat_new.shN_value_bounds().is_valid());
+    ASSERT_TRUE(splat_old.shN_value_bounds().is_valid());
+    ASSERT_EQ(splat_new.shN_value_bounds().numel(), splat_old.shN_value_bounds().numel());
+    const auto bounds_new = splat_new.shN_value_bounds().cpu().contiguous();
+    const auto bounds_old = splat_old.shN_value_bounds().cpu().contiguous();
+    const auto* bn = bounds_new.ptr<float>();
+    const auto* bo = bounds_old.ptr<float>();
+    for (size_t i = 0; i < bounds_new.numel(); ++i) {
+        EXPECT_EQ(bn[i], bo[i]) << "dest bounds mismatch at " << i;
+    }
+
+    Tensor decoded_new;
+    {
+        LiveModelMutationGuard guard("decode_new");
+        auto splat_decode = splat_new.clone();
+        ASSERT_TRUE(sh_value::ensure_shN_fp32_for_mutation(splat_decode));
+        decoded_new = splat_decode.shN().clone();
+        ASSERT_TRUE(sh_value::commit_shN_after_mutation(splat_decode));
+    }
+    Tensor decoded_old;
+    {
+        LiveModelMutationGuard guard("decode_old");
+        auto splat_decode = splat_old.clone();
+        ASSERT_TRUE(sh_value::ensure_shN_fp32_for_mutation(splat_decode));
+        decoded_old = splat_decode.shN().clone();
+        ASSERT_TRUE(sh_value::commit_shN_after_mutation(splat_decode));
+    }
+
+    auto dn = decoded_new.cpu().contiguous();
+    auto d_old = decoded_old.cpu().contiguous();
+    ASSERT_EQ(dn.numel(), d_old.numel());
+    const auto* pdn = dn.ptr<float>();
+    const auto* pdo = d_old.ptr<float>();
+    for (size_t i = 0; i < dn.numel(); ++i) {
+        ASSERT_EQ(pdn[i], pdo[i]) << "decoded mismatch at " << i;
+    }
+
+    (void)snapshot_fp32;
 }

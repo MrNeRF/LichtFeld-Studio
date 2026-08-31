@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <functional>
@@ -85,6 +86,16 @@ namespace lfs::core {
             // outgrows the current capacity. Optional; if unset the arena cannot
             // grow and an over-capacity request fails.
             std::function<size_t(size_t)> grow;
+            // Shrinks the committed physical prefix toward the requested size
+            // in place. The callback must decommit only whole VMM granules and
+            // return the resulting committed prefix, or 0 on failure. It runs
+            // after the arena has drained CUDA and any registered external
+            // release timeline. Importers of the backing must be retired by
+            // the callback before its physical handles are unmapped.
+            std::function<size_t(size_t)> shrink;
+            // Minimum prefix that must remain committed for a peer consumer
+            // (for example the viewer's shared-scratch high-water).
+            std::function<size_t()> minimum_size;
 
             [[nodiscard]] bool valid() const noexcept {
                 return device_ptr != nullptr && size > 0 && device >= 0 && static_cast<bool>(owner);
@@ -115,6 +126,8 @@ namespace lfs::core {
             std::shared_ptr<void> external_owner;
             std::string external_label;
             std::function<size_t(size_t)> external_grow;
+            std::function<size_t(size_t)> external_shrink;
+            std::function<size_t()> external_minimum_size;
             std::atomic<size_t> offset{0}; // Current allocation offset
             size_t capacity = 0;           // Same as committed_size for compatibility
             uint64_t generation = 0;
@@ -130,6 +143,8 @@ namespace lfs::core {
             std::atomic<size_t> total_allocated{0};
             std::atomic<size_t> realloc_count{0};
             std::chrono::steady_clock::time_point last_log_time;
+            // B1 hysteresis: avoid immediately undoing a recent recommit.
+            std::uint32_t boundaries_since_growth = 0;
         };
 
         struct GrowthTiming {
@@ -172,6 +187,7 @@ namespace lfs::core {
         uint64_t active_frames_ = 0;
         uint64_t pending_render_frames_ = 0;
         uint64_t active_training_frames_ = 0;
+        uint64_t last_handoff_frame_id_ = 0;
 
         // Completion event of the most recent stream-aware frame. Invalid when
         // the last frame was legacy (no stream) — the next begin then falls back
@@ -214,6 +230,10 @@ namespace lfs::core {
         uint64_t begin_frame(cudaStream_t stream, bool from_rendering = false);
         std::optional<uint64_t> try_begin_frame(bool from_rendering = false) { return try_begin_frame(nullptr, from_rendering); }
         std::optional<uint64_t> try_begin_frame(cudaStream_t stream, bool from_rendering = false);
+        // Debug-only ownership assertion for the shared CUDA/Vulkan scratch
+        // epoch. The preceding frame's CUDA event or imported Vulkan timeline
+        // wait must have been installed before this frame can touch offset zero.
+        void assert_frame_handoff(uint64_t frame_id) const;
 
         // Bounded wait: with a render pending (set_rendering_active), the trainer
         // cannot START a new frame, so waiting out its current one takes ~one
@@ -303,7 +323,8 @@ namespace lfs::core {
         size_t align_size(size_t size) const;
         void record_allocation(uint64_t frame_id, const BufferHandle& handle);
         bool commit_more_memory(Arena& arena, size_t required_size, uint64_t frame_id);
-        void decommit_unused_memory(Arena& arena);
+        void decommit_unused_memory(Arena& arena, bool release_all = false,
+                                    bool allow_reclaim = true);
         bool shrink_at_boundary(bool release_all);
         void record_commit_timing(uint64_t frame_id, uint64_t elapsed_us, bool committed);
         void record_growth_path_timing(uint64_t frame_id, uint64_t elapsed_us,

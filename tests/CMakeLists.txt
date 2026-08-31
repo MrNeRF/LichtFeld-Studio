@@ -405,6 +405,7 @@ set(TEST_FILES
     test_tensor_kernels_6c_elem.cpp
     test_tensor_lazy_stateful_ops.cpp
     test_fastgs_kernels.cpp
+    test_edge_rasterizer.cpp
     test_fastgs_fuzz.cpp
     test_fastgs_tile_culling_boundary.cpp
     fastgs_tile_culling_boundary_cuda.cu
@@ -660,6 +661,9 @@ endif()
 # Link libraries
 target_link_libraries(lichtfeld_tests PRIVATE
     ${LFS_TEST_INTERNAL_LINK_LIBS}
+
+    # Dedicated edge rasterizer is retained only as a parity/test oracle.
+    edge_compute_backend
 
     # External libraries
     GTest::gtest
@@ -1107,6 +1111,28 @@ target_include_directories(bench_tensor_launch_overhead PRIVATE
 )
 target_link_libraries(bench_tensor_launch_overhead PRIVATE
     lfs_core
+    CUDA::cudart
+)
+
+# Lane F throwaway q16 permute/scatter wall-time bench (not ctest).
+# Source lives outside the test tree so unit tests stay unmodified.
+add_executable(bench_q16_batch
+    /home/gauss/lfs-runs/vram10m/bench_q16_batch.cpp
+)
+set_target_properties(bench_q16_batch PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+    EXCLUDE_FROM_ALL ON
+)
+target_include_directories(bench_q16_batch PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/training
+    ${CUDAToolkit_INCLUDE_DIRS}
+)
+target_link_libraries(bench_q16_batch PRIVATE
+    ${LFS_TEST_INTERNAL_LINK_LIBS}
     CUDA::cudart
 )
 

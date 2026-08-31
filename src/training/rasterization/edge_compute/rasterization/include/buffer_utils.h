@@ -8,9 +8,12 @@
 #include "core/cuda_error.hpp"
 #include "edge_rasterization_config.h"
 #include "helper_math.h"
+#include "../../../fastgs/rasterization/include/visibility.cuh"
 #include <cstdint>
 #include <cub/cub.cuh>
 #include <cuda_fp16.h>
+#include <limits>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -77,6 +80,39 @@ namespace edge_compute::rasterization {
         return ((size_t)size) + 128;
     }
 
+    struct VisibilityBuffers {
+        uint* visibility_mask;
+        uint* block_counts;
+        uint* block_offsets;
+        uint* visible_indices;
+        uint* primitive_work_indices;
+        char* cub_workspace;
+        size_t cub_workspace_size;
+
+        static VisibilityBuffers from_blob(char*& blob, int n_primitives) {
+            VisibilityBuffers buffers{};
+            const size_t mask_words = (static_cast<size_t>(n_primitives) + 31u) / 32u;
+            const size_t n_blocks = (static_cast<size_t>(n_primitives) +
+                                     lfs::rasterization::visibility::kBlockSize - 1u) /
+                                    lfs::rasterization::visibility::kBlockSize;
+            obtain(blob, buffers.visibility_mask, mask_words, 128);
+            obtain(blob, buffers.block_counts, n_blocks, 128);
+            obtain(blob, buffers.block_offsets, n_blocks, 128);
+            obtain(blob, buffers.visible_indices, n_primitives, 128);
+            obtain(blob, buffers.primitive_work_indices, n_primitives, 128);
+            LFS_CUDA_CHECK_MSG(
+                cub::DeviceScan::InclusiveSum(
+                    nullptr, buffers.cub_workspace_size,
+                    buffers.block_counts, buffers.block_offsets,
+                    static_cast<int>(n_blocks)),
+                "EDGE visibility workspace query");
+            LFS_ASSERT_MSG(buffers.cub_workspace_size > 0,
+                           "EDGE visibility scan returned an empty workspace for nonempty input");
+            obtain(blob, buffers.cub_workspace, buffers.cub_workspace_size, 128);
+            return buffers;
+        }
+    };
+
     struct PerPrimitiveBuffers {
         size_t cub_workspace_size;
         char* cub_workspace;
@@ -136,6 +172,84 @@ namespace edge_compute::rasterization {
                            "CUB radix sort returned an empty workspace for nonempty instance input");
             obtain(blob, buffers.cub_workspace, buffers.cub_workspace_size, 128);
             return buffers;
+        }
+    };
+
+    // The sort phase is one exact 256-byte-aligned allocation. The sorted
+    // primitive IDs are the only payload EDGE retains after radix sort; keys,
+    // the alternate payload, and CUB scratch are phase-local.
+    struct EdgeSortWorkspace {
+        char* base = nullptr;
+        size_t cub_workspace_bytes = 0;
+        size_t cub_workspace_offset_bytes = 0;
+        int n_instances = 0;
+
+        // Keep the four arrays in the same order and alignment as the legacy
+        // PerInstanceBuffers allocator. This also keeps CUB on the same
+        // aligned path when the compacted count is not a 128-byte multiple.
+        static constexpr size_t buffer_alignment = 128;
+        static constexpr size_t alignment = 256;
+
+        static size_t align_offset(size_t bytes, size_t alignment) {
+            if (bytes > SIZE_MAX - (alignment - 1))
+                throw std::overflow_error("EDGE sort workspace alignment overflow");
+            return (bytes + alignment - 1) & ~(alignment - 1);
+        }
+
+        static size_t data_bytes(int instances) {
+            const size_t bytes = static_cast<size_t>(instances) * sizeof(InstanceKey);
+            size_t offset = bytes;
+            offset = align_offset(offset, buffer_alignment) + bytes;
+            offset = align_offset(offset, buffer_alignment) + bytes;
+            offset = align_offset(offset, buffer_alignment) + bytes;
+            return offset;
+        }
+
+        static size_t aligned_offset(size_t bytes) {
+            return align_offset(bytes, alignment);
+        }
+
+        void bind(char* allocation, int instances, size_t cub_bytes, size_t cub_offset) {
+            LFS_ASSERT_MSG(allocation != nullptr && instances > 0,
+                           "EDGE sort workspace requires a nonempty allocation");
+            base = allocation;
+            n_instances = instances;
+            cub_workspace_bytes = cub_bytes;
+            cub_workspace_offset_bytes = cub_offset;
+            LFS_ASSERT_MSG(reinterpret_cast<std::uintptr_t>(cub_workspace()) % alignment == 0,
+                           "EDGE CUB sort workspace must be 256-byte aligned");
+        }
+
+        size_t per_buffer_bytes() const noexcept {
+            return static_cast<size_t>(n_instances) * sizeof(InstanceKey);
+        }
+
+        size_t keys_alternate_offset() const noexcept {
+            return align_offset(per_buffer_bytes(), buffer_alignment);
+        }
+
+        size_t primitive_indices_current_offset() const noexcept {
+            return align_offset(keys_alternate_offset() + per_buffer_bytes(), buffer_alignment);
+        }
+
+        size_t primitive_indices_alternate_offset() const noexcept {
+            return align_offset(primitive_indices_current_offset() + per_buffer_bytes(), buffer_alignment);
+        }
+
+        uint* primitive_indices_current() const noexcept {
+            return reinterpret_cast<uint*>(base + primitive_indices_current_offset());
+        }
+        uint* primitive_indices_alternate() const noexcept {
+            return reinterpret_cast<uint*>(base + primitive_indices_alternate_offset());
+        }
+        InstanceKey* keys_current() const noexcept {
+            return reinterpret_cast<InstanceKey*>(base);
+        }
+        InstanceKey* keys_alternate() const noexcept {
+            return reinterpret_cast<InstanceKey*>(base + keys_alternate_offset());
+        }
+        void* cub_workspace() const noexcept {
+            return base + cub_workspace_offset_bytes;
         }
     };
 

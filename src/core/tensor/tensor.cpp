@@ -947,6 +947,10 @@ namespace lfs::core {
         PinnedMemoryAllocator::instance().empty_cache();
     }
 
+    void Tensor::trim_memory_pool_if_reserved_unused_exceeds(const size_t threshold_bytes) {
+        CudaMemoryPool::instance().trim_cached_memory_if_reserved_unused_exceeds(threshold_bytes);
+    }
+
     void Tensor::trim_device_memory_pool() {
         CudaMemoryPool::instance().trim_cached_memory();
     }
@@ -1765,6 +1769,10 @@ namespace lfs::core {
         CONVERT_DTYPE_CUDA(uint8_t, float, DataType::UInt8, DataType::Float32)
         CONVERT_DTYPE_CUDA(int, uint8_t, DataType::Int32, DataType::UInt8)
         CONVERT_DTYPE_CUDA(uint8_t, int, DataType::UInt8, DataType::Int32)
+
+        // UInt32 conversions (used by compact identity/payload scratch).
+        CONVERT_DTYPE_CUDA(uint32_t, float, DataType::UInt32, DataType::Float32)
+        CONVERT_DTYPE_CUDA(float, uint32_t, DataType::Float32, DataType::UInt32)
 
         // Bool -> UInt8: Bool storage is already normalized to 0 or 1.
         if (dtype_ == DataType::Bool && dtype == DataType::UInt8) {
@@ -2876,6 +2884,16 @@ namespace lfs::core {
             value = static_cast<float>(temp);
             break;
         }
+        case DataType::UInt32: {
+            uint32_t temp;
+            if (device_ == Device::CUDA) {
+                LFS_CUDA_CHECK(cudaMemcpy(&temp, raw_ptr, sizeof(uint32_t), cudaMemcpyDeviceToHost));
+            } else {
+                temp = *static_cast<const uint32_t*>(raw_ptr);
+            }
+            value = static_cast<float>(temp);
+            break;
+        }
         case DataType::Bool: {
             unsigned char temp;
             if (device_ == Device::CUDA) {
@@ -2972,6 +2990,11 @@ namespace lfs::core {
 
         // Handle UInt8 dtype by converting to float
         if (dtype_ == DataType::UInt8) {
+            auto float_tensor = to(DataType::Float32);
+            return float_tensor.to_vector();
+        }
+
+        if (dtype_ == DataType::UInt32) {
             auto float_tensor = to(DataType::Float32);
             return float_tensor.to_vector();
         }

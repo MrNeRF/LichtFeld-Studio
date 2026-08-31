@@ -221,7 +221,9 @@ namespace lfs::training {
     int MCMC::relocate_gs() {
         LOG_TIMER("MCMC::relocate_gs");
         LFS_TRACE("kernel.mcmc.relocate");
-        const bool shN_expanded = lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
+        const bool shN_expanded =
+            !_splat_data->shN_value_quantized() &&
+            lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
         lfs::training::sh_value::ShNCommitGuard shn_guard(
             *_splat_data, shN_expanded, "MCMC::relocate_gs");
         using namespace lfs::core;
@@ -379,9 +381,8 @@ namespace lfs::training {
                 opacity_dim,
                 N);
 
-            // Swizzled shN gather: at each dst primitive (dead_indices[i]) write the
-            // shN slot of src primitive (sampled_idxs[i]). Use in-swizzled-domain copies
-            // so _shN's reserved capacity is preserved (no realloc).
+            // Copy sampled shN onto dead slots. q16 stays packed: gather-decode
+            // the source rows and re-encode only the dest 256-splat blocks.
             if (_splat_data->shN().is_valid() && _splat_data->shN().numel() > 0 &&
                 _splat_data->max_sh_coeffs_rest() > 0 && dead_indices.numel() > 0) {
                 using namespace lfs::core;
@@ -389,19 +390,10 @@ namespace lfs::training {
                 const size_t n_pairs = dead_indices.numel();
                 Tensor staged = Tensor::empty({n_pairs, static_cast<size_t>(layout_rest), 3},
                                               _splat_data->shN().device());
-                shN_swizzled_gather_to_linear_i64(
-                    _splat_data->shN().ptr<float>(),
-                    sampled_idxs.ptr<int64_t>(),
-                    staged.ptr<float>(),
-                    n_pairs,
-                    layout_rest,
-                    layout_rest);
-                auto dead_i32 = dead_indices.dtype() == DataType::Int32
-                                    ? dead_indices
-                                    : dead_indices.to(DataType::Int32);
-                shN_swizzled_scatter_linear(
-                    _splat_data->shN().ptr<float>(), dead_i32.ptr<int>(),
-                    staged.ptr<float>(), n_pairs, layout_rest, layout_rest);
+                lfs::training::sh_value::gather_shN_to_canonical(
+                    *_splat_data, sampled_idxs, staged);
+                lfs::training::sh_value::scatter_canonical_into_shN(
+                    *_splat_data, dead_indices, staged);
             }
         }
 
@@ -427,7 +419,9 @@ namespace lfs::training {
         LOG_TIMER("MCMC::add_new_gs");
         LFS_TRACE("kernel.densify.duplicate");
         using namespace lfs::core;
-        const bool shN_expanded = lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
+        const bool shN_expanded =
+            !_splat_data->shN_value_quantized() &&
+            lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
         lfs::training::sh_value::ShNCommitGuard shn_guard(
             *_splat_data, shN_expanded, "MCMC::add_new_gs");
 
@@ -587,7 +581,9 @@ namespace lfs::training {
     int MCMC::add_new_gs_with_indices_test(const lfs::core::Tensor& sampled_idxs) {
         LOG_TIMER("MCMC::add_new_gs_with_indices_test");
         using namespace lfs::core;
-        const bool shN_expanded = lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
+        const bool shN_expanded =
+            !_splat_data->shN_value_quantized() &&
+            lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
         lfs::training::sh_value::ShNCommitGuard shn_guard(
             *_splat_data, shN_expanded, "MCMC::add_new_gs_with_indices_test");
 

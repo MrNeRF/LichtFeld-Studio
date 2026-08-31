@@ -315,7 +315,10 @@ protected:
     }
 
     void createComputeDescriptorSetLayout(_ComputePipeline& pipeline);
-    void createComputePipeline(_ComputePipeline& pipeline, const std::string& spirv_path, bool compatible_subgroup_size = true);
+    void createComputePipeline(_ComputePipeline& pipeline,
+                               const std::string& spirv_path,
+                               bool compatible_subgroup_size = true,
+                               uint32_t expected_workgroup_size_x = 0);
     void executeCompute(
         std::vector<std::pair<size_t, size_t>> dims,
         const void* uniformsPtr, size_t uniformSize,

@@ -31,6 +31,7 @@ namespace fast_lfs::rasterization {
         char* per_primitive_buffers_blob,
         char* per_tile_buffers_blob,
         const uint* sorted_primitive_indices,
+        const uint* primitive_work_indices,
         float* grad_opacity_helper,
         float3* grad_color_helper,
         float2* grad_mean2d_helper,
@@ -41,6 +42,7 @@ namespace fast_lfs::rasterization {
         float* densification_info,
         const int n_primitives,
         const int n_instances,
+        const int n_visible,
         const int active_sh_bases,
         const int sh_layout_bases,
         const int width,
@@ -59,6 +61,8 @@ namespace fast_lfs::rasterization {
         const uint shN_value_bits,
         const bool* mean_step_far_mask,
         const int mean_step_far_mask_n,
+        const float* edge_weight_map,
+        float* edge_score_out,
         cudaStream_t stream);
 
 } // namespace fast_lfs::rasterization

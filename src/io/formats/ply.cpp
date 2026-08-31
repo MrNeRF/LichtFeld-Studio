@@ -2163,6 +2163,11 @@ namespace lfs::io {
 
             splat_data.set_tensor_allocator(options.splat_tensor_allocator);
 
+            // One-shot pool trim after the model is fully in SplatData / exportable
+            // storage. q16 encode and H2D staging otherwise leave reserved_not_used
+            // in the CUDA async pool (E2E: ~1.75 GiB after a 2.4 GB PLY).
+            Tensor::trim_memory_pool();
+
             const auto end_time = std::chrono::steady_clock::now();
             const auto duration =
                 std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);

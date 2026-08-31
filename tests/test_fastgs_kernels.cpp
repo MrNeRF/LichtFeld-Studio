@@ -342,6 +342,41 @@ TEST_F(FastGSKernelTest, Backward_Blend) {
     EXPECT_GT(adam_moment(*opt, ParamType::Scaling).pow(2.0f).sum().item<float>(), 0.0f);
 }
 
+TEST_F(FastGSKernelTest, EdgeWeightedContributionUsesFloatMapInMainBackward) {
+    auto r = forward();
+    ASSERT_TRUE(r.has_value()) << lfs::format_for_developer(r.error());
+
+    // This value lies halfway between the rejected u8/16 cache levels, so the
+    // equality below also guards the float32 map contract against quantization.
+    constexpr float edge_weight = 1.03125f;
+    const float expected_total_contribution =
+        r->first.alpha.sum().item<float>() * edge_weight;
+    auto edge_weights = Tensor::full(
+        {H, W}, edge_weight, Device::CUDA, DataType::Float32);
+    auto edge_scores = Tensor::zeros({n_}, Device::CUDA, DataType::Float32);
+    FastGSFusedExtraGradients fused;
+    fused.edge_weight_map = edge_weights.ptr<float>();
+    fused.edge_score_out = edge_scores.ptr<float>();
+
+    auto opt = make_optimizer();
+    opt->zero_grad(0);
+    fast_rasterize_backward(
+        r->second,
+        Tensor::zeros_like(r->first.image),
+        *splat_,
+        *opt,
+        Tensor::zeros_like(r->first.alpha),
+        {},
+        DensificationType::None,
+        1,
+        fused);
+
+    const float actual_total_contribution = edge_scores.sum().item<float>();
+    EXPECT_GT(actual_total_contribution, 0.0f);
+    EXPECT_NEAR(actual_total_contribution, expected_total_contribution,
+                std::max(1.0e-3f, expected_total_contribution * 1.0e-4f));
+}
+
 TEST(FastGSDepthGradientTest, BackwardDepthMatchesLibtorchAutogradForCenteredSplat) {
     if (!torch::cuda::is_available()) {
         GTEST_SKIP() << "CUDA not available";

@@ -15,6 +15,7 @@
 #include "core/services.hpp"
 #include "core/shareable_allocation_limit.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/internal/size_bucketed_pool.hpp"
 #include "core/tensor/internal/tensor_ops.hpp"
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
@@ -450,6 +451,12 @@ namespace lfs::vis {
 
     void TrainerManager::setupStateMachineCallbacks() {
         state_machine_.setStateChangeCallback([this](TrainingState, TrainingState new_state) {
+            const bool training_cache_active =
+                new_state == TrainingState::Running ||
+                new_state == TrainingState::Paused ||
+                new_state == TrainingState::Stopping;
+            lfs::core::SizeBucketedPool::instance().set_training_active(training_cache_active);
+
             // Emit events on state changes
             if (new_state == TrainingState::Idle) {
                 {

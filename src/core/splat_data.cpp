@@ -2797,6 +2797,10 @@ namespace lfs::core {
                              : SplatData::ShNLayout::Canonical);
             result.set_tensor_allocator(std::move(tensor_allocator));
 
+            // One-shot pool trim after dataset SfM points finish loading into
+            // SplatData / exportable storage. Not on the per-tensor path.
+            Tensor::trim_memory_pool();
+
             return result;
 
         } catch (const std::exception& e) {

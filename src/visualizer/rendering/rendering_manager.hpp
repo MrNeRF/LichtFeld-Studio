@@ -131,6 +131,9 @@ namespace lfs::vis {
             VulkanContext& context,
             const lfs::core::SplatData& model,
             glm::ivec2 viewport_size);
+        // Called by the viewer loop at idle cadence. Releases private viewer
+        // scratch after a hysteresis window, or immediately under pressure.
+        void noteVksplatIdleFrame(bool training_active);
 
         enum class VksplatSelectionMaskShape : std::uint32_t {
             Brush = 0,
@@ -789,6 +792,8 @@ namespace lfs::vis {
         std::uint64_t point_cloud_data_revision_ = 0;
         std::uint64_t point_cloud_preview_selection_revision_ = 0;
         VulkanContext* last_vulkan_context_ = nullptr;
+        std::atomic<bool> vksplat_terminal_release_pending_{false};
+        std::uint32_t vksplat_idle_frame_count_ = 0;
         VkImage vulkan_external_viewport_image_ = VK_NULL_HANDLE;
         VkImageView vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
         VkImageLayout vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
