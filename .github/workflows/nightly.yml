@@ -199,6 +199,14 @@ jobs:
           path: external/nvidia-dlss-sdk
           lfs: true
 
+      - name: Checkout AMD FidelityFX SDK for the portable plugin
+        uses: actions/checkout@v4
+        with:
+          repository: GPUOpen-LibrariesAndSDKs/FidelityFX-SDK
+          ref: c6efa6bf7f2027b3ec94f28578bb5965eabb9e55
+          path: external/fidelityfx-sdk
+          submodules: recursive
+
       - name: Install CUDA 12.8
         run: |
           cd ..
@@ -239,7 +247,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $buildDir = $env:BUILD_DIR
-          $cmakeArgs = "-B $buildDir -S . -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_PORTABLE=ON -DBUILD_PYTHON_STUBS=OFF -DLFS_ENABLE_NVIDIA_DLSS=ON -DLFS_NVIDIA_DLSS_ROOT=external/nvidia-dlss-sdk"
+          $cmakeArgs = "-B $buildDir -S . -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_PORTABLE=ON -DBUILD_PYTHON_STUBS=OFF -DLFS_ENABLE_NVIDIA_DLSS=ON -DLFS_NVIDIA_DLSS_ROOT=external/nvidia-dlss-sdk -DLFS_ENABLE_AMD_FSR3=ON -DLFS_AMD_FSR3_ROOT=external/fidelityfx-sdk"
           $retryablePatterns = @(
             'status code 5\d\d',
             'timed out',

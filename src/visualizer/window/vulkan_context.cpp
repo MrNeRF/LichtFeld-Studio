@@ -4,6 +4,7 @@
 
 #include "vulkan_context.hpp"
 
+#include "rendering/amd_fsr3_plugin.hpp"
 #include "rendering/nvidia_dlss_plugin.hpp"
 
 #include "core/cuda_error.hpp"
@@ -682,6 +683,7 @@ namespace lfs::vis {
         // Optional vendor runtimes retain the Vulkan device passed at lazy
         // initialization. Shut them down after all GPU work is retired and
         // before the allocator/device they reference are destroyed.
+        AmdFsr3Plugin::instance().shutdownRuntime();
         NvidiaDlssPlugin::instance().shutdownRuntime();
 
         // #1488: surface leaked External* counts after idle, before device destroy.
@@ -2147,6 +2149,21 @@ namespace lfs::vis {
             for (const auto& name : dlss_instance_extensions)
                 appendUniqueExtension(extensions, name.c_str());
         }
+        const auto fsr3_instance_extensions =
+            AmdFsr3Plugin::instance().requiredInstanceExtensions();
+        const auto missing_fsr3_instance_extension = std::ranges::find_if(
+            fsr3_instance_extensions,
+            [&available_extensions](const std::string& name) {
+                return !extensionAvailable(available_extensions, name.c_str());
+            });
+        if (missing_fsr3_instance_extension != fsr3_instance_extensions.end()) {
+            AmdFsr3Plugin::instance().markBootstrapFailed(std::format(
+                "required Vulkan instance extension '{}' is unavailable",
+                *missing_fsr3_instance_extension));
+        } else {
+            for (const auto& name : fsr3_instance_extensions)
+                appendUniqueExtension(extensions, name.c_str());
+        }
         instance_external_memory_capabilities_enabled_ =
             extensionAvailable(available_extensions, VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME);
         if (instance_external_memory_capabilities_enabled_) {
@@ -2593,6 +2610,21 @@ namespace lfs::vis {
                 *missing_dlss_device_extension));
         } else {
             for (const auto& name : dlss_device_extensions)
+                appendUniqueExtension(extensions, name.c_str());
+        }
+        const auto fsr3_device_extensions =
+            AmdFsr3Plugin::instance().requiredDeviceExtensions(instance_, physical_device_);
+        const auto missing_fsr3_device_extension = std::ranges::find_if(
+            fsr3_device_extensions,
+            [&available_extensions](const std::string& name) {
+                return !extensionAvailable(available_extensions, name.c_str());
+            });
+        if (missing_fsr3_device_extension != fsr3_device_extensions.end()) {
+            AmdFsr3Plugin::instance().markBootstrapFailed(std::format(
+                "required Vulkan device extension '{}' is unavailable",
+                *missing_fsr3_device_extension));
+        } else {
+            for (const auto& name : fsr3_device_extensions)
                 appendUniqueExtension(extensions, name.c_str());
         }
         const bool has_external_memory =

@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "amd_fsr3_plugin.hpp"
 #include "core/camera.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_loader.hpp"
@@ -16,6 +17,7 @@
 #include "point_cloud_vulkan_renderer.hpp"
 #include "rendering/image_layout.hpp"
 #include "rendering/passes/vulkan_scene_dlss_pipeline.hpp"
+#include "rendering/passes/vulkan_scene_fsr3_pipeline.hpp"
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene_upscaler_registry.hpp"
@@ -55,6 +57,23 @@ namespace lfs::vis {
             if (output_extent.x <= 0 || output_extent.y <= 0)
                 return std::nullopt;
             const auto optimal = NvidiaDlssPlugin::instance().optimalSettings(
+                static_cast<std::uint32_t>(output_extent.x),
+                static_cast<std::uint32_t>(output_extent.y),
+                quality);
+            if (!optimal || optimal->render_width == 0 || optimal->render_height == 0 ||
+                optimal->render_width > static_cast<std::uint32_t>(output_extent.x) ||
+                optimal->render_height > static_cast<std::uint32_t>(output_extent.y)) {
+                return std::nullopt;
+            }
+            return glm::ivec2{static_cast<int>(optimal->render_width),
+                              static_cast<int>(optimal->render_height)};
+        }
+
+        [[nodiscard]] std::optional<glm::ivec2> amdFsr3OptimalRenderExtent(
+            const glm::ivec2 output_extent, const std::uint32_t quality) {
+            if (output_extent.x <= 0 || output_extent.y <= 0)
+                return std::nullopt;
+            const auto optimal = AmdFsr3Plugin::instance().optimalSettings(
                 static_cast<std::uint32_t>(output_extent.x),
                 static_cast<std::uint32_t>(output_extent.y),
                 quality);
@@ -1753,7 +1772,7 @@ namespace lfs::vis {
         glm::ivec2 render_size(
             std::max(static_cast<int>(std::lround(static_cast<float>(current_size.x) * scale)), 1),
             std::max(static_cast<int>(std::lround(static_cast<float>(current_size.y) * scale)), 1));
-        const std::uint32_t nvidia_dlss_quality =
+        const std::uint32_t vendor_quality =
             frame_settings.scene_upscaler_preset == "performance"
                 ? LFS_SCENE_UPSCALER_PLUGIN_PERFORMANCE
             : frame_settings.scene_upscaler_preset == "quality"
@@ -1765,7 +1784,20 @@ namespace lfs::vis {
             !memory_pressure_active;
         if (nvidia_dlss_optimal_query_allowed) {
             if (const auto optimal =
-                    nvidiaDlssOptimalRenderExtent(current_size, nvidia_dlss_quality)) {
+                    nvidiaDlssOptimalRenderExtent(current_size, vendor_quality)) {
+                render_size = *optimal;
+                scale = std::min(static_cast<float>(render_size.x) /
+                                     static_cast<float>(current_size.x),
+                                 static_cast<float>(render_size.y) /
+                                     static_cast<float>(current_size.y));
+            }
+        }
+        const bool amd_fsr3_optimal_query_allowed =
+            requested_upscaler == SceneUpscalerBackend::AmdFsr3 &&
+            reconstruction_runtime_ready && !resize_result.use_interactive_render_scale &&
+            !memory_pressure_active;
+        if (amd_fsr3_optimal_query_allowed) {
+            if (const auto optimal = amdFsr3OptimalRenderExtent(current_size, vendor_quality)) {
                 render_size = *optimal;
                 scale = std::min(static_cast<float>(render_size.x) /
                                      static_cast<float>(current_size.x),
@@ -1964,16 +1996,27 @@ namespace lfs::vis {
             splitViewUsesPLYComparison(frame_settings.split_view_mode);
         const bool temporal_backend_requested =
             requested_upscaler == SceneUpscalerBackend::Temporal ||
-            requested_upscaler == SceneUpscalerBackend::NvidiaDlss;
+            requested_upscaler == SceneUpscalerBackend::NvidiaDlss ||
+            requested_upscaler == SceneUpscalerBackend::AmdFsr3;
         const bool dlss_output_extent_supported =
             requested_upscaler != SceneUpscalerBackend::NvidiaDlss ||
             nvidiaDlssSupportsOutputExtent(current_size);
         const bool dlss_interactive_or_pressure =
             requested_upscaler == SceneUpscalerBackend::NvidiaDlss &&
             (resize_result.use_interactive_render_scale || memory_pressure_active);
+        const bool fsr3_output_extent_supported =
+            requested_upscaler != SceneUpscalerBackend::AmdFsr3 ||
+            amdFsr3SupportsOutputExtent(current_size);
+        const bool fsr3_interactive_or_pressure =
+            requested_upscaler == SceneUpscalerBackend::AmdFsr3 &&
+            (resize_result.use_interactive_render_scale || memory_pressure_active);
+        const bool fsr3_projection_supported =
+            requested_upscaler != SceneUpscalerBackend::AmdFsr3 ||
+            !frame_settings.orthographic;
         const bool temporal_eligible =
             temporal_backend_requested && dlss_output_extent_supported &&
-            !dlss_interactive_or_pressure &&
+            fsr3_output_extent_supported && !dlss_interactive_or_pressure &&
+            !fsr3_interactive_or_pressure && fsr3_projection_supported &&
             !frame_settings.equirectangular && !frame_settings.apply_appearance_correction &&
             temporal_split_supported &&
             lfs::rendering::isVkSplatBackend(frame_settings.raster_backend);
@@ -3305,11 +3348,16 @@ namespace lfs::vis {
                     [&](const std::size_t index) -> glm::ivec2 {
                     const glm::ivec2 proportional{std::max((*layouts)[index].width, 1),
                                                   render_size.y};
-                    if (!nvidia_dlss_optimal_query_allowed)
+                    if (!nvidia_dlss_optimal_query_allowed &&
+                        !amd_fsr3_optimal_query_allowed)
                         return proportional;
                     const glm::ivec2 panel_output{std::max((*output_layouts)[index].width, 1),
                                                   current_size.y};
-                    return nvidiaDlssOptimalRenderExtent(panel_output, nvidia_dlss_quality)
+                    if (nvidia_dlss_optimal_query_allowed) {
+                        return nvidiaDlssOptimalRenderExtent(panel_output, vendor_quality)
+                            .value_or(proportional);
+                    }
+                    return amdFsr3OptimalRenderExtent(panel_output, vendor_quality)
                         .value_or(proportional);
                 };
                 auto left = render_panel_image(

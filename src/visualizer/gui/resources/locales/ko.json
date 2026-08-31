@@ -774,6 +774,7 @@
     "scene_reconstruction_spatial": "공간",
     "scene_reconstruction_temporal": "시간",
     "scene_reconstruction_nvidia_dlss": "NVIDIA DLSS",
+    "scene_reconstruction_amd_fsr3": "AMD FSR 3.1",
     "scene_reconstruction_preset": "품질 프리셋",
     "scene_reconstruction_quality": "품질",
     "scene_reconstruction_balanced": "균형",

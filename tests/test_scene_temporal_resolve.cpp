@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "visualizer/rendering/passes/vulkan_scene_dlss_pipeline.hpp"
+#include "visualizer/rendering/passes/vulkan_scene_fsr3_pipeline.hpp"
 #include "visualizer/rendering/passes/vulkan_scene_temporal_pipeline.hpp"
 #include "visualizer/rendering/passes/vulkan_scene_temporal_resolve_pass.hpp"
 #include "visualizer/rendering/scene_temporal_resolve.hpp"
@@ -824,6 +825,65 @@ namespace lfs::vis {
         EXPECT_TRUE(nvidiaDlssSupportsOutputExtent(
             {NVIDIA_DLSS_MIN_OUTPUT_EXTENT,
              NVIDIA_DLSS_MIN_OUTPUT_EXTENT}));
+    }
+
+    TEST(VulkanSceneFsr3PipelineContract,
+         RequiresPerspectiveCameraAndCompleteVulkanInputs) {
+        VulkanSceneFsr3PipelineRequest request{
+            .temporal = pipelineRequest(),
+            .color_image = reinterpret_cast<VkImage>(5),
+            .color_format = VK_FORMAT_R8G8B8A8_UNORM,
+            .depth_image = reinterpret_cast<VkImage>(6),
+            .depth_format = VK_FORMAT_R32_SFLOAT,
+            .quality = SceneTemporalQuality::Quality,
+        };
+        request.temporal.resolve.current_color_layout =
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        request.temporal.resolve.current_allocation_extent = {640, 360};
+        request.temporal.resolve.current_depth.current_depth_layout =
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        request.temporal.resolve.current_depth.allocation_extent = {640, 360};
+        EXPECT_TRUE(validVulkanSceneFsr3PipelineRequest(request));
+
+        request.temporal.temporal.frame.view.orthographic = true;
+        EXPECT_FALSE(validVulkanSceneFsr3PipelineRequest(request));
+        request.temporal.temporal.frame.view.orthographic = false;
+        request.temporal.temporal.frame.view.near_plane = 0.0f;
+        EXPECT_FALSE(validVulkanSceneFsr3PipelineRequest(request));
+        request.temporal.temporal.frame.view.near_plane = 0.1f;
+        request.temporal.temporal.frame.view.far_plane = 0.1f;
+        EXPECT_FALSE(validVulkanSceneFsr3PipelineRequest(request));
+        request.temporal.temporal.frame.view.far_plane = 1000.0f;
+        EXPECT_TRUE(validVulkanSceneFsr3PipelineRequest(request));
+
+        request.temporal.resolve.current_color_layout = VK_IMAGE_LAYOUT_GENERAL;
+        EXPECT_FALSE(validVulkanSceneFsr3PipelineRequest(request));
+        request.temporal.resolve.current_color_layout =
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        request.temporal.resolve.current_depth.current_depth_layout =
+            VK_IMAGE_LAYOUT_GENERAL;
+        EXPECT_FALSE(validVulkanSceneFsr3PipelineRequest(request));
+        request.temporal.resolve.current_depth.current_depth_layout =
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        EXPECT_TRUE(validVulkanSceneFsr3PipelineRequest(request));
+
+        EXPECT_FALSE(amdFsr3SupportsOutputExtent(
+            {AMD_FSR3_MIN_OUTPUT_EXTENT - 1, AMD_FSR3_MIN_OUTPUT_EXTENT}));
+        EXPECT_TRUE(amdFsr3SupportsOutputExtent(
+            {AMD_FSR3_MIN_OUTPUT_EXTENT, AMD_FSR3_MIN_OUTPUT_EXTENT}));
+    }
+
+    TEST(VulkanSceneFsr3PipelineContract, UsesExactVerticalIntrinsicsWhenPresent) {
+        lfs::rendering::FrameView view;
+        view.size = {1920, 1080};
+        view.intrinsics_override = lfs::rendering::CameraIntrinsics{
+            .focal_x = 900.0f,
+            .focal_y = 700.0f,
+            .center_x = 960.0f,
+            .center_y = 540.0f,
+        };
+        const float expected = 2.0f * std::atan(540.0f / 700.0f);
+        EXPECT_NEAR(amdFsr3CameraVerticalFovRadians(view), expected, 1e-6f);
     }
 
     TEST(VulkanSceneDlssPipelineContract, MapsTemporalResetReasonsToPluginFlags) {

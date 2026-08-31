@@ -18,6 +18,7 @@ namespace lfs::vis {
         Spatial,
         Temporal,
         NvidiaDlss,
+        AmdFsr3,
     };
 
     enum class SceneUpscalerFallback : std::uint8_t {
