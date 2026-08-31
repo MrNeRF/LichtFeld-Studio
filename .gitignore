@@ -21,6 +21,9 @@ tests/data/*
 !tests/data/param_json_golden/
 tests/data/param_json_golden/*
 !tests/data/param_json_golden/*.json
+!tests/data/nn/
+tests/data/nn/*
+!tests/data/nn/moge2_ref_fixture.json
 *.pt
 *.py
 !scripts/lichtfeld_mcp_bridge.py
