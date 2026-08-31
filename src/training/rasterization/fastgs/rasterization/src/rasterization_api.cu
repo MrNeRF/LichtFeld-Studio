@@ -295,6 +295,11 @@ namespace fast_lfs::rasterization {
 
             // Get arena allocator for this frame
             auto arena_allocator = arena->get_allocator(frame_id);
+            auto phase_arena = std::make_shared<FastGSPhaseArena>(arena_allocator, stream);
+            auto phase_forward_allocator =
+                phase_arena->allocator(FastGSPhaseArena::Phase::Forward);
+            auto phase_backward_allocator =
+                phase_arena->allocator(FastGSPhaseArena::Phase::Backward);
 
             // The tile buffers remain image-sized.  FastGS allocates its
             // visibility bookkeeping and compact primitive buffers through the
@@ -316,39 +321,8 @@ namespace fast_lfs::rasterization {
             };
 
             // Call the actual forward implementation
-            ForwardResult forward_result = forward(per_primitive_buffers_func,
-                                                   per_tile_buffers_func,
-                                                   reinterpret_cast<const float3*>(means_ptr),
-                                                   reinterpret_cast<const float3*>(scales_raw_ptr),
-                                                   reinterpret_cast<const float4*>(rotations_raw_ptr),
-                                                   opacities_raw_ptr,
-                                                   reinterpret_cast<const float3*>(sh_coefficients_0_ptr),
-                                                   reinterpret_cast<const float4*>(sh_coefficients_rest_ptr),
-                                                   reinterpret_cast<const float2*>(sh_value_bounds_ptr),
-                                                   sh_value_n_cells,
-                                                   sh_value_bits,
-                                                   reinterpret_cast<const float4*>(w2c_ptr),
-                                                   reinterpret_cast<const float3*>(cam_position_ptr),
-                                                   image_ptr,
-                                                   alpha_ptr,
-                                                   depth_ptr,
-                                                   normal_ptr,
-                                                   bg_color_ptr,
-                                                   bg_image_ptr,
-                                                   n_primitives,
-                                                   active_sh_bases,
-                                                   sh_layout_bases,
-                                                   width,
-                                                   height,
-                                                   focal_x,
-                                                   focal_y,
-                                                   center_x,
-                                                   center_y,
-                                                   near_plane,
-                                                   far_plane,
-                                                   mip_filter,
-                                                   stream,
-                                                   max_screen_share_ptr);
+            ForwardResult forward_result = forward(per_primitive_buffers_func, [phase_arena](size_t size) { phase_arena->begin_phase(
+                                                                                                                FastGSPhaseArena::Phase::Forward, size); }, phase_forward_allocator, [phase_arena](const void* source, size_t size) { return phase_arena->retain_prefix(source, size); }, per_tile_buffers_func, reinterpret_cast<const float3*>(means_ptr), reinterpret_cast<const float3*>(scales_raw_ptr), reinterpret_cast<const float4*>(rotations_raw_ptr), opacities_raw_ptr, reinterpret_cast<const float3*>(sh_coefficients_0_ptr), reinterpret_cast<const float4*>(sh_coefficients_rest_ptr), reinterpret_cast<const float2*>(sh_value_bounds_ptr), sh_value_n_cells, sh_value_bits, reinterpret_cast<const float4*>(w2c_ptr), reinterpret_cast<const float3*>(cam_position_ptr), image_ptr, alpha_ptr, depth_ptr, normal_ptr, bg_color_ptr, bg_image_ptr, n_primitives, active_sh_bases, sh_layout_bases, width, height, focal_x, focal_y, center_x, center_y, near_plane, far_plane, mip_filter, stream, max_screen_share_ptr);
 
             // Verify allocations happened
             if (forward_result.n_instances > 0 && !forward_result.sorted_primitive_indices) {
@@ -362,20 +336,26 @@ namespace fast_lfs::rasterization {
             // visible primitives, while the full-N backward preprocess uses the
             // original->workset map to apply Adam/momentum to invisible rows.
             const size_t n_visible = static_cast<size_t>(forward_result.n_visible);
+            const size_t backward_phase_bytes = n_visible > 0
+                                                    ? n_visible * (sizeof(float2) + sizeof(float3) +
+                                                                   sizeof(float) + sizeof(float) +
+                                                                   3 * sizeof(float))
+                                                    : 0;
+            phase_arena->begin_phase(FastGSPhaseArena::Phase::Backward, backward_phase_bytes);
             char* grad_mean2d_helper = n_visible > 0
-                                           ? arena_allocator(n_visible * sizeof(float2))
+                                           ? phase_backward_allocator(n_visible * sizeof(float2))
                                            : nullptr;
             char* grad_conic_helper = n_visible > 0
-                                          ? arena_allocator(n_visible * sizeof(float3))
+                                          ? phase_backward_allocator(n_visible * sizeof(float3))
                                           : nullptr;
             char* grad_depth_helper = n_visible > 0
-                                          ? arena_allocator(n_visible * sizeof(float))
+                                          ? phase_backward_allocator(n_visible * sizeof(float))
                                           : nullptr;
             char* grad_opacity_helper = n_visible > 0
-                                            ? arena_allocator(n_visible * sizeof(float))
+                                            ? phase_backward_allocator(n_visible * sizeof(float))
                                             : nullptr;
             char* grad_color_helper = n_visible > 0
-                                          ? arena_allocator(n_visible * 3 * sizeof(float))
+                                          ? phase_backward_allocator(n_visible * 3 * sizeof(float))
                                           : nullptr;
             if (n_visible > 0 && (!grad_mean2d_helper || !grad_conic_helper ||
                                   !grad_depth_helper || !grad_opacity_helper ||
@@ -404,6 +384,8 @@ namespace fast_lfs::rasterization {
             ctx.grad_color_helper = grad_color_helper;
             ctx.primitive_normals = forward_result.primitive_normals;
             ctx.primitive_work_indices = forward_result.primitive_work_indices;
+            ctx.phase_allocator = phase_backward_allocator;
+            ctx.phase_arena = phase_arena;
             ctx.success = true;
             ctx.error_message = nullptr;
 
@@ -584,10 +566,11 @@ namespace fast_lfs::rasterization {
                 if (visible_count > 0 && !primitive_normals) {
                     throw std::runtime_error("Missing primitive normal buffer in forward context");
                 }
-                auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
-                auto arena_allocator = arena.get_allocator(forward_ctx.frame_id);
+                if (!forward_ctx.phase_allocator) {
+                    throw std::runtime_error("Missing backward phase allocator in forward context");
+                }
                 grad_normal_helper = reinterpret_cast<float3*>(
-                    visible_count > 0 ? arena_allocator(visible_count * sizeof(float3)) : nullptr);
+                    visible_count > 0 ? forward_ctx.phase_allocator(visible_count * sizeof(float3)) : nullptr);
                 if (visible_count > 0 && !grad_normal_helper) {
                     throw std::runtime_error("OUT_OF_MEMORY: Failed to allocate normal gradient helper buffer from arena");
                 }

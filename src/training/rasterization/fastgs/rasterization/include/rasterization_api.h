@@ -8,11 +8,15 @@
 #include "rasterization_config.h"
 #include <cstddef> // Added for size_t
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <tuple>
 
 // cstdint already provides std::uint64_t for preflight counters
 
 namespace fast_lfs::rasterization {
+
+    class FastGSPhaseArena;
 
     struct FastGSSettings {
         const float* cam_position_ptr; // Device pointer [3]
@@ -53,6 +57,10 @@ namespace fast_lfs::rasterization {
         void* grad_color_helper = nullptr;
         void* primitive_normals = nullptr;
         const uint* primitive_work_indices = nullptr;
+        // Backward-phase allocator retained by the frame context for the
+        // optional normal helper, which is only known at backward dispatch.
+        std::function<char*(size_t)> phase_allocator;
+        std::shared_ptr<FastGSPhaseArena> phase_arena;
         // Error handling for OOM / pathological frames
         bool success = false;
         bool resource_exhausted = false;

@@ -58,6 +58,9 @@ namespace fast_lfs::rasterization {
 
     ForwardResult forward(
         std::function<char*(size_t)> per_primitive_buffers_func,
+        std::function<void(size_t)> begin_phase_func,
+        std::function<char*(size_t)> phase_buffers_func,
+        std::function<char*(const void*, size_t)> retain_phase_prefix_func,
         std::function<char*(size_t)> per_tile_buffers_func,
         const float3* means,
         const float3* scales_raw,

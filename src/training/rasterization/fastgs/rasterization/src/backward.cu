@@ -70,7 +70,8 @@ void fast_lfs::rasterization::backward(
     const uint sh_layout_slots = kernels::shSlotsForBases(static_cast<uint>(sh_layout_bases));
 
     // These blobs are from the arena and are guaranteed to be valid
-    PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, n_visible);
+    PerPrimitiveBuffers per_primitive_buffers =
+        PerPrimitiveBuffers::from_persistent_blob(per_primitive_buffers_blob, n_visible);
     PerTileBuffers per_tile_buffers = PerTileBuffers::from_blob(per_tile_buffers_blob, n_tiles);
     auto* fastgs_status = per_primitive_buffers.forward_status;
 

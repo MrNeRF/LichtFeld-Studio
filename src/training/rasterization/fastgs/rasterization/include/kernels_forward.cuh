@@ -67,7 +67,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float4* __restrict__ w2c,
         const float3* __restrict__ cam_position,
         const uint* __restrict__ primitive_indices,
-        uint* __restrict__ primitive_visible_flags,
+        uint* __restrict__ primitive_visible_mask,
         uint* __restrict__ primitive_depth_keys,
         float* __restrict__ primitive_depths,
         std::uint64_t* __restrict__ primitive_n_touched_tiles,
@@ -107,9 +107,6 @@ namespace fast_lfs::rasterization::kernels::forward {
         const uint primitive_idx = primitive_indices != nullptr
                                        ? primitive_indices[work_idx]
                                        : work_idx;
-        if (primitive_visible_flags != nullptr && active) {
-            primitive_visible_flags[work_idx] = 0;
-        }
         if (!active) {
             active = false;
         }
@@ -259,8 +256,10 @@ namespace fast_lfs::rasterization::kernels::forward {
         }
 
         // store results
-        if (primitive_visible_flags != nullptr)
-            primitive_visible_flags[work_idx] = 1;
+        if (primitive_visible_mask != nullptr) {
+            atomicOr(&primitive_visible_mask[primitive_idx >> 5],
+                     1u << (primitive_idx & 31u));
+        }
         if (primitive_n_touched_tiles != nullptr)
             primitive_n_touched_tiles[work_idx] = n_touched_tiles;
         if (primitive_screen_bounds == nullptr)
@@ -318,24 +317,54 @@ namespace fast_lfs::rasterization::kernels::forward {
         }
     }
 
-    // Stable compaction: flags is replaced in place with original->workset
-    // indices, while visible_indices receives the original IDs in ascending
-    // order.  Keeping this order preserves the old sort/atomic accumulation
-    // order for bit-identical rendering and gradients.
+    __global__ void count_visible_blocks_cu(
+        const uint* __restrict__ visibility_mask,
+        uint* __restrict__ block_counts,
+        const uint n_primitives) {
+        const uint block_idx = blockIdx.x;
+        const uint n_blocks = (n_primitives + config::visibility_block_size - 1) /
+                              config::visibility_block_size;
+        if (block_idx >= n_blocks || threadIdx.x != 0)
+            return;
+        const uint first_word = (block_idx * config::visibility_block_size) >> 5;
+        const uint last_primitive = min(
+            n_primitives, (block_idx + 1u) * static_cast<uint>(config::visibility_block_size));
+        const uint n_words = (last_primitive + 31u) / 32u - first_word;
+        uint count = 0;
+        for (uint word = 0; word < n_words; ++word)
+            count += __popc(visibility_mask[first_word + word]);
+        block_counts[block_idx] = count;
+    }
+
+    // Stable compaction: the block scan supplies each block's original-order
+    // base, and the mask popcount supplies the in-block rank.  The map is
+    // written in place as the single N-sized backward lookup array.
     __global__ void compact_visible_primitives_cu(
-        uint* __restrict__ flags_or_work_indices,
-        const uint* __restrict__ offsets,
+        const uint* __restrict__ visibility_mask,
+        const uint* __restrict__ block_offsets,
+        uint* __restrict__ primitive_work_indices,
         uint* __restrict__ visible_indices,
         const uint n_primitives) {
         const uint primitive_idx = cg::this_grid().thread_rank();
         if (primitive_idx >= n_primitives)
             return;
-        if (flags_or_work_indices[primitive_idx] != 0u) {
-            const uint work_idx = offsets[primitive_idx] - 1u;
+        const uint word_idx = primitive_idx >> 5;
+        const uint bit_idx = primitive_idx & 31u;
+        const uint visible_word = visibility_mask[word_idx];
+        if ((visible_word & (1u << bit_idx)) != 0u) {
+            const uint block_idx = primitive_idx / config::visibility_block_size;
+            const uint block_first_word = (block_idx * config::visibility_block_size) >> 5;
+            uint rank = 0;
+            for (uint word = block_first_word; word < word_idx; ++word)
+                rank += __popc(visibility_mask[word]);
+            const uint prior_bits = bit_idx == 0 ? 0u : ((1u << bit_idx) - 1u);
+            rank += __popc(visible_word & prior_bits);
+            const uint block_base = block_idx == 0 ? 0u : block_offsets[block_idx - 1u];
+            const uint work_idx = block_base + rank;
             visible_indices[work_idx] = primitive_idx;
-            flags_or_work_indices[primitive_idx] = work_idx;
+            primitive_work_indices[primitive_idx] = work_idx;
         } else {
-            flags_or_work_indices[primitive_idx] = 0xffffffffu;
+            primitive_work_indices[primitive_idx] = 0xffffffffu;
         }
     }
 

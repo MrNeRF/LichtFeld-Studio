@@ -36,9 +36,9 @@ namespace {
         return (data_bytes + padding) & ~padding;
     }
 
-    // FastGS sort storage is one exact per-frame arena allocation. The four
-    // typed instance buffers occupy the first 16 bytes per instance and the
-    // queried CUB workspace occupies the aligned tail.
+    // FastGS sort storage is one exact phase allocation. One values buffer is
+    // copied into the retained prefix before phase B; the keys and the other
+    // values buffer are dead after forward rasterization.
     struct FastGSSortWorkspace {
         char* base = nullptr;
         size_t total_bytes = 0;
@@ -52,20 +52,24 @@ namespace {
         }
 
         [[nodiscard]] raster::InstanceKey* keys_current() const noexcept {
-            return reinterpret_cast<raster::InstanceKey*>(base);
+            return reinterpret_cast<raster::InstanceKey*>(base + per_buffer_bytes());
         }
 
         [[nodiscard]] raster::InstanceKey* keys_alternate() const noexcept {
             return reinterpret_cast<raster::InstanceKey*>(
-                base + per_buffer_bytes());
+                base + 2 * per_buffer_bytes());
         }
 
         [[nodiscard]] uint* primitive_indices_current() const noexcept {
-            return reinterpret_cast<uint*>(base + 2 * per_buffer_bytes());
+            return reinterpret_cast<uint*>(base);
         }
 
         [[nodiscard]] uint* primitive_indices_alternate() const noexcept {
             return reinterpret_cast<uint*>(base + 3 * per_buffer_bytes());
+        }
+
+        [[nodiscard]] uint* retained_indices() const noexcept {
+            return reinterpret_cast<uint*>(base);
         }
 
         [[nodiscard]] void* cub_workspace() const noexcept {
@@ -73,9 +77,7 @@ namespace {
         }
 
         bool owns_sorted_indices(const void* ptr) const noexcept {
-            return ptr != nullptr &&
-                   (ptr == primitive_indices_current() ||
-                    ptr == primitive_indices_alternate());
+            return ptr != nullptr && ptr == retained_indices();
         }
 
         void bind_layout(char* allocation,
@@ -164,6 +166,9 @@ int fast_lfs::rasterization::sort_workspace_capacity_n_instances() noexcept {
 
 fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     std::function<char*(size_t)> per_primitive_buffers_func,
+    std::function<void(size_t)> begin_phase_func,
+    std::function<char*(size_t)> phase_buffers_func,
+    std::function<char*(const void*, size_t)> retain_phase_prefix_func,
     std::function<char*(size_t)> per_tile_buffers_func,
     const float3* means,
     const float3* scales_raw,
@@ -230,7 +235,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     VisibilityBuffers visibility_buffers = VisibilityBuffers::from_blob(visibility_blob, n_primitives);
 
     auto launch_preprocess = [&](const uint* primitive_indices,
-                                 uint* visible_flags,
+                                 uint* visibility_mask,
                                  uint* depth_keys,
                                  float* depths,
                                  std::uint64_t* n_touched_tiles,
@@ -254,7 +259,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             w2c,
             cam_position,
             primitive_indices,
-            visible_flags,
+            visibility_mask,
             depth_keys,
             depths,
             n_touched_tiles,
@@ -287,19 +292,35 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.preprocess");
     };
 
+    const size_t visibility_mask_bytes =
+        ((static_cast<size_t>(n_primitives) + 31u) / 32u) * sizeof(uint);
+    LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(visibility_buffers.visibility_mask, 0,
+                                         visibility_mask_bytes, stream),
+                         "cudaMemsetAsync(FastGS visibility mask)");
+
     launch_preprocess(nullptr,
-                      visibility_buffers.flags_or_work_indices,
+                      visibility_buffers.visibility_mask,
                       nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
                       static_cast<uint>(n_primitives), max_screen_share);
     LFS_FASTGS_PHASE_CHECK("fastgs.forward.preprocess.visibility");
+
+    const uint n_visibility_blocks = static_cast<uint>(
+        (static_cast<size_t>(n_primitives) + config::visibility_block_size - 1) /
+        config::visibility_block_size);
+    kernels::forward::count_visible_blocks_cu<<<n_visibility_blocks,
+                                                config::visibility_block_size, 0, stream>>>(
+        visibility_buffers.visibility_mask,
+        visibility_buffers.block_counts,
+        static_cast<uint>(n_primitives));
+    LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.count_visible_blocks");
 
     check_cuda_with_fastgs_status(
         cub::DeviceScan::InclusiveSum(
             visibility_buffers.cub_workspace,
             visibility_buffers.cub_workspace_size,
-            visibility_buffers.flags_or_work_indices,
-            visibility_buffers.offsets,
-            n_primitives,
+            visibility_buffers.block_counts,
+            visibility_buffers.block_offsets,
+            static_cast<int>(n_visibility_blocks),
             stream),
         "cub::DeviceScan::InclusiveSum (FastGS visibility)",
         nullptr,
@@ -309,25 +330,27 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     LFS_FASTGS_PHASE_CHECK("cub::DeviceScan::InclusiveSum (FastGS visibility)");
 
     kernels::forward::compact_visible_primitives_cu<<<div_round_up(n_primitives, config::block_size_preprocess), config::block_size_preprocess, 0, stream>>>(
-        visibility_buffers.flags_or_work_indices,
-        visibility_buffers.offsets,
+        visibility_buffers.visibility_mask,
+        visibility_buffers.block_offsets,
+        visibility_buffers.primitive_work_indices,
         visibility_buffers.visible_indices,
         static_cast<uint>(n_primitives));
     LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.compact_visible");
 
     uint h_n_visible = 0;
     LFS_CUDA_CHECK_MSG(
-        cudaMemcpy(&h_n_visible, visibility_buffers.offsets + n_primitives - 1,
+        cudaMemcpy(&h_n_visible, visibility_buffers.block_offsets + n_visibility_blocks - 1,
                    sizeof(h_n_visible), cudaMemcpyDeviceToHost),
         "cudaMemcpy(FastGS visible count)");
     const int n_visible = checked_to_int(h_n_visible, "visible primitive count exceeds int range");
 
     char* per_primitive_buffers_base =
-        per_primitive_buffers_func(required<PerPrimitiveBuffers>(n_visible));
+        per_primitive_buffers_func(PerPrimitiveBuffers::required_persistent(n_visible));
     if (!per_primitive_buffers_base)
         throw std::runtime_error("OUT_OF_MEMORY: Failed to allocate FastGS primitive buffers");
     char* per_primitive_buffers_blob = per_primitive_buffers_base;
-    PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, n_visible);
+    PerPrimitiveBuffers per_primitive_buffers =
+        PerPrimitiveBuffers::from_persistent_blob(per_primitive_buffers_blob, n_visible);
 
     float3* primitive_normals = nullptr;
     if (normal != nullptr && n_visible > 0) {
@@ -336,6 +359,16 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         if (!primitive_normals)
             throw std::runtime_error("OUT_OF_MEMORY: Failed to allocate FastGS primitive normal buffer");
     }
+
+    begin_phase_func(PerPrimitiveBuffers::required_phase(n_visible));
+    PerPrimitiveBuffers phase_buffers =
+        PerPrimitiveBuffers::from_phase_allocator(phase_buffers_func, n_visible);
+    per_primitive_buffers.depth_keys = phase_buffers.depth_keys;
+    per_primitive_buffers.n_touched_tiles = phase_buffers.n_touched_tiles;
+    per_primitive_buffers.offset = phase_buffers.offset;
+    per_primitive_buffers.screen_bounds = phase_buffers.screen_bounds;
+    per_primitive_buffers.cub_workspace = phase_buffers.cub_workspace;
+    per_primitive_buffers.cub_workspace_size = phase_buffers.cub_workspace_size;
 
     auto* forward_status = per_primitive_buffers.forward_status;
     LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(forward_status, 0, sizeof(raster::FastGSForwardStatus), stream),
@@ -449,7 +482,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
                 throw std::overflow_error("FastGS exact sort workspace size overflow");
             }
             const size_t total_bytes = cub_offset_bytes + cub_bytes;
-            char* const sort_blob = per_primitive_buffers_func(total_bytes);
+            char* const sort_blob = phase_buffers_func(total_bytes);
             if (!sort_blob) {
                 throw std::runtime_error("OUT_OF_MEMORY: Failed to allocate FastGS sort buffers from arena");
             }
@@ -504,8 +537,9 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
                 static_cast<uint64_t>(n_primitives),
                 n_tiles_u64);
 
-            sorted_primitive_indices = primitive_indices.Current();
-            if (!sort_workspace.owns_sorted_indices(sorted_primitive_indices)) {
+            const uint* sorted_source = primitive_indices.Current();
+            if (sorted_source != sort_workspace.primitive_indices_current() &&
+                sorted_source != sort_workspace.primitive_indices_alternate()) {
                 throw std::runtime_error("FastGS radix sort returned an unexpected sorted index buffer");
             }
 
@@ -520,6 +554,13 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.extract_instance_ranges");
             check_cuda_with_fastgs_status(cudaGetLastError(), "extract_instance_ranges", forward_status, "extract_instance_ranges", static_cast<uint64_t>(n_primitives), n_tiles_u64);
             sync_fastgs_phase_if_requested("extract_instance_ranges", forward_status, "extract_instance_ranges", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+
+            // Retain one compact sorted values copy at the phase base.  The
+            // sort keys and ping-pong scratch can then be overwritten by the
+            // backward helpers, while backward still sees stable ordering.
+            sorted_primitive_indices = reinterpret_cast<uint*>(
+                retain_phase_prefix_func(sorted_source,
+                                         static_cast<size_t>(n_instances) * sizeof(uint)));
         }
     }
 
@@ -530,7 +571,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         kernels::forward::blend_cu<RENDER_NORMAL><<<grid, dim3(config::block_size_blend_forward), 0, stream>>>(
             per_tile_buffers.instance_ranges,
             sorted_primitive_indices,
-            visibility_buffers.flags_or_work_indices,
+            visibility_buffers.primitive_work_indices,
             per_primitive_buffers.mean2d,
             per_primitive_buffers.conic_opacity,
             per_primitive_buffers.color,
@@ -563,8 +604,8 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     result.n_instances = n_instances;
     result.n_visible = n_visible;
     result.per_primitive_buffers = per_primitive_buffers_base;
-    result.per_primitive_buffers_size = required<PerPrimitiveBuffers>(n_visible);
-    result.primitive_work_indices = visibility_buffers.flags_or_work_indices;
+    result.per_primitive_buffers_size = PerPrimitiveBuffers::required_persistent(n_visible);
+    result.primitive_work_indices = visibility_buffers.primitive_work_indices;
     result.primitive_normals = primitive_normals;
     result.sorted_primitive_indices = sorted_primitive_indices;
     result.sorted_primitive_indices_size = static_cast<size_t>(std::max(n_instances, 0)) * sizeof(uint);
