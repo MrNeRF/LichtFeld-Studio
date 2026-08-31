@@ -60,6 +60,36 @@ namespace lfs::vis {
                 params.eval_steps = steps;
         }
 
+        void refreshCameraEvaluationSplit(
+            lfs::core::Scene& scene,
+            const bool enable_eval,
+            const int test_every) {
+            auto cameras = scene.getActiveCameras();
+            std::erase_if(cameras, [](const auto& camera) {
+                return !camera || !camera->has_image();
+            });
+            std::sort(
+                cameras.begin(), cameras.end(),
+                [](const auto& lhs, const auto& rhs) {
+                    return lhs->uid() < rhs->uid();
+                });
+
+            const auto split_interval = static_cast<size_t>(std::max(1, test_every));
+            size_t eval_count = 0;
+            for (size_t i = 0; i < cameras.size(); ++i) {
+                const bool is_eval = enable_eval && (i % split_interval) == 0;
+                cameras[i]->set_split(
+                    is_eval ? lfs::core::CameraSplit::Eval
+                            : lfs::core::CameraSplit::Train);
+                eval_count += is_eval;
+            }
+
+            LOG_INFO(
+                "Refreshed camera evaluation split: {} train, {} val images",
+                cameras.size() - eval_count,
+                eval_count);
+        }
+
         [[nodiscard]] lfs::io::project::TrainingFinishReason
         toIoFinishReason(const FinishReason reason) {
             switch (reason) {
@@ -2060,7 +2090,8 @@ namespace lfs::vis {
             return;
         }
 
-        auto params = trainer_->getParams();
+        const auto previous_params = trainer_->getParams();
+        auto params = previous_params;
         params.dataset = pending_dataset_params_;
 
         // Use ParameterManager in GUI mode, fallback to pending_opt_params_ for headless
@@ -2070,6 +2101,16 @@ namespace lfs::vis {
                       params.optimization.strategy, params.optimization.iterations, params.optimization.max_cap);
         } else {
             params.optimization = pending_opt_params_;
+        }
+
+        const bool evaluation_split_changed =
+            previous_params.optimization.enable_eval != params.optimization.enable_eval ||
+            previous_params.dataset.test_every != params.dataset.test_every;
+        if (!trainer_->isInitialized() && scene_ && evaluation_split_changed) {
+            refreshCameraEvaluationSplit(
+                *scene_,
+                params.optimization.enable_eval,
+                params.dataset.test_every);
         }
         trainer_->setParams(params);
     }
