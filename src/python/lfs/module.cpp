@@ -248,6 +248,63 @@ namespace {
             }));
     }
 
+    lfs::Error python_viewer_shutdown_error();
+
+    lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
+    post_project_license_get_to_viewer(lfs::vis::Visualizer& viewer) {
+        if (viewer.isOnViewerThread()) {
+            return viewer.projectGetLicense();
+        }
+        const lfs::core::TaskContext context{
+            .name = "python.project_get_license",
+            .domain = lfs::ErrorDomain::Python,
+            .operation_id = lfs::OperationId::generate(),
+            .site = LFS_SOURCE_SITE_CURRENT(),
+        };
+        return lfs::vis::post_guarded_and_wait<
+            std::optional<lfs::io::project::ProjectLicense>>(
+            viewer, context,
+            [&viewer] { return viewer.projectGetLicense(); },
+            python_viewer_shutdown_error());
+    }
+
+    lfs::Result<void> post_project_license_set_to_viewer(
+        lfs::vis::Visualizer& viewer,
+        lfs::io::project::ProjectLicense license) {
+        if (viewer.isOnViewerThread()) {
+            return viewer.projectSetLicense(license);
+        }
+        const lfs::core::TaskContext context{
+            .name = "python.project_set_license",
+            .domain = lfs::ErrorDomain::Python,
+            .operation_id = lfs::OperationId::generate(),
+            .site = LFS_SOURCE_SITE_CURRENT(),
+        };
+        return lfs::vis::post_guarded_and_wait<void>(
+            viewer, context,
+            [&viewer, license = std::move(license)]() mutable {
+                return viewer.projectSetLicense(license);
+            },
+            python_viewer_shutdown_error());
+    }
+
+    lfs::Result<void> post_project_license_clear_to_viewer(
+        lfs::vis::Visualizer& viewer) {
+        if (viewer.isOnViewerThread()) {
+            return viewer.projectClearLicense();
+        }
+        const lfs::core::TaskContext context{
+            .name = "python.project_clear_license",
+            .domain = lfs::ErrorDomain::Python,
+            .operation_id = lfs::OperationId::generate(),
+            .site = LFS_SOURCE_SITE_CURRENT(),
+        };
+        return lfs::vis::post_guarded_and_wait<void>(
+            viewer, context,
+            [&viewer] { return viewer.projectClearLicense(); },
+            python_viewer_shutdown_error());
+    }
+
     lfs::Error python_viewer_shutdown_error() {
         return lfs::make_error(lfs::ErrorInit{
             .code = lfs::ErrorCode::Cancelled,
@@ -1090,6 +1147,26 @@ NB_MODULE(lichtfeld, m) {
         },
         nb::arg("discard_changes") = false, nb::arg("stop_training") = false, "Clear all project state and start a new project");
     m.def(
+        "project_create",
+        [](const std::string& path,
+           const bool discard_changes,
+           const bool stop_training) {
+            nb::gil_scoped_release release;
+            const auto project_path = python_utf8_path(path);
+            emit_project_cmd_marshaled(
+                "python.project_create",
+                [project_path, discard_changes, stop_training] {
+                    lfs::core::events::cmd::ProjectCreate{
+                        .path = project_path,
+                        .discard_changes = discard_changes,
+                        .stop_training = stop_training}
+                        .emit();
+                });
+        },
+        nb::arg("path"), nb::arg("discard_changes") = false,
+        nb::arg("stop_training") = false,
+        "Create and bind a new .licht project at path");
+    m.def(
         "project_save",
         [](const bool wait, const bool regenerate_preview) {
             nb::gil_scoped_release release;
@@ -1147,6 +1224,70 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("path") = "",
         nb::arg("wait") = false,
         "Save the active project to a new .licht path");
+    m.def(
+        "project_get_license", []() -> std::optional<nb::dict> {
+            auto* const viewer = lfs::python::get_visualizer();
+            if (!viewer) {
+                return std::nullopt;
+            }
+            auto license = [&] {
+                nb::gil_scoped_release release;
+                return post_project_license_get_to_viewer(*viewer);
+            }();
+            if (!license) {
+                throw std::runtime_error(std::format(
+                    "project_get_license failed: {}",
+                    lfs::format_for_developer(license.error())));
+            }
+            if (!license->has_value()) {
+                return std::nullopt;
+            }
+            nb::dict result;
+            result["identifier"] = (*license)->identifier;
+            result["notice"] = (*license)->notice;
+            return result;
+        },
+        "Return the license metadata for the active project, or None");
+    m.def(
+        "project_set_license",
+        [](const std::string& identifier, const std::string& notice) {
+            auto* const viewer = lfs::python::get_visualizer();
+            if (!viewer) {
+                throw std::runtime_error(
+                    "project_set_license failed: no visualizer is available");
+            }
+            auto result = [&] {
+                nb::gil_scoped_release release;
+                return post_project_license_set_to_viewer(
+                    *viewer,
+                    lfs::io::project::ProjectLicense{identifier, notice});
+            }();
+            if (!result) {
+                throw std::runtime_error(std::format(
+                    "project_set_license failed: {}",
+                    lfs::format_for_developer(result.error())));
+            }
+        },
+        nb::arg("identifier"), nb::arg("notice") = "",
+        "Set the license metadata for the active project");
+    m.def(
+        "project_clear_license", []() {
+            auto* const viewer = lfs::python::get_visualizer();
+            if (!viewer) {
+                throw std::runtime_error(
+                    "project_clear_license failed: no visualizer is available");
+            }
+            auto result = [&] {
+                nb::gil_scoped_release release;
+                return post_project_license_clear_to_viewer(*viewer);
+            }();
+            if (!result) {
+                throw std::runtime_error(std::format(
+                    "project_clear_license failed: {}",
+                    lfs::format_for_developer(result.error())));
+            }
+        },
+        "Clear the license metadata for the active project");
     m.def(
         "project_poll_write", []() {
             nb::dict result;

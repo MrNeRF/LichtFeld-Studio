@@ -13,6 +13,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace lfs::vis {
 
@@ -133,6 +134,7 @@ namespace lfs::vis {
 
         // Dataset config (CLI overrides JSON defaults)
         lfs::core::param::DatasetConfig dataset_config_;
+        std::vector<lfs::core::param::OutputFormat> export_formats_;
 
         mutable std::mutex params_mutex_;
         std::atomic<bool> dirty_{false};

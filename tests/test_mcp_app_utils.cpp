@@ -85,6 +85,11 @@ namespace {
             const std::filesystem::path&, bool) override {
             return {};
         }
+        lfs::Result<void> projectCreateAt(
+            const std::filesystem::path&,
+            lfs::vis::ProjectSwitchDisposition) override {
+            return {};
+        }
         lfs::Result<lfs::vis::ProjectOpenOutcome> projectOpen(
             const std::filesystem::path&,
             lfs::vis::ProjectSwitchDisposition) override {
@@ -108,6 +113,15 @@ namespace {
             info.project_write_running = false;
             return info;
         }
+        lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
+        projectGetLicense() override {
+            return std::optional<lfs::io::project::ProjectLicense>{};
+        }
+        lfs::Result<void> projectSetLicense(
+            const lfs::io::project::ProjectLicense&) override {
+            return {};
+        }
+        lfs::Result<void> projectClearLicense() override { return {}; }
 
         lfs::Result<lfs::vis::ProjectWritePoll>
         projectPollWrite() override {

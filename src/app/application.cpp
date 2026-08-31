@@ -36,7 +36,6 @@
 #include "visualizer/visualizer.hpp"
 
 #include "app/mcp_gui_tools.hpp"
-#include "io/exporter.hpp"
 #include "io/loader.hpp"
 #include "io/video/video_encoder.hpp"
 #include "mcp/mcp_http_server.hpp"
@@ -74,75 +73,6 @@ namespace lfs::app {
 
     namespace {
 
-        const char* final_export_extension(const core::param::OutputFormat format) {
-            using core::param::OutputFormat;
-            switch (format) {
-            case OutputFormat::PLY: return ".ply";
-            case OutputFormat::SOG: return ".sog";
-            case OutputFormat::SPZ: return ".spz";
-            case OutputFormat::HTML: return ".html";
-            case OutputFormat::USD: return ".usd";
-            case OutputFormat::USDA: return ".usda";
-            case OutputFormat::USDC: return ".usdc";
-            case OutputFormat::RAD: return ".rad";
-            }
-            return ".ply";
-        }
-
-        io::Result<void> save_final_splat(const core::SplatData& splat,
-                                          const std::filesystem::path& output,
-                                          const core::param::OutputFormat format,
-                                          const core::ProvenanceStamp& provenance) {
-            using core::param::OutputFormat;
-            switch (format) {
-            case OutputFormat::PLY:
-                return io::save_ply(splat, {.output_path = output, .binary = true, .provenance = provenance});
-            case OutputFormat::SOG:
-                return io::save_sog(splat, {.output_path = output, .kmeans_iterations = 10, .provenance = provenance});
-            case OutputFormat::SPZ:
-                return io::save_spz(splat, {.output_path = output, .version = 4, .provenance = provenance});
-            case OutputFormat::HTML:
-                return io::export_html(splat, {.output_path = output, .kmeans_iterations = 10, .provenance = provenance});
-            case OutputFormat::USD:
-            case OutputFormat::USDA:
-            case OutputFormat::USDC:
-                return io::save_usd(splat, {.output_path = output, .provenance = provenance});
-            case OutputFormat::RAD:
-                return io::save_rad(splat, {.output_path = output, .provenance = provenance});
-            }
-            return io::save_ply(splat, {.output_path = output, .binary = true, .provenance = provenance});
-        }
-
-        void export_final_splats(const training::Trainer& trainer,
-                                 const core::param::TrainingParameters& params) {
-            if (params.export_formats.empty()) {
-                return;
-            }
-            const auto& model = trainer.get_strategy().get_model();
-            const std::filesystem::path out_dir = params.dataset.output_path;
-            const std::string stem = params.dataset.output_name.empty()
-                                         ? std::format("splat_{}", trainer.get_current_iteration())
-                                         : params.dataset.output_name;
-
-            core::ProvenanceStamp stamp = params.include_provenance
-                                              ? core::make_provenance_stamp()
-                                              : core::make_minimal_provenance_stamp();
-            if (params.include_provenance) {
-                stamp.iteration = trainer.get_current_iteration();
-                stamp.strategy = params.optimization.strategy;
-            }
-
-            for (const auto format : params.export_formats) {
-                const std::filesystem::path path = out_dir / (stem + final_export_extension(format));
-                if (const auto result = save_final_splat(model, path, format, stamp); !result) {
-                    LOG_ERROR("Failed to export final splat to {}: {}",
-                              core::path_to_utf8(path), result.error().message);
-                } else {
-                    LOG_INFO("Exported final splat: {}", core::path_to_utf8(path));
-                }
-            }
-        }
-
         struct HeadlessPluginSignalGuard {
             HeadlessPluginSignalGuard() {
                 python::set_plugin_preload_completion_hook(
@@ -157,6 +87,18 @@ namespace lfs::app {
             HeadlessPluginSignalGuard& operator=(
                 const HeadlessPluginSignalGuard&) = delete;
         };
+
+        [[nodiscard]] std::filesystem::path headless_project_save_destination(
+            const core::param::TrainingParameters& cli_params,
+            const std::filesystem::path& source) {
+            if (!cli_params.dataset.output_path_explicit)
+                return source;
+
+            const auto destination = cli_params.dataset.output_path / "project.licht";
+            LOG_INFO("Headless resume project destination: {}",
+                     core::path_to_utf8(destination));
+            return destination;
+        }
 
         [[nodiscard]] lfs::Error training_project_error(
             const lfs::ErrorCode code,
@@ -579,7 +521,8 @@ namespace lfs::app {
                         training::grant_headless_project_saves(
                             *installed->trainer,
                             effective_params,
-                            *params->resume_project);
+                            headless_project_save_destination(
+                                *params, *params->resume_project));
                         manager->setTrainer(
                             std::move(installed->trainer));
                     } else {
@@ -795,7 +738,8 @@ namespace lfs::app {
                         std::move(installed->trainer);
                     training::grant_headless_project_saves(
                         *trainer, project->params,
-                        *params->resume_project);
+                        headless_project_save_destination(
+                            *params, *params->resume_project));
                     LOG_INFO(
                         "Project display hydration complete; full "
                         "trainer state restored at iteration {}",
@@ -823,7 +767,7 @@ namespace lfs::app {
                                 rebound.error()));
                         return 1;
                     }
-                    export_final_splats(*trainer, *params);
+                    training::export_final_splats(*trainer, *params);
                     trainer->shutdown();
                     static_cast<void>(
                         trainer.release());
@@ -871,7 +815,7 @@ namespace lfs::app {
                         }
                         return 1;
                     }
-                    export_final_splats(*trainer, *params);
+                    training::export_final_splats(*trainer, *params);
                     trainer->shutdown();
                     static_cast<void>(trainer.release());
                 } else {
@@ -917,7 +861,7 @@ namespace lfs::app {
                         }
                         return 1;
                     }
-                    export_final_splats(*trainer, *params);
+                    training::export_final_splats(*trainer, *params);
                     trainer->shutdown();
                     static_cast<void>(trainer.release());
                 }

@@ -124,6 +124,10 @@ namespace lfs::io {
 
         void cancel() { cv_.notify_all(); }
 
+        [[nodiscard]] bool cancelled() const noexcept {
+            return !running_ || !running_->load(std::memory_order_acquire);
+        }
+
         void reclaim_idle() {
             std::lock_guard<std::mutex> lock(mutex_);
             for (auto& slot : slots_) {
@@ -2315,12 +2319,22 @@ namespace lfs::io {
 
                 std::vector<size_t> rgb_batch_indices;
                 rgb_batch_indices.reserve(batch.size());
+                std::vector<size_t> rgb_jpeg2k_batch_indices;
+                rgb_jpeg2k_batch_indices.reserve(batch.size());
                 bool rgb_dtype_initialized = false;
                 bool rgb_output_uint8 = false;
                 for (size_t i = 0; i < batch.size(); ++i) {
                     if (!batch[i].is_mask && !batch[i].is_depth && !batch[i].is_normal &&
                         !batch[i].needs_processing &&
                         batch[i].jpeg_data) {
+                        const auto& bytes = *batch[i].jpeg_data;
+                        const bool is_jpeg2k = bytes.size() >= 2 && bytes[0] == 0xff && bytes[1] == 0x4f;
+                        if (is_jpeg2k) {
+                            rgb_jpeg2k_batch_indices.push_back(i);
+                            continue;
+                        }
+                        if (!is_jpeg_data(bytes))
+                            continue;
                         if (!rgb_dtype_initialized) {
                             rgb_dtype_initialized = true;
                             rgb_output_uint8 = batch[i].params.output_uint8;
@@ -2332,8 +2346,13 @@ namespace lfs::io {
                 }
                 if (!rgb_batch_indices.empty()) {
                     auto leases = decoded_frame_ring_->acquire_batch(rgb_batch_indices.size());
-                    if (leases.empty())
+                    if (leases.empty()) {
+                        if (decoded_frame_ring_->cancelled()) {
+                            LOG_DEBUG("[PipelinedImageLoader] GPU batch decode cancelled during shutdown");
+                            return;
+                        }
                         throw std::runtime_error("decoded frame ring cancelled");
+                    }
                     rgb_batch_indices.resize(leases.size());
                     std::vector<std::pair<const uint8_t*, size_t>> spans;
                     spans.reserve(rgb_batch_indices.size());
@@ -2361,6 +2380,41 @@ namespace lfs::io {
                         try_complete_pair(batch[index].sequence_id, batch[index].loader_generation,
                                           std::move(decoded[j]), std::nullopt, nullptr, std::nullopt,
                                           std::nullopt, nullptr, std::move(lease));
+                        decoded_as_pair[index] = true;
+                    }
+                }
+
+                if (!rgb_jpeg2k_batch_indices.empty()) {
+                    std::vector<std::pair<const uint8_t*, size_t>> spans;
+                    spans.reserve(rgb_jpeg2k_batch_indices.size());
+                    for (const size_t index : rgb_jpeg2k_batch_indices) {
+                        spans.emplace_back(batch[index].jpeg_data->data(), batch[index].jpeg_data->size());
+                    }
+                    auto decoded = nvcodec->decode_jpeg2k_16bit_batch_from_spans(
+                        spans, decode_stream_, false);
+                    if (decoded.size() != rgb_jpeg2k_batch_indices.size()) {
+                        throw std::runtime_error("JPEG2000 RGB batch decode returned wrong size");
+                    }
+                    for (size_t j = 0; j < rgb_jpeg2k_batch_indices.size(); ++j) {
+                        const size_t index = rgb_jpeg2k_batch_indices[j];
+                        auto& tensor = decoded[j];
+                        if (!tensor.is_valid() || tensor.ndim() != 3 || tensor.shape()[2] != 3) {
+                            throw std::runtime_error("Decoded RGB JPEG2000 cache is not [H,W,3]");
+                        }
+                        tensor = tensor.permute({2, 0, 1}).contiguous();
+                        tensor.set_stream(decode_stream_);
+                        if (batch[index].params.output_uint8) {
+                            auto uint8_tensor = lfs::core::Tensor::empty(
+                                tensor.shape(), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                            uint8_tensor.set_stream(decode_stream_);
+                            cuda::launch_float32_chw_to_uint8_chw(
+                                tensor.ptr<float>(), uint8_tensor.ptr<uint8_t>(),
+                                tensor.shape()[1], tensor.shape()[2], tensor.shape()[0], decode_stream_);
+                            tensor = std::move(uint8_tensor);
+                        }
+                        try_complete_pair(batch[index].sequence_id, batch[index].loader_generation,
+                                          std::move(tensor), std::nullopt, nullptr, std::nullopt,
+                                          std::nullopt, nullptr);
                         decoded_as_pair[index] = true;
                     }
                 }

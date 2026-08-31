@@ -495,8 +495,12 @@ namespace lfs::vis::gui {
 
     float SequencerUIManager::preferredFloatingHeight() const {
         const float dp = std::max(1.0f, getThemeDpiScale());
-        const float strip_h = ui_state_.show_film_strip ? FilmStripRenderer::STRIP_HEIGHT : 0.0f;
-        return (panel_config::HEIGHT + panel_config::EASING_STRIPE_HEIGHT) * dp + strip_h;
+        // #floating-header min-height + margin-bottom + #panel.is-floating padding-top
+        const float header_h = (28.0f + 6.0f + 10.0f) * dp;
+        const float strip_h =
+            ui_state_.show_film_strip ? FilmStripRenderer::STRIP_HEIGHT * dp : 0.0f;
+        return (panel_config::HEIGHT + panel_config::EASING_STRIPE_HEIGHT) * dp + header_h +
+               strip_h;
     }
 
     void SequencerUIManager::render(const UIContext& ctx, const ViewportLayout& viewport,

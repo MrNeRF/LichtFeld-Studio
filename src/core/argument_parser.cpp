@@ -363,6 +363,28 @@ namespace {
         return {};
     }
 
+    constexpr const char* kMcpPortRangeError = "ERROR: --mcp-port must be between 1 and 65535";
+
+    bool valid_mcp_port(const std::optional<int> mcp_port_val) {
+        return !mcp_port_val || (*mcp_port_val >= 1 && *mcp_port_val <= 65535);
+    }
+
+    void apply_per_launch_ui_flags(
+        lfs::core::param::TrainingParameters& params,
+        const bool no_splash_flag,
+        const std::optional<int> mcp_port_val) {
+        if (mcp_port_val) {
+            params.mcp_port = *mcp_port_val;
+        }
+#ifndef LFS_BUILD_PORTABLE
+        if (no_splash_flag) {
+            params.optimization.no_splash = true;
+        }
+#else
+        (void)no_splash_flag;
+#endif
+    }
+
     std::optional<lfs::core::param::OutputFormat> parseFormat(const std::string& str) {
         using lfs::core::param::OutputFormat;
         if (str == "ply" || str == ".ply")
@@ -432,6 +454,7 @@ namespace {
                 "\n"
                 "EXAMPLES:\n"
                 "lichtfeld-studio -d ./data -o ./output\n"
+                "lichtfeld-studio --headless -d ./data -o ./output --export ply\n"
                 "lichtfeld-studio -v session.licht\n"
                 "lichtfeld-studio --headless --resume session.licht\n"
                 "lichtfeld-studio -d ./data -o ./output --save-project-at-iter 7000\n"
@@ -464,7 +487,7 @@ namespace {
             ::args::Group paths_sep(parser, " ");
             ::args::Group paths_group(parser, "TRAINING PATHS:");
             ::args::ValueFlag<std::string> data_path(paths_group, "data_path", "Path to training data", {'d', "data-path"});
-            ::args::ValueFlag<std::string> output_path(paths_group, "output_path", "Path to output", {'o', "output-path"});
+            ::args::ValueFlag<std::string> output_path(paths_group, "output_path", "Directory for project.licht and --export files", {'o', "output-path"});
             ::args::ValueFlag<std::string> output_name(paths_group, "output_name", "Output filename (replaces default splat_ITER.ply stem)", {"output-name"});
             ::args::ValueFlag<std::string> config_file(paths_group, "config_file", "LichtFeldStudio config file (json)", {"config"});
             ::args::ValueFlag<std::string> init_path(paths_group, "path", "Initialize from splat file (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume)", {"init"});
@@ -785,6 +808,14 @@ namespace {
                 return std::make_tuple(ParseResult::Success, std::function<void()>{});
             }
 
+#ifdef LFS_BUILD_PORTABLE
+            const bool per_launch_no_splash = false;
+#else
+            const bool per_launch_no_splash = bool(no_splash);
+#endif
+            const std::optional<int> per_launch_mcp_port =
+                mcp_port ? std::optional<int>(::args::get(mcp_port)) : std::nullopt;
+
             // Viewer mode: file or directory. Bare positional paths are rewritten to
             // -v in parse_args_and_params so they share this branch.
             if (view_ply) {
@@ -798,7 +829,19 @@ namespace {
                 if (gut) {
                     params.optimization.gut = true;
                 }
-                return std::make_tuple(ParseResult::Success, std::function<void()>{});
+                if (!valid_mcp_port(per_launch_mcp_port)) {
+                    return std::unexpected(kMcpPortRangeError);
+                }
+                apply_per_launch_ui_flags(params, per_launch_no_splash, per_launch_mcp_port);
+                // parse_args_and_params replaces optimization with defaults
+                // after this return; re-apply so --no-splash survives.
+                return std::make_tuple(
+                    ParseResult::Success,
+                    std::function<void()>([&params, per_launch_no_splash,
+                                           per_launch_mcp_port]() {
+                        apply_per_launch_ui_flags(
+                            params, per_launch_no_splash, per_launch_mcp_port);
+                    }));
             }
 
             // Headless camera-path -> video render mode: no training, no window.
@@ -1018,12 +1061,10 @@ namespace {
                     return std::unexpected("ERROR: --min-track-length must be 0 or greater");
                 }
             }
-            if (mcp_port) {
-                const int port = ::args::get(mcp_port);
-                if (port < 1 || port > 65535) {
-                    return std::unexpected("ERROR: --mcp-port must be between 1 and 65535");
-                }
+            if (!valid_mcp_port(per_launch_mcp_port)) {
+                return std::unexpected(kMcpPortRangeError);
             }
+            apply_per_launch_ui_flags(params, per_launch_no_splash, per_launch_mcp_port);
 
             // Validate sh_degree (0-3)
             if (sh_degree) {
@@ -1171,14 +1212,10 @@ namespace {
                                         reset_preferences_flag = bool(reset_preferences),
                                         reset_layout_flag = bool(reset_layout),
                                         reset_all_settings_flag = bool(reset_all_settings),
-#ifdef LFS_BUILD_PORTABLE
-                                        no_splash_flag = false,
-#else
-                                        no_splash_flag = bool(no_splash),
-#endif
+                                        no_splash_flag = per_launch_no_splash,
                                         debug_python_flag = bool(debug_python),
                                         debug_python_port_val = cli_option_present({"--debug-python-port"}) ? std::optional<int>(::args::get(debug_python_port)) : std::optional<int>(),
-                                        mcp_port_val = cli_option_present({"--mcp-port"}) ? std::optional<int>(::args::get(mcp_port)) : std::optional<int>(),
+                                        mcp_port_val = per_launch_mcp_port,
                                         no_save_eval_images_flag = bool(no_save_eval_images),
                                         bg_mode_val = parsed_bg_mode,
                                         bg_color_val = parsed_bg_color,
@@ -1224,6 +1261,7 @@ namespace {
                                             cli_option_present({"--save-project-path"})
                                                 ? std::optional<std::string>(::args::get(save_project_path))
                                                 : std::optional<std::string>(),
+                                        output_path_explicit_val = cli_option_present({"-o", "--output-path"}),
                                         output_name_val = cli_option_present({"--output-name"}) ? std::optional<std::string>(::args::get(output_name)) : std::optional<std::string>()]() {
                 auto& opt = params.optimization;
                 auto& svs = params.server;
@@ -1286,6 +1324,7 @@ namespace {
                 setVal(timelapse_images_val, ds.timelapse_images);
                 setVal(timelapse_every_val, ds.timelapse_every);
                 setVal(output_name_val, ds.output_name);
+                ds.output_path_explicit = output_path_explicit_val;
                 if (save_project_at_iteration_val) {
                     params.save_project_at_iteration =
                         static_cast<size_t>(*save_project_at_iteration_val);
@@ -1328,10 +1367,9 @@ namespace {
                 setFlag(reset_preferences_flag, params.reset_preferences);
                 setFlag(reset_layout_flag, params.reset_layout);
                 setFlag(reset_all_settings_flag, params.reset_all_settings);
-                setFlag(no_splash_flag, opt.no_splash);
+                apply_per_launch_ui_flags(params, no_splash_flag, mcp_port_val);
                 setFlag(debug_python_flag, opt.debug_python);
                 setVal(debug_python_port_val, opt.debug_python_port);
-                setVal(mcp_port_val, params.mcp_port);
                 if (no_save_eval_images_flag)
                     opt.enable_save_eval_images = false;
                 if (bg_mode_val) {

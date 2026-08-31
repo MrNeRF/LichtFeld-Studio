@@ -280,11 +280,23 @@ def is_training_active() -> bool:
 def new_project(discard_changes: bool = False, stop_training: bool = False) -> None:
     """Clear all project state and start a new project"""
 
+def project_create(path: str, discard_changes: bool = False, stop_training: bool = False) -> None:
+    """Create and bind a new .licht project at path"""
+
 def project_save(wait: bool = False, regenerate_preview: bool = True) -> bool:
     """Save the active .licht project, prompting for a path when needed"""
 
 def project_save_as(path: str = '', wait: bool = False) -> bool:
     """Save the active project to a new .licht path"""
+
+def project_get_license() -> dict | None:
+    """Return the license metadata for the active project, or None"""
+
+def project_set_license(identifier: str, notice: str = '') -> None:
+    """Set the license metadata for the active project"""
+
+def project_clear_license() -> None:
+    """Clear the license metadata for the active project"""
 
 def project_poll_write() -> dict:
     """Return the active .licht project write state"""

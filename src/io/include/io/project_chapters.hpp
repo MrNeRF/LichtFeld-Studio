@@ -77,6 +77,13 @@ namespace lfs::io::project {
         friend bool operator==(const ProjectManifest&, const ProjectManifest&) = default;
     };
 
+    struct ProjectLicense {
+        std::string identifier;
+        std::string notice;
+
+        friend bool operator==(const ProjectLicense&, const ProjectLicense&) = default;
+    };
+
     enum class WorldOriginProvenance : std::uint8_t {
         None,
         CentralizeByPointCloud,
@@ -197,6 +204,9 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<ProjectGeoreference> georeference() const;
         [[nodiscard]] lfs::Result<void>
         set_georeference(const ProjectGeoreference& value);
+        [[nodiscard]] lfs::Result<std::optional<ProjectLicense>> license() const;
+        [[nodiscard]] lfs::Result<void> set_license(const ProjectLicense& value);
+        [[nodiscard]] lfs::Result<void> clear_license();
 
         [[nodiscard]] lfs::Result<std::vector<EmbedDecision>> embed_decisions() const;
         [[nodiscard]] lfs::Result<void> upsert_embed_decision(const EmbedDecision& value);

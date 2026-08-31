@@ -907,6 +907,14 @@ namespace lfs::vis::gui {
                 return;
             if (viewer_->deferLoadFileForTraining(cmd))
                 return;
+            auto output_path = cmd.output_path;
+            if (output_path.empty()) {
+                if (auto info = viewer_->projectGetInfo(); info && info->path) {
+                    output_path = info->path->parent_path();
+                } else {
+                    output_path = lfs::core::param::default_dataset_output_path(cmd.path);
+                }
+            }
             if (!viewer_->resetUntitledSessionForReplaceLoad())
                 return;
             auto* const data_loader = viewer_->getDataLoader();
@@ -914,10 +922,6 @@ namespace lfs::vis::gui {
                 LOG_ERROR("LoadFile: no data loader");
                 return;
             }
-            const auto output_path =
-                cmd.output_path.empty()
-                    ? lfs::core::param::default_dataset_output_path(cmd.path)
-                    : cmd.output_path;
             lfs::core::param::TrainingParameters params;
             if (auto* const param_mgr = viewer_->getParameterManager();
                 param_mgr && param_mgr->ensureLoaded()) {

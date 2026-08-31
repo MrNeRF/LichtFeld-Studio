@@ -103,6 +103,26 @@ def iter_licht_projects(
         _log.warning("Asset Manager folder is unavailable: %s", root)
         return
 
+    pruned_user_directories: set[Path] = set()
+    try:
+        import lichtfeld as lf
+
+        getter = getattr(getattr(lf, "ui", None), "get_default_project_location", None)
+        if callable(getter):
+            user_root = Path(str(getter() or "")).expanduser().parent.resolve()
+            pruned_user_directories = {
+                (user_root / "tmp").resolve(),
+                (user_root / "recovery").resolve(),
+            }
+    except (OSError, RuntimeError, TypeError, ValueError):
+        pass
+
+    try:
+        if root.resolve() in pruned_user_directories:
+            return
+    except OSError:
+        pass
+
     visited_directories = 0
     if progress is not None:
         progress.report(current_root=str(root))
@@ -126,9 +146,18 @@ def iter_licht_projects(
                 "Asset folder %s is very large (>10000 directories); consider a smaller folder",
                 root,
             )
-        directory_names[:] = sorted(
-            name for name in directory_names if not _directory_is_pruned(name)
-        )
+        kept_directories = []
+        for name in directory_names:
+            if _directory_is_pruned(name):
+                continue
+            if pruned_user_directories:
+                try:
+                    if (Path(current_root) / name).resolve() in pruned_user_directories:
+                        continue
+                except OSError:
+                    pass
+            kept_directories.append(name)
+        directory_names[:] = sorted(kept_directories)
         for filename in sorted(filenames):
             if cancel_event is not None and cancel_event.is_set():
                 return

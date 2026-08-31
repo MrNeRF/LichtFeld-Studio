@@ -8693,6 +8693,11 @@ namespace lfs::training {
                                               terminal_iteration, save_result.error()),
                         .detection = LFS_SOURCE_SITE_CURRENT(),
                     }));
+                } else {
+                    const auto params = getParams();
+                    if (!params.optimization.headless) {
+                        export_final_splats(*this, params);
+                    }
                 }
             } catch (const std::exception& e) {
                 append_terminal_error(lfs::make_error(lfs::ErrorInit{

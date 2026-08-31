@@ -1532,6 +1532,58 @@ namespace lfs::vis::project {
             return resolved;
         }
 
+        [[nodiscard]] std::string sanitizedProjectFileStem(
+            const std::string& value) {
+            std::string sanitized;
+            sanitized.reserve(value.size());
+            for (const unsigned char character : value) {
+                if (character == '/' || character == '\\') {
+                    continue;
+                }
+                const bool invalid =
+                    character < 0x20 || character == '<' ||
+                    character == '>' || character == ':' ||
+                    character == '"' || character == '|' ||
+                    character == '?' || character == '*';
+                sanitized.push_back(invalid ? '-' : static_cast<char>(character));
+            }
+            while (!sanitized.empty() &&
+                   (std::isspace(static_cast<unsigned char>(
+                        sanitized.back())) ||
+                    sanitized.back() == '.')) {
+                sanitized.pop_back();
+            }
+            std::size_t first = 0;
+            while (first < sanitized.size() &&
+                   (std::isspace(static_cast<unsigned char>(
+                        sanitized[first])) ||
+                    sanitized[first] == '.')) {
+                ++first;
+            }
+            if (first != 0) {
+                sanitized.erase(0, first);
+            }
+            const auto uppercase = [](const unsigned char character) {
+                return static_cast<char>(std::toupper(character));
+            };
+            std::string device_name;
+            device_name.reserve(sanitized.size());
+            std::ranges::transform(
+                sanitized, std::back_inserter(device_name), uppercase);
+            const bool reserved_device =
+                device_name == "CON" || device_name == "PRN" ||
+                device_name == "AUX" || device_name == "NUL" ||
+                (device_name.size() == 4 &&
+                 (device_name.starts_with("COM") ||
+                  device_name.starts_with("LPT")) &&
+                 device_name.back() >= '1' &&
+                 device_name.back() <= '9');
+            if (reserved_device) {
+                sanitized += "-project";
+            }
+            return sanitized.empty() ? "untitled" : sanitized;
+        }
+
         [[nodiscard]] bool sameBytes(
             const std::span<const std::byte> lhs,
             const std::span<const std::byte> rhs) {
@@ -3060,6 +3112,10 @@ namespace lfs::vis::project {
             lfs::io::project::
                 ProjectDocumentAutosaveOptions>
             autosave) {
+        auto license = document->project().license();
+        if (!license) {
+            return lfs::Status::failure(std::move(license).error());
+        }
         if (!cached_project_info_) {
             cached_project_info_ =
                 ProjectInfo{
@@ -3072,6 +3128,10 @@ namespace lfs::vis::project {
                         document
                             ->project_uuid()
                             .to_string(),
+                    .license_identifier =
+                        license->has_value()
+                            ? (*license)->identifier
+                            : std::string{},
                     .generation =
                         document->generation(),
                     .dirty =
@@ -3461,60 +3521,113 @@ namespace lfs::vis::project {
                 "project.training");
         }
 
-        if (!hasSourcePath()) {
-            if (auto waited =
-                    waitOutBackgroundAutosaveForExplicitSave();
-                !waited) {
-                return waited;
+        const auto dataset = trainer->getParams().dataset;
+        if (dataset.output_path_explicit &&
+            !dataset.output_path.empty()) {
+            std::error_code create_error;
+            std::filesystem::create_directories(
+                dataset.output_path, create_error);
+            if (create_error) {
+                return fail<void>(
+                    lfs::ErrorCode::PermissionDenied,
+                    "The training output folder could not be created.",
+                    create_error.message(),
+                    "project.training");
             }
-            if (auto locked = lockScratchAutosave();
-                !locked) {
-                return locked;
-            }
-            if (document_ && !document_->source_path()) {
-                if (auto synchronized =
-                        synchronizeDocumentFromViewer();
-                    !synchronized) {
-                    return synchronized;
-                }
-                lfs::io::project::
-                    ProjectDocumentSaveOptions options;
-                options.commit.kind =
-                    lfs::io::project::CommitKind::
-                        Explicit;
-                options.commit.commit_uuid =
-                    lfs::core::generate_uuid_v4();
-                options.file_uuid =
-                    lfs::core::generate_uuid_v4();
-                options.index_compression =
-                    lfs::io::project::
-                        IndexCompression::Zstd;
-                options.disk_reserve_bytes =
-                    64ull * 1024 * 1024;
-                options.allow_existing_destination_replacement =
-                    true;
-                options.leave_unbound = false;
-                options.writer_lock_lease = scratch_lock_;
-                auto started = startDocumentWrite(
-                    ProjectWritePurpose::Autosave,
-                    document_, *scratch_autosave_path_,
-                    std::move(options));
-                if (!started) {
-                    return started;
+            const auto destination =
+                dataset.output_path / "project.licht";
+            std::error_code abs_error;
+            const auto absolute_destination =
+                std::filesystem::absolute(
+                    destination, abs_error);
+            const bool already_bound_there =
+                !abs_error && hasSourcePath() &&
+                document_ && document_->source_path() &&
+                document_->source_path()
+                        ->lexically_normal() ==
+                    absolute_destination.lexically_normal();
+            if (!already_bound_there) {
+                if (auto saved = saveAs(
+                        destination, false, true);
+                    !saved) {
+                    return saved;
                 }
                 if (project_write_thread_.joinable()) {
                     project_write_thread_.join();
                     settleProjectWrite();
                 }
-                if (!document_->source_path()) {
+                if (!hasSourcePath()) {
                     return fail<void>(
                         lfs::ErrorCode::Unavailable,
                         "The training project could not be created.",
                         last_project_write_error_.empty()
-                            ? "Temp project first bind did not set a source path"
+                            ? "CLI output path first bind did not set a source path"
                             : last_project_write_error_,
                         "project.training");
                 }
+            }
+        } else if (!hasSourcePath()) {
+            const auto location = loadProjectLocationPreference();
+            std::error_code create_error;
+            std::filesystem::create_directories(
+                location, create_error);
+            if (create_error) {
+                return fail<void>(
+                    lfs::ErrorCode::PermissionDenied,
+                    "The Project location could not be created.",
+                    create_error.message(),
+                    "project.project_location");
+            }
+            const auto stem = sanitizedProjectFileStem(
+                dataset.data_path.filename().string());
+            lfs::Error last_error = lifecycleError(
+                lfs::ErrorCode::Unavailable,
+                "The training project could not be created.",
+                "no available project location candidate",
+                "project.project_location");
+            bool bound = false;
+            for (int attempt = 0; attempt <= 1000; ++attempt) {
+                const auto suffix =
+                    attempt == 0
+                        ? std::string{}
+                        : std::format("-{}", attempt + 1);
+                const auto candidate =
+                    location / (stem + suffix + ".licht");
+                std::error_code exists_error;
+                const bool exists =
+                    std::filesystem::exists(candidate, exists_error) ||
+                    std::filesystem::exists(
+                        std::filesystem::path(candidate.string() + ".lock"),
+                        exists_error);
+                if (exists_error) {
+                    return fail<void>(
+                        lfs::ErrorCode::PermissionDenied,
+                        "The Project location could not be inspected.",
+                        exists_error.message(),
+                        "project.project_location");
+                }
+                if (exists) {
+                    continue;
+                }
+                auto bound_result =
+                    bindUntitledSessionToMaster(candidate);
+                if (bound_result) {
+                    bound = true;
+                    break;
+                }
+                last_error = bound_result.error();
+                if (last_error.code() !=
+                    lfs::ErrorCode::AlreadyExists) {
+                    return bound_result;
+                }
+                if (attempt == 1000) {
+                    return lfs::Status::failure(
+                        std::move(last_error));
+                }
+            }
+            if (!bound) {
+                return lfs::Status::failure(
+                    std::move(last_error));
             }
         }
 
@@ -3944,7 +4057,7 @@ namespace lfs::vis::project {
         const bool automatic) {
         if (!document_ ||
             !document_->source_path() ||
-            isTempProject()) {
+            isScratchBoundSession()) {
             return fail<void>(
                 lfs::ErrorCode::FailedPrecondition,
                 "This project has no durable master to compact.",
@@ -4529,7 +4642,7 @@ namespace lfs::vis::project {
         const bool training_write_window =
             isTrainingWriteWindowOpen();
         if (!training_write_window &&
-            !isTempProject() &&
+            !isScratchBoundSession() &&
             compaction_suggested_ &&
             settings_.compaction_idle_seconds !=
                 0 &&
@@ -5724,7 +5837,7 @@ namespace lfs::vis::project {
         }
         if (!document_ ||
             !document_->source_path() ||
-            isTempProject()) {
+            isScratchBoundSession()) {
             return fail<void>(
                 lfs::ErrorCode::FailedPrecondition,
                 "This project has no path; use Save As.",
@@ -7147,12 +7260,137 @@ namespace lfs::vis::project {
         return hasDirtyProject();
     }
 
+    lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
+    ProjectLifecycle::license() {
+        if (!document_) {
+            return fail<std::optional<lfs::io::project::ProjectLicense>>(
+                lfs::ErrorCode::FailedPrecondition,
+                "There is no active project document.",
+                "Project lifecycle has not created or opened a document",
+                "project.document");
+        }
+        const std::lock_guard document_lock(document_access_mutex_);
+        return document_->project().license();
+    }
+
+    lfs::Result<void> ProjectLifecycle::setLicense(
+        const lfs::io::project::ProjectLicense& license) {
+        if (!document_) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "There is no active project document.",
+                "Project lifecycle has not created or opened a document",
+                "project.document");
+        }
+        const std::lock_guard document_lock(document_access_mutex_);
+        cached_project_info_.reset();
+        return document_->set_license(license);
+    }
+
+    lfs::Result<void> ProjectLifecycle::clearLicense() {
+        if (!document_) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "There is no active project document.",
+                "Project lifecycle has not created or opened a document",
+                "project.document");
+        }
+        const std::lock_guard document_lock(document_access_mutex_);
+        cached_project_info_.reset();
+        return document_->clear_license();
+    }
+
+    lfs::Result<void>
+    ProjectLifecycle::bindUntitledSessionToMaster(
+        const std::filesystem::path& destination) {
+        if (auto waited =
+                waitOutBackgroundAutosaveForExplicitSave();
+            !waited) {
+            return waited;
+        }
+        if (!document_) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "The project document is unavailable.",
+                "first project binding requires a live project document",
+                "project.document");
+        }
+        if (auto synchronized = synchronizeDocumentFromViewer();
+            !synchronized) {
+            return synchronized;
+        }
+        ProjectDocumentSaveOptions options;
+        options.commit.kind =
+            lfs::io::project::CommitKind::Explicit;
+        options.commit.commit_uuid =
+            lfs::core::generate_uuid_v4();
+        options.file_uuid = lfs::core::generate_uuid_v4();
+        options.index_compression =
+            lfs::io::project::IndexCompression::Zstd;
+        options.disk_reserve_bytes = 64ull * 1024 * 1024;
+        options.allow_existing_destination_replacement = false;
+        options.leave_unbound = false;
+        auto started = startDocumentWrite(
+            ProjectWritePurpose::SaveAs,
+            document_, destination, std::move(options));
+        if (!started) {
+            return started;
+        }
+        if (project_write_thread_.joinable()) {
+            project_write_thread_.join();
+            settleProjectWrite();
+        }
+        if (!document_->source_path()) {
+            return fail<void>(
+                last_project_write_error_code_.value_or(
+                    lfs::ErrorCode::Unavailable),
+                "The project could not be created.",
+                last_project_write_error_.empty()
+                    ? "first project binding did not set a source path"
+                    : last_project_write_error_,
+                "project.path");
+        }
+        return {};
+    }
+
+    lfs::Result<void>
+    ProjectLifecycle::createProjectAt(
+        const std::filesystem::path& path,
+        const ProjectSwitchDisposition disposition) {
+        auto normalized = normalizedProjectPath(path);
+        if (!normalized) {
+            return lfs::Status::failure(
+                std::move(normalized).error());
+        }
+        if (isScratchPath(*normalized)) {
+            return fail<void>(
+                lfs::ErrorCode::InvalidArgument,
+                "A project cannot be created in scratch storage.",
+                "the requested destination is reserved for crash recovery",
+                "project.path");
+        }
+        if (auto created = newProject(disposition); !created) {
+            return created;
+        }
+        std::error_code create_error;
+        std::filesystem::create_directories(
+            normalized->parent_path(), create_error);
+        if (create_error) {
+            return fail<void>(
+                lfs::ErrorCode::PermissionDenied,
+                "The project folder could not be created.",
+                create_error.message(),
+                "project.path");
+        }
+        return bindUntitledSessionToMaster(*normalized);
+    }
+
     bool ProjectLifecycle::hasSourcePath() const {
         if (recovered_master_path_) {
             return !isScratchPath(*recovered_master_path_);
         }
         return document_ && document_->source_path() &&
-               !isTempProject();
+               !isScratchBoundSession();
     }
 
     bool ProjectLifecycle::hasDirtyProject() {
@@ -7201,7 +7439,7 @@ namespace lfs::vis::project {
         if (isBlankUntitledSession()) {
             return false;
         }
-        if (isTempProject()) {
+        if (isScratchBoundSession()) {
             return true;
         }
         if (canFlushFinishedTrainerSnapshot()) {
@@ -7280,7 +7518,7 @@ namespace lfs::vis::project {
         if (!settings_.auto_save_on_close ||
             !document_ ||
             !document_->source_path() ||
-            isTempProject()) {
+            isScratchBoundSession()) {
             return CloseSaveStatus::NeedsPrompt;
         }
         if (viewer_.getTrainer()) {
@@ -7504,7 +7742,7 @@ namespace lfs::vis::project {
         if (document_) {
             poll.generation = document_->generation();
             poll.path =
-                isTempProject()
+                isScratchBoundSession()
                     ? std::nullopt
                     : (recovered_master_path_
                            ? recovered_master_path_
@@ -7617,7 +7855,7 @@ namespace lfs::vis::project {
                 : document_->dirty_chapters();
         const bool hard_dirty =
             training_forces_dirty ||
-            isTempProject() ||
+            isScratchBoundSession() ||
             canFlushFinishedTrainerSnapshot() ||
             (!blank_untitled &&
              (scene_dirty_.load(
@@ -7629,15 +7867,23 @@ namespace lfs::vis::project {
         const bool session_dirty =
             !blank_untitled &&
             hasSessionSoftDirtyChapters(*document_);
+        auto license = document_->project().license();
+        if (!license) {
+            return std::move(license).error();
+        }
         ProjectInfo result{
             .path =
-                isTempProject()
+                isScratchBoundSession()
                     ? std::nullopt
                     : (recovered_master_path_
                            ? recovered_master_path_
                            : document_->source_path()),
             .project_uuid =
                 document_->project_uuid().to_string(),
+            .license_identifier =
+                license->has_value()
+                    ? (*license)->identifier
+                    : std::string{},
             .generation = document_->generation(),
             .dirty = hard_dirty,
             .session_dirty = session_dirty,
@@ -7781,6 +8027,14 @@ namespace lfs::vis::project {
             lfs::io::project::sweep_stale_scratch_autosaves(
                 legacy_recovery_directory_);
         }
+        if (!legacy_working_tmp_directory_.empty() &&
+            freezeNormalizedPath(legacy_working_tmp_directory_) !=
+                freezeNormalizedPath(temp_project_directory_) &&
+            freezeNormalizedPath(legacy_working_tmp_directory_) !=
+                freezeNormalizedPath(legacy_recovery_directory_)) {
+            lfs::io::project::sweep_stale_scratch_autosaves(
+                legacy_working_tmp_directory_);
+        }
 
         // Never auto-restore from MRU. Startup without an
         // explicit CLI project path leaves a blank session
@@ -7907,6 +8161,13 @@ namespace lfs::vis::project {
             freezeNormalizedPath(legacy_recovery_directory_) !=
                 freezeNormalizedPath(temp_project_directory_)) {
             scratch_dirs.push_back(legacy_recovery_directory_);
+        }
+        if (!legacy_working_tmp_directory_.empty() &&
+            freezeNormalizedPath(legacy_working_tmp_directory_) !=
+                freezeNormalizedPath(temp_project_directory_) &&
+            freezeNormalizedPath(legacy_working_tmp_directory_) !=
+                freezeNormalizedPath(legacy_recovery_directory_)) {
+            scratch_dirs.push_back(legacy_working_tmp_directory_);
         }
         for (const auto& scratch_dir : scratch_dirs) {
             for (auto& inspection :
@@ -8331,10 +8592,12 @@ namespace lfs::vis::project {
         return lfs::io::project::is_scratch_autosave_path(
                    path, temp_project_directory_) ||
                lfs::io::project::is_scratch_autosave_path(
-                   path, legacy_recovery_directory_);
+                   path, legacy_recovery_directory_) ||
+               lfs::io::project::is_scratch_autosave_path(
+                   path, legacy_working_tmp_directory_);
     }
 
-    bool ProjectLifecycle::isTempProject() const {
+    bool ProjectLifecycle::isScratchBoundSession() const {
         if (recovered_master_path_ &&
             isScratchPath(*recovered_master_path_)) {
             return true;
@@ -8351,15 +8614,22 @@ namespace lfs::vis::project {
                 settings_path_.parent_path() / "recovery");
             return;
         }
-        const auto working = loadWorkingDirectoryPreference();
-        temp_project_directory_ =
-            working.empty()
-                ? std::filesystem::path{}
-                : freezeNormalizedPath(working / "tmp");
         const auto paths = lfs::core::UserPaths::resolve();
+        temp_project_directory_ =
+            paths ? freezeNormalizedPath(paths->rootDir() / "tmp")
+                  : std::filesystem::path{};
         legacy_recovery_directory_ =
             paths ? freezeNormalizedPath(paths->recoveryDir())
                   : std::filesystem::path{};
+        const auto raw_working = workingDirectoryPreferenceRaw();
+        legacy_working_tmp_directory_ =
+            raw_working.empty()
+                ? std::filesystem::path{}
+                : freezeNormalizedPath(raw_working / "tmp");
+        if (freezeNormalizedPath(legacy_working_tmp_directory_) ==
+            freezeNormalizedPath(temp_project_directory_)) {
+            legacy_working_tmp_directory_.clear();
+        }
     }
 
     std::optional<lfs::io::project::WriterLockLease>
@@ -8385,11 +8655,24 @@ namespace lfs::vis::project {
                 freezeNormalizedPath(temp_project_directory_)) {
             directories.push_back(legacy_recovery_directory_);
         }
+        if (!legacy_working_tmp_directory_.empty() &&
+            freezeNormalizedPath(legacy_working_tmp_directory_) !=
+                freezeNormalizedPath(temp_project_directory_) &&
+            freezeNormalizedPath(legacy_working_tmp_directory_) !=
+                freezeNormalizedPath(legacy_recovery_directory_)) {
+            directories.push_back(legacy_working_tmp_directory_);
+        }
+        const auto project_location =
+            freezeNormalizedPath(loadProjectLocationPreference());
         std::optional<std::filesystem::path> keep_normalized;
         if (keep && !keep->empty()) {
             keep_normalized = freezeNormalizedPath(*keep);
         }
         for (const auto& directory : directories) {
+            if (!project_location.empty() &&
+                freezeNormalizedPath(directory) == project_location) {
+                continue;
+            }
             std::error_code error;
             if (!std::filesystem::is_directory(directory, error) ||
                 error) {
@@ -8505,6 +8788,29 @@ namespace lfs::vis::project {
                    std::memory_order_acquire);
     }
 
+    bool ProjectLifecycle::isBlankProject() const {
+        if (!document_ || !document_->source_path() ||
+            isScratchBoundSession()) {
+            return false;
+        }
+        const auto hydration =
+            hydration_.load(std::memory_order_acquire);
+        if (hydration != Hydration::Empty &&
+            hydration != Hydration::Complete) {
+            return false;
+        }
+        const auto* manager = viewer_.getSceneManager();
+        if (!manager ||
+            !manager->getScene().getNodes().empty()) {
+            return false;
+        }
+        return !scene_dirty_.load(
+                   std::memory_order_acquire) &&
+               !payload_dirty_.load(
+                   std::memory_order_acquire) &&
+               !hasHardDirtyChapters(*document_);
+    }
+
     lfs::Result<void>
     ProjectLifecycle::ensureScratchAutosaveBinding() {
         if (!document_) {
@@ -8521,9 +8827,9 @@ namespace lfs::vis::project {
         if (temp_project_directory_.empty()) {
             return fail<void>(
                 lfs::ErrorCode::Unavailable,
-                "The working folder could not be resolved. Set it in Preferences.",
+                "Internal project scratch storage could not be resolved.",
                 "the temp project directory could not be resolved",
-                "project.temp_project_directory");
+                "project.scratch_directory");
         }
         const auto destination =
             lfs::io::project::scratch_autosave_path(

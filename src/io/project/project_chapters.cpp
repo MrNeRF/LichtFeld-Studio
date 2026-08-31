@@ -1346,6 +1346,61 @@ namespace lfs::io::project {
         return dom_.set_json("georeference", std::move(merged));
     }
 
+    lfs::Result<std::optional<ProjectLicense>> ProjectChapter::license() const {
+        const auto value = dom_.get_json("license");
+        if (!value || value->is_null()) {
+            return std::optional<ProjectLicense>{};
+        }
+        if (auto valid = require_object(*value, "PROJ", "license"); !valid) {
+            return std::move(valid).error();
+        }
+        auto identifier = required<std::string>(*value, "identifier", "PROJ", "license");
+        auto notice = optional<std::string>(*value, "notice", "PROJ", "license");
+        if (!identifier) {
+            return std::move(identifier).error();
+        }
+        if (!notice) {
+            return std::move(notice).error();
+        }
+        if (identifier->empty()) {
+            return fail<std::optional<ProjectLicense>>(
+                lfs::ErrorCode::DataLoss,
+                "The project license identifier is empty.",
+                "PROJ.license.identifier must be non-empty", "PROJ",
+                "license.identifier");
+        }
+        return std::optional<ProjectLicense>(ProjectLicense{
+            .identifier = std::move(*identifier),
+            .notice = notice->value_or(std::string{}),
+        });
+    }
+
+    lfs::Result<void> ProjectChapter::set_license(const ProjectLicense& value) {
+        if (value.identifier.empty()) {
+            return fail<void>(
+                lfs::ErrorCode::InvalidArgument,
+                "The project license identifier cannot be empty.",
+                "PROJ.license.identifier must be non-empty", "PROJ",
+                "license.identifier");
+        }
+        Json known{{"identifier", value.identifier}};
+        if (!value.notice.empty()) {
+            known["notice"] = value.notice;
+        }
+        Json merged = merge_known(
+            dom_.get_json("license").value_or(Json::object()), known);
+        if (value.notice.empty()) {
+            merged.erase("notice");
+        }
+        return dom_.set_json("license", std::move(merged));
+    }
+
+    lfs::Result<void> ProjectChapter::clear_license() {
+        auto removed = dom_.remove("license");
+        return removed ? lfs::Result<void>{}
+                       : lfs::Result<void>::failure(std::move(removed).error());
+    }
+
     lfs::Result<std::vector<EmbedDecision>> ProjectChapter::embed_decisions() const {
         auto items = dom_.array_items("embed_decisions");
         if (!items) {

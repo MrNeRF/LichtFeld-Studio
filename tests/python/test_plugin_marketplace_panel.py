@@ -11,7 +11,7 @@ import pytest
 
 
 def _install_lf_stub(monkeypatch):
-    state = SimpleNamespace(translations={})
+    state = SimpleNamespace(translations={}, ui_scale=1.0)
     panel_space = SimpleNamespace(
         SIDE_PANEL="SIDE_PANEL",
         FLOATING="FLOATING",
@@ -32,6 +32,7 @@ def _install_lf_stub(monkeypatch):
         PanelHeightMode=panel_height_mode,
         PanelOption=panel_option,
         tr=tr,
+        get_ui_scale=lambda: state.ui_scale,
         request_redraw=lambda: None,
     )
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
@@ -73,20 +74,25 @@ class _HandleStub:
 
 
 class _ElementStub:
-    def __init__(self):
+    def __init__(self, client_width=0):
         self.text = ""
         self.classes = {}
         self.attributes = {}
         self.inner_rml = ""
+        self.client_width = client_width
+        self.set_text_count = 0
+        self.set_attribute_count = 0
         self._parent = None
 
     def set_text(self, value):
+        self.set_text_count += 1
         self.text = value
 
     def set_class(self, name, enabled):
         self.classes[name] = enabled
 
     def set_attribute(self, name, value):
+        self.set_attribute_count += 1
         self.attributes[name] = value
 
     def remove_attribute(self, name):
@@ -143,10 +149,51 @@ def test_plugin_marketplace_syncs_feedback_nodes(plugin_marketplace_module):
     assert doc.get_element_by_id("feedback-card-error").classes["hidden"] is True
 
 
-def test_plugin_marketplace_uses_dirty_update_policy(plugin_marketplace_module):
+def test_plugin_marketplace_uses_interval_update_policy(plugin_marketplace_module):
     module, _state = plugin_marketplace_module
-    assert module.PluginMarketplacePanel.update_policy == "dirty"
-    assert "update_interval_ms" not in module.PluginMarketplacePanel.__dict__
+    assert module.PluginMarketplacePanel.update_policy == "interval"
+    assert module.PluginMarketplacePanel.update_interval_ms == 250
+
+
+def test_plugin_marketplace_converts_grid_width_from_pixels_to_dp(plugin_marketplace_module):
+    module, state = plugin_marketplace_module
+    state.ui_scale = 1.5
+    panel = module.PluginMarketplacePanel()
+    grid = _ElementStub(client_width=900)
+    doc = _DocStub({"card-grid": grid})
+
+    assert panel._grid_viewport_width(doc, grid) == 600
+
+
+def test_plugin_marketplace_idle_status_and_titles_do_not_rewrite_dom(
+    plugin_marketplace_module,
+):
+    module, state = plugin_marketplace_module
+    state.translations.update({
+        "plugin_marketplace.loading": "Loading",
+        "plugin_marketplace.view.grid": "Grid view",
+        "plugin_marketplace.view.list": "List view",
+    })
+    panel = module.PluginMarketplacePanel()
+    status = _ElementStub()
+    cards_btn = _ElementStub()
+    list_btn = _ElementStub()
+    doc = _DocStub({
+        "catalog-status": status,
+        "catalog-status-dot": _ElementStub(),
+        "view-cards-btn": cards_btn,
+        "view-list-btn": list_btn,
+    })
+
+    panel._update_catalog_status(doc, 0, True, False)
+    panel._sync_view_mode_controls(doc)
+    panel._update_catalog_status(doc, 0, True, False)
+    panel._sync_view_mode_controls(doc)
+
+    assert status.text == "Loading"
+    assert status.set_text_count == 1
+    assert cards_btn.set_attribute_count == 1
+    assert list_btn.set_attribute_count == 1
 
 
 def test_plugin_marketplace_requests_update_on_language_generation(plugin_marketplace_module):
@@ -441,3 +488,32 @@ def test_plugin_marketplace_auto_expanded_row_can_be_collapsed_and_reopened(
 
     panel._set_list_row_expanded("sample-card", True, rerender=False)
     assert panel._is_list_row_expanded("sample-card") is True
+
+
+def test_plugin_marketplace_resources_use_unified_window_language(plugin_marketplace_module):
+    root = Path(__file__).parent.parent.parent
+    resources = root / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+    rml = (resources / "plugin_marketplace.rml").read_text(encoding="utf-8")
+    rcss = (resources / "plugin_marketplace.rcss").read_text(encoding="utf-8")
+    theme_rcss = (resources / "plugin_marketplace.theme.rcss").read_text(encoding="utf-8")
+    source = (root / "src" / "python" / "lfs_plugins" / "plugin_marketplace_panel.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert '<body template="floating-window"' in rml
+    assert 'class="mp-intro"' in rml
+    assert 'class="mp-manual-section"' in rml
+    assert 'class="mp-empty-state hidden"' in rml
+    assert "mp-warning-text" not in source
+    assert source.count("mp-warning-note") == 2
+    assert ".mp-controls {" in rcss
+    assert ".mp-manual-section {" in rcss
+    assert ".plugin-card {" in rcss
+    assert ".plugin-list-summary {" in rcss
+    assert ".confirm-dialog {" in rcss
+    assert ".mp-intro > .mp-warning-note {" in rcss
+    assert "#formats-content.section-content {" in rcss
+    assert ".card-grid.hidden," in rcss
+    assert ".mp-intro > .mp-warning-note {" in theme_rcss
+    assert "background-color: @{surface};" in theme_rcss
+    assert "border-color: @{primary};" in theme_rcss

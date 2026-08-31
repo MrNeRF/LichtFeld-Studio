@@ -99,6 +99,11 @@ namespace lfs::vis {
         lfs::Result<void>
         projectSaveAs(const std::filesystem::path& path,
                       bool regenerate_preview = true) override;
+        lfs::Result<void>
+        projectCreateAt(
+            const std::filesystem::path& path,
+            ProjectSwitchDisposition disposition =
+                ProjectSwitchDisposition::RequireClean) override;
         lfs::Result<void> projectSaveAsExplicit(
             const std::filesystem::path& path,
             bool regenerate_preview = true);
@@ -128,6 +133,11 @@ namespace lfs::vis {
         projectHasPath() override;
         lfs::Result<ProjectInfo>
         projectGetInfo() override;
+        lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
+        projectGetLicense() override;
+        lfs::Result<void> projectSetLicense(
+            const lfs::io::project::ProjectLicense& license) override;
+        lfs::Result<void> projectClearLicense() override;
         lfs::Result<ProjectWritePoll>
         projectPollWrite() override;
         bool consumeProjectSaveStarted() override;
@@ -254,6 +264,18 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_StoredSessionAtPrmsIterationsReportsCompleted_Test;
         friend class VisualizerImplResetTest_StoredSessionBelowPrmsIterationsReportsNotCompleted_Test;
         friend class VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnAutosave_Test;
+        friend class VisualizerImplResetTest_CreateProjectAtWritesBindsAndRegistersMru_Test;
+        friend class VisualizerImplResetTest_CreateProjectAtRefusesExistingDestination_Test;
+        friend class VisualizerImplResetTest_CreateProjectAtRejectsScratchAndUnpublishedPaths_Test;
+        friend class VisualizerImplResetTest_CreateProjectRequireCleanFailsOnDirtySession_Test;
+        friend class VisualizerImplResetTest_TrainingStartAutoCreateSuffixesOnCollision_Test;
+        friend class VisualizerImplResetTest_DatasetLoadIntoBlankCreatedProjectKeepsBinding_Test;
+        friend class VisualizerImplResetTest_ProjectCreateOnDirtyEmitsCreatePath_Test;
+        friend class VisualizerImplResetTest_StartupScansLegacyWorkingTmpDirectory_Test;
+        friend class VisualizerImplResetTest_StartupPruneNeverTouchesProjectLocation_Test;
+        friend class VisualizerImplResetTest_ScratchDirectoryIsFixedUnderRootRegardlessOfPreferences_Test;
+        friend class VisualizerImplResetTest_ProjectCreateWhileTrainingPromptsWithCreatePath_Test;
+        friend class VisualizerImplResetTest_RecoveredScratchSaveStillRefusesAndStaysOutOfMru_Test;
         friend class VisualizerImplResetTest_EditModeWithoutHydratedSessionDropsCheckpoint_Test;
         friend class VisualizerImplResetTest_RestoreThenTrainWritesNewCheckpoint_Test;
         friend class VisualizerImplResetTest_HeadlessOpenPrintsHydrationStagesWhenBenchPathSet_Test;
@@ -300,14 +322,16 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_ProgressedPausedTrainerStillBlocksCleanClose_Test;
         friend class VisualizerImplResetTest_CloseSaveRoutesTrainingSnapshotToLiveDocument_Test;
         friend class VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
-        friend class VisualizerImplResetTest_StartTrainingUntitledBindsTempProjectAndStaysUntitled_Test;
-        friend class VisualizerImplResetTest_UntitledTrainingSnapshotAdoptionKeepsSessionUntitledAndOutOfMru_Test;
-        friend class VisualizerImplResetTest_SaveAsAfterUntitledTrainingMigratesTempIncludingCheckpoint_Test;
+        friend class VisualizerImplResetTest_StartTrainingUntitledCreatesRealProjectInProjectLocation_Test;
+        friend class VisualizerImplResetTest_PrepareTrainingStartProjectSucceedsAfterInitPlyLoad_Test;
+        friend class VisualizerImplResetTest_StartTrainingWithCliOutputPathBindsProjectThere_Test;
+        friend class VisualizerImplResetTest_UntitledTrainingSnapshotAdoptionRegistersProjectInMru_Test;
+        friend class VisualizerImplResetTest_SaveAsAfterAutoCreatedTrainingKeepsOriginalAndCheckpoint_Test;
         friend class VisualizerImplResetTest_UntitledStartConflictNeverReportsExistingOutputProject_Test;
-        friend class VisualizerImplResetTest_CompletedUntitledTrainingBlocksCleanClose_Test;
-        friend class VisualizerImplResetTest_TempProjectSaveRefusesAndStaysOutOfMru_Test;
-        friend class VisualizerImplResetTest_TempSessionLightAutosaveWritesSidecarWithScratchLease_Test;
-        friend class VisualizerImplResetTest_WorkingDirectoryPreferenceChangeAppliesToNextSession_Test;
+        friend class VisualizerImplResetTest_CompletedAutoCreatedTrainingSavesRealMasterOnClose_Test;
+        friend class VisualizerImplResetTest_SaveSucceedsOnAutoCreatedTrainingProject_Test;
+        friend class VisualizerImplResetTest_LightAutosaveWritesSidecarNextToAutoCreatedProject_Test;
+        friend class VisualizerImplResetTest_ProjectLocationPreferenceGovernsTrainingAutoCreate_Test;
         friend class VisualizerImplResetTest_StartupPrunesOlderUnlockedScratchFilesAfterOffer_Test;
         friend class VisualizerImplResetTest_StartupScansLegacyRecoveryDirectory_Test;
         friend class VisualizerImplResetTest_PausedUngrantedStartTrainingGrantsAndBinds_Test;
@@ -387,10 +411,10 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_LoadFileStopTrainingDefersSplatLoadUntilTrainerStops_Test;
         friend class VisualizerImplResetTest_LoadFileStopTrainingDefersWholeBatchInOrder_Test;
         friend class VisualizerImplResetTest_LoadDatasetApiDoesNotDeferOrPrompt_Test;
-        friend class VisualizerImplResetTest_ForceExitDiscardOnTempSessionLeavesNoFilesAndNoWarning_Test;
+        friend class VisualizerImplResetTest_ForceExitDiscardOnAutoCreatedProjectLeavesProjectAndNoAutosave_Test;
         friend class VisualizerImplResetTest_DatasetLoadIntoTitledProjectStartsUntitledSessionAndKeepsProjectFile_Test;
         friend class VisualizerImplResetTest_DatasetLoadPreservesImportParameters_Test;
-        friend class VisualizerImplResetTest_DatasetLoadIntoTrainedTempSessionRemovesOldTempFile_Test;
+        friend class VisualizerImplResetTest_DatasetLoadIntoTrainedAutoCreatedProjectStartsUntitledSessionAndKeepsProjectFile_Test;
         friend class VisualizerImplResetTest_SplatDropOntoTitledDatasetProjectStartsUntitledSessionAndKeepsProjectFile_Test;
         friend class VisualizerImplResetTest_SplatAddOntoSplatSceneKeepsTitledProject_Test;
         friend class VisualizerImplResetTest_PreTrainingProjectSaveRestoresCameraEnabledAndHidden_Test;
@@ -449,6 +473,13 @@ namespace lfs::vis {
             ProjectSwitchDisposition disposition,
             bool stop_training = false);
         void performNewProject(
+            ProjectSwitchDisposition disposition);
+        void handleCreateProject(
+            const std::filesystem::path& path,
+            ProjectSwitchDisposition disposition,
+            bool stop_training = false);
+        void performCreateProject(
+            const std::filesystem::path& path,
             ProjectSwitchDisposition disposition);
         void handleOpenProject(
             const std::filesystem::path& path,
@@ -591,6 +622,7 @@ namespace lfs::vis {
             None,
             Reset,
             NewProject,
+            CreateProject,
             OpenProject,
             LoadDataset,
             CloseSave,
@@ -602,6 +634,7 @@ namespace lfs::vis {
             pending_new_project_disposition_ =
                 ProjectSwitchDisposition::RequireClean;
         std::filesystem::path pending_open_path_;
+        std::filesystem::path pending_create_project_path_;
         ProjectSwitchDisposition
             pending_open_disposition_ =
                 ProjectSwitchDisposition::RequireClean;

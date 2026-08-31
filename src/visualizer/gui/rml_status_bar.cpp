@@ -15,9 +15,11 @@
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
+#include "gui/status_bar_mining.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/ui_context.hpp"
 #include "internal/resource_paths.hpp"
+#include "preferences.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
@@ -29,8 +31,8 @@
 #include <RmlUi/Core/Element.h>
 #include <SDL3/SDL_clipboard.h>
 #include <SDL3/SDL_video.h>
-#include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <format>
@@ -181,7 +183,8 @@ namespace lfs::vis::gui {
                                      const int total_iterations,
                                      const bool past,
                                      const bool hovered,
-                                     const bool preview) {
+                                     const bool preview,
+                                     const bool miner) {
             const float left_pct = std::clamp(
                 100.0f * static_cast<float>(step) / static_cast<float>(total_iterations),
                 0.5f,
@@ -195,16 +198,25 @@ namespace lfs::vis::gui {
             if (preview)
                 classes += " is-preview";
 
-            markers += std::format(
-                "<div class=\"{}\" style=\"left:{:.3f}%;\"></div>",
-                classes,
-                left_pct);
+            if (miner) {
+                markers += std::format(
+                    "<img class=\"{}\" src=\"../icon/mining/{}\" style=\"left:{:.3f}%;\"/>",
+                    classes,
+                    past ? "gem-collected.png" : "gem.png",
+                    left_pct);
+            } else {
+                markers += std::format(
+                    "<div class=\"{}\" style=\"left:{:.3f}%;\"></div>",
+                    classes,
+                    left_pct);
+            }
         }
 
         std::string buildProgressMarkersRml(std::vector<size_t> save_steps,
                                             const int total_iterations,
                                             const int current_iteration,
-                                            const ProgressMarkerRenderState& state) {
+                                            const ProgressMarkerRenderState& state,
+                                            const bool miner) {
             if (total_iterations <= 0)
                 return {};
 
@@ -224,7 +236,8 @@ namespace lfs::vis::gui {
                                         total_iterations,
                                         save_step <= static_cast<size_t>(std::max(0, current_iteration)),
                                         !state.dragging && save_step == state.hover_step,
-                                        false);
+                                        false,
+                                        miner);
             }
 
             if (state.dragging && state.preview_step > 0 &&
@@ -234,7 +247,8 @@ namespace lfs::vis::gui {
                                         total_iterations,
                                         false,
                                         true,
-                                        true);
+                                        true,
+                                        miner);
             }
             return markers;
         }
@@ -379,7 +393,19 @@ namespace lfs::vis::gui {
         ctor.Bind("mode_text", &model_.mode_text);
         ctor.Bind("mode_color", &model_.mode_color);
         ctor.Bind("show_training", &model_.show_training);
+        ctor.Bind("progress_miner", &model_.progress_miner);
+        ctor.Bind("miner_raised", &model_.miner_raised);
+        ctor.Bind("miner_step_a", &model_.miner_step_a);
+        ctor.Bind("miner_strike", &model_.miner_strike);
+        ctor.Bind("miner_step_b", &model_.miner_step_b);
+        ctor.Bind("miner_smoke_1", &model_.miner_smoke_1);
+        ctor.Bind("miner_smoke_2", &model_.miner_smoke_2);
+        ctor.Bind("miner_smoke_3", &model_.miner_smoke_3);
+        ctor.Bind("miner_smoke_4", &model_.miner_smoke_4);
+        ctor.Bind("miner_smoke_5", &model_.miner_smoke_5);
+        ctor.Bind("miner_smoke_6", &model_.miner_smoke_6);
         ctor.Bind("progress_width", &model_.progress_width);
+        ctor.Bind("progress_text_left", &model_.progress_text_left);
         ctor.Bind("progress_text", &model_.progress_text);
         ctor.Bind("step_label", &model_.step_label);
         ctor.Bind("step_value", &model_.step_value);
@@ -523,6 +549,10 @@ namespace lfs::vis::gui {
         base_rcss_.clear();
         has_theme_signature_ = false;
         model_.progress_markers_rml.clear();
+        mining_wall_rml_.clear();
+        mining_debris_rml_.clear();
+        mining_scene_ = {};
+        progress_style_checked_at_ = {};
         model_dirty_ = true;
         animation_active_ = true;
         fit_level_ = 0;
@@ -589,6 +619,23 @@ namespace lfs::vis::gui {
     void RmlStatusBar::markModelDirty() {
         model_dirty_ = true;
         next_refresh_at_ = {};
+    }
+
+    bool RmlStatusBar::animationFrameDue(
+        const std::chrono::steady_clock::time_point now) const {
+        return animation_active_ &&
+               (next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
+                now >= next_refresh_at_);
+    }
+
+    std::optional<double> RmlStatusBar::secondsUntilAnimationFrame(
+        const std::chrono::steady_clock::time_point now) const {
+        if (!animation_active_)
+            return std::nullopt;
+        if (next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
+            now >= next_refresh_at_)
+            return 0.0;
+        return std::chrono::duration<double>(next_refresh_at_ - now).count();
     }
 
     void RmlStatusBar::postStatusMessage(std::string text, const ErrorNoticeLevel level) {
@@ -796,6 +843,101 @@ namespace lfs::vis::gui {
                 el->SetInnerRML(model_.progress_markers_rml);
         }
         model_dirty_ = true;
+    }
+
+    void RmlStatusBar::setProgressWallRml(std::string value) {
+        if (mining_wall_rml_ == value)
+            return;
+
+        mining_wall_rml_ = std::move(value);
+        if (document_) {
+            if (auto* el = document_->GetElementById("progress-wall"))
+                el->SetInnerRML(mining_wall_rml_);
+        }
+        markModelDirty();
+    }
+
+    void RmlStatusBar::setProgressDebrisRml(std::string value) {
+        if (mining_debris_rml_ == value)
+            return;
+
+        mining_debris_rml_ = std::move(value);
+        if (document_) {
+            if (auto* el = document_->GetElementById("progress-debris"))
+                el->SetInnerRML(mining_debris_rml_);
+        }
+        markModelDirty();
+    }
+
+    void RmlStatusBar::updateMiningScene(const float progress,
+                                         const std::chrono::steady_clock::time_point now,
+                                         const bool paused) {
+        float dp_ratio = 1.0f;
+        if (document_ && document_->GetContext())
+            dp_ratio = document_->GetContext()->GetDensityIndependentPixelRatio();
+        float bar_dp = 360.0f;
+        if (const auto geom = progressBarGeometry(); geom && dp_ratio > 0.0f)
+            bar_dp = geom->w / dp_ratio;
+
+        const auto layout = mining::miningLayout(bar_dp);
+        const float fill_dp = progress * bar_dp - layout.offset_dp;
+        const int current_block =
+            std::clamp(static_cast<int>(fill_dp / 16.0f), 0, layout.block_count - 1);
+        const int crack = mining::miningCrackStage(fill_dp, current_block);
+
+        int pause_ms = 0;
+        if (paused) {
+            if (mining_scene_.pause_started == std::chrono::steady_clock::time_point{}) {
+                mining_scene_.pause_started = now;
+                mining_scene_.prev_pause_ms = -1;
+            }
+            pause_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                            now - mining_scene_.pause_started)
+                                            .count());
+            mining::spawnSmokeLetters(mining_scene_.particles, progress * bar_dp + 6.0f, 1.0f,
+                                      mining_scene_.prev_pause_ms, pause_ms);
+            mining_scene_.prev_pause_ms = pause_ms;
+        } else {
+            mining_scene_.pause_started = {};
+            mining_scene_.prev_pause_ms = -1;
+        }
+
+        if (mining_scene_.block_count == layout.block_count && mining_scene_.current_block >= 0 &&
+            current_block > mining_scene_.current_block) {
+            const int broken_block = current_block - 1;
+            mining::spawnBreakParticles(mining_scene_.particles, layout, broken_block,
+                                        mining::miningBlockType(broken_block, layout.block_count));
+        }
+
+        const bool strike_active = model_.miner_strike;
+        if (strike_active && !mining_scene_.strike_was_active) {
+            mining::spawnStrikeChips(
+                mining_scene_.particles, progress * bar_dp + 7.0f, 6.0f,
+                mining::miningBlockType(current_block, layout.block_count),
+                mining_scene_.strike_seed++);
+        }
+        mining_scene_.strike_was_active = strike_active;
+
+        float dt_s = 0.0f;
+        if (mining_scene_.last_step != std::chrono::steady_clock::time_point{}) {
+            dt_s = std::clamp(std::chrono::duration<float>(now - mining_scene_.last_step).count(),
+                              0.0f, 0.1f);
+        }
+        mining_scene_.last_step = now;
+        mining::stepMiningParticles(mining_scene_.particles, dt_s);
+
+        if (bar_dp != mining_scene_.bar_dp || layout.block_count != mining_scene_.block_count ||
+            current_block != mining_scene_.current_block || crack != mining_scene_.crack_stage) {
+            setProgressWallRml(mining::buildMiningWallRml(layout, current_block, crack));
+            mining_scene_.bar_dp = bar_dp;
+            mining_scene_.block_count = layout.block_count;
+            mining_scene_.current_block = current_block;
+            mining_scene_.crack_stage = crack;
+        }
+        if (!mining_scene_.particles.empty())
+            setProgressDebrisRml(mining::buildMiningParticlesRml(mining_scene_.particles));
+        else if (!mining_debris_rml_.empty())
+            setProgressDebrisRml("");
     }
 
     std::optional<RmlStatusBar::ProgressBarGeometry> RmlStatusBar::progressBarGeometry() const {
@@ -1050,8 +1192,10 @@ namespace lfs::vis::gui {
                 tooltip = details;
                 color = colorToRml(p.error);
             } else {
-                summary = status.network_exposed ? LOC("status_bar.mcp_network")
-                                                 : LOC("status_bar.mcp_local");
+                summary = std::format("{} ({})",
+                                      status.network_exposed ? LOC("status_bar.mcp_network")
+                                                             : LOC("status_bar.mcp_local"),
+                                      status.port);
                 for (const auto& endpoint : status.endpoints) {
                     if (!details.empty())
                         details += '\n';
@@ -1170,7 +1314,26 @@ namespace lfs::vis::gui {
                              (training_state == TrainingState::Running ||
                               training_state == TrainingState::Paused);
         setModelBool("show_training", model_.show_training, show_training);
-
+        if (progress_style_checked_at_ == std::chrono::steady_clock::time_point{} ||
+            now - progress_style_checked_at_ >= std::chrono::seconds(1)) {
+            progress_style_checked_at_ = now;
+            progress_miner_pref_ = loadProgressBarStylePreference() == "miner";
+        }
+        setModelBool("progress_miner", model_.progress_miner, progress_miner_pref_);
+        const bool running = training_state == TrainingState::Running;
+        const auto animation_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+        const auto swing_phase_ms = animation_ms % 550;
+        const bool strike_phase = running && swing_phase_ms >= 350;
+        const int walk_phase = static_cast<int>((animation_ms / 275) % 4);
+        const bool miner_running = progress_miner_pref_ && show_training && running;
+        setModelBool("miner_raised", model_.miner_raised,
+                     miner_running && !strike_phase && walk_phase != 0 && walk_phase != 2);
+        setModelBool("miner_step_a", model_.miner_step_a,
+                     miner_running && !strike_phase && walk_phase == 0);
+        setModelBool("miner_strike", model_.miner_strike, miner_running && strike_phase);
+        setModelBool("miner_step_b", model_.miner_step_b,
+                     miner_running && !strike_phase && walk_phase == 2);
         setModelString("step_label", model_.step_label, LOC(lichtfeld::Strings::Status::STEP));
         setModelString("loss_label", model_.loss_label, LOC(lichtfeld::Strings::Status::LOSS));
         setModelString("gaussians_label", model_.gaussians_label,
@@ -1196,6 +1359,35 @@ namespace lfs::vis::gui {
 
             setModelString("progress_width", model_.progress_width, progress_pct);
             setModelString("progress_text", model_.progress_text, std::move(progress_text));
+
+            float dp_ratio = 1.0f;
+            if (document_ && document_->GetContext())
+                dp_ratio = document_->GetContext()->GetDensityIndependentPixelRatio();
+            float bar_dp = 360.0f;
+            if (const auto geom = progressBarGeometry(); geom && dp_ratio > 0.0f)
+                bar_dp = geom->w / dp_ratio;
+            float text_width_dp = 28.0f;
+            if (document_ && dp_ratio > 0.0f) {
+                if (auto* progress_text_el = document_->GetElementById("progress-text")) {
+                    const float measured_width_dp = progress_text_el->GetOffsetWidth() / dp_ratio;
+                    if (measured_width_dp > 0.0f)
+                        text_width_dp = measured_width_dp;
+                }
+            }
+            const float text_left_dp = progress_miner_pref_
+                                           ? mining::miningProgressTextLeftDp(progress * bar_dp, bar_dp,
+                                                                              text_width_dp)
+                                           : 0.0f;
+            setModelString("progress_text_left", model_.progress_text_left,
+                           std::format("{:.2f}dp", text_left_dp));
+
+            if (progress_miner_pref_) {
+                updateMiningScene(progress, now, training_state == TrainingState::Paused);
+            } else {
+                setProgressWallRml("");
+                setProgressDebrisRml("");
+                mining_scene_ = {};
+            }
             const ProgressMarkerRenderState marker_state{
                 .dragging = save_step_interaction_.dragging,
                 .adding = save_step_interaction_.adding,
@@ -1203,7 +1395,8 @@ namespace lfs::vis::gui {
                 .preview_step = save_step_interaction_.preview_step,
                 .hover_step = save_step_interaction_.hover_step,
             };
-            setProgressMarkersRml(buildProgressMarkersRml(tm->getSaveSteps(), total, cur, marker_state));
+            setProgressMarkersRml(buildProgressMarkersRml(tm->getSaveSteps(), total, cur, marker_state,
+                                                          progress_miner_pref_));
             setModelString("step_value", model_.step_value, std::format("{}/{}", cur, total));
             setModelString("loss_value", model_.loss_value, std::format("{:.4f}", loss));
             setModelString("gaussians_value", model_.gaussians_value,
@@ -1226,6 +1419,10 @@ namespace lfs::vis::gui {
         } else {
             resetSaveStepInteraction();
             setModelString("progress_width", model_.progress_width, "0%");
+            setModelString("progress_text_left", model_.progress_text_left, "0dp");
+            setProgressWallRml("");
+            setProgressDebrisRml("");
+            mining_scene_ = {};
             setModelString("progress_text", model_.progress_text, "");
             setProgressMarkersRml("");
             setModelString("step_value", model_.step_value, "");
@@ -1236,6 +1433,23 @@ namespace lfs::vis::gui {
             setModelString("time_value", model_.time_value, "");
             setModelString("eta_value", model_.eta_value, "");
         }
+
+        const bool miner_smoke = progress_miner_pref_ && show_training &&
+                                 training_state == TrainingState::Paused &&
+                                 mining_scene_.pause_started !=
+                                     std::chrono::steady_clock::time_point{};
+        const int smoke_frame = miner_smoke
+                                    ? mining::miningSmokeSpriteIndex(static_cast<int>(
+                                          std::chrono::duration_cast<std::chrono::milliseconds>(
+                                              now - mining_scene_.pause_started)
+                                              .count()))
+                                    : 0;
+        setModelBool("miner_smoke_1", model_.miner_smoke_1, miner_smoke && smoke_frame == 0);
+        setModelBool("miner_smoke_2", model_.miner_smoke_2, miner_smoke && smoke_frame == 1);
+        setModelBool("miner_smoke_3", model_.miner_smoke_3, miner_smoke && smoke_frame == 2);
+        setModelBool("miner_smoke_4", model_.miner_smoke_4, miner_smoke && smoke_frame == 3);
+        setModelBool("miner_smoke_5", model_.miner_smoke_5, miner_smoke && smoke_frame == 4);
+        setModelBool("miner_smoke_6", model_.miner_smoke_6, miner_smoke && smoke_frame == 5);
 
         // Splat section (non-training)
         bool show_splats = !show_training && content_type != SceneManager::ContentType::Empty;
@@ -1412,10 +1626,15 @@ namespace lfs::vis::gui {
             (model_.show_gpu_model ? uint32_t{1} << 7 : 0) |
             (model_.account_show_tier ? uint32_t{1} << 8 : 0);
 
-        animation_active_ = wasd_visible || zoom_visible || status_msg.visible;
-        next_refresh_at_ = now + (animation_active_ ? kAnimatedRefreshInterval
-                                                    : (ctx.is_training ? kBusyRefreshInterval
-                                                                       : kIdleRefreshInterval));
+        const bool miner_visible = progress_miner_pref_ && show_training;
+        animation_active_ = wasd_visible || zoom_visible || status_msg.visible ||
+                            miner_visible;
+        next_refresh_at_ = now + (miner_visible && training_state == TrainingState::Running
+                                      ? kBusyRefreshInterval
+                                  : miner_visible     ? kMiningRefreshInterval
+                                  : animation_active_ ? kAnimatedRefreshInterval
+                                  : ctx.is_training   ? kBusyRefreshInterval
+                                                      : kIdleRefreshInterval);
         return model_dirty_;
     }
 
@@ -1567,8 +1786,8 @@ namespace lfs::vis::gui {
         const bool refresh_due =
             next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
             now >= next_refresh_at_;
-        const bool can_reuse = theme_current && !dp_changed && !model_dirty_ && !animation_active_ &&
-                               !refresh_due && render_w == last_render_w_ &&
+        const bool can_reuse = theme_current && !dp_changed && !model_dirty_ && !refresh_due &&
+                               render_w == last_render_w_ &&
                                render_h == last_render_h_;
         if (!can_reuse) {
             render(ctx, x, y, w_px, h_px, screen_w, screen_h);
@@ -1601,7 +1820,7 @@ namespace lfs::vis::gui {
         const bool theme_changed = updateTheme();
         const auto now = std::chrono::steady_clock::now();
         const bool refresh_due =
-            size_changed || dp_changed || theme_changed || had_pending_model_dirty || animation_active_ ||
+            size_changed || dp_changed || theme_changed || had_pending_model_dirty ||
             next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
             now >= next_refresh_at_;
         const bool content_changed = updateContent(ctx, refresh_due);

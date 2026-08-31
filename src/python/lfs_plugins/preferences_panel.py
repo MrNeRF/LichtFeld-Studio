@@ -41,10 +41,14 @@ class PreferencesPanel(Panel):
         ("drone", "preferences.navigation_drone"),
     )
 
+    PROGRESS_BAR_OPTIONS = (
+        ("classic", "preferences.progress_bar_classic"),
+        ("miner", "preferences.progress_bar_miner"),
+    )
+
     EXPANDABLE_SECTIONS = (
         "language",
-        "working_directory",
-        "asset_manager",
+        "project_location",
         "appearance",
         "scene_rendering",
         "navigation",
@@ -73,17 +77,14 @@ class PreferencesPanel(Panel):
         self._mcp_request_logging = False
         self._mcp_safe_mode = False
         self._last_mcp_runtime_config = None
-        self._working_directory = ""
-        self._applied_working_directory = ""
-        self._asset_manager_directory = ""
-        self._applied_asset_manager_directory = ""
+        self._project_location = ""
+        self._applied_project_location = ""
         self._document = None
         self._file_associations = []
 
     def on_bind_model(self, ctx):
         self._read_mcp_preferences()
-        self._read_working_directory()
-        self._read_asset_manager_directory()
+        self._read_project_location()
         model = ctx.create_data_model("preferences")
         if model is None:
             return
@@ -104,6 +105,7 @@ class PreferencesPanel(Panel):
                 lambda section=section: section in self._expanded_sections,
             )
         model.bind("theme_idx", self._theme_index, self._set_theme_index)
+        model.bind("progress_bar_idx", self._progress_bar_index, self._set_progress_bar_index)
         model.bind("scale_idx", self._scale_index, self._set_scale_index)
         model.bind(
             "scene_upscaler_idx",
@@ -132,16 +134,8 @@ class PreferencesPanel(Panel):
         model.bind("mcp_enabled", lambda: self._mcp_enabled, self._set_mcp_enabled)
         model.bind("mcp_expose_network", lambda: self._mcp_expose_network, self._set_mcp_expose_network)
         model.bind("mcp_port", lambda: self._mcp_port, self._set_mcp_port)
-        model.bind("working_directory", lambda: self._working_directory, self._set_working_directory_draft)
-        model.bind_func("working_directory_hint", self._working_directory_hint)
-        model.bind(
-            "asset_manager_directory",
-            lambda: self._asset_manager_directory,
-            self._set_asset_manager_directory_draft,
-        )
-        model.bind_func(
-            "asset_manager_directory_hint", self._asset_manager_directory_hint
-        )
+        model.bind("project_location", lambda: self._project_location, self._set_project_location_draft)
+        model.bind_func("project_location_hint", self._project_location_hint)
         model.bind("mcp_request_logging", lambda: self._mcp_request_logging, self._set_mcp_request_logging)
         model.bind_func("mcp_safe_mode", lambda: self._mcp_safe_mode)
         model.bind_func("mcp_status", self._mcp_status_text)
@@ -163,29 +157,14 @@ class PreferencesPanel(Panel):
         model.bind_event("toggle_mcp_enabled", self._on_toggle_mcp_enabled)
         model.bind_event("mcp_port_change", self._on_mcp_port_change)
         model.bind_event("confirm_mcp_port", self._on_confirm_mcp_port)
-        model.bind_event("working_directory_change", self._on_working_directory_change)
-        model.bind_event("confirm_working_directory", self._on_confirm_working_directory)
-        model.bind_event("browse_working_directory", self._on_browse_working_directory)
-        model.bind_event("use_default_working_directory", self._on_use_default_working_directory)
-        model.bind_event(
-            "asset_manager_directory_change",
-            self._on_asset_manager_directory_change,
-        )
-        model.bind_event(
-            "confirm_asset_manager_directory",
-            self._on_confirm_asset_manager_directory,
-        )
-        model.bind_event(
-            "browse_asset_manager_directory",
-            self._on_browse_asset_manager_directory,
-        )
-        model.bind_event(
-            "use_default_asset_manager_directory",
-            self._on_use_default_asset_manager_directory,
-        )
+        model.bind_event("project_location_change", self._on_project_location_change)
+        model.bind_event("confirm_project_location", self._on_confirm_project_location)
+        model.bind_event("browse_project_location", self._on_browse_project_location)
+        model.bind_event("use_default_project_location", self._on_use_default_project_location)
         model.bind_event("open_mcp_log_folder", self._on_open_mcp_log_folder)
         model.bind_event("toggle_section", self._on_toggle_section)
         model.bind_record_list("themes")
+        model.bind_record_list("progress_bar_styles")
         model.bind_record_list("scales")
         model.bind_record_list("scene_upscalers")
         model.bind_record_list("scene_upscaler_presets")
@@ -235,6 +214,7 @@ class PreferencesPanel(Panel):
     def _state(self):
         return (
             lf.ui.get_theme(),
+            lf.ui.get_progress_bar_style(),
             float(lf.ui.get_ui_scale_preference()),
             self._scene_upscaler(),
             self._scene_upscaler_preset(),
@@ -263,6 +243,13 @@ class PreferencesPanel(Panel):
                     "label": lf.ui.tr(theme.get("label_key") or theme.get("name") or theme["id"]),
                 }
                 for index, theme in enumerate(self._theme_catalog)
+            ],
+        )
+        self._handle.update_record_list(
+            "progress_bar_styles",
+            [
+                {"index": str(index), "label": lf.ui.tr(label)}
+                for index, (_style, label) in enumerate(self.PROGRESS_BAR_OPTIONS)
             ],
         )
         self._handle.update_record_list(
@@ -313,6 +300,22 @@ class PreferencesPanel(Panel):
             return
         if 0 <= index < len(self._theme_catalog):
             lf.ui.set_theme(self._theme_catalog[index]["id"])
+            self._refresh_selection()
+
+    def _progress_bar_index(self):
+        current = lf.ui.get_progress_bar_style()
+        for index, (style, _label) in enumerate(self.PROGRESS_BAR_OPTIONS):
+            if style == current:
+                return str(index)
+        return "0"
+
+    def _set_progress_bar_index(self, value):
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            return
+        if 0 <= index < len(self.PROGRESS_BAR_OPTIONS):
+            lf.ui.set_progress_bar_style(self.PROGRESS_BAR_OPTIONS[index][0])
             self._refresh_selection()
 
     def _scale_index(self):
@@ -509,139 +512,69 @@ class PreferencesPanel(Panel):
         lf.ui.set_scene_graph_selection_markers(bool(enabled))
         self._refresh_selection()
 
-    def _read_working_directory(self):
-        stored = lf.ui.get_working_directory_preference()
-        self._applied_working_directory = stored or lf.ui.get_default_working_directory()
-        self._working_directory = self._applied_working_directory
-        self._dirty_working_directory()
+    def _read_project_location(self):
+        stored = lf.ui.get_project_location_preference()
+        self._applied_project_location = stored or lf.ui.get_default_project_location()
+        self._project_location = self._applied_project_location
+        self._dirty_project_location()
 
-    def _set_working_directory_draft(self, value):
-        self._working_directory = str(value).strip()
-        self._dirty_working_directory()
+    def _set_project_location_draft(self, value):
+        self._project_location = str(value).strip()
+        self._dirty_project_location()
 
-    def _on_working_directory_change(self, _handle, event, args):
+    def _on_project_location_change(self, _handle, event, args):
         if args:
-            self._set_working_directory_draft(args[0])
+            self._set_project_location_draft(args[0])
         if event.get_bool_parameter("linebreak", False):
-            self._commit_working_directory()
+            self._commit_project_location()
 
-    def _on_confirm_working_directory(self, _handle, _event, _args):
-        self._commit_working_directory()
+    def _on_confirm_project_location(self, _handle, _event, _args):
+        self._commit_project_location()
 
-    def _on_browse_working_directory(self, _handle, _event, _args):
-        start = self._working_directory or lf.ui.get_default_working_directory()
+    def _on_browse_project_location(self, _handle, _event, _args):
+        start = self._project_location or lf.ui.get_default_project_location()
         chosen = lf.ui.open_folder_dialog(
-            lf.ui.tr("preferences.working_directory"), start)
-        if not chosen:
-            return
-        self._working_directory = chosen
-        self._commit_working_directory()
+            lf.ui.tr("preferences.project_location"), start)
+        if chosen:
+            self._project_location = chosen
+            self._commit_project_location()
 
-    def _on_use_default_working_directory(self, _handle, _event, _args):
-        lf.ui.clear_working_directory()
-        self._read_working_directory()
+    def _on_use_default_project_location(self, _handle, _event, _args):
+        lf.ui.clear_project_location()
+        self._read_project_location()
 
-    def _working_directory_hint(self):
-        path = lf.ui.get_temp_project_directory()
-        template = lf.ui.tr("preferences.working_directory_hint") or "Temporary projects: {path}"
-        return template.replace("{path}", path)
-
-    def _commit_working_directory(self):
-        draft = (self._working_directory or "").strip()
-        default_path = lf.ui.get_default_working_directory()
-        if not draft or draft == default_path:
-            lf.ui.clear_working_directory()
-            self._read_working_directory()
-            return True
-        error = lf.ui.set_working_directory(draft)
-        if error:
-            lf.ui.message_dialog(
-                lf.ui.tr("preferences.working_directory"),
-                error or lf.ui.tr("preferences.working_directory_invalid"),
-                "error",
-            )
-            self._working_directory = self._applied_working_directory
-            self._dirty_working_directory()
-            return False
-        self._read_working_directory()
-        return True
-
-    def _dirty_working_directory(self):
-        if not self._handle:
-            return
-        self._handle.dirty("working_directory")
-        self._handle.dirty("working_directory_hint")
-
-    def _read_asset_manager_directory(self):
-        stored = lf.ui.get_asset_manager_directory_preference()
-        self._applied_asset_manager_directory = (
-            stored or lf.ui.get_default_asset_manager_directory()
-        )
-        self._asset_manager_directory = self._applied_asset_manager_directory
-        self._dirty_asset_manager_directory()
-
-    def _set_asset_manager_directory_draft(self, value):
-        self._asset_manager_directory = str(value).strip()
-        self._dirty_asset_manager_directory()
-
-    def _on_asset_manager_directory_change(self, _handle, event, args):
-        if args:
-            self._set_asset_manager_directory_draft(args[0])
-        if event.get_bool_parameter("linebreak", False):
-            self._commit_asset_manager_directory()
-
-    def _on_confirm_asset_manager_directory(self, _handle, _event, _args):
-        self._commit_asset_manager_directory()
-
-    def _on_browse_asset_manager_directory(self, _handle, _event, _args):
-        start = (
-            self._asset_manager_directory
-            or lf.ui.get_default_asset_manager_directory()
-        )
-        chosen = lf.ui.open_folder_dialog(
-            lf.ui.tr("preferences.asset_manager_directory"), start
-        )
-        if not chosen:
-            return
-        self._asset_manager_directory = chosen
-        self._commit_asset_manager_directory()
-
-    def _on_use_default_asset_manager_directory(self, _handle, _event, _args):
-        lf.ui.clear_asset_manager_directory()
-        self._read_asset_manager_directory()
-
-    def _asset_manager_directory_hint(self):
+    def _project_location_hint(self):
         template = (
-            lf.ui.tr("preferences.asset_manager_directory_hint")
-            or "Projects in this directory appear in the Default folder: {path}"
+            lf.ui.tr("preferences.project_location_hint")
+            or "New projects and the Asset Manager Default folder: {path}"
         )
-        return template.replace("{path}", self._applied_asset_manager_directory)
+        return template.replace("{path}", self._applied_project_location)
 
-    def _commit_asset_manager_directory(self):
-        draft = (self._asset_manager_directory or "").strip()
-        default_path = lf.ui.get_default_asset_manager_directory()
+    def _commit_project_location(self):
+        draft = (self._project_location or "").strip()
+        default_path = lf.ui.get_default_project_location()
         if not draft or draft == default_path:
-            lf.ui.clear_asset_manager_directory()
-            self._read_asset_manager_directory()
+            lf.ui.clear_project_location()
+            self._read_project_location()
             return True
-        error = lf.ui.set_asset_manager_directory(draft)
+        error = lf.ui.set_project_location(draft)
         if error:
             lf.ui.message_dialog(
-                lf.ui.tr("preferences.asset_manager_settings"),
-                error or lf.ui.tr("preferences.asset_manager_directory_invalid"),
+                lf.ui.tr("preferences.project_location"),
+                error or lf.ui.tr("preferences.project_location_invalid"),
                 "error",
             )
-            self._asset_manager_directory = self._applied_asset_manager_directory
-            self._dirty_asset_manager_directory()
+            self._project_location = self._applied_project_location
+            self._dirty_project_location()
             return False
-        self._read_asset_manager_directory()
+        self._read_project_location()
         return True
 
-    def _dirty_asset_manager_directory(self):
+    def _dirty_project_location(self):
         if not self._handle:
             return
-        self._handle.dirty("asset_manager_directory")
-        self._handle.dirty("asset_manager_directory_hint")
+        self._handle.dirty("project_location")
+        self._handle.dirty("project_location_hint")
 
     def _read_mcp_preferences(self):
         preferences = lf.ui.get_mcp_preferences()
@@ -926,19 +859,15 @@ class PreferencesPanel(Panel):
         # The floating-window title bar is cancellation: discard an unconfirmed
         # port draft while preserving settings that were already applied live.
         self._mcp_port = str(self._mcp_applied_port)
-        self._working_directory = self._applied_working_directory
-        self._asset_manager_directory = self._applied_asset_manager_directory
+        self._project_location = self._applied_project_location
         self._dirty_mcp()
-        self._dirty_working_directory()
-        self._dirty_asset_manager_directory()
+        self._dirty_project_location()
         lf.ui.set_panel_enabled(self.id, False)
 
     def _on_accept_and_close(self, _handle, _event, _args):
         if not self._commit_mcp_port():
             return
-        if not self._commit_working_directory():
-            return
-        if not self._commit_asset_manager_directory():
+        if not self._commit_project_location():
             return
         lf.ui.set_panel_enabled(self.id, False)
 
@@ -1042,12 +971,11 @@ class PreferencesPanel(Panel):
         section = section or self._section
         if section == "general":
             lf.ui.set_language("en")
-            lf.ui.clear_working_directory()
-            lf.ui.clear_asset_manager_directory()
-            self._read_working_directory()
-            self._read_asset_manager_directory()
+            lf.ui.clear_project_location()
+            self._read_project_location()
         elif section == "appearance":
             lf.ui.set_theme("dark")
+            lf.ui.set_progress_bar_style("classic")
             lf.ui.set_ui_scale(0.0)
             lf.ui.set_scene_reconstruction("native", "native")
             lf.ui.reset_scene_reconstruction_preferences()
@@ -1075,6 +1003,7 @@ class PreferencesPanel(Panel):
     def _dirty_selection(self):
         if self._handle:
             self._handle.dirty("theme_idx")
+            self._handle.dirty("progress_bar_idx")
             self._handle.dirty("scale_idx")
             self._handle.dirty("scene_upscaler_idx")
             self._handle.dirty("scene_upscaler_preset_idx")
@@ -1086,5 +1015,4 @@ class PreferencesPanel(Panel):
             self._handle.dirty("remember_view_snap")
             self._handle.dirty("scene_graph_selection_markers")
             self._dirty_mcp()
-            self._dirty_working_directory()
-            self._dirty_asset_manager_directory()
+            self._dirty_project_location()
