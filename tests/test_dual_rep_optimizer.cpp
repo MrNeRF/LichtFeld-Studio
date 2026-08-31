@@ -487,6 +487,9 @@ TEST(DualRepOptimizer, MRNF_PerSplatMeanStepWithQuantizedAdamIsFinite) {
     opt_params.iterations = 200;
     opt_params.max_cap = 32;
     opt_params.sh_degree_interval = 10000;
+    // The per-splat mean step ships behind the opt-in Background Improvements
+    // switch; the test exercises that path, so it must opt in.
+    opt_params.background_improvements = true;
     ASSERT_NO_THROW(strategy.initialize(opt_params));
 
     std::vector<float> log_s(8 * 3);
