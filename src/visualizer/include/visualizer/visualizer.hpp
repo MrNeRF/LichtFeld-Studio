@@ -199,6 +199,11 @@ namespace lfs::vis {
         virtual lfs::Result<void>
         projectSaveAs(const std::filesystem::path& path,
                       bool regenerate_preview = true) = 0;
+        virtual lfs::Result<void>
+        projectCreateAt(
+            const std::filesystem::path& path,
+            ProjectSwitchDisposition disposition =
+                ProjectSwitchDisposition::RequireClean) = 0;
         virtual lfs::Result<ProjectOpenOutcome>
         projectOpen(
             const std::filesystem::path& path,

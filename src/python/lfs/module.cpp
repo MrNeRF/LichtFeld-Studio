@@ -1090,6 +1090,26 @@ NB_MODULE(lichtfeld, m) {
         },
         nb::arg("discard_changes") = false, nb::arg("stop_training") = false, "Clear all project state and start a new project");
     m.def(
+        "project_create",
+        [](const std::string& path,
+           const bool discard_changes,
+           const bool stop_training) {
+            nb::gil_scoped_release release;
+            const auto project_path = python_utf8_path(path);
+            emit_project_cmd_marshaled(
+                "python.project_create",
+                [project_path, discard_changes, stop_training] {
+                    lfs::core::events::cmd::ProjectCreate{
+                        .path = project_path,
+                        .discard_changes = discard_changes,
+                        .stop_training = stop_training}
+                        .emit();
+                });
+        },
+        nb::arg("path"), nb::arg("discard_changes") = false,
+        nb::arg("stop_training") = false,
+        "Create and bind a new .licht project at path");
+    m.def(
         "project_save",
         [](const bool wait, const bool regenerate_preview) {
             nb::gil_scoped_release release;
