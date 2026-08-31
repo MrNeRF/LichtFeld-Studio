@@ -738,7 +738,8 @@ namespace lfs::rendering {
             const float ortho_scale,
             const float near_depth,
             const float far_depth,
-            const float scale,
+            const float scale_x,
+            const float scale_y,
             const float offset_x,
             const float offset_y,
             const float* __restrict__ model_transforms,
@@ -818,8 +819,8 @@ namespace lfs::rendering {
             // view_y and view_z up front so it can add, mirroring the slang
             // formula verbatim. The equirect branch in that kernel applies the
             // same vis→vk negation used here so px/py match.
-            const float half_w = 0.5f * scale * image_width;
-            const float half_h = 0.5f * scale * image_height;
+            const float half_w = 0.5f * scale_x * image_width;
+            const float half_h = 0.5f * scale_y * image_height;
             const float cx = 0.5f * image_width + offset_x * (0.5f * image_width - half_w);
             const float cy = 0.5f * image_height + offset_y * (0.5f * image_height - half_h);
             const bool inside_rect = fabsf(px - cx) <= half_w && fabsf(py - cy) <= half_h;
@@ -1498,7 +1499,8 @@ namespace lfs::rendering {
         const float ortho_scale,
         const float near_depth,
         const float far_depth,
-        const float scale,
+        const float scale_x,
+        const float scale_y,
         const float offset_x,
         const float offset_y,
         const Tensor* const model_transforms,
@@ -1561,7 +1563,8 @@ namespace lfs::rendering {
             sanitized_ortho_scale,
             near_depth,
             far_depth,
-            scale,
+            scale_x,
+            scale_y,
             offset_x,
             offset_y,
             prepared_transforms.ptr,

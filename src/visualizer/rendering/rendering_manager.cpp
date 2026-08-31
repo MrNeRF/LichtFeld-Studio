@@ -69,8 +69,11 @@ namespace lfs::vis {
                 settings.depth_filter_max.z = 0.0f;
             }
 
-            if (!std::isfinite(settings.depth_filter_scale)) {
-                settings.depth_filter_scale = kDefaultScale;
+            if (!std::isfinite(settings.depth_filter_scale_x)) {
+                settings.depth_filter_scale_x = kDefaultScale;
+            }
+            if (!std::isfinite(settings.depth_filter_scale_y)) {
+                settings.depth_filter_scale_y = kDefaultScale;
             }
             if (!std::isfinite(settings.depth_filter_offset_x)) {
                 settings.depth_filter_offset_x = kDefaultOffset;
@@ -78,7 +81,8 @@ namespace lfs::vis {
             if (!std::isfinite(settings.depth_filter_offset_y)) {
                 settings.depth_filter_offset_y = kDefaultOffset;
             }
-            settings.depth_filter_scale = std::clamp(settings.depth_filter_scale, 0.05f, 1.0f);
+            settings.depth_filter_scale_x = std::clamp(settings.depth_filter_scale_x, 0.05f, 1.0f);
+            settings.depth_filter_scale_y = std::clamp(settings.depth_filter_scale_y, 0.05f, 1.0f);
             settings.depth_filter_offset_x = std::clamp(settings.depth_filter_offset_x, -1.0f, 1.0f);
             settings.depth_filter_offset_y = std::clamp(settings.depth_filter_offset_y, -1.0f, 1.0f);
             settings.depth_filter_viz_mode = std::clamp(settings.depth_filter_viz_mode, 0, 2);
@@ -720,6 +724,22 @@ namespace lfs::vis {
     bool RenderingManager::isGTComparisonActive() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         return split_view_service_.isGTComparisonActive(settings_);
+    }
+
+    void RenderingManager::setDepthWindowDragPreview(const bool active) {
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex_);
+            if (depth_window_drag_preview_ == active) {
+                return;
+            }
+            depth_window_drag_preview_ = active;
+        }
+        markDirty(DirtyFlag::OVERLAY);
+    }
+
+    bool RenderingManager::depthWindowDragPreview() const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return depth_window_drag_preview_;
     }
 
     bool RenderingManager::isIndependentSplitViewActive() const {

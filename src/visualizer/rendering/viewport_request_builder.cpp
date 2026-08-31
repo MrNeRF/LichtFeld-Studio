@@ -242,7 +242,12 @@ namespace lfs::vis {
             }
         }
         void applyGaussianViewVolume(lfs::rendering::GaussianFilterState& filters, const FrameContext& ctx) {
-            if (!ctx.settings.depth_filter_enabled) {
+            // While GT comparison mode is active the depth filter's render effect
+            // (dim/hide/containment, and the drag-preview lane with it) is fully
+            // suspended. Settings are never mutated — dropping the filters from the
+            // request restores everything the moment GT ends.
+            if (!ctx.settings.depth_filter_enabled ||
+                splitViewUsesGTComparison(ctx.settings.split_view_mode)) {
                 return;
             }
 
@@ -251,9 +256,11 @@ namespace lfs::vis {
                 .max = ctx.settings.depth_filter_max,
                 .transform = ctx.settings.depth_filter_transform.inv().toMat4()};
             filters.screen_window = lfs::rendering::SelectionScreenWindow{
-                .scale = ctx.settings.depth_filter_scale,
+                .scale_x = ctx.settings.depth_filter_scale_x,
+                .scale_y = ctx.settings.depth_filter_scale_y,
                 .offset_x = ctx.settings.depth_filter_offset_x,
-                .offset_y = ctx.settings.depth_filter_offset_y};
+                .offset_y = ctx.settings.depth_filter_offset_y,
+                .drag_preview = ctx.depth_window_drag_preview};
             filters.cull_outside_view_volume = ctx.settings.depth_filter_viz_mode == 2;
             filters.dim_outside_view_volume = ctx.settings.depth_filter_viz_mode == 1;
         }

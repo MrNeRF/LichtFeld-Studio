@@ -74,6 +74,9 @@ namespace lfs::vis {
             };
         }
 
+        // KEEP IN SYNC: formula-identical to the ViewportInfo overload below and
+        // to op::screenToRender in depth_window_geometry.hpp. A change to any one
+        // of the three must be mirrored in the other two.
         [[nodiscard]] glm::vec2 screenToRender(const glm::vec2& screen,
                                                const SelectionProjectionContext::ViewerLayout& info) {
             const float scale_x = static_cast<float>(info.render_width) / info.width;
@@ -84,6 +87,9 @@ namespace lfs::vis {
             };
         }
 
+        // KEEP IN SYNC: formula-identical to the ViewerLayout overload above and
+        // to op::screenToRender in depth_window_geometry.hpp. A change to any one
+        // of the three must be mirrored in the other two.
         [[nodiscard]] glm::vec2 screenToRender(const glm::vec2& screen, const SelectionService::ViewportInfo& info) {
             const float scale_x = static_cast<float>(info.render_width) / info.width;
             const float scale_y = static_cast<float>(info.render_height) / info.height;
@@ -2446,6 +2452,12 @@ namespace lfs::vis {
         session.preview_dirty = false;
     }
 
+    void SelectionService::invalidateInteractiveBrushFilterCache() {
+        auto& session = interactive_selection_;
+        session.preview_dirty = true;
+        session.preview_brush_point_count = 0;
+    }
+
     SelectionResult SelectionService::commitSelection(const core::Tensor& selection, const SelectionMode mode,
                                                       const std::vector<bool>& node_mask,
                                                       const SelectionFilterState& filters,
@@ -3933,7 +3945,8 @@ namespace lfs::vis {
                 sanitized_ortho_scale,
                 -settings.depth_filter_max.z,
                 -settings.depth_filter_min.z,
-                settings.depth_filter_scale,
+                settings.depth_filter_scale_x,
+                settings.depth_filter_scale_y,
                 settings.depth_filter_offset_x,
                 settings.depth_filter_offset_y,
                 model_transforms_ptr,
