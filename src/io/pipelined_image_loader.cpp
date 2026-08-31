@@ -124,6 +124,10 @@ namespace lfs::io {
 
         void cancel() { cv_.notify_all(); }
 
+        [[nodiscard]] bool cancelled() const noexcept {
+            return !running_ || !running_->load(std::memory_order_acquire);
+        }
+
         void reclaim_idle() {
             std::lock_guard<std::mutex> lock(mutex_);
             for (auto& slot : slots_) {
@@ -2324,8 +2328,13 @@ namespace lfs::io {
                 }
                 if (!rgb_batch_indices.empty()) {
                     auto leases = decoded_frame_ring_->acquire_batch(rgb_batch_indices.size());
-                    if (leases.empty())
+                    if (leases.empty()) {
+                        if (decoded_frame_ring_->cancelled()) {
+                            LOG_DEBUG("[PipelinedImageLoader] GPU batch decode cancelled during shutdown");
+                            return;
+                        }
                         throw std::runtime_error("decoded frame ring cancelled");
+                    }
                     rgb_batch_indices.resize(leases.size());
                     std::vector<std::pair<const uint8_t*, size_t>> spans;
                     spans.reserve(rgb_batch_indices.size());

@@ -88,6 +88,18 @@ namespace lfs::app {
                 const HeadlessPluginSignalGuard&) = delete;
         };
 
+        [[nodiscard]] std::filesystem::path headless_project_save_destination(
+            const core::param::TrainingParameters& cli_params,
+            const std::filesystem::path& source) {
+            if (!cli_params.dataset.output_path_explicit)
+                return source;
+
+            const auto destination = cli_params.dataset.output_path / "project.licht";
+            LOG_INFO("Headless resume project destination: {}",
+                     core::path_to_utf8(destination));
+            return destination;
+        }
+
         [[nodiscard]] lfs::Error training_project_error(
             const lfs::ErrorCode code,
             std::string detail,
@@ -509,7 +521,8 @@ namespace lfs::app {
                         training::grant_headless_project_saves(
                             *installed->trainer,
                             effective_params,
-                            *params->resume_project);
+                            headless_project_save_destination(
+                                *params, *params->resume_project));
                         manager->setTrainer(
                             std::move(installed->trainer));
                     } else {
@@ -725,7 +738,8 @@ namespace lfs::app {
                         std::move(installed->trainer);
                     training::grant_headless_project_saves(
                         *trainer, project->params,
-                        *params->resume_project);
+                        headless_project_save_destination(
+                            *params, *params->resume_project));
                     LOG_INFO(
                         "Project display hydration complete; full "
                         "trainer state restored at iteration {}",
