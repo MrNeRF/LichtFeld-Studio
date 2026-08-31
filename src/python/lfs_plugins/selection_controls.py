@@ -3,6 +3,7 @@
 """Selection controls controller for the viewport selection overlay."""
 
 import math
+import time
 
 import lichtfeld as lf
 
@@ -22,6 +23,7 @@ _DEPTH_MAX = 1000.0
 _DEPTH_GAP = 0.01
 _DEPTH_SLIDER_HALF_WINDOW = 20.0
 _DEPTH_SLIDER_MIN_SPAN = 1.0
+_DEPTH_USER_EDIT_MARK_TTL = 0.75
 _DEFAULT_DEPTH_NEAR = 0.0
 _DEFAULT_DEPTH_FAR = 6.0
 _DEFAULT_FRUSTUM_HALF_WIDTH = 1.35
@@ -129,7 +131,7 @@ class SelectionControlsController:
         self._last_state_key = None
         self._last_state_items = None
         self._depth_echo_holdoff = 0
-        self._depth_user_edit_pending = set()
+        self._depth_user_edit_pending = {}
         self._depth_text_bufs = {
             "selection_depth_near_str": None,
             "selection_depth_far_str": None,
@@ -399,13 +401,16 @@ class SelectionControlsController:
         self._apply_depth_range(self._depth_enabled, self._depth_near, far)
 
     def _mark_depth_user_edit(self, key):
-        self._depth_user_edit_pending.add(key)
+        self._depth_user_edit_pending[key] = time.monotonic()
 
     def _depth_setter_allowed(self, key):
         if not self._visible or self._last_state_key is None:
             return False
-        user_edit = key in self._depth_user_edit_pending
-        self._depth_user_edit_pending.discard(key)
+        marked_at = self._depth_user_edit_pending.pop(key, None)
+        user_edit = (
+            marked_at is not None
+            and time.monotonic() - marked_at <= _DEPTH_USER_EDIT_MARK_TTL
+        )
         return self._depth_echo_holdoff == 0 or user_edit
 
     def _apply_depth_range(self, enabled, near, far):

@@ -258,6 +258,28 @@ def test_selection_depth_toggle_and_sliders_use_selection_api(selection_controls
     assert state.depth_calls[-1] == (True, 1.5, 2.0, 1.35)
 
 
+def test_selection_depth_user_edit_mark_expires(selection_controls_module, monkeypatch):
+    module, state = selection_controls_module
+    panel = module.SelectionControlsController()
+    model = _DataModelStub()
+
+    panel.bind_model(model)
+    panel.update(_DocumentStub())
+    panel._depth_echo_holdoff = 1
+    panel._mark_depth_user_edit("near")
+    marked_at = module.time.monotonic()
+    monkeypatch.setattr(
+        module.time,
+        "monotonic",
+        lambda: marked_at + module._DEPTH_USER_EDIT_MARK_TTL + 0.01,
+    )
+
+    model.bound_binds["selection_depth_near_value"][1]("1.5")
+
+    assert state.depth_calls == []
+    assert "near" not in panel._depth_user_edit_pending
+
+
 def test_selection_depth_text_fields_commit_like_panel_inputs(selection_controls_module):
     module, state = selection_controls_module
     panel = module.SelectionControlsController()
