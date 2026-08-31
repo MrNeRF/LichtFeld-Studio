@@ -83,6 +83,35 @@ namespace {
             spirvDiagnosticName(spirv_path),
             bytes);
     }
+
+    [[nodiscard]] bool spirvHasComputeWorkgroupSize(
+        const std::vector<std::uint32_t>& spirv,
+        const std::uint32_t expected_x,
+        const std::uint32_t expected_y,
+        const std::uint32_t expected_z) {
+        // OpExecutionMode LocalSize is the execution mode emitted by the
+        // Slang compute shaders in this renderer. Check the module before
+        // creating the pipeline so the host dispatch geometry cannot silently
+        // diverge from the shader's numthreads declaration.
+        constexpr std::uint16_t kOpExecutionMode = 16u;
+        constexpr std::uint32_t kExecutionModeLocalSize = 17u;
+        for (std::size_t word = 5; word < spirv.size();) {
+            const std::uint32_t instruction = spirv[word];
+            const std::uint16_t word_count = static_cast<std::uint16_t>(instruction >> 16u);
+            const std::uint16_t opcode = static_cast<std::uint16_t>(instruction & 0xffffu);
+            if (word_count == 0 || word + word_count > spirv.size()) {
+                return false;
+            }
+            if (opcode == kOpExecutionMode && word_count >= 6u &&
+                spirv[word + 2u] == kExecutionModeLocalSize) {
+                return spirv[word + 3u] == expected_x &&
+                       spirv[word + 4u] == expected_y &&
+                       spirv[word + 5u] == expected_z;
+            }
+            word += word_count;
+        }
+        return false;
+    }
 } // namespace
 
 [[noreturn]] static void throwRendererContractViolation(std::string detail,
@@ -338,6 +367,7 @@ void VulkanGSPipeline::assignBufferLabels(VulkanGSPipelineBuffers& buffers) {
     _(primitive_sort_indices)
     _(tiles_touched_depth_ordered)
     _(visible_flags)
+    _(visible_block_counts)
     _(visible_prefix)
     _(visible_count)
     _(visible_sort_dispatch_args)
@@ -469,6 +499,7 @@ void VulkanGSPipeline::cleanupBuffers(VulkanGSPipelineBuffers& buffers) {
     _(primitive_sort_indices)
     _(tiles_touched_depth_ordered)
     _(visible_flags)
+    _(visible_block_counts)
     _(visible_prefix)
     _(visible_count)
     _(visible_sort_dispatch_args)
@@ -1874,10 +1905,23 @@ void VulkanGSPipeline::createComputeDescriptorSetLayout(_ComputePipeline& pipeli
     }
 }
 
-void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline, const std::string& spirv_path, bool compatible_subgroup_size) {
+void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline,
+                                             const std::string& spirv_path,
+                                             bool compatible_subgroup_size,
+                                             const uint32_t expected_workgroup_size_x) {
 
     pipeline.diagnostic_name = spirvDiagnosticName(spirv_path);
     const auto spirv_code = loadSpirv(spirv_path);
+    if (expected_workgroup_size_x != 0 &&
+        !spirvHasComputeWorkgroupSize(spirv_code, expected_workgroup_size_x, 1u, 1u)) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "VkSplat compute shader workgroup geometry does not match the host contract (pipeline='{}', shader='{}', expected=[{},1,1])",
+                pipeline.diagnostic_name,
+                spirv_path,
+                expected_workgroup_size_x),
+            LFS_SOURCE_SITE_CURRENT());
+    }
     recordSlangShaderBytecode(spirv_path, spirv_code.size() * sizeof(uint32_t));
     createShaderModule(spirv_code, &pipeline.shader);
     if (debug_name_writer_.enabled()) {

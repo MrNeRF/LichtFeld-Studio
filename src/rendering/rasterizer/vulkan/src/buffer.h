@@ -206,12 +206,17 @@ struct VulkanGSPipelineBuffers {
     // Legacy aliases (same VkBuffer/offset, documented at bind/resize):
     //   primitive_depth_keys  ↔ primitive_sort_indices   (keys die after compact; indices born at post-radix copy)
     //   tiles_touched         ↔ index_buffer_offset      (last tiles_touched read is apply_depth_ordering)
-    //   visible_flags         ↔ tiles_touched_depth_ordered (flags die after prefix scan)
+    //   visible_flags         ↔ tiles_touched_depth_ordered (mask dies after scan)
     Buffer<uint32_t> primitive_depth_keys;       // (N,) float-as-uint of ‖mean − cam‖²
     Buffer<int32_t> primitive_sort_indices;      // (N,) depth-ranked primitive idx
     Buffer<int32_t> tiles_touched_depth_ordered; // (N,) reordered tiles_touched
-    Buffer<int32_t> visible_flags;               // (N,) projection-visible primitive flag
-    Buffer<int32_t> visible_prefix;              // (N,) inclusive scan of visible_flags
+    // Packed legacy visibility scan. The member names are retained for the
+    // stable renderer/test surface; their extents are no longer N:
+    // visible_flags is four words per 128-splat block, visible_block_counts and
+    // visible_prefix are one inclusive count per 128-splat workgroup.
+    Buffer<int32_t> visible_flags;               // (4*ceil(N/128),) packed visibility mask
+    Buffer<int32_t> visible_block_counts;        // (ceil(N/128),) count per mask block
+    Buffer<int32_t> visible_prefix;              // (ceil(N/128),) inclusive block-count scan
     Buffer<uint32_t> visible_count;              // (1,) visible primitive count
     Buffer<uint32_t> visible_sort_dispatch_args; // VisibleSortDispatch: radix only
 

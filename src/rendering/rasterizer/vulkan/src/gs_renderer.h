@@ -434,8 +434,8 @@ protected:
     _ComputePipeline pipeline_selection_polygon_rasterize = _ComputePipeline(2);
     _ComputePipeline pipeline_generate_keys_wave = _ComputePipeline(8);
     _ComputePipeline pipeline_apply_depth_ordering = _ComputePipeline(4);
-    _ComputePipeline pipeline_visible_flags = _ComputePipeline(2);
-    _ComputePipeline pipeline_prepare_visible_sort = _ComputePipeline(3);
+    _ComputePipeline pipeline_visible_flags = _ComputePipeline(3);
+    _ComputePipeline pipeline_prepare_visible_sort = _ComputePipeline(4);
     _ComputePipeline pipeline_prepare_tile_sort = _ComputePipeline(2);
     _ComputePipeline pipeline_compact_visible_primitives = _ComputePipeline(5);
     _ComputePipeline pipeline_lod_map_indices = _ComputePipeline(3);

@@ -21,6 +21,7 @@
 #include "io/formats/rad.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rasterizer/vulkan/src/indirect_layout.h"
+#include "rendering/rasterizer/vulkan/src/visible_mask.h"
 #include "rendering/rasterizer/vulkan/src/viewport_scratch_bucket.h"
 #include "rendering/vulkan_wait.hpp"
 #include "viewport/vksplat_compose.comp.spv.h"
@@ -3346,8 +3347,12 @@ namespace lfs::vis {
         add_count(per_visible, sizeof(std::int32_t)); // primitive_sort_indices
         add_count(per_visible, sizeof(std::int32_t)); // tiles_touched_depth_ordered
         if (!macro_chain) {
-            add_count(num_splats, sizeof(std::int32_t)); // visible_flags
-            add_count(num_splats, sizeof(std::int32_t)); // visible_prefix
+            add_count(lfs::rendering::vulkan::visible_mask::maskWordCount(num_splats),
+                      sizeof(std::int32_t)); // packed visible mask
+            add_count(lfs::rendering::vulkan::visible_mask::workgroupCount(num_splats),
+                      sizeof(std::int32_t)); // visible block counts
+            add_count(lfs::rendering::vulkan::visible_mask::workgroupCount(num_splats),
+                      sizeof(std::int32_t)); // scanned visible block counts
         }
         add_count(2, sizeof(std::uint32_t));                                                                          // visible_count
         add_count(indirect::VisibleSortDispatch::kLayout.word_count, sizeof(std::uint32_t));                          // visible_sort_dispatch_args
@@ -3782,8 +3787,12 @@ namespace lfs::vis {
         bind_count(buffers_.primitive_sort_indices, per_visible);
         bind_count(buffers_.tiles_touched_depth_ordered, per_visible);
         if (!macro_chain) {
-            bind_count(buffers_.visible_flags, num_splats);
-            bind_count(buffers_.visible_prefix, num_splats);
+            bind_count(buffers_.visible_flags,
+                       lfs::rendering::vulkan::visible_mask::maskWordCount(num_splats));
+            bind_count(buffers_.visible_block_counts,
+                       lfs::rendering::vulkan::visible_mask::workgroupCount(num_splats));
+            bind_count(buffers_.visible_prefix,
+                       lfs::rendering::vulkan::visible_mask::workgroupCount(num_splats));
         }
         bind_count(buffers_.visible_count, 2);
         bind_count(buffers_.visible_sort_dispatch_args,
@@ -3889,6 +3898,7 @@ namespace lfs::vis {
         RELEASE_PRIVATE_SCRATCH(primitive_sort_indices);
         RELEASE_PRIVATE_SCRATCH(tiles_touched_depth_ordered);
         RELEASE_PRIVATE_SCRATCH(visible_flags);
+        RELEASE_PRIVATE_SCRATCH(visible_block_counts);
         RELEASE_PRIVATE_SCRATCH(visible_prefix);
         RELEASE_PRIVATE_SCRATCH(visible_count);
         RELEASE_PRIVATE_SCRATCH(visible_sort_dispatch_args);
@@ -3994,6 +4004,7 @@ namespace lfs::vis {
         DETACH_SHARED(primitive_sort_indices);
         DETACH_SHARED(tiles_touched_depth_ordered);
         DETACH_SHARED(visible_flags);
+        DETACH_SHARED(visible_block_counts);
         DETACH_SHARED(visible_prefix);
         DETACH_SHARED(visible_count);
         DETACH_SHARED(visible_sort_dispatch_args);

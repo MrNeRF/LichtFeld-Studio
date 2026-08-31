@@ -1,6 +1,7 @@
 #include "gs_renderer.h"
 
 #include "core/logger.hpp"
+#include "visible_mask.h"
 #include "viewport_scratch_bucket.h"
 
 #include <algorithm>
@@ -1037,10 +1038,17 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
     createComputePipeline(pipeline_sorting_indirect_2.spine, spirv_paths.at("radix_sort/spine_indirect"));
     createComputePipeline(pipeline_sorting_indirect_2.downsweep, spirv_paths.at("radix_sort/downsweep_indirect"));
     createComputePipeline(pipeline_apply_depth_ordering, spirv_paths.at("apply_depth_ordering"));
-    createComputePipeline(pipeline_visible_flags, spirv_paths.at("visible_flags"));
+    static_assert(lfs::rendering::vulkan::visible_mask::kWorkgroupSize == 128u);
+    createComputePipeline(pipeline_visible_flags,
+                          spirv_paths.at("visible_flags"),
+                          true,
+                          static_cast<uint32_t>(lfs::rendering::vulkan::visible_mask::kWorkgroupSize));
     createComputePipeline(pipeline_prepare_visible_sort, spirv_paths.at("prepare_visible_sort"));
     createComputePipeline(pipeline_prepare_tile_sort, spirv_paths.at("prepare_tile_sort"));
-    createComputePipeline(pipeline_compact_visible_primitives, spirv_paths.at("compact_visible_primitives"));
+    createComputePipeline(pipeline_compact_visible_primitives,
+                          spirv_paths.at("compact_visible_primitives"),
+                          true,
+                          static_cast<uint32_t>(lfs::rendering::vulkan::visible_mask::kWorkgroupSize));
     createComputePipeline(pipeline_lod_map_indices, spirv_paths.at("lod_map_indices"));
     createComputePipeline(pipeline_lod_select_threshold, spirv_paths.at("lod_select_threshold"));
     if (spirv_paths.count("lod_compact_touch")) {
@@ -2334,7 +2342,12 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
             timeCpuStage("vksplat.render.record.executeSortPrimitivesByDepth.ensure_buffers");
         unsorted_keys = &resizeDeviceBuffer(buffers.unsorted_keys(), num_splats);
         unsorted_idx = &resizeDeviceBuffer(buffers.unsorted_gauss_idx(), num_splats);
-        resizeDeviceBuffer(buffers.visible_flags, num_splats);
+        resizeDeviceBuffer(buffers.visible_flags,
+                           lfs::rendering::vulkan::visible_mask::maskWordCount(num_splats));
+        resizeDeviceBuffer(buffers.visible_block_counts,
+                           lfs::rendering::vulkan::visible_mask::workgroupCount(num_splats));
+        resizeDeviceBuffer(buffers.visible_prefix,
+                           lfs::rendering::vulkan::visible_mask::workgroupCount(num_splats));
         resizeDeviceBuffer(buffers.visible_count, 2);
         resizeDeviceBuffer(buffers.visible_sort_dispatch_args,
                            indirect::VisibleSortDispatch::kLayout.word_count);
@@ -2356,12 +2369,13 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
         [[maybe_unused]] auto cpu_timer =
             timeCpuStage("vksplat.render.record.executeSortPrimitivesByDepth.build_visible_flags");
         executeCompute(
-            {{num_splats, 64}},
+            {{num_splats, lfs::rendering::vulkan::visible_mask::kWorkgroupSize}},
             &visible_uniforms, sizeof(visible_uniforms),
             pipeline_visible_flags,
             std::vector<TaggedBinding>{
                 {buffers.tiles_touched.deviceBuffer, BufferUse::ComputeRead},
                 {buffers.visible_flags.deviceBuffer, BufferUse::ComputeWrite},
+                {buffers.visible_block_counts.deviceBuffer, BufferUse::ComputeWrite},
             });
     }
 
@@ -2369,7 +2383,7 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
         PerfTimer::Timer<PerfTimer::VisiblePrefix> gpu_timer(this);
         [[maybe_unused]] auto cpu_timer =
             timeCpuStage("vksplat.render.record.executeSortPrimitivesByDepth.visible_prefix");
-        executeCumsum(buffers, buffers.visible_flags, buffers.visible_prefix);
+        executeCumsum(buffers, buffers.visible_block_counts, buffers.visible_prefix);
     }
 
     struct PrepareUniforms {
@@ -2382,12 +2396,16 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
         PerfTimer::Timer<PerfTimer::PrepareVisibleSort> gpu_timer(this);
         [[maybe_unused]] auto cpu_timer =
             timeCpuStage("vksplat.render.record.executeSortPrimitivesByDepth.prepare_visible_sort");
-        // Shader indexes visible_prefix[num_splats-1]; dual-source with cumsum size.
-        if (num_splats > 0 && buffers.visible_prefix.deviceSize() < num_splats) {
+        // The prepare shader reads the last inclusive block count, not an
+        // N-wide per-splat prefix.
+        const std::size_t visible_blocks =
+            lfs::rendering::vulkan::visible_mask::workgroupCount(num_splats);
+        if (visible_blocks > 0 && buffers.visible_prefix.deviceSize() < visible_blocks) {
             lfs::rendering::throw_renderer_contract(
                 std::format(
-                    "prepare_visible_sort requires visible_prefix covering uniforms.num_splats (num_splats={}, device_elements={}, buffer={:#x})",
+                    "prepare_visible_sort requires visible_prefix covering all visibility blocks (num_splats={}, blocks={}, device_elements={}, buffer={:#x})",
                     num_splats,
+                    visible_blocks,
                     buffers.visible_prefix.deviceSize(),
                     lfs::rendering::vkHandleValue(buffers.visible_prefix.deviceBuffer.buffer)),
                 LFS_SOURCE_SITE_CURRENT());
@@ -2397,6 +2415,7 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
             &prepare_uniforms, sizeof(prepare_uniforms),
             pipeline_prepare_visible_sort,
             std::vector<TaggedBinding>{
+                {buffers.visible_block_counts.deviceBuffer, BufferUse::ComputeRead},
                 {buffers.visible_prefix.deviceBuffer, BufferUse::ComputeRead},
                 {buffers.visible_count.deviceBuffer, BufferUse::ComputeWrite},
                 {buffers.visible_sort_dispatch_args.deviceBuffer, BufferUse::ComputeWrite},
@@ -2415,11 +2434,11 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
         [[maybe_unused]] auto cpu_timer =
             timeCpuStage("vksplat.render.record.executeSortPrimitivesByDepth.compact_visible_primitives");
         executeCompute(
-            {{num_splats, 64}},
+            {{num_splats, lfs::rendering::vulkan::visible_mask::kWorkgroupSize}},
             &visible_uniforms, sizeof(visible_uniforms),
             pipeline_compact_visible_primitives,
             std::vector<TaggedBinding>{
-                {buffers.tiles_touched.deviceBuffer, BufferUse::ComputeRead},
+                {buffers.visible_flags.deviceBuffer, BufferUse::ComputeRead},
                 {buffers.visible_prefix.deviceBuffer, BufferUse::ComputeRead},
                 {buffers.primitive_depth_keys.deviceBuffer, BufferUse::ComputeRead},
                 {*unsorted_keys, BufferUse::ComputeWrite},
