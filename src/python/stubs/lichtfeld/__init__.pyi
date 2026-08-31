@@ -280,6 +280,9 @@ def is_training_active() -> bool:
 def new_project(discard_changes: bool = False, stop_training: bool = False) -> None:
     """Clear all project state and start a new project"""
 
+def project_create(path: str, discard_changes: bool = False, stop_training: bool = False) -> None:
+    """Create and bind a new .licht project at path"""
+
 def project_save(wait: bool = False, regenerate_preview: bool = True) -> bool:
     """Save the active .licht project, prompting for a path when needed"""
 

@@ -205,6 +205,13 @@ namespace lfs::vis {
             return resolved->rootDir();
         }
 
+        [[nodiscard]] std::filesystem::path defaultProjectLocationPath() {
+            const auto resolved = lfs::core::UserPaths::resolve();
+            if (!resolved)
+                return {};
+            return resolved->rootDir() / "projects";
+        }
+
         [[nodiscard]] std::filesystem::path defaultAssetManagerDirectoryPath() {
             const auto resolved = lfs::core::UserPaths::resolve();
             if (!resolved)
@@ -604,6 +611,44 @@ namespace lfs::vis {
         impl_->saveLocked();
     }
 
+    lfs::Status UserPreferences::setProjectLocation(
+        const std::filesystem::path& path) {
+        auto resolved = validateWritableDirectory(
+            path, "project_location", "The project location",
+            ".lfs-project-write-probe-");
+        if (!resolved)
+            return lfs::Status::failure(std::move(resolved).error());
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["project_location"] =
+            lfs::core::path_to_utf8(*resolved);
+        impl_->saveLocked();
+        return {};
+    }
+
+    std::filesystem::path UserPreferences::projectLocation() {
+        const auto raw = projectLocationPreference();
+        return raw.empty() ? defaultProjectLocationPath() : raw;
+    }
+
+    std::filesystem::path UserPreferences::projectLocationPreference() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("project_location");
+        if (it == impl_->values.end() || !it->is_string())
+            return {};
+        const std::string stored = it->get<std::string>();
+        return stored.empty() ? std::filesystem::path{}
+                              : lfs::core::utf8_to_path(stored);
+    }
+
+    void UserPreferences::clearProjectLocation() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["project_location"] = "";
+        impl_->saveLocked();
+    }
+
     lfs::Status UserPreferences::setAssetManagerDirectory(
         const std::filesystem::path& path) {
         auto resolved = validateWritableAssetManagerDirectory(path);
@@ -658,6 +703,22 @@ namespace lfs::vis {
         if (root.empty())
             return {};
         return root / "tmp";
+    }
+    lfs::Status setProjectLocationPreference(
+        const std::filesystem::path& path) {
+        return UserPreferences::instance().setProjectLocation(path);
+    }
+    std::filesystem::path loadProjectLocationPreference() {
+        return UserPreferences::instance().projectLocation();
+    }
+    std::filesystem::path projectLocationPreferenceRaw() {
+        return UserPreferences::instance().projectLocationPreference();
+    }
+    void clearProjectLocationPreference() {
+        UserPreferences::instance().clearProjectLocation();
+    }
+    std::filesystem::path defaultProjectLocation() {
+        return defaultProjectLocationPath();
     }
     lfs::Status setAssetManagerDirectoryPreference(const std::filesystem::path& path) {
         return UserPreferences::instance().setAssetManagerDirectory(path);
