@@ -1391,9 +1391,75 @@ namespace lfs::vis {
         std::ifstream persisted(profile_path);
         ASSERT_TRUE(persisted.is_open());
         const std::string contents((std::istreambuf_iterator<char>(persisted)), {});
-        EXPECT_NE(contents.find("\"version\": 26"), std::string::npos); // PROFILE_VERSION
+        EXPECT_NE(contents.find("\"version\": 27"), std::string::npos); // PROFILE_VERSION
         EXPECT_NE(contents.find("Toggle MCP Server"), std::string::npos);
         EXPECT_NE(contents.find("Toggle MCP Local/Network Binding"), std::string::npos);
+
+        persisted.close();
+        std::filesystem::remove_all(root, filesystem_error);
+    }
+
+    TEST_F(InputControllerFocusTest, VersionTwentyOneProfileMigratesThroughTwentySevenWithSingleVersionStamp) {
+        const auto root = std::filesystem::temp_directory_path() /
+                          "lfs_input_bindings_v21_through_v27";
+        std::error_code filesystem_error;
+        std::filesystem::remove_all(root, filesystem_error);
+        const ScopedEnvironmentVariable home("LFS_HOME", root.string());
+        const auto paths = core::UserPaths::resolve();
+        ASSERT_TRUE(paths);
+        ASSERT_TRUE(paths->ensureDirectories());
+
+        const auto profile_path = paths->keymapDir() / "Default.json";
+        std::filesystem::create_directories(profile_path.parent_path());
+        {
+            std::ofstream file(profile_path);
+            ASSERT_TRUE(file.is_open());
+            file << R"({
+  "name": "Default",
+  "version": 21,
+  "bindings": []
+})";
+        }
+
+        input::InputBindings::setPersistenceEnabled(true);
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
+        input::InputBindings::setPersistenceEnabled(false);
+
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_M,
+                                         input::MODIFIER_CTRL | input::MODIFIER_SHIFT),
+                  input::Action::TOGGLE_MCP_SERVER);
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_N,
+                                         input::MODIFIER_CTRL | input::MODIFIER_SHIFT),
+                  input::Action::TOGGLE_MCP_BINDING);
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_G,
+                                         input::MODIFIER_ALT),
+                  input::Action::TOGGLE_GRID);
+        EXPECT_EQ(loaded.getActionForScroll(input::ToolMode::SELECTION,
+                                            input::MODIFIER_SHIFT | input::MODIFIER_ALT),
+                  input::Action::DEPTH_ADJUST_SIZE);
+        EXPECT_EQ(loaded.getActionForDrag(input::ToolMode::SELECTION,
+                                          input::MouseButton::LEFT,
+                                          input::MODIFIER_SHIFT | input::MODIFIER_ALT),
+                  input::Action::DEPTH_WINDOW_DRAG);
+        EXPECT_EQ(loaded.getActionForDrag(input::ToolMode::SELECTION,
+                                          input::MouseButton::LEFT,
+                                          input::MODIFIER_CTRL | input::MODIFIER_SHIFT | input::MODIFIER_ALT),
+                  input::Action::DEPTH_WINDOW_DRAG);
+
+        std::ifstream persisted(profile_path);
+        ASSERT_TRUE(persisted.is_open());
+        const std::string contents((std::istreambuf_iterator<char>(persisted)), {});
+        const auto version_key = contents.find("\"version\":");
+        ASSERT_NE(version_key, std::string::npos);
+        EXPECT_EQ(contents.find("\"version\":", version_key + 1), std::string::npos);
+        EXPECT_NE(contents.find("\"version\": 27"), std::string::npos);
+        EXPECT_NE(contents.find("Toggle MCP Server"), std::string::npos);
+        EXPECT_NE(contents.find("Window size"), std::string::npos);
+        EXPECT_NE(contents.find("Window drag"), std::string::npos);
 
         persisted.close();
         std::filesystem::remove_all(root, filesystem_error);

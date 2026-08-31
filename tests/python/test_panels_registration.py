@@ -99,6 +99,7 @@ def _install_recording_lf(monkeypatch):
         "DEPTH_ADJUST_FAR",
         "DEPTH_ADJUST_SIDE",
         "DEPTH_ADJUST_SIZE",
+        "DEPTH_WINDOW_DRAG",
         "TOGGLE_SELECTION_DEPTH_FILTER",
         "TOGGLE_SELECTION_CROP_FILTER",
         "BRUSH_RESIZE",

@@ -1422,6 +1422,7 @@
     "action.depth_adjust_far": "깊이 상자 조정",
     "action.depth_adjust_side": "깊이 상자 조정",
     "action.depth_adjust_size": "창 크기 조정",
+    "action.depth_window_drag": "깊이 창 드래그",
     "action.toggle_selection_depth_filter": "깊이 상자 전환",
     "action.toggle_selection_crop_filter": "선택 자르기 필터 전환",
     "action.brush_resize": "브러시 크기 조정",
