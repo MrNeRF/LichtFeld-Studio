@@ -49,6 +49,7 @@ class MRNFStrategyTest_FarStarvationFactorFromSyntheticPopulations_Test;
 class MRNFStrategyTest_CensusGateActivatesAndSuppressesFarFeatures_Test;
 class MRNFStrategyTest_ExploreStarvationWeights_Test;
 class MRNFStrategyTest_DirectAuxiliaryGrowthPreservesPrefix_Test;
+class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Test;
 class MRNFStrategyTest_BackgroundImprovementsOffDisablesEveryProfileMechanism_Test;
 class MRNFStrategyTest_BackgroundImprovementsOnKeepsProfileMechanisms_Test;
 
@@ -109,8 +110,11 @@ namespace lfs::training {
         void reserve_optimizer_capacity(size_t capacity) override;
         void set_optimization_params(const lfs::core::param::OptimizationParameters& params) override;
         void set_training_dataset(std::shared_ptr<CameraDataset> views) override;
+        lfs::core::Tensor edge_score_scratch(int iter) override;
+        void on_edge_score_accumulated(int iter) override;
 
     private:
+        friend class ::MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Test;
         friend class ::MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
         friend class ::MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
         friend class ::MRNFStrategyTest_SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth_Test;
@@ -165,11 +169,9 @@ namespace lfs::training {
         void ensure_densification_info_shape();
         void enforce_max_cap();
         void refresh_decay_schedule_from_current_state();
-        void accumulate_edge_sample(int iter, const RenderOutput& render_output);
-        [[nodiscard]] bool should_accumulate_edge_sample(int iter) const;
         [[nodiscard]] bool should_accumulate_view_sample(int iter) const;
         [[nodiscard]] bool should_accumulate_explore_sample(int iter) const;
-        [[nodiscard]] int edge_target_samples_per_refine_window() const;
+        [[nodiscard]] int view_target_samples_per_refine_window() const;
         void reset_edge_accumulator();
         void reset_explore_accumulator();
         void accumulate_explore_sample(int iter, const RenderOutput& render_output);
@@ -251,9 +253,8 @@ namespace lfs::training {
         lfs::core::Tensor _precomputed_edge_scores;
         bool _edge_precompute_valid = false;
         lfs::core::Tensor _edge_score_sum;
-        lfs::core::Tensor _edge_canny_nms_output;
+        lfs::core::Tensor _edge_view_scores;
         int _edge_sample_count = 0;
-        int _edge_last_sample_iter = -1;
         lfs::core::Tensor _explore_score_sum;
         lfs::core::Tensor _explore_error_hw;
         lfs::core::Tensor _explore_view_scores;

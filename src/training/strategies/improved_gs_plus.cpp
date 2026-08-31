@@ -9,16 +9,12 @@
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
-#include "edge_rasterizer.hpp"
-#include "gsplat_rasterizer.hpp"
 #include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
 
 #include "core/tensor/internal/memory_pool.hpp"
-#include "io/pipelined_image_loader.hpp"
 #include "kernels/densification_kernels.hpp"
-#include "kernels/image_kernels.hpp"
 #include "kernels/mcmc_kernels.hpp"
 #include "kernels/mrnf_kernels.hpp"
 #include "optimizer/adam_optimizer.hpp"
@@ -27,8 +23,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <numeric>
-#include <random>
+#include <utility>
 
 namespace lfs::training {
 
@@ -55,43 +50,6 @@ namespace lfs::training {
             const float quantile_threshold = sorted_val[q_index].item_as<float>();
 
             return quantile_threshold;
-        }
-
-        struct CannyWorkspace {
-            lfs::core::Tensor nms_output;
-        };
-
-        CannyWorkspace create_canny_workspace(int height, int width) {
-            const auto dev = lfs::core::Device::CUDA;
-            const auto dt = lfs::core::DataType::Float32;
-            return {
-                lfs::core::Tensor::zeros({static_cast<size_t>(height), static_cast<size_t>(width)}, dev, dt)};
-        }
-
-        void apply_canny_filter(const lfs::core::Tensor& input_data, CannyWorkspace& ws) {
-            assert(input_data.dtype() == lfs::core::DataType::Float32 ||
-                   input_data.dtype() == lfs::core::DataType::UInt8);
-            assert(input_data.device() == lfs::core::Device::CUDA);
-            assert(input_data.ndim() == 3);
-            assert(input_data.shape()[0] >= 3);
-
-            const int width = input_data.shape()[2];
-            const int height = input_data.shape()[1];
-
-            auto input_contig = input_data.contiguous();
-            if (input_contig.dtype() == lfs::core::DataType::UInt8) {
-                kernels::launch_fused_canny_edge_filter_chw(
-                    input_contig.ptr<uint8_t>(),
-                    ws.nms_output.ptr<float>(),
-                    height,
-                    width);
-            } else {
-                kernels::launch_fused_canny_edge_filter_chw(
-                    input_contig.ptr<float>(),
-                    ws.nms_output.ptr<float>(),
-                    height,
-                    width);
-            }
         }
 
         void normalize_by_positive_median_inplace(lfs::core::Tensor& tensor) {
@@ -285,56 +243,6 @@ namespace lfs::training {
 
         this->_budget_schedule = get_count_array();
         ensure_error_score_shape();
-    }
-
-    const lfs::core::Tensor ImprovedGSPlus::compute_gaussian_score() {
-        const int64_t N = _splat_data->size();
-
-        auto view_indices = random_cam_indices();
-        const int num_views = static_cast<int>(view_indices.size());
-        assert(num_views > 0);
-
-        CannyWorkspace canny_ws;
-        auto gaussian_scores = lfs::core::Tensor::zeros(
-            {static_cast<size_t>(N)}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-
-        for (int view = 0; view < num_views; view++) {
-            const int idx = view_indices[view];
-            lfs::core::Camera* cam = _views->get_camera(idx);
-
-            assert(_image_loader && "set_image_loader() must be called before training");
-            lfs::io::LoadParams params;
-            params.resize_factor = _views->get_resize_factor();
-            params.max_width = _views->get_max_width();
-            params.output_uint8 = true;
-            if (cam->is_undistort_prepared()) {
-                params.undistort = &cam->undistort_params();
-            }
-            lfs::core::Tensor image = _image_loader->load_image_immediate(cam->image_path(), params);
-
-            const int img_h = image.shape()[1];
-            const int img_w = image.shape()[2];
-
-            if (cam->image_width() != img_w || cam->image_height() != img_h) {
-                cam->set_image_dimensions(img_w, img_h);
-            }
-            if (view == 0 ||
-                img_h != static_cast<int>(canny_ws.nms_output.shape()[0]) ||
-                img_w != static_cast<int>(canny_ws.nms_output.shape()[1])) {
-                canny_ws = create_canny_workspace(img_h, img_w);
-            }
-
-            apply_canny_filter(image, canny_ws);
-            normalize_by_positive_median_inplace(canny_ws.nms_output);
-
-            auto score_render = edge_rasterize(*cam, this->get_model(), canny_ws.nms_output);
-
-            normalize_by_positive_median_inplace(score_render.edges_score);
-            gaussian_scores.add_(score_render.edges_score);
-        }
-
-        gaussian_scores.div_(static_cast<float>(num_views));
-        return zero_frozen_scores(*_splat_data, gaussian_scores);
     }
 
     void ImprovedGSPlus::ensure_error_score_shape() {
@@ -675,15 +583,66 @@ namespace lfs::training {
         }
     }
 
-    void ImprovedGSPlus::pre_step(int iter, RenderOutput& render_output) {
-        if (iter > _params->stop_refine)
+    lfs::core::Tensor ImprovedGSPlus::edge_score_scratch(const int iter) {
+        if (!_params || iter >= static_cast<int>(_params->stop_refine) ||
+            !_splat_data || _splat_data->size() == 0) {
+            return {};
+        }
+
+        const size_t n = static_cast<size_t>(_splat_data->size());
+        if (!_edge_score_sum.is_valid() || _edge_score_sum.ndim() != 1 ||
+            _edge_score_sum.numel() != n) {
+            _edge_score_sum = lfs::core::Tensor::zeros({n}, _splat_data->means().device());
+            _edge_sample_count = 0;
+        }
+        if (!_edge_view_scores.is_valid() || _edge_view_scores.ndim() != 1 ||
+            _edge_view_scores.numel() != n) {
+            _edge_view_scores = lfs::core::Tensor::zeros({n}, _splat_data->means().device());
+        } else {
+            _edge_view_scores.zero_();
+        }
+        return _edge_view_scores;
+    }
+
+    void ImprovedGSPlus::on_edge_score_accumulated(const int iter) {
+        if (!_params || iter >= static_cast<int>(_params->stop_refine) ||
+            !_edge_view_scores.is_valid() || !_edge_score_sum.is_valid() ||
+            _edge_view_scores.numel() != _edge_score_sum.numel()) {
             return;
+        }
+
+        kernels::launch_normalize_by_positive_median(
+            _edge_view_scores.ptr<float>(), _edge_view_scores.numel(),
+            _edge_view_scores.stream(), &_edge_median_scratch);
+        zero_frozen_scores_inplace(*_splat_data, _edge_view_scores);
+        _edge_score_sum.add_(_edge_view_scores);
+        ++_edge_sample_count;
+    }
+
+    void ImprovedGSPlus::pre_step(int iter, RenderOutput& render_output) {
+        (void)render_output;
+        _precomputed_scores = lfs::core::Tensor();
+        _precompute_valid = false;
+
+        if (!_params || iter > static_cast<int>(_params->stop_refine)) {
+            _edge_score_sum = lfs::core::Tensor();
+            _edge_view_scores = lfs::core::Tensor();
+            _edge_sample_count = 0;
+            return;
+        }
         if (!is_refining(iter))
             return;
+        if (_edge_sample_count <= 0 || !_edge_score_sum.is_valid() ||
+            _edge_score_sum.ndim() != 1 ||
+            _edge_score_sum.numel() != static_cast<size_t>(_splat_data->size())) {
+            return;
+        }
 
-        assert(_views && "set_views() must be called before training");
-
-        _precomputed_scores = compute_gaussian_score();
+        const int completed_views = std::exchange(_edge_sample_count, 0);
+        _precomputed_scores = std::move(_edge_score_sum);
+        _edge_view_scores = lfs::core::Tensor();
+        _precomputed_scores.div_(static_cast<float>(completed_views));
+        zero_frozen_scores_inplace(*_splat_data, _precomputed_scores);
         _precompute_valid = true;
     }
 
@@ -775,6 +734,10 @@ namespace lfs::training {
         if (iter == _params->stop_refine) {
             _splat_data->_densification_info = lfs::core::Tensor::empty({0});
             _error_score_max = lfs::core::Tensor::empty({0});
+            _edge_score_sum = lfs::core::Tensor();
+            _edge_view_scores = lfs::core::Tensor();
+            _edge_sample_count = 0;
+            _edge_median_scratch.release();
 
             lfs::core::CudaMemoryPool::instance().trim_cached_memory();
         }
@@ -782,6 +745,7 @@ namespace lfs::training {
 
     void ImprovedGSPlus::permute_gaussian_rows(const lfs::core::Tensor& perm) {
         morton::permute_row_tensor(_precomputed_scores, perm);
+        morton::permute_row_tensor(_edge_score_sum, perm);
         morton::permute_row_tensor(_error_score_max, perm);
         morton::permute_row_tensor(_free_mask, perm);
     }
@@ -865,27 +829,6 @@ namespace lfs::training {
         auto active_region = _free_mask.slice(0, 0, current_size);
         auto is_active = active_region.logical_not();
         return is_active.nonzero().squeeze(-1);
-    }
-
-    std::vector<int> ImprovedGSPlus::random_cam_indices(const int N) const {
-        const int num_cam_dataset = _views->size();
-        int num_samples = 0;
-
-        if (num_cam_dataset < N) {
-            num_samples = num_cam_dataset;
-        } else {
-            const int min_cam_dataset = 0.08 * num_cam_dataset;
-            num_samples = std::max(N, min_cam_dataset);
-        }
-
-        std::vector<int> all_indices(num_cam_dataset);
-        std::iota(all_indices.begin(), all_indices.end(), 0);
-
-        std::default_random_engine rng(global_seed());
-        std::shuffle(all_indices.begin(), all_indices.end(), rng);
-
-        all_indices.resize(num_samples);
-        return all_indices;
     }
 
     void ImprovedGSPlus::opacity_prune(const int iter) {
@@ -1225,6 +1168,10 @@ namespace lfs::training {
             _free_mask = lfs::core::Tensor::zeros_bool({capacity}, _splat_data->means().device());
             sync_deleted_mask_from_free_mask(*_splat_data, _free_mask);
             _precomputed_scores = lfs::core::Tensor();
+            _edge_score_sum = lfs::core::Tensor();
+            _edge_view_scores = lfs::core::Tensor();
+            _edge_sample_count = 0;
+            _edge_median_scratch.release();
             _error_score_max = lfs::core::Tensor::zeros({static_cast<size_t>(_splat_data->size())}, _splat_data->means().device());
             _precompute_valid = false;
             _current_step = 0;
@@ -1330,6 +1277,10 @@ namespace lfs::training {
         sync_deleted_mask_from_free_mask(*_splat_data, _free_mask);
 
         _precomputed_scores = lfs::core::Tensor();
+        _edge_score_sum = lfs::core::Tensor();
+        _edge_view_scores = lfs::core::Tensor();
+        _edge_sample_count = 0;
+        _edge_median_scratch.release();
         _error_score_max = lfs::core::Tensor::zeros({static_cast<size_t>(_splat_data->size())}, _splat_data->means().device());
         _precompute_valid = false;
 
@@ -1354,6 +1305,10 @@ namespace lfs::training {
         std::swap(_total_steps, source._total_steps);
         _budget_schedule.swap(source._budget_schedule);
         std::swap(_precomputed_scores, source._precomputed_scores);
+        std::swap(_edge_score_sum, source._edge_score_sum);
+        std::swap(_edge_view_scores, source._edge_view_scores);
+        std::swap(_edge_sample_count, source._edge_sample_count);
+        std::swap(_edge_median_scratch, source._edge_median_scratch);
         std::swap(_error_score_max, source._error_score_max);
         std::swap(_precompute_valid, source._precompute_valid);
         std::swap(_free_mask, source._free_mask);

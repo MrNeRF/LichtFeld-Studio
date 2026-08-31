@@ -11,9 +11,7 @@
 #include "core/logger.hpp"
 #include "core/sh_value_quant.hpp"
 #include "diagnostics/vram_profiler.hpp"
-#include "edge_rasterizer.hpp"
 #include "kernels/densification_kernels.hpp"
-#include "kernels/image_kernels.hpp"
 #include "kernels/mrnf_kernels.hpp"
 #include "lfs/training/mean_step_scale.cuh"
 #include "lfs/training/morton_reorder.hpp"
@@ -43,7 +41,7 @@ namespace lfs::training {
         constexpr int MRNF_RATIO_RANK_LOG_INTERVAL = 25;
 
         constexpr float MRNF_EDGE_SCORE_WEIGHT = 0.25f;
-        constexpr int MRNF_EDGE_MIN_VIEW_SAMPLES = 10;
+        constexpr int MRNF_EXPLORE_MIN_VIEW_SAMPLES = 10;
         constexpr int MRNF_BOUNDS_RECOMPUTE_INTERVAL_REFINES = 5;
         constexpr float MRNF_RAW_OPACITY_PRUNE_THRESHOLD = -5.54126358f; // logit(1 / 255)
         constexpr float MRNF_LOG_MIN_SCALE_THRESHOLD = -23.0258509f;     // log(1e-10)
@@ -549,45 +547,6 @@ namespace lfs::training {
             splat_data.reconcile_deleted_mask();
         }
 
-        void ensure_canny_workspace(lfs::core::Tensor& nms_output, const int height, const int width) {
-            if (!nms_output.is_valid() ||
-                nms_output.ndim() != 2 ||
-                height != static_cast<int>(nms_output.shape()[0]) ||
-                width != static_cast<int>(nms_output.shape()[1])) {
-                nms_output = lfs::core::Tensor::zeros(
-                    {static_cast<size_t>(height), static_cast<size_t>(width)},
-                    lfs::core::Device::CUDA,
-                    lfs::core::DataType::Float32);
-            }
-        }
-
-        void apply_canny_filter(const lfs::core::Tensor& input_data, lfs::core::Tensor& nms_output) {
-            assert(input_data.dtype() == lfs::core::DataType::Float32 ||
-                   input_data.dtype() == lfs::core::DataType::UInt8);
-            assert(input_data.device() == lfs::core::Device::CUDA);
-            assert(input_data.ndim() == 3);
-            assert(input_data.shape()[0] >= 3);
-
-            const int width = static_cast<int>(input_data.shape()[2]);
-            const int height = static_cast<int>(input_data.shape()[1]);
-
-            ensure_canny_workspace(nms_output, height, width);
-            auto input_contig = input_data.contiguous();
-            if (input_contig.dtype() == lfs::core::DataType::UInt8) {
-                kernels::launch_fused_canny_edge_filter_chw(
-                    input_contig.ptr<uint8_t>(),
-                    nms_output.ptr<float>(),
-                    height,
-                    width);
-            } else {
-                kernels::launch_fused_canny_edge_filter_chw(
-                    input_contig.ptr<float>(),
-                    nms_output.ptr<float>(),
-                    height,
-                    width);
-            }
-        }
-
         void normalize_by_positive_median_inplace(
             lfs::core::Tensor& tensor,
             PositiveMedianScratch* scratch = nullptr) {
@@ -768,7 +727,51 @@ namespace lfs::training {
         }
     }
 
+    lfs::core::Tensor MRNF::edge_score_scratch(const int iter) {
+        using namespace lfs::core;
+        if (_topology_frozen || !_params || !_params->use_edge_map ||
+            iter <= static_cast<int>(_params->start_refine) ||
+            iter >= static_cast<int>(_params->stop_refine) ||
+            !_splat_data || _splat_data->size() == 0) {
+            return {};
+        }
+
+        const size_t n = static_cast<size_t>(_splat_data->size());
+        if (!_edge_score_sum.is_valid() || _edge_score_sum.ndim() != 1 ||
+            _edge_score_sum.numel() != n) {
+            _edge_score_sum = Tensor::zeros({n}, _splat_data->means().device());
+            _edge_sample_count = 0;
+        }
+        if (!_edge_view_scores.is_valid() || _edge_view_scores.ndim() != 1 ||
+            _edge_view_scores.numel() != n) {
+            _edge_view_scores = Tensor::zeros({n}, _splat_data->means().device());
+        } else {
+            _edge_view_scores.zero_();
+        }
+        return _edge_view_scores;
+    }
+
+    void MRNF::on_edge_score_accumulated(const int iter) {
+        if (!_params || !_params->use_edge_map ||
+            iter <= static_cast<int>(_params->start_refine) ||
+            iter >= static_cast<int>(_params->stop_refine) ||
+            !_edge_view_scores.is_valid() || !_edge_score_sum.is_valid() ||
+            _edge_view_scores.numel() != _edge_score_sum.numel()) {
+            return;
+        }
+
+        // Match the old per-view estimator boundary: normalize each view's
+        // splat vector independently, then apply the frozen mask in effect for
+        // that sample before adding it to the persistent refine window.
+        normalize_by_positive_median_inplace(_edge_view_scores, &_median_scratch);
+        zero_frozen_scores_inplace(*_splat_data, _edge_view_scores);
+        _edge_score_sum.add_(_edge_view_scores);
+        ++_edge_sample_count;
+        publish_vram_attribution();
+    }
+
     void MRNF::pre_step(int iter, RenderOutput& render_output) {
+        (void)render_output;
         publish_vram_attribution();
         _precomputed_edge_scores = lfs::core::Tensor();
         _edge_precompute_valid = false;
@@ -777,10 +780,6 @@ namespace lfs::training {
             reset_edge_accumulator();
             publish_vram_attribution();
             return;
-        }
-
-        if (should_accumulate_edge_sample(iter)) {
-            accumulate_edge_sample(iter, render_output);
         }
 
         if (!is_refining(iter)) {
@@ -796,13 +795,16 @@ namespace lfs::training {
             return;
         }
 
-        _precomputed_edge_scores = _edge_score_sum.clone();
-        _precomputed_edge_scores.div_(static_cast<float>(_edge_sample_count));
+        // FastGS strategy hooks run at iteration start. Close and move the
+        // completed [previous-refine, iter) window here, before this iteration's
+        // main backward can request a scratch vector. Iteration iter therefore
+        // starts the next window after refinement/topology mutation.
+        const int completed_views = std::exchange(_edge_sample_count, 0);
+        _precomputed_edge_scores = std::move(_edge_score_sum);
+        _edge_view_scores = lfs::core::Tensor();
+        _precomputed_edge_scores.div_(static_cast<float>(completed_views));
         zero_frozen_scores_inplace(*_splat_data, _precomputed_edge_scores);
         _edge_precompute_valid = true;
-        // Capture the short, real overlap before score_sum is released.
-        publish_vram_attribution();
-        reset_edge_accumulator();
         publish_vram_attribution();
     }
 
@@ -824,17 +826,17 @@ namespace lfs::training {
         }
     }
 
-    int MRNF::edge_target_samples_per_refine_window() const {
+    int MRNF::view_target_samples_per_refine_window() const {
         const int refine_window = _params ? static_cast<int>(_params->refine_every) : 1;
         if (!_views || _views->size() == 0) {
-            return std::max(1, std::min(refine_window, MRNF_EDGE_MIN_VIEW_SAMPLES));
+            return std::max(1, std::min(refine_window, MRNF_EXPLORE_MIN_VIEW_SAMPLES));
         }
 
         const int num_cam_dataset = static_cast<int>(_views->size());
-        const int requested_samples = num_cam_dataset < MRNF_EDGE_MIN_VIEW_SAMPLES
+        const int requested_samples = num_cam_dataset < MRNF_EXPLORE_MIN_VIEW_SAMPLES
                                           ? num_cam_dataset
                                           : std::max(
-                                                MRNF_EDGE_MIN_VIEW_SAMPLES,
+                                                MRNF_EXPLORE_MIN_VIEW_SAMPLES,
                                                 static_cast<int>(0.08f * static_cast<float>(num_cam_dataset)));
         return std::max(1, std::min(refine_window, requested_samples));
     }
@@ -851,14 +853,10 @@ namespace lfs::training {
             return true;
         }
 
-        const int target_samples = edge_target_samples_per_refine_window();
+        const int target_samples = view_target_samples_per_refine_window();
         const int refine_every = std::max(1, static_cast<int>(_params->refine_every));
         const int stride = std::max(1, refine_every / target_samples);
         return (iter % stride) == 0;
-    }
-
-    bool MRNF::should_accumulate_edge_sample(int iter) const {
-        return _params && _params->use_edge_map && should_accumulate_view_sample(iter);
     }
 
     bool MRNF::should_accumulate_explore_sample(int iter) const {
@@ -868,8 +866,8 @@ namespace lfs::training {
 
     void MRNF::reset_edge_accumulator() {
         _edge_score_sum = lfs::core::Tensor();
+        _edge_view_scores = lfs::core::Tensor();
         _edge_sample_count = 0;
-        _edge_last_sample_iter = -1;
     }
 
     void MRNF::reset_explore_accumulator() {
@@ -909,7 +907,7 @@ namespace lfs::training {
             account_tensor("refine_counts_device", _refine_counts_dev);
             account_tensor("edge.precomputed_scores", _precomputed_edge_scores);
             account_tensor("edge.score_sum", _edge_score_sum);
-            account_tensor("edge.canny_nms", _edge_canny_nms_output);
+            account_tensor("edge.view_scores", _edge_view_scores);
             account_tensor("explore.score_sum", _explore_score_sum);
             account_tensor("explore.error_hw", _explore_error_hw);
             account_tensor("explore.view_scores", _explore_view_scores);
@@ -954,44 +952,6 @@ namespace lfs::training {
         } catch (...) {
             // Attribution must never alter the training control path.
         }
-    }
-
-    void MRNF::accumulate_edge_sample(int iter, const RenderOutput& render_output) {
-        using namespace lfs::core;
-
-        if (_edge_last_sample_iter == iter) {
-            return;
-        }
-        if (!render_output.camera ||
-            !render_output.target_image.is_valid() ||
-            render_output.target_image.device() != Device::CUDA ||
-            (render_output.target_image.dtype() != DataType::Float32 &&
-             render_output.target_image.dtype() != DataType::UInt8) ||
-            render_output.target_image.ndim() != 3 ||
-            render_output.target_image.shape()[0] < 3) {
-            return;
-        }
-
-        const size_t n = static_cast<size_t>(_splat_data->size());
-        if (!_edge_score_sum.is_valid() ||
-            _edge_score_sum.ndim() != 1 ||
-            _edge_score_sum.numel() != n) {
-            _edge_score_sum = Tensor::zeros({n}, _splat_data->means().device());
-            _edge_sample_count = 0;
-        }
-
-        apply_canny_filter(render_output.target_image, _edge_canny_nms_output);
-        normalize_by_positive_median_inplace(_edge_canny_nms_output, &_median_scratch);
-
-        auto score_render = edge_rasterize(
-            *render_output.camera,
-            this->get_model(),
-            _edge_canny_nms_output);
-        normalize_by_positive_median_inplace(score_render.edges_score, &_median_scratch);
-        _edge_score_sum.add_(zero_frozen_scores(*_splat_data, score_render.edges_score));
-        ++_edge_sample_count;
-        _edge_last_sample_iter = iter;
-        publish_vram_attribution();
     }
 
     bool MRNF::should_cache_seed_view(int iter) const {
@@ -2680,6 +2640,9 @@ namespace lfs::training {
             compact(_vis_count);
         if (_precomputed_edge_scores.is_valid() && _precomputed_edge_scores.numel() > new_size)
             compact(_precomputed_edge_scores);
+        if (_edge_score_sum.is_valid() && _edge_score_sum.numel() > new_size)
+            compact(_edge_score_sum);
+        _edge_view_scores = Tensor();
         if (_explore_score_sum.is_valid() && _explore_score_sum.numel() > new_size)
             compact(_explore_score_sum);
 
@@ -3706,9 +3669,8 @@ namespace lfs::training {
         std::swap(_precomputed_edge_scores, source._precomputed_edge_scores);
         std::swap(_edge_precompute_valid, source._edge_precompute_valid);
         std::swap(_edge_score_sum, source._edge_score_sum);
-        std::swap(_edge_canny_nms_output, source._edge_canny_nms_output);
+        std::swap(_edge_view_scores, source._edge_view_scores);
         std::swap(_edge_sample_count, source._edge_sample_count);
-        std::swap(_edge_last_sample_iter, source._edge_last_sample_iter);
         std::swap(_explore_score_sum, source._explore_score_sum);
         std::swap(_explore_error_hw, source._explore_error_hw);
         std::swap(_explore_view_scores, source._explore_view_scores);

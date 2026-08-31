@@ -61,6 +61,8 @@ namespace fast_lfs::rasterization {
         const uint shN_value_bits,
         const bool* mean_step_far_mask,
         const int mean_step_far_mask_n,
+        const float* edge_weight_map,
+        float* edge_score_out,
         cudaStream_t stream);
 
 } // namespace fast_lfs::rasterization

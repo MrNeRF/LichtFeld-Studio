@@ -844,7 +844,9 @@ namespace lfs::training {
             bwd_shN_n_cells,
             bwd_shN_bits,
             fused_adam.mean_step_far_mask,
-            fused_adam.mean_step_far_mask_n);
+            fused_adam.mean_step_far_mask_n,
+            fused_extra_gradients.edge_weight_map,
+            fused_extra_gradients.edge_score_out);
 
         ctx.mark_forward_context_released();
 

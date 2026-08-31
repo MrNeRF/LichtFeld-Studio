@@ -39,6 +39,7 @@
 #include "io/project_document.hpp"
 #include "io/project_recovery.hpp"
 #include "io/scene_chapter_adapter.hpp"
+#include "kernels/densification_kernels.hpp"
 #include "kernels/image_kernels.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "lfs/training/joint_adam_codec.hpp"
@@ -1192,7 +1193,7 @@ namespace lfs::training {
         roi_weight_map_ = {};
         densification_ssim_workspace_ = {};
         densification_error_map_ = {};
-        edge_map_buffer_ = {};
+        clearEdgeWeightCache();
         mask_preprocess_workspace_ = {};
     }
 
@@ -3508,7 +3509,7 @@ namespace lfs::training {
         normal_prior_depth_scalar_ = {};
         densification_ssim_workspace_ = {};
         densification_error_map_ = {};
-        edge_map_buffer_ = {};
+        clearEdgeWeightCache();
         strategy_.reset();
         bilateral_grid_.reset();
         ppisp_.reset();
@@ -5553,6 +5554,108 @@ namespace lfs::training {
         bg_image_cache_clock_ = 0;
     }
 
+    void Trainer::clearEdgeWeightCache() {
+        edge_weight_cache_.clear();
+        edge_weight_cache_bytes_ = 0;
+        edge_weight_cache_clock_ = 0;
+        ++edge_weight_preprocessing_generation_;
+        edge_weight_scoring_active_ = false;
+        edge_map_buffer_ = {};
+        edge_weight_median_scratch_.release();
+    }
+
+    lfs::core::Tensor Trainer::get_edge_weight_map(
+        const int camera_uid,
+        const lfs::core::Tensor& gt_image) {
+        LFS_ASSERT_MSG(gt_image.is_valid() && gt_image.device() == lfs::core::Device::CUDA &&
+                           gt_image.ndim() == 3 && gt_image.shape()[0] >= 3,
+                       "edge-weight input must be CUDA CHW image data");
+        LFS_ASSERT_MSG(gt_image.dtype() == lfs::core::DataType::Float32 ||
+                           gt_image.dtype() == lfs::core::DataType::UInt8,
+                       "edge-weight input must be float32 or uint8");
+
+        const size_t height = gt_image.shape()[1];
+        const size_t width = gt_image.shape()[2];
+        LFS_ASSERT_MSG(width == 0 || height <= std::numeric_limits<size_t>::max() / width / sizeof(float),
+                       "edge-weight map byte size overflow");
+        const lfs::core::TensorShape map_shape{height, width};
+        const size_t map_bytes = height * width * sizeof(float);
+        const cudaStream_t stream = gt_image.stream();
+
+        if (auto it = edge_weight_cache_.find(camera_uid);
+            it != edge_weight_cache_.end() &&
+            it->second.height == height && it->second.width == width &&
+            it->second.preprocessing_generation == edge_weight_preprocessing_generation_ &&
+            it->second.tensor.dtype() == lfs::core::DataType::Float32) {
+            it->second.last_used = ++edge_weight_cache_clock_;
+            it->second.tensor.sync_to_stream(stream);
+            return it->second.tensor;
+        }
+        if (auto it = edge_weight_cache_.find(camera_uid); it != edge_weight_cache_.end()) {
+            edge_weight_cache_bytes_ -= std::min(
+                edge_weight_cache_bytes_, it->second.allocation_bytes);
+            edge_weight_cache_.erase(it);
+        }
+
+        if (!edge_map_buffer_.is_valid() || edge_map_buffer_.shape() != map_shape ||
+            edge_map_buffer_.dtype() != lfs::core::DataType::Float32) {
+            edge_map_buffer_ = lfs::core::Tensor::empty(
+                map_shape, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+        }
+        edge_map_buffer_.set_stream(stream);
+        if (gt_image.dtype() == lfs::core::DataType::UInt8) {
+            kernels::launch_fused_canny_edge_filter_chw(
+                gt_image.ptr<uint8_t>(), edge_map_buffer_.ptr<float>(),
+                static_cast<int>(height), static_cast<int>(width), stream);
+        } else {
+            kernels::launch_fused_canny_edge_filter_chw(
+                gt_image.ptr<float>(), edge_map_buffer_.ptr<float>(),
+                static_cast<int>(height), static_cast<int>(width), stream);
+        }
+        kernels::launch_normalize_by_positive_median(
+            edge_map_buffer_.ptr<float>(), height * width, stream,
+            &edge_weight_median_scratch_);
+
+        lfs::core::Tensor map;
+        const bool cacheable = map_bytes <= EDGE_WEIGHT_CACHE_BUDGET_BYTES;
+        while (!edge_weight_cache_.empty() && cacheable &&
+               (edge_weight_cache_.size() >= EDGE_WEIGHT_CACHE_MAX_ENTRIES ||
+                edge_weight_cache_bytes_ > EDGE_WEIGHT_CACHE_BUDGET_BYTES - map_bytes)) {
+            const auto lru = std::min_element(
+                edge_weight_cache_.begin(), edge_weight_cache_.end(),
+                [](const auto& left, const auto& right) {
+                    return left.second.last_used < right.second.last_used;
+                });
+            if (!map.is_valid() && lru->second.height == height && lru->second.width == width &&
+                lru->second.tensor.dtype() == lfs::core::DataType::Float32) {
+                map = std::move(lru->second.tensor);
+            }
+            edge_weight_cache_bytes_ -= std::min(
+                edge_weight_cache_bytes_, lru->second.allocation_bytes);
+            edge_weight_cache_.erase(lru);
+        }
+
+        if (!cacheable) {
+            return edge_map_buffer_;
+        }
+        if (!map.is_valid()) {
+            map = lfs::core::Tensor::zeros_direct(
+                map_shape, height, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+        }
+        map.set_stream(stream);
+        map.copy_(edge_map_buffer_);
+
+        auto [it, inserted] = edge_weight_cache_.insert_or_assign(
+            camera_uid,
+            EdgeWeightCacheEntry{
+                map, height, width, map_bytes, edge_weight_preprocessing_generation_,
+                ++edge_weight_cache_clock_});
+        (void)it;
+        (void)inserted;
+        edge_weight_cache_bytes_ += map_bytes;
+        return map;
+    }
+
     lfs::core::Tensor Trainer::get_background_image_for_camera(int width, int height) {
         // Return empty tensor if no background image is loaded
         if (!bg_image_base_.is_valid() || bg_image_base_.is_empty()) {
@@ -6061,6 +6164,8 @@ namespace lfs::training {
                 const bool normal_supervision_started = normal_supervision_active(iter);
 
                 FastGSFusedExtraGradients fused_extra_gradients;
+                lfs::core::Tensor edge_score_scratch;
+                lfs::core::Tensor edge_weight_map;
                 lfs::core::Tensor fused_scale_reg_loss_gpu;
                 lfs::core::Tensor fused_opacity_reg_loss_gpu;
                 lfs::core::Tensor sparsity_loss_gpu;
@@ -6069,6 +6174,17 @@ namespace lfs::training {
                     LOG_VRAM_DIFF("train.regularizers.fastgs_forward_only");
                     auto& model = strategy_->get_model();
                     if (run_fastgs_gaussian_backward) {
+                        edge_score_scratch = strategy_->edge_score_scratch(iter);
+                        if (edge_score_scratch.is_valid() &&
+                            edge_score_scratch.dtype() == lfs::core::DataType::Float32 &&
+                            edge_score_scratch.numel() == static_cast<size_t>(model.size())) {
+                            edge_weight_map = get_edge_weight_map(cam->uid(), gt_image);
+                            fused_extra_gradients.edge_weight_map = edge_weight_map.ptr<float>();
+                            fused_extra_gradients.edge_score_out = edge_score_scratch.ptr<float>();
+                            edge_weight_scoring_active_ = true;
+                        } else if (edge_weight_scoring_active_) {
+                            clearEdgeWeightCache();
+                        }
                         fused_extra_gradients.scale_reg_weight = params_.optimization.scale_reg;
                         // Fused path shares the configured opacity_reg weight between gradient and loss accumulation.
                         fused_extra_gradients.opacity_reg_weight =
@@ -7311,6 +7427,14 @@ namespace lfs::training {
                             } else {
                                 tile_context_guard.release();
                                 if (run_fastgs_gaussian_backward) {
+                                    if (fused_extra_gradients.edge_score_out != nullptr) {
+                                        LFS_ASSERT_MSG(
+                                            edge_weight_map.is_valid() && edge_weight_map.ndim() == 2 &&
+                                                edge_weight_map.dtype() == lfs::core::DataType::Float32 &&
+                                                edge_weight_map.shape()[0] == static_cast<size_t>(fast_ctx->height) &&
+                                                edge_weight_map.shape()[1] == static_cast<size_t>(fast_ctx->width),
+                                            "cached edge-weight map dimensions must match FastGS context");
+                                    }
                                     // Topology-only locking (see post_backward/step above): the
                                     // fused backward updates params in place; the interop
                                     // semaphore orders those against the viewer's reads, so the
@@ -7326,6 +7450,9 @@ namespace lfs::training {
                                                             fused_extra_gradients,
                                                             tile_grad_depth,
                                                             tile_grad_normal);
+                                    if (fused_extra_gradients.edge_score_out != nullptr) {
+                                        strategy_->on_edge_score_accumulated(iter);
+                                    }
                                     if (model_write_lock.owns_lock()) {
                                         recordParamsReady();
                                     }

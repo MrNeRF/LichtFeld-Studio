@@ -25,6 +25,7 @@ class MRNFStrategyTest_FarStarvationFactorFromSyntheticPopulations_Test;
 class MRNFStrategyTest_CensusGateActivatesAndSuppressesFarFeatures_Test;
 class MRNFStrategyTest_ExploreStarvationWeights_Test;
 class MRNFStrategyTest_DirectAuxiliaryGrowthPreservesPrefix_Test;
+class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Test;
 
 #include "core/camera.hpp"
 #include "core/cuda/sh_layout.cuh"
@@ -264,6 +265,64 @@ TEST(MRNFStrategyTest, EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores) {
     EXPECT_NEAR(guidance_ptr[2], 1.0f, 1e-5f);
     EXPECT_GT(guidance_ptr[0], 1.0f);
     EXPECT_GT(guidance_ptr[1], guidance_ptr[0]);
+}
+
+TEST(MRNFStrategyTest, EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+
+    auto opt_params = vanilla_mrnf_params();
+    opt_params.iterations = 1'000;
+    opt_params.start_refine = 0;
+    opt_params.stop_refine = 800;
+    opt_params.refine_every = 100;
+    opt_params.max_cap = 32;
+    opt_params.use_edge_map = true;
+    strategy.initialize(opt_params);
+
+    std::vector<float> raw_values(10);
+    for (size_t i = 0; i < raw_values.size(); ++i) {
+        raw_values[i] = static_cast<float>(i + 1);
+    }
+    const auto raw = Tensor::from_vector(
+        raw_values, TensorShape({raw_values.size()}), Device::CUDA);
+
+    const auto add_view = [&](const int iter, const float scale) {
+        auto scratch = strategy.edge_score_scratch(iter);
+        ASSERT_TRUE(scratch.is_valid());
+        scratch.copy_(raw * scale);
+        strategy.on_edge_score_accumulated(iter);
+    };
+
+    // Equal per-view weighting must survive an arbitrary raw score scale.
+    add_view(1, 1.0f);
+    add_view(99, 17.0f);
+    RenderOutput unused;
+    strategy.pre_step(100, unused);
+    ASSERT_TRUE(strategy._edge_precompute_valid);
+    EXPECT_FALSE(strategy._edge_score_sum.is_valid());
+    EXPECT_EQ(strategy._edge_sample_count, 0);
+    auto first_window = strategy._precomputed_edge_scores.cpu();
+    const auto* first_ptr = first_window.ptr<float>();
+    for (size_t i = 0; i < raw_values.size(); ++i) {
+        EXPECT_NEAR(first_ptr[i], raw_values[i] / 6.0f, 1.0e-6f) << "index=" << i;
+    }
+
+    // Refinement at 100 closes before iteration 100's main backward. Its view
+    // therefore starts the [100,200) window, and a mask active only for the
+    // later sample affects only that sample.
+    add_view(100, 3.0f);
+    splat_data.set_frozen_ranges({SplatData::FrozenRange{.start = 0, .count = 1}});
+    add_view(199, 11.0f);
+    splat_data.clear_frozen_ranges();
+    strategy.pre_step(200, unused);
+    ASSERT_TRUE(strategy._edge_precompute_valid);
+    auto second_window = strategy._precomputed_edge_scores.cpu();
+    const auto* second_ptr = second_window.ptr<float>();
+    EXPECT_NEAR(second_ptr[0], (raw_values[0] / 6.0f) * 0.5f, 1.0e-6f);
+    for (size_t i = 1; i < raw_values.size(); ++i) {
+        EXPECT_NEAR(second_ptr[i], raw_values[i] / 6.0f, 1.0e-6f) << "index=" << i;
+    }
 }
 
 TEST(CropDampingStrategyTest, MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale) {

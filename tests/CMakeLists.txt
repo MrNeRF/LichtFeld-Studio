@@ -659,6 +659,9 @@ endif()
 target_link_libraries(lichtfeld_tests PRIVATE
     ${LFS_TEST_INTERNAL_LINK_LIBS}
 
+    # Dedicated edge rasterizer is retained only as a parity/test oracle.
+    edge_compute_backend
+
     # External libraries
     GTest::gtest
     nanobind-static

@@ -474,10 +474,12 @@ namespace fast_lfs::rasterization::kernels::backward {
         float normal_z;
         float densification_weight;
         float densification_error_weighted;
+        float edge_weighted_contribution;
     };
 
     __device__ __forceinline__ BlendBackwardAccum make_zero_blend_backward_accum() {
-        return {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+        return {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     }
 
     // Reverse-order index into [0, T_eff): high contributor first.
@@ -533,6 +535,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         float3* __restrict__ grad_color,
         float* __restrict__ densification_info,
         const float* __restrict__ densification_error_map,
+        const float* __restrict__ edge_weight_map,
+        float* __restrict__ edge_score_out,
         FastGSForwardStatus* __restrict__ status,
         const uint n_instances,
         const uint n_primitives,
@@ -699,6 +703,10 @@ namespace fast_lfs::rasterization::kernels::backward {
                 pixel_error1 = inside1 ? densification_error_map[pixel_idx1] : 1.0f;
             }
         }
+        const float edge_weight0 =
+            (edge_weight_map != nullptr && inside0) ? edge_weight_map[pixel_idx0] : 0.0f;
+        const float edge_weight1 =
+            (edge_weight_map != nullptr && inside1) ? edge_weight_map[pixel_idx1] : 0.0f;
 
         // Fetch batch size: runtime override or config default; shrink for tiny T_eff.
         // Cap at block size so one thread can load one splat (collaborative fetch).
@@ -870,6 +878,7 @@ namespace fast_lfs::rasterization::kernels::backward {
                     // Lambda-like: process one pixel's contribution into accum.
                     auto accumulate_pixel = [&](const bool use, const bool inside, const uint last,
                                                 const float2 pixel, const float pixel_error,
+                                                const float edge_weight,
                                                 float& T, float3& grad_c, float& grad_T,
                                                 const float grad_d, const float3& grad_n) {
                         if (!use || !inside || static_cast<uint>(tile_primitive_idx) >= last)
@@ -892,6 +901,9 @@ namespace fast_lfs::rasterization::kernels::backward {
                         const float transmittance_after = T;
                         const float transmittance_before = transmittance_after / one_minus_alpha_safe;
                         const float blending_weight = transmittance_before * alpha;
+                        if (edge_score_out != nullptr) {
+                            accum.edge_weighted_contribution += blending_weight * edge_weight;
+                        }
                         float normal_dot_grad = 0.0f;
                         if constexpr (NORMAL_CHANNEL) {
                             normal_dot_grad = dot(normal, grad_n);
@@ -943,8 +955,10 @@ namespace fast_lfs::rasterization::kernels::backward {
                                  grad_transmittance_after * one_minus_alpha;
                     };
 
-                    accumulate_pixel(use0, inside0, last0, pixel0, pixel_error0, T0, grad_c0, grad_T0, grad_d0, grad_n0);
-                    accumulate_pixel(use1, inside1, last1, pixel1, pixel_error1, T1, grad_c1, grad_T1, grad_d1, grad_n1);
+                    accumulate_pixel(use0, inside0, last0, pixel0, pixel_error0, edge_weight0,
+                                     T0, grad_c0, grad_T0, grad_d0, grad_n0);
+                    accumulate_pixel(use1, inside1, last1, pixel1, pixel_error1, edge_weight1,
+                                     T1, grad_c1, grad_T1, grad_d1, grad_n1);
 
                     // Warp-reduce → one global atomic per splat per warp.
                     const unsigned contrib_mask = __ballot_sync(0xffffffffu, has_contribution);
@@ -978,6 +992,9 @@ namespace fast_lfs::rasterization::kernels::backward {
                             dens_w = reduce_field(accum.densification_weight);
                             dens_e = reduce_field(accum.densification_error_weighted);
                         }
+                        const float edge_score = edge_score_out != nullptr
+                                                     ? reduce_field(accum.edge_weighted_contribution)
+                                                     : 0.0f;
                         if (lane_id == 0u) {
                             atomicAdd(&grad_mean2d[work_idx].x, clamp_grad(mean_x));
                             atomicAdd(&grad_mean2d[work_idx].y, clamp_grad(mean_y));
@@ -997,6 +1014,9 @@ namespace fast_lfs::rasterization::kernels::backward {
                             if constexpr (DENSIFICATION_TYPE != DensificationType::None) {
                                 atomicAdd(&densification_info[primitive_idx], dens_w);
                                 atomicAdd(&densification_info[n_primitives + primitive_idx], dens_e);
+                            }
+                            if (edge_score_out != nullptr) {
+                                atomicAdd(&edge_score_out[primitive_idx], edge_score);
                             }
                         }
                     }
