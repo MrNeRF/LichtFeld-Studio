@@ -1409,7 +1409,8 @@ namespace lfs::vis {
                 }
                 if (!*has_path) {
                     const auto path =
-                        gui::SaveProjectFileDialog();
+                        gui::SaveProjectFileDialog(
+                            "project.licht", loadProjectLocationPreference());
                     if (path.empty()) {
                         return;
                     }
@@ -1447,8 +1448,8 @@ namespace lfs::vis {
                 if (path.empty()) {
                     std::string default_name =
                         "project.licht";
-                    std::filesystem::path
-                        default_directory;
+                    std::filesystem::path default_directory =
+                        loadProjectLocationPreference();
                     if (auto info = projectGetInfo();
                         info && info->path) {
                         default_name =
@@ -1554,8 +1555,8 @@ namespace lfs::vis {
 
         cmd::SaveAsAndExit::when(
             [this](const auto&) {
-                completeSaveAsAndExit(
-                    gui::SaveProjectFileDialog());
+                completeSaveAsAndExit(gui::SaveProjectFileDialog(
+                    "project.licht", loadProjectLocationPreference()));
             });
 
         cmd::CancelExit::when([this](const auto&) {
@@ -1609,7 +1610,8 @@ namespace lfs::vis {
                 auto has_path = projectHasPath();
                 if (!has_path || !*has_path) {
                     const auto path =
-                        gui::SaveProjectFileDialog();
+                        gui::SaveProjectFileDialog(
+                            "project.licht", loadProjectLocationPreference());
                     if (path.empty()) {
                         abandonSaveAndExitAttempt();
                         return;

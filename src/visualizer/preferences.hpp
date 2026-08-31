@@ -59,21 +59,11 @@ namespace lfs::vis {
         [[nodiscard]] std::string sceneUpscaler();
         [[nodiscard]] std::string sceneUpscalerPreset(const std::string& backend_id);
 
-        [[nodiscard]] lfs::Status setWorkingDirectory(const std::filesystem::path& path);
-        [[nodiscard]] std::filesystem::path workingDirectory();
-        [[nodiscard]] std::filesystem::path workingDirectoryPreference();
-        void clearWorkingDirectory();
-
         [[nodiscard]] lfs::Status setProjectLocation(
             const std::filesystem::path& path);
         [[nodiscard]] std::filesystem::path projectLocation();
         [[nodiscard]] std::filesystem::path projectLocationPreference();
         void clearProjectLocation();
-
-        [[nodiscard]] lfs::Status setAssetManagerDirectory(const std::filesystem::path& path);
-        [[nodiscard]] std::filesystem::path assetManagerDirectory();
-        [[nodiscard]] std::filesystem::path assetManagerDirectoryPreference();
-        void clearAssetManagerDirectory();
 
     private:
         UserPreferences();
@@ -106,13 +96,7 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API std::string loadSceneUpscalerPresetPreference(
         const std::string& backend_id);
 
-    [[nodiscard]] LFS_VIS_API lfs::Status
-    setWorkingDirectoryPreference(const std::filesystem::path& path);
-    [[nodiscard]] LFS_VIS_API std::filesystem::path loadWorkingDirectoryPreference();
     [[nodiscard]] LFS_VIS_API std::filesystem::path workingDirectoryPreferenceRaw();
-    LFS_VIS_API void clearWorkingDirectoryPreference();
-    [[nodiscard]] LFS_VIS_API std::filesystem::path defaultWorkingDirectory();
-    [[nodiscard]] LFS_VIS_API std::filesystem::path tempProjectDirectoryPreference();
     [[nodiscard]] LFS_VIS_API lfs::Status
     setProjectLocationPreference(const std::filesystem::path& path);
     [[nodiscard]] LFS_VIS_API std::filesystem::path
@@ -121,11 +105,5 @@ namespace lfs::vis {
     projectLocationPreferenceRaw();
     LFS_VIS_API void clearProjectLocationPreference();
     [[nodiscard]] LFS_VIS_API std::filesystem::path defaultProjectLocation();
-    [[nodiscard]] LFS_VIS_API lfs::Status
-    setAssetManagerDirectoryPreference(const std::filesystem::path& path);
-    [[nodiscard]] LFS_VIS_API std::filesystem::path loadAssetManagerDirectoryPreference();
-    [[nodiscard]] LFS_VIS_API std::filesystem::path assetManagerDirectoryPreferenceRaw();
-    LFS_VIS_API void clearAssetManagerDirectoryPreference();
-    [[nodiscard]] LFS_VIS_API std::filesystem::path defaultAssetManagerDirectory();
 
 } // namespace lfs::vis

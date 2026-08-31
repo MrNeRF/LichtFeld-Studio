@@ -175,7 +175,7 @@ def _install_recording_lf(monkeypatch):
         add_hook=lambda *args, **kwargs: step_side_effects.append(("hook", args)),
         remove_hook=lambda *args, **kwargs: None,
         on_open_camera_preview=lambda cb: step_side_effects.append(("camera_preview", cb)),
-        on_show_dataset_load_popup=lambda cb: None,
+        on_show_new_project_dialog=lambda cb: None,
         on_show_resume_checkpoint_popup=lambda cb: None,
         on_request_exit=lambda cb: None,
         on_project_switch_confirmation=lambda cb: None,
@@ -354,7 +354,7 @@ def test_all_good_registers_in_order_with_rendering_first(panels_module):
     expected_panels = [
         "RenderingPanel",
         "TrainingPanel",
-        "DatasetImportPanel",
+        "NewProjectPanel",
         "ResumeCheckpointPanel",
         "ExportPanel",
         "AboutPanel",

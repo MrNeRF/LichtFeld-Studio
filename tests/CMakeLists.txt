@@ -420,6 +420,7 @@ set(TEST_FILES
     test_selection_rasterization_ops.cpp
     test_rendering_refactor_services.cpp
     test_theme_registry.cpp
+    test_preferences_migration.cpp
     test_viewport.cpp
     test_input_controller_focus.cpp
     test_input_controller_dataset_load.cpp
