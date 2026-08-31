@@ -1365,6 +1365,16 @@ namespace lfs::vis {
                 }
             };
 
+        cmd::ProjectCreate::when(
+            [this](const auto& command) {
+                handleCreateProject(
+                    command.path,
+                    command.discard_changes
+                        ? ProjectSwitchDisposition::DiscardChanges
+                        : ProjectSwitchDisposition::RequireClean,
+                    command.stop_training);
+            });
+
         cmd::SwitchToEditMode::when(
             [this, publish_project_error](const auto&) {
                 if (project_lifecycle_) {
@@ -2867,6 +2877,9 @@ namespace lfs::vis {
         if (!project_lifecycle_) {
             return true;
         }
+        if (project_lifecycle_->isBlankProject()) {
+            return true;
+        }
         if (project_lifecycle_->isBlankUntitledSession()) {
             return true;
         }
@@ -3048,6 +3061,98 @@ namespace lfs::vis {
         }
     }
 
+    void VisualizerImpl::handleCreateProject(
+        const std::filesystem::path& path,
+        const ProjectSwitchDisposition disposition,
+        const bool stop_training) {
+        if (pending_training_action_ ==
+                PendingTrainingAction::CloseSave ||
+            pending_training_action_ ==
+                PendingTrainingAction::CloseDiscard) {
+            return;
+        }
+        if (!project_lifecycle_) {
+            return;
+        }
+        if (auto preflight = project_lifecycle_->preflightSwitch(
+                disposition, stop_training);
+            !preflight) {
+            if (isDirtyProjectSwitchError(preflight.error())) {
+                lfs::core::events::cmd::ShowProjectSwitchConfirmation{
+                    .new_project = true,
+                    .path = {},
+                    .create_path = path}
+                    .emit();
+                return;
+            }
+            if (!stop_training &&
+                isTrainingProjectSwitchError(preflight.error()) &&
+                trainer_manager_ &&
+                trainer_manager_->isTrainingActive()) {
+                lfs::core::events::cmd::ShowStopTrainingConfirmation{
+                    .new_project = true,
+                    .path = {},
+                    .discard_changes =
+                        disposition ==
+                        ProjectSwitchDisposition::DiscardChanges,
+                    .create_path = path}
+                    .emit();
+                return;
+            }
+            LOG_ERROR(
+                "Create Project preflight failed: {}",
+                lfs::format_for_developer(preflight.error()));
+            lfs::Error contextual = preflight.error();
+            lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
+                .error = std::move(contextual).with_context(gui::error_op::kNewProject, LFS_SOURCE_SITE_CURRENT()),
+                .surface = lfs::ErrorSurface::Toast,
+                .actions = {},
+                .operation_id = lfs::OperationId::generate(),
+            });
+            return;
+        }
+        if (gui_manager_) {
+            gui_manager_->asyncTasks().cancelImport();
+        }
+        pending_view_paths_.clear();
+        pending_dataset_path_.clear();
+        pending_auto_train_ = false;
+        if (shouldDeferProjectSwitchForTraining()) {
+            pending_training_action_ =
+                PendingTrainingAction::CreateProject;
+            pending_create_project_path_ = path;
+            pending_new_project_disposition_ = disposition;
+            requestStopThenPendingAction();
+            return;
+        }
+        pending_training_action_ = PendingTrainingAction::None;
+        pending_create_project_path_.clear();
+        performCreateProject(path, disposition);
+    }
+
+    void VisualizerImpl::performCreateProject(
+        const std::filesystem::path& path,
+        const ProjectSwitchDisposition disposition) {
+        keep_asset_manager_open_after_restore_ = false;
+        if (!project_lifecycle_) {
+            return;
+        }
+        if (auto created = project_lifecycle_->createProjectAt(
+                path, disposition);
+            !created) {
+            LOG_ERROR(
+                "Create Project failed: {}",
+                lfs::format_for_developer(created.error()));
+            lfs::Error contextual = created.error();
+            lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
+                .error = std::move(contextual).with_context(gui::error_op::kNewProject, LFS_SOURCE_SITE_CURRENT()),
+                .surface = lfs::ErrorSurface::Toast,
+                .actions = {},
+                .operation_id = lfs::OperationId::generate(),
+            });
+        }
+    }
+
     void VisualizerImpl::handleOpenProject(
         const std::filesystem::path& path,
         const ProjectSwitchDisposition disposition,
@@ -3187,6 +3292,7 @@ namespace lfs::vis {
         pending_open_disposition_ =
             ProjectSwitchDisposition::RequireClean;
         pending_open_keep_asset_manager_open_ = false;
+        pending_create_project_path_.clear();
         pending_load_files_.clear();
         gui_session_restore_.clear();
         pending_project_tools_restore_.reset();
@@ -3482,6 +3588,21 @@ namespace lfs::vis {
         }
         return project_lifecycle_->saveAs(
             path, regenerate_preview);
+    }
+
+    lfs::Result<void>
+    VisualizerImpl::projectCreateAt(
+        const std::filesystem::path& path,
+        const ProjectSwitchDisposition disposition) {
+        if (!project_lifecycle_) {
+            return visualizerFailure<void>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
+        }
+        return project_lifecycle_->createProjectAt(
+            path, disposition);
     }
 
     lfs::Result<void>
@@ -3905,6 +4026,17 @@ namespace lfs::vis {
                 ProjectSwitchDisposition::
                     RequireClean;
             break;
+        case PendingTrainingAction::CreateProject: {
+            const auto path = std::exchange(
+                pending_create_project_path_, {});
+            const auto disposition = std::exchange(
+                pending_new_project_disposition_,
+                ProjectSwitchDisposition::RequireClean);
+            if (!path.empty()) {
+                performCreateProject(path, disposition);
+            }
+            break;
+        }
         case PendingTrainingAction::OpenProject: {
             const auto path =
                 std::exchange(
