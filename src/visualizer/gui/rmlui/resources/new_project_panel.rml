@@ -11,7 +11,9 @@
     <div class="impdlg-control-group">
       <span class="impdlg-field-label text-muted">@tr:new_project.name</span>
       <div class="impdlg-control-main">
-        <input type="text" class="impdlg-input" data-value="name" />
+        <div class="impdlg-control-row">
+          <input type="text" class="impdlg-input" data-value="name" />
+        </div>
       </div>
     </div>
 
