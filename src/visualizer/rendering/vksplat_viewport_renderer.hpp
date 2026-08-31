@@ -175,7 +175,7 @@ namespace lfs::vis {
 
         // Release viewer-owned scratch after an idle boundary. Shared training
         // scratch is released only when the caller explicitly permits it.
-        void releaseScratchOnIdle(bool release_shared);
+        void releaseScratchOnIdle(bool release_shared, bool allow_shared_reclaim = false);
 
         // Invoked with the completion value immediately after each live-model
         // submit, BEFORE the shared arena frame is released — the trainer's
@@ -692,6 +692,9 @@ namespace lfs::vis {
             // Viewer high-water is measured from offset zero. The trainer arena
             // deliberately reuses that same prefix during its exclusive epoch.
             std::atomic<std::size_t> viewer_high_water_bytes{0};
+            // Set by the existing idle-release boundary. While set, the trainer
+            // may reclaim the viewer-only prefix; the next viewer ensure clears it.
+            std::atomic<bool> viewer_idle_reclaim_eligible{false};
             std::uint64_t generation = 0;
             bool installed_in_training_arena = false;
         };

@@ -3385,6 +3385,11 @@ namespace lfs::vis {
             return std::unexpected("VkSplat shared scratch requires CUDA/Vulkan external-memory interop");
         }
 
+        // This is the viewer's next use of the shared block (including the
+        // training-start prime), so a prior idle boundary no longer permits the
+        // trainer to trim below the viewer's tracked high-water.
+        shared_scratch_.viewer_idle_reclaim_eligible.store(false, std::memory_order_release);
+
         // 12.5% headroom on the first allocation; 50% when growing an existing
         // block so the lowered floor cannot cause per-frame regrow churn while
         // instance demand ramps with N.
@@ -3461,6 +3466,9 @@ namespace lfs::vis {
             };
         };
         const auto make_minimum_size_fn = [this]() -> std::size_t {
+            if (shared_scratch_.viewer_idle_reclaim_eligible.load(std::memory_order_acquire)) {
+                return 0;
+            }
             return shared_scratch_.viewer_high_water_bytes.load(std::memory_order_acquire);
         };
 
@@ -4018,7 +4026,8 @@ namespace lfs::vis {
         buffers_.is_unsorted_1 = true;
     }
 
-    void VksplatViewportRenderer::releaseScratchOnIdle(const bool release_shared) {
+    void VksplatViewportRenderer::releaseScratchOnIdle(const bool release_shared,
+                                                       const bool allow_shared_reclaim) {
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
         if (context_ == nullptr) {
             return;
@@ -4026,7 +4035,10 @@ namespace lfs::vis {
 
         releasePrivateScratchBuffers();
         if (release_shared) {
+            shared_scratch_.viewer_idle_reclaim_eligible.store(false, std::memory_order_release);
             releaseSharedScratchArena();
+        } else if (allow_shared_reclaim) {
+            shared_scratch_.viewer_idle_reclaim_eligible.store(true, std::memory_order_release);
         }
         drainRetiredScratchBuffers(false);
     }
@@ -4071,6 +4083,7 @@ namespace lfs::vis {
         shared_scratch_.imported_buffer = {};
         shared_scratch_.bytes = 0;
         shared_scratch_.viewer_high_water_bytes.store(0, std::memory_order_release);
+        shared_scratch_.viewer_idle_reclaim_eligible.store(false, std::memory_order_release);
         shared_scratch_.generation = 0;
         shared_scratch_.installed_in_training_arena = false;
     }

@@ -1608,7 +1608,7 @@ namespace lfs::core {
         {
             std::lock_guard<std::mutex> arena_lock(arena_mutex_);
             for (auto& [device, arena_ptr] : device_arenas_) {
-                if (!arena_ptr || arena_ptr->external_backing) {
+                if (!arena_ptr) {
                     continue;
                 }
 
