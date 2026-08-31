@@ -17,7 +17,7 @@ The Preferences panel currently exposes:
 - working folder (the parent of the temp project directory used for untitled
   sessions);
 - application theme and UI scale;
-- status bar progress bar style (`status_bar_progress_style`: `classic` or `minecraft`);
+- status bar progress bar style (`status_bar_progress_style`: `classic` or `miner`);
 - viewport scene reconstruction backend and backend-specific preset;
 - camera navigation mode and axis/view snap;
 - per-setting remember options;

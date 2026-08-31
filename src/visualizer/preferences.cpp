@@ -42,7 +42,7 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] bool knownProgressBarStyle(std::string_view style) {
-            return style == "classic" || style == "minecraft";
+            return style == "classic" || style == "miner";
         }
 
         [[nodiscard]] lfs::Error workingDirectoryError(

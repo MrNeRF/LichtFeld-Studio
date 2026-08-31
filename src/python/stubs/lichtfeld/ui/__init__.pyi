@@ -236,10 +236,10 @@ def set_scene_graph_selection_markers(enabled: bool) -> None:
     """Show or hide Scene Graph selection markers"""
 
 def get_progress_bar_style() -> str:
-    """Return the status bar progress style (classic or minecraft)"""
+    """Return the status bar progress style (classic or miner)"""
 
 def set_progress_bar_style(style: str) -> None:
-    """Set the status bar progress style (classic or minecraft)"""
+    """Set the status bar progress style (classic or miner)"""
 
 class PanelSpace(enum.Enum):
     SIDE_PANEL = 0

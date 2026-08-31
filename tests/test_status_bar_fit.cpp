@@ -94,7 +94,7 @@ namespace {
         std::string mode_text = "Training (Default/3DGS)";
         std::string mode_color = "#ffffff";
         bool show_training = true;
-        bool progress_minecraft = false;
+        bool progress_miner = false;
         bool miner_raised = false;
         bool miner_strike = false;
         std::string progress_width = "50%";
@@ -223,7 +223,7 @@ namespace {
             bound &= constructor.Bind("mode_text", &model_.mode_text);
             bound &= constructor.Bind("mode_color", &model_.mode_color);
             bound &= constructor.Bind("show_training", &model_.show_training);
-            bound &= constructor.Bind("progress_minecraft", &model_.progress_minecraft);
+            bound &= constructor.Bind("progress_miner", &model_.progress_miner);
             bound &= constructor.Bind("miner_raised", &model_.miner_raised);
             bound &= constructor.Bind("miner_strike", &model_.miner_strike);
             bound &= constructor.Bind("progress_width", &model_.progress_width);

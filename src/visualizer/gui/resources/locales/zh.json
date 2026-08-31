@@ -767,7 +767,7 @@
     "appearance": "外观",
     "progress_bar_style": "进度条",
     "progress_bar_classic": "经典",
-    "progress_bar_minecraft": "Minecraft",
+    "progress_bar_miner": "Miner",
     "scene_rendering": "场景渲染",
     "scene_reconstruction": "场景重建",
     "scene_reconstruction_off": "关闭",

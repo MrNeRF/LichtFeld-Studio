@@ -767,7 +767,7 @@
     "appearance": "모양",
     "progress_bar_style": "진행 표시줄",
     "progress_bar_classic": "클래식",
-    "progress_bar_minecraft": "Minecraft",
+    "progress_bar_miner": "Miner",
     "scene_rendering": "장면 렌더링",
     "scene_reconstruction": "장면 재구성",
     "scene_reconstruction_off": "끄기",

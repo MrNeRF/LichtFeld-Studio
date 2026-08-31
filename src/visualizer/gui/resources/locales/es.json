@@ -767,7 +767,7 @@
     "appearance": "Apariencia",
     "progress_bar_style": "Barra de progreso",
     "progress_bar_classic": "Clásico",
-    "progress_bar_minecraft": "Minecraft",
+    "progress_bar_miner": "Miner",
     "scene_rendering": "Renderizado de la escena",
     "scene_reconstruction": "Reconstrucción de la escena",
     "scene_reconstruction_off": "Desactivada",
