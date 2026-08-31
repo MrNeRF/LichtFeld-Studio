@@ -60,6 +60,7 @@ def preferences_panel_module(monkeypatch):
         ),
         scene_reconstruction_presets={"native": "native", "spatial": "quality"},
         project_location="",
+        embed_dataset_by_default=False,
     )
 
     def set_project_location(path):
@@ -108,8 +109,12 @@ def preferences_panel_module(monkeypatch):
         get_project_location=lambda: state.project_location or "/home/tester/.lichtfeld/projects",
         get_project_location_preference=lambda: state.project_location,
         get_default_project_location=lambda: "/home/tester/.lichtfeld/projects",
+        get_embed_dataset_by_default=lambda: state.embed_dataset_by_default,
         set_project_location=set_project_location,
         clear_project_location=clear_project_location,
+        set_embed_dataset_by_default=lambda enabled: setattr(
+            state, "embed_dataset_by_default", bool(enabled)
+        ),
         open_folder_dialog=lambda title, start: "",
         set_panel_enabled=lambda panel_id, enabled: state.panel_enabled_calls.append(
             (panel_id, bool(enabled))
@@ -815,3 +820,13 @@ def test_file_associations_rows_toggle_calls_set(preferences_panel_module):
 
     assert state.file_association_set_calls == [(".ply", True)]
     assert [row["registered"] for row in records["file_associations"]] == [True, True]
+
+
+def test_embed_dataset_default_is_exposed_and_settable(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+
+    assert module.lf.ui.get_embed_dataset_by_default() is False
+    panel._set_embed_dataset_by_default(True)
+    assert state.embed_dataset_by_default is True
+    assert module.lf.ui.get_embed_dataset_by_default() is True

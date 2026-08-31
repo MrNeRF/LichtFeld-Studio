@@ -8,6 +8,7 @@
     "file.save_project": "Project opslaan",
     "file.save_project_as": "Project opslaan als...",
     "file.compact_project": "Project comprimeren",
+    "file.embed_dataset": "Dataset in project insluiten",
     "file.auto_save_on_close": "Opslaan bij sluiten zonder te vragen",
     "file.no_recent_projects": "Geen recente projecten",
     "file.clear_recent_projects": "Recente projecten wissen",
@@ -733,7 +734,12 @@
     "dataset_ready": "Dataset (Gereed)",
     "training_paused": "Training (Gepauzeerd)",
     "training_finished": "Training Voltooid",
-    "ply_models_count": "PLY Modellen: {}"
+    "ply_models_count": "PLY Modellen: {}",
+    "dataset_embed_prepare": "Ingesloten dataset voorbereiden",
+    "dataset_embed_extracting": "Ingesloten dataset uitpakken",
+    "dataset_embed_scanning": "Datasetbestanden scannen",
+    "dataset_embed_batch": "Datasetbatch insluiten",
+    "dataset_embed_complete": "Dataset ingesloten"
   },
   "mode": {
     "empty": "Leeg",
@@ -751,6 +757,8 @@
     "project_location": "Projectlocatie",
     "project_location_hint": "Nieuwe projecten en de standaardmap van Assetbeheer: {path}",
     "project_location_description": "Nieuwe projecten worden hier gemaakt en deze map wordt gebruikt als standaardmap van Assetbeheer.",
+    "embed_dataset_by_default": "Datasets naar nieuwe projecten kopiëren",
+    "embed_dataset_by_default_description": "Nieuwe projecten kunnen de originele, ongewijzigde datasetbestanden kopiëren om te delen.",
     "project_location_invalid": "Deze map kan niet als projectlocatie worden gebruikt.",
     "use_default": "Standaard gebruiken",
     "title": "Voorkeuren",
@@ -1273,6 +1281,8 @@
     "invalid_name": "Voer een geldige projectnaam in.",
     "source_invalid": "De bron is geen ondersteunde dataset of splatbestand.",
     "advanced": "Geavanceerd",
+    "embed_dataset": "Dataset naar project kopiëren",
+    "embed_dataset_description": "Byte-identieke datasetbestanden bij dit project bewaren.",
     "create": "Maken"
   },
   "notification": {

@@ -8,6 +8,7 @@
     "file.save_project": "Salva progetto",
     "file.save_project_as": "Salva progetto con nome...",
     "file.compact_project": "Compatta progetto",
+    "file.embed_dataset": "Incorpora dataset nel progetto",
     "file.auto_save_on_close": "Salva alla chiusura senza chiedere",
     "file.no_recent_projects": "Nessun progetto recente",
     "file.clear_recent_projects": "Cancella progetti recenti",
@@ -733,7 +734,12 @@
     "dataset_ready": "Dataset (Pronto)",
     "training_paused": "Training (In Pausa)",
     "training_finished": "Training Completato",
-    "ply_models_count": "Modelli PLY: {}"
+    "ply_models_count": "Modelli PLY: {}",
+    "dataset_embed_prepare": "Preparare il dataset incorporato",
+    "dataset_embed_extracting": "Estrarre il dataset incorporato",
+    "dataset_embed_scanning": "Scansione dei file del dataset",
+    "dataset_embed_batch": "Incorporare un lotto del dataset",
+    "dataset_embed_complete": "Dataset incorporato"
   },
   "mode": {
     "empty": "Vuoto",
@@ -751,6 +757,8 @@
     "project_location": "Posizione dei progetti",
     "project_location_hint": "Nuovi progetti e cartella predefinita del Gestore Risorse: {path}",
     "project_location_description": "I nuovi progetti vengono creati qui e questa cartella viene usata come cartella predefinita del Gestore Risorse.",
+    "embed_dataset_by_default": "Copia i dataset nei nuovi progetti",
+    "embed_dataset_by_default_description": "I nuovi progetti possono copiare i file originali senza modifiche per facilitarne la condivisione.",
     "project_location_invalid": "Questa cartella non può essere usata come posizione dei progetti.",
     "use_default": "Usa predefinito",
     "title": "Preferenze",
@@ -1273,6 +1281,8 @@
     "invalid_name": "Inserisci un nome progetto valido.",
     "source_invalid": "L'origine non è un dataset o un file splat supportato.",
     "advanced": "Avanzate",
+    "embed_dataset": "Copia dataset nel progetto",
+    "embed_dataset_description": "Conserva i file del dataset identici agli originali.",
     "create": "Crea"
   },
   "notification": {

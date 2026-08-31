@@ -2636,6 +2636,12 @@ def set_project_location(path: str) -> str:
 def clear_project_location() -> None:
     """Clear the project location preference so the default is used."""
 
+def get_embed_dataset_by_default() -> bool:
+    """Get whether new projects copy datasets into the project by default."""
+
+def set_embed_dataset_by_default(enabled: bool) -> bool:
+    """Set whether new projects copy datasets into the project by default."""
+
 def get_mcp_status() -> dict:
     """Get current MCP HTTP server runtime status"""
 

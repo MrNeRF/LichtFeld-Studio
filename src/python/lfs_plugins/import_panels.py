@@ -182,6 +182,7 @@ class NewProjectPanel(_ImportDialogPanel):
         self._min_track_length = 0
         self._min_track_length_str = "0"
         self._apply_auto_crop = False
+        self._embed_dataset = False
         self._advanced_expanded = False
         self._last_lang = ""
 
@@ -192,6 +193,7 @@ class NewProjectPanel(_ImportDialogPanel):
 
         model.bind_func("panel_label", lambda: lf.ui.tr("new_project.title"))
         model.bind_func("source_is_dataset", lambda: self._source_kind == "dataset")
+        model.bind_func("embed_dataset_visible", lambda: self._source_kind == "dataset")
         model.bind_func("advanced_expanded", lambda: self._advanced_expanded)
         model.bind_func("name_valid", self._name_is_valid)
         model.bind_func("target_exists", self._target_exists)
@@ -217,6 +219,7 @@ class NewProjectPanel(_ImportDialogPanel):
         model.bind("max_width_disabled", lambda: self._max_width == 0, self._set_max_width_disabled)
         model.bind("min_track_length_str", lambda: self._min_track_length_str, self._set_min_track_length_str)
         model.bind("apply_auto_crop", lambda: self._apply_auto_crop, self._set_apply_auto_crop)
+        model.bind("embed_dataset", lambda: self._embed_dataset, self._set_embed_dataset)
 
         model.bind_event("browse_folder", self._on_browse_folder)
         model.bind_event("browse_file", self._on_browse_file)
@@ -250,6 +253,7 @@ class NewProjectPanel(_ImportDialogPanel):
         self._min_track_length = 0
         self._min_track_length_str = "0"
         self._apply_auto_crop = False
+        self._embed_dataset = bool(getattr(lf.ui, "get_embed_dataset_by_default", lambda: False)())
         self._advanced_expanded = False
         params = lf.optimization_params()
         self._ppisp_sidecar_path = ""
@@ -290,6 +294,7 @@ class NewProjectPanel(_ImportDialogPanel):
         self._dirty_model(
             "source_path",
             "source_is_dataset",
+            "embed_dataset_visible",
             "images_path",
             "sparse_path",
             "masks_path",
@@ -305,6 +310,7 @@ class NewProjectPanel(_ImportDialogPanel):
             "location_preview",
             "create_hint",
             "min_track_length_str",
+            "embed_dataset_visible",
         )
 
     @staticmethod
@@ -490,6 +496,13 @@ class NewProjectPanel(_ImportDialogPanel):
         self._apply_auto_crop = enabled
         self._dirty_model("apply_auto_crop")
 
+    def _set_embed_dataset(self, value):
+        value = bool(value)
+        if value == self._embed_dataset:
+            return
+        self._embed_dataset = value
+        self._dirty_model("embed_dataset")
+
     def _on_browse_init(self, _handle=None, _ev=None, _args=None):
         if self._source_kind != "dataset":
             return
@@ -533,6 +546,7 @@ class NewProjectPanel(_ImportDialogPanel):
         max_width = self._max_width
         apply_auto_crop = self._apply_auto_crop
         min_track_length = self._min_track_length
+        embed_dataset = self._embed_dataset
 
         def _commit(stop_training: bool) -> None:
             if not self._can_create() or self._target_path() != target:
@@ -561,6 +575,8 @@ class NewProjectPanel(_ImportDialogPanel):
                 if stop_training:
                     load_kwargs["stop_training"] = True
                 lf.load_file(**load_kwargs)
+                if embed_dataset:
+                    lf.project_embed_dataset()
             elif source_kind == "splat":
                 lf.load_file(path=source_path, is_dataset=False, discard_changes=True)
 

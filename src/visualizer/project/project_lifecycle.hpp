@@ -150,6 +150,7 @@ namespace lfs::vis::project {
     struct ProjectLifecycleSettings {
         bool reopen_last_project = true;
         bool auto_save_on_close = false;
+        bool embed_dataset_by_default = false;
         std::uint64_t autosave_interval_seconds = 5 * 60;
         std::uint64_t autosave_dirty_epoch_threshold = 20;
         std::uint64_t autosave_quiet_seconds = 2;
@@ -246,6 +247,9 @@ namespace lfs::vis::project {
         setReopenLastProject(bool enabled);
         [[nodiscard]] lfs::Result<void>
         setAutoSaveOnClose(bool enabled);
+        [[nodiscard]] lfs::Result<void>
+        setEmbedDatasetByDefault(bool enabled);
+        [[nodiscard]] lfs::Result<void> startDatasetEmbed();
         [[nodiscard]] lfs::Result<void>
         clearRecentProjects();
         [[nodiscard]] lfs::Result<void>
@@ -429,6 +433,7 @@ namespace lfs::vis::project {
             TrainingAutosave,
             TrainingExplicitSave,
             TrainingCloseSave,
+            DatasetEmbed,
         };
 
         using DeclinedRecoveryIdentity = DismissedRecoveryEntry;

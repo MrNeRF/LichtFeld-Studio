@@ -226,6 +226,19 @@ class CompactProjectOperator(Operator):
         return {"FINISHED"}
 
 
+class EmbedDatasetOperator(Operator):
+    label = "menu.file.embed_dataset"
+    description = "Copy the external dataset into the project"
+
+    @classmethod
+    def poll(cls, context) -> bool:
+        return bool(getattr(lf, "project_can_embed_dataset", lambda: False)())
+
+    def execute(self, context) -> set:
+        lf.project_embed_dataset()
+        return {"FINISHED"}
+
+
 class ImportDatasetOperator(Operator):
     label = "menu.file.import_dataset"
     description = "Import a dataset folder"
@@ -530,6 +543,7 @@ class FileMenu:
                 shortcut="Ctrl+S",
             ),
             menu_operator(SaveProjectAsOperator),
+            menu_operator(EmbedDatasetOperator, enabled=bool(getattr(lf, "project_can_embed_dataset", lambda: False)())),
             menu_operator(
                 CompactProjectOperator,
                 enabled=_can_compact_project(),
@@ -568,6 +582,7 @@ _operator_classes = [
     OpenProjectOperator,
     SaveProjectOperator,
     SaveProjectAsOperator,
+    EmbedDatasetOperator,
     CompactProjectOperator,
     ImportDatasetOperator,
     ImportPlyOperator,

@@ -8,6 +8,7 @@
     "file.save_project": "Enregistrer le projet",
     "file.save_project_as": "Enregistrer le projet sous...",
     "file.compact_project": "Compacter le projet",
+    "file.embed_dataset": "Intégrer le jeu de données au projet",
     "file.auto_save_on_close": "Enregistrer à la fermeture sans demander",
     "file.no_recent_projects": "Aucun projet récent",
     "file.clear_recent_projects": "Effacer les projets récents",
@@ -733,7 +734,12 @@
     "dataset_ready": "Dataset (Prêt)",
     "training_paused": "Entraînement (En Pause)",
     "training_finished": "Entraînement Terminé",
-    "ply_models_count": "Modèles PLY : {}"
+    "ply_models_count": "Modèles PLY : {}",
+    "dataset_embed_prepare": "Préparer le jeu de données intégré",
+    "dataset_embed_extracting": "Extraire le jeu de données intégré",
+    "dataset_embed_scanning": "Analyser les fichiers du jeu de données",
+    "dataset_embed_batch": "Intégrer un lot du jeu de données",
+    "dataset_embed_complete": "Jeu de données intégré"
   },
   "mode": {
     "empty": "Vide",
@@ -751,6 +757,8 @@
     "project_location": "Emplacement des projets",
     "project_location_hint": "Nouveaux projets et dossier par défaut du gestionnaire d'actifs : {path}",
     "project_location_description": "Les nouveaux projets sont créés ici et ce dossier sert de dossier par défaut du gestionnaire d'actifs.",
+    "embed_dataset_by_default": "Copier les jeux de données dans les nouveaux projets",
+    "embed_dataset_by_default_description": "Les nouveaux projets peuvent copier les fichiers originaux, sans modification, pour faciliter le partage.",
     "project_location_invalid": "Ce dossier ne peut pas servir d'emplacement pour les projets.",
     "use_default": "Utiliser la valeur par défaut",
     "title": "Préférences",
@@ -1273,6 +1281,8 @@
     "invalid_name": "Saisissez un nom de projet valide.",
     "source_invalid": "La source n'est pas un dataset ni un fichier splat pris en charge.",
     "advanced": "Avancé",
+    "embed_dataset": "Copier le jeu de données dans le projet",
+    "embed_dataset_description": "Conserver les fichiers du jeu de données identiques aux originaux.",
     "create": "Créer"
   },
   "notification": {

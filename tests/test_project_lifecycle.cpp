@@ -39,6 +39,7 @@ namespace {
             << lfs::format_for_developer(loaded.error());
         EXPECT_TRUE(loaded->reopen_last_project);
         EXPECT_FALSE(loaded->auto_save_on_close);
+        EXPECT_FALSE(loaded->embed_dataset_by_default);
         EXPECT_EQ(
             loaded->autosave_interval_seconds,
             5u * 60u);
@@ -110,6 +111,7 @@ namespace {
         ProjectLifecycleSettings settings;
         settings.reopen_last_project = false;
         settings.auto_save_on_close = false;
+        settings.embed_dataset_by_default = true;
         settings.autosave_interval_seconds = 17;
         settings.autosave_dirty_epoch_threshold = 9;
         settings.autosave_quiet_seconds = 7;

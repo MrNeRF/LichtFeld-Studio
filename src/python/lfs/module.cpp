@@ -1167,6 +1167,15 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("stop_training") = false,
         "Create and bind a new .licht project at path");
     m.def(
+        "project_embed_dataset",
+        []() {
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled(
+                "python.project_embed_dataset",
+                [] { lfs::core::events::cmd::ProjectEmbedDataset{}.emit(); });
+        },
+        "Embed the active project's external dataset verbatim");
+    m.def(
         "project_save",
         [](const bool wait, const bool regenerate_preview) {
             nb::gil_scoped_release release;
@@ -1421,6 +1430,18 @@ NB_MODULE(lichtfeld, m) {
         },
         "Return whether the active project has a bound .licht path");
     m.def(
+        "project_can_embed_dataset", []() {
+            auto* const viewer = lfs::python::get_visualizer();
+            if (!viewer) {
+                return false;
+            }
+            auto info = viewer->projectGetInfo();
+            return info && info->path.has_value() &&
+                   info->dataset_external_available &&
+                   !info->embedded_dataset_complete;
+        },
+        "Return whether the active project can embed its external dataset");
+    m.def(
         "project_recent_files", []() {
             std::vector<std::string> paths;
             auto* const viewer =
@@ -1582,6 +1603,30 @@ NB_MODULE(lichtfeld, m) {
         },
         nb::arg("enabled"),
         "Enable or disable automatic project save on close");
+    m.def(
+        "project_embed_dataset_by_default_enabled", []() {
+            auto* const viewer = lfs::python::get_visualizer();
+            if (!viewer) {
+                return false;
+            }
+            auto info = viewer->projectGetMenuInfo();
+            if (!info) {
+                throw std::runtime_error(std::format(
+                    "project_embed_dataset_by_default_enabled failed: {}",
+                    lfs::format_for_developer(info.error())));
+            }
+            return info->embed_dataset_by_default;
+        });
+    m.def(
+        "project_set_embed_dataset_by_default",
+        [](const bool enabled) {
+            nb::gil_scoped_release release;
+            lfs::core::events::cmd::SetEmbedDatasetByDefault{
+                .enabled = enabled}
+                .emit();
+        },
+        nb::arg("enabled"),
+        "Set whether new projects copy datasets into the project by default");
     m.def(
         "project_autosave_interval_seconds", []() -> std::uint64_t {
             auto* const viewer =

@@ -31,6 +31,7 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     opened_stop_training = []
     opened_keep_asset_manager = []
     new_projects = []
+    embed_calls = []
     removed = []
     confirm_dialogs = []
     message_dialogs = []
@@ -88,6 +89,7 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     lf_stub.confirm_dialogs = confirm_dialogs
     lf_stub.message_dialogs = message_dialogs
     lf_stub.warning_messages = warnings
+    lf_stub.embed_calls = embed_calls
     loaded = []
 
     def load_file(*args, **kwargs):
@@ -97,6 +99,8 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     lf_stub.load_file_calls = loaded
     lf_stub.project_save = lambda *args, **kwargs: True
     lf_stub.project_save_as = lambda *args, **kwargs: True
+    lf_stub.project_can_embed_dataset = lambda: False
+    lf_stub.project_embed_dataset = lambda: embed_calls.append(True)
     lf_stub.load_config_file = lambda *_args, **_kwargs: None
     lf_stub.is_dataset_path = lambda _path: True
     lf_stub.read_checkpoint_header = lambda _path: object()
@@ -330,6 +334,15 @@ def test_compact_project_enabled_only_with_durable_path(monkeypatch):
     file_menu.lf.project_has_path = raise_missing
     guarded = _compact_project_item(file_menu)
     assert guarded["enabled"] is False
+
+
+def test_embed_dataset_operator_requires_external_incomplete_dataset(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    assert file_menu.EmbedDatasetOperator.poll(None) is False
+    file_menu.lf.project_can_embed_dataset = lambda: True
+    assert file_menu.EmbedDatasetOperator.poll(None) is True
+    assert file_menu.EmbedDatasetOperator().execute(None) == {"FINISHED"}
+    assert file_menu.lf.embed_calls == [True]
 
 
 def test_imports_are_grouped_before_exports(monkeypatch):

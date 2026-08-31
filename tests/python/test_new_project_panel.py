@@ -52,6 +52,7 @@ def new_project_module(monkeypatch, tmp_path):
         calls=[],
         dirty=False,
         training=False,
+        embed_default=False,
     )
 
     def confirm(title, message, buttons, callback=None):
@@ -70,6 +71,7 @@ def new_project_module(monkeypatch, tmp_path):
         confirm_dialog=confirm,
         open_dataset_folder_dialog=lambda: str(dataset),
         open_ply_file_dialog=lambda _start="": str(splat),
+        get_embed_dataset_by_default=lambda: state.embed_default,
     )
     lf_stub.is_dataset_path = lambda path: str(path) == str(dataset)
     lf_stub.detect_dataset_info = lambda _path: info
@@ -79,6 +81,7 @@ def new_project_module(monkeypatch, tmp_path):
     lf_stub.is_training_active = lambda: state.training
     lf_stub.project_create = lambda *args, **kwargs: state.calls.append(("create", args, kwargs))
     lf_stub.load_file = lambda *args, **kwargs: state.calls.append(("load", args, kwargs))
+    lf_stub.project_embed_dataset = lambda: state.calls.append(("embed", (), {}))
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
     return import_module("lfs_plugins.import_panels"), state
 
@@ -115,6 +118,25 @@ def test_splat_and_blank_create(new_project_module):
     panel._on_do_create()
     assert len(state.calls) == 1
     assert state.calls[0][0] == "create"
+
+
+def test_dataset_checkbox_defaults_from_preference_and_embeds_after_load(new_project_module):
+    module, state = new_project_module
+    state.embed_default = True
+    panel = _panel(module)
+
+    assert panel.show(str(state.dataset)) is True
+    assert panel._source_kind == "dataset"
+    assert panel._embed_dataset is True
+    panel._on_do_create()
+    assert [call[0] for call in state.calls] == ["create", "load", "embed"]
+
+    state.calls.clear()
+    panel.show(str(state.splat))
+    assert panel._source_kind == "splat"
+    assert panel._embed_dataset is True
+    panel._on_do_create()
+    assert [call[0] for call in state.calls] == ["create", "load"]
 
 
 def test_create_prompts_only_when_pressed_and_propagates_stop_training(new_project_module):
