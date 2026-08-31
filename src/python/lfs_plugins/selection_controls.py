@@ -16,6 +16,13 @@ except Exception:
         return fallback
 
 
+def _gt_comparison_active():
+    # Broad GT-comparison-mode query; defensive because test stubs replace lf.ui
+    # with a bare namespace.
+    query = getattr(lf.ui, "is_gt_comparison_active", None)
+    return bool(query()) if query else False
+
+
 _SELECTION_TOOL_ID = "builtin.select"
 _DEPTH_MIN = 0.0
 _DEPTH_MAX = 1000.0
@@ -29,7 +36,8 @@ _DEFAULT_WINDOW_SCALE = 0.35
 _DEFAULT_WINDOW_OFFSET = 0.0
 _DEFAULT_VIZ_MODE = 1
 _SCALE_PERCENT_MIN = 5.0
-_SCALE_PERCENT_MAX = 100.0
+_SCALE_PERCENT_MAX = 300.0
+_REF_RATIO_EPS = 1.0e-3
 _OFFSET_PERCENT_MIN = -100.0
 _OFFSET_PERCENT_MAX = 100.0
 _MISSING = object()
@@ -161,6 +169,9 @@ class SelectionControlsController:
         self._depth_far = _DEFAULT_DEPTH_FAR
         self._frustum_half_width = _DEFAULT_FRUSTUM_HALF_WIDTH
         self._window_scale = _DEFAULT_WINDOW_SCALE
+        self._window_scale_y = _DEFAULT_WINDOW_SCALE
+        self._ref_scale_x = _DEFAULT_WINDOW_SCALE
+        self._ref_scale_y = _DEFAULT_WINDOW_SCALE
         self._offset_x = _DEFAULT_WINDOW_OFFSET
         self._offset_y = _DEFAULT_WINDOW_OFFSET
         self._viz_mode = _DEFAULT_VIZ_MODE
@@ -178,7 +189,12 @@ class SelectionControlsController:
         self._escape_revert = w.EscapeRevertController()
 
     def bind_model(self, model):
-        model.bind_func("selection_depth_mode_active", lambda: self._depth_enabled)
+        # No depth-window surface exists while GT comparison is active: the depth
+        # slider block hides for the duration and returns untouched when it ends.
+        model.bind_func(
+            "selection_depth_mode_active",
+            lambda: self._depth_enabled and not _gt_comparison_active(),
+        )
         model.bind_func("selection_has_scene", lambda: self._has_scene)
         model.bind_func("selection_has_selection", lambda: self._has_selection)
         model.bind_func("selection_can_delete", lambda: self._has_selection)
@@ -231,8 +247,8 @@ class SelectionControlsController:
             lambda: f"{self._scale_percent():.0f}",
             self._set_depth_scale_percent_from_slider,
         )
-        model.bind_func("selection_depth_scale_slider_min", lambda: f"{_SCALE_PERCENT_MIN:.0f}")
-        model.bind_func("selection_depth_scale_slider_max", lambda: f"{_SCALE_PERCENT_MAX:.0f}")
+        model.bind_func("selection_depth_scale_slider_min", lambda: f"{self._scale_slider_bounds()[0]:.0f}")
+        model.bind_func("selection_depth_scale_slider_max", lambda: f"{self._scale_slider_bounds()[1]:.0f}")
         model.bind(
             "selection_depth_offset_x_str",
             lambda: self._depth_text_value("selection_depth_offset_x_str"),
@@ -312,6 +328,11 @@ class SelectionControlsController:
             self._depth_echo_holdoff = max(0, self._depth_echo_holdoff - 1)
         self._sync_depth_text_bufs()
         state_items = self._state_items()
+        if self._last_state_items is not None:
+            changed_before = self._changed_state_fields(state_items)
+            if "depth_window_draw_generation" in changed_before:
+                self._ref_scale_x = self._window_scale
+                self._ref_scale_y = self._window_scale_y
         state_key = self._state_key(state_items)
         if state_key != self._last_state_key:
             changed_fields = self._changed_state_fields(state_items)
@@ -375,13 +396,28 @@ class SelectionControlsController:
         window_getter = getattr(lf.selection, "get_depth_filter_window", None)
         if callable(window_getter):
             try:
-                w_enabled, w_near, w_far, scale, offset_x, offset_y = window_getter()
+                w_enabled, w_near, w_far, scale_x, scale_y, offset_x, offset_y = window_getter()
                 enabled = w_enabled
                 near = w_near
                 far = w_far
                 self._window_scale = _clamp(
-                    _parse_float(scale, _DEFAULT_WINDOW_SCALE), 0.05, 1.0
+                    _parse_float(scale_x, _DEFAULT_WINDOW_SCALE), 0.05, 1.0
                 )
+                self._window_scale_y = _clamp(
+                    _parse_float(scale_y, _DEFAULT_WINDOW_SCALE), 0.05, 1.0
+                )
+                cross = abs(
+                    self._window_scale * self._ref_scale_y
+                    - self._window_scale_y * self._ref_scale_x
+                )
+                norm = max(
+                    self._window_scale * self._ref_scale_y,
+                    self._window_scale_y * self._ref_scale_x,
+                    1.0e-6,
+                )
+                if cross / norm > _REF_RATIO_EPS:
+                    self._ref_scale_x = self._window_scale
+                    self._ref_scale_y = self._window_scale_y
                 self._offset_x = _clamp(
                     _parse_float(offset_x, _DEFAULT_WINDOW_OFFSET), -1.0, 1.0
                 )
@@ -407,6 +443,7 @@ class SelectionControlsController:
             self._depth_near,
             self._depth_far,
             self._window_scale,
+            self._window_scale_y,
             self._offset_x,
             self._offset_y,
         )
@@ -421,9 +458,13 @@ class SelectionControlsController:
             ("can_undo", self._can_undo),
             ("can_redo", self._can_redo),
             ("depth_enabled", self._depth_enabled),
+            # The depth sliders hide while GT comparison is active.
+            ("gt_comparison_active", _gt_comparison_active()),
             ("depth_near", round(self._depth_near, 3)),
             ("depth_far", round(self._depth_far, 3)),
             ("window_scale", round(self._window_scale, 4)),
+            ("window_scale_y", round(self._window_scale_y, 4)),
+            ("depth_window_draw_generation", RuntimeState.depth_window_draw_generation.value),
             ("offset_x", round(self._offset_x, 4)),
             ("offset_y", round(self._offset_y, 4)),
             ("viz_mode", int(self._viz_mode)),
@@ -518,7 +559,21 @@ class SelectionControlsController:
         self._apply_depth_range(self._depth_enabled, self._depth_near, far)
 
     def _scale_percent(self):
-        return _clamp(round(self._window_scale * 100.0), _SCALE_PERCENT_MIN, _SCALE_PERCENT_MAX)
+        ref = max(self._ref_scale_x, 1.0e-6)
+        return _clamp(round(self._window_scale / ref * 100.0), _SCALE_PERCENT_MIN, _SCALE_PERCENT_MAX)
+
+    def _scale_factor_bounds(self):
+        ref_x = max(self._ref_scale_x, 1.0e-6)
+        ref_y = max(self._ref_scale_y, 1.0e-6)
+        f_min = max(0.05 / ref_x, 0.05 / ref_y)
+        f_max = min(1.0 / ref_x, 1.0 / ref_y)
+        return f_min, max(f_min, f_max)
+
+    def _scale_slider_bounds(self):
+        f_min, f_max = self._scale_factor_bounds()
+        lo = _clamp(round(f_min * 100.0), _SCALE_PERCENT_MIN, _SCALE_PERCENT_MAX)
+        hi = _clamp(round(f_max * 100.0), lo, _SCALE_PERCENT_MAX)
+        return lo, hi
 
     def _offset_percent(self, offset):
         return _clamp(round(offset * 100.0), _OFFSET_PERCENT_MIN, _OFFSET_PERCENT_MAX)
@@ -552,21 +607,31 @@ class SelectionControlsController:
         if isinstance(value, str):
             value = value.strip().rstrip("%")
         percent = _clamp(_parse_float(value, self._scale_percent()), _SCALE_PERCENT_MIN, _SCALE_PERCENT_MAX)
-        self._apply_depth_window(self._depth_enabled, self._depth_near, self._depth_far, percent / 100.0, self._offset_x, self._offset_y)
+        f_min, f_max = self._scale_factor_bounds()
+        factor = _clamp(percent / 100.0, f_min, f_max)
+        self._apply_depth_window(
+            self._depth_enabled,
+            self._depth_near,
+            self._depth_far,
+            self._ref_scale_x * factor,
+            self._offset_x,
+            self._offset_y,
+            self._ref_scale_y * factor,
+        )
 
     def _set_depth_offset_x_percent(self, value):
         if not self._visible or self._last_state_key is None:
             return
         self._refresh_depth_state()
         percent = _clamp(_parse_float(value, self._offset_percent(self._offset_x)), _OFFSET_PERCENT_MIN, _OFFSET_PERCENT_MAX)
-        self._apply_depth_window(self._depth_enabled, self._depth_near, self._depth_far, self._window_scale, percent / 100.0, self._offset_y)
+        self._apply_depth_window(self._depth_enabled, self._depth_near, self._depth_far, self._window_scale, percent / 100.0, self._offset_y, self._window_scale_y)
 
     def _set_depth_offset_y_percent(self, value):
         if not self._visible or self._last_state_key is None:
             return
         self._refresh_depth_state()
         percent = _clamp(_parse_float(value, self._offset_percent(self._offset_y)), _OFFSET_PERCENT_MIN, _OFFSET_PERCENT_MAX)
-        self._apply_depth_window(self._depth_enabled, self._depth_near, self._depth_far, self._window_scale, self._offset_x, percent / 100.0)
+        self._apply_depth_window(self._depth_enabled, self._depth_near, self._depth_far, self._window_scale, self._offset_x, percent / 100.0, self._window_scale_y)
 
     # Range-input entry points. RmlUi replays a slider's pre-update position into
     # its setter when the bound attributes change in the same frame, so these
@@ -599,13 +664,14 @@ class SelectionControlsController:
         self._set_depth_offset_y_percent(value)
 
     def _apply_depth_range(self, enabled, near, far):
-        self._apply_depth_window(enabled, near, far, self._window_scale, self._offset_x, self._offset_y)
+        self._apply_depth_window(enabled, near, far, self._window_scale, self._offset_x, self._offset_y, self._window_scale_y)
 
-    def _apply_depth_window(self, enabled, near, far, scale, offset_x, offset_y):
+    def _apply_depth_window(self, enabled, near, far, scale, offset_x, offset_y, scale_y):
         self._depth_enabled = bool(enabled)
         self._depth_near = _clamp(near, _DEPTH_MIN, _DEPTH_MAX - _DEPTH_GAP)
         self._depth_far = _clamp(far, self._depth_near + _DEPTH_GAP, _DEPTH_MAX)
         self._window_scale = _clamp(scale, 0.05, 1.0)
+        self._window_scale_y = _clamp(scale_y, 0.05, 1.0)
         self._offset_x = _clamp(offset_x, -1.0, 1.0)
         self._offset_y = _clamp(offset_y, -1.0, 1.0)
 
@@ -619,6 +685,7 @@ class SelectionControlsController:
                     self._window_scale,
                     self._offset_x,
                     self._offset_y,
+                    self._window_scale_y,
                 )
             else:
                 lf.selection.set_depth_filter_range(
@@ -696,7 +763,11 @@ class SelectionControlsController:
     def _commit_depth_text_key(self, key):
         value = self._depth_text_bufs.get(key)
         if value is not None and value.strip():
-            parsed_src = value.strip().rstrip("%") if key == "selection_depth_scale_str" else value
+            parsed_src = (
+                value.split("×", 1)[0].strip().rstrip("%")
+                if key == "selection_depth_scale_str"
+                else value
+            )
             parsed = _parse_float(parsed_src, None)
             if parsed is None:
                 self._sync_depth_text_bufs(force=True)
@@ -836,6 +907,7 @@ class SelectionControlsController:
                 "selection_depth_mode_active",
                 "selection_depth_toggle_label",
             ),
+            "gt_comparison_active": ("selection_depth_mode_active",),
             "depth_near": (
                 "selection_depth_near_str",
                 "selection_depth_near_value",
@@ -853,6 +925,15 @@ class SelectionControlsController:
             "window_scale": (
                 "selection_depth_scale_str",
                 "selection_depth_scale_value",
+                "selection_depth_scale_slider_min",
+                "selection_depth_scale_slider_max",
+            ),
+            "window_scale_y": ("selection_depth_scale_str",),
+            "depth_window_draw_generation": (
+                "selection_depth_scale_str",
+                "selection_depth_scale_value",
+                "selection_depth_scale_slider_min",
+                "selection_depth_scale_slider_max",
             ),
             "offset_x": (
                 "selection_depth_offset_x_str",

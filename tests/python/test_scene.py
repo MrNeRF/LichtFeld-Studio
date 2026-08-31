@@ -18,6 +18,19 @@ class TestSceneModule:
         assert scene is None
 
 
+class TestSelectionModule:
+    """Tests for the selection binding's depth-window API shape."""
+
+    def test_depth_filter_window_getter_returns_seven_tuple(self, lf):
+        state = lf.selection.get_depth_filter_window()
+
+        assert isinstance(state, tuple)
+        assert len(state) == 7
+        assert isinstance(state[0], bool)
+        for slot in state[1:]:
+            assert isinstance(slot, float)
+
+
 class TestSplatDataAfterLoad:
     """Tests for SplatData access after loading a PLY."""
 

@@ -50,7 +50,8 @@ namespace lfs::vis {
           scripts_generation(store_, Field::ScriptsGeneration, "scripts_generation", 0),
           language_generation(store_, Field::LanguageGeneration, "language_generation", 0),
           render_settings_generation(store_, Field::RenderSettingsGeneration, "render_settings_generation", 0),
-          viewport_toolbar_generation(store_, Field::ViewportToolbarGeneration, "viewport_toolbar_generation", 0) {}
+          viewport_toolbar_generation(store_, Field::ViewportToolbarGeneration, "viewport_toolbar_generation", 0),
+          depth_window_draw_generation(store_, Field::DepthWindowDrawGeneration, "depth_window_draw_generation", 0) {}
 
     AppStore& app_store() {
         static AppStore instance;
@@ -64,6 +65,11 @@ namespace lfs::vis {
 
     void publish_viewport_toolbar_generation() {
         auto& signal = app_store().viewport_toolbar_generation;
+        signal.set(signal.get() + 1);
+    }
+
+    void publish_depth_window_draw_commit() {
+        auto& signal = app_store().depth_window_draw_generation;
         signal.set(signal.get() + 1);
     }
 
