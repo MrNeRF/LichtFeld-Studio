@@ -6,9 +6,9 @@
 
 #include "istrategy.hpp"
 
+#include "lfs/training/refine_scratch.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/scheduler.hpp"
-#include "lfs/training/refine_scratch.hpp"
 #include "strategy_utils.hpp"
 #include "trainer.hpp"
 

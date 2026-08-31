@@ -1,8 +1,8 @@
 #include "gs_renderer.h"
 
 #include "core/logger.hpp"
-#include "visible_mask.h"
 #include "viewport_scratch_bucket.h"
+#include "visible_mask.h"
 
 #include <algorithm>
 #include <cmath>

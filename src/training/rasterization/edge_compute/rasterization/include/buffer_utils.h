@@ -4,11 +4,11 @@
 
 #pragma once
 
+#include "../../../fastgs/rasterization/include/visibility.cuh"
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
 #include "edge_rasterization_config.h"
 #include "helper_math.h"
-#include "../../../fastgs/rasterization/include/visibility.cuh"
 #include <cstdint>
 #include <cub/cub.cuh>
 #include <cuda_fp16.h>

@@ -5,8 +5,8 @@
 #include "buffer_utils.h"
 #include "core/cuda/memory_arena.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
-#include "edge_rasterization_api.h"
 #include "edge_phase_arena.h"
+#include "edge_rasterization_api.h"
 #include "edge_rasterization_config.h"
 #include "forward.h"
 #include "helper_math.h"
@@ -86,30 +86,30 @@ namespace edge_compute::rasterization {
 
             // Call the actual forward implementation
             const int n_instances = edge_forward(
-                                                 arena_allocator,
-                                                 [phase_arena](size_t size) {
-                                                     phase_arena->begin(size);
-                                                 },
-                                                 phase_allocator,
-                                                 per_tile_buffers_func,
-                                                 reinterpret_cast<const float3*>(means_ptr),
-                                                 reinterpret_cast<const float3*>(scales_raw_ptr),
-                                                 reinterpret_cast<const float4*>(rotations_raw_ptr),
-                                                 opacities_raw_ptr,
-                                                 reinterpret_cast<const float4*>(w2c_ptr),
-                                                 n_primitives,
-                                                 width,
-                                                 height,
-                                                 focal_x,
-                                                 focal_y,
-                                                 center_x,
-                                                 center_y,
-                                                 near_plane,
-                                                 far_plane,
-                                                 mip_filter,
-                                                 pixel_weights,
-                                                 accum_weights,
-                                                 stream);
+                arena_allocator,
+                [phase_arena](size_t size) {
+                    phase_arena->begin(size);
+                },
+                phase_allocator,
+                per_tile_buffers_func,
+                reinterpret_cast<const float3*>(means_ptr),
+                reinterpret_cast<const float3*>(scales_raw_ptr),
+                reinterpret_cast<const float4*>(rotations_raw_ptr),
+                opacities_raw_ptr,
+                reinterpret_cast<const float4*>(w2c_ptr),
+                n_primitives,
+                width,
+                height,
+                focal_x,
+                focal_y,
+                center_x,
+                center_y,
+                near_plane,
+                far_plane,
+                mip_filter,
+                pixel_weights,
+                accum_weights,
+                stream);
 
             return {frame_id, true, nullptr};
 

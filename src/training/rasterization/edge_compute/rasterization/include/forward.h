@@ -58,4 +58,4 @@ namespace edge_compute::rasterization {
         float* accum_weights,
         cudaStream_t stream = nullptr);
 
-}
+} // namespace edge_compute::rasterization

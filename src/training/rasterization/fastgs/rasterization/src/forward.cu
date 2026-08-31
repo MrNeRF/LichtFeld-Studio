@@ -7,9 +7,9 @@
 #include "forward.h"
 #include "helper_math.h"
 #include "kernels_forward.cuh"
-#include "visibility.cuh"
 #include "rasterization_config.h"
 #include "utils.h"
+#include "visibility.cuh"
 #include <algorithm>
 #include <atomic>
 #include <cstdint>

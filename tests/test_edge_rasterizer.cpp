@@ -7,8 +7,8 @@
 #include "rasterization/edge_compute/rasterization/include/edge_rasterization_api.h"
 #include <algorithm>
 #include <cmath>
-#include <cuda_runtime.h>
 #include <cstring>
+#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <random>
 #include <stdexcept>

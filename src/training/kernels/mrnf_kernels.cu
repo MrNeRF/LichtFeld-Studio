@@ -607,7 +607,7 @@ namespace lfs::training::mrnf_strategy {
                 "Gumbel scratch sorted-keys buffer must be a non-null CUDA f32 tensor");
             LFS_ASSERT_MSG(
                 scratch->indices_sorted.is_valid() &&
-                scratch->indices_sorted.ptr<uint32_t>() != nullptr,
+                    scratch->indices_sorted.ptr<uint32_t>() != nullptr,
                 "Gumbel scratch sorted-indices buffer must be a non-null CUDA uint32 tensor");
             d_keys = scratch->keys.ptr<float>();
             d_indices = scratch->indices.ptr<uint32_t>();

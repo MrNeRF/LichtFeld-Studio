@@ -6,8 +6,8 @@
 
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/tensor.hpp"
-#include "kernels/image_kernels.hpp"
 #include "kernels/densification_kernels.hpp"
+#include "kernels/image_kernels.hpp"
 #include "lfs/training/refine_scratch.hpp"
 
 #include <algorithm>

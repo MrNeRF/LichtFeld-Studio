@@ -130,11 +130,11 @@ int edge_compute::rasterization::edge_forward_legacy(
             per_primitive_buffers.n_touched_tiles,
             per_primitive_buffers.offset,
             per_primitive_buffers.depth_keys,
-        per_primitive_buffers.screen_bounds,
-        per_primitive_buffers.mean2d,
-        per_primitive_buffers.conic_opacity,
-        nullptr,
-        per_instance_buffers.keys.Current(),
+            per_primitive_buffers.screen_bounds,
+            per_primitive_buffers.mean2d,
+            per_primitive_buffers.conic_opacity,
+            nullptr,
+            per_instance_buffers.keys.Current(),
             per_instance_buffers.primitive_indices.Current(),
             grid.x,
             depth_bits,
@@ -225,7 +225,7 @@ int edge_compute::rasterization::edge_forward(
     VisibilityBuffers visibility = VisibilityBuffers::from_blob(visibility_blob, n_primitives);
     const size_t mask_bytes = ((static_cast<size_t>(n_primitives) + 31u) / 32u) * sizeof(uint);
     LFS_CUDA_CHECK_MSG(cudaMemsetAsync(visibility.visibility_mask, 0, mask_bytes, stream),
-                      "cudaMemsetAsync(EDGE visibility mask)");
+                       "cudaMemsetAsync(EDGE visibility mask)");
 
     kernels::forward::preprocess_cu<<<div_round_up(n_primitives, config::block_size_preprocess),
                                       config::block_size_preprocess, 0, stream>>>(
@@ -252,8 +252,8 @@ int edge_compute::rasterization::edge_forward(
     lfs::rasterization::visibility::compact_indices<<<
         div_round_up(n_primitives, config::block_size_preprocess),
         config::block_size_preprocess, 0, stream>>>(
-            visibility.visibility_mask, visibility.block_offsets, visibility.visible_indices,
-            visibility.primitive_work_indices, static_cast<uint>(n_primitives));
+        visibility.visibility_mask, visibility.block_offsets, visibility.visible_indices,
+        visibility.primitive_work_indices, static_cast<uint>(n_primitives));
     LFS_CUDA_LAUNCH_CHECK(stream, "edge.forward.compact_visible");
 
     uint n_visible_u32 = 0;
@@ -311,7 +311,7 @@ int edge_compute::rasterization::edge_forward(
             size_t cub_bytes = 0;
             LFS_CUDA_CHECK_MSG(
                 cub::DeviceRadixSort::SortPairs(nullptr, cub_bytes, query_keys, query_indices,
-                                                 n_instances, 0, key_end_bit, stream),
+                                                n_instances, 0, key_end_bit, stream),
                 "EDGE radix sort workspace query");
             const size_t data_bytes = EdgeSortWorkspace::data_bytes(n_instances);
             const size_t cub_offset = EdgeSortWorkspace::aligned_offset(data_bytes);
@@ -334,8 +334,8 @@ int edge_compute::rasterization::edge_forward(
             LFS_CUDA_LAUNCH_CHECK(stream, "edge.forward.create_instances");
             LFS_CUDA_CHECK_MSG(
                 cub::DeviceRadixSort::SortPairs(sort_workspace.cub_workspace(),
-                                                 sort_workspace.cub_workspace_bytes,
-                                                 keys, indices, n_instances, 0, key_end_bit, stream),
+                                                sort_workspace.cub_workspace_bytes,
+                                                keys, indices, n_instances, 0, key_end_bit, stream),
                 "cub::DeviceRadixSort::SortPairs (EDGE Tile/Depth)");
             LFS_CUDA_LAUNCH_CHECK(stream, "edge.forward.sort");
             kernels::forward::extract_instance_ranges_cu<<<div_round_up(n_instances, config::block_size_extract_instance_ranges),
