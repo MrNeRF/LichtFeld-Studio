@@ -113,10 +113,12 @@ namespace fast_lfs::optimizer {
         int sh_value_bits,
         int sh_value_n_cells,
         float step_size,
+        const float* sh_band_step_size,
         float beta1,
         float beta2,
         float eps,
         float bias_correction2_sqrt_rcp,
+        const float* sh_band_bias_correction2_sqrt_rcp,
         cudaStream_t stream = nullptr);
 
     // Joint (u,log_s) densify reset: encode true (m,v)=(0,0). Widens block

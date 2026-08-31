@@ -31,6 +31,7 @@ namespace lfs::training {
 
     namespace {
         constexpr int SH_WARMUP_ITERATIONS = 1000;
+        constexpr int SH_BAND_COUNT = 3;
         constexpr float DEFAULT_GROWTH_MULTIPLIER = 1.5f;
 
         std::atomic<uint64_t> g_adam_slow_path_grow_count{0};
@@ -55,6 +56,44 @@ namespace lfs::training {
                 return 0;
             }
             return (tensor.capacity() > 0 ? tensor.capacity() : tensor.shape()[0]) * row_size;
+        }
+
+        [[nodiscard]] int active_sh_band_count(const lfs::core::SplatData& splat_data) {
+            return std::clamp(splat_data.get_active_sh_degree(), 0, SH_BAND_COUNT);
+        }
+
+        void advance_sh_band_steps(AdamParamState& state, const int active_bands) {
+            for (int band = 0; band < active_bands; ++band) {
+                ++state.sh_band_step_count[static_cast<size_t>(band)];
+            }
+        }
+
+        void prepare_sh_band_corrections(
+            const AdamConfig& config,
+            const AdamParamState& state,
+            const int active_bands,
+            const bool next_step,
+            const float learning_rate,
+            float (&step_size)[SH_BAND_COUNT],
+            float (&bias_correction2_sqrt_rcp)[SH_BAND_COUNT]) {
+            for (int band = 0; band < SH_BAND_COUNT; ++band) {
+                const auto index = static_cast<size_t>(band);
+                const int64_t step = state.sh_band_step_count[index] +
+                                     ((next_step && band < active_bands) ? 1 : 0);
+                if (step <= 0) {
+                    step_size[index] = 0.0f;
+                    bias_correction2_sqrt_rcp[index] = 1.0f;
+                    continue;
+                }
+                const double bias_correction1_rcp =
+                    1.0 / (1.0 - std::pow(config.beta1, step));
+                const double correction2_sqrt_rcp =
+                    1.0 / std::sqrt(1.0 - std::pow(config.beta2, step));
+                step_size[index] =
+                    learning_rate * static_cast<float>(bias_correction1_rcp);
+                bias_correction2_sqrt_rcp[index] =
+                    static_cast<float>(correction2_sqrt_rcp);
+            }
         }
 
     } // namespace
@@ -399,6 +438,7 @@ namespace lfs::training {
             state.capacity = alloc_cap;
             state.size = logical_size;
             state.step_count = 0;
+            state.sh_band_step_count.fill(0);
             LOG_DEBUG("allocate_gradients({}): cap={}", name, state.capacity);
         }
         LOG_DEBUG("Allocated gradients for {} parameter groups", states_.size());
@@ -587,6 +627,7 @@ namespace lfs::training {
         state.capacity = std::max(initial_cap, logical_size);
         state.size = logical_size;
         state.step_count = 0;
+        state.sh_band_step_count.fill(0);
         if (type == ParamType::ShN) {
             const double mib = (2.0 * static_cast<double>(state.capacity) * sizeof(uint8_t) +
                                 2.0 * static_cast<double>(prim_capacity) * sizeof(float)) /
@@ -663,12 +704,24 @@ namespace lfs::training {
         }
 
         state.step_count++;
+        const int active_sh_bands =
+            type == ParamType::ShN ? active_sh_band_count(splat_data_) : 0;
+        if (type == ParamType::ShN) {
+            advance_sh_band_steps(state, active_sh_bands);
+        }
 
         auto& param_live = get_param(type);
 
         const double bias_correction1_rcp = 1.0 / (1.0 - std::pow(config_.beta1, state.step_count));
         const double bias_correction2_sqrt_rcp = 1.0 / std::sqrt(1.0 - std::pow(config_.beta2, state.step_count));
         const float param_lr = static_cast<float>(get_param_lr(type));
+        float sh_band_step_size[SH_BAND_COUNT] = {};
+        float sh_band_bias_correction2_sqrt_rcp[SH_BAND_COUNT] = {1.0f, 1.0f, 1.0f};
+        if (type == ParamType::ShN) {
+            prepare_sh_band_corrections(
+                config_, state, active_sh_bands, /*next_step=*/false, param_lr,
+                sh_band_step_size, sh_band_bias_correction2_sqrt_rcp);
+        }
 
         cudaStream_t execution_stream = state.grad.stream();
         if (execution_stream == nullptr) {
@@ -748,10 +801,12 @@ namespace lfs::training {
                     sh_value_bits,
                     sh_value_n_cells,
                     param_lr * static_cast<float>(bias_correction1_rcp),
+                    sh_band_step_size,
                     static_cast<float>(config_.beta1),
                     static_cast<float>(config_.beta2),
                     static_cast<float>(config_.eps),
                     static_cast<float>(bias_correction2_sqrt_rcp),
+                    sh_band_bias_correction2_sqrt_rcp,
                     execution_stream);
                 param_live.set_stream(execution_stream);
                 state.exp_avg.set_stream(execution_stream);
@@ -1022,6 +1077,15 @@ namespace lfs::training {
         fused.shN = prepare_param(ParamType::ShN,
                                   static_cast<int>(lfs::core::sh_float4_slots_for_rest(layout_rest) * 4u),
                                   active_rest > 0 && iteration > SH_WARMUP_ITERATIONS);
+        if (fused.shN.enabled) {
+            auto& sh_state = states_.at(param_name(ParamType::ShN));
+            prepare_sh_band_corrections(
+                config_, sh_state, active_sh_band_count(splat_data_),
+                /*next_step=*/true, static_cast<float>(get_param_lr(ParamType::ShN)),
+                fused.shN.sh_band_step_size,
+                fused.shN.sh_band_bias_correction2_sqrt_rcp);
+            fused.shN.use_sh_band_corrections = true;
+        }
         // Generation-checked q16 fetch — never bake a pre-grow exportable pointer.
         if (fused.shN.enabled && splat_data_.shN_value_quantized() &&
             splat_data_.shN_value_bounds().is_valid()) {
@@ -1079,6 +1143,9 @@ namespace lfs::training {
             auto& state = states_[name];
             if (state.exp_avg.is_valid() && state.is_joint()) {
                 state.step_count++;
+                if (type == ParamType::ShN) {
+                    advance_sh_band_steps(state, active_sh_band_count(splat_data_));
+                }
             }
         }
         fused_step_iteration_ = iteration;
@@ -1777,7 +1844,8 @@ namespace lfs::training {
         // v1: fp32 moments (no scales).
         // v2: uint8 quantised moments + per-primitive fp32 scales (legacy codec only).
         // v3: per-state joint_bits marker; joint packs (exp_avg + joint_bounds), legacy keeps v2 tensors.
-        constexpr uint32_t ADAM_STATE_VERSION = 3;
+        // v4: three SH-rest band step counters for degree-local Adam bias correction.
+        constexpr uint32_t ADAM_STATE_VERSION = 4;
     } // namespace
 
     void AdamOptimizer::serialize(std::ostream& os) const {
@@ -1819,6 +1887,9 @@ namespace lfs::training {
             os.write(reinterpret_cast<const char*>(&name_len), sizeof(name_len));
             os.write(name.data(), name_len);
             os.write(reinterpret_cast<const char*>(&state.step_count), sizeof(state.step_count));
+            os.write(
+                reinterpret_cast<const char*>(state.sh_band_step_count.data()),
+                sizeof(state.sh_band_step_count));
             os.write(reinterpret_cast<const char*>(&state.capacity), sizeof(state.capacity));
             os.write(reinterpret_cast<const char*>(&state.size), sizeof(state.size));
             // v3: joint_bits discriminates packed joint moments from legacy u8+scales.
@@ -1916,9 +1987,28 @@ namespace lfs::training {
 
             AdamParamState state;
             lfs::core::serialization_detail::read_exact(is, &state.step_count, sizeof(state.step_count), "Adam step count");
+            if (version >= 4) {
+                lfs::core::serialization_detail::read_exact(
+                    is,
+                    state.sh_band_step_count.data(),
+                    sizeof(state.sh_band_step_count),
+                    "Adam SH band step counts");
+            } else if (name == "shN") {
+                // Legacy checkpoints used the tensor-wide step for every active SH
+                // coefficient. Preserve that age for already-active bands while leaving
+                // future bands fresh when they are enabled after resume.
+                const int active_bands = active_sh_band_count(splat_data_);
+                for (int band = 0; band < active_bands; ++band) {
+                    state.sh_band_step_count[static_cast<size_t>(band)] =
+                        state.step_count;
+                }
+            }
             lfs::core::serialization_detail::read_exact(is, &state.capacity, sizeof(state.capacity), "Adam state capacity");
             lfs::core::serialization_detail::read_exact(is, &state.size, sizeof(state.size), "Adam state size");
-            if (state.step_count < 0 || state.size > state.capacity)
+            const bool invalid_band_step = std::any_of(
+                state.sh_band_step_count.begin(), state.sh_band_step_count.end(),
+                [](const int64_t step) { return step < 0; });
+            if (state.step_count < 0 || invalid_band_step || state.size > state.capacity)
                 throw std::runtime_error("Invalid AdamOptimizer checkpoint: inconsistent state bounds");
 
             // v3 introduces per-state joint_bits; v1/v2 are always legacy (joint_bits=0).
@@ -2136,6 +2226,7 @@ namespace lfs::training {
         if (state->joint_bounds.is_valid())
             state->joint_bounds.zero_();
         state->step_count = 0;
+        state->sh_band_step_count.fill(0);
     }
 
 } // namespace lfs::training

@@ -33,6 +33,11 @@ namespace fast_lfs::rasterization {
         int n_attributes = 0;
         float step_size = 0.0f;
         float bias_correction2_sqrt_rcp = 1.0f;
+        // shN-only per-band corrections. Logical scalar cells [0,9), [9,24),
+        // and [24,45) select l=1, l=2, and l=3 respectively.
+        float sh_band_step_size[3] = {0.0f, 0.0f, 0.0f};
+        float sh_band_bias_correction2_sqrt_rcp[3] = {1.0f, 1.0f, 1.0f};
+        bool use_sh_band_corrections = false;
         bool enabled = false;
         const float* screen_share_max = nullptr;
         int screen_share_n = 0;

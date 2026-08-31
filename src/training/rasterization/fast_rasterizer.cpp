@@ -751,6 +751,12 @@ namespace lfs::training {
             dst.n_attributes = src.n_attributes;
             dst.step_size = src.step_size;
             dst.bias_correction2_sqrt_rcp = src.bias_correction2_sqrt_rcp;
+            for (int band = 0; band < 3; ++band) {
+                dst.sh_band_step_size[band] = src.sh_band_step_size[band];
+                dst.sh_band_bias_correction2_sqrt_rcp[band] =
+                    src.sh_band_bias_correction2_sqrt_rcp[band];
+            }
+            dst.use_sh_band_corrections = src.use_sh_band_corrections;
             dst.enabled = src.enabled;
             dst.screen_share_max = src.screen_share_max;
             dst.screen_share_n = src.screen_share_n;

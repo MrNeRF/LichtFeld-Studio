@@ -51,6 +51,10 @@ namespace lfs::training {
         lfs::core::Tensor joint_bounds; // [n_bounds, 4] fp32; joint codec only
         int joint_bits = 0;             // 0=legacy, 8=SH, 16=non-SH
         int64_t step_count = 0;
+        // SH-rest bands are activated progressively. Their Adam bias-correction ages
+        // must start when each band becomes trainable instead of inheriting the age of
+        // the whole shN tensor. Unused for non-ShN parameter states.
+        std::array<int64_t, 3> sh_band_step_count{};
         size_t capacity = 0; // Allocated capacity (moment rows / float cells)
         size_t size = 0;     // Used size
         [[nodiscard]] bool is_joint() const noexcept { return joint_bits != 0; }
@@ -94,6 +98,11 @@ namespace lfs::training {
         int n_attributes = 0;
         float step_size = 0.0f;
         float bias_correction2_sqrt_rcp = 1.0f;
+        // shN-only bias corrections for degree bands l=1, l=2, l=3. The
+        // scalar fields above remain the fallback for non-SH and legacy callers.
+        float sh_band_step_size[3] = {0.0f, 0.0f, 0.0f};
+        float sh_band_bias_correction2_sqrt_rcp[3] = {1.0f, 1.0f, 1.0f};
+        bool use_sh_band_corrections = false;
         bool enabled = false;
         const float* screen_share_max = nullptr;
         int screen_share_n = 0;

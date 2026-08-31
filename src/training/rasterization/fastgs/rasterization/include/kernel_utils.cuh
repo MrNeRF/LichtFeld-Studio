@@ -826,7 +826,7 @@ namespace fast_lfs::rasterization::kernels {
         const bool value_f16 = p.sh_value_bits == 16 && !value_q16;
         const uint n_value_cells = value_q16 ? static_cast<uint>(p.sh_value_n_cells) : 0u;
 
-        float row_step_size = p.step_size;
+        float row_step_scale = 1.0f;
         bool apply_step = true;
         bool touch = p.enabled && sh_layout_slots > 0u &&
                      p.joint_packed != nullptr && p.joint_bounds != nullptr;
@@ -842,7 +842,7 @@ namespace fast_lfs::rasterization::kernels {
             if (p.frozen_lr_scale == 0.0f)
                 apply_step = false;
             else
-                row_step_size *= p.frozen_lr_scale;
+                row_step_scale *= p.frozen_lr_scale;
         }
         if (touch && p.crop_damping_mask != nullptr &&
             primitive_idx < static_cast<uint>(p.crop_damping_mask_size) &&
@@ -850,7 +850,7 @@ namespace fast_lfs::rasterization::kernels {
             if (p.cropbox_lr_scale == 0.0f)
                 apply_step = false;
             else
-                row_step_size *= p.cropbox_lr_scale;
+                row_step_scale *= p.cropbox_lr_scale;
         }
 
         const int bidx = static_cast<int>(blockIdx.x);
@@ -872,6 +872,7 @@ namespace fast_lfs::rasterization::kernels {
 
         constexpr uint N_SLOTS = (ACTIVE_SH_BASES > 9) ? 12u : (ACTIVE_SH_BASES > 4) ? 6u
                                                                                      : 3u;
+        constexpr uint N_ACTIVE_CELLS = (ACTIVE_SH_BASES - 1u) * 3u;
 
         if (touch) {
 #pragma unroll
@@ -891,10 +892,23 @@ namespace fast_lfs::rasterization::kernels {
                     const float gci = (c == 0) ? gk.x : (c == 1) ? gk.y
                                                     : (c == 2)   ? gk.z
                                                                  : gk.w;
+                    const uint cell_lin = k * 4u + static_cast<uint>(c);
+                    const bool cell_active = cell_lin < N_ACTIVE_CELLS;
+                    const int band = cell_lin < 9u ? 0 : (cell_lin < 24u ? 1 : 2);
+                    const float cell_step_size = row_step_scale *
+                                                 (p.use_sh_band_corrections
+                                                      ? p.sh_band_step_size[band]
+                                                      : p.step_size);
+                    const float cell_bias_correction2_sqrt_rcp =
+                        p.use_sh_band_corrections
+                            ? p.sh_band_bias_correction2_sqrt_rcp[band]
+                            : p.bias_correction2_sqrt_rcp;
                     const int64_t cell = static_cast<int64_t>(slot) * 4 + c;
                     const float2 prim = shN_adam_moment_us<C>(
-                        gci, cell, p.joint_packed, old_mm, apply_step, active_slot,
-                        beta1, beta2, row_step_size, eps, p.bias_correction2_sqrt_rcp, pci);
+                        gci, cell, p.joint_packed, old_mm,
+                        apply_step && cell_active, cell_active,
+                        beta1, beta2, cell_step_size, eps,
+                        cell_bias_correction2_sqrt_rcp, pci);
                     if (c == 0)
                         pc.x = pci;
                     else if (c == 1)
@@ -904,7 +918,6 @@ namespace fast_lfs::rasterization::kernels {
                     else
                         pc.w = pci;
                     if (value_q16) {
-                        const uint cell_lin = k * 4u + static_cast<uint>(c);
                         if (cell_lin < n_value_cells) {
                             local_v_min = fminf(local_v_min, pci);
                             local_v_max = fmaxf(local_v_max, pci);
@@ -990,16 +1003,28 @@ namespace fast_lfs::rasterization::kernels {
                     const float gci = (c == 0) ? gk.x : (c == 1) ? gk.y
                                                     : (c == 2)   ? gk.z
                                                                  : gk.w;
+                    const uint cell_lin = k * 4u + static_cast<uint>(c);
+                    const bool cell_active = cell_lin < N_ACTIVE_CELLS;
+                    const int band = cell_lin < 9u ? 0 : (cell_lin < 24u ? 1 : 2);
+                    const float cell_step_size = row_step_scale *
+                                                 (p.use_sh_band_corrections
+                                                      ? p.sh_band_step_size[band]
+                                                      : p.step_size);
+                    const float cell_bias_correction2_sqrt_rcp =
+                        p.use_sh_band_corrections
+                            ? p.sh_band_bias_correction2_sqrt_rcp[band]
+                            : p.bias_correction2_sqrt_rcp;
                     const int64_t cell = static_cast<int64_t>(slot) * 4 + c;
                     const float2 prim = shN_adam_moment_us<C>(
-                        gci, cell, p.joint_packed, old_mm, apply_step, active_slot,
-                        beta1, beta2, row_step_size, eps, p.bias_correction2_sqrt_rcp, pci);
+                        gci, cell, p.joint_packed, old_mm,
+                        apply_step && cell_active, cell_active,
+                        beta1, beta2, cell_step_size, eps,
+                        cell_bias_correction2_sqrt_rcp, pci);
                     C::encode_us(p.joint_packed, cell, prim.x, prim.y,
                                  new_mm.x, new_mm.z, inv_u_range, inv_s_range);
                     // Always re-encode under new block bounds (frozen/crop-damped too),
                     // matching joint-moment encode. apply_step only gates the Adam update.
                     if (value_q16) {
-                        const uint cell_lin = k * 4u + static_cast<uint>(c);
                         if (cell_lin < n_value_cells) {
                             param_u16[lfs::core::sh_value::shAtU16(
                                 primitive_idx, cell_lin, n_value_cells)] =

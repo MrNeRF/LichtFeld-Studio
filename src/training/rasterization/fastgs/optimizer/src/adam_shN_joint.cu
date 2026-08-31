@@ -48,10 +48,12 @@ namespace fast_lfs::optimizer {
         const int sh_value_bits,
         const int sh_value_n_cells,
         const float step_size,
+        const float* sh_band_step_size,
         const float beta1,
         const float beta2,
         const float eps,
         const float bias_correction2_sqrt_rcp,
+        const float* sh_band_bias_correction2_sqrt_rcp,
         cudaStream_t stream) {
         LFS_VALIDATE_CUDA_DEVICE_POINTER(param, "param");
         LFS_VALIDATE_CUDA_DEVICE_POINTER(packed, "joint_packed");
@@ -67,6 +69,11 @@ namespace fast_lfs::optimizer {
         if (sh_value_bits != 0 && sh_value_bits != 16) {
             throw std::runtime_error(
                 "adam_step_shN_joint_from_grad: sh_value_bits must be 0 or 16");
+        }
+        if (sh_band_step_size == nullptr ||
+            sh_band_bias_correction2_sqrt_rcp == nullptr) {
+            throw std::runtime_error(
+                "adam_step_shN_joint_from_grad: missing SH band corrections");
         }
 
         fast_lfs::rasterization::FusedAdamSettings fused{};
@@ -90,6 +97,12 @@ namespace fast_lfs::optimizer {
         fused.shN.cropbox_lr_scale = cropbox_lr_scale;
         fused.shN.step_size = step_size;
         fused.shN.bias_correction2_sqrt_rcp = bias_correction2_sqrt_rcp;
+        for (int band = 0; band < 3; ++band) {
+            fused.shN.sh_band_step_size[band] = sh_band_step_size[band];
+            fused.shN.sh_band_bias_correction2_sqrt_rcp[band] =
+                sh_band_bias_correction2_sqrt_rcp[band];
+        }
+        fused.shN.use_sh_band_corrections = true;
         fused.shN.enabled = true;
 
         constexpr int kBS = 256;
