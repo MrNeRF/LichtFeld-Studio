@@ -35,6 +35,28 @@ namespace edge_compute::rasterization {
         float* accum_weights,
         cudaStream_t stream = nullptr); // nullptr → getCurrentCUDAStream()
 
+    // Test-only compatibility path. Production callers must use edge_forward_raw,
+    // which uses packed visibility and V-sized geometry storage.
+    ForwardResult edge_forward_raw_legacy_for_testing(
+        const float* means_ptr,
+        const float* scales_raw_ptr,
+        const float* rotations_raw_ptr,
+        const float* opacities_raw_ptr,
+        const float* w2c_ptr,
+        int n_primitives,
+        int width,
+        int height,
+        float focal_x,
+        float focal_y,
+        float center_x,
+        float center_y,
+        float near_plane,
+        float far_plane,
+        bool mip_filter,
+        const float* pixel_weights,
+        float* accum_weights,
+        cudaStream_t stream = nullptr);
+
     // Pre-compile all CUDA kernels to avoid JIT delays during rendering
     void warmup_kernels();
 

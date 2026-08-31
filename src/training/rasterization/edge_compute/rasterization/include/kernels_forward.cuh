@@ -39,11 +39,14 @@ namespace edge_compute::rasterization::kernels::forward {
         const float4* __restrict__ raw_rotations,
         const float* __restrict__ raw_opacities,
         const float4* __restrict__ w2c,
+        const uint* __restrict__ primitive_indices,
+        uint* __restrict__ primitive_visible_mask,
         uint* __restrict__ primitive_depth_keys,
         uint* __restrict__ primitive_n_touched_tiles,
         ushort4* __restrict__ primitive_screen_bounds,
         float2* __restrict__ primitive_mean2d,
         float4* __restrict__ primitive_conic_opacity,
+        const uint n_work_items,
         const uint n_primitives,
         const uint grid_width,
         const uint grid_height,
@@ -57,15 +60,16 @@ namespace edge_compute::rasterization::kernels::forward {
         const float far_,
         const uint depth_bits,
         const bool mip_filter) {
-        auto primitive_idx = cg::this_grid().thread_rank();
-        bool active = true;
-        if (primitive_idx >= n_primitives) {
+        auto work_idx = cg::this_grid().thread_rank();
+        bool active = work_idx < n_work_items;
+        if (!active) {
             active = false;
-            primitive_idx = n_primitives - 1;
+            work_idx = n_work_items - 1;
         }
+        const uint primitive_idx = primitive_indices != nullptr ? primitive_indices[work_idx] : work_idx;
 
-        if (active)
-            primitive_n_touched_tiles[primitive_idx] = 0;
+        if (active && primitive_n_touched_tiles != nullptr)
+            primitive_n_touched_tiles[work_idx] = 0;
 
         // load 3d mean
         const float3 mean3d = means[primitive_idx];
@@ -200,16 +204,21 @@ namespace edge_compute::rasterization::kernels::forward {
         if (n_touched_tiles == 0 || !active)
             return;
 
+        if (primitive_visible_mask != nullptr)
+            atomicOr(&primitive_visible_mask[primitive_idx >> 5], 1u << (primitive_idx & 31u));
+        if (primitive_n_touched_tiles == nullptr)
+            return;
+
         // store results
-        primitive_n_touched_tiles[primitive_idx] = n_touched_tiles;
-        primitive_screen_bounds[primitive_idx] = make_ushort4(
+        primitive_n_touched_tiles[work_idx] = n_touched_tiles;
+        primitive_screen_bounds[work_idx] = make_ushort4(
             static_cast<ushort>(screen_bounds.x),
             static_cast<ushort>(screen_bounds.y),
             static_cast<ushort>(screen_bounds.z),
             static_cast<ushort>(screen_bounds.w));
-        primitive_mean2d[primitive_idx] = mean2d;
-        primitive_conic_opacity[primitive_idx] = make_float4(conic, output_opacity);
-        primitive_depth_keys[primitive_idx] = quantize_depth_key(depth, depth_bits);
+        primitive_mean2d[work_idx] = mean2d;
+        primitive_conic_opacity[work_idx] = make_float4(conic, output_opacity);
+        primitive_depth_keys[work_idx] = quantize_depth_key(depth, depth_bits);
     }
 
     // based on https://github.com/r4dl/StopThePop-Rasterization/blob/d8cad09919ff49b11be3d693d1e71fa792f559bb/cuda_rasterizer/stopthepop/stopthepop_common.cuh#L325
@@ -220,6 +229,7 @@ namespace edge_compute::rasterization::kernels::forward {
         const ushort4* __restrict__ primitive_screen_bounds,
         const float2* __restrict__ primitive_mean2d,
         const float4* __restrict__ primitive_conic_opacity,
+        const uint* __restrict__ visible_primitive_indices,
         InstanceKey* __restrict__ instance_keys,
         uint* __restrict__ instance_primitive_indices,
         const uint grid_width,
@@ -266,7 +276,9 @@ namespace edge_compute::rasterization::kernels::forward {
                     for (uint tile_x = min_x; tile_x < max_x && current_write_offset < write_offset_end; tile_x++) {
                         const uint tile_key = tile_y * grid_width + tile_x;
                         instance_keys[current_write_offset] = make_instance_key(tile_key, depth_key, depth_bits);
-                        instance_primitive_indices[current_write_offset] = primitive_idx;
+                        instance_primitive_indices[current_write_offset] = visible_primitive_indices != nullptr
+                                                                               ? visible_primitive_indices[primitive_idx]
+                                                                               : primitive_idx;
                         current_write_offset++;
                     }
                 }
@@ -281,7 +293,9 @@ namespace edge_compute::rasterization::kernels::forward {
                     for (uint tile_y = min_y; tile_y < max_y && current_write_offset < write_offset_end; tile_y++) {
                         const uint tile_key = tile_y * grid_width + tile_x;
                         instance_keys[current_write_offset] = make_instance_key(tile_key, depth_key, depth_bits);
-                        instance_primitive_indices[current_write_offset] = primitive_idx;
+                        instance_primitive_indices[current_write_offset] = visible_primitive_indices != nullptr
+                                                                               ? visible_primitive_indices[primitive_idx]
+                                                                               : primitive_idx;
                         current_write_offset++;
                     }
                 }
@@ -317,6 +331,7 @@ namespace edge_compute::rasterization::kernels::forward {
     __global__ void __launch_bounds__(config::block_size_blend) edge_blend_cu(
         const uint2* __restrict__ tile_instance_ranges,
         const uint* __restrict__ instance_primitive_indices,
+        const uint* __restrict__ primitive_work_indices,
         const float2* __restrict__ primitive_mean2d,
         const float4* __restrict__ primitive_conic_opacity,
         const uint width,
@@ -358,10 +373,13 @@ namespace edge_compute::rasterization::kernels::forward {
             if (__syncthreads_count(done) == config::block_size_blend)
                 break;
             if (current_fetch_idx < tile_range.y) {
-                const uint primitive_idx = instance_primitive_indices[current_fetch_idx];
-                collected_mean2d[thread_rank] = primitive_mean2d[primitive_idx];
-                collected_conic_opacity[thread_rank] = primitive_conic_opacity[primitive_idx];
-                collected_primitive_idx[thread_rank] = primitive_idx;
+                const uint original_idx = instance_primitive_indices[current_fetch_idx];
+                const uint work_idx = primitive_work_indices != nullptr
+                                          ? primitive_work_indices[original_idx]
+                                          : original_idx;
+                collected_mean2d[thread_rank] = primitive_mean2d[work_idx];
+                collected_conic_opacity[thread_rank] = primitive_conic_opacity[work_idx];
+                collected_primitive_idx[thread_rank] = original_idx;
             }
             block.sync();
             const int current_batch_size = min(config::block_size_blend, n_points_remaining);

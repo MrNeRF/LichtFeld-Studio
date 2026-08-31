@@ -7,6 +7,7 @@
 #include "forward.h"
 #include "helper_math.h"
 #include "kernels_forward.cuh"
+#include "visibility.cuh"
 #include "rasterization_config.h"
 #include "utils.h"
 #include <algorithm>
@@ -307,8 +308,8 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     const uint n_visibility_blocks = static_cast<uint>(
         (static_cast<size_t>(n_primitives) + config::visibility_block_size - 1) /
         config::visibility_block_size);
-    kernels::forward::count_visible_blocks_cu<<<n_visibility_blocks,
-                                                config::visibility_block_size, 0, stream>>>(
+    lfs::rasterization::visibility::count_blocks<<<n_visibility_blocks,
+                                                   lfs::rasterization::visibility::kBlockSize, 0, stream>>>(
         visibility_buffers.visibility_mask,
         visibility_buffers.block_counts,
         static_cast<uint>(n_primitives));
@@ -329,11 +330,11 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         n_tiles_u64);
     LFS_FASTGS_PHASE_CHECK("cub::DeviceScan::InclusiveSum (FastGS visibility)");
 
-    kernels::forward::compact_visible_primitives_cu<<<div_round_up(n_primitives, config::block_size_preprocess), config::block_size_preprocess, 0, stream>>>(
+    lfs::rasterization::visibility::compact_indices<<<div_round_up(n_primitives, config::block_size_preprocess), config::block_size_preprocess, 0, stream>>>(
         visibility_buffers.visibility_mask,
         visibility_buffers.block_offsets,
-        visibility_buffers.primitive_work_indices,
         visibility_buffers.visible_indices,
+        visibility_buffers.primitive_work_indices,
         static_cast<uint>(n_primitives));
     LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.compact_visible");
 
