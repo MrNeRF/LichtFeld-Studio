@@ -289,6 +289,10 @@ namespace lfs::vis {
         SplitViewInfo getSplitViewInfo() const;
         [[nodiscard]] bool isSplitViewActive() const;
         [[nodiscard]] bool isGTComparisonActive() const;
+        // Internal drag-preview signal for the shader-approximate live reveal; never touches
+        // RenderSettings.
+        void setDepthWindowDragPreview(bool active);
+        [[nodiscard]] bool depthWindowDragPreview() const;
         [[nodiscard]] bool isIndependentSplitViewActive() const;
         // Project restore may only enter/leave split modes through the service
         // transition path; it must never assign RenderSettings::split_view_mode.
@@ -922,6 +926,7 @@ namespace lfs::vis {
 
         // Settings
         RenderSettings settings_;
+        bool depth_window_drag_preview_ = false;
         SceneUpscalerSelection scene_upscaler_runtime_selection_{};
         std::array<int, 2> panel_grid_planes_{{1, 1}};
         mutable std::mutex settings_mutex_;

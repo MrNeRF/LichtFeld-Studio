@@ -176,6 +176,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         operator/operator_id.cpp
         operator/operator_registry.cpp
         operator/ops/align_ops.cpp
+        operator/ops/depth_window_ops.cpp
         operator/ops/edit_ops.cpp
         operator/ops/scene_ops.cpp
         operator/ops/selection_ops.cpp
@@ -183,6 +184,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # Compositional operations system
         operation/undo_entry.cpp
+        operation/depth_window_undo_entry.cpp
         operation/undo_history.cpp
         operation/operation.cpp
         operation/pipeline.cpp

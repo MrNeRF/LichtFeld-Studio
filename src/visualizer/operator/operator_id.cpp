@@ -36,6 +36,7 @@ namespace lfs::vis::op {
             {"ellipsoid.set", "Set Ellipsoid"},
             {"ellipsoid.fit", "Fit Ellipsoid"},
             {"ellipsoid.reset", "Reset Ellipsoid"},
+            {"selection.depth_window_drag", "Drag Depth Window"},
         }};
 
         struct ToolInfo {

@@ -3,21 +3,29 @@
 
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
+#include "core/events.hpp"
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "input/input_controller.hpp"
 #include "input/key_codes.hpp"
 #include "internal/viewport.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/operator_context.hpp"
 #include "operator/operator_properties.hpp"
+#include "operator/operator_registry.hpp"
+#include "operator/ops/depth_window_ops.hpp"
 #include "operator/ops/selection_ops.hpp"
+#include "rendering/render_constants.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "selection/selection_service.hpp"
 #include "tools/selection_tool.hpp"
 #include "tools/tool_base.hpp"
+#include "visualizer_impl.hpp"
 
 #include <algorithm>
+#include <glm/glm.hpp>
 #include <gtest/gtest.h>
 #include <memory>
 #include <vector>
@@ -89,7 +97,8 @@ namespace {
         settings.depth_filter_min = {-0.5f, -0.5f, -8.875f};
         settings.depth_filter_max = {0.5f, 0.5f, -8.0f};
         // Full-viewport window so only depth can decide.
-        settings.depth_filter_scale = 1.0f;
+        settings.depth_filter_scale_x = 1.0f;
+        settings.depth_filter_scale_y = 1.0f;
         settings.depth_filter_offset_x = 0.0f;
         settings.depth_filter_offset_y = 0.0f;
         rendering_manager.updateSettings(settings);
@@ -386,6 +395,38 @@ TEST_F(SelectionOperatorModalTest, ClosedPolygonVertexDragConsumesMouseMoveUntil
     EXPECT_FALSE(service().isInteractivePolygonVertexDragActive());
 }
 
+TEST_F(SelectionOperatorModalTest, DepthFilterExtentsUseIndependentScaleAxes) {
+    Viewport viewport(100, 100);
+    lfs::vis::ToolContext tool_context(rendering_manager_.get(), scene_manager_.get(), &viewport, nullptr);
+    tool_context.updateViewportBounds(0.0f, 0.0f, 100.0f, 100.0f);
+
+    constexpr float k_scale_x = 0.4f;
+    constexpr float k_scale_y = 0.7f;
+    auto settings = rendering_manager_->getSettings();
+    settings.depth_filter_scale_x = k_scale_x;
+    settings.depth_filter_scale_y = k_scale_y;
+    rendering_manager_->updateSettings(settings);
+
+    lfs::vis::tools::SelectionTool tool;
+    ASSERT_TRUE(tool.initialize(tool_context));
+    tool.setDepthFilterRange(false, 0.0f, 15.0f, 0.0f);
+    tool.setEnabled(true);
+    tool.setDepthFilterEnabled(true);
+
+    const auto updated = rendering_manager_->getSettings();
+    const auto [pixel_focal_x, pixel_focal_y] =
+        lfs::rendering::computePixelFocalLengths(glm::ivec2(100, 100), updated.focal_length_mm);
+    const float half_w_pixels = 0.5f * k_scale_x * 100.0f;
+    const float half_h_pixels = 0.5f * k_scale_y * 100.0f;
+    const float expected_half_x = half_w_pixels * 15.0f / pixel_focal_x;
+    const float expected_half_y = half_h_pixels * 15.0f / pixel_focal_y;
+
+    EXPECT_NEAR(updated.depth_filter_min.x, -expected_half_x, 1.0e-5f);
+    EXPECT_NEAR(updated.depth_filter_max.x, expected_half_x, 1.0e-5f);
+    EXPECT_NEAR(updated.depth_filter_min.y, -expected_half_y, 1.0e-5f);
+    EXPECT_NEAR(updated.depth_filter_max.y, expected_half_y, 1.0e-5f);
+    EXPECT_NE(expected_half_x, expected_half_y);
+}
 TEST_F(SelectionOperatorModalTest, ClosedPolygonShiftAddsVertexAndCtrlRemovesVertex) {
     set_initial_selection({1, 0});
 
@@ -450,4 +491,161 @@ TEST_F(SelectionOperatorModalTest, ClosedPolygonShiftAddsVertexAndCtrlRemovesVer
     service().refreshInteractivePreview();
     const auto& reduced_points = rendering_manager_->getPolygonPoints();
     ASSERT_EQ(reduced_points.size(), 3u);
+}
+
+class DepthWindowDragLifecycleTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        lfs::event::EventBridge::instance().clear_all();
+        lfs::core::event::bus().clear_all();
+        lfs::vis::services().clear();
+        lfs::vis::op::undoHistory().clear();
+
+        options_.show_startup_overlay = false;
+        options_.width = 200;
+        options_.height = 200;
+        viewer_ = std::make_unique<lfs::vis::VisualizerImpl>(options_);
+        viewer_->initializeTools();
+
+        rendering_manager_ = viewer_->getRenderingManager();
+        scene_manager_ = viewer_->getSceneManager();
+        selection_tool_ = viewer_->getSelectionTool();
+        ASSERT_NE(rendering_manager_, nullptr);
+        ASSERT_NE(scene_manager_, nullptr);
+        ASSERT_NE(selection_tool_, nullptr);
+
+        scene_manager_->getScene().addSplat(
+            "depth_window_test",
+            make_test_splat({
+                0.0f,
+                0.0f,
+                0.0f,
+                1.0f,
+                0.0f,
+                0.0f,
+            }));
+        scene_manager_->initSelectionService();
+        if (auto* const service = scene_manager_->getSelectionService()) {
+            service->setTestingViewport({
+                .x = 0.0f,
+                .y = 0.0f,
+                .width = static_cast<float>(options_.width),
+                .height = static_cast<float>(options_.height),
+                .render_width = options_.width,
+                .render_height = options_.height,
+            });
+        }
+        selection_tool_->setEnabled(true);
+
+        auto settings = rendering_manager_->getSettings();
+        settings.depth_filter_enabled = true;
+        settings.depth_filter_scale_x = 0.5f;
+        settings.depth_filter_scale_y = 0.5f;
+        rendering_manager_->updateSettings(settings);
+        selection_tool_->setDepthFilterEnabled(true);
+    }
+
+    void TearDown() override {
+        lfs::vis::op::operators().cancelModalOperator();
+        lfs::event::EventBridge::instance().clear_all();
+        lfs::core::event::bus().clear_all();
+        lfs::vis::services().clear();
+        viewer_.reset();
+        lfs::vis::op::undoHistory().clear();
+    }
+
+    [[nodiscard]] lfs::vis::op::OperatorProperties depthDragProps(const double x, const double y) const {
+        lfs::vis::op::OperatorProperties props;
+        props.set("x", x);
+        props.set("y", y);
+        props.set("viewport_x", 0.0f);
+        props.set("viewport_y", 0.0f);
+        props.set("viewport_width", static_cast<float>(options_.width));
+        props.set("viewport_height", static_cast<float>(options_.height));
+        props.set("modifiers", lfs::vis::input::KEYMOD_SHIFT | lfs::vis::input::KEYMOD_ALT);
+        return props;
+    }
+
+    void expectMidDragPreviewActive() {
+        ASSERT_TRUE(startDepthDrag());
+        EXPECT_TRUE(rendering_manager_->depthWindowDragPreview());
+    }
+
+    bool startDepthDrag(const double x = 10.0, const double y = 10.0) {
+        auto props = depthDragProps(x, y);
+        const auto result = lfs::vis::op::operators().invoke(lfs::vis::op::BuiltinOp::DepthWindowDrag, &props);
+        return result.status == lfs::vis::op::OperatorResult::RUNNING_MODAL;
+    }
+
+    lfs::vis::ViewerOptions options_{};
+    std::unique_ptr<lfs::vis::VisualizerImpl> viewer_;
+    lfs::vis::RenderingManager* rendering_manager_ = nullptr;
+    lfs::vis::SceneManager* scene_manager_ = nullptr;
+    lfs::vis::tools::SelectionTool* selection_tool_ = nullptr;
+};
+
+TEST_F(DepthWindowDragLifecycleTest, CommitClearsDepthWindowDragPreview) {
+    expectMidDragPreviewActive();
+    const auto release = mouse_button(static_cast<int>(lfs::vis::input::AppMouseButton::LEFT),
+                                      lfs::vis::input::ACTION_RELEASE,
+                                      60.0,
+                                      60.0);
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(release), lfs::vis::op::OperatorResult::FINISHED);
+    EXPECT_FALSE(rendering_manager_->depthWindowDragPreview());
+}
+
+TEST_F(DepthWindowDragLifecycleTest, EscapeClearsDepthWindowDragPreview) {
+    expectMidDragPreviewActive();
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(key_press(lfs::vis::input::KEY_ESCAPE)),
+              lfs::vis::op::OperatorResult::CANCELLED);
+    EXPECT_FALSE(rendering_manager_->depthWindowDragPreview());
+}
+
+TEST_F(DepthWindowDragLifecycleTest, ModifierReleaseClearsDepthWindowDragPreview) {
+    expectMidDragPreviewActive();
+    const ModalEvent release_shift{
+        .type = ModalEvent::Type::KEY,
+        .data = KeyEvent{
+            .key = lfs::vis::input::KEY_LEFT_SHIFT,
+            .scancode = 0,
+            .action = lfs::vis::input::ACTION_RELEASE,
+            .mods = lfs::vis::input::KEYMOD_ALT,
+        },
+    };
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(release_shift),
+              lfs::vis::op::OperatorResult::CANCELLED);
+    EXPECT_FALSE(rendering_manager_->depthWindowDragPreview());
+}
+
+TEST_F(DepthWindowDragLifecycleTest, GtToggleClearsDepthWindowDragPreview) {
+    expectMidDragPreviewActive();
+    lfs::core::events::cmd::ToggleGTComparison{}.emit();
+    EXPECT_FALSE(rendering_manager_->depthWindowDragPreview());
+    EXPECT_FALSE(lfs::vis::op::operators().hasModalOperator());
+}
+
+TEST_F(DepthWindowDragLifecycleTest, ModalReplacementClearsDepthWindowDragPreview) {
+    expectMidDragPreviewActive();
+    lfs::vis::op::OperatorProperties stroke_props;
+    stroke_props.set("mode", 0);
+    stroke_props.set("op", 0);
+    stroke_props.set("x", 30.0);
+    stroke_props.set("y", 30.0);
+    const auto stroke = lfs::vis::op::operators().invoke(lfs::vis::op::BuiltinOp::SelectionStroke, &stroke_props);
+    ASSERT_EQ(stroke.status, lfs::vis::op::OperatorResult::RUNNING_MODAL);
+    EXPECT_FALSE(rendering_manager_->depthWindowDragPreview());
+    lfs::vis::op::operators().cancelModalOperator();
+}
+
+TEST_F(DepthWindowDragLifecycleTest, FocusLossClearsDepthWindowDragPreview) {
+    expectMidDragPreviewActive();
+    // The viewer is constructed without initialize(), so no InputController is
+    // wired to the WindowManager; drive the focus-loss handler on a directly
+    // constructed controller (its cancelModalOperator path is what terminates
+    // the drag).
+    Viewport focus_viewport(options_.width, options_.height);
+    lfs::vis::InputController input(nullptr, focus_viewport);
+    input.onWindowFocusLost();
+    EXPECT_FALSE(rendering_manager_->depthWindowDragPreview());
+    EXPECT_FALSE(lfs::vis::op::operators().hasModalOperator());
 }

@@ -23,6 +23,7 @@
 #include "operator/operator_context.hpp"
 #include "operator/operator_id.hpp"
 #include "operator/operator_registry.hpp"
+#include "operator/ops/depth_window_ops.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -50,7 +51,28 @@ namespace lfs::vis {
         constexpr float kWasdShiftSpeedBonus = 20.0f;
         constexpr double kCameraContextMenuDragThreshold = 4.0;
         constexpr double kCameraFrustumClickThreshold = 5.0;
+        constexpr int kDepthWindowModifiers = input::KEYMOD_SHIFT | input::KEYMOD_ALT;
         namespace string_keys = lichtfeld::Strings;
+
+        [[nodiscard]] SDL_Cursor* depthWindowSdlCursor(const op::DepthWindowCursor cursor) {
+            static SDL_Cursor* const nwse = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NWSE_RESIZE);
+            static SDL_Cursor* const nesw = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NESW_RESIZE);
+            static SDL_Cursor* const ew = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
+            static SDL_Cursor* const ns = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NS_RESIZE);
+            static SDL_Cursor* const move = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_MOVE);
+            static SDL_Cursor* const crosshair =
+                SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_CROSSHAIR);
+            switch (cursor) {
+            case op::DepthWindowCursor::ResizeNwse: return nwse;
+            case op::DepthWindowCursor::ResizeNesw: return nesw;
+            case op::DepthWindowCursor::ResizeEw: return ew;
+            case op::DepthWindowCursor::ResizeNs: return ns;
+            case op::DepthWindowCursor::Move: return move;
+            case op::DepthWindowCursor::Crosshair: return crosshair;
+            case op::DepthWindowCursor::Default:
+            default: return SDL_GetDefaultCursor();
+            }
+        }
 
         // Expand [world_min, world_max] by a node's local AABB transformed to world
         // space. With use_percentile, the splat/point-cloud box is the trimmed
@@ -474,9 +496,41 @@ namespace lfs::vis {
         bindings_.setOnBindingsChanged([this]() { refreshMovementKeyCache(); });
     }
 
+    void InputController::releaseDepthWindowCursor() {
+        if (current_cursor_ == CursorType::DepthWindow) {
+            SDL_SetCursor(SDL_GetDefaultCursor());
+            current_cursor_ = CursorType::Default;
+        }
+    }
+
+    bool InputController::applyDepthWindowHoverCursor(const double x, const double y,
+                                                      const bool modifiers_held) {
+        const auto depth_cursor = op::updateDepthWindowHover(
+            glm::vec2(x, y),
+            {viewport_bounds_.x, viewport_bounds_.y,
+             viewport_bounds_.width, viewport_bounds_.height},
+            modifiers_held);
+        if (!op::depthWindowOverlayState().visible) {
+            if (current_cursor_ == CursorType::DepthWindow) {
+                SDL_SetCursor(SDL_GetDefaultCursor());
+                current_cursor_ = CursorType::Default;
+            }
+            return false;
+        }
+        SDL_SetCursor(depthWindowSdlCursor(depth_cursor));
+        depth_window_cursor_ = static_cast<int>(depth_cursor);
+        current_cursor_ = depth_cursor == op::DepthWindowCursor::Default
+                              ? CursorType::Default
+                              : CursorType::DepthWindow;
+        return true;
+    }
+
     void InputController::applySplitterCursorOverride() const {
         if (current_cursor_ == CursorType::Resize && resize_cursor_) {
             SDL_SetCursor(resize_cursor_);
+        } else if (current_cursor_ == CursorType::DepthWindow) {
+            SDL_SetCursor(depthWindowSdlCursor(
+                static_cast<op::DepthWindowCursor>(depth_window_cursor_)));
         }
     }
 
@@ -552,6 +606,8 @@ namespace lfs::vis {
     }
 
     void InputController::onWindowFocusLost() {
+        op::operators().cancelModalOperator();
+        op::clearDepthWindowHover();
         if (current_cursor_ != CursorType::Default) {
             SDL_SetCursor(SDL_GetDefaultCursor());
             current_cursor_ = CursorType::Default;
@@ -715,7 +771,22 @@ namespace lfs::vis {
         }
 
         // Dispatch to modal operators first - if consumed, don't continue
+        const bool depth_drag_was_active =
+            op::operators().activeModalId() ==
+            op::to_string(op::BuiltinOp::DepthWindowDrag);
         if (dispatchMouseButtonToModals(button, action, mods, x, y, over_gui_hover)) {
+            const bool depth_drag_ended =
+                depth_drag_was_active &&
+                op::operators().activeModalId() !=
+                    op::to_string(op::BuiltinOp::DepthWindowDrag);
+            if (action == input::ACTION_RELEASE && depth_drag_ended &&
+                current_cursor_ == CursorType::DepthWindow) {
+                if (isNearSplitter(x, y) ||
+                    !applyDepthWindowHoverCursor(
+                        x, y, (mods & kDepthWindowModifiers) == kDepthWindowModifiers)) {
+                    releaseDepthWindowCursor();
+                }
+            }
             return;
         }
 
@@ -1008,6 +1079,23 @@ namespace lfs::vis {
                 break;
             }
 
+            case input::Action::DEPTH_WINDOW_DRAG:
+                if (!over_gui && !over_gizmo && !over_transform_gizmo &&
+                    selection_tool_ && selection_tool_->isEnabled() &&
+                    selection_tool_->isDepthFilterEnabled()) {
+                    op::OperatorProperties props;
+                    props.set("x", x);
+                    props.set("y", y);
+                    props.set("button", button);
+                    props.set("modifiers", mods);
+                    props.set("viewport_x", viewport_bounds_.x);
+                    props.set("viewport_y", viewport_bounds_.y);
+                    props.set("viewport_width", viewport_bounds_.width);
+                    props.set("viewport_height", viewport_bounds_.height);
+                    (void)op::operators().invoke(op::BuiltinOp::DepthWindowDrag, &props);
+                }
+                break;
+
             case input::Action::SELECTION_REPLACE:
             case input::Action::SELECTION_ADD:
             case input::Action::SELECTION_REMOVE:
@@ -1277,6 +1365,7 @@ namespace lfs::vis {
         auto* gui = services().guiOrNull();
 
         if (gui && gui->isCapturingInput()) {
+            releaseDepthWindowCursor();
             gui->captureMouseMove(x, y);
             last_mouse_pos_ = {x, y};
             return;
@@ -1284,6 +1373,7 @@ namespace lfs::vis {
 
         // Forward to pie menu if open — consume event to prevent viewport interaction
         if (gui && gui->gizmo().isPieMenuOpen()) {
+            releaseDepthWindowCursor();
             gui->gizmo().onPieMenuMouseMove({static_cast<float>(x), static_cast<float>(y)});
             last_mouse_pos_ = {x, y};
             return;
@@ -1316,6 +1406,17 @@ namespace lfs::vis {
             drag_mode_ == DragMode::None &&
             isInViewport(x, y) &&
             isNearSplitter(x, y);
+
+        const int hover_modifiers = getModifierKeys();
+        const bool depth_window_modifiers =
+            (hover_modifiers & kDepthWindowModifiers) == kDepthWindowModifiers;
+        const bool no_mouse_buttons = SDL_GetMouseState(nullptr, nullptr) == 0;
+        if (no_mouse_buttons && !isNearSplitter(x, y) &&
+            applyDepthWindowHoverCursor(x, y, depth_window_modifiers)) {
+            hovered_camera_id_ = -1;
+            last_mouse_pos_ = current_pos;
+            return;
+        }
 
         if (pending_click_drag_.active) {
             if (!isMouseButtonPressed(pending_click_drag_.button)) {
@@ -1425,7 +1526,8 @@ namespace lfs::vis {
         if (over_splitter) {
             SDL_SetCursor(resize_cursor_);
             current_cursor_ = CursorType::Resize;
-        } else if (current_cursor_ == CursorType::Resize) {
+        } else if (current_cursor_ == CursorType::Resize ||
+                   current_cursor_ == CursorType::DepthWindow) {
             SDL_SetCursor(SDL_GetDefaultCursor());
             current_cursor_ = CursorType::Default;
         }
@@ -1607,7 +1709,7 @@ namespace lfs::vis {
     }
 
     void InputController::handleKey(const int physical_key, const int logical_key,
-                                    const int scancode, int action, [[maybe_unused]] int mods) {
+                                    const int scancode, int action, int mods) {
         // Track modifier keys (always, even if GUI has focus)
         if (physical_key == input::KEY_LEFT_CONTROL || physical_key == input::KEY_RIGHT_CONTROL) {
             key_ctrl_pressed_ = (action != input::ACTION_RELEASE);
@@ -1654,6 +1756,24 @@ namespace lfs::vis {
         SDL_GetMouseState(&mx_f, &my_f);
         double mx = mx_f, my = my_f;
         const bool over_gui_hover = isPointerOverUiHover(mx, my);
+        if (op::operators().activeModalId() !=
+                op::to_string(op::BuiltinOp::DepthWindowDrag) &&
+            SDL_GetMouseState(nullptr, nullptr) == 0 &&
+            !isNearSplitter(mx, my) &&
+            !applyDepthWindowHoverCursor(
+                mx, my, (mods & kDepthWindowModifiers) == kDepthWindowModifiers)) {
+            if (current_cursor_ == CursorType::Resize ||
+                current_cursor_ == CursorType::DepthWindow) {
+                SDL_SetCursor(SDL_GetDefaultCursor());
+                current_cursor_ = CursorType::Default;
+            }
+        }
+        if (op::operators().activeModalId() ==
+                op::to_string(op::BuiltinOp::DepthWindowDrag) &&
+            (mods & kDepthWindowModifiers) != kDepthWindowModifiers) {
+            SDL_SetCursor(SDL_GetDefaultCursor());
+            current_cursor_ = CursorType::Default;
+        }
         if (action == input::ACTION_PRESS &&
             dispatchSelectionActionToModal(bound_action, mods, mx, my)) {
             return;

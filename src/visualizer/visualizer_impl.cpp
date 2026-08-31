@@ -30,6 +30,7 @@
 #include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
 #include "operator/ops/align_ops.hpp"
+#include "operator/ops/depth_window_ops.hpp"
 #include "operator/ops/edit_ops.hpp"
 #include "operator/ops/scene_ops.hpp"
 #include "operator/ops/selection_ops.hpp"
@@ -320,6 +321,7 @@ namespace lfs::vis {
         op::registerTransformOperators();
         op::registerAlignOperators();
         op::registerSelectionOperators();
+        op::registerDepthWindowOperators();
         op::registerEditOperators();
         op::registerSceneOperators();
 
@@ -350,6 +352,7 @@ namespace lfs::vis {
         // Clear operator system
         op::unregisterEditOperators();
         op::unregisterSceneOperators();
+        op::unregisterDepthWindowOperators();
         op::unregisterSelectionOperators();
         op::unregisterAlignOperators();
         op::unregisterTransformOperators();
@@ -2690,6 +2693,12 @@ namespace lfs::vis {
         if (trainer_manager_) {
             trainer_manager_.reset();
         }
+
+        // Cancel any running modal operator while the tool context is still
+        // alive: a modal's cancel/destructor path may reach back into a tool
+        // (e.g. the depth-window drag latch), and the tools hold raw pointers
+        // to this context.
+        op::operators().cancelModalOperator();
 
         // Clean up tool context
         tool_context_.reset();

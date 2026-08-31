@@ -41,6 +41,8 @@
 
 struct SDL_Window;
 
+class DepthWindowDragLifecycleTest;
+
 namespace lfs::python {
     struct SequencerUIStateData;
 } // namespace lfs::python
@@ -250,6 +252,8 @@ namespace lfs::vis {
         JobRegistry job_registry_;
         friend class gui::GuiManager;
         friend class project::ProjectLifecycle;
+        friend class ::DepthWindowDragLifecycleTest;
+        friend class DepthWindowGtHookTest;
         friend class VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnSave_Test;
         friend class VisualizerImplResetTest_StoredSessionAtPrmsIterationsReportsCompleted_Test;
         friend class VisualizerImplResetTest_StoredSessionBelowPrmsIterationsReportsNotCompleted_Test;

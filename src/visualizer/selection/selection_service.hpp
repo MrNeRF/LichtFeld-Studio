@@ -177,6 +177,10 @@ namespace lfs::vis {
         [[nodiscard]] SelectionResult finishInteractiveSelection();
         void cancelInteractiveSelection();
         void refreshInteractivePreview();
+        // Forces the next interactive-preview refresh to restart the incremental
+        // brush filter from point zero and re-apply filters (used when the depth
+        // window changes under an unchanged brush point set, e.g. a drag commit).
+        void invalidateInteractiveBrushFilterCache();
         [[nodiscard]] bool isInteractiveSelectionActive() const { return interactive_selection_.active; }
         [[nodiscard]] SelectionShape getInteractiveSelectionShape() const { return interactive_selection_.shape; }
         [[nodiscard]] bool isInteractiveSelectionClosed() const { return interactive_selection_.polygon_closed; }
@@ -186,6 +190,12 @@ namespace lfs::vis {
         void updatePassiveRingHoverPreview(glm::vec2 cursor_pos, SelectionMode mode,
                                            SelectionFilterState filters = {});
         void setInteractiveSelectionMode(SelectionMode mode) { interactive_selection_.mode = mode; }
+        // Test-only observable for the incremental brush-preview cache: the number of
+        // brush points already folded into the interactive preview. Zero after
+        // invalidateInteractiveBrushFilterCache(); restored by the next refresh.
+        [[nodiscard]] std::size_t interactiveBrushPreviewPointCountForTest() const {
+            return interactive_selection_.preview_brush_point_count;
+        }
         void setTestingScreenPositions(std::shared_ptr<core::Tensor> screen_positions);
         void setTestingScreenPositionsForCamera(int camera_index, std::shared_ptr<core::Tensor> screen_positions);
         void setTestingViewport(ViewportInfo viewport);

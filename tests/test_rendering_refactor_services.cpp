@@ -11,11 +11,17 @@
 #include "core/point_cloud.hpp"
 #include "core/services.hpp"
 #include "core/tensor.hpp"
+#include "input/key_codes.hpp"
 #include "io/cache_image_loader.hpp"
 #include "operation/undo_history.hpp"
+#include "operator/operator_registry.hpp"
+#include "operator/ops/depth_window_ops.hpp"
+#include "operator/ops/selection_ops.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/render_constants.hpp"
 #include "rendering/vksplat_viewport_renderer.hpp"
+#include "selection/selection_service.hpp"
+#include "tools/selection_tool.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/rendering/render_pass.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
@@ -25,6 +31,7 @@
 #include "visualizer/rendering/viewport_frame_lifecycle_service.hpp"
 #include "visualizer/rendering/viewport_request_builder.hpp"
 #include "visualizer/scene/scene_manager.hpp"
+#include "visualizer_impl.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -2505,6 +2512,179 @@ namespace lfs::vis {
         EXPECT_FLOAT_EQ((*packed)[base + 1], 0.0f);
         EXPECT_FLOAT_EQ((*packed)[base + 2], 0.0f);
         EXPECT_FLOAT_EQ((*packed)[base + 3], 0.0f);
+    }
+
+    TEST(OverlayParamPackingTest, OverlayParamLayoutAndAnisotropicScreenWindowPacking) {
+        static_assert(detail::ViewIntrinsics == 12);
+        static_assert(detail::ViewWindow == 206);
+        static_assert(detail::ParamCount == 207);
+
+        lfs::rendering::ViewportRenderRequest request{};
+        request.frame_view.size = {640, 480};
+        request.filters.view_volume = lfs::rendering::BoundingBox{
+            .min = glm::vec3(-1.0f),
+            .max = glm::vec3(1.0f),
+            .transform = glm::mat4(1.0f)};
+        request.filters.screen_window = lfs::rendering::SelectionScreenWindow{
+            .scale_x = 0.25f,
+            .scale_y = 0.75f,
+            .offset_x = 0.15f,
+            .offset_y = -0.35f,
+        };
+
+        const auto packed = detail::buildOverlayParamsCpuFloats(request, false, false, false, 0, false);
+        ASSERT_TRUE(packed.has_value());
+
+        const std::size_t view_flags_base = static_cast<std::size_t>(detail::ViewFlags) * 4u;
+        EXPECT_FLOAT_EQ((*packed)[view_flags_base + 3], 0.0f);
+
+        const std::size_t view_window_base = static_cast<std::size_t>(detail::ViewWindow) * 4u;
+        EXPECT_FLOAT_EQ((*packed)[view_window_base + 0], 0.25f);
+        EXPECT_FLOAT_EQ((*packed)[view_window_base + 1], 0.75f);
+        EXPECT_FLOAT_EQ((*packed)[view_window_base + 2], 0.0f);
+        EXPECT_FLOAT_EQ((*packed)[view_window_base + 3], 0.0f);
+    }
+
+    TEST(OverlayParamPackingTest, ViewWindowZPacksDepthWindowDragPreviewFlag) {
+        const std::size_t view_window_base = static_cast<std::size_t>(detail::ViewWindow) * 4u;
+
+        lfs::rendering::ViewportRenderRequest preview_on{};
+        preview_on.frame_view.size = {640, 480};
+        preview_on.filters.view_volume = lfs::rendering::BoundingBox{
+            .min = glm::vec3(-1.0f),
+            .max = glm::vec3(1.0f),
+            .transform = glm::mat4(1.0f)};
+        preview_on.filters.screen_window = lfs::rendering::SelectionScreenWindow{
+            .scale_x = 0.25f,
+            .scale_y = 0.75f,
+            .drag_preview = true,
+        };
+
+        const auto packed_on =
+            detail::buildOverlayParamsCpuFloats(preview_on, false, false, false, 0, false);
+        ASSERT_TRUE(packed_on.has_value());
+        EXPECT_FLOAT_EQ((*packed_on)[view_window_base + 2], 1.0f);
+        EXPECT_FLOAT_EQ((*packed_on)[view_window_base + 3], 0.0f);
+
+        lfs::rendering::ViewportRenderRequest preview_off = preview_on;
+        preview_off.filters.screen_window->drag_preview = false;
+
+        const auto packed_off =
+            detail::buildOverlayParamsCpuFloats(preview_off, false, false, false, 0, false);
+        ASSERT_TRUE(packed_off.has_value());
+        EXPECT_FLOAT_EQ((*packed_off)[view_window_base + 2], 0.0f);
+        EXPECT_FLOAT_EQ((*packed_off)[view_window_base + 3], 0.0f);
+    }
+
+    class DepthWindowGtHookTest : public ::testing::Test {
+    protected:
+        void SetUp() override {
+            lfs::event::EventBridge::instance().clear_all();
+            lfs::core::event::bus().clear_all();
+            lfs::vis::services().clear();
+            lfs::vis::op::undoHistory().clear();
+
+            options_.show_startup_overlay = false;
+            options_.width = 200;
+            options_.height = 200;
+            viewer_ = std::make_unique<lfs::vis::VisualizerImpl>(options_);
+            viewer_->initializeTools();
+
+            rendering_manager_ = viewer_->getRenderingManager();
+            selection_tool_ = viewer_->getSelectionTool();
+            ASSERT_NE(rendering_manager_, nullptr);
+            ASSERT_NE(selection_tool_, nullptr);
+
+            const std::vector<float> means_data{0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
+            const std::vector<float> rotation_data{1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f};
+            auto means = lfs::core::Tensor::from_vector(means_data, {size_t{2}, size_t{3}}, lfs::core::Device::CUDA).to(lfs::core::DataType::Float32);
+            auto sh0 = lfs::core::Tensor::zeros({size_t{2}, size_t{1}, size_t{3}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            auto shN = lfs::core::Tensor::zeros({size_t{2}, size_t{3}, size_t{3}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            auto scaling = lfs::core::Tensor::zeros({size_t{2}, size_t{3}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            auto rotation = lfs::core::Tensor::from_vector(rotation_data, {size_t{2}, size_t{4}}, lfs::core::Device::CUDA).to(lfs::core::DataType::Float32);
+            auto opacity = lfs::core::Tensor::zeros({size_t{2}, size_t{1}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            viewer_->getSceneManager()->getScene().addSplat(
+                "depth_window_test",
+                std::make_unique<lfs::core::SplatData>(1, std::move(means), std::move(sh0), std::move(shN), std::move(scaling), std::move(rotation), std::move(opacity), 1.0f));
+            viewer_->getSceneManager()->initSelectionService();
+            if (auto* const service = viewer_->getSceneManager()->getSelectionService()) {
+                service->setTestingViewport({
+                    .x = 0.0f,
+                    .y = 0.0f,
+                    .width = static_cast<float>(options_.width),
+                    .height = static_cast<float>(options_.height),
+                    .render_width = options_.width,
+                    .render_height = options_.height,
+                });
+            }
+            selection_tool_->setEnabled(true);
+
+            auto settings = rendering_manager_->getSettings();
+            settings.depth_filter_enabled = true;
+            settings.depth_filter_scale_x = 0.5f;
+            settings.depth_filter_scale_y = 0.5f;
+            rendering_manager_->updateSettings(settings);
+            selection_tool_->setDepthFilterEnabled(true);
+        }
+
+        void TearDown() override {
+            lfs::vis::op::operators().cancelModalOperator();
+            lfs::event::EventBridge::instance().clear_all();
+            lfs::core::event::bus().clear_all();
+            lfs::vis::services().clear();
+            viewer_.reset();
+            lfs::vis::op::undoHistory().clear();
+        }
+
+        bool startDepthDrag() {
+            lfs::vis::op::OperatorProperties props;
+            props.set("x", 10.0);
+            props.set("y", 10.0);
+            props.set("viewport_x", 0.0f);
+            props.set("viewport_y", 0.0f);
+            props.set("viewport_width", static_cast<float>(options_.width));
+            props.set("viewport_height", static_cast<float>(options_.height));
+            props.set("modifiers", lfs::vis::input::KEYMOD_SHIFT | lfs::vis::input::KEYMOD_ALT);
+            const auto result = lfs::vis::op::operators().invoke(lfs::vis::op::BuiltinOp::DepthWindowDrag, &props);
+            return result.status == lfs::vis::op::OperatorResult::RUNNING_MODAL;
+        }
+
+        lfs::vis::ViewerOptions options_{};
+        std::unique_ptr<lfs::vis::VisualizerImpl> viewer_;
+        lfs::vis::RenderingManager* rendering_manager_ = nullptr;
+        lfs::vis::tools::SelectionTool* selection_tool_ = nullptr;
+    };
+
+    TEST_F(DepthWindowGtHookTest, GtToggleCancelsDepthWindowDragAndClearsHover) {
+        ASSERT_TRUE(startDepthDrag());
+        ASSERT_TRUE(rendering_manager_->depthWindowDragPreview());
+        (void)lfs::vis::op::updateDepthWindowHover(
+            glm::vec2(50.0f, 50.0f),
+            glm::vec4(0.0f, 0.0f, static_cast<float>(options_.width), static_cast<float>(options_.height)),
+            true);
+
+        lfs::core::events::cmd::ToggleGTComparison{}.emit();
+
+        EXPECT_FALSE(rendering_manager_->depthWindowDragPreview());
+        EXPECT_FALSE(lfs::vis::op::operators().hasModalOperator());
+        EXPECT_FALSE(lfs::vis::op::depthWindowOverlayState().visible);
+        EXPECT_EQ(lfs::vis::op::depthWindowOverlayState().hovered_handle, lfs::vis::op::DepthWindowHandle::None);
+    }
+
+    TEST_F(DepthWindowGtHookTest, GtToggleLeavesUnrelatedSelectionStrokeModalActive) {
+        lfs::vis::op::OperatorProperties stroke_props;
+        stroke_props.set("mode", 0);
+        stroke_props.set("op", 0);
+        stroke_props.set("x", 30.0);
+        stroke_props.set("y", 30.0);
+        const auto stroke = lfs::vis::op::operators().invoke(lfs::vis::op::BuiltinOp::SelectionStroke, &stroke_props);
+        ASSERT_EQ(stroke.status, lfs::vis::op::OperatorResult::RUNNING_MODAL);
+
+        lfs::core::events::cmd::ToggleGTComparison{}.emit();
+
+        EXPECT_TRUE(lfs::vis::op::operators().hasModalOperator());
+        EXPECT_EQ(lfs::vis::op::operators().activeModalId(), "selection.stroke");
+        lfs::vis::op::operators().cancelModalOperator();
     }
 
 } // namespace lfs::vis

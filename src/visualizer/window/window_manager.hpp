@@ -92,6 +92,7 @@ namespace lfs::vis {
 
         void setCallbackHandler(void* handler) { callback_handler_ = handler; }
         void setInputController(InputController* ic);
+        [[nodiscard]] InputController* inputController() { return input_controller_; }
         [[nodiscard]] const FrameInputBuffer& frameInput() const { return frame_input_; }
         [[nodiscard]] const input::InputRouter& inputRouter() const { return input_router_; }
 
