@@ -6,6 +6,7 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
+#include "core/sh_value_quant.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "kernels/densification_kernels.hpp"
 #include "kernels/mcmc_kernels.hpp"
@@ -938,6 +939,8 @@ namespace lfs::training {
                 // releases the freed chunk — so only replace if the param's capacity is actually
                 // below the target.
                 auto ensure_capacity_direct = [capacity](Tensor& param) {
+                    LFS_ASSERT_MSG(param.dtype() == DataType::Float32,
+                                   "MCMC training parameter must be Float32");
                     if (param.capacity() >= capacity)
                         return;
                     // GUI exportable tensors grow with live N.
@@ -949,17 +952,25 @@ namespace lfs::training {
                     param = std::move(new_param);
                 };
 
-                // shN is 1D swizzled — its capacity must be in FLOATS, not row count.
                 const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
-                auto ensure_shN_capacity_direct = [capacity, layout_rest](Tensor& param) {
-                    const size_t cap_floats = lfs::core::sh_swizzled_float_count(capacity, layout_rest);
-                    if (param.capacity() >= cap_floats)
+                const bool shN_quantized = _splat_data->shN_value_quantized();
+                auto ensure_shN_capacity_direct = [capacity, layout_rest, shN_quantized](Tensor& param) {
+                    const auto expected_dtype = shN_quantized ? DataType::Float16 : DataType::Float32;
+                    LFS_ASSERT_MSG(param.dtype() == expected_dtype,
+                                   "MCMC shN dtype does not match its storage representation");
+                    const size_t required_capacity =
+                        shN_quantized
+                            ? lfs::core::sh_value_quant::sh_value_u16_count(capacity, layout_rest)
+                            : lfs::core::sh_swizzled_float_count(capacity, layout_rest);
+                    if (param.capacity() >= required_capacity)
                         return;
                     if (param.is_external_storage())
                         return;
-                    auto new_param = Tensor::zeros_direct(param.shape(), cap_floats);
-                    cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
-                               param.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
+                    auto new_param = Tensor::zeros_direct(
+                        param.shape(), required_capacity, Device::CUDA, param.dtype());
+                    cudaMemcpy(new_param.data_ptr(), param.data_ptr(),
+                               param.numel() * dtype_size(param.dtype()),
+                               cudaMemcpyDeviceToDevice);
                     param = std::move(new_param);
                 };
 
