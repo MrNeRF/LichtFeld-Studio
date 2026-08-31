@@ -421,37 +421,12 @@ namespace lfs::training {
         n_capacity = new_cap;
     }
 
-    void DensifyNScratch::ensure_k(const size_t k, const lfs::core::Device device) {
-        using namespace lfs::core;
-        if (k == 0) {
-            return;
-        }
-        k_required = std::max(k_required, k);
-        if (k_capacity >= k) {
-            return;
-        }
-        const size_t new_cap = k_capacity == 0
-                                   ? k
-                                   : std::max(
-                                         k, static_cast<size_t>(static_cast<double>(std::max(k_capacity, k)) * 1.2) + 1);
-        i64_a = Tensor::empty({new_cap}, device, DataType::Int64);
-        i64_b = Tensor::empty({new_cap}, device, DataType::Int64);
-        k_capacity = new_cap;
-    }
-
     lfs::core::Tensor DensifyNScratch::f32_a_view(const size_t n) const {
         return f32_a.slice(0, 0, n);
     }
     lfs::core::Tensor DensifyNScratch::bool_a_view(const size_t n) const {
         return bool_a.slice(0, 0, n);
     }
-    lfs::core::Tensor DensifyNScratch::i64_a_view(const size_t k) const {
-        return i64_a.slice(0, 0, k);
-    }
-    lfs::core::Tensor DensifyNScratch::i64_b_view(const size_t k) const {
-        return i64_b.slice(0, 0, k);
-    }
-
     void DensifyChildWorkspace::ensure(
         const size_t K,
         const size_t sh_rest_in,

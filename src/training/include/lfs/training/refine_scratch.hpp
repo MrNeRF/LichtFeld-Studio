@@ -48,8 +48,8 @@ namespace lfs::training {
             const size_t new_cap = detail::grow_only_capacity(n_capacity, n);
             keys = Tensor::zeros_direct(TensorShape({new_cap}), new_cap, device, DataType::Float32);
             keys_sorted = Tensor::zeros_direct(TensorShape({new_cap}), new_cap, device, DataType::Float32);
-            indices = Tensor::empty({new_cap}, device, DataType::Int64);
-            indices_sorted = Tensor::empty({new_cap}, device, DataType::Int64);
+            indices = Tensor::empty({new_cap}, device, DataType::UInt32);
+            indices_sorted = Tensor::empty({new_cap}, device, DataType::UInt32);
             n_capacity = new_cap;
         }
 
@@ -61,6 +61,20 @@ namespace lfs::training {
             const size_t new_cap = detail::grow_only_capacity(cub_bytes, bytes);
             cub = Tensor::empty({new_cap}, device, DataType::UInt8);
             cub_bytes = new_cap;
+        }
+
+        [[nodiscard]] std::size_t resident_bytes() const noexcept {
+            return n_capacity * 4 * sizeof(float) + cub_bytes;
+        }
+
+        void release() noexcept {
+            keys = {};
+            indices = {};
+            keys_sorted = {};
+            indices_sorted = {};
+            cub = {};
+            n_capacity = 0;
+            cub_bytes = 0;
         }
     };
 
@@ -104,6 +118,23 @@ namespace lfs::training {
                 sort_temp = Tensor::empty({new_cap}, device, DataType::UInt8);
                 sort_temp_bytes = new_cap;
             }
+        }
+
+        [[nodiscard]] std::size_t resident_bytes() const noexcept {
+            return n_capacity * 2 * sizeof(float) +
+                   (count.is_valid() ? sizeof(std::int32_t) : 0) +
+                   select_temp_bytes + sort_temp_bytes;
+        }
+
+        void release() noexcept {
+            selected = {};
+            sorted = {};
+            count = {};
+            select_temp = {};
+            sort_temp = {};
+            n_capacity = 0;
+            select_temp_bytes = 0;
+            sort_temp_bytes = 0;
         }
     };
 

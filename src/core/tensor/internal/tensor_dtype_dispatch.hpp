@@ -38,6 +38,9 @@ namespace lfs::core::detail {
         case DataType::Bool:
             std::forward<Function>(function).template operator()<bool>();
             return;
+        case DataType::UInt32:
+            std::forward<Function>(function).template operator()<uint32_t>();
+            return;
         }
 
         LFS_ASSERT_MSG(false,
@@ -81,6 +84,13 @@ namespace lfs::core::detail {
         case DataType::UInt8:
             if (!std::isfinite(value) || value < 0.0f || value > 255.0f) {
                 failure("scalar is outside the UInt8 range");
+            }
+            return;
+        case DataType::UInt32:
+            if (!std::isfinite(value) || value < 0.0f ||
+                static_cast<double>(value) >
+                    static_cast<double>(std::numeric_limits<uint32_t>::max())) {
+                failure("scalar is outside the UInt32 range");
             }
             return;
         }

@@ -629,6 +629,7 @@ namespace lfs::training {
 
         _strategy_required_peak_bytes = 0;
         _strategy_allocated_peak_bytes = 0;
+        _topology_frozen = false;
         _densify_n_required_peak_bytes = 0;
         _densify_n_allocated_peak_bytes = 0;
         _densify_child_required_peak_bytes = 0;
@@ -734,7 +735,6 @@ namespace lfs::training {
         if (capacity > 0) {
             const auto device = _splat_data->means().device();
             _densify_n_scratch.ensure_n(capacity, device);
-            _densify_n_scratch.ensure_k(std::max(capacity / 20, size_t{1024}), device);
             _gumbel_scratch.ensure_n(capacity, device);
             _median_scratch.ensure_n(capacity, device);
             if (lfs::training::PerfBenchCollector::enabled()) {
@@ -1187,6 +1187,17 @@ namespace lfs::training {
                 _splat_data->shN().dtype() == lfs::core::DataType::Float32) {
                 lfs::training::sh_value::commit_shN_after_mutation(*_splat_data);
             }
+            _refine_weight_max = Tensor();
+            _gumbel_scratch.release();
+            _median_scratch.release();
+            _densify_n_scratch.release();
+            _topology_frozen = true;
+            assert(!_refine_weight_max.is_valid());
+            assert(_gumbel_scratch.resident_bytes() == 0);
+            assert(_median_scratch.resident_bytes() == 0);
+            assert(_densify_n_scratch.resident_bytes() == 0);
+            Tensor::trim_memory_pool();
+            publish_vram_attribution();
         }
 
         if (iter >= static_cast<int>(_params->stop_refine)) {
@@ -1832,7 +1843,7 @@ namespace lfs::training {
         const uint64_t seed,
         const size_t known_nnz) {
         using namespace lfs::core;
-        if (k <= 0 || !weights.is_valid() || weights.numel() == 0) {
+        if (_topology_frozen || k <= 0 || !weights.is_valid() || weights.numel() == 0) {
             return {};
         }
 
@@ -1914,6 +1925,9 @@ namespace lfs::training {
 
     void MRNF::apply_explore_starvation_weights(lfs::core::Tensor& weights, const size_t n) {
         using namespace lfs::core;
+        if (_topology_frozen) {
+            return;
+        }
         auto vis_count = visibility_accumulator();
         if (!weights.is_valid() || weights.numel() != n ||
             !vis_count.is_valid() || vis_count.numel() != n) {
@@ -3494,7 +3508,7 @@ namespace lfs::training {
     }
 
     lfs::core::Tensor MRNF::edge_guidance_factor() {
-        if (!_params || !_params->use_edge_map || !_edge_precompute_valid) {
+        if (_topology_frozen || !_params || !_params->use_edge_map || !_edge_precompute_valid) {
             return {};
         }
 
@@ -3630,7 +3644,6 @@ namespace lfs::training {
         const auto device = _splat_data->means().device();
         if (capacity > 0) {
             _densify_n_scratch.ensure_n(capacity, device);
-            _densify_n_scratch.ensure_k(std::max(capacity / 20, size_t{1024}), device);
             _gumbel_scratch.ensure_n(capacity, device);
             _median_scratch.ensure_n(capacity, device);
         }

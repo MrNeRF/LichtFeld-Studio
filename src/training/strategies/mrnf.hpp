@@ -280,6 +280,7 @@ namespace lfs::training {
         float _far_starvation = 1.0f;
         float _logged_far_starvation = -1.0f;
         lfs::core::Tensor _free_mask;
+        bool _topology_frozen = false;
 
         DensifyNScratch _densify_n_scratch;
         GumbelTopKScratch _gumbel_scratch;
