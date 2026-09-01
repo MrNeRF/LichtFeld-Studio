@@ -84,6 +84,8 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 | [nlohmann/json](https://github.com/nlohmann/json) | JSON for Modern C++ | MIT |
 | [LibArchive](https://libarchive.org/) | Multi-format archive library | BSD |
 | [libwebp](https://github.com/webmproject/libwebp) | WebP image format library | BSD-3-Clause |
+| [TinyUSDZ](https://github.com/lighttransport/tinyusdz) | Flat USD/USDZ reader and writer | Apache-2.0 |
+| [lz4](https://github.com/lz4/lz4) | USD crate compression | BSD-2-Clause |
 
 ## Utilities
 | Project | Description | License |

@@ -556,15 +556,6 @@ list(APPEND TEST_SOURCES
 # Create test executable
 add_executable(lichtfeld_tests ${TEST_SOURCES})
 
-# USD (pxr) headers from vcpkg pull in deprecated <ext/hash_set> and emit
-# #warning (-Wcpp). Third-party; suppress only for this translation unit.
-if(NOT MSVC)
-    set_source_files_properties(
-        test_usd_format.cpp
-        PROPERTIES COMPILE_OPTIONS "-Wno-cpp"
-    )
-endif()
-
 # Python integration tests import the in-tree extension at runtime.
 add_dependencies(lichtfeld_tests lfs_py)
 

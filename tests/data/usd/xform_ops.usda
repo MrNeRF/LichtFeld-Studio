@@ -1,0 +1,22 @@
+#usda 1.0
+(
+    defaultPrim = "Ops"
+)
+
+def Xform "Ops"
+{
+    quatd xformOp:orient = (0.9238795, 0, 0, 0.3826834)
+    double3 xformOp:rotateXYZ = (20, 30, 40)
+    float3 xformOp:rotateZYX = (15, 25, 35)
+    uniform token[] xformOpOrder = ["xformOp:rotateXYZ", "xformOp:rotateZYX", "xformOp:orient"]
+
+    def ParticleField3DGaussianSplat "Splats"
+    {
+        float[] opacities = [0.5]
+        quatf[] orientations = [(1, 0, 0, 0)]
+        point3f[] positions = [(1, 2, 3)]
+        float3[] radiance:sphericalHarmonicsCoefficients = [(0.1, 0.2, 0.3)]
+        uniform int radiance:sphericalHarmonicsDegree = 0
+        float3[] scales = [(1, 1, 1)]
+    }
+}

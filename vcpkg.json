@@ -80,7 +80,6 @@
       ]
     },
     "shader-slang",
-    "usd",
     "xxhash",
     "zstd"
   ],
@@ -177,10 +176,6 @@
     {
       "name": "volk",
       "version": "1.4.341.0"
-    },
-    {
-      "name": "usd",
-      "version": "26.3"
     },
     {
       "name": "python3",

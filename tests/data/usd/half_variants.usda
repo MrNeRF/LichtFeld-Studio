@@ -1,0 +1,14 @@
+#usda 1.0
+(
+    defaultPrim = "GaussianSplats"
+)
+
+def ParticleField3DGaussianSplat "GaussianSplats"
+{
+    half[] opacitiesh = [0.25, 0.5, 0.75]
+    quath[] orientationsh = [(1, 0, 0, 0), (0.899902, 0.0999756, 0.199951, 0.300049), (0.700195, -0.399902, 0.5, -0.600098)]
+    point3h[] positionsh = [(-0.5, 1, 2), (3, -4, 5.5), (6, 7, -8)]
+    half3[] radiance:sphericalHarmonicsCoefficientsh = [(0.0100021, 0.0200043, 0.0299988), (0.109985, 0.119995, 0.130005), (0.209961, 0.219971, 0.22998)]
+    uniform int radiance:sphericalHarmonicsDegree = 1
+    half3[] scalesh = [(0.0999756, 0.199951, 0.300049), (1, 1.09961, 1.2002), (2, 2.09961, 2.19922)]
+}
