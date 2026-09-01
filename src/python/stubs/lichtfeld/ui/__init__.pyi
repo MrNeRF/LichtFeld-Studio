@@ -2601,7 +2601,7 @@ def get_theme_mode() -> str:
     """Get the selected family mode: dark, light, or auto"""
 
 def supports_system_theme() -> bool:
-    """Return whether automatic OS light/dark theme detection is supported"""
+    """Return whether automatic OS light/dark detection is available in this session"""
 
 def themes() -> list:
     """Get available theme presets with stable ids and UI metadata"""

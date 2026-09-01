@@ -4925,7 +4925,7 @@ namespace lfs::python {
         m.def(
             "supports_system_theme",
             []() { return vis::supportsSystemThemePreference(); },
-            "Return whether automatic OS light/dark theme detection is supported");
+            "Return whether automatic OS light/dark detection is available in this session");
 
         m.def(
             "themes",

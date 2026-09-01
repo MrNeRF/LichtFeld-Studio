@@ -13,12 +13,15 @@
 #include <fstream>
 #include <future>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <set>
 #include <utility>
 #include <vector>
 
 #if defined(_WIN32)
 #include <windows.h>
+#elif defined(__linux__)
+#include <SDL3/SDL_video.h>
 #endif
 
 namespace lfs::vis {
@@ -157,7 +160,7 @@ namespace lfs::vis {
             return name;
         }
 
-        bool systemPrefersLightThemeImpl() {
+        std::optional<bool> systemLightThemePreferenceImpl() {
 #if defined(_WIN32)
             DWORD apps_use_light_theme = 0;
             DWORD value_size = sizeof(apps_use_light_theme);
@@ -171,16 +174,25 @@ namespace lfs::vis {
                 &value_size);
             if (result == ERROR_SUCCESS)
                 return apps_use_light_theme != 0;
+#elif defined(__linux__)
+            switch (SDL_GetSystemTheme()) {
+            case SDL_SYSTEM_THEME_LIGHT:
+                return true;
+            case SDL_SYSTEM_THEME_DARK:
+                return false;
+            default:
+                break;
+            }
 #endif
-            return false;
+            return std::nullopt;
         }
 
-        constexpr bool systemThemePreferenceSupportedImpl() {
-#if defined(_WIN32)
-            return true;
-#else
-            return false;
-#endif
+        bool systemPrefersLightThemeImpl() {
+            return systemLightThemePreferenceImpl().value_or(false);
+        }
+
+        bool systemThemePreferenceSupportedImpl() {
+            return systemLightThemePreferenceImpl().has_value();
         }
 
     } // namespace

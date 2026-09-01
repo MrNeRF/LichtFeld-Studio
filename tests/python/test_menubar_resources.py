@@ -44,6 +44,9 @@ def test_menubar_submenus_are_stacked_above_overlay_and_hit_testable():
     assert 'data-class-open="item.submenu_open"' in rml
     assert 'data-attr-data-root-index="item.index"' in rml
     assert 'data-class-active="item.submenu_open"' in rml
+    assert 'data-class-open="child.submenu_open"' in rml
+    assert 'data-attr-data-child-index="child.index"' in rml
+    assert 'data-for="leaf : child.children"' in rml
     assert 'id="dropdown-popup"' in rml
     assert "#dropdown-overlay" in rcss
     assert "#dropdown-container" in rcss
@@ -61,7 +64,7 @@ def test_menubar_submenus_are_stacked_above_overlay_and_hit_testable():
     submenu_rule = _rule_body(rcss, ".submenu-popup")
     assert "min-width: 200dp;" in submenu_rule
     assert "max-width: 420dp;" in submenu_rule
-    assert "overflow: hidden;" in submenu_rule
+    assert "overflow: visible;" in submenu_rule
     menu_item_rule = _rule_body(rcss, ".menu-item")
     assert "flex-shrink: 0;" in menu_item_rule
     assert "white-space: nowrap;" in menu_item_rule
@@ -152,7 +155,9 @@ def test_menu_bar_uses_retained_bounds_for_submenu_hover():
     assert "Rml::Element* dropdownElementAtPoint(float x, float y) const" in menu_bar_header
     assert "RmlMenuBar::dropdownElementAtPoint" in menu_bar_cpp
     assert "GetAbsoluteOffset(Rml::BoxArea::Border)" in menu_bar_cpp
-    assert "setOpenSubmenu(submenuIndexForElement(hit_element))" in menu_bar_cpp
+    assert "setOpenSubmenu(" in menu_bar_cpp
+    assert "submenuIndexForElement(hit_element)," in menu_bar_cpp
+    assert "childSubmenuIndexForElement(hit_element)" in menu_bar_cpp
     assert "tooltip_.setHover(resolveRmlTooltip(hit_element), hit_element)" in menu_bar_cpp
     assert "void sizeOpenDropdowns();" in menu_bar_header
     assert "RmlMenuBar::sizeOpenDropdowns" in menu_bar_cpp
@@ -167,6 +172,37 @@ def test_menu_bar_uses_retained_bounds_for_submenu_hover():
     assert 'action == "set_camera_navigation_mode"' in menu_bar_cpp
     assert "setCameraNavigationMode" in menu_bar_cpp
     assert "std::vector<MenuToolbarButtonView> camera_buttons_" in menu_bar_header
+
+
+def test_theme_auto_visibility_and_variant_button_width_are_capability_driven():
+    preferences_panel = (
+        PROJECT_ROOT / "src" / "python" / "lfs_plugins" / "preferences_panel.py"
+    ).read_text(encoding="utf-8")
+    preferences_rcss = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+        / "preferences.rcss"
+    ).read_text(encoding="utf-8")
+    theme_cpp = (
+        PROJECT_ROOT / "src" / "visualizer" / "theme" / "theme.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert '{"dark", "light"}.issubset(modes) and lf.ui.supports_system_theme()' in preferences_panel
+    variants_rule = _rule_body(preferences_rcss, ".preferences-theme-variants")
+    assert "display: flex;" in variants_rule
+    assert "flex: 0 0 200dp;" in variants_rule
+    variant_rule = _rule_body(preferences_rcss, ".preferences-theme-variant")
+    assert "flex: 1 1 0;" in variant_rule
+    assert "min-width: 0;" in variant_rule
+
+    assert "#elif defined(__linux__)" in theme_cpp
+    assert "SDL_GetSystemTheme()" in theme_cpp
+    assert "SDL_SYSTEM_THEME_LIGHT" in theme_cpp
+    assert "SDL_SYSTEM_THEME_DARK" in theme_cpp
 
 
 def test_open_menu_requests_passive_mouse_render_and_blocks_viewport_hit_testing():

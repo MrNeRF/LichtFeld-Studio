@@ -53,18 +53,13 @@ Supported token forms include palette names such as `@{text}`, `@{surface}`, `@{
 
 ## Theme Catalog
 
-Theme presets are listed in `src/visualizer/gui/assets/themes/manifest.json`. The manifest owns catalog metadata:
+Theme families are listed in `src/visualizer/gui/assets/themes/manifest.json`. The v2 manifest contains only the family `file` and its catalog `order`; each referenced file owns the family id, display name, and its `dark` and/or `light` variants.
 
-- `id`: stable preset id used by preferences and `lf.ui.set_theme(id)`
-- `file`: theme value file under the same directory
-- `fallback`: built-in base theme used for missing values
-- `label_key`: translation key used by UI menus
-- `mode`: `dark` or `light`
-- `order`: menu order
+Variant display names are independent from their semantic mode. A family can therefore expose concise names such as `Night` and `Day` while the application still treats them as `dark` and `light` for system matching.
 
-Individual theme JSON files own values only: `name`, `palette`, `sizes`, `fonts`, and other theme sections. Do not duplicate catalog fields such as `id`, `label_key`, `mode`, or `order` inside the theme value file.
+Python UI code must read `lf.ui.themes()` instead of hardcoding the catalog. Use `lf.ui.get_theme_family()` and `lf.ui.get_theme_mode()` for selection state, and `lf.ui.set_theme_family(family_id, mode)` to select `dark`, `light`, or `auto`. The legacy preset APIs and v1 manifest remain supported for compatibility.
 
-Python UI code must read `lf.ui.themes()` instead of hardcoding the theme list. `lf.ui.get_theme()` returns the stable id of the active preset.
+See [Theme format v2](./theme-format.md) for the complete file contract and fallback behavior.
 
 ## Hot Reload
 
