@@ -1567,10 +1567,13 @@ NB_MODULE(lichtfeld, m) {
         "project_set_reopen_last",
         [](const bool enabled) {
             nb::gil_scoped_release release;
-            lfs::core::events::cmd::
-                SetReopenLastProject{
-                    .enabled = enabled}
-                    .emit();
+            emit_project_cmd_marshaled(
+                "python.project_set_reopen_last",
+                [enabled] {
+                    lfs::core::events::cmd::SetReopenLastProject{
+                        .enabled = enabled}
+                        .emit();
+                });
         },
         nb::arg("enabled"),
         "Enable or disable reopening the last project at startup");
@@ -1596,10 +1599,13 @@ NB_MODULE(lichtfeld, m) {
         "project_set_auto_save_on_close",
         [](const bool enabled) {
             nb::gil_scoped_release release;
-            lfs::core::events::cmd::
-                SetAutoSaveOnClose{
-                    .enabled = enabled}
-                    .emit();
+            emit_project_cmd_marshaled(
+                "python.project_set_auto_save_on_close",
+                [enabled] {
+                    lfs::core::events::cmd::SetAutoSaveOnClose{
+                        .enabled = enabled}
+                        .emit();
+                });
         },
         nb::arg("enabled"),
         "Enable or disable automatic project save on close");
@@ -1621,9 +1627,13 @@ NB_MODULE(lichtfeld, m) {
         "project_set_embed_dataset_by_default",
         [](const bool enabled) {
             nb::gil_scoped_release release;
-            lfs::core::events::cmd::SetEmbedDatasetByDefault{
-                .enabled = enabled}
-                .emit();
+            emit_project_cmd_marshaled(
+                "python.project_set_embed_dataset_by_default",
+                [enabled] {
+                    lfs::core::events::cmd::SetEmbedDatasetByDefault{
+                        .enabled = enabled}
+                        .emit();
+                });
         },
         nb::arg("enabled"),
         "Set whether new projects copy datasets into the project by default");
@@ -1645,10 +1655,13 @@ NB_MODULE(lichtfeld, m) {
         "project_set_autosave_interval_seconds",
         [](const std::uint64_t seconds) {
             nb::gil_scoped_release release;
-            lfs::core::events::cmd::
-                SetProjectAutosaveInterval{
-                    .seconds = seconds}
-                    .emit();
+            emit_project_cmd_marshaled(
+                "python.project_set_autosave_interval_seconds",
+                [seconds] {
+                    lfs::core::events::cmd::SetProjectAutosaveInterval{
+                        .seconds = seconds}
+                        .emit();
+                });
         },
         nb::arg("seconds"),
         "Set the timed project autosave interval in seconds; zero disables the timer trigger");
@@ -1661,7 +1674,12 @@ NB_MODULE(lichtfeld, m) {
         },
         "Remove all nodes from the scene");
     m.def(
-        "switch_to_edit_mode", []() { lfs::core::events::cmd::SwitchToEditMode{}.emit(); },
+        "switch_to_edit_mode", []() {
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled(
+                "python.switch_to_edit_mode",
+                [] { lfs::core::events::cmd::SwitchToEditMode{}.emit(); });
+        },
         "Switch from training to edit mode");
 
     m.def(
@@ -1706,7 +1724,13 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "load_config_file",
         [](const std::string& path) {
-            lfs::core::events::cmd::LoadConfigFile{.path = python_utf8_path(path)}.emit();
+            nb::gil_scoped_release release;
+            const auto config_path = python_utf8_path(path);
+            emit_project_cmd_marshaled(
+                "python.load_config_file",
+                [config_path] {
+                    lfs::core::events::cmd::LoadConfigFile{.path = config_path}.emit();
+                });
         },
         nb::arg("path"), "Load a JSON configuration file.");
 

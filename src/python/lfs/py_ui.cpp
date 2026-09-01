@@ -51,6 +51,7 @@
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/operator/operator_context.hpp"
 #include "visualizer/operator/operator_registry.hpp"
+#include "visualizer/post_work_utils.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/theme/theme.hpp"
@@ -79,11 +80,14 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stack>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 #ifdef _WIN32
 #include <shellapi.h>
@@ -100,6 +104,43 @@ namespace lfs::python {
     using lfs::training::CommandCenter;
 
     namespace {
+
+        template <typename F>
+            requires(!std::is_void_v<std::invoke_result_t<F>>)
+        auto invoke_on_viewer(F&& fn, std::invoke_result_t<F> fallback) {
+            auto* const viewer = get_visualizer();
+            if (!viewer || viewer->isOnViewerThread())
+                return std::invoke(std::forward<F>(fn));
+            if (!viewer->acceptsPostedWork())
+                return fallback;
+
+            nb::gil_scoped_release release;
+            return lfs::vis::post_work_and_wait(
+                [viewer](lfs::vis::Visualizer::WorkItem work) {
+                    return viewer->postWork(std::move(work));
+                },
+                std::forward<F>(fn),
+                [fallback]() { return fallback; });
+        }
+
+        template <typename F>
+            requires(std::is_void_v<std::invoke_result_t<F>>)
+        void invoke_on_viewer(F&& fn) {
+            auto* const viewer = get_visualizer();
+            if (!viewer || viewer->isOnViewerThread()) {
+                std::invoke(std::forward<F>(fn));
+                return;
+            }
+            if (!viewer->acceptsPostedWork())
+                return;
+
+            nb::gil_scoped_release release;
+            lfs::vis::post_work_and_wait(
+                [viewer](lfs::vis::Visualizer::WorkItem work) {
+                    return viewer->postWork(std::move(work));
+                },
+                std::forward<F>(fn), [] {});
+        }
 
         std::string get_class_id(nb::object cls) {
             auto mod = nb::cast<std::string>(cls.attr("__module__"));
@@ -3914,10 +3955,12 @@ namespace lfs::python {
                 };
                 auto it = tool_map.find(id);
                 if (it != tool_map.end()) {
-                    if (auto* const editor = get_editor_context()) {
-                        editor->setActiveTool(it->second);
-                    }
-                    lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(it->second)}.emit();
+                    const auto tool = it->second;
+                    invoke_on_viewer([tool] {
+                        if (auto* const editor = get_editor_context())
+                            editor->setActiveTool(tool);
+                        lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(tool)}.emit();
+                    });
                 }
             },
             nb::arg("id"), "Set the active tool via C++ event");
@@ -3925,10 +3968,11 @@ namespace lfs::python {
         m.def(
             "set_active_operator",
             [](const std::string& id, const std::string& gizmo_type) {
-                if (auto* const editor = get_editor_context()) {
-                    editor->setActiveOperator(id, gizmo_type);
-                }
-                vis::UnifiedToolRegistry::instance().setActiveTool(id);
+                invoke_on_viewer([id, gizmo_type] {
+                    if (auto* const editor = get_editor_context())
+                        editor->setActiveOperator(id, gizmo_type);
+                    vis::UnifiedToolRegistry::instance().setActiveTool(id);
+                });
             },
             nb::arg("id"), nb::arg("gizmo_type") = "", "Set active operator with optional gizmo type");
 
@@ -3948,11 +3992,11 @@ namespace lfs::python {
 
         m.def(
             "clear_active_operator", []() {
-                auto* editor = get_editor_context();
-                if (editor) {
-                    editor->clearActiveOperator();
-                }
-                vis::UnifiedToolRegistry::instance().clearActiveTool();
+                invoke_on_viewer([] {
+                    if (auto* const editor = get_editor_context())
+                        editor->clearActiveOperator();
+                    vis::UnifiedToolRegistry::instance().clearActiveTool();
+                });
             },
             "Clear the active operator");
 
@@ -4064,14 +4108,16 @@ namespace lfs::python {
 
         m.def(
             "get_active_submode",
-            []() { return vis::UnifiedToolRegistry::instance().getActiveSubmode(); },
+            []() {
+                return invoke_on_viewer(
+                    [] { return std::string{vis::UnifiedToolRegistry::instance().getActiveSubmode()}; },
+                    std::string{});
+            },
             "Get active selection submode");
 
         m.def(
             "set_selection_mode",
             [](const std::string& mode) {
-                vis::UnifiedToolRegistry::instance().setActiveSubmode(mode);
-
                 static const std::unordered_map<std::string, int> MODE_MAP = {
                     {"centers", static_cast<int>(lfs::vis::SelectionSubMode::Centers)},
                     {"rectangle", static_cast<int>(lfs::vis::SelectionSubMode::Rectangle)},
@@ -4081,9 +4127,14 @@ namespace lfs::python {
                     {"color", static_cast<int>(lfs::vis::SelectionSubMode::Color)},
                     {"box", static_cast<int>(lfs::vis::SelectionSubMode::Box)},
                     {"sphere", static_cast<int>(lfs::vis::SelectionSubMode::Sphere)}};
-                if (const auto it = MODE_MAP.find(mode); it != MODE_MAP.end()) {
-                    lfs::core::events::tools::SetSelectionSubMode{.selection_mode = it->second}.emit();
-                }
+                const auto it = MODE_MAP.find(mode);
+                const std::optional<int> selection_mode =
+                    it == MODE_MAP.end() ? std::nullopt : std::optional{it->second};
+                invoke_on_viewer([mode, selection_mode] {
+                    vis::UnifiedToolRegistry::instance().setActiveSubmode(mode);
+                    if (selection_mode)
+                        lfs::core::events::tools::SetSelectionSubMode{.selection_mode = *selection_mode}.emit();
+                });
             },
             nb::arg("mode"), "Set selection mode");
 
