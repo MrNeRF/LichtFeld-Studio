@@ -179,17 +179,7 @@ namespace {
     }
 
     template <typename T>
-    std::tuple<T*, int, int, int>
-    load_image_t(std::filesystem::path p, int res_div, int max_width) {
-        LOG_TIMER("load_image total");
-        image_codecs::Image decoded;
-        std::string error;
-        const std::string path_utf8 = lfs::core::path_to_utf8(p);
-        if (!image_codecs::decode(p, decoded, error))
-            throw std::runtime_error("Load failed: " + path_utf8 + (error.empty() ? "" : " : " + error));
-        if (decoded.width <= 0 || decoded.height <= 0 || decoded.channels <= 0)
-            throw std::runtime_error("Invalid image dimensions: " + path_utf8);
-
+    T* convert_to_rgb(const image_codecs::Image& decoded) {
         const size_t pixels = static_cast<size_t>(decoded.width) * decoded.height;
         auto* base = static_cast<T*>(std::malloc(pixels * 3 * sizeof(T)));
         if (!base)
@@ -212,7 +202,7 @@ namespace {
                 for (size_t pixel = 0; pixel < pixels; ++pixel) {
                     const size_t index = pixel * decoded.channels;
                     const auto convert = [&](const size_t channel) {
-                        return static_cast<uint8_t>((static_cast<uint32_t>(source[index + channel]) * 255u + 32767u) / 65535u);
+                        return static_cast<uint8_t>(std::lround(static_cast<double>(source[index + channel]) / 257.0));
                     };
                     const T first = convert(0);
                     expand_pixel_to_rgb(base + pixel * 3, decoded.channels, first,
@@ -271,9 +261,45 @@ namespace {
                 }
             }
         }
+        return base;
+    }
 
-        int target_width = decoded.width;
-        int target_height = decoded.height;
+    void* allocate_image_buffer(const std::size_t bytes, void*) {
+        return std::malloc(bytes);
+    }
+
+    template <typename T>
+    std::tuple<T*, int, int, int>
+    load_image_t(std::filesystem::path p, int res_div, int max_width) {
+        LOG_TIMER("load_image total");
+        const std::string path_utf8 = lfs::core::path_to_utf8(p);
+        constexpr auto sample_type = std::is_same_v<T, uint8_t> ? image_codecs::SampleType::UInt8
+                                                                : image_codecs::SampleType::UInt16;
+        image_codecs::DecodeTarget target{3, sample_type, nullptr, allocate_image_buffer, nullptr};
+        image_codecs::Probe direct_info;
+        std::string error;
+        int source_width = 0;
+        int source_height = 0;
+        T* base = nullptr;
+        if (image_codecs::decode_to_buffer(p, target, direct_info, error)) {
+            source_width = direct_info.width;
+            source_height = direct_info.height;
+            base = static_cast<T*>(target.data);
+        } else {
+            if (target.data)
+                std::free(target.data);
+            image_codecs::Image decoded;
+            if (!image_codecs::decode(p, decoded, error))
+                throw std::runtime_error("Load failed: " + path_utf8 + (error.empty() ? "" : " : " + error));
+            if (decoded.width <= 0 || decoded.height <= 0 || decoded.channels <= 0)
+                throw std::runtime_error("Invalid image dimensions: " + path_utf8);
+            source_width = decoded.width;
+            source_height = decoded.height;
+            base = convert_to_rgb<T>(decoded);
+        }
+
+        int target_width = source_width;
+        int target_height = source_height;
         if (res_div == 2 || res_div == 4 || res_div == 8) {
             target_width = std::max(1, target_width / res_div);
             target_height = std::max(1, target_height / res_div);
@@ -289,11 +315,11 @@ namespace {
                 target_height = max_width;
             }
         }
-        if (target_width == decoded.width && target_height == decoded.height)
-            return {base, decoded.width, decoded.height, 3};
+        if (target_width == source_width && target_height == source_height)
+            return {base, source_width, source_height, 3};
         T* resized = nullptr;
         try {
-            resized = downscale_resample_direct<T>(base, decoded.width, decoded.height,
+            resized = downscale_resample_direct<T>(base, source_width, source_height,
                                                    target_width, target_height, 0);
         } catch (...) {
             std::free(base);
@@ -375,6 +401,13 @@ namespace lfs::core {
 
     std::tuple<unsigned char*, int, int, int>
     load_image_from_memory(const uint8_t* const data, const size_t size) {
+        image_codecs::DecodeTarget target{3, image_codecs::SampleType::UInt8, nullptr, allocate_image_buffer, nullptr};
+        image_codecs::Probe direct_info;
+        std::string direct_error;
+        if (image_codecs::decode_memory_to_buffer(data, size, target, direct_info, direct_error))
+            return {static_cast<unsigned char*>(target.data), direct_info.width, direct_info.height, direct_info.channels};
+        if (target.data)
+            std::free(target.data);
         image_codecs::Image decoded;
         std::string error;
         if (!image_codecs::decode_memory(data, size, decoded, error))
@@ -461,6 +494,14 @@ namespace lfs::core {
         std::string error;
         if (!image_codecs::probe(p, probe, error) || probe.sample_type == image_codecs::SampleType::UInt8)
             return {nullptr, 0, 0};
+        if (probe.channels == 1) {
+            image_codecs::DecodeTarget target{1, image_codecs::SampleType::Float32, nullptr, allocate_image_buffer, nullptr};
+            image_codecs::Probe decoded;
+            if (image_codecs::decode_to_buffer(p, target, decoded, error))
+                return {static_cast<float*>(target.data), decoded.width, decoded.height};
+            if (target.data)
+                std::free(target.data);
+        }
         auto [decoded, width, height, channels] = load_image_float(p);
         if (!decoded || channels < 1) {
             return {nullptr, 0, 0};
@@ -481,6 +522,14 @@ namespace lfs::core {
         std::string error;
         if (!image_codecs::probe(p, probe, error) || probe.sample_type == image_codecs::SampleType::UInt8 || probe.channels < 3)
             return {nullptr, 0, 0};
+        if (probe.channels == 3) {
+            image_codecs::DecodeTarget target{3, image_codecs::SampleType::Float32, nullptr, allocate_image_buffer, nullptr};
+            image_codecs::Probe decoded;
+            if (image_codecs::decode_to_buffer(p, target, decoded, error))
+                return {static_cast<float*>(target.data), decoded.width, decoded.height};
+            if (target.data)
+                std::free(target.data);
+        }
         auto [decoded, width, height, channels] = load_image_float(p);
         if (!decoded || channels < 3) {
             return {nullptr, 0, 0};
@@ -502,8 +551,28 @@ namespace lfs::core {
     void free_image_float(float* img) { std::free(img); }
 
     std::tuple<float*, int, int, int> load_image_float(const std::filesystem::path& p) {
-        image_codecs::Image decoded;
+        if (p.extension() == ".hdr") {
+            image_codecs::DecodeTarget target{3, image_codecs::SampleType::Float32,
+                                              nullptr, allocate_image_buffer, nullptr};
+            image_codecs::Probe decoded;
+            std::string error;
+            if (image_codecs::decode_to_buffer(p, target, decoded, error))
+                return {static_cast<float*>(target.data), decoded.width, decoded.height, decoded.channels};
+            if (target.data)
+                std::free(target.data);
+        }
+        image_codecs::Probe probe;
         std::string error;
+        if (image_codecs::probe(p, probe, error) && probe.channels > 0) {
+            image_codecs::DecodeTarget target{probe.channels, image_codecs::SampleType::Float32,
+                                              nullptr, allocate_image_buffer, nullptr};
+            image_codecs::Probe decoded;
+            if (image_codecs::decode_to_buffer(p, target, decoded, error))
+                return {static_cast<float*>(target.data), decoded.width, decoded.height, decoded.channels};
+            if (target.data)
+                std::free(target.data);
+        }
+        image_codecs::Image decoded;
         if (!image_codecs::decode(p, decoded, error)) {
             LOG_ERROR("load_image_float: failed to read {}{}", lfs::core::path_to_utf8(p),
                       error.empty() ? "" : ": " + error);

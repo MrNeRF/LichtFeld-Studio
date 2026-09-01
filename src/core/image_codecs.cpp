@@ -13,17 +13,27 @@
 #include <tiffio.h>
 #include <tinyexr.h>
 #include <webp/decode.h>
+#include <zlib.h>
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cctype>
 #include <csetjmp>
 #include <cstdarg>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <limits>
 #include <memory>
+
+#ifndef _WIN32
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace lfs::core::image_codecs {
 
@@ -41,19 +51,19 @@ namespace lfs::core::image_codecs {
         bool read_file(const std::filesystem::path& path, std::vector<std::uint8_t>& data, std::string& error) {
             std::ifstream file(path, std::ios::binary | std::ios::ate);
             if (!file) {
-                error = "Could not open file " + path.string();
+                error = "Could not open file " + path_to_utf8(path);
                 return false;
             }
             const auto end = file.tellg();
             if (end < 0) {
-                error = "Could not determine file size for " + path.string();
+                error = "Could not determine file size for " + path_to_utf8(path);
                 return false;
             }
             const auto size = static_cast<std::size_t>(end);
             file.seekg(0);
             data.resize(size);
             if (size != 0 && !file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size))) {
-                error = "Could not read file " + path.string();
+                error = "Could not read file " + path_to_utf8(path);
                 return false;
             }
             return true;
@@ -62,14 +72,14 @@ namespace lfs::core::image_codecs {
         bool read_prefix(const std::filesystem::path& path, std::vector<std::uint8_t>& data, std::string& error) {
             std::ifstream file(path, std::ios::binary);
             if (!file) {
-                error = "Could not open file " + path.string();
+                error = "Could not open file " + path_to_utf8(path);
                 return false;
             }
             data.resize(32);
             file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(data.size()));
             data.resize(static_cast<std::size_t>(file.gcount()));
             if (file.bad()) {
-                error = "Could not read file " + path.string();
+                error = "Could not read file " + path_to_utf8(path);
                 return false;
             }
             return true;
@@ -78,6 +88,26 @@ namespace lfs::core::image_codecs {
         bool is_png(const std::vector<std::uint8_t>& data) {
             return data.size() >= kPngSignature.size() &&
                    std::equal(kPngSignature.begin(), kPngSignature.end(), data.begin());
+        }
+
+        bool png_gray_has_transparency(const std::vector<std::uint8_t>& data) {
+            if (!is_png(data) || data.size() < 33 || data[25] != PNG_COLOR_TYPE_GRAY)
+                return false;
+            std::size_t offset = 33;
+            while (offset + 12 <= data.size()) {
+                const auto length = (static_cast<std::size_t>(data[offset]) << 24) |
+                                    (static_cast<std::size_t>(data[offset + 1]) << 16) |
+                                    (static_cast<std::size_t>(data[offset + 2]) << 8) |
+                                    static_cast<std::size_t>(data[offset + 3]);
+                if (length > data.size() - offset - 12)
+                    return false;
+                if (std::memcmp(data.data() + offset + 4, "tRNS", 4) == 0)
+                    return true;
+                if (std::memcmp(data.data() + offset + 4, "IDAT", 4) == 0)
+                    return false;
+                offset += 12 + length;
+            }
+            return false;
         }
 
         bool is_jpeg(const std::vector<std::uint8_t>& data) {
@@ -115,9 +145,32 @@ namespace lfs::core::image_codecs {
             }
         }
 
-        struct PngWriteContext {
-            std::ofstream file;
-        };
+        std::FILE* open_binary_file(const std::filesystem::path& path) {
+#ifdef _WIN32
+            return _wfopen(path.c_str(), L"rb");
+#else
+            const auto path_utf8 = path_to_utf8(path);
+            return std::fopen(path_utf8.c_str(), "rb");
+#endif
+        }
+
+        std::FILE* open_output_file(const std::filesystem::path& path) {
+#ifdef _WIN32
+            return _wfopen(path.c_str(), L"wb");
+#else
+            const auto path_utf8 = path_to_utf8(path);
+            return std::fopen(path_utf8.c_str(), "wb");
+#endif
+        }
+
+        void* allocate_target(DecodeTarget& target, const std::size_t bytes, std::string& error) {
+            if (target.data)
+                return target.data;
+            target.data = target.allocate ? target.allocate(bytes, target.user) : std::malloc(bytes);
+            if (!target.data)
+                error = "Could not allocate image buffer";
+            return target.data;
+        }
 
         struct PngReadContext {
             const std::uint8_t* data = nullptr;
@@ -133,15 +186,142 @@ namespace lfs::core::image_codecs {
             context->offset += size;
         }
 
-        void png_write_callback(png_structp png, png_bytep data, png_size_t size) {
-            auto* context = static_cast<PngWriteContext*>(png_get_io_ptr(png));
-            context->file.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
-            if (!context->file) {
-                png_error(png, "write failed");
+        bool configure_png_target(png_structp png, png_infop info, DecodeTarget& target,
+                                  Probe& result, std::string& error) {
+            png_uint_32 width = 0;
+            png_uint_32 height = 0;
+            int bit_depth = 0;
+            int color_type = 0;
+            png_get_IHDR(png, info, &width, &height, &bit_depth, &color_type, nullptr, nullptr, nullptr);
+            const bool gray_alpha = color_type == PNG_COLOR_TYPE_GRAY_ALPHA ||
+                                    (png_get_valid(png, info, PNG_INFO_tRNS) && color_type == PNG_COLOR_TYPE_GRAY);
+            if (width == 0 || height == 0 || target.channels != 3 ||
+                (target.sample_type != SampleType::UInt8 && target.sample_type != SampleType::UInt16) ||
+                (bit_depth == 16 && target.sample_type == SampleType::UInt8) || gray_alpha) {
+                error = "PNG layout requires conversion";
+                return false;
             }
+            if (color_type == PNG_COLOR_TYPE_PALETTE)
+                png_set_palette_to_rgb(png);
+            if (color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8)
+                png_set_expand_gray_1_2_4_to_8(png);
+            const bool compact_gray = color_type == PNG_COLOR_TYPE_GRAY && target.sample_type == SampleType::UInt16;
+            if ((color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_GRAY_ALPHA) && !compact_gray)
+                png_set_gray_to_rgb(png);
+            if (color_type == PNG_COLOR_TYPE_GRAY_ALPHA || color_type == PNG_COLOR_TYPE_RGBA)
+                png_set_strip_alpha(png);
+            if (bit_depth == 8 && target.sample_type == SampleType::UInt16)
+                png_set_expand_16(png);
+            png_read_update_info(png, info);
+            const int output_channels = png_get_channels(png, info);
+            const int output_bit_depth = png_get_bit_depth(png, info);
+            const int expected_bit_depth = target.sample_type == SampleType::UInt16 ? 16 : 8;
+            if (output_channels != target.channels || output_bit_depth != expected_bit_depth) {
+                error = "PNG target layout mismatch";
+                return false;
+            }
+            if constexpr (std::endian::native == std::endian::little) {
+                if (output_bit_depth == 16)
+                    png_set_swap(png);
+            }
+            const auto bytes_per_sample = static_cast<std::size_t>(output_bit_depth / 8);
+            const auto decoded_row_bytes = static_cast<std::size_t>(width) * (compact_gray ? 1 : target.channels) * bytes_per_sample;
+            const auto output_row_bytes = static_cast<std::size_t>(width) * target.channels * bytes_per_sample;
+            if (!allocate_target(target, output_row_bytes * height, error))
+                return false;
+            result = {static_cast<int>(width), static_cast<int>(height), target.channels, target.sample_type};
+            std::vector<png_bytep> rows(height);
+            for (png_uint_32 y = 0; y < height; ++y)
+                rows[y] = static_cast<png_bytep>(target.data) + static_cast<std::size_t>(y) * decoded_row_bytes;
+            png_read_image(png, rows.data());
+            png_read_end(png, info);
+            if (compact_gray) {
+                auto* output = static_cast<std::uint16_t*>(target.data);
+                const auto* gray = output;
+                const auto pixels = static_cast<std::size_t>(width) * height;
+                for (std::size_t pixel = pixels; pixel-- > 0;) {
+                    const auto value = gray[pixel];
+                    output[pixel * 3 + 0] = value;
+                    output[pixel * 3 + 1] = value;
+                    output[pixel * 3 + 2] = value;
+                }
+            }
+            return true;
         }
 
-        void png_flush_callback(png_structp) {}
+        bool decode_png_memory_to_buffer(const std::uint8_t* data, std::size_t size,
+                                         DecodeTarget& target, Probe& result, std::string& error);
+
+        bool decode_png_file_to_buffer(const std::filesystem::path& path, DecodeTarget& target,
+                                       Probe& result, std::string& error) {
+            if (target.sample_type == SampleType::UInt16 && target.channels == 3) {
+                std::vector<std::uint8_t> file_data;
+                if (!read_file(path, file_data, error))
+                    return false;
+                const bool is_16_bit_png = is_png(file_data) && file_data.size() >= 25 && file_data[24] == 16;
+                int width = 0;
+                int height = 0;
+                int source_channels = 0;
+                if (is_16_bit_png) {
+                    auto* decoded = stbi_load_16_from_memory(file_data.data(), static_cast<int>(file_data.size()),
+                                                             &width, &height, &source_channels, target.channels);
+                    if (decoded && source_channels != 2 && !png_gray_has_transparency(file_data)) {
+                        target.data = decoded;
+                        result = {width, height, target.channels, target.sample_type};
+                        return true;
+                    }
+                    stbi_image_free(decoded);
+                }
+                return decode_png_memory_to_buffer(file_data.data(), file_data.size(), target, result, error);
+            }
+            auto* file = open_binary_file(path);
+            if (!file) {
+                error = "Could not open file " + path_to_utf8(path);
+                return false;
+            }
+            png_structp png = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
+            png_infop info = png ? png_create_info_struct(png) : nullptr;
+            if (!png || !info) {
+                png_destroy_read_struct(&png, &info, nullptr);
+                std::fclose(file);
+                error = "Could not allocate PNG decoder";
+                return false;
+            }
+            if (setjmp(png_jmpbuf(png))) {
+                png_destroy_read_struct(&png, &info, nullptr);
+                std::fclose(file);
+                error = "PNG decode failed";
+                return false;
+            }
+            png_init_io(png, file);
+            png_read_info(png, info);
+            const bool success = configure_png_target(png, info, target, result, error);
+            png_destroy_read_struct(&png, &info, nullptr);
+            std::fclose(file);
+            return success;
+        }
+
+        bool decode_png_memory_to_buffer(const std::uint8_t* data, const std::size_t size,
+                                         DecodeTarget& target, Probe& result, std::string& error) {
+            png_structp png = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
+            png_infop info = png ? png_create_info_struct(png) : nullptr;
+            if (!png || !info) {
+                png_destroy_read_struct(&png, &info, nullptr);
+                error = "Could not allocate PNG decoder";
+                return false;
+            }
+            if (setjmp(png_jmpbuf(png))) {
+                png_destroy_read_struct(&png, &info, nullptr);
+                error = "PNG decode failed";
+                return false;
+            }
+            PngReadContext input{data, size, 0};
+            png_set_read_fn(png, &input, png_read_callback);
+            png_read_info(png, info);
+            const bool success = configure_png_target(png, info, target, result, error);
+            png_destroy_read_struct(&png, &info, nullptr);
+            return success;
+        }
 
         bool decode_png(const std::vector<std::uint8_t>& file_data, Image& result, std::string& error) {
             if (!is_png(file_data)) {
@@ -183,10 +363,10 @@ namespace lfs::core::image_codecs {
                 error = "Unsupported PNG layout";
                 return false;
             }
-#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-            if (bit_depth == 16)
-                png_set_swap(png);
-#endif
+            if constexpr (std::endian::native == std::endian::little) {
+                if (bit_depth == 16)
+                    png_set_swap(png);
+            }
             const std::size_t bytes_per_sample = static_cast<std::size_t>(bit_depth / 8);
             const std::size_t row_bytes = static_cast<std::size_t>(width) * channels * bytes_per_sample;
             result.width = static_cast<int>(width);
@@ -244,6 +424,103 @@ namespace lfs::core::image_codecs {
             return true;
         }
 
+        bool decode_jpeg_source(jpeg_decompress_struct& cinfo, DecodeTarget& target,
+                                Probe& result, std::string& error) {
+            jpeg_read_header(&cinfo, TRUE);
+            if (target.sample_type != SampleType::UInt8 || (target.channels != 1 && target.channels != 3)) {
+                error = "Unsupported JPEG target layout";
+                return false;
+            }
+            cinfo.out_color_space = target.channels == 1 ? JCS_GRAYSCALE : JCS_RGB;
+            jpeg_start_decompress(&cinfo);
+            if (cinfo.output_components != target.channels) {
+                error = "JPEG target channel mismatch";
+                return false;
+            }
+            const auto width = static_cast<int>(cinfo.output_width);
+            const auto height = static_cast<int>(cinfo.output_height);
+            const auto row_bytes = static_cast<std::size_t>(width) * target.channels;
+            if (!allocate_target(target, row_bytes * height, error))
+                return false;
+            result = {width, height, target.channels, SampleType::UInt8};
+            while (cinfo.output_scanline < cinfo.output_height) {
+                auto* row = static_cast<JSAMPLE*>(target.data) + static_cast<std::size_t>(cinfo.output_scanline) * row_bytes;
+                JSAMPROW rows[] = {row};
+                jpeg_read_scanlines(&cinfo, rows, 1);
+            }
+            jpeg_finish_decompress(&cinfo);
+            return true;
+        }
+
+        bool decode_jpeg_file_to_buffer(const std::filesystem::path& path, DecodeTarget& target,
+                                        Probe& result, std::string& error) {
+            auto* file = open_binary_file(path);
+            if (!file) {
+                error = "Could not open file " + path_to_utf8(path);
+                return false;
+            }
+            jpeg_decompress_struct cinfo{};
+            JpegError jerror;
+            cinfo.err = jpeg_std_error(&jerror.base);
+            jerror.base.error_exit = jpeg_error_exit;
+            if (setjmp(jerror.jump)) {
+                jpeg_destroy_decompress(&cinfo);
+                std::fclose(file);
+                set_error(error, "JPEG decode failed", jerror.message);
+                return false;
+            }
+            jpeg_create_decompress(&cinfo);
+            jpeg_stdio_src(&cinfo, file);
+            const bool success = decode_jpeg_source(cinfo, target, result, error);
+            jpeg_destroy_decompress(&cinfo);
+            std::fclose(file);
+            return success;
+        }
+
+        bool decode_jpeg_memory_to_buffer(const std::uint8_t* data, const std::size_t size,
+                                          DecodeTarget& target, Probe& result, std::string& error) {
+            jpeg_decompress_struct cinfo{};
+            JpegError jerror;
+            cinfo.err = jpeg_std_error(&jerror.base);
+            jerror.base.error_exit = jpeg_error_exit;
+            if (setjmp(jerror.jump)) {
+                jpeg_destroy_decompress(&cinfo);
+                set_error(error, "JPEG decode failed", jerror.message);
+                return false;
+            }
+            jpeg_create_decompress(&cinfo);
+            jpeg_mem_src(&cinfo, const_cast<unsigned char*>(data), size);
+            const bool success = decode_jpeg_source(cinfo, target, result, error);
+            jpeg_destroy_decompress(&cinfo);
+            return success;
+        }
+
+        bool probe_jpeg_file(const std::filesystem::path& path, Probe& result, std::string& error) {
+            auto* file = open_binary_file(path);
+            if (!file) {
+                error = "Could not open file " + path_to_utf8(path);
+                return false;
+            }
+            jpeg_decompress_struct cinfo{};
+            JpegError jerror;
+            cinfo.err = jpeg_std_error(&jerror.base);
+            jerror.base.error_exit = jpeg_error_exit;
+            if (setjmp(jerror.jump)) {
+                jpeg_destroy_decompress(&cinfo);
+                std::fclose(file);
+                set_error(error, "JPEG header probe failed", jerror.message);
+                return false;
+            }
+            jpeg_create_decompress(&cinfo);
+            jpeg_stdio_src(&cinfo, file);
+            jpeg_read_header(&cinfo, TRUE);
+            result = {static_cast<int>(cinfo.image_width), static_cast<int>(cinfo.image_height),
+                      cinfo.num_components == 1 ? 1 : 3, SampleType::UInt8};
+            jpeg_destroy_decompress(&cinfo);
+            std::fclose(file);
+            return true;
+        }
+
         bool probe_jpeg_bytes(const std::uint8_t* bytes, std::size_t size, Probe& result, std::string& error) {
             jpeg_decompress_struct cinfo{};
             JpegError jerror;
@@ -263,10 +540,6 @@ namespace lfs::core::image_codecs {
             return true;
         }
 
-        struct TiffStream {
-            std::fstream file;
-        };
-
         void tiff_quiet_handler(const char*, const char*, va_list) {}
 
         void install_tiff_quiet_handlers() {
@@ -278,66 +551,16 @@ namespace lfs::core::image_codecs {
             (void)installed;
         }
 
-        tmsize_t tiff_read(thandle_t handle, void* buffer, tmsize_t size) {
-            auto* stream = static_cast<TiffStream*>(handle);
-            stream->file.read(static_cast<char*>(buffer), size);
-            return static_cast<tmsize_t>(stream->file.gcount());
-        }
-
-        tmsize_t tiff_write(thandle_t handle, void* buffer, tmsize_t size) {
-            auto* stream = static_cast<TiffStream*>(handle);
-            stream->file.write(static_cast<const char*>(buffer), size);
-            return stream->file ? size : 0;
-        }
-
-        toff_t tiff_seek(thandle_t handle, toff_t offset, int whence) {
-            auto* stream = static_cast<TiffStream*>(handle);
-            std::ios_base::seekdir direction = std::ios::beg;
-            if (whence == SEEK_CUR)
-                direction = std::ios::cur;
-            else if (whence == SEEK_END)
-                direction = std::ios::end;
-            stream->file.clear();
-            stream->file.seekg(static_cast<std::streamoff>(offset), direction);
-            stream->file.seekp(static_cast<std::streamoff>(offset), direction);
-            return stream->file ? static_cast<toff_t>(stream->file.tellg()) : static_cast<toff_t>(-1);
-        }
-
-        int tiff_close(thandle_t handle) {
-            auto* stream = static_cast<TiffStream*>(handle);
-            stream->file.close();
-            delete stream;
-            return 0;
-        }
-
-        toff_t tiff_size(thandle_t handle) {
-            auto* stream = static_cast<TiffStream*>(handle);
-            const auto position = stream->file.tellg();
-            stream->file.seekg(0, std::ios::end);
-            const auto size = stream->file.tellg();
-            stream->file.seekg(position);
-            return size < 0 ? 0 : static_cast<toff_t>(size);
-        }
-
-        int tiff_map(thandle_t, void**, toff_t*) { return 0; }
-        void tiff_unmap(thandle_t, void*, toff_t) {}
-
         TIFF* open_tiff(const std::filesystem::path& path, const char* mode, std::string& error) {
             install_tiff_quiet_handlers();
-            auto* stream = new TiffStream;
-            const auto open_mode = mode[0] == 'r' ? (std::ios::in | std::ios::binary) : (std::ios::in | std::ios::out | std::ios::binary | std::ios::trunc);
-            stream->file.open(path, open_mode);
-            if (!stream->file) {
-                delete stream;
-                error = "Could not open TIFF " + path.string();
-                return nullptr;
-            }
-            TIFF* tiff = TIFFClientOpen(path.string().c_str(), mode, stream, tiff_read, tiff_write,
-                                        tiff_seek, tiff_close, tiff_size, tiff_map, tiff_unmap);
-            if (!tiff) {
-                delete stream;
-                error = "Could not initialize TIFF codec for " + path.string();
-            }
+#ifdef _WIN32
+            TIFF* tiff = TIFFOpenW(path.c_str(), mode);
+#else
+            const auto path_utf8 = path_to_utf8(path);
+            TIFF* tiff = TIFFOpen(path_utf8.c_str(), mode);
+#endif
+            if (!tiff)
+                error = "Could not initialize TIFF codec for " + path_to_utf8(path);
             return tiff;
         }
 
@@ -428,6 +651,56 @@ namespace lfs::core::image_codecs {
             return true;
         }
 
+        bool decode_tiff_to_buffer(const std::filesystem::path& path, DecodeTarget& target,
+                                   Probe& result, std::string& error) {
+            TIFF* tiff = open_tiff(path, "r", error);
+            if (!tiff)
+                return false;
+            std::uint32_t width = 0;
+            std::uint32_t height = 0;
+            std::uint16_t channels = 1;
+            std::uint16_t bits = 8;
+            std::uint16_t sample_format = SAMPLEFORMAT_UINT;
+            std::uint16_t planar = PLANARCONFIG_CONTIG;
+            TIFFGetField(tiff, TIFFTAG_IMAGEWIDTH, &width);
+            TIFFGetField(tiff, TIFFTAG_IMAGELENGTH, &height);
+            TIFFGetFieldDefaulted(tiff, TIFFTAG_SAMPLESPERPIXEL, &channels);
+            TIFFGetFieldDefaulted(tiff, TIFFTAG_BITSPERSAMPLE, &bits);
+            TIFFGetFieldDefaulted(tiff, TIFFTAG_SAMPLEFORMAT, &sample_format);
+            TIFFGetFieldDefaulted(tiff, TIFFTAG_PLANARCONFIG, &planar);
+            const auto source_type = sample_format == SAMPLEFORMAT_IEEEFP ? SampleType::Float32
+                                     : bits == 16                         ? SampleType::UInt16
+                                                                          : SampleType::UInt8;
+            const auto sample_size = static_cast<std::size_t>(bits / 8);
+            const auto row_bytes = static_cast<std::size_t>(width) * channels * sample_size;
+            const bool direct = width > 0 && height > 0 && channels == target.channels && planar == PLANARCONFIG_CONTIG &&
+                                !TIFFIsTiled(tiff) && source_type == target.sample_type &&
+                                ((bits == 8 && target.sample_type == SampleType::UInt8) ||
+                                 (bits == 16 && target.sample_type == SampleType::UInt16) ||
+                                 (bits == 32 && target.sample_type == SampleType::Float32)) &&
+                                TIFFScanlineSize(tiff) == static_cast<tmsize_t>(row_bytes);
+            if (!direct) {
+                TIFFClose(tiff);
+                error = "TIFF layout requires conversion";
+                return false;
+            }
+            if (!allocate_target(target, row_bytes * height, error)) {
+                TIFFClose(tiff);
+                return false;
+            }
+            result = {static_cast<int>(width), static_cast<int>(height), target.channels, target.sample_type};
+            for (std::uint32_t y = 0; y < height; ++y) {
+                auto* row = static_cast<std::uint8_t*>(target.data) + static_cast<std::size_t>(y) * row_bytes;
+                if (TIFFReadScanline(tiff, row, y, 0) < 0) {
+                    TIFFClose(tiff);
+                    error = "TIFF scanline read failed";
+                    return false;
+                }
+            }
+            TIFFClose(tiff);
+            return true;
+        }
+
         bool decode_webp(const std::vector<std::uint8_t>& file_data, Image& result, std::string& error) {
             int width = 0;
             int height = 0;
@@ -493,6 +766,184 @@ namespace lfs::core::image_codecs {
             return true;
         }
 
+        bool decode_webp_to_buffer(const std::filesystem::path& path, DecodeTarget& target,
+                                   Probe& result, std::string& error) {
+            std::vector<std::uint8_t> file_data;
+            if (!read_file(path, file_data, error))
+                return false;
+            int width = 0;
+            int height = 0;
+            if (!WebPGetInfo(file_data.data(), file_data.size(), &width, &height)) {
+                error = "Invalid WebP image";
+                return false;
+            }
+            if (target.sample_type != SampleType::UInt8 || target.channels != 3) {
+                error = "Unsupported WebP target layout";
+                return false;
+            }
+            const auto bytes = static_cast<std::size_t>(width) * height * target.channels;
+            if (!allocate_target(target, bytes, error))
+                return false;
+            if (!WebPDecodeRGBInto(file_data.data(), file_data.size(), static_cast<std::uint8_t*>(target.data), bytes,
+                                   width * target.channels)) {
+                error = "WebP decode failed";
+                return false;
+            }
+            result = {width, height, target.channels, target.sample_type};
+            return true;
+        }
+
+        bool decode_stb_to_buffer(const std::filesystem::path& path, const bool hdr,
+                                  DecodeTarget& target, Probe& result, std::string& error) {
+#ifndef _WIN32
+            if (hdr && target.sample_type == SampleType::Float32) {
+                const int descriptor = open(path.c_str(), O_RDONLY);
+                struct stat file_status {};
+                if (descriptor >= 0 && fstat(descriptor, &file_status) == 0 && file_status.st_size > 0 &&
+                    file_status.st_size <= std::numeric_limits<int>::max()) {
+                    const auto size = static_cast<std::size_t>(file_status.st_size);
+                    void* mapped = mmap(nullptr, size, PROT_READ, MAP_PRIVATE, descriptor, 0);
+                    if (mapped != MAP_FAILED) {
+                        int width = 0;
+                        int height = 0;
+                        int source_channels = 0;
+                        auto* decoded = stbi_loadf_from_memory(static_cast<const stbi_uc*>(mapped),
+                                                               static_cast<int>(size), &width, &height,
+                                                               &source_channels, target.channels);
+                        munmap(mapped, size);
+                        close(descriptor);
+                        if (decoded) {
+                            target.data = decoded;
+                            result = {width, height, target.channels, target.sample_type};
+                            return true;
+                        }
+                    } else {
+                        close(descriptor);
+                    }
+                } else if (descriptor >= 0) {
+                    close(descriptor);
+                }
+            }
+#endif
+            auto* file = open_binary_file(path);
+            if (!file) {
+                error = "Could not open file " + path_to_utf8(path);
+                return false;
+            }
+            int width = 0;
+            int height = 0;
+            int source_channels = 0;
+            if (hdr) {
+                if (target.sample_type != SampleType::Float32) {
+                    std::fclose(file);
+                    error = "Unsupported HDR target layout";
+                    return false;
+                }
+                auto* decoded = stbi_loadf_from_file(file, &width, &height, &source_channels, target.channels);
+                std::fclose(file);
+                if (!decoded) {
+                    error = "HDR decode failed";
+                    return false;
+                }
+                target.data = decoded;
+            } else {
+                if (target.sample_type != SampleType::UInt8) {
+                    std::fclose(file);
+                    error = "Unsupported STB target layout";
+                    return false;
+                }
+                auto* decoded = stbi_load_from_file(file, &width, &height, &source_channels, target.channels);
+                std::fclose(file);
+                if (!decoded) {
+                    error = "STB decode failed";
+                    return false;
+                }
+                target.data = decoded;
+            }
+            result = {width, height, target.channels, target.sample_type};
+            return true;
+        }
+
+        bool probe_png_file(const std::filesystem::path& path, Probe& result, std::string& error) {
+            auto* file = open_binary_file(path);
+            if (!file) {
+                error = "Could not open file " + path_to_utf8(path);
+                return false;
+            }
+            png_structp png = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
+            png_infop info = png ? png_create_info_struct(png) : nullptr;
+            if (!png || !info) {
+                png_destroy_read_struct(&png, &info, nullptr);
+                std::fclose(file);
+                error = "Could not allocate PNG decoder";
+                return false;
+            }
+            if (setjmp(png_jmpbuf(png))) {
+                png_destroy_read_struct(&png, &info, nullptr);
+                std::fclose(file);
+                error = "PNG header probe failed";
+                return false;
+            }
+            png_init_io(png, file);
+            png_read_info(png, info);
+            png_uint_32 width = 0;
+            png_uint_32 height = 0;
+            int bit_depth = 0;
+            int color_type = 0;
+            png_get_IHDR(png, info, &width, &height, &bit_depth, &color_type, nullptr, nullptr, nullptr);
+            const int channels = color_type == PNG_COLOR_TYPE_GRAY ? 1 : color_type == PNG_COLOR_TYPE_GRAY_ALPHA                                ? 2
+                                                                     : color_type == PNG_COLOR_TYPE_PALETTE || color_type == PNG_COLOR_TYPE_RGB ? 3
+                                                                                                                                                : 4;
+            result = {static_cast<int>(width), static_cast<int>(height), channels,
+                      bit_depth == 16 ? SampleType::UInt16 : SampleType::UInt8};
+            png_destroy_read_struct(&png, &info, nullptr);
+            std::fclose(file);
+            return true;
+        }
+
+        bool probe_stb_file(const std::filesystem::path& path, const bool hdr,
+                            Probe& result, std::string& error) {
+            auto* file = open_binary_file(path);
+            if (!file) {
+                error = "Could not open file " + path_to_utf8(path);
+                return false;
+            }
+            int width = 0;
+            int height = 0;
+            int channels = 0;
+            const bool success = stbi_info_from_file(file, &width, &height, &channels) != 0;
+            std::fclose(file);
+            if (!success) {
+                error = hdr ? "Invalid HDR header" : "Invalid STB image header";
+                return false;
+            }
+            result = {width, height, channels, hdr ? SampleType::Float32 : SampleType::UInt8};
+            return true;
+        }
+
+        bool probe_webp_file(const std::filesystem::path& path, Probe& result, std::string& error) {
+            std::vector<std::uint8_t> header;
+            if (!read_prefix(path, header, error))
+                return false;
+            if (!is_webp(header)) {
+                error = "Invalid WebP header";
+                return false;
+            }
+            int width = 0;
+            int height = 0;
+            if (!WebPGetInfo(header.data(), header.size(), &width, &height)) {
+                error = "Invalid WebP header";
+                return false;
+            }
+            WebPBitstreamFeatures features{};
+            if (WebPGetFeatures(header.data(), header.size(), &features) != VP8_STATUS_OK) {
+                error = "Invalid WebP features";
+                return false;
+            }
+            result = {width, height, features.has_alpha ? 4 : 3, SampleType::UInt8};
+            return true;
+        }
+
         bool decode_exr(const std::filesystem::path& path, Image& result, std::string& error) {
             float* decoded = nullptr;
             int width = 0;
@@ -519,12 +970,76 @@ namespace lfs::core::image_codecs {
 
     } // namespace
 
+    bool decode_to_buffer(const std::filesystem::path& path, DecodeTarget& target,
+                          Probe& result, std::string& error) {
+        const auto extension = lower_extension(path);
+        if (extension == ".jpg" || extension == ".jpeg")
+            return decode_jpeg_file_to_buffer(path, target, result, error);
+        if (extension == ".png")
+            return decode_png_file_to_buffer(path, target, result, error);
+        if (extension == ".webp")
+            return decode_webp_to_buffer(path, target, result, error);
+        if (extension == ".tif" || extension == ".tiff")
+            return decode_tiff_to_buffer(path, target, result, error);
+        if (extension == ".hdr")
+            return decode_stb_to_buffer(path, true, target, result, error);
+        if (extension == ".bmp" || extension == ".tga")
+            return decode_stb_to_buffer(path, false, target, result, error);
+        error = "Unsupported image extension: " + path_to_utf8(path);
+        return false;
+    }
+
+    bool decode_memory_to_buffer(const std::uint8_t* data, const std::size_t size,
+                                 DecodeTarget& target, Probe& result, std::string& error) {
+        if (!data || size == 0) {
+            error = "Empty image buffer";
+            return false;
+        }
+        if (size >= 2 && data[0] == 0xff && data[1] == 0xd8)
+            return decode_jpeg_memory_to_buffer(data, size, target, result, error);
+        if (size >= kPngSignature.size() && std::equal(kPngSignature.begin(), kPngSignature.end(), data))
+            return decode_png_memory_to_buffer(data, size, target, result, error);
+        error = "Unsupported image buffer format";
+        return false;
+    }
+
     bool probe(const std::filesystem::path& path, Probe& result, std::string& error) {
+        const auto extension = lower_extension(path);
+        if (extension == ".jpg" || extension == ".jpeg")
+            return probe_jpeg_file(path, result, error);
+        if (extension == ".png")
+            return probe_png_file(path, result, error);
+        if (extension == ".webp")
+            return probe_webp_file(path, result, error);
+        if (extension == ".bmp" || extension == ".tga")
+            return probe_stb_file(path, false, result, error);
+        if (extension == ".hdr")
+            return probe_stb_file(path, true, result, error);
+        if (extension == ".tif" || extension == ".tiff") {
+            TIFF* tiff = open_tiff(path, "r", error);
+            if (!tiff)
+                return false;
+            std::uint32_t width = 0;
+            std::uint32_t height = 0;
+            std::uint16_t channels = 1;
+            std::uint16_t bits = 8;
+            std::uint16_t sample_format = SAMPLEFORMAT_UINT;
+            TIFFGetField(tiff, TIFFTAG_IMAGEWIDTH, &width);
+            TIFFGetField(tiff, TIFFTAG_IMAGELENGTH, &height);
+            TIFFGetFieldDefaulted(tiff, TIFFTAG_SAMPLESPERPIXEL, &channels);
+            TIFFGetFieldDefaulted(tiff, TIFFTAG_BITSPERSAMPLE, &bits);
+            TIFFGetFieldDefaulted(tiff, TIFFTAG_SAMPLEFORMAT, &sample_format);
+            TIFFClose(tiff);
+            result = {static_cast<int>(width), static_cast<int>(height), static_cast<int>(channels),
+                      sample_format == SAMPLEFORMAT_IEEEFP ? SampleType::Float32 : bits == 16 ? SampleType::UInt16
+                                                                                              : SampleType::UInt8};
+            return true;
+        }
+
         std::vector<std::uint8_t> prefix;
         if (!read_prefix(path, prefix, error))
             return false;
-        const auto extension = lower_extension(path);
-        if (is_exr(prefix) || extension == ".exr") {
+        if (is_exr(prefix)) {
             error = "EXR dimensions require codec decode";
             return false;
         }
@@ -624,22 +1139,23 @@ namespace lfs::core::image_codecs {
             result = {width, height, channels, SampleType::Float32};
             return true;
         }
-        error = "Unsupported image format: " + path.string();
+        error = "Unsupported image format: " + path_to_utf8(path);
         return false;
     }
 
     bool decode(const std::filesystem::path& path, Image& result, std::string& error) {
-        std::vector<std::uint8_t> prefix;
-        if (!read_prefix(path, prefix, error))
-            return false;
         const auto extension = lower_extension(path);
-        if (is_tiff(prefix) || extension == ".tif" || extension == ".tiff")
+        if (extension == ".tif" || extension == ".tiff")
             return decode_tiff(path, result, error);
-        if (is_exr(prefix) || extension == ".exr")
+        if (extension == ".exr")
             return decode_exr(path, result, error);
         std::vector<std::uint8_t> data;
         if (!read_file(path, data, error))
             return false;
+        if (is_tiff(data))
+            return decode_tiff(path, result, error);
+        if (is_exr(data))
+            return decode_exr(path, result, error);
         if (is_jpeg(data))
             return decode_jpeg_bytes(data.data(), data.size(), result, error);
         if (is_png(data))
@@ -652,7 +1168,7 @@ namespace lfs::core::image_codecs {
             return decode_stb(data, false, result, error);
         if (extension == ".tga")
             return decode_stb(data, false, result, error);
-        error = "Unsupported image format: " + path.string();
+        error = "Unsupported image format: " + path_to_utf8(path);
         return false;
     }
 
@@ -719,7 +1235,7 @@ namespace lfs::core::image_codecs {
         if (!file) {
             free(output);
             jpeg_destroy_compress(&cinfo);
-            error = "Could not open JPEG output " + path.string();
+            error = "Could not open JPEG output " + path_to_utf8(path);
             return false;
         }
         file.write(reinterpret_cast<const char*>(output), static_cast<std::streamsize>(output_size));
@@ -727,7 +1243,7 @@ namespace lfs::core::image_codecs {
         free(output);
         jpeg_destroy_compress(&cinfo);
         if (!success)
-            error = "Could not write JPEG output " + path.string();
+            error = "Could not write JPEG output " + path_to_utf8(path);
         return success;
     }
 
@@ -746,25 +1262,28 @@ namespace lfs::core::image_codecs {
             error = "Could not allocate PNG encoder";
             return false;
         }
+        std::FILE* file = nullptr;
         if (setjmp(png_jmpbuf(png))) {
+            if (file)
+                std::fclose(file);
             png_destroy_write_struct(&png, &info);
             error = "PNG encode failed";
             return false;
         }
-        PngWriteContext context;
-        context.file.open(path, std::ios::binary);
-        if (!context.file) {
+        file = open_output_file(path);
+        if (!file) {
             png_destroy_write_struct(&png, &info);
-            error = "Could not open PNG output " + path.string();
+            error = "Could not open PNG output " + path_to_utf8(path);
             return false;
         }
-        png_set_write_fn(png, &context, png_write_callback, png_flush_callback);
+        png_init_io(png, file);
         const int color_type = channels == 1 ? PNG_COLOR_TYPE_GRAY : channels == 2 ? PNG_COLOR_TYPE_GRAY_ALPHA
                                                                  : channels == 3   ? PNG_COLOR_TYPE_RGB
                                                                                    : PNG_COLOR_TYPE_RGBA;
         png_set_IHDR(png, info, width, height, bit_depth, color_type, PNG_INTERLACE_NONE,
                      PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
         png_set_compression_level(png, std::clamp(compression_level, 0, 9));
+        png_set_compression_strategy(png, Z_DEFAULT_STRATEGY);
         png_text text{};
         if (comment && !comment->empty()) {
             text.compression = PNG_TEXT_COMPRESSION_NONE;
@@ -773,10 +1292,10 @@ namespace lfs::core::image_codecs {
             png_set_text(png, info, &text, 1);
         }
         png_write_info(png, info);
-#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-        if (bit_depth == 16)
-            png_set_swap(png);
-#endif
+        if constexpr (std::endian::native == std::endian::little) {
+            if (bit_depth == 16)
+                png_set_swap(png);
+        }
         const auto row_bytes = static_cast<std::size_t>(width) * channels * (bit_depth / 8);
         std::vector<png_bytep> rows(height);
         auto* bytes = static_cast<png_bytep>(const_cast<void*>(data));
@@ -784,9 +1303,11 @@ namespace lfs::core::image_codecs {
             rows[y] = bytes + static_cast<std::size_t>(y) * row_bytes;
         png_write_image(png, rows.data());
         png_write_end(png, info);
-        context.file.close();
         png_destroy_write_struct(&png, &info);
-        return true;
+        const bool success = std::fclose(file) == 0;
+        if (!success)
+            error = "Could not write PNG output " + path_to_utf8(path);
+        return success;
     }
 
     bool write_tiff(const std::filesystem::path& path, const std::uint8_t* data,

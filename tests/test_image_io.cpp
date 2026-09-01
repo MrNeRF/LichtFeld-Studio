@@ -92,6 +92,30 @@ TEST(ImageIoTest, ConvertsSixteenBitPngMemoryToUint8) {
     lfs::core::free_image(decoded);
 }
 
+TEST(ImageIoTest, ExpandsEightBitPngToUint16) {
+    const auto source_path = std::filesystem::path(PROJECT_ROOT_PATH) / "data/bicycle/images_4/_DSC8679.JPG";
+    auto [source, source_width, source_height, source_channels] = lfs::core::load_image(source_path);
+    ASSERT_NE(source, nullptr);
+    ASSERT_EQ(source_channels, 3);
+
+    const auto path = std::filesystem::temp_directory_path() / "lfs_image_io_expand8.png";
+    ASSERT_TRUE(lfs::core::save_png(path, source, source_width, source_height, source_channels, 8, 0));
+    const auto pixel_count = static_cast<std::size_t>(source_width) * source_height * source_channels;
+
+    auto [decoded, width, height, channels] = lfs::core::load_image_u16(path);
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+
+    ASSERT_NE(decoded, nullptr);
+    ASSERT_EQ(width, source_width);
+    ASSERT_EQ(height, source_height);
+    ASSERT_EQ(channels, 3);
+    for (std::size_t i = 0; i < pixel_count; ++i)
+        ASSERT_EQ(decoded[i], static_cast<std::uint16_t>(static_cast<unsigned int>(source[i]) * 257u)) << "sample " << i;
+    lfs::core::free_image(decoded);
+    lfs::core::free_image(source);
+}
+
 TEST(ImageIoTest, GrayAlphaPathAndMemoryExpansionMatch) {
     const auto source_path = std::filesystem::path(PROJECT_ROOT_PATH) / "data/bicycle/images_4/_DSC8679.JPG";
     auto [source, source_width, source_height, source_channels] = lfs::core::load_image(source_path);

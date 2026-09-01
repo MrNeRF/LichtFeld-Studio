@@ -30,9 +30,21 @@ namespace lfs::core::image_codecs {
         SampleType sample_type = SampleType::UInt8;
     };
 
+    using DecodeAllocator = void* (*)(std::size_t bytes, void* user);
+
+    struct DecodeTarget {
+        int channels = 0;
+        SampleType sample_type = SampleType::UInt8;
+        void* data = nullptr;
+        DecodeAllocator allocate = nullptr;
+        void* user = nullptr;
+    };
+
     bool probe(const std::filesystem::path& path, Probe& result, std::string& error);
     bool decode(const std::filesystem::path& path, Image& result, std::string& error);
+    bool decode_to_buffer(const std::filesystem::path& path, DecodeTarget& target, Probe& result, std::string& error);
     bool decode_memory(const std::uint8_t* data, size_t size, Image& result, std::string& error);
+    bool decode_memory_to_buffer(const std::uint8_t* data, size_t size, DecodeTarget& target, Probe& result, std::string& error);
     bool decode_jpeg_memory(const std::uint8_t* data, size_t size, Image& result, std::string& error);
 
     bool write_jpeg(const std::filesystem::path& path, const std::uint8_t* data,
