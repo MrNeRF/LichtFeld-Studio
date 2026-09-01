@@ -244,11 +244,29 @@ namespace lfs::io::project {
             const auto* src =
                 reinterpret_cast<const std::uint8_t*>(interleaved.data());
             auto* dst = reinterpret_cast<std::uint8_t*>(out.data());
-            for (std::size_t w = 0; w < n_words; ++w) {
-                dst[0 * n_words + w] = src[w * 4 + 0];
-                dst[1 * n_words + w] = src[w * 4 + 1];
-                dst[2 * n_words + w] = src[w * 4 + 2];
-                dst[3 * n_words + w] = src[w * 4 + 3];
+            const auto copy_range = [=](const std::size_t begin,
+                                        const std::size_t end) {
+                for (std::size_t w = begin; w < end; ++w) {
+                    dst[0 * n_words + w] = src[w * 4 + 0];
+                    dst[1 * n_words + w] = src[w * 4 + 1];
+                    dst[2 * n_words + w] = src[w * 4 + 2];
+                    dst[3 * n_words + w] = src[w * 4 + 3];
+                }
+            };
+            constexpr std::size_t PARALLEL_THRESHOLD_WORDS = 1ull << 20;
+            if (n_words < PARALLEL_THRESHOLD_WORDS) {
+                copy_range(0, n_words);
+                return out;
+            }
+            const std::size_t worker_count = std::min<std::size_t>(
+                n_words,
+                std::max(1u, std::thread::hardware_concurrency()));
+            std::vector<std::jthread> workers;
+            workers.reserve(worker_count);
+            for (std::size_t worker = 0; worker < worker_count; ++worker) {
+                const std::size_t begin = n_words * worker / worker_count;
+                const std::size_t end = n_words * (worker + 1) / worker_count;
+                workers.emplace_back([=] { copy_range(begin, end); });
             }
             return out;
         }
@@ -773,26 +791,42 @@ namespace lfs::io::project {
             return crc32c(0, encoded.data(), encoded.size());
         }
 
-        std::vector<std::uint32_t>
-        calculate_block_crcs(const std::span<const std::byte> stored) {
-            std::vector<std::uint32_t> entries;
+        struct PayloadCrcs {
+            std::uint32_t stored = 0;
+            std::vector<std::uint32_t> blocks;
+        };
+
+        PayloadCrcs calculate_payload_crcs(
+            const std::span<const std::byte> stored,
+            const bool with_blocks) {
+            PayloadCrcs result;
             if (stored.empty()) {
-                return entries;
+                return result;
             }
-            const std::uint64_t count =
-                stored.size() / BLOCK_CRC_BYTES +
-                (stored.size() % BLOCK_CRC_BYTES != 0 ? 1 : 0);
-            entries.reserve(static_cast<std::size_t>(count));
+            if (with_blocks) {
+                const std::uint64_t count =
+                    stored.size() / BLOCK_CRC_BYTES +
+                    (stored.size() % BLOCK_CRC_BYTES != 0 ? 1 : 0);
+                result.blocks.reserve(static_cast<std::size_t>(count));
+            }
             std::size_t offset = 0;
             while (offset < stored.size()) {
                 const std::size_t bytes = static_cast<std::size_t>(
                     std::min<std::uint64_t>(stored.size() - offset,
                                             BLOCK_CRC_BYTES));
-                entries.push_back(
-                    crc32c(0, stored.data() + offset, bytes));
+                if (with_blocks) {
+                    const auto block_crc =
+                        crc32c(0, stored.data() + offset, bytes);
+                    result.blocks.push_back(block_crc);
+                    result.stored = crc32c_combine(
+                        result.stored, block_crc, bytes);
+                } else {
+                    result.stored = crc32c(
+                        result.stored, stored.data() + offset, bytes);
+                }
                 offset += bytes;
             }
-            return entries;
+            return result;
         }
 
     } // namespace
@@ -991,6 +1025,7 @@ namespace lfs::io::project {
         bool keep_temporary = false;
         bool used_clean_proof_reuse = false;
         bool used_opaque_carry_forward = false;
+        bool private_staging = false;
         std::optional<lfs::Error> post_publish_note;
 
         ~Impl() {
@@ -1141,6 +1176,8 @@ namespace lfs::io::project {
             const bool with_blocks =
                 options.block_crcs ||
                 stored.size() >= BLOCK_CRC_REQUIRED_AT;
+            const auto payload_crcs =
+                calculate_payload_crcs(stored, with_blocks);
             std::vector<std::uint32_t> entries;
             std::uint64_t table_bytes = 0;
             if (with_blocks) {
@@ -1151,7 +1188,7 @@ namespace lfs::io::project {
                         "block_count must be at least one",
                         "chunk.block_crcs");
                 }
-                entries = calculate_block_crcs(stored);
+                entries = payload_crcs.blocks;
                 auto entry_bytes = detail::checked_multiply(
                     entries.size(), sizeof(std::uint32_t), active_path,
                     *table_offset, "block_table.entries");
@@ -1201,8 +1238,7 @@ namespace lfs::io::project {
                 return std::move(write).error();
             }
 
-            const std::uint32_t stored_crc =
-                crc32c(0, stored.data(), stored.size());
+            const std::uint32_t stored_crc = payload_crcs.stored;
             if (preserve_stored_crc && stored_crc != expected_stored_crc) {
                 return writer_error(
                     lfs::ErrorCode::DataLoss, destination_path,
@@ -1338,7 +1374,7 @@ namespace lfs::io::project {
                 return std::move(zero).error();
             }
 
-            constexpr std::size_t COPY_BUFFER_BYTES = 5 * 1024 * 1024;
+            constexpr std::size_t COPY_BUFFER_BYTES = 32 * 1024 * 1024;
             std::vector<std::byte> buffer(
                 static_cast<std::size_t>(std::min<std::uint64_t>(
                     std::max<std::uint64_t>(source_row.stored_bytes, 1),
@@ -1391,6 +1427,16 @@ namespace lfs::io::project {
                 entries.push_back(block_crc);
             }
             assert(entries.size() == block_count);
+            if (with_blocks &&
+                (!source_row.block_crc_table.has_value() ||
+                 entries != source_row.block_crc_table->entries)) {
+                return writer_error(
+                    lfs::ErrorCode::DataLoss, destination_path,
+                    "A source project chunk failed block CRC validation during compaction.",
+                    std::format("block CRC table for {} does not match its payload",
+                                source_row.key_string()),
+                    "chunk.block_crc32c");
+            }
             if (stored_crc != source_row.payload_crc32c) {
                 return writer_error(
                     lfs::ErrorCode::DataLoss, destination_path,
@@ -2816,15 +2862,19 @@ namespace lfs::io::project {
             return boundary;
         }
         const auto commit_written = std::chrono::steady_clock::now();
-        if (auto flush = impl_->file->sync_data(); !flush) {
-            impl_->poisoned = true;
-            return flush;
+        if (!impl_->private_staging) {
+            if (auto flush = impl_->file->sync_data(); !flush) {
+                impl_->poisoned = true;
+                return flush;
+            }
         }
         const auto data_flushed = std::chrono::steady_clock::now();
-        if (auto boundary =
-                impl_->notify(CommitBoundary::AppendFlushed);
-            !boundary) {
-            return boundary;
+        if (!impl_->private_staging) {
+            if (auto boundary =
+                    impl_->notify(CommitBoundary::AppendFlushed);
+                !boundary) {
+                return boundary;
+            }
         }
 
         HeadInfo head{
@@ -2850,20 +2900,25 @@ namespace lfs::io::project {
             !boundary) {
             return boundary;
         }
-        if (auto flush = impl_->file->sync_all(); !flush) {
-            impl_->poisoned = true;
-            return flush;
+        if (!impl_->private_staging) {
+            if (auto flush = impl_->file->sync_all(); !flush) {
+                impl_->poisoned = true;
+                return flush;
+            }
         }
         const auto all_flushed = std::chrono::steady_clock::now();
         LOG_DEBUG(
-            "Project commit stages: write_commit={:.3f} ms sync_data={:.3f} ms sync_all={:.3f} ms total={:.3f} ms",
+            "Project commit stages: write_commit={:.3f} ms sync_data={:.3f} ms sync_all={:.3f} ms deferred_durability={} total={:.3f} ms",
             std::chrono::duration<double, std::milli>(commit_written - commit_started).count(),
             std::chrono::duration<double, std::milli>(data_flushed - commit_written).count(),
             std::chrono::duration<double, std::milli>(all_flushed - data_flushed).count(),
+            impl_->private_staging,
             std::chrono::duration<double, std::milli>(all_flushed - commit_started).count());
-        if (auto boundary = impl_->notify(CommitBoundary::HeadFlushed);
-            !boundary) {
-            return boundary;
+        if (!impl_->private_staging) {
+            if (auto boundary = impl_->notify(CommitBoundary::HeadFlushed);
+                !boundary) {
+                return boundary;
+            }
         }
 
         ReaderOptions validation_options;
@@ -2969,7 +3024,9 @@ namespace lfs::io::project {
 
         auto validation = impl_->mode == Impl::Mode::Append
                               ? validate_authority(impl_->active_path)
-                              : validate_path(impl_->active_path);
+                              : (impl_->private_staging
+                                     ? validate_authority(impl_->active_path)
+                                     : validate_path(impl_->active_path));
         if (!validation) {
             impl_->poisoned = true;
             impl_->keep_temporary = impl_->mode == Impl::Mode::Create;
@@ -3065,19 +3122,32 @@ namespace lfs::io::project {
     lfs::Result<void>
     ProjectWriter::compact(const std::filesystem::path& path,
                            const CompactionOptions& options) {
-        if (path.empty()) {
+        return compact_to(path, path, options);
+    }
+
+    lfs::Result<void>
+    ProjectWriter::compact_to(
+        const std::filesystem::path& source_path,
+        const std::filesystem::path& destination_path,
+        const CompactionOptions& options) {
+        const auto compact_started = std::chrono::steady_clock::now();
+        auto source_ready = compact_started;
+        auto copy_finished = compact_started;
+        if (source_path.empty() || destination_path.empty()) {
             return status_failure(writer_error(
-                lfs::ErrorCode::InvalidArgument, path,
+                lfs::ErrorCode::InvalidArgument,
+                source_path.empty() ? source_path : destination_path,
                 "The project path is empty.",
-                "compact requires an existing destination path",
+                "compact requires nonempty source and destination paths",
                 "project.path"));
         }
-        auto lock_result = detail::WriterLock::acquire(path);
+        const auto& path = source_path;
+        auto lock_result = detail::WriterLock::acquire(destination_path);
         if (!lock_result) {
             return status_failure(std::move(lock_result).error());
         }
         auto source_result =
-            ProjectReader::open(path, options.compatibility);
+            ProjectReader::open(source_path, options.compatibility);
         if (!source_result) {
             return status_failure(std::move(source_result).error());
         }
@@ -3126,9 +3196,7 @@ namespace lfs::io::project {
                         .commit_uuid.to_string()),
                 "compaction.autosave_binding"));
         }
-        if (auto verify = source_result->verify_all(); !verify) {
-            return verify;
-        }
+        source_ready = std::chrono::steady_clock::now();
 
         auto file_uuid =
             assigned_uuid(options.new_file_uuid, path, "file_uuid");
@@ -3145,9 +3213,9 @@ namespace lfs::io::project {
 
         auto impl = std::make_unique<Impl>();
         impl->mode = Impl::Mode::Create;
-        impl->destination_path = path;
+        impl->destination_path = destination_path;
         impl->active_path =
-            detail::make_sibling_temp_path(path, "compact");
+            detail::make_sibling_temp_path(destination_path, "compact");
         impl->lock.emplace(std::move(*lock_result));
         impl->superblock = SuperblockInfo{
             .format = CURRENT_CONTAINER_VERSION,
@@ -3173,6 +3241,7 @@ namespace lfs::io::project {
         impl->disk_reserve_bytes = options.disk_reserve_bytes;
         impl->index_compression = IndexCompression::Zstd;
         impl->observer = options.boundary_observer;
+        impl->private_staging = options.private_staging;
 
         if (auto current = impl->notify(CommitBoundary::CurrentHeadValidated);
             !current) {
@@ -3260,7 +3329,24 @@ namespace lfs::io::project {
             // Tombstones are discarded on compaction (spec MAY; no keep_tombstones producer).
         }
 
-        return writer.commit();
+        copy_finished = std::chrono::steady_clock::now();
+        const auto commit_started = copy_finished;
+        auto committed = writer.commit();
+        if (committed) {
+            const auto finished = std::chrono::steady_clock::now();
+            const auto milliseconds = [](const auto begin, const auto end) {
+                return std::chrono::duration<double, std::milli>(end - begin)
+                    .count();
+            };
+            LOG_DEBUG(
+                "Project compaction stages: source={} destination={} source_open_metadata={:.3f} ms copy_crc_write={:.3f} ms commit={:.3f} ms total={:.3f} ms",
+                source_path.string(), destination_path.string(),
+                milliseconds(compact_started, source_ready),
+                milliseconds(source_ready, copy_finished),
+                milliseconds(commit_started, finished),
+                milliseconds(compact_started, finished));
+        }
+        return committed;
     }
 
 } // namespace lfs::io::project

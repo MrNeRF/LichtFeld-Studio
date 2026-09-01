@@ -571,6 +571,10 @@ namespace lfs::io::project {
         std::uint64_t wallclock_unix_ns = 0;
         std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
         CommitBoundaryObserver boundary_observer;
+        // Save As compaction writes a private intermediate file. The caller
+        // must complete the final append, full CRC verification, and durable
+        // publication before exposing it as the destination.
+        bool private_staging = false;
     };
 
     class LFS_IO_API ProjectWriter {
@@ -581,6 +585,13 @@ namespace lfs::io::project {
         append(const std::filesystem::path& path, const AppendOptions& options = {});
         [[nodiscard]] static lfs::Result<void>
         compact(const std::filesystem::path& path, const CompactionOptions& options = {});
+        // Compacts source_path into a new destination without first cloning
+        // the complete source file. The source is only read; publication of
+        // destination remains transactional and fully validated.
+        [[nodiscard]] static lfs::Result<void>
+        compact_to(const std::filesystem::path& source_path,
+                   const std::filesystem::path& destination_path,
+                   const CompactionOptions& options = {});
 
         ProjectWriter(ProjectWriter&&) noexcept;
         ProjectWriter& operator=(ProjectWriter&&) noexcept;

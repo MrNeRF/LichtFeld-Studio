@@ -3202,6 +3202,26 @@ namespace lfs::io::project {
         const ProjectDocumentSaveOptions& options,
         const ProjectDocumentAutosaveOptions* autosave) {
         const bool is_autosave = autosave != nullptr;
+        const auto save_started = std::chrono::steady_clock::now();
+        auto preview_finished = save_started;
+        auto payload_finished = save_started;
+        auto writer_setup_finished = save_started;
+        auto chunks_finished = save_started;
+        const auto log_save_stages = [&](const auto finished) {
+            const auto milliseconds = [](const auto begin, const auto end) {
+                return std::chrono::duration<double, std::milli>(end - begin)
+                    .count();
+            };
+            LOG_DEBUG(
+                "Project document save stages: autosave={} preview_prepare={:.3f} ms payload_prepare={:.3f} ms writer_setup={:.3f} ms chunk_write={:.3f} ms commit={:.3f} ms total={:.3f} ms",
+                is_autosave,
+                milliseconds(save_started, preview_finished),
+                milliseconds(preview_finished, payload_finished),
+                milliseconds(payload_finished, writer_setup_finished),
+                milliseconds(writer_setup_finished, chunks_finished),
+                milliseconds(chunks_finished, finished),
+                milliseconds(save_started, finished));
+        };
         if (!options.preview_png.empty() &&
             ((options.commit.kind != CommitKind::Explicit &&
               options.commit.kind != CommitKind::Recovered) ||
@@ -3239,6 +3259,7 @@ namespace lfs::io::project {
             }
         }
 #endif
+        preview_finished = std::chrono::steady_clock::now();
         auto normalized = normalized_absolute_path(path);
         if (!normalized) {
             return std::move(normalized).error();
@@ -3553,6 +3574,7 @@ namespace lfs::io::project {
         }
         add_encoded(project_key, staged_project->to_bytes(),
                     json_options());
+        payload_finished = std::chrono::steady_clock::now();
 
         std::set<ChunkKey, ChunkKeyLess> desired{
             project_key,
@@ -3742,6 +3764,7 @@ namespace lfs::io::project {
         if (auto result = writer->preflight(*planned_bytes); !result) {
             return std::move(result).error();
         }
+        writer_setup_finished = std::chrono::steady_clock::now();
 
         ProjectDocumentSaveReport report;
         if (!preview_png.empty()) {
@@ -3952,9 +3975,12 @@ namespace lfs::io::project {
             }
             ++report.rewritten_chunks;
         }
+        chunks_finished = std::chrono::steady_clock::now();
         if (auto result = writer->commit(); !result) {
             return std::move(result).error();
         }
+        const auto commit_finished = std::chrono::steady_clock::now();
+        log_save_stages(commit_finished);
         writer.reset();
 
         if (is_autosave || options.leave_unbound) {
@@ -3999,6 +4025,13 @@ namespace lfs::io::project {
     ProjectDocument::save_as(
         const std::filesystem::path& path,
         const ProjectDocumentSaveOptions& options) {
+        const auto save_as_started = std::chrono::steady_clock::now();
+        auto save_as_preflight_finished = save_as_started;
+        auto save_as_compaction_finished = save_as_started;
+        auto save_as_rebind_finished = save_as_started;
+        auto save_as_save_finished = save_as_started;
+        auto save_as_validate_finished = save_as_started;
+        auto save_as_restore_finished = save_as_started;
         if (impl_->source_reader) {
             const auto compatibility =
                 impl_->source_reader->write_compatibility();
@@ -4075,6 +4108,7 @@ namespace lfs::io::project {
                 std::format("filesystem::exists failed: {}", error.message()),
                 "project.path");
         }
+        save_as_preflight_finished = std::chrono::steady_clock::now();
 
         const auto original_path = *impl_->source_path;
         const auto original_dirty = impl_->dirty;
@@ -4100,23 +4134,12 @@ namespace lfs::io::project {
             std::error_code lock_error;
             std::filesystem::remove(lock_path, lock_error);
         };
-        if (!std::filesystem::copy_file(
-                original_path, temporary,
-                std::filesystem::copy_options::none, error)) {
-            remove_temporary();
-            return fail<ProjectDocumentSaveReport>(
-                lfs::ErrorCode::Unavailable,
-                "The project could not be staged for Save As.",
-                std::format("copy_file failed: {}", error.message()),
-                "project.save_as.copy");
-        }
-
         const auto file_uuid =
             options.file_uuid.is_nil()
                 ? lfs::core::generate_uuid_v4()
                 : options.file_uuid;
-        auto compacted = ProjectWriter::compact(
-            temporary,
+        auto compacted = ProjectWriter::compact_to(
+            original_path, temporary,
             CompactionOptions{
                 .compatibility =
                     impl_->source_reader
@@ -4136,11 +4159,13 @@ namespace lfs::io::project {
                 .wallclock_unix_ns = options.commit.wallclock_unix_ns,
                 .disk_reserve_bytes = options.disk_reserve_bytes,
                 .boundary_observer = {},
+                .private_staging = true,
             });
         if (!compacted) {
             remove_temporary();
             return std::move(compacted).error();
         }
+        save_as_compaction_finished = std::chrono::steady_clock::now();
 
         const auto rebind_preserving_dirty_lazy =
             [this](
@@ -4263,6 +4288,7 @@ namespace lfs::io::project {
             remove_temporary();
             return std::move(rebound).error();
         }
+        save_as_rebind_finished = std::chrono::steady_clock::now();
 
         auto staging_options = options;
         staging_options.writer_lock_lease.reset();
@@ -4277,6 +4303,7 @@ namespace lfs::io::project {
             }
             return save_error;
         }
+        save_as_save_finished = std::chrono::steady_clock::now();
 
         lfs::core::Uuid expected_commit_uuid;
         std::optional<lfs::Error> staged_failure;
@@ -4309,6 +4336,7 @@ namespace lfs::io::project {
             }
             return std::move(*staged_failure);
         }
+        save_as_validate_finished = std::chrono::steady_clock::now();
 
         auto post_save_dirty = impl_->dirty;
         auto post_save_keys = impl_->normalized_source_keys;
@@ -4327,6 +4355,7 @@ namespace lfs::io::project {
                 std::move(replacement).error();
             return cause;
         }
+        save_as_restore_finished = std::chrono::steady_clock::now();
         auto published =
             ProjectReader::open(*normalized);
         if (!published ||
@@ -4340,21 +4369,6 @@ namespace lfs::io::project {
                           "The published commit UUID does not match the independently validated staged project.",
                           "project.save_as.publish")
                     : std::move(published).error();
-            auto rollback =
-                detail::rollback_atomic_replace(
-                    *replacement, *normalized);
-            if (!rollback) {
-                cause = std::move(cause)
-                            .with_suppressed(
-                                std::move(rollback)
-                                    .error());
-            }
-            return cause;
-        }
-        if (auto verified = published->verify_all();
-            !verified) {
-            auto cause =
-                std::move(verified).error();
             auto rollback =
                 detail::rollback_atomic_replace(
                     *replacement, *normalized);
@@ -4391,6 +4405,22 @@ namespace lfs::io::project {
             !finished) {
             return std::move(finished).error();
         }
+        const auto save_as_finished = std::chrono::steady_clock::now();
+        const auto milliseconds = [](const auto begin, const auto end) {
+            return std::chrono::duration<double, std::milli>(end - begin)
+                .count();
+        };
+        LOG_DEBUG(
+            "Project Save As stages: preflight={:.3f} ms compact={:.3f} ms rebind={:.3f} ms document_save={:.3f} ms staged_validate={:.3f} ms restore={:.3f} ms publish={:.3f} ms total={:.3f} ms source={} destination={}",
+            milliseconds(save_as_started, save_as_preflight_finished),
+            milliseconds(save_as_preflight_finished, save_as_compaction_finished),
+            milliseconds(save_as_compaction_finished, save_as_rebind_finished),
+            milliseconds(save_as_rebind_finished, save_as_save_finished),
+            milliseconds(save_as_save_finished, save_as_validate_finished),
+            milliseconds(save_as_validate_finished, save_as_restore_finished),
+            milliseconds(save_as_restore_finished, save_as_finished),
+            milliseconds(save_as_started, save_as_finished),
+            original_path.string(), normalized->string());
         saved->generation = impl_->generation;
         return saved;
     }
