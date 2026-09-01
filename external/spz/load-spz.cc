@@ -41,6 +41,7 @@ SOFTWARE.
 #include <iostream>
 #include <limits>
 #include <sstream>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -78,6 +79,35 @@ namespace spz {
             }
             *result = lhs + rhs;
             return true;
+        }
+
+        template <typename Function>
+        void parallelForChunks(size_t count, Function&& function) {
+            if (count < 4096) {
+                function(0, count);
+                return;
+            }
+
+            const unsigned hardwareThreads = std::thread::hardware_concurrency();
+            const size_t threadCount = std::min<size_t>(
+                count, std::min(16u, hardwareThreads == 0 ? 1u : hardwareThreads));
+            if (threadCount == 1) {
+                function(0, count);
+                return;
+            }
+
+            const size_t chunkSize = (count + threadCount - 1) / threadCount;
+            std::vector<std::thread> workers;
+            workers.reserve(threadCount);
+            for (size_t begin = 0; begin < count; begin += chunkSize) {
+                const size_t end = std::min(begin + chunkSize, count);
+                workers.emplace_back([begin, end, &function]() {
+                    function(begin, end);
+                });
+            }
+            for (auto& worker : workers) {
+                worker.join();
+            }
         }
 
 #define CHECK(x)                                                                    \
@@ -283,7 +313,11 @@ namespace spz {
         ZSTD_CCtx* cctx = ZSTD_createCCtx();
         if (!cctx)
             return false;
-        ZSTD_CCtx_setParameter(cctx, ZSTD_c_compressionLevel, compressionLevel);
+        if (ZSTD_isError(ZSTD_CCtx_setParameter(cctx, ZSTD_c_compressionLevel, compressionLevel))) {
+            ZSTD_freeCCtx(cctx);
+            return false;
+        }
+        ZSTD_CCtx_setParameter(cctx, ZSTD_c_nbWorkers, std::min(16u, std::thread::hardware_concurrency()));
 
         size_t const compressedSize = ZSTD_compress2(cctx, out->data(), bound, data, size);
         ZSTD_freeCCtx(cctx);
@@ -407,51 +441,63 @@ namespace spz {
 
         // Store coordinates as 24-bit fixed point values.
         const float scale = (1 << packed.fractionalBits);
-        std::array<float, 3> bufPos = {};
-        for (int32_t pi = 0; pi < numPoints; ++pi) {
-            const size_t base = static_cast<size_t>(pi) * 3;
-            bufPos[0] = g.positions[base + 0] * scale;
-            bufPos[1] = g.positions[base + 1] * scale;
-            bufPos[2] = g.positions[base + 2] * scale;
-            if (c.rotFlipPFunc) {
-                c.rotFlipPFunc(bufPos.data());
-            } else {
-                bufPos[0] *= c.flipP[0];
-                bufPos[1] *= c.flipP[1];
-                bufPos[2] *= c.flipP[2];
+        parallelForChunks(static_cast<size_t>(numPoints), [&](size_t begin, size_t end) {
+            std::array<float, 3> bufPos = {};
+            for (size_t pi = begin; pi < end; ++pi) {
+                const size_t base = pi * 3;
+                bufPos[0] = g.positions[base + 0] * scale;
+                bufPos[1] = g.positions[base + 1] * scale;
+                bufPos[2] = g.positions[base + 2] * scale;
+                if (c.rotFlipPFunc) {
+                    c.rotFlipPFunc(bufPos.data());
+                } else {
+                    bufPos[0] *= c.flipP[0];
+                    bufPos[1] *= c.flipP[1];
+                    bufPos[2] *= c.flipP[2];
+                }
+                for (size_t j = 0; j < 3; ++j) {
+                    const int32_t fixed32 =
+                        static_cast<int32_t>(std::round(bufPos[j]));
+                    packed.positions[(base + j) * 3 + 0] = fixed32 & 0xff;
+                    packed.positions[(base + j) * 3 + 1] = (fixed32 >> 8) & 0xff;
+                    packed.positions[(base + j) * 3 + 2] = (fixed32 >> 16) & 0xff;
+                }
             }
-            for (size_t j = 0; j < 3; ++j) {
-                const int32_t fixed32 =
-                    static_cast<int32_t>(std::round(bufPos[j]));
-                packed.positions[(base + j) * 3 + 0] = fixed32 & 0xff;
-                packed.positions[(base + j) * 3 + 1] = (fixed32 >> 8) & 0xff;
-                packed.positions[(base + j) * 3 + 2] = (fixed32 >> 16) & 0xff;
-            }
-        }
+        });
 
-        for (size_t i = 0; i < numPoints * 3; i++) {
-            packed.scales[i] = toUint8((g.scales[i] + 10.0f) * 16.0f);
-        }
+        parallelForChunks(static_cast<size_t>(numPoints), [&](size_t begin, size_t end) {
+            for (size_t i = begin * 3; i < end * 3; ++i) {
+                packed.scales[i] = toUint8((g.scales[i] + 10.0f) * 16.0f);
+            }
+        });
 
         if (packed.usesQuaternionSmallestThree) {
-            for (size_t i = 0; i < numPoints; i++) {
-                packQuaternionSmallestThree(&packed.rotations[4 * i], &g.rotations[4 * i], c);
-            }
+            parallelForChunks(static_cast<size_t>(numPoints), [&](size_t begin, size_t end) {
+                for (size_t i = begin; i < end; i++) {
+                    packQuaternionSmallestThree(&packed.rotations[4 * i], &g.rotations[4 * i], c);
+                }
+            });
         } else {
-            for (size_t i = 0; i < numPoints; i++) {
-                packQuaternionFirstThree(&packed.rotations[3 * i], &g.rotations[4 * i], c);
+            parallelForChunks(static_cast<size_t>(numPoints), [&](size_t begin, size_t end) {
+                for (size_t i = begin; i < end; i++) {
+                    packQuaternionFirstThree(&packed.rotations[3 * i], &g.rotations[4 * i], c);
+                }
+            });
+        }
+
+        parallelForChunks(static_cast<size_t>(numPoints), [&](size_t begin, size_t end) {
+            for (size_t i = begin; i < end; i++) {
+                // Apply sigmoid activation to alpha
+                packed.alphas[i] = toUint8(sigmoid(g.alphas[i]) * 255.0f);
             }
-        }
+        });
 
-        for (size_t i = 0; i < numPoints; i++) {
-            // Apply sigmoid activation to alpha
-            packed.alphas[i] = toUint8(sigmoid(g.alphas[i]) * 255.0f);
-        }
-
-        for (size_t i = 0; i < numPoints * 3; i++) {
-            // Convert SH DC component to wide RGB (allowing values that are a bit above 1 and below 0).
-            packed.colors[i] = toUint8(g.colors[i] * (colorScale * 255.0f) + (0.5f * 255.0f));
-        }
+        parallelForChunks(static_cast<size_t>(numPoints), [&](size_t begin, size_t end) {
+            for (size_t i = begin * 3; i < end * 3; ++i) {
+                // Convert SH DC component to wide RGB (allowing values that are a bit above 1 and below 0).
+                packed.colors[i] = toUint8(g.colors[i] * (colorScale * 255.0f) + (0.5f * 255.0f));
+            }
+        });
 
         if (g.shDegree > 0) {
             // Use configurable spherical harmonics quantization parameters from PackOptions.
@@ -460,29 +506,34 @@ namespace spz {
             const uint8_t sh1Bits = o.sh1Bits;
             const uint8_t shRestBits = o.shRestBits;
             const int32_t shPerPoint = dimForDegree(g.shDegree) * 3;
-            std::array<float, 24> bufSh = {};
-            for (size_t i = 0; i < numPoints * shPerPoint; i += shPerPoint) {
-                for (size_t channel = 0; channel < 3; channel++) {
-                    for (size_t k = 0; k < static_cast<size_t>(shDim); ++k) {
-                        bufSh[k] = g.sh[i + k * 3 + channel];
-                    }
-                    for (size_t band = 0; band < static_cast<size_t>(g.shDegree) && band < static_cast<size_t>(SH_MAX_DEGREE); ++band) {
-                        if (c.rotFlipShFuncs[band]) {
-                            c.rotFlipShFuncs[band](bufSh.data() + band * (band + 2));
+            parallelForChunks(static_cast<size_t>(numPoints), [&](size_t begin, size_t end) {
+                std::array<float, 24> bufSh = {};
+                for (size_t point = begin; point < end; ++point) {
+                    const size_t i = point * shPerPoint;
+                    for (size_t channel = 0; channel < 3; channel++) {
+                        for (size_t k = 0; k < static_cast<size_t>(shDim); ++k) {
+                            bufSh[k] = g.sh[i + k * 3 + channel];
+                        }
+                        for (size_t band = 0; band < static_cast<size_t>(g.shDegree) &&
+                                                       band < static_cast<size_t>(SH_MAX_DEGREE);
+                             ++band) {
+                            if (c.rotFlipShFuncs[band]) {
+                                c.rotFlipShFuncs[band](bufSh.data() + band * (band + 2));
+                            }
+                        }
+                        for (size_t k = 0; k < static_cast<size_t>(shDim); ++k) {
+                            bufSh[k] *= c.flipSh[k];
+                        }
+                        size_t j = 0, k = 0;
+                        for (; j < 9; j += 3, k++) { // degree-1: 3 coefficients × 3 RGB channels = 9 slots
+                            packed.sh[i + j + channel] = quantizeSH(bufSh[k], 1 << (8 - sh1Bits));
+                        }
+                        for (; j < shPerPoint; j += 3, k++) {
+                            packed.sh[i + j + channel] = quantizeSH(bufSh[k], 1 << (8 - shRestBits));
                         }
                     }
-                    for (size_t k = 0; k < static_cast<size_t>(shDim); ++k) {
-                        bufSh[k] *= c.flipSh[k];
-                    }
-                    size_t j = 0, k = 0;
-                    for (; j < 9; j += 3, k++) { // degree-1: 3 coefficients × 3 RGB channels = 9 slots
-                        packed.sh[i + j + channel] = quantizeSH(bufSh[k], 1 << (8 - sh1Bits));
-                    }
-                    for (; j < shPerPoint; j += 3, k++) {
-                        packed.sh[i + j + channel] = quantizeSH(bufSh[k], 1 << (8 - shRestBits));
-                    }
                 }
-            }
+            });
         }
 
         return packed;
