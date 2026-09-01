@@ -17,6 +17,7 @@
 #include <queue>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 namespace lfs::core {
@@ -33,6 +34,15 @@ namespace lfs::core {
 
     LFS_CORE_API std::tuple<uint16_t*, int, int, int>
     load_image_u16(std::filesystem::path p, int res_div = -1, int max_width = 0);
+
+    // Native resolution and native channel count (1-4). Integer formats normalized
+    // to [0,1], float formats passed through. No gamma conversion. nullptr on failure.
+    LFS_CORE_API std::tuple<float*, int, int, int> load_image_float(const std::filesystem::path& p);
+    LFS_CORE_API void resample_bilinear_f32(const float* src, int sw, int sh, int channels,
+                                            float* dst, int dw, int dh);
+    // bit_depth 8 or 16; data is native-endian u8/u16 interleaved.
+    LFS_CORE_API bool save_png(const std::filesystem::path& p, const void* data, int w, int h,
+                               int channels, int bit_depth, int compression_level);
 
     LFS_CORE_API void save_image(const std::filesystem::path& path, Tensor image,
                                  const std::optional<std::string>& metadata_comment = {});

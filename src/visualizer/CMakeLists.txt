@@ -252,7 +252,7 @@ target_link_libraries(lfs_visualizer
         Freetype::Freetype
         nfd::nfd
         vterm
-        lfs_oiio
+        fmt::fmt-header-only
 )
 
 set_property(SOURCE

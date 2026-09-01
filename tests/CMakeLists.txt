@@ -466,6 +466,7 @@ set(TEST_FILES
     test_ppisp_exposure_seed.cpp
     test_metrics_evaluator_appearance.cpp
     test_export_env_composite.cpp
+    test_image_io.cpp
     test_undistort.cpp
     test_viewport_region_utils.cpp
     test_viewport_interop_decision.cpp
@@ -665,7 +666,6 @@ target_link_libraries(lichtfeld_tests PRIVATE
     GTest::gtest
     nanobind-static
     ${TORCH_LIBRARIES}
-    OpenImageIO::OpenImageIO
     OpenMeshCore
     assimp::assimp
 
