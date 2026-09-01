@@ -129,7 +129,9 @@ namespace lfs::training {
         const lfs::core::Tensor& grad_alpha,
         lfs::core::SplatData& gaussian_model,
         AdamOptimizer& optimizer,
-        const lfs::core::Tensor& pixel_error_map = {});
+        const lfs::core::Tensor& pixel_error_map = {},
+        const lfs::core::Tensor& edge_weight_map = {},
+        lfs::core::Tensor edge_score_out = {});
 
     // Release per-thread renderer caches before the owning CUDA stream is torn down.
     bool release_gsplat_rasterizer_thread_local_caches() noexcept;

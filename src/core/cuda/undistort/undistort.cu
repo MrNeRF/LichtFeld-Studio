@@ -639,7 +639,8 @@ namespace lfs::core {
         }
 
         if (!found_valid_border_point) {
-            LOG_WARN("Undistort crop solve found no valid border samples, keeping original intrinsics");
+            params.crop_solve_failed = true;
+            LOG_DEBUG("Undistort crop solve found no valid border samples, keeping original intrinsics");
             return params;
         }
 

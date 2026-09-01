@@ -4964,14 +4964,6 @@ namespace lfs::training {
                                             "stage project parameter snapshot",
                                             LFS_SOURCE_SITE_CURRENT()));
                             }
-                            for (const auto& uuid :
-                                 document
-                                     ->checkpoint_uuids()) {
-                                static_cast<void>(
-                                    document
-                                        ->remove_checkpoint(
-                                            uuid));
-                            }
                             auto lazy =
                                 lfs::io::project::
                                     LazyChunkValue::from_owned(
@@ -5769,6 +5761,14 @@ namespace lfs::training {
     }
 
     lfs::Status Trainer::recover_forward_oom(const lfs::Error& cause) {
+        if (auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena()) {
+            const auto info = arena->get_memory_info();
+            lfs::core::log_arena_failure_vram_snapshot(
+                "trainer.recover_forward_oom", info.arena_capacity, info.peak_usage);
+        } else {
+            lfs::core::log_arena_failure_vram_snapshot(
+                "trainer.recover_forward_oom", 0, 0);
+        }
         const auto synchronize = [this] {
             return recovery_sync_for_testing_ ? recovery_sync_for_testing_()
                                               : cudaDeviceSynchronize();
@@ -6180,21 +6180,30 @@ namespace lfs::training {
                 lfs::core::Tensor fused_scale_reg_loss_gpu;
                 lfs::core::Tensor fused_opacity_reg_loss_gpu;
                 lfs::core::Tensor sparsity_loss_gpu;
+                const bool run_gut_gaussian_backward =
+                    params_.optimization.gut && update_gaussians_this_iter;
+                if (run_fastgs_gaussian_backward || run_gut_gaussian_backward) {
+                    auto& model = strategy_->get_model();
+                    edge_score_scratch = strategy_->edge_score_scratch(iter);
+                    if (edge_score_scratch.is_valid() &&
+                        edge_score_scratch.dtype() == lfs::core::DataType::Float32 &&
+                        edge_score_scratch.numel() == static_cast<size_t>(model.size())) {
+                        edge_weight_map = get_edge_weight_map(cam->uid(), gt_image);
+                        edge_weight_scoring_active_ = true;
+                    } else if (edge_weight_scoring_active_) {
+                        clearEdgeWeightCache();
+                    }
+                } else if (edge_weight_scoring_active_) {
+                    clearEdgeWeightCache();
+                }
                 if (fastgs_path) {
                     LFS_VRAM_SCOPE("train.regularizers.fastgs_forward_only");
                     LOG_VRAM_DIFF("train.regularizers.fastgs_forward_only");
                     auto& model = strategy_->get_model();
                     if (run_fastgs_gaussian_backward) {
-                        edge_score_scratch = strategy_->edge_score_scratch(iter);
-                        if (edge_score_scratch.is_valid() &&
-                            edge_score_scratch.dtype() == lfs::core::DataType::Float32 &&
-                            edge_score_scratch.numel() == static_cast<size_t>(model.size())) {
-                            edge_weight_map = get_edge_weight_map(cam->uid(), gt_image);
+                        if (edge_weight_scoring_active_) {
                             fused_extra_gradients.edge_weight_map = edge_weight_map.ptr<float>();
                             fused_extra_gradients.edge_score_out = edge_score_scratch.ptr<float>();
-                            edge_weight_scoring_active_ = true;
-                        } else if (edge_weight_scoring_active_) {
-                            clearEdgeWeightCache();
                         }
                         fused_extra_gradients.scale_reg_weight = params_.optimization.scale_reg;
                         // Fused path shares the configured opacity_reg weight between gradient and loss accumulation.
@@ -6313,27 +6322,60 @@ namespace lfs::training {
                         LOG_VRAM_DIFF("train.rasterize_forward");
                         current_phase = StepPhase::Forward;
                         if (params_.optimization.gut) {
-                            auto rasterize_result = gsplat_rasterize_forward(
-                                *cam, strategy_->get_model(), bg,
-                                0, 0, 0, 0,
-                                1.0f, false, GsplatRenderMode::RGB, true, bg_tile);
-
-                            if (!rasterize_result) {
-                                nvtxRangePop(); // rasterize_forward
-                                nvtxRangePop(); // tile
-                                return lfs::from_legacy_expected<StepDisposition>(
-                                           std::unexpected(rasterize_result.error()),
-                                           lfs::LegacyErrorContext{
-                                               .code = lfs::ErrorCode::Internal,
-                                               .domain = lfs::ErrorDomain::Rendering,
-                                               .operation = "gsplat_rasterize_forward",
-                                               .source = LFS_SOURCE_SITE_CURRENT(),
-                                           })
-                                    .error();
+                            const MutationStamp forward_stamp{
+                                static_cast<std::uint64_t>(iter), mutation_epoch_,
+                                StepPhase::Forward, fastgs_strategy_hooks_at_start};
+                            unsigned forward_attempts = 0;
+                            for (;;) {
+                                ++forward_attempts;
+                                try {
+                                    auto rasterize_result = gsplat_rasterize_forward(
+                                        *cam, strategy_->get_model(), bg,
+                                        0, 0, 0, 0,
+                                        1.0f, false, GsplatRenderMode::RGB, true, bg_tile);
+                                    if (!rasterize_result) {
+                                        auto typed = lfs::from_legacy_expected<
+                                            std::pair<RenderOutput, GsplatRasterizeContext>>(
+                                            std::move(rasterize_result),
+                                            lfs::LegacyErrorContext{
+                                                .code = lfs::ErrorCode::Internal,
+                                                .domain = lfs::ErrorDomain::Rendering,
+                                                .operation = "gsplat_rasterize_forward",
+                                                .source = LFS_SOURCE_SITE_CURRENT(),
+                                            });
+                                        if (!typed) {
+                                            nvtxRangePop(); // rasterize_forward
+                                            nvtxRangePop(); // tile
+                                            return std::move(typed).error();
+                                        }
+                                        auto gut_result = std::move(typed).value();
+                                        output = std::move(gut_result.first);
+                                        gsplat_ctx.emplace(std::move(gut_result.second));
+                                    } else {
+                                        output = std::move(rasterize_result->first);
+                                        gsplat_ctx.emplace(std::move(rasterize_result->second));
+                                    }
+                                    break;
+                                } catch (const lfs::Exception& exception) {
+                                    const lfs::Error forward_error = exception.error();
+                                    const RetryDecision decision = classify_forward_retry(
+                                        forward_error, forward_stamp, forward_attempts);
+                                    if (decision == RetryDecision::DoNotRetry) {
+                                        nvtxRangePop(); // rasterize_forward
+                                        nvtxRangePop(); // tile
+                                        return forward_error;
+                                    }
+                                    LOG_ERROR(
+                                        "GUT forward exhausted a resource (attempt {}): {}",
+                                        forward_attempts, forward_error.detail());
+                                    if (lfs::Status recovery = recover_forward_oom(forward_error);
+                                        !recovery) {
+                                        nvtxRangePop(); // rasterize_forward
+                                        nvtxRangePop(); // tile
+                                        return std::move(recovery).error();
+                                    }
+                                }
                             }
-
-                            output = std::move(rasterize_result->first);
-                            gsplat_ctx.emplace(std::move(rasterize_result->second));
                         } else {
                             const bool render_normal =
                                 normal_supervision_started &&
@@ -7434,7 +7476,12 @@ namespace lfs::training {
                                 tile_context_guard.release();
                                 gsplat_rasterize_backward(*gsplat_ctx, raster_grad, grad_alpha,
                                                           strategy_->get_model(), strategy_->get_optimizer(),
-                                                          use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{});
+                                                          use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{},
+                                                          edge_weight_scoring_active_ ? edge_weight_map : lfs::core::Tensor{},
+                                                          edge_weight_scoring_active_ ? edge_score_scratch : lfs::core::Tensor{});
+                                if (edge_weight_scoring_active_) {
+                                    strategy_->on_edge_score_accumulated(iter);
+                                }
                             } else {
                                 tile_context_guard.release();
                                 if (run_fastgs_gaussian_backward) {
@@ -7678,6 +7725,23 @@ namespace lfs::training {
                     strategy_->pre_step(iter, r_output);
                 }
 
+                const bool save_regular_phase_output =
+                    get_active_sparsify_steps() > 0 &&
+                    iter == get_sparsity_boundary_iteration();
+                TrainerProjectSavePolicy project_save_policy;
+                std::optional<std::filesystem::path> step_project_path;
+                {
+                    std::lock_guard lock(project_snapshot_mutex_);
+                    project_save_policy = trainer_project_save_policy_;
+                    if (live_project_path_ &&
+                        !live_project_path_->empty()) {
+                        step_project_path = *live_project_path_;
+                    }
+                }
+                const bool may_save_at_step_boundary =
+                    project_save_policy.at_step_boundaries &&
+                    step_project_path.has_value();
+
                 {
                     DeferredEvents deferred;
                     {
@@ -7783,6 +7847,43 @@ namespace lfs::training {
                             strategy_->step(iter);
                         }
 
+                        if (save_regular_phase_output &&
+                            may_save_at_step_boundary) {
+                            LOG_INFO(
+                                "Capturing regular-phase .licht generation at iteration {} before sparsity pruning",
+                                iter);
+                            // This boundary capture has priority over a writer
+                            // still in flight: otherwise the request would be
+                            // coalesced until after pruning.
+                            finish_project_writer();
+                            static_cast<void>(
+                                request_project_save(
+                                    *step_project_path));
+                            if (need_exclusive) {
+                                if (combined_model_lock.owns_lock()) {
+                                    combined_model_lock.unlock();
+                                }
+                                lock.unlock();
+                            } else {
+                                model_write_lock.unlock();
+                            }
+                            consume_requested_project_snapshot(iter);
+                            if (need_exclusive) {
+                                lock.lock();
+                                if (scene_) {
+                                    combined_model_lock =
+                                        scene_->acquireCombinedModelExclusive();
+                                }
+                            } else {
+                                model_write_lock.lock();
+                            }
+                            waitForModelReaders();
+                        } else if (save_regular_phase_output) {
+                            LOG_DEBUG(
+                                "Skipping regular-phase project capture at iteration {}: trainer-initiated saves are not authorized",
+                                iter);
+                        }
+
                         if (sparsity_optimizer_ &&
                             sparsity_optimizer_->is_initialized() &&
                             static_cast<size_t>(model.size()) != model_size_before) {
@@ -7878,36 +7979,7 @@ namespace lfs::training {
                         photometric_loss_.arena().shrink_to_required();
                     }
 
-                    const bool save_regular_phase_output = get_active_sparsify_steps() > 0 &&
-                                                           iter == get_sparsity_boundary_iteration();
                     current_phase = StepPhase::TerminalCleanup;
-                    TrainerProjectSavePolicy project_save_policy;
-                    std::optional<std::filesystem::path> step_project_path;
-                    {
-                        std::lock_guard lock(project_snapshot_mutex_);
-                        project_save_policy = trainer_project_save_policy_;
-                        if (live_project_path_ &&
-                            !live_project_path_->empty()) {
-                            step_project_path = *live_project_path_;
-                        }
-                    }
-                    const bool may_save_at_step_boundary =
-                        project_save_policy.at_step_boundaries &&
-                        step_project_path.has_value();
-                    if (save_regular_phase_output) {
-                        if (may_save_at_step_boundary) {
-                            LOG_INFO(
-                                "Queuing regular-phase .licht generation at iteration {} before sparsification",
-                                iter);
-                            static_cast<void>(
-                                request_project_save(
-                                    *step_project_path));
-                        } else {
-                            LOG_DEBUG(
-                                "Skipping regular-phase project save at iteration {}: trainer-initiated saves are not authorized",
-                                iter);
-                        }
-                    }
 
                     // Publish a project generation at specified steps unless
                     // the sparsity-boundary save already handled it.
@@ -8690,49 +8762,68 @@ namespace lfs::training {
             saving_model_.store(true, std::memory_order_release);
             try {
                 LOG_INFO("Saving {} project at iteration {}...",
-                         terminal_error ? "recovery" : (user_stopped ? "stopped" : "final"),
+                         terminal_error ? "emergency" : (user_stopped ? "stopped" : "final"),
                          terminal_iteration);
                 if (auto save_result = save_project_to(
                         *terminal_project_path,
                         terminal_iteration);
                     !save_result) {
-                    std::optional<lfs::Error> typed_save_error;
-                    {
-                        std::lock_guard lock(project_snapshot_mutex_);
-                        typed_save_error =
-                            last_project_writer_typed_error_;
-                    }
-                    if (typed_save_error) {
-                        append_terminal_error(
-                            std::move(*typed_save_error));
+                    if (terminal_error) {
+                        LOG_ERROR("Emergency project save failed at iteration {} to '{}': {} "
+                                  "(original training error preserved)",
+                                  terminal_iteration,
+                                  lfs::core::path_to_utf8(*terminal_project_path),
+                                  save_result.error());
                     } else {
-                        append_terminal_error(lfs::make_error(lfs::ErrorInit{
-                            .code = lfs::ErrorCode::Internal,
-                            .domain = lfs::ErrorDomain::Training,
-                            .user_message = "Terminal training save failed.",
-                            .detail = std::format("Terminal save failed at iteration {}: {}",
-                                                  terminal_iteration, save_result.error()),
-                            .detection = LFS_SOURCE_SITE_CURRENT(),
-                        }));
+                        std::optional<lfs::Error> typed_save_error;
+                        {
+                            std::lock_guard lock(project_snapshot_mutex_);
+                            typed_save_error = last_project_writer_typed_error_;
+                        }
+                        if (typed_save_error) {
+                            append_terminal_error(std::move(*typed_save_error));
+                        } else {
+                            append_terminal_error(lfs::make_error(lfs::ErrorInit{
+                                .code = lfs::ErrorCode::Internal,
+                                .domain = lfs::ErrorDomain::Training,
+                                .user_message = "Terminal training save failed.",
+                                .detail = std::format("Terminal save failed at iteration {}: {}",
+                                                      terminal_iteration, save_result.error()),
+                                .detection = LFS_SOURCE_SITE_CURRENT(),
+                            }));
+                        }
                     }
                 } else {
+                    if (terminal_error) {
+                        LOG_INFO("Emergency project save succeeded at iteration {} to '{}'",
+                                 terminal_iteration,
+                                 lfs::core::path_to_utf8(*save_result));
+                    }
                     const auto params = getParams();
                     if (!params.optimization.headless) {
                         export_final_splats(*this, params);
                     }
                 }
             } catch (const std::exception& e) {
-                append_terminal_error(lfs::make_error(lfs::ErrorInit{
-                    .code = lfs::ErrorCode::Internal,
-                    .domain = lfs::ErrorDomain::Training,
-                    .user_message = "Terminal training save failed.",
-                    .detail = std::format("Terminal save threw at iteration {}: {}",
-                                          terminal_iteration, e.what()),
-                    .detection = LFS_SOURCE_SITE_CURRENT(),
-                }));
+                if (terminal_error) {
+                    LOG_ERROR("Emergency project save threw at iteration {} to '{}': {} "
+                              "(original training error preserved)",
+                              terminal_iteration,
+                              lfs::core::path_to_utf8(*terminal_project_path),
+                              e.what());
+                } else {
+                    append_terminal_error(lfs::make_error(lfs::ErrorInit{
+                        .code = lfs::ErrorCode::Internal,
+                        .domain = lfs::ErrorDomain::Training,
+                        .user_message = "Terminal training save failed.",
+                        .detail = std::format("Terminal save threw at iteration {}: {}",
+                                              terminal_iteration, e.what()),
+                        .detection = LFS_SOURCE_SITE_CURRENT(),
+                    }));
+                }
             }
             LOG_INFO("Terminal {} save phase took {:.3f}s",
-                     user_stopped ? "stop" : "completion",
+                     terminal_error ? "emergency" : (user_stopped ? "stop" : "completion"),
                      std::chrono::duration<double>(std::chrono::steady_clock::now() - terminal_save_started).count());
             pending_snapshot_finish_reason_ =
                 lfs::io::project::TrainingFinishReason::None;

@@ -3659,8 +3659,9 @@ namespace {
             disk.commit().commit_uuid);
     }
 
-    LazyChunkValue make_autosave_checkpoint_payload(
-        const Uuid& checkpoint_uuid) {
+    LazyChunkValue make_autosave_checkpoint_payload_at(
+        const Uuid& checkpoint_uuid,
+        const int iteration) {
         auto model = make_splat(2);
         lfs::training::MCMC strategy(*model);
         lfs::core::param::TrainingParameters parameters;
@@ -3674,7 +3675,7 @@ namespace {
             std::ios::binary | std::ios::out);
         (void)require_result(
             lfs::training::serialize_checkpoint(
-                stream, 11, strategy, parameters,
+                stream, iteration, strategy, parameters,
                 nullptr, nullptr, nullptr, nullptr));
         const auto encoded = stream.str();
         std::vector<std::byte> bytes(encoded.size());
@@ -3683,6 +3684,11 @@ namespace {
         auto payload = LazyChunkValue::from_owned(
             std::move(bytes), checkpoint_uuid);
         return require_result(std::move(payload));
+    }
+
+    LazyChunkValue make_autosave_checkpoint_payload(
+        const Uuid& checkpoint_uuid) {
+        return make_autosave_checkpoint_payload_at(checkpoint_uuid, 11);
     }
 
     void install_bound_autosave_checkpoint(
@@ -3849,7 +3855,7 @@ namespace {
     }
 
     TEST(ProjectDocumentTest,
-         UnboundCheckpointIsRemovedWhenCapturedSceneHasNoBinding) {
+         UnboundCheckpointRemainsLiveWhenCapturedSceneHasNoBinding) {
         const auto training_uuid = fixed_uuid(9970);
         const auto checkpoint_uuid = fixed_uuid(9971);
         auto document = make_empty_document(fixed_uuid(9972), 100);
@@ -3876,30 +3882,12 @@ namespace {
         document->edit_scene_graph() = SceneGraphChapter{};
         Scene live;
         auto before_prune = document->stage_hydration(live);
-        ASSERT_FALSE(before_prune);
-        EXPECT_EQ(
-            before_prune.error().code(), lfs::ErrorCode::DataLoss);
-
-        std::unordered_set<Uuid> bound;
-        if (const auto nodes = document->scene_graph().nodes();
-            nodes) {
-            for (const auto& node : *nodes) {
-                if (node.payload && node.payload->fourcc == "CKPT") {
-                    bound.insert(node.payload->instance_uuid);
-                }
-            }
-        }
-        for (const auto& uuid : document->checkpoint_uuids()) {
-            if (!bound.contains(uuid)) {
-                EXPECT_TRUE(document->remove_checkpoint(uuid));
-            }
-        }
-        EXPECT_TRUE(document->checkpoint_uuids().empty());
-
-        Scene after_scene;
-        auto after_prune = document->stage_hydration(after_scene);
-        ASSERT_TRUE(after_prune)
-            << lfs::format_for_developer(after_prune.error());
+        ASSERT_TRUE(before_prune)
+            << lfs::format_for_developer(before_prune.error());
+        EXPECT_EQ(document->checkpoint_uuids().size(), 1u);
+        const auto bound = document->bound_checkpoint_uuid();
+        ASSERT_TRUE(bound);
+        EXPECT_FALSE(*bound);
 
         TemporaryDirectory temporary;
         const auto path =
@@ -3907,7 +3895,10 @@ namespace {
         (void)require_result(
             document->save(path, save_options(9973, 200)));
         auto reopened = require_result_ptr(ProjectDocument::open(path));
-        EXPECT_TRUE(reopened->checkpoint_uuids().empty());
+        EXPECT_EQ(reopened->checkpoint_uuids().size(), 1u);
+        const auto reopened_bound = reopened->bound_checkpoint_uuid();
+        ASSERT_TRUE(reopened_bound);
+        EXPECT_FALSE(*reopened_bound);
     }
 
     TEST(ProjectDocumentTest,
@@ -3950,6 +3941,209 @@ namespace {
         }
         ASSERT_EQ(document->checkpoint_uuids().size(), 1u);
         EXPECT_EQ(document->checkpoint_uuids().front(), checkpoint_uuid);
+    }
+
+    TEST(ProjectDocumentTest,
+         CheckpointHistorySurvivesSaveAsAndCompaction) {
+        TemporaryDirectory temporary;
+        const auto master = temporary.path / "history-master.licht";
+        const auto copy = temporary.path / "history-copy.licht";
+        const Uuid training_uuid = fixed_uuid(9980);
+        const Uuid first_uuid = fixed_uuid(9981);
+        const Uuid current_uuid = fixed_uuid(9982);
+        auto document = make_empty_document(fixed_uuid(9983), 100);
+        install_bound_autosave_checkpoint(
+            *document, training_uuid, first_uuid);
+        require_status(document->edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = training_uuid,
+                .type = "splat",
+                .name = "Training",
+                .child_order = 0,
+                .payload = PayloadBinding{
+                    .fourcc = "CKPT",
+                    .instance_uuid = current_uuid,
+                    .source_kind = "training",
+                },
+            }));
+        require_status(document->set_checkpoint(
+            current_uuid,
+            make_autosave_checkpoint_payload_at(current_uuid, 22)));
+        auto master_options = save_options(9984, 200);
+        master_options.commit.snapshot_uuid = current_uuid;
+        ASSERT_TRUE(document->save(master, master_options));
+
+        auto reopened = require_result_ptr(ProjectDocument::open(master));
+        EXPECT_EQ(reopened->checkpoint_uuids().size(), 2u);
+        const auto bound = require_result(reopened->bound_checkpoint_uuid());
+        ASSERT_TRUE(bound);
+        EXPECT_EQ(*bound, current_uuid);
+
+        auto foreign = make_empty_document(fixed_uuid(9989), 250);
+        ASSERT_TRUE(foreign->save(copy, save_options(9990, 250)));
+        auto copy_options = save_options(9985, 300);
+        copy_options.commit.snapshot_uuid = current_uuid;
+        copy_options.allow_existing_destination_replacement = true;
+        ASSERT_TRUE(reopened->save_as(copy, copy_options));
+        ASSERT_TRUE(ProjectWriter::compact(
+            copy,
+            CompactionOptions{
+                .new_file_uuid = fixed_uuid(9986),
+                .commit_uuid = fixed_uuid(9987),
+                .snapshot_uuid = current_uuid,
+                .creation_time_unix_ns = 400,
+                .wallclock_unix_ns = 500,
+                .disk_reserve_bytes = 0,
+            }));
+        auto compacted = require_result_ptr(ProjectDocument::open(copy));
+        EXPECT_EQ(compacted->checkpoint_uuids().size(), 2u);
+        EXPECT_NE(compacted->find_checkpoint(first_uuid), nullptr);
+        EXPECT_NE(compacted->find_checkpoint(current_uuid), nullptr);
+        EXPECT_EQ(
+            require_result(compacted->bound_checkpoint_uuid()),
+            std::optional(current_uuid));
+    }
+
+    TEST(ProjectDocumentTest,
+         CheckpointHistoryRetentionEvictsOldestUnboundEntry) {
+        auto document = make_empty_document(fixed_uuid(9988), 100);
+        for (int iteration = 1;
+             iteration <= static_cast<int>(CHECKPOINT_HISTORY_LIMIT) + 2;
+             ++iteration) {
+            const auto uuid = fixed_uuid(9988 + iteration);
+            require_status(document->set_checkpoint(
+                uuid,
+                make_autosave_checkpoint_payload_at(uuid, iteration)));
+        }
+        const auto uuids = document->checkpoint_uuids();
+        EXPECT_EQ(uuids.size(), CHECKPOINT_HISTORY_LIMIT);
+        EXPECT_EQ(document->find_checkpoint(fixed_uuid(9989)), nullptr);
+        EXPECT_EQ(document->find_checkpoint(fixed_uuid(9990)), nullptr);
+        EXPECT_NE(document->find_checkpoint(fixed_uuid(9991)), nullptr);
+    }
+
+    TEST(ProjectDocumentTest,
+         LightweightAutosaveRefreshDoesNotGrowCheckpointHistory) {
+        TemporaryDirectory temporary;
+        const auto master = temporary.path / "autosave-master.licht";
+        write_phase_a_fixture(master);
+        auto document = require_result_ptr(ProjectDocument::open(master));
+        const auto checkpoint_uuid = fixed_uuid(10010);
+        install_bound_autosave_checkpoint(
+            *document, fixed_uuid(10009), checkpoint_uuid);
+        auto master_options = save_options(10011, 200);
+        master_options.commit.snapshot_uuid = checkpoint_uuid;
+        ASSERT_TRUE(document->save(master, master_options));
+        const auto base = require_result(ProjectReader::open(master));
+        const auto sidecar = autosave_sidecar_path(master);
+
+        for (std::uint64_t sequence = 1; sequence <= 2; ++sequence) {
+            auto saved = document->save_autosave(
+                sidecar,
+                ProjectDocumentAutosaveOptions{
+                    .file_uuid = fixed_uuid(10011 + sequence),
+                    .base_explicit_commit_uuid =
+                        base.commit().commit_uuid,
+                    .autosave_sequence = sequence,
+                    .snapshot_uuid = checkpoint_uuid,
+                    .index_compression =
+                        IndexCompression::StoredForDeterministicTests,
+                    .disk_reserve_bytes = 0,
+                });
+            ASSERT_TRUE(saved)
+                << lfs::format_for_developer(saved.error());
+            EXPECT_EQ(document->checkpoint_uuids().size(), 1u);
+            EXPECT_EQ(
+                require_result(document->bound_checkpoint_uuid()),
+                std::optional(checkpoint_uuid));
+        }
+    }
+
+    TEST(ProjectDocumentTest,
+         TrainingNodeWithoutBoundCheckpointIsRejected) {
+        auto document = make_empty_document(fixed_uuid(9995), 100);
+        const Uuid training_uuid = fixed_uuid(9996);
+        const Uuid checkpoint_uuid = fixed_uuid(9997);
+        require_status(document->edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = training_uuid,
+                .type = "splat",
+                .name = "Training",
+                .child_order = 0,
+                .payload = PayloadBinding{
+                    .fourcc = "CKPT",
+                    .instance_uuid = checkpoint_uuid,
+                    .source_kind = "training",
+                },
+            }));
+        require_status(document->edit_scene_graph()
+                           .set_training_model_uuid(training_uuid));
+        TemporaryDirectory temporary;
+        auto invalid_options = save_options(9998, 200);
+        invalid_options.commit.snapshot_uuid = {};
+        auto saved = document->save(
+            temporary.path / "invalid-training.licht",
+            invalid_options);
+        ASSERT_FALSE(saved);
+        EXPECT_EQ(saved.error().code(), lfs::ErrorCode::DataLoss);
+    }
+
+    TEST(ProjectDocumentTest,
+         TrainingNodeWithoutBoundCheckpointWithHistoryIsRejected) {
+        auto document = make_empty_document(fixed_uuid(10002), 100);
+        const Uuid training_uuid = fixed_uuid(10003);
+        const Uuid checkpoint_uuid = fixed_uuid(10004);
+        require_status(document->edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = training_uuid,
+                .type = "group",
+                .name = "Training",
+                .child_order = 0,
+            }));
+        require_status(document->edit_scene_graph()
+                           .set_training_model_uuid(training_uuid));
+        require_status(document->set_checkpoint(
+            checkpoint_uuid,
+            make_autosave_checkpoint_payload(checkpoint_uuid)));
+
+        TemporaryDirectory temporary;
+        auto saved = document->save(
+            temporary.path / "unbound-training-history.licht",
+            save_options(10005, 200));
+        ASSERT_FALSE(saved);
+        EXPECT_EQ(saved.error().code(), lfs::ErrorCode::DataLoss);
+        EXPECT_NE(
+            lfs::format_for_developer(saved.error()).find("historical CKPT"),
+            std::string::npos);
+    }
+
+    TEST(ProjectDocumentTest,
+         FreshTrainingNodeWithoutCheckpointHistoryLoads) {
+        auto document = make_empty_document(fixed_uuid(9999), 100);
+        const Uuid training_uuid = fixed_uuid(10000);
+        require_status(document->edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = training_uuid,
+                .type = "group",
+                .name = "Training",
+                .child_order = 0,
+            }));
+        require_status(document->edit_scene_graph()
+                           .set_training_model_uuid(training_uuid));
+
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "fresh-training.licht";
+        auto saved = document->save(path, save_options(10001, 200));
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(saved.error());
+
+        auto reopened = ProjectDocument::open(path);
+        ASSERT_TRUE(reopened)
+            << lfs::format_for_developer(reopened.error());
+        EXPECT_TRUE(reopened->checkpoint_uuids().empty());
+        const auto bound = reopened->bound_checkpoint_uuid();
+        ASSERT_TRUE(bound);
+        EXPECT_FALSE(*bound);
     }
 
     TEST(ProjectDocumentTest,

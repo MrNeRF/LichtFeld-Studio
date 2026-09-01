@@ -18,6 +18,44 @@
 
 namespace lfs::core {
 
+    void log_arena_failure_vram_snapshot(
+        const std::string_view label, const size_t committed_bytes,
+        const size_t frame_peak_bytes) {
+        size_t free_bytes = 0;
+        size_t total_bytes = 0;
+        (void)cudaMemGetInfo(&free_bytes, &total_bytes);
+
+        std::uint64_t pool_used = 0;
+        std::uint64_t pool_reserved = 0;
+#if CUDART_VERSION >= 12080
+        int device = 0;
+        cudaMemPool_t pool = nullptr;
+        if (cudaGetDevice(&device) == cudaSuccess &&
+            cudaDeviceGetDefaultMemPool(&pool, device) == cudaSuccess) {
+            (void)cudaMemPoolGetAttribute(
+                pool, cudaMemPoolAttrUsedMemCurrent, &pool_used);
+            (void)cudaMemPoolGetAttribute(
+                pool, cudaMemPoolAttrReservedMemCurrent, &pool_reserved);
+        }
+#endif
+
+        const std::string label_text = label.empty() ? "unnamed" : std::string(label);
+        const auto profiler = lfs::diagnostics::VramProfiler::instance().snapshot();
+        const auto& process = profiler.process;
+        LOG_ERROR(
+            "Arena VRAM failure snapshot label=%s cuda_free=%zu MiB cuda_total=%zu MiB "
+            "arena_committed=%zu MiB frame_peak=%zu MiB exportable_splat=%zu MiB "
+            "shared_scratch=%zu MiB cuda_default_pool_reserved=%zu MiB "
+            "cuda_default_pool_used=%zu MiB",
+            label_text.c_str(),
+            free_bytes >> 20, total_bytes >> 20,
+            committed_bytes >> 20, frame_peak_bytes >> 20,
+            process.exportable_splat_bytes >> 20,
+            process.shared_scratch_bytes >> 20,
+            static_cast<size_t>(pool_reserved >> 20),
+            static_cast<size_t>(pool_used >> 20));
+    }
+
     // Default constructor implementation
     RasterizerMemoryArena::RasterizerMemoryArena()
         : RasterizerMemoryArena(Config{}) {
@@ -621,8 +659,9 @@ namespace lfs::core {
         arena.last_log_time = std::chrono::steady_clock::now();
     }
 
-    std::function<char*(size_t)> RasterizerMemoryArena::get_allocator(uint64_t frame_id) {
-        return [this, frame_id](size_t size) -> char* {
+    std::function<char*(size_t)> RasterizerMemoryArena::get_allocator(
+        const uint64_t frame_id, const char* label) {
+        return [this, frame_id, label](size_t size) -> char* {
             if (size == 0) {
                 return nullptr;
             }
@@ -637,7 +676,7 @@ namespace lfs::core {
                                "RasterizerMemoryArena allocation");
 
             Arena& arena = get_or_create_arena(device);
-            return allocate_internal(arena, size, frame_id);
+            return allocate_internal(arena, size, frame_id, label);
         };
     }
 
@@ -1666,7 +1705,9 @@ namespace lfs::core {
         return shrink_at_boundary(true);
     }
 
-    char* RasterizerMemoryArena::allocate_internal(Arena& arena, size_t size, uint64_t frame_id) {
+    char* RasterizerMemoryArena::allocate_internal(
+        Arena& arena, const size_t size, const uint64_t frame_id,
+        const char* label) {
         LFS_CUDA_BREADCRUMB("arena.allocate");
         size_t aligned_size = align_size(size);
 
@@ -1680,9 +1721,13 @@ namespace lfs::core {
 
         // Sanity check
         if (aligned_size > config_.max_physical) {
-            LOG_ERROR("Single allocation request %zu MB exceeds max physical size %zu MB",
+            LOG_ERROR("Arena allocation '%s' request %zu MB exceeds max physical size %zu MB",
+                      label ? label : "unnamed",
                       aligned_size >> 20,
                       config_.max_physical >> 20);
+            log_arena_failure_vram_snapshot(
+                label ? label : "unnamed", arena.committed_size,
+                arena.peak_usage.load(std::memory_order_relaxed));
             return nullptr;
         }
 
@@ -1831,15 +1876,22 @@ namespace lfs::core {
                     }
                     if (result == ExternalGrowResult::Failed) {
                         LOG_ERROR("External rasterizer arena '%s' exhausted and could not grow: "
-                                  "capacity=%zu MiB request=%zu MiB",
+                                  "capacity=%zu MiB request=%zu MiB allocation='%s'",
                                   arena.external_label.empty() ? "unnamed" : arena.external_label.c_str(),
                                   static_cast<size_t>(arena.committed_size >> 20),
-                                  static_cast<size_t>(aligned_size >> 20));
+                                  static_cast<size_t>(aligned_size >> 20),
+                                  label ? label : "unnamed");
+                        log_arena_failure_vram_snapshot(
+                            label ? label : "unnamed", arena.committed_size,
+                            arena.peak_usage.load(std::memory_order_relaxed));
                         return nullptr;
                     }
                     if (std::chrono::steady_clock::now() >= deadline) {
                         LOG_ERROR("External rasterizer arena '%s' grow timed out waiting for the render gate",
                                   arena.external_label.empty() ? "unnamed" : arena.external_label.c_str());
+                        log_arena_failure_vram_snapshot(
+                            label ? label : "unnamed", arena.committed_size,
+                            arena.peak_usage.load(std::memory_order_relaxed));
                         return nullptr;
                     }
                     std::this_thread::yield();
@@ -1862,8 +1914,12 @@ namespace lfs::core {
             // We need to grow - calculate how much
             const size_t growth_needed = total_needed - arena.committed_size;
             if (total_needed > config_.max_physical) {
-                LOG_ERROR("Capacity limit reached: max=%zu MB, requested=%zu MB",
-                          config_.max_physical >> 20, aligned_size >> 20);
+                LOG_ERROR("Arena allocation '%s' capacity limit reached: max=%zu MB, total_needed=%zu MB, request=%zu MB",
+                          label ? label : "unnamed",
+                          config_.max_physical >> 20, total_needed >> 20, aligned_size >> 20);
+                log_arena_failure_vram_snapshot(
+                    label ? label : "unnamed", arena.committed_size,
+                    arena.peak_usage.load(std::memory_order_relaxed));
                 return nullptr;
             }
 
@@ -1915,8 +1971,13 @@ namespace lfs::core {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                     continue;
                 } else {
-                    LOG_ERROR("Out of memory after %d attempts: requested=%zu MB, usage=%zu MB, committed=%zu MB, max=%zu MB",
-                              MAX_RETRIES, size >> 20, current_offset >> 20, arena.committed_size >> 20, config_.max_physical >> 20);
+                    LOG_ERROR("Out of memory after %d attempts: allocation='%s' requested=%zu MB, usage=%zu MB, committed=%zu MB, max=%zu MB",
+                              MAX_RETRIES, label ? label : "unnamed",
+                              size >> 20, current_offset >> 20,
+                              arena.committed_size >> 20, config_.max_physical >> 20);
+                    log_arena_failure_vram_snapshot(
+                        label ? label : "unnamed", arena.committed_size,
+                        arena.peak_usage.load(std::memory_order_relaxed));
                     return nullptr;
                 }
             }
@@ -1924,7 +1985,10 @@ namespace lfs::core {
             // Growth succeeded, retry allocation
         }
 
-        LOG_ERROR("Allocation loop exhausted");
+        LOG_ERROR("Allocation loop exhausted for '%s'", label ? label : "unnamed");
+        log_arena_failure_vram_snapshot(
+            label ? label : "unnamed", arena.committed_size,
+            arena.peak_usage.load(std::memory_order_relaxed));
         return nullptr;
     }
 

@@ -12,6 +12,7 @@
 #include <format>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <iostream>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -219,6 +220,28 @@ namespace {
         ASSERT_EQ(result.error().suppressed().size(), 1u);
         EXPECT_EQ(result.error().suppressed().front().code(),
                   lfs::ErrorCode::ResourceExhausted);
+    }
+
+    TEST(TrainerRetrySemantics, RecoverySuccessCompletesTheForwardRetryPreparation) {
+        lfs::core::Scene scene;
+        const auto cameras = scene.addGroup("Cameras");
+        auto camera = std::make_shared<lfs::core::Camera>(
+            lfs::core::Tensor::eye(3, lfs::core::Device::CPU),
+            lfs::core::Tensor::zeros({3}, lfs::core::Device::CPU),
+            100.0f, 100.0f, 32.0f, 32.0f,
+            lfs::core::Tensor(), lfs::core::Tensor(),
+            lfs::core::CameraModelType::PINHOLE,
+            "camera.png", std::filesystem::path{}, std::filesystem::path{},
+            64, 64, 0);
+        scene.addCamera("camera.png", cameras, std::move(camera));
+        lfs::training::Trainer trainer(scene);
+        const auto cause = make_retry_test_error(lfs::ErrorCode::ResourceExhausted);
+
+        const auto result = lfs::training::TrainerRetryTestAccess::recover_with_sync_status(
+            trainer, cause, cudaSuccess);
+        EXPECT_TRUE(result.has_value());
+        EXPECT_TRUE(lfs::training::TrainerRetryTestAccess::should_retry(cause, 1));
+        EXPECT_FALSE(lfs::training::TrainerRetryTestAccess::should_retry(cause, 2));
     }
 
     constexpr const char* TEST_IMAGES = "images_4";
@@ -1532,9 +1555,13 @@ namespace {
                 << lfs::format_for_developer(document.error());
             const auto checkpoint_uuids =
                 document->checkpoint_uuids();
-            ASSERT_EQ(checkpoint_uuids.size(), 1u);
+            ASSERT_GE(checkpoint_uuids.size(), 2u);
+            const auto bound = document->bound_checkpoint_uuid();
+            ASSERT_TRUE(bound);
+            ASSERT_TRUE(*bound);
+            const auto checkpoint_uuid = **bound;
             const auto* checkpoint =
-                document->find_checkpoint(checkpoint_uuids.front());
+                document->find_checkpoint(checkpoint_uuid);
             ASSERT_NE(checkpoint, nullptr);
 
             std::optional<lfs::core::CheckpointParametersLoadResult>
@@ -1576,7 +1603,7 @@ namespace {
             ASSERT_TRUE(hydration->trainer_state_pending);
             ASSERT_EQ(
                 hydration->checkpoint_uuid,
-                std::optional(checkpoint_uuids.front()));
+                std::optional(checkpoint_uuid));
             ASSERT_TRUE(hydration->checkpoint_header.has_value());
 
             const auto* display_model =
@@ -1590,7 +1617,7 @@ namespace {
                 lfs::training::
                     installTrainerFromProjectCheckpoint(
                         scene, *document,
-                        checkpoint_uuids.front(),
+                        checkpoint_uuid,
                         resumed_params,
                         lfs::core::path_to_utf8(
                             project_path),
@@ -1672,10 +1699,13 @@ namespace {
         }
         const auto continued_checkpoints =
             continued->checkpoint_uuids();
-        ASSERT_EQ(continued_checkpoints.size(), 1u);
+        ASSERT_GE(continued_checkpoints.size(), 2u);
+        const auto continued_bound = continued->bound_checkpoint_uuid();
+        ASSERT_TRUE(continued_bound);
+        ASSERT_TRUE(*continued_bound);
         const auto* continued_checkpoint =
             continued->find_checkpoint(
-                continued_checkpoints.front());
+                **continued_bound);
         ASSERT_NE(continued_checkpoint, nullptr);
         std::optional<int> continued_iteration;
         const auto continued_header =
@@ -2145,6 +2175,83 @@ namespace {
             std::min<size_t>(500, stop_refine);
         params.optimization.stop_refine = stop_refine;
         return params;
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall,
+           SparsityBoundaryRetainsPrePruneCheckpointAcrossSaveAs) {
+        const auto output_path =
+            std::filesystem::temp_directory_path() /
+            "lfs_test_sparsity_checkpoint_history";
+        std::error_code ec;
+        std::filesystem::remove_all(output_path, ec);
+        std::filesystem::create_directories(output_path);
+
+        auto params = make_tiny_headless_params(output_path, 4);
+        params.optimization.enable_sparsity = true;
+        params.optimization.sparsify_steps = 1;
+        params.optimization.prune_ratio = 0.25f;
+        params.optimization.save_steps = {1};
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+        auto trainer = std::make_unique<lfs::training::Trainer>(scene);
+        ASSERT_TRUE(trainer->initialize(params));
+        lfs::training::grant_headless_project_saves(*trainer, params);
+        auto train = trainer->train();
+        ASSERT_TRUE(train)
+            << lfs::format_for_developer(train.error());
+        trainer->shutdown();
+
+        const auto master = output_path / "project.licht";
+        auto document = lfs::io::project::ProjectDocument::open(master);
+        ASSERT_TRUE(document)
+            << lfs::format_for_developer(document.error());
+        const auto bound = document->bound_checkpoint_uuid();
+        ASSERT_TRUE(bound);
+        ASSERT_TRUE(*bound);
+        EXPECT_EQ(document->checkpoint_uuids().size(), 3u);
+
+        std::vector<int> iterations;
+        for (const auto& uuid : document->checkpoint_uuids()) {
+            std::optional<lfs::core::CheckpointHeader> header;
+            ASSERT_TRUE(document->find_checkpoint(uuid)->visit_stream(
+                [&](std::istream& stream, const std::uint64_t bytes)
+                    -> lfs::Result<void> {
+                    if (auto parsed =
+                            lfs::core::load_checkpoint_header(stream, bytes);
+                        parsed) {
+                        header = *parsed;
+                    }
+                    return {};
+                }));
+            ASSERT_TRUE(header);
+            iterations.push_back(header->iteration);
+        }
+        std::ranges::sort(iterations);
+        EXPECT_EQ(iterations, (std::vector<int>{1, 4, 5}));
+
+        const auto copy = output_path / "project-copy.licht";
+        auto saved_as = document->save_as(copy);
+        ASSERT_TRUE(saved_as)
+            << lfs::format_for_developer(saved_as.error());
+        auto reopened = lfs::io::project::ProjectDocument::open(copy);
+        ASSERT_TRUE(reopened)
+            << lfs::format_for_developer(reopened.error());
+        EXPECT_EQ(reopened->checkpoint_uuids().size(), 3u);
+        const auto reopened_bound = reopened->bound_checkpoint_uuid();
+        ASSERT_TRUE(reopened_bound);
+        EXPECT_EQ(*reopened_bound, *bound);
+        std::cout << "checkpoint_history path=" << copy
+                  << " bound=" << (*reopened_bound)->to_string()
+                  << " iterations=";
+        for (const int iteration : iterations) {
+            std::cout << iteration << ',';
+        }
+        std::cout << " count=" << reopened->checkpoint_uuids().size()
+                  << '\n';
+
+        std::filesystem::remove_all(output_path, ec);
     }
 
     TEST_F(ProjectCheckpointTrainerInstall,

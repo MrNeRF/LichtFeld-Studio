@@ -98,5 +98,10 @@ use `--headless --resume project.licht`; a complete autosave newer than the
 master head is recovered automatically. Ambiguous recovery candidates remain
 an error.
 
-The current grammar is **1.0** on this development branch. The framed payload layout is guarded by
+The current grammar is **1.1** on this development branch. Version 1.1 makes CKPT history
+explicit: SCNG binds exactly one resumable checkpoint when a training node exists, while
+additional live CKPT chapters are historical and are copied by compaction. The existing
+Version major/minor fields and commit minimum-reader fields are the compatibility mechanism;
+old 1.0 readers reject a 1.1 multi-checkpoint commit before validation with an unsupported
+version error rather than reporting data loss. The framed payload layout is guarded by
 reader/writer tests; no compatibility promise is made for pre-framed development files.

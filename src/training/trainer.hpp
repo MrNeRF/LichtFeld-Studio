@@ -67,7 +67,7 @@ namespace lfs::vis {
     class VisualizerImplResetTest_ExplicitSaveAfterUnadoptedTrainerAppendUsesCurrentHead_Test;
     class VisualizerImplResetTest_ExplicitSaveAfterTrainerRewriteUsesCurrentHead_Test;
     class VisualizerImplResetTest_UntitledTrainerRewriteAdoptThenSaveAsUsesCurrentHead_Test;
-    class VisualizerImplResetTest_EditModeSaveDropsFormerTrainingCheckpoint_Test;
+    class VisualizerImplResetTest_EditModeSaveRetainsUnboundCheckpointHistory_Test;
     class VisualizerImplResetTest_UntitledTrainingSnapshotAdoptionRegistersProjectInMru_Test;
     class VisualizerImplResetTest_SaveAsAfterAutoCreatedTrainingKeepsOriginalAndCheckpoint_Test;
     class VisualizerImplResetTest_CompletedAutoCreatedTrainingSavesRealMasterOnClose_Test;
@@ -431,7 +431,7 @@ namespace lfs::training {
         friend class lfs::vis::VisualizerImplResetTest_ExplicitSaveAfterUnadoptedTrainerAppendUsesCurrentHead_Test;
         friend class lfs::vis::VisualizerImplResetTest_ExplicitSaveAfterTrainerRewriteUsesCurrentHead_Test;
         friend class lfs::vis::VisualizerImplResetTest_UntitledTrainerRewriteAdoptThenSaveAsUsesCurrentHead_Test;
-        friend class lfs::vis::VisualizerImplResetTest_EditModeSaveDropsFormerTrainingCheckpoint_Test;
+        friend class lfs::vis::VisualizerImplResetTest_EditModeSaveRetainsUnboundCheckpointHistory_Test;
         friend class lfs::vis::VisualizerImplResetTest_UntitledTrainingSnapshotAdoptionRegistersProjectInMru_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsAfterAutoCreatedTrainingKeepsOriginalAndCheckpoint_Test;
         friend class lfs::vis::VisualizerImplResetTest_CompletedAutoCreatedTrainingSavesRealMasterOnClose_Test;

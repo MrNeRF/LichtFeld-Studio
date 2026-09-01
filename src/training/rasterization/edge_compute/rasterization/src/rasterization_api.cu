@@ -61,7 +61,7 @@ namespace edge_compute::rasterization {
         uint64_t frame_id = arena.begin_frame(stream);
 
         // Get arena allocator for this frame
-        auto arena_allocator = arena.get_allocator(frame_id);
+        auto arena_allocator = arena.get_allocator(frame_id, "edge_compute.forward");
 
         try {
             // Workspace queries are part of the allocation transaction: if CUB
@@ -156,7 +156,7 @@ namespace edge_compute::rasterization {
         const int n_tiles = static_cast<int>(grid.x * grid.y);
         auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
         const uint64_t frame_id = arena.begin_frame(stream);
-        auto arena_allocator = arena.get_allocator(frame_id);
+        auto arena_allocator = arena.get_allocator(frame_id, "edge_compute.legacy");
         try {
             const size_t primitive_size = required<PerPrimitiveBuffers>(n_primitives);
             const size_t tile_size = required<PerTileBuffers>(n_tiles);

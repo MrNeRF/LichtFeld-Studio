@@ -3437,11 +3437,11 @@ namespace lfs::vis {
         // the render thread in reimportSharedScratchIfGrown.
         const auto make_grow_fn = [this](std::shared_ptr<lfs::core::ExportableBlock> block) {
             return [this, block = std::move(block)](std::size_t need) -> std::size_t {
-                const std::size_t want =
-                    need > (std::numeric_limits<std::size_t>::max() / 2) ? need : need + need / 2;
-                auto grew = lfs::core::growExportableDeviceBlock(block, want);
+                const std::size_t exact_need = alignUp(need, kSharedScratchPageBytes);
+                auto grew = lfs::core::growExportableDeviceBlock(block, exact_need);
                 if (!grew) {
-                    return std::size_t{0};
+                    LOG_ERROR("VkSplat shared scratch grow to {} MiB failed: {}",
+                              exact_need >> 20, grew.error());
                 }
                 return block->committedPrefixBytes();
             };
@@ -3560,7 +3560,13 @@ namespace lfs::vis {
                 ++shared_scratch_.generation;
                 return true;
             };
-            if (!lfs::core::GlobalArenaManager::instance().grow_external_backing(device_ptr, target_bytes, commit)) {
+            const std::size_t exact_required_bytes = alignUp(required_bytes, kSharedScratchPageBytes);
+            bool grew = lfs::core::GlobalArenaManager::instance().grow_external_backing(
+                device_ptr, exact_required_bytes, commit);
+            if (!grew) {
+                LOG_ERROR("VkSplat shared scratch grow to {} MiB failed: {}",
+                          exact_required_bytes >> 20,
+                          commit_error.empty() ? "unknown error" : commit_error);
                 return std::unexpected(commit_error.empty()
                                            ? std::string("VkSplat shared scratch training rasterizer arena is busy")
                                            : std::format("VkSplat shared scratch grow failed: {}", commit_error));

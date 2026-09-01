@@ -1450,15 +1450,14 @@ namespace lfs::io::project {
                 }
             }
 
-            if (checkpoints.size() !=
-                static_cast<std::size_t>(bound_checkpoint.has_value())) {
+            if (*training && !bound_checkpoint && !checkpoints.empty()) {
                 return fail<void>(
                     lfs::ErrorCode::DataLoss,
-                    "The project contains an unbound training checkpoint.",
+                    "The project has unbound training checkpoint history.",
                     std::format(
-                        "{} CKPT chapters exist but SCNG binds {}",
-                        checkpoints.size(),
-                        bound_checkpoint ? 1 : 0),
+                        "SCNG declares a training node but binds no CKPT; {} "
+                        "historical CKPT chapter(s) are not resumable",
+                        checkpoints.size()),
                     "CKPT");
             }
             if (!checkpoints.empty() && !ppisp_payloads.empty()) {
@@ -2449,6 +2448,29 @@ namespace lfs::io::project {
                    : &found->second;
     }
 
+    lfs::Result<std::optional<lfs::core::Uuid>>
+    ProjectDocument::bound_checkpoint_uuid() const {
+        auto training = impl_->scene_graph.training_model_uuid();
+        if (!training) {
+            return std::move(training).error();
+        }
+        if (!*training) {
+            return std::optional<lfs::core::Uuid>{};
+        }
+        auto nodes = impl_->scene_graph.nodes();
+        if (!nodes) {
+            return std::move(nodes).error();
+        }
+        for (const auto& node : *nodes) {
+            if (node.uuid == **training && node.payload &&
+                node.payload->fourcc == "CKPT") {
+                return std::optional<lfs::core::Uuid>(
+                    node.payload->instance_uuid);
+            }
+        }
+        return std::optional<lfs::core::Uuid>{};
+    }
+
     void ProjectDocument::drop_checkpoint_clean_proof_for_testing(
         const lfs::core::Uuid& instance_uuid) {
         const auto found = impl_->checkpoints.find(instance_uuid);
@@ -2472,9 +2494,50 @@ namespace lfs::io::project {
                 "must share one non-null identity; payload must be non-empty",
                 "CKPT.instance_uuid");
         }
+        const auto bound = bound_checkpoint_uuid();
+        if (!bound) {
+            return lfs::Result<void>::failure(
+                std::move(bound).error());
+        }
+        const auto bound_uuid =
+            *bound ? **bound : lfs::core::Uuid{};
         impl_->checkpoints.insert_or_assign(
             instance_uuid, std::move(payload));
         impl_->mark(FOURCC_CKPT, instance_uuid);
+
+        std::vector<std::pair<lfs::core::Uuid, int>> historical;
+        historical.reserve(impl_->checkpoints.size());
+        for (const auto& [uuid, checkpoint] : impl_->checkpoints) {
+            if (!bound_uuid.is_nil() && uuid == bound_uuid) {
+                continue;
+            }
+            int iteration = std::numeric_limits<int>::max();
+            std::array<std::byte, sizeof(lfs::core::CheckpointHeader)> prefix{};
+            if (auto peeked = checkpoint.peek_prefix(prefix); peeked) {
+                SpanStreambuf buffer(std::span<const std::byte>(
+                    prefix.data(), prefix.size()));
+                std::istream stream(&buffer);
+                if (auto header = lfs::core::load_checkpoint_header(
+                        stream, checkpoint.size());
+                    header && header->iteration >= 0) {
+                    iteration = header->iteration;
+                }
+            }
+            historical.emplace_back(uuid, iteration);
+        }
+        std::ranges::sort(historical, [](const auto& lhs, const auto& rhs) {
+            if (lhs.second != rhs.second) {
+                return lhs.second < rhs.second;
+            }
+            return lhs.first.to_string() < rhs.first.to_string();
+        });
+        while (historical.size() > CHECKPOINT_HISTORY_LIMIT) {
+            const auto evicted = historical.front().first;
+            historical.erase(historical.begin());
+            if (impl_->checkpoints.erase(evicted) != 0) {
+                impl_->mark(FOURCC_CKPT, evicted);
+            }
+        }
         return {};
     }
 
@@ -3167,13 +3230,13 @@ namespace lfs::io::project {
                     ? impl_->source_reader
                           ->commit()
                           .min_reader_version
-                    : CURRENT_CONTAINER_VERSION,
+                    : Version{1, 0},
             .min_safe_writer_version =
                 impl_->source_reader
                     ? impl_->source_reader
                           ->commit()
                           .min_safe_writer_version
-                    : CURRENT_CONTAINER_VERSION,
+                    : Version{1, 0},
             .extra_reader_capabilities =
                 impl_->source_reader
                     ? impl_->source_reader
@@ -3381,9 +3444,12 @@ namespace lfs::io::project {
         if (commit.wallclock_unix_ns == 0) {
             commit.wallclock_unix_ns = unix_time_ns();
         }
-        if (impl_->checkpoints.size() == 1) {
-            const auto& snapshot_uuid =
-                impl_->checkpoints.begin()->first;
+        auto bound_checkpoint = bound_checkpoint_uuid();
+        if (!bound_checkpoint) {
+            return std::move(bound_checkpoint).error();
+        }
+        if (*bound_checkpoint) {
+            const auto& snapshot_uuid = **bound_checkpoint;
             if (commit.snapshot_uuid.is_nil()) {
                 commit.snapshot_uuid = snapshot_uuid;
             } else if (commit.snapshot_uuid != snapshot_uuid) {
@@ -3396,6 +3462,12 @@ namespace lfs::io::project {
                         snapshot_uuid.to_string()),
                     "commit.snapshot_uuid");
             }
+        }
+        if (impl_->checkpoints.size() > 1) {
+            commit.min_reader_version = std::max(
+                commit.min_reader_version, CURRENT_CONTAINER_VERSION);
+            commit.min_safe_writer_version = std::max(
+                commit.min_safe_writer_version, CURRENT_CONTAINER_VERSION);
         }
         if (is_autosave && commit.snapshot_uuid.is_nil()) {
             commit.snapshot_uuid =
@@ -4632,10 +4704,18 @@ namespace lfs::io::project {
             std::optional<lfs::core::param::TrainingParameters>
                 checkpoint_params;
             MaterializeRetirementSink ckpt_retirement;
+            auto bound_checkpoint = bound_checkpoint_uuid();
+            if (!bound_checkpoint) {
+                return std::move(bound_checkpoint).error();
+            }
             staged_checkpoint_splats.reserve(
-                impl_->checkpoints.size());
+                bound_checkpoint->has_value() ? 1 : 0);
             for (const auto& [uuid, payload] :
                  impl_->checkpoints) {
+                if (!bound_checkpoint->has_value() ||
+                    uuid != **bound_checkpoint) {
+                    continue;
+                }
                 std::optional<lfs::core::SplatData>
                     materialized;
                 const auto ckpt_started =

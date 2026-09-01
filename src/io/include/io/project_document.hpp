@@ -33,6 +33,10 @@ namespace lfs::io {
 
 namespace lfs::io::project {
 
+    // The current SCNG-bound checkpoint is resumable; older CKPT chapters are
+    // retained history. This cap counts only unbound historical chapters.
+    inline constexpr std::size_t CHECKPOINT_HISTORY_LIMIT = 16;
+
     // A binary chapter whose clean source range is also its lazy hydration
     // handle. Reading a clean value never marks it dirty; saving that same
     // value reuses its CleanProof byte-for-byte. An owned value retains the
@@ -274,6 +278,8 @@ namespace lfs::io::project {
 
         [[nodiscard]] const LazyChunkValue*
         find_checkpoint(const lfs::core::Uuid& instance_uuid) const noexcept;
+        [[nodiscard]] lfs::Result<std::optional<lfs::core::Uuid>>
+        bound_checkpoint_uuid() const;
         // Test-only: drop the file-backed CKPT CleanProof. find_checkpoint()
         // is const and LazyChunkValue::Impl is translation-unit local.
         void drop_checkpoint_clean_proof_for_testing(

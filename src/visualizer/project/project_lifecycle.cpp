@@ -4363,14 +4363,16 @@ namespace lfs::vis::project {
             return std::nullopt;
         }
         if (hasSourcePath() && document_) {
-            const auto uuids =
-                document_->checkpoint_uuids();
-            if (!uuids.empty()) {
+            const auto bound = document_->bound_checkpoint_uuid();
+            if (!bound) {
+                return -1;
+            }
+            if (*bound) {
                 if (cached_bound_checkpoint_iteration_) {
                     return *cached_bound_checkpoint_iteration_;
                 }
                 const auto* checkpoint =
-                    document_->find_checkpoint(uuids.front());
+                    document_->find_checkpoint(**bound);
                 if (!checkpoint) {
                     return std::nullopt;
                 }
@@ -4399,14 +4401,16 @@ namespace lfs::vis::project {
                 if (!opened) {
                     return -1;
                 }
-                const auto disk_uuids =
-                    opened->checkpoint_uuids();
-                if (disk_uuids.empty()) {
+                const auto disk_bound =
+                    opened->bound_checkpoint_uuid();
+                if (!disk_bound) {
+                    return -1;
+                }
+                if (!*disk_bound) {
                     return std::nullopt;
                 }
                 const auto* checkpoint =
-                    opened->find_checkpoint(
-                        disk_uuids.front());
+                    opened->find_checkpoint(**disk_bound);
                 if (!checkpoint) {
                     return -1;
                 }
@@ -4441,16 +4445,16 @@ namespace lfs::vis::project {
         if (!trainer || !document_) {
             return false;
         }
-        const auto uuids = document_->checkpoint_uuids();
-        if (uuids.empty()) {
-            return true;
-        }
         if (cached_bound_checkpoint_iteration_) {
             return *cached_bound_checkpoint_iteration_ !=
                    trainer->get_current_iteration();
         }
+        const auto bound = document_->bound_checkpoint_uuid();
+        if (!bound || !*bound) {
+            return true;
+        }
         const auto* checkpoint =
-            document_->find_checkpoint(uuids.front());
+            document_->find_checkpoint(**bound);
         if (!checkpoint) {
             return true;
         }
@@ -5930,64 +5934,14 @@ namespace lfs::vis::project {
             document_->edit_scene_graph() =
                 std::move(*captured_scene);
         }
-        // Entering Edit Mode turns the live training model into an ordinary
-        // splat and clears its SCNG training binding.  A full sync must also
-        // retire the formerly resumable CKPT; otherwise validation correctly
-        // rejects the now-orphaned checkpoint.  Keep it during lightweight
-        // autosaves while a training session is still bound.
+        // Entering Edit Mode clears the SCNG training binding. Existing CKPT
+        // chapters remain live historical data (not resumable without a
+        // binding) and survive saves and compaction.
         if ((mode == DocumentSyncMode::Default ||
              mode == DocumentSyncMode::Autosave) &&
-            training_uuid.is_nil() &&
-            !keepStoredCheckpointChapters()) {
-            const auto checkpoint_uuids =
-                document_->checkpoint_uuids();
-            for (const auto& uuid : checkpoint_uuids) {
-                static_cast<void>(
-                    document_->remove_checkpoint(uuid));
-            }
-            if (!checkpoint_uuids.empty()) {
-                cached_bound_checkpoint_iteration_.reset();
-                clearStoredTrainingSession();
-            }
-        }
-        // Light autosave omits the unbound live training
-        // node from SCNG. Drop CKPT chapters that node no
-        // longer binds; otherwise V21 rejects the sidecar.
-        // A stored-but-not-hydrated session keeps both the
-        // SCNG training binding and the CKPT bytes.
-        if (mode ==
-                DocumentSyncMode::
-                    LightTrainingAutosave &&
-            !omit_unbound_training.empty() &&
-            !keepStoredCheckpointChapters()) {
-            std::unordered_set<lfs::core::Uuid>
-                bound_checkpoints;
-            if (const auto nodes =
-                    document_->scene_graph().nodes();
-                nodes) {
-                for (const auto& node : *nodes) {
-                    if (node.payload &&
-                        node.payload->fourcc == "CKPT") {
-                        bound_checkpoints.insert(
-                            node.payload->instance_uuid);
-                    }
-                }
-            }
-            const auto checkpoint_uuids =
-                document_->checkpoint_uuids();
-            bool removed_any = false;
-            for (const auto& uuid : checkpoint_uuids) {
-                if (!bound_checkpoints.contains(uuid)) {
-                    static_cast<void>(
-                        document_->remove_checkpoint(
-                            uuid));
-                    removed_any = true;
-                }
-            }
-            if (removed_any) {
-                cached_bound_checkpoint_iteration_.reset();
-                clearStoredTrainingSession();
-            }
+            training_uuid.is_nil()) {
+            cached_bound_checkpoint_iteration_.reset();
+            clearStoredTrainingSession();
         }
         // Same bookkeeping as the trainer writer after a
         // wholesale SCNG install: drop SPLT/PCLD/MESH

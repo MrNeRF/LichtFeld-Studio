@@ -277,7 +277,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_ScratchDirectoryIsFixedUnderRootRegardlessOfPreferences_Test;
         friend class VisualizerImplResetTest_ProjectCreateWhileTrainingPromptsWithCreatePath_Test;
         friend class VisualizerImplResetTest_RecoveredScratchSaveStillRefusesAndStaysOutOfMru_Test;
-        friend class VisualizerImplResetTest_EditModeWithoutHydratedSessionDropsCheckpoint_Test;
+        friend class VisualizerImplResetTest_EditModeWithoutHydratedSessionRetainsCheckpointHistory_Test;
         friend class VisualizerImplResetTest_RestoreThenTrainWritesNewCheckpoint_Test;
         friend class VisualizerImplResetTest_HeadlessOpenPrintsHydrationStagesWhenBenchPathSet_Test;
         friend class VisualizerImplResetTest_ResetTrainingPreservesExplicitInitPath_Test;
@@ -382,7 +382,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_TrainingCheckpointReopenRestoresPausedResumableState_Test;
         friend class VisualizerImplResetTest_ErrorFinishedCheckpointProjectReopensPausedAndResumable_Test;
         friend class VisualizerImplResetTest_CompletedCheckpointProjectStillReopensFinished_Test;
-        friend class VisualizerImplResetTest_EditModeSaveDropsFormerTrainingCheckpoint_Test;
+        friend class VisualizerImplResetTest_EditModeSaveRetainsUnboundCheckpointHistory_Test;
         friend class VisualizerImplResetTest_ReopenedTwoSplatProjectBuildsExternalCombinedModel_Test;
         friend class VisualizerImplResetTest_ForceExitDiscardDeletesAutosaveSidecarOnTeardown_Test;
         friend class VisualizerImplResetTest_EmergencyForceExitKeepsAutosaveSidecarOnTeardown_Test;

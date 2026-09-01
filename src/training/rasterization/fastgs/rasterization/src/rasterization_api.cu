@@ -294,8 +294,13 @@ namespace fast_lfs::rasterization {
                 n_tiles);
 
             // Get arena allocator for this frame
-            auto arena_allocator = arena->get_allocator(frame_id);
-            auto phase_arena = std::make_shared<FastGSPhaseArena>(arena_allocator, stream);
+            auto per_primitive_allocator =
+                arena->get_allocator(frame_id, "fastgs.per_primitive");
+            auto per_tile_allocator =
+                arena->get_allocator(frame_id, "fastgs.per_tile");
+            auto sort_phase_allocator =
+                arena->get_allocator(frame_id, "fastgs.sort_phase");
+            auto phase_arena = std::make_shared<FastGSPhaseArena>(sort_phase_allocator, stream);
             auto phase_forward_allocator =
                 phase_arena->allocator(FastGSPhaseArena::Phase::Forward);
             auto phase_backward_allocator =
@@ -305,7 +310,7 @@ namespace fast_lfs::rasterization {
             // visibility bookkeeping and compact primitive buffers through the
             // primitive callback after it knows this step's visible count.
             const size_t per_tile_size = required<PerTileBuffers>(n_tiles);
-            char* per_tile_buffers_blob = arena_allocator(per_tile_size);
+            char* per_tile_buffers_blob = per_tile_allocator(per_tile_size);
 
             if (!per_tile_buffers_blob) {
                 return fail("OUT_OF_MEMORY: Failed to allocate tile buffers from arena", true);
@@ -313,7 +318,7 @@ namespace fast_lfs::rasterization {
 
             // Create allocation wrappers
             std::function<char*(size_t)> per_primitive_buffers_func =
-                arena_allocator;
+                per_primitive_allocator;
 
             std::function<char*(size_t)> per_tile_buffers_func =
                 [&per_tile_buffers_blob](size_t size) -> char* {
@@ -415,6 +420,8 @@ namespace fast_lfs::rasterization {
             last_forward_error = e.what();
             ForwardContext error_ctx = {};
             error_ctx.success = false;
+            error_ctx.resource_exhausted =
+                last_forward_error.find("OUT_OF_MEMORY") != std::string::npos;
             error_ctx.error_message = last_forward_error.c_str();
             error_ctx.frame_id = frame_id;
             return error_ctx;

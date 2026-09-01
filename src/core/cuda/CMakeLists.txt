@@ -10,6 +10,7 @@
 set(LFS_CORE_CUDA_SOURCES
     memory_arena.cu
     exportable_storage.cpp
+    vmm_device_buffer.cpp
     lanczos_resize/lanczos_resize.cu
     undistort/undistort.cu
     kernels/selection_ops.cu
