@@ -5,7 +5,6 @@
     "curl",
     "args",
     "assimp",
-    "boost-preprocessor",
     {
       "name": "ffmpeg",
       "features": [
@@ -116,10 +115,6 @@
     {
       "name": "args",
       "version": "6.4.8"
-    },
-    {
-      "name": "boost-preprocessor",
-      "version": "1.90.0#1"
     },
     {
       "name": "ffmpeg",
