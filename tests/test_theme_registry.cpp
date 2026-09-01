@@ -172,8 +172,22 @@ TEST(ThemeRegistry, VersionTwoManifestOwnsThemeFamilies) {
             ASSERT_TRUE(variant->contains("name")) << family_file << ':' << mode;
             ASSERT_TRUE(variant->contains("label_key")) << family_file << ':' << mode;
             ASSERT_TRUE(variant->contains("fallback")) << family_file << ':' << mode;
-            EXPECT_TRUE(variant->contains("fonts")) << family_file << ':' << mode;
-            EXPECT_TRUE((*variant)["fonts"].is_object()) << family_file << ':' << mode;
+            if (variant->contains("fonts"))
+                EXPECT_TRUE((*variant)["fonts"].is_object()) << family_file << ':' << mode;
+            if (const auto gradients = variant->find("gradients"); gradients != variant->end()) {
+                ASSERT_TRUE(gradients->is_object()) << family_file << ':' << mode;
+                for (const auto& [name, gradient] : gradients->items()) {
+                    if (name.starts_with('_'))
+                        continue;
+                    ASSERT_TRUE(gradient.is_object()) << family_file << ':' << mode << ':' << name;
+                    ASSERT_TRUE(gradient.contains("start")) << name;
+                    ASSERT_TRUE(gradient.contains("end")) << name;
+                    EXPECT_TRUE(gradient["start"].is_array()) << name;
+                    EXPECT_EQ(gradient["start"].size(), 4u) << name;
+                    EXPECT_TRUE(gradient["end"].is_array()) << name;
+                    EXPECT_EQ(gradient["end"].size(), 4u) << name;
+                }
+            }
 
             const std::string id = (*variant)["id"].get<std::string>();
             ASSERT_TRUE(info_by_id.contains(id)) << id;
@@ -196,7 +210,7 @@ TEST(ThemeRegistry, VersionTwoManifestOwnsThemeFamilies) {
 TEST(ThemeRegistry, CatalogIsStableAndSelfDescribing) {
     const auto infos = themePresetInfos();
 
-    ASSERT_EQ(infos.size(), 6u);
+    ASSERT_EQ(infos.size(), 8u);
 
     int previous_order = 0;
     std::set<std::string> ids;
@@ -215,6 +229,8 @@ TEST(ThemeRegistry, CatalogIsStableAndSelfDescribing) {
 
     EXPECT_TRUE(ids.contains("dark"));
     EXPECT_TRUE(ids.contains("light"));
+    EXPECT_TRUE(ids.contains("signal_night"));
+    EXPECT_TRUE(ids.contains("signal_day"));
     EXPECT_TRUE(ids.contains("gruvbox"));
     EXPECT_TRUE(ids.contains("catppuccin_mocha"));
     EXPECT_TRUE(ids.contains("catppuccin_latte"));
@@ -235,6 +251,66 @@ TEST(ThemeRegistry, CurrentThemeUsesStablePresetId) {
     if (!original_theme.empty()) {
         EXPECT_TRUE(lfs::vis::setThemeByName(original_theme));
     }
+}
+
+TEST(ThemeRegistry, OptionalGradientsLoadAndLegacyThemesKeepDerivedFallbacks) {
+    const std::string original_theme = lfs::vis::currentThemeId();
+
+    ASSERT_TRUE(lfs::vis::setThemeByName("dark"));
+    EXPECT_FALSE(lfs::vis::theme().gradients.window_title.has_value());
+    EXPECT_FALSE(lfs::vis::theme().gradients.progress.has_value());
+
+    ASSERT_TRUE(lfs::vis::setThemeByName("signal_night"));
+    ASSERT_TRUE(lfs::vis::theme().gradients.window_body.has_value());
+    ASSERT_TRUE(lfs::vis::theme().gradients.panel_body.has_value());
+    ASSERT_TRUE(lfs::vis::theme().gradients.window_title.has_value());
+    ASSERT_TRUE(lfs::vis::theme().gradients.progress.has_value());
+    EXPECT_FLOAT_EQ(lfs::vis::theme().gradients.progress->start.x, 0.224f);
+    EXPECT_FLOAT_EQ(lfs::vis::theme().gradients.progress->end.z, 1.0f);
+
+    if (!original_theme.empty())
+        EXPECT_TRUE(lfs::vis::setThemeByName(original_theme));
+}
+
+TEST(ThemeRegistry, InvalidOptionalGradientDoesNotRejectTheme) {
+    const auto path =
+        std::filesystem::temp_directory_path() / "lfs_invalid_optional_gradient.json";
+    {
+        std::ofstream file(path);
+        file << R"({
+            "name": "Invalid Gradient Theme",
+            "palette": {"primary": [0.1, 0.2, 0.3, 1.0]},
+            "gradients": {"progress": {"start": [2.0, 0.0, 0.0, 1.0], "end": [0.0, 1.0]}}
+        })";
+    }
+
+    lfs::vis::Theme loaded = lfs::vis::darkTheme();
+    ASSERT_TRUE(lfs::vis::loadTheme(loaded, lfs::core::path_to_utf8(path)));
+    EXPECT_FLOAT_EQ(loaded.palette.primary.x, 0.1f);
+    EXPECT_FALSE(loaded.gradients.progress.has_value());
+
+    std::error_code error;
+    std::filesystem::remove(path, error);
+}
+
+TEST(ThemeRegistry, OptionalGradientsRoundTripThroughLegacyThemeSave) {
+    const auto path =
+        std::filesystem::temp_directory_path() / "lfs_optional_gradient_roundtrip.json";
+
+    lfs::vis::Theme source = lfs::vis::darkTheme();
+    source.gradients.progress = lfs::vis::ThemeGradient{
+        {0.1f, 0.2f, 0.3f, 0.4f},
+        {0.5f, 0.6f, 0.7f, 0.8f}};
+    ASSERT_TRUE(lfs::vis::saveTheme(source, lfs::core::path_to_utf8(path)));
+
+    lfs::vis::Theme loaded = lfs::vis::darkTheme();
+    ASSERT_TRUE(lfs::vis::loadTheme(loaded, lfs::core::path_to_utf8(path)));
+    ASSERT_TRUE(loaded.gradients.progress.has_value());
+    EXPECT_FLOAT_EQ(loaded.gradients.progress->start.w, 0.4f);
+    EXPECT_FLOAT_EQ(loaded.gradients.progress->end.z, 0.7f);
+
+    std::error_code error;
+    std::filesystem::remove(path, error);
 }
 
 TEST(ThemeRegistry, LegacyStandaloneThemeJsonRemainsLoadable) {

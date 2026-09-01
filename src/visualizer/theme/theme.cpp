@@ -85,6 +85,36 @@ namespace lfs::vis {
             return {0.0f, 0.0f, 0.0f, 1.0f};
         }
 
+        bool isValidThemeColorJson(const json& value) {
+            if (!value.is_array() || value.size() != 4)
+                return false;
+            for (const auto& channel : value) {
+                if (!channel.is_number())
+                    return false;
+                const double component = channel.get<double>();
+                if (!std::isfinite(component) || component < 0.0 || component > 1.0)
+                    return false;
+            }
+            return true;
+        }
+
+        std::optional<ThemeGradient> gradientFromJson(const json& value) {
+            if (!value.is_object())
+                return std::nullopt;
+            const auto start = value.find("start");
+            const auto end = value.find("end");
+            if (start == value.end() || end == value.end() ||
+                !isValidThemeColorJson(*start) || !isValidThemeColorJson(*end)) {
+                return std::nullopt;
+            }
+            return ThemeGradient{colorFromJson(*start), colorFromJson(*end)};
+        }
+
+        json gradientToJson(const ThemeGradient& gradient) {
+            return json{{"start", colorToJson(gradient.start)},
+                        {"end", colorToJson(gradient.end)}};
+        }
+
         json vec2ToJson(const ThemeVec2& v) {
             return json::array({v.x, v.y});
         }
@@ -1172,6 +1202,23 @@ namespace lfs::vis {
             overlay["selection"] = colorToJson(t.overlay.selection);
             overlay["selection_flash"] = colorToJson(t.overlay.selection_flash);
 
+            const auto write_gradient = [&j](const char* name,
+                                             const std::optional<ThemeGradient>& gradient) {
+                if (gradient)
+                    j["gradients"][name] = gradientToJson(*gradient);
+            };
+            write_gradient("window_body", t.gradients.window_body);
+            write_gradient("panel_body", t.gradients.panel_body);
+            write_gradient("window_title", t.gradients.window_title);
+            write_gradient("section_header", t.gradients.section_header);
+            write_gradient("section_header_hover", t.gradients.section_header_hover);
+            write_gradient("progress", t.gradients.progress);
+            write_gradient("scrubber_track", t.gradients.scrubber_track);
+            write_gradient("scrubber_fill", t.gradients.scrubber_fill);
+            write_gradient("histogram_header", t.gradients.histogram_header);
+            write_gradient("histogram_fill", t.gradients.histogram_fill);
+            write_gradient("histogram_selection", t.gradients.histogram_selection);
+
             std::ofstream file;
             if (!lfs::core::open_file_for_write(lfs::core::utf8_to_path(path), file))
                 return false;
@@ -1343,6 +1390,41 @@ namespace lfs::vis {
                         t.overlay.selection = colorFromJson(o["selection"]);
                     if (o.contains("selection_flash"))
                         t.overlay.selection_flash = colorFromJson(o["selection_flash"]);
+                }
+
+                if (j.contains("gradients")) {
+                    const auto& gradients = j["gradients"];
+                    if (!gradients.is_object()) {
+                        LOG_WARN("Ignoring theme gradients: expected an object");
+                    } else {
+                        const auto apply_gradient = [&gradients](
+                                                        const char* name,
+                                                        std::optional<ThemeGradient>& target) {
+                            const auto value = gradients.find(name);
+                            if (value == gradients.end())
+                                return;
+                            if (value->is_null()) {
+                                target.reset();
+                                return;
+                            }
+                            if (const auto parsed = gradientFromJson(*value)) {
+                                target = *parsed;
+                            } else {
+                                LOG_WARN("Ignoring invalid theme gradient '{}'", name);
+                            }
+                        };
+                        apply_gradient("window_body", t.gradients.window_body);
+                        apply_gradient("panel_body", t.gradients.panel_body);
+                        apply_gradient("window_title", t.gradients.window_title);
+                        apply_gradient("section_header", t.gradients.section_header);
+                        apply_gradient("section_header_hover", t.gradients.section_header_hover);
+                        apply_gradient("progress", t.gradients.progress);
+                        apply_gradient("scrubber_track", t.gradients.scrubber_track);
+                        apply_gradient("scrubber_fill", t.gradients.scrubber_fill);
+                        apply_gradient("histogram_header", t.gradients.histogram_header);
+                        apply_gradient("histogram_fill", t.gradients.histogram_fill);
+                        apply_gradient("histogram_selection", t.gradients.histogram_selection);
+                    }
                 }
 
                 return true;

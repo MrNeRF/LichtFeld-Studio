@@ -15,22 +15,31 @@
 .tab {
     background-color: transparent;
     color: @{text_dim};
+    @{right_panel.tab_shape};
+    border-color: @{right_panel.tab_border};
+    border-bottom-color: @{right_panel.tab_bottom_border};
+}
+
+.tab-label {
+    @{right_panel.tab_label_shape};
 }
 
 .tab:hover {
-    background-color: @{right_panel.tab_hover};
+    @{right_panel.tab_hover_decor};
 }
 
 .tab:focus-visible {
-    background-color: @{right_panel.tab_hover};
+    @{right_panel.tab_hover_decor};
     color: @{text};
-    border-bottom-color: @{primary};
+    border-color: @{right_panel.tab_active_border};
+    border-bottom-color: @{right_panel.tab_active_bottom_border};
 }
 
 .tab.active {
-    background-color: @{right_panel.tab_active_bg};
+    @{right_panel.tab_active_decor};
     color: @{text};
-    border-bottom-color: @{primary};
+    border-color: @{right_panel.tab_active_border};
+    border-bottom-color: @{right_panel.tab_active_bottom_border};
 }
 
 .tab-close {

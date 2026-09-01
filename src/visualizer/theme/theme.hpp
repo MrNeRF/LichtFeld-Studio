@@ -5,6 +5,7 @@
 
 #include "core/export.hpp"
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -147,6 +148,25 @@ namespace lfs::vis {
         ThemeColor selection_flash = {0.55f, 0.7f, 0.94f, 1.0f};
     };
 
+    struct ThemeGradient {
+        ThemeColor start;
+        ThemeColor end;
+    };
+
+    struct ThemeGradients {
+        std::optional<ThemeGradient> window_body;
+        std::optional<ThemeGradient> panel_body;
+        std::optional<ThemeGradient> window_title;
+        std::optional<ThemeGradient> section_header;
+        std::optional<ThemeGradient> section_header_hover;
+        std::optional<ThemeGradient> progress;
+        std::optional<ThemeGradient> scrubber_track;
+        std::optional<ThemeGradient> scrubber_fill;
+        std::optional<ThemeGradient> histogram_header;
+        std::optional<ThemeGradient> histogram_fill;
+        std::optional<ThemeGradient> histogram_selection;
+    };
+
     // Complete theme
     struct LFS_VIS_API Theme {
         std::string name;
@@ -160,6 +180,7 @@ namespace lfs::vis {
         ThemeVignette vignette;
         ThemeButton button;
         ThemeOverlay overlay;
+        ThemeGradients gradients;
 
         // Toolbar
         [[nodiscard]] ThemeColor toolbar_background() const;

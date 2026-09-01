@@ -199,6 +199,28 @@ namespace lfs::vis::gui::rml_theme {
             hashColor(seed, overlay.selection_flash);
         }
 
+        void hashGradient(std::size_t& seed, const std::optional<ThemeGradient>& gradient) {
+            hashCombine(seed, gradient.has_value());
+            if (!gradient)
+                return;
+            hashColor(seed, gradient->start);
+            hashColor(seed, gradient->end);
+        }
+
+        void hashGradients(std::size_t& seed, const ThemeGradients& gradients) {
+            hashGradient(seed, gradients.window_body);
+            hashGradient(seed, gradients.panel_body);
+            hashGradient(seed, gradients.window_title);
+            hashGradient(seed, gradients.section_header);
+            hashGradient(seed, gradients.section_header_hover);
+            hashGradient(seed, gradients.progress);
+            hashGradient(seed, gradients.scrubber_track);
+            hashGradient(seed, gradients.scrubber_fill);
+            hashGradient(seed, gradients.histogram_header);
+            hashGradient(seed, gradients.histogram_fill);
+            hashGradient(seed, gradients.histogram_selection);
+        }
+
     } // namespace
 
     namespace {
@@ -418,45 +440,121 @@ namespace lfs::vis::gui::rml_theme {
 
             const auto window_surface =
                 colorToRml(is_light ? lighten(p.surface, 0.015f) : lighten(p.surface, 0.02f));
+            const auto window_body_decor = t.gradients.window_body
+                                               ? std::format(
+                                                     "decorator: vertical-gradient({} {}); background-color: {}",
+                                                     colorToRml(t.gradients.window_body->start),
+                                                     colorToRml(t.gradients.window_body->end), surface)
+                                               : std::format("background-color: {}", window_surface);
+            const auto panel_body_decor = t.gradients.panel_body
+                                              ? std::format(
+                                                    "decorator: vertical-gradient({} {}); background-color: {}",
+                                                    colorToRml(t.gradients.panel_body->start),
+                                                    colorToRml(t.gradients.panel_body->end), surface)
+                                              : std::format("background-color: {}", surface);
+            const bool enhanced_panel_chrome = t.gradients.panel_body.has_value();
+            const auto right_panel_tab_shape = enhanced_panel_chrome
+                                                   ? "margin: 3dp 2dp; padding: 0 8dp; min-height: 22dp; "
+                                                     "border-bottom-width: 1dp; border-radius: 5dp"
+                                                   : "margin: 0; padding: 0 14dp; min-height: 28dp; "
+                                                     "border-top-left-radius: 4dp; border-top-right-radius: 4dp";
+            const auto right_panel_tab_label_shape =
+                enhanced_panel_chrome ? "line-height: 20dp" : "line-height: 28dp";
+            const auto right_panel_tab_hover_decor = enhanced_panel_chrome
+                                                         ? std::format(
+                                                               "decorator: vertical-gradient({} {}); background-color: transparent",
+                                                               colorToRml(blend(p.surface_bright, p.primary, 0.12f)),
+                                                               colorToRml(blend(p.surface, p.primary, 0.07f)))
+                                                         : std::format(
+                                                               "background-color: {}",
+                                                               colorToRmlAlpha(p.surface_bright, 0.5f));
+            const auto right_panel_tab_active_decor = enhanced_panel_chrome
+                                                          ? std::format(
+                                                                "decorator: vertical-gradient({} {}); background-color: transparent",
+                                                                colorToRml(blend(p.surface_bright, p.primary, 0.24f)),
+                                                                colorToRml(blend(p.surface, p.primary, 0.15f)))
+                                                          : std::format(
+                                                                "background-color: {}",
+                                                                colorToRmlAlpha(p.surface_bright, 0.4f));
             const auto title_surface_col = is_light ? darken(p.surface, 0.02f) : lighten(p.surface, 0.045f);
+            const ThemeGradient title_gradient = t.gradients.window_title.value_or(
+                ThemeGradient{lighten(title_surface_col, 0.12f), title_surface_col});
             const auto title_decor = std::format("decorator: vertical-gradient({} {}); background-color: transparent",
-                                                 colorToRml(lighten(title_surface_col, 0.12f)),
-                                                 colorToRml(title_surface_col));
-            const auto header_decor = std::format("decorator: vertical-gradient({} {}); background-color: transparent",
-                                                  colorToRmlAlpha(p.primary, 0.31f),
-                                                  colorToRmlAlpha(p.primary, 0.16f));
-            const auto header_hover_decor = std::format("decorator: vertical-gradient({} {}); background-color: transparent",
-                                                        colorToRmlAlpha(p.primary, 0.55f),
-                                                        colorToRmlAlpha(p.primary, 0.40f));
+                                                 colorToRml(title_gradient.start),
+                                                 colorToRml(title_gradient.end));
+            const auto optional_vertical_gradient = [](const std::optional<ThemeGradient>& gradient) {
+                if (!gradient)
+                    return std::string{"decorator: none; background-color: transparent"};
+                return std::format(
+                    "decorator: vertical-gradient({} {}); background-color: transparent",
+                    colorToRml(gradient->start), colorToRml(gradient->end));
+            };
+            const auto header_decor = optional_vertical_gradient(t.gradients.section_header);
+            const auto header_hover_decor =
+                optional_vertical_gradient(t.gradients.section_header_hover);
+            const auto header_shape = t.gradients.section_header
+                                          ? std::format(
+                                                "margin: 4dp 0 2dp 0; border-width: 1dp; "
+                                                "border-radius: 5dp; border-color: {}",
+                                                colorToRmlAlpha(p.border, 0.58f))
+                                          : "margin: 0 -6dp; border-width: 0; "
+                                            "border-top-width: 4dp; border-radius: 0";
+            const ThemeGradient progress_gradient = t.gradients.progress.value_or(
+                ThemeGradient{p.primary, blend(p.primary, ThemeColor{1, 1, 1, 1}, 0.08f)});
             const auto progress_fill_decor = std::format("decorator: horizontal-gradient({} {}); background-color: transparent",
-                                                         colorToRml(p.primary),
-                                                         colorToRml(blend(p.primary, ThemeColor{1, 1, 1, 1}, 0.08f)));
-            const auto scrub_bg_top = colorToRml(is_light
-                                                     ? blend(p.surface, p.surface_bright, 0.10f)
-                                                     : blend(p.surface, p.surface_bright, 0.45f));
-            const auto scrub_bg_bottom = colorToRml(is_light
-                                                        ? blend(p.surface, p.background, 0.08f)
-                                                        : blend(p.surface, p.background, 0.22f));
+                                                         colorToRml(progress_gradient.start),
+                                                         colorToRml(progress_gradient.end));
+            const ThemeGradient scrub_track_gradient = t.gradients.scrubber_track.value_or(
+                ThemeGradient{is_light
+                                  ? blend(p.surface, p.surface_bright, 0.10f)
+                                  : blend(p.surface, p.surface_bright, 0.45f),
+                              is_light
+                                  ? blend(p.surface, p.background, 0.08f)
+                                  : blend(p.surface, p.background, 0.22f)});
             const auto scrub_bg_decor =
                 std::format("decorator: vertical-gradient({} {}); background-color: {}",
-                            scrub_bg_top, scrub_bg_bottom, surface);
+                            colorToRml(scrub_track_gradient.start),
+                            colorToRml(scrub_track_gradient.end), surface);
+            const ThemeGradient scrub_fill_gradient =
+                t.gradients.scrubber_fill.value_or(
+                    ThemeGradient{
+                        withAlpha(blend(p.primary_dim, p.primary, 0.20f),
+                                  is_light ? 0.36f : 0.42f),
+                        withAlpha(p.primary, is_light ? 0.52f : 0.60f)});
             const auto scrub_fill_decor =
                 std::format("decorator: horizontal-gradient({} {}); background-color: transparent",
-                            colorToRmlAlpha(blend(p.primary_dim, p.primary, 0.20f), is_light ? 0.36f : 0.42f),
-                            colorToRmlAlpha(p.primary, is_light ? 0.52f : 0.60f));
+                            colorToRml(scrub_fill_gradient.start),
+                            colorToRml(scrub_fill_gradient.end));
+            const ThemeGradient histogram_header_gradient =
+                t.gradients.histogram_header.value_or(
+                    ThemeGradient{
+                        blend(p.surface_bright, p.primary, is_light ? 0.04f : 0.10f),
+                        blend(p.surface, p.primary_dim, is_light ? 0.02f : 0.05f)});
             const auto histogram_hero_decor =
                 std::format("decorator: vertical-gradient({} {}); background-color: transparent",
-                            colorToRml(blend(p.surface_bright, p.primary, is_light ? 0.04f : 0.10f)),
-                            colorToRml(blend(p.surface, p.primary_dim, is_light ? 0.02f : 0.05f)));
+                            colorToRml(histogram_header_gradient.start),
+                            colorToRml(histogram_header_gradient.end));
+            const ThemeGradient histogram_fill_gradient =
+                t.gradients.histogram_fill.value_or(
+                    ThemeGradient{
+                        blend(p.primary_dim, p.primary, 0.25f),
+                        blend(p.primary, ThemeColor{1, 1, 1, 1},
+                              is_light ? 0.04f : 0.10f)});
             const auto histogram_fill_decor =
                 std::format("decorator: vertical-gradient({} {}); background-color: {}",
-                            colorToRml(blend(p.primary_dim, p.primary, 0.25f)),
-                            colorToRml(blend(p.primary, ThemeColor{1, 1, 1, 1}, is_light ? 0.04f : 0.10f)),
+                            colorToRml(histogram_fill_gradient.start),
+                            colorToRml(histogram_fill_gradient.end),
                             primary);
+            const ThemeGradient histogram_selection_gradient =
+                t.gradients.histogram_selection.value_or(
+                    ThemeGradient{
+                        blend(p.warning, p.primary, 0.18f),
+                        blend(p.warning, ThemeColor{1, 1, 1, 1},
+                              is_light ? 0.06f : 0.12f)});
             const auto histogram_fill_selected_decor =
                 std::format("decorator: vertical-gradient({} {}); background-color: {}",
-                            colorToRml(blend(p.warning, p.primary, 0.18f)),
-                            colorToRml(blend(p.warning, ThemeColor{1, 1, 1, 1}, is_light ? 0.06f : 0.12f)),
+                            colorToRml(histogram_selection_gradient.start),
+                            colorToRml(histogram_selection_gradient.end),
                             colorToRml(p.warning));
 
             const int window_rounding = std::max(4, static_cast<int>(t.sizes.window_rounding));
@@ -483,11 +581,18 @@ namespace lfs::vis::gui::rml_theme {
 
             std::unordered_map<std::string, std::string> tokens{
                 {"window.surface", window_surface},
+                {"window.body_decor", window_body_decor},
+                {"panel.body_decor", panel_body_decor},
                 {"window.title_decor", title_decor},
                 {"window.rounding", std::format("{}", window_rounding)},
                 {"window.shadow_padding", std::format("{:.1f}", window_shadow_padding)},
                 {"components.header_decor", header_decor},
                 {"components.header_hover_decor", header_hover_decor},
+                {"components.header_shape", header_shape},
+                {"components.header_state_border",
+                 t.gradients.section_header ? colorToRmlAlpha(p.border, 0.72f)
+                                            : colorToRml(t.menu_background())},
+                {"components.header_text", t.gradients.section_header ? text : primary},
                 {"components.progress_fill_decor", progress_fill_decor},
                 {"components.scrub_bg_decor", scrub_bg_decor},
                 {"components.scrub_fill_decor", scrub_fill_decor},
@@ -535,6 +640,17 @@ namespace lfs::vis::gui::rml_theme {
                 {"panel.primary_accent", colorToRmlAlpha(p.primary, 0.22f)},
                 {"right_panel.tab_hover", colorToRmlAlpha(p.surface_bright, 0.5f)},
                 {"right_panel.tab_active_bg", colorToRmlAlpha(p.surface_bright, 0.4f)},
+                {"right_panel.tab_shape", right_panel_tab_shape},
+                {"right_panel.tab_label_shape", right_panel_tab_label_shape},
+                {"right_panel.tab_hover_decor", right_panel_tab_hover_decor},
+                {"right_panel.tab_active_decor", right_panel_tab_active_decor},
+                {"right_panel.tab_border", colorToRmlAlpha(p.border, enhanced_panel_chrome ? 0.46f : 0.42f)},
+                {"right_panel.tab_bottom_border", colorToRmlAlpha(p.border, enhanced_panel_chrome ? 0.58f : 0.62f)},
+                {"right_panel.tab_active_border",
+                 enhanced_panel_chrome ? colorToRmlAlpha(p.primary, 0.78f)
+                                       : colorToRmlAlpha(p.border, 0.42f)},
+                {"right_panel.tab_active_bottom_border",
+                 enhanced_panel_chrome ? colorToRmlAlpha(p.primary, 0.95f) : primary},
                 {"right_panel.tab_nav_bg", colorToRmlAlpha(p.surface_bright, 0.2f)},
                 {"right_panel.tab_nav_hover", colorToRmlAlpha(p.surface_bright, 0.55f)},
                 {"right_panel.tab_nav_disabled", colorToRmlAlpha(p.text_dim, 0.35f)},
@@ -551,7 +667,12 @@ namespace lfs::vis::gui::rml_theme {
                                                    is_light ? 0.18f : 0.44f)},
                 {"overlay.surface", colorToRmlAlpha(p.surface, 0.95f)},
                 {"overlay.border", colorToRmlAlpha(p.border, 0.4f)},
-                {"viewport.icon_dim", colorToRmlAlpha(p.text, 0.9f)},
+                {"viewport.icon_dim",
+                 is_light ? colorToRmlAlpha(ThemeColor{0.90f, 0.93f, 0.98f, 1.0f}, 0.88f)
+                          : colorToRmlAlpha(p.text, 0.90f)},
+                {"viewport.icon_disabled",
+                 is_light ? colorToRmlAlpha(ThemeColor{0.90f, 0.93f, 0.98f, 1.0f}, 0.42f)
+                          : colorToRmlAlpha(p.text_dim, 0.48f)},
                 {"viewport.selected_hover", colorToRml(ThemeColor{
                                                 std::min(1.0f, p.primary.x + 0.1f),
                                                 std::min(1.0f, p.primary.y + 0.1f),
@@ -564,6 +685,9 @@ namespace lfs::vis::gui::rml_theme {
                 {"viewport.metrics_bg", colorToRmlAlpha(p.background, 0.92f)},
                 {"viewport.metrics_border", colorToRmlAlpha(p.primary, 0.55f)},
                 {"statusbar.progress_bg", colorToRmlAlpha(p.surface_bright, 0.5f)},
+                {"statusbar.progress_fill_decor",
+                 t.gradients.progress ? progress_fill_decor
+                                      : std::format("background-color: {}", primary)},
                 {"statusbar.progress_marker", colorToRmlAlpha(p.error, 0.78f)},
                 {"statusbar.progress_marker_active", colorToRmlAlpha(p.warning, 0.92f)},
                 {"statusbar.progress_marker_past", colorToRmlAlpha(p.text_dim, 0.58f)},
@@ -775,6 +899,7 @@ namespace lfs::vis::gui::rml_theme {
         hashCombine(seed, b.tint_hover);
         hashCombine(seed, b.tint_active);
         hashOverlay(seed, o);
+        hashGradients(seed, t.gradients);
         return seed;
     }
 

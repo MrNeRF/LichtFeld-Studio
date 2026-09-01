@@ -133,7 +133,7 @@
 }
 
 .icon-btn.disabled img {
-    image-color: @{text_dim};
+    image-color: @{viewport.icon_disabled};
 }
 
 .viewport-metrics-card {

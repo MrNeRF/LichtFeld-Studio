@@ -658,6 +658,23 @@ namespace lfs::vis::gui {
             }
             syncTabNavigation();
 
+            // Data-model and overflow updates can move the tab strip after input was
+            // processed for this frame. Re-resolve hover against the settled layout so
+            // a long or closeable tab cannot briefly hover at its previous coordinates
+            // and then drop the pseudo-class on the following frame.
+            if (rml_pointer_inside_) {
+                const float local_x = prev_mouse_x_ - layout.pos.x;
+                const float local_y = prev_mouse_y_ - layout.pos.y;
+                if (local_x >= 0.0f && local_x < layout.size.x &&
+                    local_y >= 0.0f && local_y < layout.size.y) {
+                    auto* const hover_before = rml_context_->GetHoverElement();
+                    rml_context_->ProcessMouseMove(static_cast<int>(local_x),
+                                                   static_cast<int>(local_y), 0);
+                    if (rml_context_->GetHoverElement() != hover_before)
+                        rml_context_->Update();
+                }
+            }
+
             last_fbo_w_ = w;
             last_fbo_h_ = h;
             last_scene_h_ = layout.scene_h;

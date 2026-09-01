@@ -110,11 +110,15 @@ body {
     tab-index: auto;
     nav: auto;
     min-height: 28dp;
+    box-sizing: border-box;
+    border-width: 1dp;
+    border-bottom-width: 2dp;
     border-top-left-radius: 4dp;
     border-top-right-radius: 4dp;
-    border-bottom-width: 2dp;
-    border-bottom-color: transparent;
-    transition: border-bottom-color background-color color 0.15s quadratic-out;
+    /* This context is cached between input events, so a timed transition would
+       stall on its first frame until the pointer moves again. Tab selection and
+       hover feedback must therefore be committed atomically. */
+    transition: none;
 }
 
 .tab.closeable {

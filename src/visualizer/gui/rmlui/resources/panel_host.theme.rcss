@@ -3,5 +3,5 @@
 
 body {
     color: @{text};
-    background-color: @{surface};
+    @{panel.body_decor};
 }

@@ -1,0 +1,364 @@
+{
+  "schema_version": 2,
+  "id": "signal",
+  "name": "Signal",
+  "_description": "Modern high-legibility theme family with restrained depth and crisp accents",
+
+  "variants": {
+    "dark": {
+      "id": "signal_night",
+      "name": "Night",
+      "label_key": "menu.view.theme.dark",
+      "fallback": "dark",
+      "_description": "Deep neutral surfaces, bright text and a focused blue accent",
+
+      "palette": {
+        "_info": "Colors are [R, G, B, A] with values 0.0-1.0",
+
+        "background":     [0.043, 0.059, 0.078, 1.0],
+        "_background":    "Near-black blue-gray canvas",
+
+        "surface":        [0.071, 0.094, 0.129, 1.0],
+        "_surface":       "Clearly separated panel surface",
+
+        "surface_bright": [0.110, 0.149, 0.200, 1.0],
+        "_surface_bright": "Hover and raised surface",
+
+        "primary":        [0.310, 0.549, 1.000, 1.0],
+        "_primary":       "Focused blue accent",
+
+        "primary_dim":    [0.224, 0.447, 0.843, 1.0],
+        "_primary_dim":   "Lower-emphasis blue accent",
+
+        "secondary":      [0.608, 0.541, 0.984, 1.0],
+        "_secondary":     "Violet secondary accent",
+
+        "text":           [0.957, 0.969, 0.984, 1.0],
+        "_text":          "High-contrast cool white text",
+
+        "text_dim":       [0.663, 0.706, 0.761, 1.0],
+        "_text_dim":      "Readable secondary text",
+
+        "border":         [0.204, 0.255, 0.329, 1.0],
+        "_border":        "Visible but quiet structural border",
+
+        "success":        [0.239, 0.863, 0.592, 1.0],
+        "_success":       "Success green",
+
+        "warning":        [1.000, 0.741, 0.290, 1.0],
+        "_warning":       "Warning amber",
+
+        "error":          [1.000, 0.400, 0.478, 1.0],
+        "_error":         "Error red",
+
+        "info":           [0.329, 0.780, 0.925, 1.0],
+        "_info":          "Information cyan",
+
+        "row_even":       [1.000, 1.000, 1.000, 0.035],
+        "_row_even":      "Subtle alternating row",
+
+        "row_odd":        [0.000, 0.000, 0.000, 0.120],
+        "_row_odd":       "Subtle alternating row"
+      },
+
+      "gradients": {
+        "_info": "Every gradient is optional; missing or invalid entries use the standard palette-based fallback",
+
+        "window_body": { "start": [0.078, 0.102, 0.141, 1.0], "end": [0.047, 0.063, 0.086, 1.0] },
+        "_window_body": "Vertical floating-window body gradient",
+
+        "panel_body": { "start": [0.076, 0.100, 0.137, 1.0], "end": [0.055, 0.073, 0.100, 1.0] },
+        "_panel_body": "Vertical hosted-panel body gradient",
+
+        "window_title": { "start": [0.118, 0.176, 0.286, 1.0], "end": [0.071, 0.094, 0.129, 1.0] },
+        "_window_title": "Vertical floating-window title gradient",
+
+        "section_header": { "start": [0.105, 0.137, 0.184, 1.0], "end": [0.078, 0.102, 0.141, 1.0] },
+        "_section_header": "Vertical section header gradient",
+
+        "section_header_hover": { "start": [0.122, 0.161, 0.220, 1.0], "end": [0.098, 0.133, 0.188, 1.0] },
+        "_section_header_hover": "Vertical hovered section header gradient",
+
+        "progress": { "start": [0.224, 0.447, 0.843, 1.0], "end": [0.396, 0.635, 1.000, 1.0] },
+        "_progress": "Horizontal progress fill gradient",
+
+        "scrubber_track": { "start": [0.110, 0.149, 0.200, 1.0], "end": [0.055, 0.075, 0.102, 1.0] },
+        "_scrubber_track": "Vertical scrubber track gradient",
+
+        "scrubber_fill": { "start": [0.224, 0.447, 0.843, 0.62], "end": [0.310, 0.549, 1.000, 0.78] },
+        "_scrubber_fill": "Horizontal scrubber fill gradient",
+
+        "histogram_header": { "start": [0.125, 0.188, 0.302, 1.0], "end": [0.071, 0.102, 0.157, 1.0] },
+        "_histogram_header": "Vertical histogram header gradient",
+
+        "histogram_fill": { "start": [0.224, 0.447, 0.843, 1.0], "end": [0.396, 0.635, 1.000, 1.0] },
+        "_histogram_fill": "Vertical histogram bar gradient",
+
+        "histogram_selection": { "start": [0.776, 0.580, 0.282, 1.0], "end": [1.000, 0.741, 0.290, 1.0] },
+        "_histogram_selection": "Vertical selected histogram bar gradient"
+      },
+
+      "sizes": {
+        "_info": "UI element sizes in pixels",
+        "window_rounding": 8.0,
+        "frame_rounding": 5.0,
+        "popup_rounding": 8.0,
+        "scrollbar_rounding": 7.0,
+        "grab_rounding": 4.0,
+        "tab_rounding": 5.0,
+        "border_size": 0.0,
+        "child_border_size": 1.0,
+        "popup_border_size": 1.0,
+        "window_padding": [8.0, 8.0],
+        "frame_padding": [7.0, 4.0],
+        "item_spacing": [8.0, 5.0],
+        "item_inner_spacing": [5.0, 4.0],
+        "indent_spacing": 21.0,
+        "scrollbar_size": 13.0,
+        "grab_min_size": 16.0,
+        "toolbar_button_size": 24.0,
+        "toolbar_padding": 6.0,
+        "toolbar_spacing": 4.0
+      },
+
+      "menu": {
+        "bg_lighten": 0.025,
+        "hover_lighten": 0.085,
+        "active_alpha": 0.40,
+        "popup_lighten": 0.015,
+        "popup_rounding": 8.0,
+        "popup_border_size": 1.0,
+        "border_alpha": 0.72,
+        "bottom_border_darken": 0.045,
+        "frame_padding": [12.0, 8.0],
+        "item_spacing": [12.0, 6.0],
+        "popup_padding": [8.0, 8.0]
+      },
+
+      "context_menu": {
+        "rounding": 8.0,
+        "header_alpha": 0.38,
+        "header_hover_alpha": 0.58,
+        "header_active_alpha": 0.78,
+        "padding": [14.0, 10.0],
+        "item_spacing": [10.0, 8.0]
+      },
+
+      "viewport": {
+        "corner_radius": 8.0,
+        "border_size": 2.0,
+        "border_alpha": 0.45,
+        "border_darken": 0.10
+      },
+
+      "shadows": {
+        "enabled": true,
+        "offset": [0.0, 8.0],
+        "blur": 18.0,
+        "alpha": 0.44
+      },
+
+      "vignette": {
+        "enabled": true,
+        "intensity": 0.20,
+        "radius": 0.78,
+        "softness": 0.48
+      },
+
+      "button": {
+        "tint_normal": 0.48,
+        "tint_hover": 0.62,
+        "tint_active": 0.74
+      },
+
+      "overlay": {
+        "background": [0.071, 0.094, 0.129, 1.0],
+        "text": [0.957, 0.969, 0.984, 1.0],
+        "text_dim": [0.663, 0.706, 0.761, 1.0],
+        "border": [0.310, 0.549, 1.000, 1.0],
+        "icon": [0.396, 0.635, 1.000, 1.0],
+        "highlight": [0.224, 0.447, 0.843, 1.0],
+        "selection": [0.157, 0.329, 0.651, 1.0],
+        "selection_flash": [0.486, 0.686, 1.000, 1.0]
+      }
+    },
+
+    "light": {
+      "id": "signal_day",
+      "name": "Day",
+      "label_key": "menu.view.theme.light",
+      "fallback": "light",
+      "_description": "Quiet paper-like surfaces, dark text and a deep blue accent",
+
+      "palette": {
+        "_info": "Colors are [R, G, B, A] with values 0.0-1.0",
+
+        "background":     [0.929, 0.945, 0.969, 1.0],
+        "_background":    "Cool neutral application canvas",
+
+        "surface":        [0.973, 0.980, 0.988, 1.0],
+        "_surface":       "Soft white panel surface",
+
+        "surface_bright": [1.000, 1.000, 1.000, 1.0],
+        "_surface_bright": "Raised and hovered surface",
+
+        "primary":        [0.090, 0.361, 0.827, 1.0],
+        "_primary":       "Deep accessible blue accent",
+
+        "primary_dim":    [0.180, 0.435, 0.816, 1.0],
+        "_primary_dim":   "Lower-emphasis blue accent",
+
+        "secondary":      [0.412, 0.255, 0.776, 1.0],
+        "_secondary":     "Violet secondary accent",
+
+        "text":           [0.063, 0.094, 0.157, 1.0],
+        "_text":          "High-contrast ink text",
+
+        "text_dim":       [0.278, 0.329, 0.404, 1.0],
+        "_text_dim":      "Readable secondary text",
+
+        "border":         [0.635, 0.682, 0.749, 1.0],
+        "_border":        "Clear cool-gray structural border",
+
+        "success":        [0.024, 0.463, 0.278, 1.0],
+        "_success":       "Success green",
+
+        "warning":        [0.710, 0.278, 0.031, 1.0],
+        "_warning":       "Warning amber",
+
+        "error":          [0.706, 0.137, 0.094, 1.0],
+        "_error":         "Error red",
+
+        "info":           [0.090, 0.361, 0.827, 1.0],
+        "_info":          "Information blue",
+
+        "row_even":       [1.000, 1.000, 1.000, 0.70],
+        "_row_even":      "Subtle alternating row",
+
+        "row_odd":        [0.722, 0.761, 0.812, 0.16],
+        "_row_odd":       "Subtle alternating row"
+      },
+
+      "gradients": {
+        "_info": "Every gradient is optional; missing or invalid entries use the standard palette-based fallback",
+
+        "window_body": { "start": [1.000, 1.000, 1.000, 1.0], "end": [0.953, 0.969, 0.988, 1.0] },
+        "_window_body": "Vertical floating-window body gradient",
+
+        "panel_body": { "start": [1.000, 1.000, 1.000, 1.0], "end": [0.945, 0.960, 0.982, 1.0] },
+        "_panel_body": "Vertical hosted-panel body gradient",
+
+        "window_title": { "start": [1.000, 1.000, 1.000, 1.0], "end": [0.902, 0.929, 0.969, 1.0] },
+        "_window_title": "Vertical floating-window title gradient",
+
+        "section_header": { "start": [1.000, 1.000, 1.000, 1.0], "end": [0.941, 0.957, 0.980, 1.0] },
+        "_section_header": "Vertical section header gradient",
+
+        "section_header_hover": { "start": [0.925, 0.953, 1.000, 1.0], "end": [0.875, 0.918, 0.984, 1.0] },
+        "_section_header_hover": "Vertical hovered section header gradient",
+
+        "progress": { "start": [0.090, 0.361, 0.827, 1.0], "end": [0.310, 0.549, 1.000, 1.0] },
+        "_progress": "Horizontal progress fill gradient",
+
+        "scrubber_track": { "start": [1.000, 1.000, 1.000, 1.0], "end": [0.886, 0.910, 0.945, 1.0] },
+        "_scrubber_track": "Vertical scrubber track gradient",
+
+        "scrubber_fill": { "start": [0.180, 0.435, 0.816, 0.48], "end": [0.090, 0.361, 0.827, 0.66] },
+        "_scrubber_fill": "Horizontal scrubber fill gradient",
+
+        "histogram_header": { "start": [0.910, 0.941, 0.988, 1.0], "end": [0.827, 0.882, 0.969, 1.0] },
+        "_histogram_header": "Vertical histogram header gradient",
+
+        "histogram_fill": { "start": [0.180, 0.435, 0.816, 1.0], "end": [0.310, 0.549, 1.000, 1.0] },
+        "_histogram_fill": "Vertical histogram bar gradient",
+
+        "histogram_selection": { "start": [0.710, 0.278, 0.031, 1.0], "end": [0.941, 0.498, 0.122, 1.0] },
+        "_histogram_selection": "Vertical selected histogram bar gradient"
+      },
+
+      "sizes": {
+        "_info": "UI element sizes in pixels",
+        "window_rounding": 8.0,
+        "frame_rounding": 5.0,
+        "popup_rounding": 8.0,
+        "scrollbar_rounding": 7.0,
+        "grab_rounding": 4.0,
+        "tab_rounding": 5.0,
+        "border_size": 0.0,
+        "child_border_size": 1.0,
+        "popup_border_size": 1.0,
+        "window_padding": [8.0, 8.0],
+        "frame_padding": [7.0, 4.0],
+        "item_spacing": [8.0, 5.0],
+        "item_inner_spacing": [5.0, 4.0],
+        "indent_spacing": 21.0,
+        "scrollbar_size": 13.0,
+        "grab_min_size": 16.0,
+        "toolbar_button_size": 24.0,
+        "toolbar_padding": 6.0,
+        "toolbar_spacing": 4.0
+      },
+
+      "menu": {
+        "bg_lighten": 0.012,
+        "hover_lighten": 0.018,
+        "active_alpha": 0.20,
+        "popup_lighten": 0.010,
+        "popup_rounding": 8.0,
+        "popup_border_size": 1.0,
+        "border_alpha": 0.88,
+        "bottom_border_darken": 0.055,
+        "frame_padding": [12.0, 8.0],
+        "item_spacing": [12.0, 6.0],
+        "popup_padding": [8.0, 8.0]
+      },
+
+      "context_menu": {
+        "rounding": 8.0,
+        "header_alpha": 0.20,
+        "header_hover_alpha": 0.32,
+        "header_active_alpha": 0.44,
+        "padding": [14.0, 10.0],
+        "item_spacing": [10.0, 8.0]
+      },
+
+      "viewport": {
+        "corner_radius": 8.0,
+        "border_size": 2.0,
+        "border_alpha": 0.52,
+        "border_darken": 0.08
+      },
+
+      "shadows": {
+        "enabled": true,
+        "offset": [0.0, 7.0],
+        "blur": 16.0,
+        "alpha": 0.22
+      },
+
+      "vignette": {
+        "enabled": true,
+        "intensity": 0.10,
+        "radius": 0.80,
+        "softness": 0.52
+      },
+
+      "button": {
+        "tint_normal": 0.24,
+        "tint_hover": 0.34,
+        "tint_active": 0.46
+      },
+
+      "overlay": {
+        "background": [0.973, 0.980, 0.988, 1.0],
+        "text": [0.063, 0.094, 0.157, 1.0],
+        "text_dim": [0.278, 0.329, 0.404, 1.0],
+        "border": [0.090, 0.361, 0.827, 1.0],
+        "icon": [0.180, 0.435, 0.816, 1.0],
+        "highlight": [0.788, 0.867, 1.000, 1.0],
+        "selection": [0.667, 0.788, 1.000, 1.0],
+        "selection_flash": [0.310, 0.549, 1.000, 1.0]
+      }
+    }
+  }
+}

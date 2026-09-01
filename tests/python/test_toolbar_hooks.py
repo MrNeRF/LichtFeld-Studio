@@ -1537,6 +1537,51 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert "viewport-export-status" not in rml[panel_start:panel_end]
 
 
+def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
+    project_root = Path(__file__).parent.parent.parent
+    resources = project_root / "src/visualizer/gui/rmlui/resources"
+    right_panel_rcss = (resources / "right_panel.rcss").read_text(encoding="utf-8")
+    right_panel_theme = (resources / "right_panel.theme.rcss").read_text(encoding="utf-8")
+    shell_theme = (resources / "shell.theme.rcss").read_text(encoding="utf-8")
+    panel_host_theme = (resources / "panel_host.theme.rcss").read_text(encoding="utf-8")
+    resolver = (
+        project_root / "src/visualizer/gui/rmlui/rml_theme.cpp"
+    ).read_text(encoding="utf-8")
+
+    tab_start = right_panel_rcss.index(".tab {")
+    tab_end = right_panel_rcss.index("\n}", tab_start)
+    tab_rule = right_panel_rcss[tab_start:tab_end]
+    assert "box-sizing: border-box;" in tab_rule
+    assert "border-width: 1dp;" in tab_rule
+    assert "border-bottom-width: 2dp;" in tab_rule
+    assert "transition: none;" in tab_rule
+    assert "0.15s" not in tab_rule
+
+    for token in (
+        "right_panel.tab_border",
+        "right_panel.tab_bottom_border",
+        "right_panel.tab_active_border",
+        "right_panel.tab_active_bottom_border",
+    ):
+        assert f"@{{{token}}}" in right_panel_theme
+        assert f'"{token}"' in resolver
+
+    hover_start = right_panel_theme.index(".tab:hover {")
+    hover_end = right_panel_theme.index("\n}", hover_start)
+    hover_rule = right_panel_theme[hover_start:hover_end]
+    assert "border-color:" not in hover_rule
+    assert "border-bottom-color:" not in hover_rule
+
+    active_start = right_panel_theme.index(".tab.active {")
+    active_end = right_panel_theme.index("\n}", active_start)
+    active_rule = right_panel_theme[active_start:active_end]
+    assert "border-bottom-color: @{right_panel.tab_active_bottom_border};" in active_rule
+
+    assert "background-color: @{menu.background};" in shell_theme
+    assert "@{panel.body_decor};" in panel_host_theme
+    assert "background-color: transparent;" not in panel_host_theme
+
+
 def test_gt_compare_modes_show_matching_color_legends():
     project_root = Path(__file__).parent.parent.parent
     resources = project_root / "src/visualizer/gui/rmlui/resources"

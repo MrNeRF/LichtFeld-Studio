@@ -6,6 +6,10 @@
       "order": 10
     },
     {
+      "file": "signal.json",
+      "order": 20
+    },
+    {
       "file": "gruvbox.json",
       "order": 30
     },
