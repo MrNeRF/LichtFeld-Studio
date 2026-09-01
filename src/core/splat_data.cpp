@@ -654,7 +654,7 @@ namespace {
         const size_t n,
         const size_t k) {
         using namespace lfs::core;
-        Tensor out = Tensor::empty({n, k, SH_CHANNELS}, Device::CPU, DataType::Float32);
+        Tensor out = Tensor::empty_pageable_host({n, k, SH_CHANNELS}, DataType::Float32);
         auto* const dst = out.ptr<float>();
         const size_t active_floats = k * SH_CHANNELS;
         tbb::parallel_for(
@@ -685,7 +685,8 @@ namespace {
         const size_t n,
         const size_t k) {
         using namespace lfs::core;
-        Tensor out = Tensor::zeros({n, k, SH_CHANNELS}, Device::CPU, DataType::Float32);
+        Tensor out = Tensor::empty_pageable_host({n, k, SH_CHANNELS}, DataType::Float32);
+        out.zero_();
         auto* const dst = out.ptr<float>();
         const std::uint32_t n_cells =
             sh_value_quant::n_value_cells_per_prim(static_cast<std::uint32_t>(k));
@@ -721,20 +722,27 @@ namespace {
         const size_t k) {
         using namespace lfs::core;
         if (n == 0 || k == 0) {
-            return Tensor::zeros({n, k, SH_CHANNELS}, Device::CPU);
+            Tensor out = Tensor::empty_pageable_host({n, k, SH_CHANNELS}, DataType::Float32);
+            out.zero_();
+            return out;
         }
-        const Tensor codes_cpu = shN.cpu().contiguous();
+        const Tensor codes_cpu = shN.to_pageable_host().contiguous();
         if (bounds.is_valid() && bounds.numel() > 0) {
-            const Tensor bounds_cpu = bounds.cpu().contiguous();
+            const Tensor bounds_cpu = bounds.to_pageable_host().contiguous();
             return dequant_q16_to_canonical_cpu(
                 reinterpret_cast<const std::uint16_t*>(codes_cpu.data_ptr()),
                 bounds_cpu.ptr<float>(),
                 n,
                 k);
         }
-        const Tensor fp32_swizzled = codes_cpu.to(DataType::Float32);
+        Tensor fp32_swizzled = Tensor::empty_pageable_host(codes_cpu.shape(), DataType::Float32);
+        const auto* const codes = codes_cpu.ptr<__half>();
+        auto* const fp32 = fp32_swizzled.ptr<float>();
+        for (size_t i = 0; i < static_cast<size_t>(codes_cpu.numel()); ++i) {
+            fp32[i] = static_cast<float>(codes[i]);
+        }
         if (!fp32_swizzled.is_valid() || fp32_swizzled.numel() == 0) {
-            Tensor out = Tensor::empty({n, k, SH_CHANNELS}, Device::CPU, DataType::Float32);
+            Tensor out = Tensor::empty_pageable_host({n, k, SH_CHANNELS}, DataType::Float32);
             out.zero_();
             return out;
         }
@@ -1079,7 +1087,9 @@ namespace lfs::core {
         const size_t n = static_cast<size_t>(size());
         const size_t k = max_sh_coeffs_rest();
         if (n == 0 || k == 0) {
-            return Tensor::zeros({n, k, SH_CHANNELS}, Device::CPU);
+            Tensor out = Tensor::empty_pageable_host({n, k, SH_CHANNELS}, DataType::Float32);
+            out.zero_();
+            return out;
         }
 
         // Quantized / IEEE-f16 path: host dequant to [N,K,3] on CPU (export/checkpoint
@@ -1089,12 +1099,12 @@ namespace lfs::core {
         }
 
         if (!_shN.is_valid() || _shN.numel() == 0) {
-            Tensor out = Tensor::empty({n, k, SH_CHANNELS}, Device::CPU, DataType::Float32);
+            Tensor out = Tensor::empty_pageable_host({n, k, SH_CHANNELS}, DataType::Float32);
             out.zero_();
             return out;
         }
 
-        const Tensor shN_cpu = _shN.cpu().contiguous();
+        const Tensor shN_cpu = _shN.to_pageable_host().contiguous();
         return unpack_swizzled_floats_to_canonical_cpu(
             shN_cpu.ptr<float>(),
             static_cast<size_t>(shN_cpu.numel()),

@@ -1706,10 +1706,10 @@ namespace lfs::io {
                                   "Failed to compute Morton order for SOG export",
                                   options.output_path);
             }
-            auto sort_indices_cpu = sort_indices_tensor.cpu();
+            auto sort_indices_cpu = sort_indices_tensor.to_pageable_host();
             const auto* indices = sort_indices_cpu.ptr<int32_t>();
 
-            auto means_cpu = means_cuda.cpu();
+            auto means_cpu = means_cuda.to_pageable_host();
             const auto* means_ptr = means_cpu.ptr<float>();
             const auto morton_finished = std::chrono::steady_clock::now();
             const auto source_index = [&](int64_t sorted_index) -> int64_t {
@@ -1832,13 +1832,13 @@ namespace lfs::io {
                 return (static_cast<size_t>(num_rows) + PACK_CHUNK_SIZE - 1) / PACK_CHUNK_SIZE;
             };
 
-            auto rotations = splat_data.rotation_raw().cpu();
+            auto rotations = splat_data.rotation_raw().to_pageable_host();
             const auto* rot_ptr = rotations.ptr<float>();
-            auto scales = splat_data.scaling_raw().cpu();
+            auto scales = splat_data.scaling_raw().to_pageable_host();
             const auto* scales_ptr = scales.ptr<float>();
-            auto sh0 = splat_data.sh0_raw().cpu();
+            auto sh0 = splat_data.sh0_raw().to_pageable_host();
             const auto* sh0_ptr = sh0.ptr<float>();
-            auto opacity = splat_data.opacity_raw().cpu();
+            auto opacity = splat_data.opacity_raw().to_pageable_host();
             const auto* opacity_ptr = opacity.ptr<float>();
 
             if (!report_progress(0.10f, "Positions")) {
@@ -2128,7 +2128,7 @@ namespace lfs::io {
                                       options.output_path);
                 }
 
-                auto sh_centroids_cpu = sh_centroids.cpu();
+                auto sh_centroids_cpu = sh_centroids.to_pageable_host();
                 const auto* sh_centroids_ptr = static_cast<const float*>(sh_centroids_cpu.data_ptr());
                 const int actual_palette_size = static_cast<int>(sh_centroids.size(0));
 
@@ -2169,7 +2169,7 @@ namespace lfs::io {
                 queue_webp("shN_centroids.webp", sh_centroids_buf, centroids_width, centroids_height,
                            CRITICAL_WEBP_METHOD, CRITICAL_CENTROIDS_WEBP_QUALITY);
 
-                auto sh_labels_cpu = sh_labels.cpu();
+                auto sh_labels_cpu = sh_labels.to_pageable_host();
                 const auto* sh_labels_ptr = static_cast<const int32_t*>(sh_labels_cpu.data_ptr());
 
                 sh_labels_buf.assign(width * height * CHANNELS, 0);

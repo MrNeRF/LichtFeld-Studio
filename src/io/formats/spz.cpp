@@ -177,53 +177,64 @@ namespace lfs::io {
             const auto sh_coeffs = sh_degree > 0 ? static_cast<size_t>(SH_COEFFS_FOR_DEGREE[sh_degree]) : 0;
 
             // sh0 must be [N, 1, 3] to match PLY loader format
-            auto means = Tensor::empty({num_points, 3}, Device::CPU, DataType::Float32);
-            auto sh0 = Tensor::empty({num_points, 1, 3}, Device::CPU, DataType::Float32);
-            auto scaling = Tensor::empty({num_points, 3}, Device::CPU, DataType::Float32);
-            auto rotation = Tensor::empty({num_points, 4}, Device::CPU, DataType::Float32);
-            auto opacity = Tensor::empty({num_points, 1}, Device::CPU, DataType::Float32);
+            Tensor means;
+            Tensor sh0;
+            Tensor scaling;
+            Tensor rotation;
+            Tensor opacity;
 
             Tensor shN;
-            if (sh_coeffs > 0) {
-                shN = Tensor::empty({num_points, sh_coeffs, 3}, Device::CPU, DataType::Float32);
+            {
+                LOG_TIMER_DEBUG("SPZ load: host tensors");
+                means = Tensor::empty_pageable_host({num_points, 3}, DataType::Float32);
+                sh0 = Tensor::empty_pageable_host({num_points, 1, 3}, DataType::Float32);
+                scaling = Tensor::empty_pageable_host({num_points, 3}, DataType::Float32);
+                rotation = Tensor::empty_pageable_host({num_points, 4}, DataType::Float32);
+                opacity = Tensor::empty_pageable_host({num_points, 1}, DataType::Float32);
+                if (sh_coeffs > 0) {
+                    shN = Tensor::empty_pageable_host({num_points, sh_coeffs, 3}, DataType::Float32);
+                }
+
+                auto* const means_ptr = static_cast<float*>(means.data_ptr());
+                auto* const sh0_ptr = static_cast<float*>(sh0.data_ptr());
+                auto* const scaling_ptr = static_cast<float*>(scaling.data_ptr());
+                auto* const rotation_ptr = static_cast<float*>(rotation.data_ptr());
+                auto* const opacity_ptr = static_cast<float*>(opacity.data_ptr());
+                auto* const shN_ptr = sh_coeffs > 0 ? static_cast<float*>(shN.data_ptr()) : nullptr;
+
+                std::copy(cloud.positions.begin(), cloud.positions.end(), means_ptr);
+                std::copy(cloud.scales.begin(), cloud.scales.end(), scaling_ptr);
+                std::copy(cloud.colors.begin(), cloud.colors.end(), sh0_ptr);
+
+                // Rotation: SPZ xyzw -> SplatData wxyz
+                for (size_t i = 0; i < num_points; ++i) {
+                    rotation_ptr[i * 4 + 0] = cloud.rotations[i * 4 + 3]; // w
+                    rotation_ptr[i * 4 + 1] = cloud.rotations[i * 4 + 0]; // x
+                    rotation_ptr[i * 4 + 2] = cloud.rotations[i * 4 + 1]; // y
+                    rotation_ptr[i * 4 + 3] = cloud.rotations[i * 4 + 2]; // z
+                }
+
+                for (size_t i = 0; i < num_points; ++i) {
+                    opacity_ptr[i] = cloud.alphas[i];
+                }
+
+                if (sh_coeffs > 0 && !cloud.sh.empty()) {
+                    std::copy(cloud.sh.begin(), cloud.sh.end(), shN_ptr);
+                }
             }
 
-            auto* const means_ptr = static_cast<float*>(means.data_ptr());
-            auto* const sh0_ptr = static_cast<float*>(sh0.data_ptr());
-            auto* const scaling_ptr = static_cast<float*>(scaling.data_ptr());
-            auto* const rotation_ptr = static_cast<float*>(rotation.data_ptr());
-            auto* const opacity_ptr = static_cast<float*>(opacity.data_ptr());
-            auto* const shN_ptr = sh_coeffs > 0 ? static_cast<float*>(shN.data_ptr()) : nullptr;
-
-            std::copy(cloud.positions.begin(), cloud.positions.end(), means_ptr);
-            std::copy(cloud.scales.begin(), cloud.scales.end(), scaling_ptr);
-            std::copy(cloud.colors.begin(), cloud.colors.end(), sh0_ptr);
-
-            // Rotation: SPZ xyzw -> SplatData wxyz
-            for (size_t i = 0; i < num_points; ++i) {
-                rotation_ptr[i * 4 + 0] = cloud.rotations[i * 4 + 3]; // w
-                rotation_ptr[i * 4 + 1] = cloud.rotations[i * 4 + 0]; // x
-                rotation_ptr[i * 4 + 2] = cloud.rotations[i * 4 + 1]; // y
-                rotation_ptr[i * 4 + 3] = cloud.rotations[i * 4 + 2]; // z
+            {
+                LOG_TIMER_DEBUG("SPZ load: upload");
+                return SplatData(
+                    sh_degree,
+                    std::move(means),
+                    std::move(sh0),
+                    std::move(shN),
+                    std::move(scaling),
+                    std::move(rotation),
+                    std::move(opacity),
+                    SCENE_SCALE);
             }
-
-            for (size_t i = 0; i < num_points; ++i) {
-                opacity_ptr[i] = cloud.alphas[i];
-            }
-
-            if (sh_coeffs > 0 && !cloud.sh.empty()) {
-                std::copy(cloud.sh.begin(), cloud.sh.end(), shN_ptr);
-            }
-
-            return SplatData(
-                sh_degree,
-                std::move(means),
-                std::move(sh0),
-                std::move(shN),
-                std::move(scaling),
-                std::move(rotation),
-                std::move(opacity),
-                SCENE_SCALE);
         }
 
         spz::GaussianCloud convert_to_spz(const SplatData& splat) {
@@ -236,12 +247,26 @@ namespace lfs::io {
             cloud.shDegree = sh_degree;
             cloud.antialiased = false;
 
-            const auto means = splat.means().contiguous().to(Device::CPU);
-            const auto scaling = splat.scaling_raw().contiguous().to(Device::CPU);
-            const auto rotation = splat.rotation_raw().contiguous().to(Device::CPU);
-            const auto opacity = splat.opacity_raw().contiguous().to(Device::CPU);
-            const auto sh0 = splat.sh0().contiguous().to(Device::CPU);
+            Tensor means;
+            Tensor scaling;
+            Tensor rotation;
+            Tensor opacity;
+            Tensor sh0;
+            Tensor shN;
+            {
+                LOG_TIMER_DEBUG("SPZ export: host copies");
+                means = splat.means().contiguous().to_pageable_host();
+                scaling = splat.scaling_raw().contiguous().to_pageable_host();
+                rotation = splat.rotation_raw().contiguous().to_pageable_host();
+                opacity = splat.opacity_raw().contiguous().to_pageable_host();
+                sh0 = splat.sh0().contiguous().to_pageable_host();
+                if (sh_coeffs > 0 && splat.shN().is_valid() && splat.shN().numel() > 0) {
+                    // shN is stored swizzled; unpack on CPU to avoid a canonical CUDA copy.
+                    shN = splat.shN_canonical_cpu();
+                }
+            }
 
+            LOG_TIMER_DEBUG("SPZ export: pack");
             cloud.positions.resize(num_points * 3);
             cloud.scales.resize(num_points * 3);
             cloud.rotations.resize(num_points * 4);
@@ -271,9 +296,7 @@ namespace lfs::io {
 
             std::memcpy(cloud.alphas.data(), opacity_ptr, static_cast<size_t>(num_points) * sizeof(float));
 
-            if (sh_coeffs > 0 && splat.shN().is_valid() && splat.shN().numel() > 0) {
-                // shN is stored swizzled; unpack on CPU to avoid a canonical CUDA copy.
-                const auto shN = splat.shN_canonical_cpu().contiguous();
+            if (sh_coeffs > 0 && shN.is_valid() && shN.numel() > 0) {
                 cloud.sh.resize(num_points * sh_coeffs * 3);
                 const auto* const shN_ptr = static_cast<const float*>(shN.data_ptr());
                 std::memcpy(cloud.sh.data(), shN_ptr, cloud.sh.size() * sizeof(float));
@@ -303,11 +326,15 @@ namespace lfs::io {
                     lfs::core::path_to_utf8(filepath)));
             }
 
-            std::vector<uint8_t> data(static_cast<size_t>(size));
-            in.seekg(0, std::ios::beg);
-            if (!in.read(reinterpret_cast<char*>(data.data()),
-                         static_cast<std::streamsize>(data.size()))) {
-                return std::unexpected(std::format("Failed to read SPZ file: {}", lfs::core::path_to_utf8(filepath)));
+            std::vector<uint8_t> data;
+            {
+                LOG_TIMER_DEBUG("SPZ load: read");
+                data.resize(static_cast<size_t>(size));
+                in.seekg(0, std::ios::beg);
+                if (!in.read(reinterpret_cast<char*>(data.data()),
+                             static_cast<std::streamsize>(data.size()))) {
+                    return std::unexpected(std::format("Failed to read SPZ file: {}", lfs::core::path_to_utf8(filepath)));
+                }
             }
 
             // Sniff the container so unsupported versions fail with a clear message.
@@ -350,7 +377,11 @@ namespace lfs::io {
             // Load through the in-memory API to avoid narrow-path handling in the bundled SPZ library.
             spz::UnpackOptions options;
             options.to = spz::CoordinateSystem::RDF;
-            auto cloud = spz::loadSpz(data, options);
+            spz::GaussianCloud cloud;
+            {
+                LOG_TIMER_DEBUG("SPZ load: decompress");
+                cloud = spz::loadSpz(data, options);
+            }
             if (auto validation = validate_spz_cloud(cloud); !validation) {
                 return std::unexpected(std::format(
                     "Failed to load SPZ file '{}': {}",
@@ -432,41 +463,47 @@ namespace lfs::io {
 
         // Pack to memory first, then write to file ourselves to handle Unicode paths correctly
         std::vector<uint8_t> data;
-        if (!spz::saveSpz(cloud, pack_options, &data)) {
-            return make_error(ErrorCode::WRITE_FAILURE,
-                              "Failed to pack SPZ data", options.output_path);
+        {
+            LOG_TIMER_DEBUG("SPZ export: compress");
+            if (!spz::saveSpz(cloud, pack_options, &data)) {
+                return make_error(ErrorCode::WRITE_FAILURE,
+                                  "Failed to pack SPZ data", options.output_path);
+            }
         }
 
         if (!report_export_progress(options.progress_callback, 0.9f, "Writing SPZ")) {
             return make_error(ErrorCode::CANCELLED, "SPZ export cancelled", options.output_path);
         }
 
-        if (auto dir_result = ensure_output_parent_directory(options.output_path); !dir_result) {
-            return std::unexpected(dir_result.error());
-        }
+        {
+            LOG_TIMER_DEBUG("SPZ export: write");
+            if (auto dir_result = ensure_output_parent_directory(options.output_path); !dir_result) {
+                return std::unexpected(dir_result.error());
+            }
 
-        ScopedAtomicOutputFile atomic_output(options.output_path);
-        std::ofstream file;
-        if (!lfs::core::open_file_for_write(atomic_output.temp_path(), std::ios::binary | std::ios::out, file)) {
-            return make_error(ErrorCode::WRITE_FAILURE,
-                              "Failed to open temporary SPZ file for writing",
-                              atomic_output.temp_path());
-        }
+            ScopedAtomicOutputFile atomic_output(options.output_path);
+            std::ofstream file;
+            if (!lfs::core::open_file_for_write(atomic_output.temp_path(), std::ios::binary | std::ios::out, file)) {
+                return make_error(ErrorCode::WRITE_FAILURE,
+                                  "Failed to open temporary SPZ file for writing",
+                                  atomic_output.temp_path());
+            }
 
-        file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
-        file.close();
+            file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+            file.close();
 
-        if (!file.good()) {
-            return make_error(ErrorCode::WRITE_FAILURE,
-                              "Failed to write SPZ file", atomic_output.temp_path());
-        }
+            if (!file.good()) {
+                return make_error(ErrorCode::WRITE_FAILURE,
+                                  "Failed to write SPZ file", atomic_output.temp_path());
+            }
 
-        if (!report_export_progress(options.progress_callback, 1.0f, "SPZ export complete")) {
-            return make_error(ErrorCode::CANCELLED, "SPZ export cancelled", options.output_path);
-        }
+            if (!report_export_progress(options.progress_callback, 1.0f, "SPZ export complete")) {
+                return make_error(ErrorCode::CANCELLED, "SPZ export cancelled", options.output_path);
+            }
 
-        if (auto commit_result = atomic_output.commit(); !commit_result) {
-            return std::unexpected(commit_result.error());
+            if (auto commit_result = atomic_output.commit(); !commit_result) {
+                return std::unexpected(commit_result.error());
+            }
         }
 
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
