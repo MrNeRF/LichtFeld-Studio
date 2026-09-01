@@ -4,6 +4,7 @@
 
 #include "vulkan_scene_fsr3_pipeline.hpp"
 
+#include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "rendering/amd_fsr3_plugin.hpp"
 #include "rendering/scene_temporal_resolve.hpp"
@@ -17,6 +18,7 @@
 #include <format>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <vk_mem_alloc.h>
 
@@ -26,6 +28,19 @@ namespace lfs::vis {
 
         [[nodiscard]] constexpr std::size_t viewIndex(const TemporalViewId view) noexcept {
             return static_cast<std::size_t>(view);
+        }
+
+        [[nodiscard]] constexpr std::string_view qualityName(
+            const SceneTemporalQuality quality) noexcept {
+            switch (quality) {
+            case SceneTemporalQuality::Quality:
+                return "quality";
+            case SceneTemporalQuality::Balanced:
+                return "balanced";
+            case SceneTemporalQuality::Performance:
+                return "performance";
+            }
+            return "unknown";
         }
 
         [[nodiscard]] constexpr std::uint32_t pluginView(
@@ -64,6 +79,8 @@ namespace lfs::vis {
             std::uint32_t pending_reset_flags = LFS_SCENE_UPSCALER_PLUGIN_RESET_REQUESTED;
             std::chrono::steady_clock::time_point previous_evaluation{};
             bool has_previous_evaluation = false;
+            std::optional<VulkanSceneFsr3PipelineRequest> evaluated_input;
+            VulkanSceneFsr3PipelineResult cached_result;
         };
 
         VulkanContext* context = nullptr;
@@ -234,7 +251,8 @@ namespace lfs::vis {
                 .render_height = static_cast<std::uint32_t>(prepared.plan.render_extent.y),
                 .output_width = static_cast<std::uint32_t>(prepared.plan.output_extent.x),
                 .output_height = static_cast<std::uint32_t>(prepared.plan.output_extent.y),
-                .motion_vectors_include_jitter = 0,
+                .motion_vectors_include_jitter =
+                    AMD_FSR3_MOTION_VECTORS_INCLUDE_JITTER,
             };
             const bool changed = !view.feature_configured ||
                                  view.feature.quality != feature.quality ||
@@ -252,6 +270,18 @@ namespace lfs::vis {
                                             LFS_SCENE_UPSCALER_PLUGIN_RESET_OUTPUT_SIZE;
             view.feature = feature;
             view.feature_configured = true;
+            if (changed) {
+                LOG_INFO("AMD FSR 3.1 configured: view={} preset={} render={}x{} output={}x{} jitter_phase={}",
+                         feature.view,
+                         qualityName(quality),
+                         feature.render_width,
+                         feature.render_height,
+                         feature.output_width,
+                         feature.output_height,
+                         amdFsr3JitterPhaseCount(
+                             static_cast<int>(feature.render_width),
+                             static_cast<int>(feature.output_width)));
+            }
             return true;
         }
 
@@ -260,8 +290,10 @@ namespace lfs::vis {
             const VulkanSceneFsr3PipelineStatus status,
             const TemporalResetReason reason) {
             coordinator.discard(prepared, reason);
-            views.at(viewIndex(prepared.view)).pending_reset_flags |=
-                LFS_SCENE_UPSCALER_PLUGIN_RESET_RUNTIME;
+            auto& view = views.at(viewIndex(prepared.view));
+            view.pending_reset_flags |= LFS_SCENE_UPSCALER_PLUGIN_RESET_RUNTIME;
+            view.evaluated_input.reset();
+            view.cached_result = {};
             return {.status = status, .view = prepared.view};
         }
 
@@ -277,11 +309,20 @@ namespace lfs::vis {
                 return {.status = VulkanSceneFsr3PipelineStatus::RuntimeUnavailable,
                         .view = request.temporal.temporal.view};
 
+            auto& view = views.at(viewIndex(request.temporal.temporal.view));
+            if (view.pending_reset_flags == LFS_SCENE_UPSCALER_PLUGIN_RESET_NONE &&
+                view.evaluated_input && view.cached_result.resolved() &&
+                reusableVulkanSceneFsr3PipelineInput(request,
+                                                     *view.evaluated_input)) {
+                return view.cached_result;
+            }
+
             const auto prepared = coordinator.prepare(request.temporal.temporal);
             if (!prepared.active())
                 return {.status = VulkanSceneFsr3PipelineStatus::Inactive,
                         .view = request.temporal.temporal.view};
-            const auto view_projections = makeTemporalMotionViewProjectionPair(prepared.frame);
+            const auto view_projections =
+                makeAmdFsr3MotionViewProjectionPair(prepared.frame);
             if (!view_projections)
                 return fail(prepared,
                             VulkanSceneFsr3PipelineStatus::InvalidRequest,
@@ -299,6 +340,7 @@ namespace lfs::vis {
                 return fail(prepared,
                             VulkanSceneFsr3PipelineStatus::InvalidRequest,
                             TemporalResetReason::InvalidInput);
+
             auto motion_params = request.temporal.motion;
             motion_params.inverse_current_view_projection = glm::inverse(view_projections->current);
             motion_params.previous_view_projection = view_projections->previous;
@@ -355,11 +397,11 @@ namespace lfs::vis {
                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                              VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 
-            auto& view = views.at(viewIndex(prepared.view));
-            const glm::vec2 jitter_pixels = sceneTemporalJitterPixels(
-                prepared.frame.current_jitter,
-                prepared.plan.render_extent,
-                request.temporal.motion.flip_y);
+            const glm::vec2 jitter_pixels = amdFsr3DispatchJitterPixels(
+                prepared.frame, prepared.plan.render_extent);
+            const std::uint32_t reset_flags =
+                view.pending_reset_flags |
+                pluginResetFlags(prepared.frame.reset_reasons);
             const LfsSceneUpscalerEvaluateV1 evaluation{
                 .struct_size = sizeof(LfsSceneUpscalerEvaluateV1),
                 .view = pluginView(prepared.view),
@@ -420,7 +462,7 @@ namespace lfs::vis {
                 .motion_scale_y = 1.0f,
                 .pre_exposure = 1.0f,
                 .frame_time_milliseconds = frameTimeMilliseconds(view),
-                .reset_flags = view.pending_reset_flags | pluginResetFlags(prepared.frame.reset_reasons),
+                .reset_flags = reset_flags,
                 .camera_near = prepared.frame.current.near_plane,
                 .camera_far = prepared.frame.current.far_plane,
                 .camera_vertical_fov_radians = amdFsr3CameraVerticalFovRadians(prepared.frame.current),
@@ -459,13 +501,17 @@ namespace lfs::vis {
                 .depth_extent = prepared.plan.render_extent,
                 .sequence = prepared.frame.sequence + 1,
             };
-            return {
+            VulkanSceneFsr3PipelineResult result{
                 .status = VulkanSceneFsr3PipelineStatus::Resolved,
                 .view = prepared.view,
                 .sequence = history.sequence,
                 .output_view = output->view,
+                .output_layout = VK_IMAGE_LAYOUT_GENERAL,
                 .history = history,
             };
+            view.evaluated_input = request;
+            view.cached_result = result;
+            return result;
         }
 
         void reset(const TemporalViewId view, const TemporalResetReason reason) {
@@ -474,6 +520,8 @@ namespace lfs::vis {
                 auto& state = views.at(viewIndex(view));
                 state.pending_reset_flags |= pluginResetFlags(reason);
                 state.has_previous_evaluation = false;
+                state.evaluated_input.reset();
+                state.cached_result = {};
             }
         }
 
@@ -482,6 +530,8 @@ namespace lfs::vis {
             for (auto& state : views) {
                 state.pending_reset_flags |= pluginResetFlags(reason);
                 state.has_previous_evaluation = false;
+                state.evaluated_input.reset();
+                state.cached_result = {};
             }
         }
 

@@ -4367,8 +4367,10 @@ namespace lfs::vis::gui {
                         .temporal = *params.temporal,
                         .color_image = params.external_scene_image,
                         .color_format = VK_FORMAT_R8G8B8A8_UNORM,
+                        .color_generation = params.external_scene_image_generation,
                         .depth_image = params.depth_blit.external_image,
                         .depth_format = params.depth_blit.external_image_format,
+                        .depth_generation = params.depth_blit.external_image_generation,
                         .quality = temporal_frame->quality,
                     };
                     if (validVulkanSceneFsr3PipelineRequest(fsr3_request))
@@ -4507,8 +4509,10 @@ namespace lfs::vis::gui {
                             .temporal = *temporal,
                             .color_image = panel.external_image,
                             .color_format = VK_FORMAT_R8G8B8A8_UNORM,
+                            .color_generation = panel.external_image_generation,
                             .depth_image = panel.depth_image,
                             .depth_format = panel.depth_image_format,
+                            .depth_generation = panel.depth_image_generation,
                             .quality = panel.temporal_quality,
                         };
                         if (!validVulkanSceneFsr3PipelineRequest(request))

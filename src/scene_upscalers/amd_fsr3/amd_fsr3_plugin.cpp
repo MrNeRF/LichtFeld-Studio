@@ -60,18 +60,6 @@ namespace {
         return FFX_FSR3UPSCALER_QUALITY_MODE_BALANCED;
     }
 
-    [[nodiscard]] float fsrSharpness(const std::uint32_t quality) noexcept {
-        switch (quality) {
-        case LFS_SCENE_UPSCALER_PLUGIN_QUALITY:
-            return 0.1f;
-        case LFS_SCENE_UPSCALER_PLUGIN_PERFORMANCE:
-            return 0.3f;
-        case LFS_SCENE_UPSCALER_PLUGIN_BALANCED:
-            return 0.2f;
-        }
-        return 0.2f;
-    }
-
     [[nodiscard]] FfxDimensions2D dimensions(const std::uint32_t width,
                                              const std::uint32_t height) noexcept {
         return {.width = width, .height = height};
@@ -254,7 +242,9 @@ namespace {
             settings.minimum_height = render_height;
             settings.maximum_width = render_width;
             settings.maximum_height = render_height;
-            settings.sharpness = fsrSharpness(quality);
+            // Presets select only the SDK's reconstruction ratio. LichtFeld
+            // does not add RCAS sharpening on top of the reconstructed image.
+            settings.sharpness = 0.0f;
             last_error_.clear();
             return LFS_SCENE_UPSCALER_PLUGIN_OK;
         }
@@ -286,8 +276,10 @@ namespace {
             releaseFeatureLocked(view);
 
             FfxFsr3UpscalerContextDescription description{};
-            description.flags = FFX_FSR3UPSCALER_ENABLE_AUTO_EXPOSURE |
-                                FFX_FSR3UPSCALER_ENABLE_DYNAMIC_RESOLUTION;
+            // LichtFeld supplies a fixed-size LDR viewport signal and an explicit
+            // neutral pre-exposure. Contexts are recreated when render or output
+            // size changes, so dynamic-size support is not advertised.
+            description.flags = 0;
             if (config.motion_vectors_include_jitter != 0) {
                 description.flags |=
                     FFX_FSR3UPSCALER_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION;
@@ -378,8 +370,9 @@ namespace {
                                           L"LFS FSR output",
                                           FFX_RESOURCE_USAGE_UAV);
             // Reactive and transparency/composition masks stay null until the
-            // renderer can publish semantically correct inputs. Auto exposure is
-            // enabled on the context, so no application exposure resource is used.
+            // renderer can publish semantically correct material signals. The
+            // default null exposure resource is exactly 1.0 and matches the
+            // explicit neutral pre-exposure supplied below.
             parameters.dilatedDepth = sharedResource(view, 0);
             parameters.dilatedMotionVectors = sharedResource(view, 1);
             parameters.reconstructedPrevNearestDepth = sharedResource(view, 2);
@@ -395,8 +388,11 @@ namespace {
                 dimensions(evaluation.color.valid_width, evaluation.color.valid_height);
             parameters.upscaleSize =
                 dimensions(evaluation.output.valid_width, evaluation.output.valid_height);
-            parameters.enableSharpening = true;
-            parameters.sharpness = fsrSharpness(view.config.quality);
+            // RCAS is an optional post-pass, not part of the quality-mode
+            // contract. It exaggerates high-frequency splat edges and produces
+            // a visibly hard, stippled result after temporal convergence.
+            parameters.enableSharpening = false;
+            parameters.sharpness = 0.0f;
             parameters.frameTimeDelta = evaluation.frame_time_milliseconds;
             parameters.preExposure = evaluation.pre_exposure;
             parameters.reset = evaluation.reset_flags != 0;

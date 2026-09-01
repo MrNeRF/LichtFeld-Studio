@@ -2024,10 +2024,18 @@ namespace lfs::vis {
             training_refresh_dirty != 0 && independently_dirty_temporal_sources == 0;
         const bool allow_temporal_settle =
             !training_refresh_only && !lod_results_ready && !lod_transition_active;
+        const std::uint32_t fsr3_jitter_phase_count =
+            requested_upscaler == SceneUpscalerBackend::AmdFsr3
+                ? amdFsr3JitterPhaseCount(render_size.x, current_size.x)
+                : 0u;
         temporal_convergence_.prepare(
             temporal_eligible,
             (frame_dirty & temporal_source_dirty) != 0,
-            allow_temporal_settle);
+            allow_temporal_settle,
+            fsr3_jitter_phase_count > 0
+                ? fsr3_jitter_phase_count
+                : TemporalConvergenceController::SAMPLE_COUNT,
+            fsr3_jitter_phase_count);
         glm::vec2 applied_temporal_jitter_pixels = temporal_convergence_.jitter();
         if (temporal_backend_requested &&
             (reported_upscaler.requested != requested_upscaler ||

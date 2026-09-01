@@ -46,4 +46,32 @@ namespace lfs::vis {
                request.temporal.resolve.current_depth.current_depth_layout ==
                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     }
+
+    bool reusableVulkanSceneFsr3PipelineInput(
+        const VulkanSceneFsr3PipelineRequest& current,
+        const VulkanSceneFsr3PipelineRequest& previous) noexcept {
+        if (current.color_generation == 0 || current.depth_generation == 0 ||
+            current.temporal.temporal.frame.camera_cut) {
+            return false;
+        }
+
+        const auto& current_temporal = current.temporal.temporal;
+        const auto& previous_temporal = previous.temporal.temporal;
+        return current.color_image == previous.color_image &&
+               current.color_format == previous.color_format &&
+               current.color_generation == previous.color_generation &&
+               current.depth_image == previous.depth_image &&
+               current.depth_format == previous.depth_format &&
+               current.depth_generation == previous.depth_generation &&
+               current.quality == previous.quality &&
+               current_temporal.view == previous_temporal.view &&
+               current_temporal.render_extent.x == previous_temporal.render_extent.x &&
+               current_temporal.render_extent.y == previous_temporal.render_extent.y &&
+               current_temporal.output_extent.x == previous_temporal.output_extent.x &&
+               current_temporal.output_extent.y == previous_temporal.output_extent.y &&
+               current_temporal.frame.scene_generation ==
+                   previous_temporal.frame.scene_generation &&
+               current_temporal.frame.backend_key ==
+                   previous_temporal.frame.backend_key;
+    }
 } // namespace lfs::vis

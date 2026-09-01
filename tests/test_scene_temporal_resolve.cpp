@@ -6,6 +6,7 @@
 #include "visualizer/rendering/passes/vulkan_scene_fsr3_pipeline.hpp"
 #include "visualizer/rendering/passes/vulkan_scene_temporal_pipeline.hpp"
 #include "visualizer/rendering/passes/vulkan_scene_temporal_resolve_pass.hpp"
+#include "visualizer/rendering/scene_motion_reprojection.hpp"
 #include "visualizer/rendering/scene_temporal_resolve.hpp"
 #include "visualizer/rendering/scene_upscaler_plugin_api.h"
 #include "visualizer/rendering/temporal_frame_tracker.hpp"
@@ -867,10 +868,58 @@ namespace lfs::vis {
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         EXPECT_TRUE(validVulkanSceneFsr3PipelineRequest(request));
 
+        request.color_format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        EXPECT_FALSE(validVulkanSceneFsr3PipelineRequest(request));
+        request.color_format = VK_FORMAT_R8G8B8A8_UNORM;
+        EXPECT_TRUE(validVulkanSceneFsr3PipelineRequest(request));
+
         EXPECT_FALSE(amdFsr3SupportsOutputExtent(
             {AMD_FSR3_MIN_OUTPUT_EXTENT - 1, AMD_FSR3_MIN_OUTPUT_EXTENT}));
         EXPECT_TRUE(amdFsr3SupportsOutputExtent(
             {AMD_FSR3_MIN_OUTPUT_EXTENT, AMD_FSR3_MIN_OUTPUT_EXTENT}));
+    }
+
+    TEST(VulkanSceneFsr3PipelineContract,
+         ReusesOnlyTheSamePublishedSourceGeneration) {
+        VulkanSceneFsr3PipelineRequest previous{
+            .temporal = pipelineRequest(),
+            .color_image = reinterpret_cast<VkImage>(5),
+            .color_format = VK_FORMAT_R8G8B8A8_UNORM,
+            .color_generation = 11,
+            .depth_image = reinterpret_cast<VkImage>(6),
+            .depth_format = VK_FORMAT_R32_SFLOAT,
+            .depth_generation = 12,
+            .quality = SceneTemporalQuality::Quality,
+        };
+        previous.temporal.resolve.current_color_layout =
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        previous.temporal.resolve.current_allocation_extent = {640, 360};
+        previous.temporal.resolve.current_depth.current_depth_layout =
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        previous.temporal.resolve.current_depth.allocation_extent = {640, 360};
+        ASSERT_TRUE(validVulkanSceneFsr3PipelineRequest(previous));
+
+        auto current = previous;
+        current.temporal.frame_slot += 1;
+        EXPECT_TRUE(reusableVulkanSceneFsr3PipelineInput(current, previous));
+
+        current.color_generation += 1;
+        EXPECT_FALSE(reusableVulkanSceneFsr3PipelineInput(current, previous));
+        current = previous;
+        current.depth_generation += 1;
+        EXPECT_FALSE(reusableVulkanSceneFsr3PipelineInput(current, previous));
+        current = previous;
+        current.quality = SceneTemporalQuality::Performance;
+        EXPECT_FALSE(reusableVulkanSceneFsr3PipelineInput(current, previous));
+        current = previous;
+        current.temporal.temporal.render_extent.x -= 1;
+        EXPECT_FALSE(reusableVulkanSceneFsr3PipelineInput(current, previous));
+        current = previous;
+        current.temporal.temporal.frame.camera_cut = true;
+        EXPECT_FALSE(reusableVulkanSceneFsr3PipelineInput(current, previous));
+
+        current.color_generation = 0;
+        EXPECT_FALSE(reusableVulkanSceneFsr3PipelineInput(current, previous));
     }
 
     TEST(VulkanSceneFsr3PipelineContract, UsesExactVerticalIntrinsicsWhenPresent) {
@@ -884,6 +933,89 @@ namespace lfs::vis {
         };
         const float expected = 2.0f * std::atan(540.0f / 700.0f);
         EXPECT_NEAR(amdFsr3CameraVerticalFovRadians(view), expected, 1e-6f);
+    }
+
+    TEST(VulkanSceneFsr3PipelineContract, UsesSdkJitterPhaseLengthForActualScale) {
+        EXPECT_EQ(amdFsr3JitterPhaseCount(1280, 1920), 18u);
+        EXPECT_EQ(amdFsr3JitterPhaseCount(1129, 1920), 23u);
+        EXPECT_EQ(amdFsr3JitterPhaseCount(960, 1920), 32u);
+        EXPECT_EQ(amdFsr3JitterPhaseCount(0, 1920), 1u);
+    }
+
+    TEST(VulkanSceneFsr3PipelineContract,
+         ReconstructsMotionFromJitteredDepthAndEnablesSdkCancellation) {
+        constexpr glm::ivec2 extent{1280, 720};
+        TemporalFrameState frame{};
+        frame.current.size = extent;
+        frame.current.focal_length_mm = 35.0f;
+        frame.current.near_plane = 0.1f;
+        frame.current.far_plane = 1000.0f;
+        frame.previous = frame.current;
+        frame.current_jitter = temporalJitterNdc({0.25f, -0.5f}, extent);
+        frame.previous_jitter = temporalJitterNdc({-0.5f, 0.25f}, extent);
+
+        const auto motion = makeAmdFsr3MotionViewProjectionPair(frame);
+        const auto jittered = makeTemporalViewProjectionPair(frame);
+        const auto unjittered = makeTemporalMotionViewProjectionPair(frame);
+        ASSERT_TRUE(motion.has_value());
+        ASSERT_TRUE(jittered.has_value());
+        ASSERT_TRUE(unjittered.has_value());
+        EXPECT_EQ(AMD_FSR3_MOTION_VECTORS_INCLUDE_JITTER, 1u);
+        EXPECT_EQ(motion->current, jittered->current);
+        EXPECT_EQ(motion->previous, jittered->previous);
+        EXPECT_NE(motion->current, unjittered->current);
+        EXPECT_NE(motion->previous, unjittered->previous);
+
+        const SceneMotionReprojectionParams params{
+            .inverse_current_view_projection = glm::inverse(motion->current),
+            .previous_view_projection = motion->previous,
+            .render_extent = extent,
+        };
+        const auto camera_motion =
+            reprojectSceneMotionPixels(params, {640.5f, 360.5f}, 0.5f);
+        ASSERT_TRUE(camera_motion.has_value());
+        EXPECT_GT(glm::length(*camera_motion), 0.0f);
+
+        const glm::vec2 dispatch_jitter =
+            amdFsr3DispatchJitterPixels(frame, extent);
+        EXPECT_NEAR(dispatch_jitter.x, 0.25f, 1e-6f);
+        EXPECT_NEAR(dispatch_jitter.y, -0.5f, 1e-6f);
+    }
+
+    TEST(VulkanSceneFsr3PipelineContract,
+         DispatchJitterFollowsCameraProjectionNotTextureStorageOrientation) {
+        constexpr glm::ivec2 extent{1280, 720};
+        TemporalFrameState frame{};
+        frame.current_jitter = temporalJitterNdc({0.25f, -0.5f}, extent);
+
+        const glm::vec2 dispatch_jitter =
+            amdFsr3DispatchJitterPixels(frame, extent);
+        const glm::vec2 storage_flipped_jitter = sceneTemporalJitterPixels(
+            frame.current_jitter, extent, true);
+
+        EXPECT_NEAR(dispatch_jitter.x, 0.25f, 1e-6f);
+        EXPECT_NEAR(dispatch_jitter.y, -0.5f, 1e-6f);
+        EXPECT_NEAR(storage_flipped_jitter.x, dispatch_jitter.x, 1e-6f);
+        EXPECT_NEAR(storage_flipped_jitter.y, -dispatch_jitter.y, 1e-6f);
+    }
+
+    TEST(VulkanSceneFsr3PipelineContract, ResolvedOutputOwnsItsImageLayout) {
+        SceneHistoryContract history{
+            .color_storage = SceneHistoryStorage::VulkanImage,
+            .depth_storage = SceneHistoryStorage::VulkanImage,
+            .color_extent = {1280, 720},
+            .depth_extent = {853, 480},
+            .sequence = 1,
+        };
+        VulkanSceneFsr3PipelineResult result{
+            .status = VulkanSceneFsr3PipelineStatus::Resolved,
+            .sequence = 1,
+            .output_view = reinterpret_cast<VkImageView>(1),
+            .history = history,
+        };
+        EXPECT_FALSE(result.resolved());
+        result.output_layout = VK_IMAGE_LAYOUT_GENERAL;
+        EXPECT_TRUE(result.resolved());
     }
 
     TEST(VulkanSceneDlssPipelineContract, MapsTemporalResetReasonsToPluginFlags) {

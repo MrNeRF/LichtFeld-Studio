@@ -2400,13 +2400,13 @@ namespace lfs::vis {
                     }
                     frame.effective_split_view = params.split_view;
                     frame.effective_split_view.left.external_image_view = left.output_view;
-                    frame.effective_split_view.left.external_image_layout = VK_IMAGE_LAYOUT_GENERAL;
+                    frame.effective_split_view.left.external_image_layout = left.output_layout;
                     frame.effective_split_view.left.external_image_generation = left.sequence;
                     frame.effective_split_view.left.uv_scale = {1.0f, 1.0f};
                     frame.effective_split_view.left.uv_clamp_max = {1.0f, 1.0f};
                     frame.effective_split_view.left.spatial_filter = false;
                     frame.effective_split_view.right.external_image_view = right.output_view;
-                    frame.effective_split_view.right.external_image_layout = VK_IMAGE_LAYOUT_GENERAL;
+                    frame.effective_split_view.right.external_image_layout = right.output_layout;
                     frame.effective_split_view.right.external_image_generation = right.sequence;
                     frame.effective_split_view.right.uv_scale = {1.0f, 1.0f};
                     frame.effective_split_view.right.uv_clamp_max = {1.0f, 1.0f};
@@ -2428,7 +2428,7 @@ namespace lfs::vis {
                 }
                 if (!scene_image_uploader.bindPresentationView(frame.scene_descriptor_set,
                                                                result.output_view,
-                                                               VK_IMAGE_LAYOUT_GENERAL)) {
+                                                               result.output_layout)) {
                     fsr3_pipeline.reset(result.view, TemporalResetReason::ResolveFailure);
                     fsr3_failure_latched = true;
                     reportFsr3Failure("presentation descriptor bind failed");

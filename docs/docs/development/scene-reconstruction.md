@@ -167,23 +167,37 @@ selected.
 Safe mode never opens the module, and exact application-relative paths prevent
 system search-path discovery.
 
-The backend consumes perceptually encoded LDR `RGBA8`, normalized non-inverted
-`R32_SFLOAT` raster depth converted from LichtFeld's positive linear view depth,
-and low-resolution `RG16F` current-to-previous pixel motion. Motion is
-jitter-free, while the exact applied projection jitter is supplied separately.
-Main, left and right views own
+The backend consumes LichtFeld's LDR `RGBA8` viewport color directly, supplies
+neutral pre-exposure, and writes the same full-resolution `RGBA8` presentation
+contract without an additional host-side transfer or sharpening pass. Its other
+inputs are normalized non-inverted `R32_SFLOAT` raster depth converted from
+LichtFeld's positive linear view depth and low-resolution `RG16F`
+current-to-previous pixel motion. Because that depth was rasterized with the
+jittered camera projection, motion is reconstructed from the same current and
+previous jittered projection pair; the plugin declares the embedded jitter so
+FidelityFX can cancel it using the exact current camera-projection sample. The
+reported jitter is independent of texture storage or presentation orientation.
+The optional RCAS post-pass is disabled: the Quality,
+Balanced and Performance presets select reconstruction ratios without adding a
+second sharpening operation to high-frequency splat edges. Static-scene
+convergence and the repeating Halton jitter sequence follow the SDK phase count
+derived from the actual render/output ratio (18, 23, or 32 samples for the
+standard Quality, Balanced, and Performance ratios). Each FSR dispatch consumes
+a newly published color/depth generation rendered with that sample; GUI-only
+presentation frames reuse the last resolved output instead of feeding the same
+source and frozen jitter into FidelityFX again. Main, left and right views own
 independent FidelityFX contexts; split presentation remains transactional. A
 malformed request or runtime failure falls back atomically to Native and is
 latched until an explicit Native to AMD FSR 3.1 retry. Expected startup warm-up,
 temporary resize suspension, VRAM-pressure suspension and output extents below
 32 by 32 remain quiet and recover automatically.
 
-The first integration does not fabricate reactive or transparency-and-
-composition masks: those optional inputs remain absent until the renderer can
-publish semantically correct data, leaving FidelityFX shading-change detection
-to handle them. LichtFeld has no canonical metres-per-scene-unit contract, so
-the SDK receives its neutral `1.0` view-space scale; depth projection still uses
-the frame's exact near plane, far plane and vertical field of view.
+Reactive and transparency-and-composition masks remain absent until the renderer
+can publish semantically correct material signals; aggregate Gaussian coverage
+is not a valid substitute. LichtFeld has no canonical metres-per-scene-unit
+contract, so the SDK receives its neutral `1.0` view-space scale; depth
+projection still uses the frame's exact near plane, far plane and vertical field
+of view.
 
 FSR 3.1 currently supports perspective regular and training viewports,
 Independent Dual split view and PLY comparison. Equirectangular projection,
