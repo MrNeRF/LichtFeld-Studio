@@ -7,6 +7,7 @@
 #include "core/alloc_counter.hpp"
 #include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"
+#include "core/cuda/vmm_device_buffer.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "lfs/training/sh_value_codec.hpp"
@@ -18,6 +19,7 @@
 #include "training/rasterization/gsplat_rasterizer.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <cuda_runtime.h>
@@ -295,6 +297,56 @@ protected:
     Tensor means_, sh0_, shN_, scaling_, rotation_, opacity_;
     Tensor bg_color_;
 };
+
+TEST(VmmDeviceBufferTest, GrowsInPlace) {
+    constexpr size_t kMiB = 1024u * 1024u;
+    constexpr size_t kFirstCommit = 256u * kMiB;
+    constexpr size_t kSecondCommit = 512u * kMiB;
+    constexpr size_t kKeptPrefix = 128u * kMiB;
+    auto result = VmmDeviceBuffer::create(1024u * kMiB,
+                                          "test.gsplat.vmm_intersection");
+    ASSERT_TRUE(result) << format_for_developer(result.error());
+    auto buffer = std::move(*result);
+    const size_t granularity = buffer.granularity_bytes();
+
+    ASSERT_TRUE(buffer.commit(kFirstCommit));
+    void* const initial_address = buffer.data();
+    EXPECT_EQ(buffer.committed_bytes(), kFirstCommit);
+
+    ASSERT_TRUE(buffer.commit(kSecondCommit));
+    EXPECT_EQ(buffer.data(), initial_address);
+    EXPECT_EQ(buffer.committed_bytes(), kSecondCommit);
+
+    ASSERT_EQ(cudaMemset(buffer.data(), 0x5a, kKeptPrefix), cudaSuccess);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    size_t free_before = 0;
+    size_t total_bytes = 0;
+    ASSERT_EQ(cudaMemGetInfo(&free_before, &total_bytes), cudaSuccess);
+    ASSERT_TRUE(buffer.decommit_tail(kKeptPrefix));
+    EXPECT_EQ(buffer.data(), initial_address);
+    EXPECT_GE(buffer.committed_bytes(), kKeptPrefix);
+    EXPECT_EQ(buffer.committed_bytes() % granularity, 0u);
+
+    std::array<unsigned char, 4> kept_prefix{};
+    ASSERT_EQ(cudaMemcpy(kept_prefix.data(), buffer.data(), kept_prefix.size(), cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    EXPECT_EQ(kept_prefix, (std::array<unsigned char, 4>{0x5a, 0x5a, 0x5a, 0x5a}));
+
+    size_t free_after = 0;
+    ASSERT_EQ(cudaMemGetInfo(&free_after, &total_bytes), cudaSuccess);
+    ASSERT_TRUE(buffer.commit(kSecondCommit));
+    EXPECT_EQ(buffer.data(), initial_address);
+    EXPECT_EQ(buffer.committed_bytes(), kSecondCommit);
+    ASSERT_EQ(cudaMemcpy(kept_prefix.data(), buffer.data(), kept_prefix.size(), cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    EXPECT_EQ(kept_prefix, (std::array<unsigned char, 4>{0x5a, 0x5a, 0x5a, 0x5a}));
+
+    if (free_after < free_before + 256u * kMiB) {
+        GTEST_SKIP() << "CUDA free-memory jitter masked VMM decommit reclaim: before="
+                     << free_before << " after=" << free_after;
+    }
+}
 
 #if LFS_CUDA_FAILURE_INJECTION_ENABLED
 TEST_F(GsplatRasterizerTest, CudaAllocationFailureAbortsAndRecovers) {

@@ -1914,9 +1914,9 @@ namespace lfs::core {
             // We need to grow - calculate how much
             const size_t growth_needed = total_needed - arena.committed_size;
             if (total_needed > config_.max_physical) {
-                LOG_ERROR("Arena allocation '%s' capacity limit reached: max=%zu MB, requested=%zu MB",
+                LOG_ERROR("Arena allocation '%s' capacity limit reached: max=%zu MB, total_needed=%zu MB, request=%zu MB",
                           label ? label : "unnamed",
-                          config_.max_physical >> 20, aligned_size >> 20);
+                          config_.max_physical >> 20, total_needed >> 20, aligned_size >> 20);
                 log_arena_failure_vram_snapshot(
                     label ? label : "unnamed", arena.committed_size,
                     arena.peak_usage.load(std::memory_order_relaxed));

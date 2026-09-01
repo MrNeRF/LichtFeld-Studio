@@ -5,13 +5,17 @@
 #include "Intersect.h"
 #include "Common.h"
 #include "Ops.h"
+#include "core/cuda/vmm_device_buffer.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cuda_runtime.h>
 #include <format>
 #include <limits>
+#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -19,11 +23,44 @@ namespace gsplat_lfs {
 
     namespace {
         struct IntersectBufferCache {
-            DirectDeviceBuffer cum_tiles;
-            // Each id/value pair is one exact block. This avoids paying the
-            // allocator's quantization independently for the two arrays.
-            DirectDeviceBuffer isect_pair;
-            DirectDeviceBuffer sort_pair;
+            struct RollingPeak {
+                static constexpr size_t kBucketCalls = 256;
+                static constexpr size_t kBucketCount = 2;
+
+                std::array<size_t, kBucketCount> maxima{};
+                std::array<size_t, kBucketCount> counts{};
+                size_t active_bucket = 0;
+                size_t samples = 0;
+
+                void observe(const size_t value) {
+                    if (counts[active_bucket] == kBucketCalls) {
+                        active_bucket = (active_bucket + 1) % kBucketCount;
+                        counts[active_bucket] = 0;
+                        maxima[active_bucket] = 0;
+                    }
+                    maxima[active_bucket] = std::max(maxima[active_bucket], value);
+                    ++counts[active_bucket];
+                    ++samples;
+                }
+
+                [[nodiscard]] size_t peak() const noexcept {
+                    return std::max(maxima[0], maxima[1]);
+                }
+
+                [[nodiscard]] bool has_samples() const noexcept {
+                    return samples != 0;
+                }
+            };
+
+            static constexpr size_t kTrimWindowCalls = 512;
+            static constexpr size_t kTrimHysteresisBytes = 64u * 1024u * 1024u;
+
+            lfs::core::VmmDeviceBuffer cum_tiles;
+            // Separate regions keep both addresses stable as the count grows.
+            std::optional<lfs::core::VmmDeviceBuffer> isect_ids_storage;
+            std::optional<lfs::core::VmmDeviceBuffer> isect_values_storage;
+            std::optional<lfs::core::VmmDeviceBuffer> sort_ids_storage;
+            std::optional<lfs::core::VmmDeviceBuffer> sort_values_storage;
             size_t cum_tiles_capacity = 0;
             size_t isect_capacity = 0;
             size_t sort_capacity = 0;
@@ -35,7 +72,12 @@ namespace gsplat_lfs {
             size_t cub_sort_ws_bytes = 0;
             int64_t cub_sort_n = 0;
             uint32_t cub_sort_end_bit = 0;
-            size_t pending_isect_capacity = 0;
+            RollingPeak cum_tiles_peak;
+            RollingPeak isect_peak;
+            size_t call_count = 0;
+            bool trim_used_in_window = false;
+            cudaStream_t bound_stream = nullptr;
+            bool has_bound_stream = false;
 
             IntersectBufferCache() {
 #if CUDART_VERSION >= 11020
@@ -56,70 +98,242 @@ namespace gsplat_lfs {
                 }
             }
 
-            static size_t pair_bytes(const size_t count) {
-                return checked_bytes(
-                    count, sizeof(int64_t) + sizeof(int32_t),
-                    "gsplat intersection id/value pair");
+            [[nodiscard]] size_t granularity_bytes() const noexcept {
+                if (cum_tiles) {
+                    return cum_tiles.granularity_bytes();
+                }
+                if (isect_ids_storage) {
+                    return isect_ids_storage->granularity_bytes();
+                }
+                if (isect_values_storage) {
+                    return isect_values_storage->granularity_bytes();
+                }
+                if (sort_ids_storage) {
+                    return sort_ids_storage->granularity_bytes();
+                }
+                if (sort_values_storage) {
+                    return sort_values_storage->granularity_bytes();
+                }
+                return lfs::core::VmmDeviceBuffer::kGranularityBytes;
+            }
+
+            size_t pair_reservation_bytes(const size_t element_bytes) const {
+                constexpr size_t kMaxIntersectionCount =
+                    static_cast<size_t>(std::numeric_limits<int32_t>::max());
+                constexpr size_t kPairBytes =
+                    kMaxIntersectionCount * (sizeof(int64_t) + sizeof(int32_t));
+
+                size_t free_bytes = 0;
+                size_t total_bytes = 0;
+                LFS_CUDA_CHECK_MSG(cudaMemGetInfo(&free_bytes, &total_bytes),
+                                   "gsplat VMM intersection reservation sizing");
+                (void)free_bytes;
+                const size_t granularity = granularity_bytes();
+                const size_t pair_budget = std::max(
+                    granularity, (std::min(total_bytes, kPairBytes) / granularity) * granularity);
+                const size_t element_budget = pair_budget / (sizeof(int64_t) + sizeof(int32_t));
+                return std::max(
+                    granularity,
+                    ((element_budget * element_bytes + granularity - 1) / granularity) *
+                        granularity);
+            }
+
+            static lfs::core::VmmDeviceBuffer create_vmm_buffer(
+                const size_t reservation_bytes, const char* label) {
+                auto result = lfs::core::VmmDeviceBuffer::create(reservation_bytes, label);
+                if (!result) {
+                    throw lfs::Exception(std::move(result).error());
+                }
+                return std::move(*result);
+            }
+
+            static void commit_vmm_buffer(lfs::core::VmmDeviceBuffer& buffer,
+                                          const size_t bytes) {
+                auto result = buffer.commit(bytes);
+                if (!result) {
+                    throw lfs::Exception(std::move(result).error());
+                }
+            }
+
+            static void decommit_vmm_buffer(lfs::core::VmmDeviceBuffer& buffer,
+                                            const size_t bytes) {
+                auto result = buffer.decommit_tail(bytes);
+                if (!result) {
+                    throw lfs::Exception(std::move(result).error());
+                }
+            }
+
+            static bool exceeds_hysteresis(const lfs::core::VmmDeviceBuffer& buffer,
+                                           const size_t required_bytes) {
+                return buffer && buffer.committed_bytes() > required_bytes &&
+                       buffer.committed_bytes() - required_bytes >= kTrimHysteresisBytes;
+            }
+
+            void update_capacities() {
+                cum_tiles_capacity = cum_tiles
+                                         ? cum_tiles.committed_bytes() / sizeof(int64_t)
+                                         : 0;
+                isect_capacity = isect_ids_storage && isect_values_storage
+                                     ? std::min(
+                                           isect_ids_storage->committed_bytes() / sizeof(int64_t),
+                                           isect_values_storage->committed_bytes() / sizeof(int32_t))
+                                     : 0;
+                sort_capacity = sort_ids_storage && sort_values_storage
+                                    ? std::min(
+                                          sort_ids_storage->committed_bytes() / sizeof(int64_t),
+                                          sort_values_storage->committed_bytes() / sizeof(int32_t))
+                                    : 0;
+            }
+
+            void trim_to_recent_peak() {
+                if (trim_used_in_window || !has_bound_stream) {
+                    return;
+                }
+
+                const size_t cum_need = cum_tiles_peak.has_samples()
+                                            ? checked_bytes(cum_tiles_peak.peak(), sizeof(int64_t),
+                                                            "gsplat cumulative tile trim")
+                                            : 0;
+                const size_t isect_need = isect_peak.has_samples()
+                                              ? checked_bytes(isect_peak.peak(), sizeof(int64_t),
+                                                              "gsplat intersection trim")
+                                              : 0;
+                const size_t value_need = isect_peak.has_samples()
+                                              ? checked_bytes(isect_peak.peak(), sizeof(int32_t),
+                                                              "gsplat flatten-id trim")
+                                              : 0;
+                const bool should_trim =
+                    exceeds_hysteresis(cum_tiles, cum_need) ||
+                    (isect_ids_storage && exceeds_hysteresis(*isect_ids_storage, isect_need)) ||
+                    (isect_values_storage &&
+                     exceeds_hysteresis(*isect_values_storage, value_need)) ||
+                    (sort_ids_storage && exceeds_hysteresis(*sort_ids_storage, isect_need)) ||
+                    (sort_values_storage &&
+                     exceeds_hysteresis(*sort_values_storage, value_need));
+                if (!should_trim) {
+                    return;
+                }
+
+                if (sort_reuse_event && sort_reuse_event_recorded) {
+                    LFS_CUDA_CHECK_MSG(
+                        cudaEventSynchronize(sort_reuse_event),
+                        "gsplat sort-cache trim event wait");
+                }
+                if (n_isects_ready_event) {
+                    LFS_CUDA_CHECK_MSG(
+                        cudaEventSynchronize(n_isects_ready_event),
+                        "gsplat intersection-count trim event wait");
+                }
+                LFS_CUDA_CHECK_MSG(
+                    cudaStreamSynchronize(bound_stream),
+                    "gsplat intersection-cache trim stream wait");
+
+                if (cum_tiles) {
+                    decommit_vmm_buffer(cum_tiles, cum_need);
+                }
+                if (isect_ids_storage) {
+                    decommit_vmm_buffer(*isect_ids_storage, isect_need);
+                }
+                if (isect_values_storage) {
+                    decommit_vmm_buffer(*isect_values_storage, value_need);
+                }
+                if (sort_ids_storage) {
+                    decommit_vmm_buffer(*sort_ids_storage, isect_need);
+                }
+                if (sort_values_storage) {
+                    decommit_vmm_buffer(*sort_values_storage, value_need);
+                }
+                update_capacities();
+                cub_sort_ws_bytes = 0;
+                cub_sort_n = 0;
+                trim_used_in_window = true;
+            }
+
+            void begin_call(const size_t n_elements, cudaStream_t stream) {
+                ++call_count;
+                if (call_count > 1 && (call_count - 1) % kTrimWindowCalls == 0) {
+                    trim_used_in_window = false;
+                }
+                cum_tiles_peak.observe(n_elements);
+                if (has_bound_stream && bound_stream != stream) {
+                    LFS_CUDA_CHECK_MSG(
+                        cudaStreamSynchronize(bound_stream),
+                        "gsplat intersection-cache stream handoff");
+                }
+                trim_to_recent_peak();
+                bound_stream = stream;
+                has_bound_stream = true;
+            }
+
+            void finish_call(const int64_t n_isects) {
+                if (n_isects >= 0) {
+                    isect_peak.observe(static_cast<size_t>(n_isects));
+                }
             }
 
             int64_t* isect_ids() const {
-                return isect_pair.as<int64_t>();
+                return isect_ids_storage ? isect_ids_storage->as<int64_t>() : nullptr;
             }
 
             int32_t* flatten_ids() const {
-                return reinterpret_cast<int32_t*>(
-                    static_cast<std::byte*>(isect_pair.get()) +
-                    isect_capacity * sizeof(int64_t));
+                return isect_values_storage ? isect_values_storage->as<int32_t>() : nullptr;
             }
 
             int64_t* sorted_isect_ids() const {
-                return sort_pair.as<int64_t>();
+                return sort_ids_storage ? sort_ids_storage->as<int64_t>() : nullptr;
             }
 
             int32_t* sorted_flatten_ids() const {
-                return reinterpret_cast<int32_t*>(
-                    static_cast<std::byte*>(sort_pair.get()) +
-                    sort_capacity * sizeof(int64_t));
+                return sort_values_storage ? sort_values_storage->as<int32_t>() : nullptr;
             }
 
             void ensure_cum_tiles(size_t n_elements, cudaStream_t stream) {
+                (void)stream;
                 if (n_elements <= cum_tiles_capacity && cum_tiles) {
-                    cum_tiles.bind_stream(stream);
                     return;
                 }
                 if (n_elements > cum_tiles_capacity) {
-                    const size_t new_cap = n_elements;
-                    DirectDeviceBuffer replacement(
-                        checked_bytes(new_cap, sizeof(int64_t), "gsplat cumulative tiles"),
-                        stream,
-                        "rasterizer.gsplat.cumulative_tiles");
-
-                    cum_tiles = std::move(replacement);
-                    cum_tiles_capacity = new_cap;
+                    if (!cum_tiles) {
+                        cum_tiles = create_vmm_buffer(
+                            pair_reservation_bytes(sizeof(int64_t)),
+                            "rasterizer.gsplat.cumulative_tiles");
+                    }
+                    commit_vmm_buffer(
+                        cum_tiles,
+                        checked_bytes(n_elements, sizeof(int64_t),
+                                      "gsplat cumulative tiles"));
+                    cum_tiles_capacity = cum_tiles.committed_bytes() / sizeof(int64_t);
                 }
-            }
-
-            static size_t grow_cap(size_t current, size_t needed) {
-                if (needed <= current) {
-                    return current;
-                }
-                return needed + needed / 4;
             }
 
             void ensure_isect_buffers(size_t n_isects, cudaStream_t stream) {
+                (void)stream;
                 if (n_isects == 0) {
                     return;
                 }
                 if (n_isects <= isect_capacity) {
-                    isect_pair.bind_stream(stream);
                     return;
                 }
-                const size_t new_cap = grow_cap(isect_capacity, n_isects);
-                DirectDeviceBuffer replacement(
-                    pair_bytes(new_cap), stream,
-                    "rasterizer.gsplat.intersection_id_value_pair");
-                isect_pair = std::move(replacement);
-                isect_capacity = new_cap;
+                if (!isect_ids_storage) {
+                    isect_ids_storage = create_vmm_buffer(
+                        pair_reservation_bytes(sizeof(int64_t)),
+                        "rasterizer.gsplat.intersection_ids");
+                }
+                if (!isect_values_storage) {
+                    isect_values_storage = create_vmm_buffer(
+                        pair_reservation_bytes(sizeof(int32_t)),
+                        "rasterizer.gsplat.intersection_flatten_ids");
+                }
+                commit_vmm_buffer(
+                    *isect_ids_storage,
+                    checked_bytes(n_isects, sizeof(int64_t), "gsplat intersection ids"));
+                commit_vmm_buffer(
+                    *isect_values_storage,
+                    checked_bytes(n_isects, sizeof(int32_t),
+                                  "gsplat intersection flatten ids"));
+                isect_capacity = std::min(
+                    isect_ids_storage->committed_bytes() / sizeof(int64_t),
+                    isect_values_storage->committed_bytes() / sizeof(int32_t));
                 cub_sort_ws_bytes = 0;
                 cub_sort_n = 0;
             }
@@ -136,16 +350,29 @@ namespace gsplat_lfs {
                         "gsplat sort-cache stream handoff");
                 }
                 if (n_isects > sort_capacity) {
-                    const size_t new_cap = grow_cap(sort_capacity, n_isects);
-                    DirectDeviceBuffer replacement(
-                        pair_bytes(new_cap), stream,
-                        "rasterizer.gsplat.sorted_intersection_id_value_pair");
-                    sort_pair = std::move(replacement);
-                    sort_capacity = new_cap;
+                    if (!sort_ids_storage) {
+                        sort_ids_storage = create_vmm_buffer(
+                            pair_reservation_bytes(sizeof(int64_t)),
+                            "rasterizer.gsplat.sorted_intersection_ids");
+                    }
+                    if (!sort_values_storage) {
+                        sort_values_storage = create_vmm_buffer(
+                            pair_reservation_bytes(sizeof(int32_t)),
+                            "rasterizer.gsplat.sorted_intersection_flatten_ids");
+                    }
+                    commit_vmm_buffer(
+                        *sort_ids_storage,
+                        checked_bytes(n_isects, sizeof(int64_t),
+                                      "gsplat sorted intersection ids"));
+                    commit_vmm_buffer(
+                        *sort_values_storage,
+                        checked_bytes(n_isects, sizeof(int32_t),
+                                      "gsplat sorted intersection flatten ids"));
+                    sort_capacity = std::min(
+                        sort_ids_storage->committed_bytes() / sizeof(int64_t),
+                        sort_values_storage->committed_bytes() / sizeof(int32_t));
                     cub_sort_ws_bytes = 0;
                     cub_sort_n = 0;
-                } else {
-                    sort_pair.bind_stream(stream);
                 }
             }
 
@@ -171,16 +398,23 @@ namespace gsplat_lfs {
             }
 
             bool release() noexcept {
-                cum_tiles.reset();
-                isect_pair.reset();
-                sort_pair.reset();
+                cum_tiles.release();
+                isect_ids_storage.reset();
+                isect_values_storage.reset();
+                sort_ids_storage.reset();
+                sort_values_storage.reset();
                 cum_tiles_capacity = 0;
                 isect_capacity = 0;
                 sort_capacity = 0;
+                cum_tiles_peak = {};
+                isect_peak = {};
+                call_count = 0;
+                trim_used_in_window = false;
+                bound_stream = nullptr;
+                has_bound_stream = false;
                 cub_sort_ws_bytes = 0;
                 cub_sort_n = 0;
                 cub_sort_end_bit = 0;
-                pending_isect_capacity = 0;
                 cudaEvent_t event = std::exchange(sort_reuse_event, nullptr);
                 sort_reuse_event_recorded = false;
                 if (event) {
@@ -196,7 +430,8 @@ namespace gsplat_lfs {
                 // mid-process release does not break a later forward on this thread.
                 const bool cub_released = release_gsplat_cub_workspace();
                 const bool color_grad_released = release_gsplat_color_grad_workspace();
-                return !cum_tiles && !isect_pair && !sort_pair &&
+                return !cum_tiles && !isect_ids_storage && !isect_values_storage &&
+                       !sort_ids_storage && !sort_values_storage &&
                        sort_reuse_event == nullptr && cub_released &&
                        color_grad_released;
             }
@@ -270,6 +505,9 @@ namespace gsplat_lfs {
             return result;
         }
 
+        auto& cache = get_cache();
+        cache.begin_call(n_elements, stream);
+
         launch_intersect_tile_kernel(
             means2d, radii, depths,
             nullptr, nullptr,
@@ -280,7 +518,6 @@ namespace gsplat_lfs {
             nullptr, nullptr,
             stream);
 
-        auto& cache = get_cache();
         cache.ensure_cum_tiles(n_elements, stream);
         int64_t* d_cum_tiles = cache.cum_tiles.as<int64_t>();
         compute_cumsum_gpu(tiles_per_gauss_out, d_cum_tiles, n_elements, stream);
@@ -308,16 +545,6 @@ namespace gsplat_lfs {
             return n;
         };
 
-        auto schedule_proactive_grow = [&](const int64_t n) {
-            if (n > 0 && n * 5 > static_cast<int64_t>(cache.isect_capacity) * 4) {
-                const size_t count = static_cast<size_t>(n);
-                const size_t want = count + count / 4;
-                if (want > cache.isect_capacity) {
-                    cache.pending_isect_capacity = want;
-                }
-            }
-        };
-
         LFS_CUDA_CHECK_MSG(
             cudaMemcpyAsync(cache.h_n_isects_pinned, d_cum_tiles + n_elements - 1,
                             sizeof(int64_t), cudaMemcpyDeviceToHost, stream),
@@ -327,11 +554,6 @@ namespace gsplat_lfs {
                 cudaEventRecord(cache.n_isects_ready_event, stream),
                 "gsplat n_isects event record");
         }
-
-        if (cache.pending_isect_capacity > cache.isect_capacity) {
-            cache.ensure_isect_buffers(cache.pending_isect_capacity, stream);
-        }
-        cache.pending_isect_capacity = 0;
 
         auto fill_and_sort_capacity = [&](const size_t cap) {
             cache.ensure_isect_buffers(cap, stream);
@@ -386,12 +608,13 @@ namespace gsplat_lfs {
             const int64_t n_isects = drain_count();
             result.n_isects = static_cast<int32_t>(n_isects);
             if (n_isects == 0) {
+                cache.finish_call(n_isects);
                 launch_offsets();
                 return result;
             }
             fill_and_sort_capacity(static_cast<size_t>(n_isects));
             launch_offsets();
-            schedule_proactive_grow(n_isects);
+            cache.finish_call(n_isects);
             return result;
         }
 
@@ -406,10 +629,9 @@ namespace gsplat_lfs {
                                "gsplat intersection overflow drain");
             fill_and_sort_capacity(static_cast<size_t>(n_isects));
             launch_offsets();
-        } else {
-            schedule_proactive_grow(n_isects);
         }
 
+        cache.finish_call(n_isects);
         return result;
     }
 
