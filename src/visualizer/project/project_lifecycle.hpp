@@ -669,6 +669,9 @@ namespace lfs::vis::project {
             last_autosaved_dirty_epoch_ = 0;
         std::uint64_t
             last_autosaved_scene_serial_ = 0;
+        std::optional<std::uint64_t>
+            last_autosaved_parameter_serial_;
+        bool autosave_quiesce_logged_ = false;
         std::uint64_t autosave_sequence_ = 0;
         bool autosave_memory_warning_published_ = false;
         bool application_close_pending_ = false;
