@@ -24,8 +24,73 @@ namespace lfs::io {
 
     namespace {
 
-        constexpr int CHUNK_SIZE = 128;
+        constexpr int CHUNK_SIZE = 256;
         constexpr int BLOCK_SIZE = 256;
+        constexpr int SWIZZLED_POINTS_PER_THREAD = 2;
+
+        class CudaEventTimer {
+        public:
+            CudaEventTimer() {
+                LFS_CUDA_CHECK(cudaEventCreate(&start_));
+                if (const auto status = cudaEventCreate(&stop_); status != cudaSuccess) {
+                    cudaEventDestroy(start_);
+                    start_ = nullptr;
+                    LFS_CUDA_CHECK(status);
+                }
+            }
+
+            ~CudaEventTimer() {
+                if (start_) {
+                    cudaEventDestroy(start_);
+                }
+                if (stop_) {
+                    cudaEventDestroy(stop_);
+                }
+            }
+
+            CudaEventTimer(const CudaEventTimer&) = delete;
+            CudaEventTimer& operator=(const CudaEventTimer&) = delete;
+
+            CudaEventTimer(CudaEventTimer&& other) noexcept
+                : start_(other.start_), stop_(other.stop_) {
+                other.start_ = nullptr;
+                other.stop_ = nullptr;
+            }
+
+            CudaEventTimer& operator=(CudaEventTimer&& other) noexcept {
+                if (this != &other) {
+                    if (start_) {
+                        cudaEventDestroy(start_);
+                    }
+                    if (stop_) {
+                        cudaEventDestroy(stop_);
+                    }
+                    start_ = other.start_;
+                    stop_ = other.stop_;
+                    other.start_ = nullptr;
+                    other.stop_ = nullptr;
+                }
+                return *this;
+            }
+
+            void record_start() {
+                LFS_CUDA_CHECK(cudaEventRecord(start_, nullptr));
+            }
+
+            void record_stop() {
+                LFS_CUDA_CHECK(cudaEventRecord(stop_, nullptr));
+            }
+
+            float elapsed_ms() const {
+                float milliseconds = 0.0f;
+                LFS_CUDA_CHECK(cudaEventElapsedTime(&milliseconds, start_, stop_));
+                return milliseconds;
+            }
+
+        private:
+            cudaEvent_t start_ = nullptr;
+            cudaEvent_t stop_ = nullptr;
+        };
 
         // Tensor::cuda() deep-copies CUDA tensors in this codebase; borrow when possible.
         Tensor as_cuda_contiguous(const Tensor& data) {
@@ -67,6 +132,13 @@ namespace lfs::io {
             const std::uint32_t slot = dim / 4u;
             const std::uint32_t component = dim % 4u;
             return float4_component(shN[shAt_device(primitive_idx, slot, slots_per_primitive)], component);
+        }
+
+        template <int N_DIMS>
+        __device__ __forceinline__ float read_swizzled_sh_slot(
+            const float4* __restrict__ point_slots,
+            const std::uint32_t dim) {
+            return float4_component(point_slots[dim / 4u], dim % 4u);
         }
 
         template <int N_DIMS>
@@ -233,18 +305,28 @@ namespace lfs::io {
             const int k) {
             __shared__ float shared_centroids[CHUNK_SIZE * N_DIMS];
 
-            const int tid = blockIdx.x * blockDim.x + threadIdx.x;
+            const int thread_base = (blockIdx.x * blockDim.x + threadIdx.x) * SWIZZLED_POINTS_PER_THREAD;
 
-            float point[N_DIMS];
-            if (tid < n_points) {
+            constexpr int point_slots_count = (N_DIMS + 3) / 4;
+            float4 point_slots[SWIZZLED_POINTS_PER_THREAD][point_slots_count];
+            for (int point = 0; point < SWIZZLED_POINTS_PER_THREAD; ++point) {
+                const int point_idx = thread_base + point;
+                if (point_idx >= n_points) {
+                    continue;
+                }
 #pragma unroll
-                for (int d = 0; d < N_DIMS; ++d) {
-                    point[d] = read_swizzled_sh_dim<N_DIMS>(shN, static_cast<std::uint32_t>(tid), static_cast<std::uint32_t>(d));
+                for (int slot = 0; slot < point_slots_count; ++slot) {
+                    point_slots[point][slot] = shN[shAt_device(
+                        static_cast<std::uint32_t>(point_idx), static_cast<std::uint32_t>(slot), point_slots_count)];
                 }
             }
 
-            float min_dist = 1e30f;
-            int min_idx = 0;
+            float min_dist[SWIZZLED_POINTS_PER_THREAD];
+            int min_idx[SWIZZLED_POINTS_PER_THREAD];
+            for (int point = 0; point < SWIZZLED_POINTS_PER_THREAD; ++point) {
+                min_dist[point] = 1e30f;
+                min_idx[point] = 0;
+            }
 
             const int num_chunks = (k + CHUNK_SIZE - 1) / CHUNK_SIZE;
             for (int chunk = 0; chunk < num_chunks; ++chunk) {
@@ -262,26 +344,31 @@ namespace lfs::io {
 
                 __syncthreads();
 
-                if (tid < n_points) {
+                for (int point = 0; point < SWIZZLED_POINTS_PER_THREAD; ++point) {
+                    const int point_idx = thread_base + point;
+                    if (point_idx >= n_points) {
+                        continue;
+                    }
                     for (int c = 0; c < chunk_size; ++c) {
                         float dist = 0.0f;
 #pragma unroll
                         for (int d = 0; d < N_DIMS; ++d) {
-                            const float diff = point[d] - shared_centroids[c * N_DIMS + d];
+                            const float diff = read_swizzled_sh_slot<N_DIMS>(point_slots[point], static_cast<std::uint32_t>(d)) -
+                                               shared_centroids[c * N_DIMS + d];
                             dist += diff * diff;
                         }
-                        if (dist < min_dist) {
-                            min_dist = dist;
-                            min_idx = chunk_start + c;
+                        if (dist < min_dist[point]) {
+                            min_dist[point] = dist;
+                            min_idx[point] = chunk_start + c;
                         }
+                    }
+
+                    if (chunk == num_chunks - 1) {
+                        labels[point_idx] = min_idx[point];
                     }
                 }
 
                 __syncthreads();
-            }
-
-            if (tid < n_points) {
-                labels[tid] = min_idx;
             }
         }
 
@@ -316,10 +403,17 @@ namespace lfs::io {
                 return;
 
             const int label = labels[tid];
+            constexpr int point_slots_count = (N_DIMS + 3) / 4;
+            float4 point_slots[point_slots_count];
+#pragma unroll
+            for (int slot = 0; slot < point_slots_count; ++slot) {
+                point_slots[slot] = shN[shAt_device(
+                    static_cast<std::uint32_t>(tid), static_cast<std::uint32_t>(slot), point_slots_count)];
+            }
 #pragma unroll
             for (int d = 0; d < N_DIMS; ++d) {
                 atomicAdd(&centroid_sums[label * N_DIMS + d],
-                          read_swizzled_sh_dim<N_DIMS>(shN, static_cast<std::uint32_t>(tid), static_cast<std::uint32_t>(d)));
+                          read_swizzled_sh_slot<N_DIMS>(point_slots, static_cast<std::uint32_t>(d)));
             }
             atomicAdd(&counts[label], 1);
         }
@@ -427,12 +521,15 @@ namespace lfs::io {
             auto counts = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
 
             const int grid_n = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+            const int grid_n_assign =
+                (n + BLOCK_SIZE * SWIZZLED_POINTS_PER_THREAD - 1) /
+                (BLOCK_SIZE * SWIZZLED_POINTS_PER_THREAD);
             const int grid_k = (k + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
             const auto kmeans_ticket = ::lfs::core::cuda_record_range(
                 /*stream=*/nullptr, "io.kmeans.swizzled_bruteforce_iteration");
             for (int iter = 0; iter < iterations; ++iter) {
-                assign_nearest_swizzled_bruteforce_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
+                assign_nearest_swizzled_bruteforce_kernel<N_DIMS><<<grid_n_assign, BLOCK_SIZE>>>(
                     d_shN, d_centroids, labels.ptr<int>(), n, k);
                 LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_nearest_swizzled");
 
@@ -470,22 +567,30 @@ namespace lfs::io {
             const int n_points) {
             __shared__ float shared_supers[SUPER_CHUNK_SIZE * N_DIMS];
 
-            const int tid = blockIdx.x * blockDim.x + threadIdx.x;
+            const int thread_base = (blockIdx.x * blockDim.x + threadIdx.x) * SWIZZLED_POINTS_PER_THREAD;
 
-            float point[N_DIMS];
-            if (tid < n_points) {
+            constexpr int point_slots_count = (N_DIMS + 3) / 4;
+            float4 point_slots[SWIZZLED_POINTS_PER_THREAD][point_slots_count];
+            for (int point = 0; point < SWIZZLED_POINTS_PER_THREAD; ++point) {
+                const int point_idx = thread_base + point;
+                if (point_idx >= n_points) {
+                    continue;
+                }
 #pragma unroll
-                for (int d = 0; d < N_DIMS; ++d) {
-                    point[d] = read_swizzled_sh_dim<N_DIMS>(shN, static_cast<std::uint32_t>(tid), static_cast<std::uint32_t>(d));
+                for (int slot = 0; slot < point_slots_count; ++slot) {
+                    point_slots[point][slot] = shN[shAt_device(
+                        static_cast<std::uint32_t>(point_idx), static_cast<std::uint32_t>(slot), point_slots_count)];
                 }
             }
 
-            float best_dists[NUM_NEAREST_SUPERS];
-            int best_idxs[NUM_NEAREST_SUPERS];
+            float best_dists[SWIZZLED_POINTS_PER_THREAD][NUM_NEAREST_SUPERS];
+            int best_idxs[SWIZZLED_POINTS_PER_THREAD][NUM_NEAREST_SUPERS];
 #pragma unroll
-            for (int i = 0; i < NUM_NEAREST_SUPERS; ++i) {
-                best_dists[i] = 1e30f;
-                best_idxs[i] = 0;
+            for (int point = 0; point < SWIZZLED_POINTS_PER_THREAD; ++point) {
+                for (int i = 0; i < NUM_NEAREST_SUPERS; ++i) {
+                    best_dists[point][i] = 1e30f;
+                    best_idxs[point][i] = 0;
+                }
             }
 
             const int num_chunks = (NUM_SUPER_CLUSTERS + SUPER_CHUNK_SIZE - 1) / SUPER_CHUNK_SIZE;
@@ -503,25 +608,30 @@ namespace lfs::io {
                 }
                 __syncthreads();
 
-                if (tid < n_points) {
+                for (int point = 0; point < SWIZZLED_POINTS_PER_THREAD; ++point) {
+                    const int point_idx = thread_base + point;
+                    if (point_idx >= n_points) {
+                        continue;
+                    }
                     for (int sc = 0; sc < chunk_size; ++sc) {
                         float dist = 0.0f;
 #pragma unroll
                         for (int d = 0; d < N_DIMS; ++d) {
-                            const float diff = point[d] - shared_supers[sc * N_DIMS + d];
+                            const float diff = read_swizzled_sh_slot<N_DIMS>(point_slots[point], static_cast<std::uint32_t>(d)) -
+                                               shared_supers[sc * N_DIMS + d];
                             dist += diff * diff;
                         }
 
                         const int sc_global = chunk_start + sc;
-                        if (dist < best_dists[NUM_NEAREST_SUPERS - 1]) {
+                        if (dist < best_dists[point][NUM_NEAREST_SUPERS - 1]) {
                             for (int i = NUM_NEAREST_SUPERS - 1; i >= 0; --i) {
-                                if (i == 0 || dist >= best_dists[i - 1]) {
+                                if (i == 0 || dist >= best_dists[point][i - 1]) {
                                     for (int j = NUM_NEAREST_SUPERS - 1; j > i; --j) {
-                                        best_dists[j] = best_dists[j - 1];
-                                        best_idxs[j] = best_idxs[j - 1];
+                                        best_dists[point][j] = best_dists[point][j - 1];
+                                        best_idxs[point][j] = best_idxs[point][j - 1];
                                     }
-                                    best_dists[i] = dist;
-                                    best_idxs[i] = sc_global;
+                                    best_dists[point][i] = dist;
+                                    best_idxs[point][i] = sc_global;
                                     break;
                                 }
                             }
@@ -531,11 +641,15 @@ namespace lfs::io {
                 __syncthreads();
             }
 
-            if (tid < n_points) {
+            for (int point = 0; point < SWIZZLED_POINTS_PER_THREAD; ++point) {
+                const int point_idx = thread_base + point;
+                if (point_idx >= n_points) {
+                    continue;
+                }
                 float min_dist = 1e30f;
                 int min_idx = 0;
                 for (int si = 0; si < NUM_NEAREST_SUPERS; ++si) {
-                    const int super_idx = best_idxs[si];
+                    const int super_idx = best_idxs[point][si];
                     const int start = super_offsets[super_idx];
                     const int end = super_offsets[super_idx + 1];
                     for (int c = start; c < end; ++c) {
@@ -543,7 +657,8 @@ namespace lfs::io {
                         float dist = 0.0f;
 #pragma unroll
                         for (int d = 0; d < N_DIMS; ++d) {
-                            const float diff = point[d] - centroids[centroid_idx * N_DIMS + d];
+                            const float diff = read_swizzled_sh_slot<N_DIMS>(point_slots[point], static_cast<std::uint32_t>(d)) -
+                                               centroids[centroid_idx * N_DIMS + d];
                             dist += diff * diff;
                         }
                         if (dist < min_dist) {
@@ -552,7 +667,7 @@ namespace lfs::io {
                         }
                     }
                 }
-                labels[tid] = min_idx;
+                labels[point_idx] = min_idx;
             }
         }
 
@@ -578,6 +693,9 @@ namespace lfs::io {
                 LFS_CUDA_AWAIT(kmeans_ticket, cudaDeviceSynchronize(), "io.kmeans.swizzled_hierarchical_gather_sync");
                 return {centroids, labels};
             }
+
+            CudaEventTimer init_sampling_timer;
+            init_sampling_timer.record_start();
 
             auto centroids = Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(N_DIMS)},
                                            Device::CUDA, DataType::Float32);
@@ -641,6 +759,7 @@ namespace lfs::io {
             auto super_indices = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
             build_csr_offsets_gpu(super_membership.ptr<int>(), super_offsets.ptr<int>(),
                                   super_indices.ptr<int>(), k, NUM_SUPER_CLUSTERS);
+            init_sampling_timer.record_stop();
 
             auto labels = Tensor::zeros({static_cast<size_t>(n)}, Device::CUDA, DataType::Int32);
             auto centroid_sums = Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(N_DIMS)},
@@ -648,6 +767,19 @@ namespace lfs::io {
             auto centroid_counts = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
 
             const int grid_n = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+            const int grid_n_assign =
+                (n + BLOCK_SIZE * SWIZZLED_POINTS_PER_THREAD - 1) /
+                (BLOCK_SIZE * SWIZZLED_POINTS_PER_THREAD);
+
+            const int timed_iterations = std::max(0, iterations);
+            std::vector<CudaEventTimer> assign_timers;
+            std::vector<CudaEventTimer> accumulate_finalize_timers;
+            assign_timers.reserve(static_cast<size_t>(timed_iterations));
+            accumulate_finalize_timers.reserve(static_cast<size_t>(timed_iterations));
+            for (int iter = 0; iter < timed_iterations; ++iter) {
+                assign_timers.emplace_back();
+                accumulate_finalize_timers.emplace_back();
+            }
 
             const auto kmeans_ticket = ::lfs::core::cuda_record_range(
                 /*stream=*/nullptr, "io.kmeans.swizzled_hierarchical_iteration");
@@ -672,19 +804,22 @@ namespace lfs::io {
                 }
 
                 const bool use_exact = (iter == iterations - 1);
+                assign_timers[static_cast<size_t>(iter)].record_start();
 
                 if (use_exact) {
-                    assign_nearest_swizzled_bruteforce_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
+                    assign_nearest_swizzled_bruteforce_kernel<N_DIMS><<<grid_n_assign, BLOCK_SIZE>>>(
                         d_shN, d_centroids, labels.ptr<int>(), n, k);
                     LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_nearest_swizzled");
                 } else {
-                    hierarchical_search_swizzled_fused_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
+                    hierarchical_search_swizzled_fused_kernel<N_DIMS><<<grid_n_assign, BLOCK_SIZE>>>(
                         d_shN, d_centroids, super_centroids.ptr<float>(),
                         super_offsets.ptr<int>(), super_indices.ptr<int>(),
                         labels.ptr<int>(), n);
                     LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.hierarchical_search_swizzled_fused");
                 }
+                assign_timers[static_cast<size_t>(iter)].record_stop();
 
+                accumulate_finalize_timers[static_cast<size_t>(iter)].record_start();
                 centroid_sums.zero_();
                 centroid_counts.zero_();
 
@@ -697,9 +832,28 @@ namespace lfs::io {
                     d_centroids, centroid_sums.ptr<float>(), centroid_counts.ptr<int>(),
                     d_shN, k, n, seed);
                 LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.finalize_swizzled_centroids");
+                accumulate_finalize_timers[static_cast<size_t>(iter)].record_stop();
             }
 
             LFS_CUDA_AWAIT(kmeans_ticket, cudaDeviceSynchronize(), "io.kmeans.swizzled_hierarchical_iteration_sync");
+
+            float hierarchical_assign_ms = 0.0f;
+            float final_exact_assign_ms = 0.0f;
+            float accumulate_finalize_ms = 0.0f;
+            for (int iter = 0; iter < iterations; ++iter) {
+                const float assign_ms = assign_timers[static_cast<size_t>(iter)].elapsed_ms();
+                if (iter == iterations - 1) {
+                    final_exact_assign_ms = assign_ms;
+                } else {
+                    hierarchical_assign_ms += assign_ms;
+                }
+                accumulate_finalize_ms += accumulate_finalize_timers[static_cast<size_t>(iter)].elapsed_ms();
+            }
+            LOG_DEBUG(
+                "SH k-means CUDA stages: init_sampling_ms=%0.3f hierarchical_assign_ms=%0.3f "
+                "final_exact_assign_ms=%0.3f accumulate_finalize_ms=%0.3f",
+                init_sampling_timer.elapsed_ms(), hierarchical_assign_ms,
+                final_exact_assign_ms, accumulate_finalize_ms);
             return {centroids, labels};
         }
 
