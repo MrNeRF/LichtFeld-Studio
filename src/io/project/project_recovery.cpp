@@ -114,6 +114,23 @@ namespace lfs::io::project {
             return false;
         }
 
+        struct RecoveryCandidateTimer {
+            std::filesystem::path path;
+            std::string_view kind;
+            const std::chrono::steady_clock::time_point started =
+                std::chrono::steady_clock::now();
+
+            ~RecoveryCandidateTimer() {
+                LOG_DEBUG(
+                    "startup.recovery.candidate kind={} path={} ms={:.3f}",
+                    kind,
+                    path.generic_string(),
+                    std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - started)
+                        .count());
+            }
+        };
+
         [[nodiscard]] bool
         base_echo_matches(
             const ChunkInfo& reference,
@@ -144,7 +161,8 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<void>
         validate_complete_overlay(
             const ProjectReader& master,
-            const ProjectReader& sidecar) {
+            const ProjectReader& sidecar,
+            const bool verify_payloads = true) {
             if (sidecar.superblock().role !=
                 ContainerRole::AutosaveSidecar) {
                 return fail<void>(
@@ -167,9 +185,11 @@ namespace lfs::io::project {
                     "match the selected master head",
                     "autosave.binding");
             }
-            if (auto verified = sidecar.verify_all();
-                !verified) {
-                return verified;
+            if (verify_payloads) {
+                if (auto verified = sidecar.verify_all();
+                    !verified) {
+                    return verified;
+                }
             }
 
             std::map<ChunkKey, const ChunkInfo*,
@@ -1191,7 +1211,11 @@ namespace lfs::io::project {
 
     lfs::Result<RecoveryInspection>
     inspect_scratch_autosave(
-        const std::filesystem::path& scratch_path) {
+        const std::filesystem::path& scratch_path,
+        const RecoveryInspectionOptions& options) {
+        const RecoveryCandidateTimer candidate_timer{
+            .path = scratch_path,
+            .kind = "scratch"};
         auto lock =
             detail::WriterLock::acquire(scratch_path);
         if (!lock) {
@@ -1225,17 +1249,19 @@ namespace lfs::io::project {
                     scratch_path.filename().string()));
             return result;
         }
-        if (auto verified = reader->verify_all();
-            !verified) {
-            result.disposition =
-                RecoveryDisposition::Invalid;
-            result.diagnostics.push_back(
-                std::format(
-                    "{}: {}",
-                    scratch_path.filename().string(),
-                    lfs::format_for_developer(
-                        verified.error())));
-            return result;
+        if (options.verify_payloads) {
+            if (auto verified = reader->verify_all();
+                !verified) {
+                result.disposition =
+                    RecoveryDisposition::Invalid;
+                result.diagnostics.push_back(
+                    std::format(
+                        "{}: {}",
+                        scratch_path.filename().string(),
+                        lfs::format_for_developer(
+                            verified.error())));
+                return result;
+            }
         }
         if (!scratch_has_recoverable_content(*reader)) {
             result.disposition =
@@ -1261,7 +1287,8 @@ namespace lfs::io::project {
     }
 
     void sweep_stale_scratch_autosaves(
-        const std::filesystem::path& recovery_directory) {
+        const std::filesystem::path& recovery_directory,
+        const RecoveryInspectionOptions& options) {
         if (recovery_directory.empty()) {
             return;
         }
@@ -1297,7 +1324,7 @@ namespace lfs::io::project {
                 continue;
             }
             auto inspection =
-                inspect_scratch_autosave(entry);
+                inspect_scratch_autosave(entry, options);
             if (!inspection) {
                 if (inspection.error().code() ==
                     lfs::ErrorCode::Unavailable) {
@@ -1315,7 +1342,8 @@ namespace lfs::io::project {
 
     std::vector<RecoveryInspection>
     scan_scratch_autosaves(
-        const std::filesystem::path& recovery_directory) {
+        const std::filesystem::path& recovery_directory,
+        const RecoveryInspectionOptions& options) {
         std::vector<RecoveryInspection> result;
         if (recovery_directory.empty()) {
             return result;
@@ -1342,7 +1370,7 @@ namespace lfs::io::project {
                 continue;
             }
             auto inspection =
-                inspect_scratch_autosave(entry);
+                inspect_scratch_autosave(entry, options);
             if (!inspection) {
                 continue;
             }
@@ -1399,7 +1427,11 @@ namespace lfs::io::project {
     lfs::Result<RecoveryInspection>
     inspect_autosave_recovery(
         const std::filesystem::path& master_path,
-        const ReaderOptions& master_reader_options) {
+        const ReaderOptions& master_reader_options,
+        const RecoveryInspectionOptions& options) {
+        const RecoveryCandidateTimer candidate_timer{
+            .path = master_path,
+            .kind = "master"};
         auto lock =
             detail::WriterLock::acquire(master_path);
         if (!lock) {
@@ -1486,7 +1518,8 @@ namespace lfs::io::project {
             }
             auto complete =
                 validate_complete_overlay(
-                    *master, *sidecar);
+                    *master, *sidecar,
+                    options.verify_payloads);
             if (!complete) {
                 const auto reason = std::format(
                     "{}: {}",

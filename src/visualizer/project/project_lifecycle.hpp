@@ -238,7 +238,9 @@ namespace lfs::vis::project {
             bool allow_active_training = false);
 
         void openStartupProject(
-            const std::optional<std::filesystem::path>& explicit_path);
+            const std::optional<std::filesystem::path>& explicit_path,
+            bool defer_recovery_scan = false);
+        void runStartupRecoveryScan();
         void markSceneMutation(std::uint32_t mutation_flags);
         void updateMaintenance();
         void noteProjectFrameRendered(double render_ms);
@@ -455,6 +457,9 @@ namespace lfs::vis::project {
         };
 
         void offerStartupCrashRecovery();
+        [[nodiscard]] std::vector<RecoveryCandidate>
+        inspectStartupRecoveryCandidates();
+        void applyStartupRecoveryScan();
         [[nodiscard]] std::optional<RecoveryCandidate>
         selectStartupRecoveryCandidate();
         void enqueueRecoveryPrompt(
@@ -712,6 +717,12 @@ namespace lfs::vis::project {
             lfs::io::project::RecoverySession>
             recovery_session_;
         bool recovery_prompt_pending_ = false;
+        bool startup_recovery_scan_pending_ = false;
+        std::mutex startup_recovery_scan_mutex_;
+        std::optional<std::vector<RecoveryCandidate>>
+            startup_recovery_scan_candidates_;
+        std::atomic<bool> startup_recovery_scan_ready_{false};
+        std::jthread startup_recovery_scan_thread_;
         std::uint64_t recovery_prompt_generation_ = 0;
         std::optional<RecoveryCandidate>
             pending_recovery_candidate_;

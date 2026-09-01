@@ -2638,6 +2638,10 @@ namespace lfs::vis::project {
         if (project_write_thread_.joinable()) {
             project_write_thread_.join();
         }
+        startup_recovery_scan_thread_.request_stop();
+        if (startup_recovery_scan_thread_.joinable()) {
+            startup_recovery_scan_thread_.join();
+        }
         stopHydrationThreads();
         std::optional<std::filesystem::path> discard_master;
         if (close_discard_requested_) {
@@ -5370,6 +5374,7 @@ namespace lfs::vis::project {
     }
 
     void ProjectLifecycle::updateMaintenance() {
+        applyStartupRecoveryScan();
         settleProjectWrite();
         if (!viewer_.jobs().anyRunning(
                 JobType::ProjectWrite)) {
@@ -6994,10 +6999,13 @@ namespace lfs::vis::project {
             opening_scratch
                 ? lfs::io::project::
                       inspect_scratch_autosave(
-                          *normalized)
+                          *normalized,
+                          {.verify_payloads = false})
                 : lfs::io::project::
                       inspect_autosave_recovery(
-                          *normalized);
+                          *normalized,
+                          {},
+                          {.verify_payloads = false});
         if (!inspection) {
             return std::move(inspection).error();
         }
@@ -8900,7 +8908,12 @@ namespace lfs::vis::project {
 
     void ProjectLifecycle::openStartupProject(
         const std::optional<
-            std::filesystem::path>& explicit_path) {
+            std::filesystem::path>& explicit_path,
+        const bool defer_recovery_scan) {
+        if (!explicit_path && defer_recovery_scan) {
+            startup_recovery_scan_pending_ = true;
+            return;
+        }
         std::vector<std::filesystem::path> known;
         {
             const std::lock_guard lock(
@@ -8916,12 +8929,12 @@ namespace lfs::vis::project {
             sweep_stale_licht_artifacts_for_known_masters(
                 known);
         lfs::io::project::sweep_stale_scratch_autosaves(
-            temp_project_directory_);
+            temp_project_directory_, {.verify_payloads = false});
         if (!legacy_recovery_directory_.empty() &&
             freezeNormalizedPath(legacy_recovery_directory_) !=
                 freezeNormalizedPath(temp_project_directory_)) {
             lfs::io::project::sweep_stale_scratch_autosaves(
-                legacy_recovery_directory_);
+                legacy_recovery_directory_, {.verify_payloads = false});
         }
         if (!legacy_working_tmp_directory_.empty() &&
             freezeNormalizedPath(legacy_working_tmp_directory_) !=
@@ -8929,7 +8942,7 @@ namespace lfs::vis::project {
             freezeNormalizedPath(legacy_working_tmp_directory_) !=
                 freezeNormalizedPath(legacy_recovery_directory_)) {
             lfs::io::project::sweep_stale_scratch_autosaves(
-                legacy_working_tmp_directory_);
+                legacy_working_tmp_directory_, {.verify_payloads = false});
         }
 
         // Never auto-restore from MRU. Startup without an
@@ -8959,6 +8972,79 @@ namespace lfs::vis::project {
         } else if (auto* gui = viewer_.getGuiManager()) {
             gui->dismissStartupOverlay();
         }
+    }
+
+    void ProjectLifecycle::runStartupRecoveryScan() {
+        if (!startup_recovery_scan_pending_) {
+            return;
+        }
+        startup_recovery_scan_pending_ = false;
+
+        std::vector<std::filesystem::path> known;
+        {
+            const std::lock_guard lock(settings_mutex_);
+            known.reserve(settings_.mru.size());
+            for (const auto& entry : settings_.mru) {
+                known.push_back(resolveProjectMruPath(entry.last_known_path));
+            }
+        }
+        startup_recovery_scan_ready_.store(false, std::memory_order_release);
+        {
+            const std::lock_guard lock(startup_recovery_scan_mutex_);
+            startup_recovery_scan_candidates_.reset();
+        }
+        startup_recovery_scan_thread_ = std::jthread(
+            [this, known = std::move(known)] {
+                LOG_TIMER("startup.recovery.scan");
+                try {
+                    lfs::io::project::sweep_stale_licht_artifacts_for_known_masters(known);
+                    const lfs::io::project::RecoveryInspectionOptions detection_options{
+                        .verify_payloads = false};
+                    lfs::io::project::sweep_stale_scratch_autosaves(
+                        temp_project_directory_, detection_options);
+                    if (!legacy_recovery_directory_.empty() &&
+                        freezeNormalizedPath(legacy_recovery_directory_) !=
+                            freezeNormalizedPath(temp_project_directory_)) {
+                        lfs::io::project::sweep_stale_scratch_autosaves(
+                            legacy_recovery_directory_, detection_options);
+                    }
+                    if (!legacy_working_tmp_directory_.empty() &&
+                        freezeNormalizedPath(legacy_working_tmp_directory_) !=
+                            freezeNormalizedPath(temp_project_directory_) &&
+                        freezeNormalizedPath(legacy_working_tmp_directory_) !=
+                            freezeNormalizedPath(legacy_recovery_directory_)) {
+                        lfs::io::project::sweep_stale_scratch_autosaves(
+                            legacy_working_tmp_directory_, detection_options);
+                    }
+                    auto candidates = inspectStartupRecoveryCandidates();
+                    {
+                        const std::lock_guard lock(startup_recovery_scan_mutex_);
+                        startup_recovery_scan_candidates_ = std::move(candidates);
+                    }
+                } catch (const std::exception& error) {
+                    LOG_ERROR("Startup recovery scan failed: {}", error.what());
+                    const std::lock_guard lock(startup_recovery_scan_mutex_);
+                    startup_recovery_scan_candidates_.emplace();
+                } catch (...) {
+                    LOG_ERROR("Startup recovery scan failed with an unknown exception");
+                    const std::lock_guard lock(startup_recovery_scan_mutex_);
+                    startup_recovery_scan_candidates_.emplace();
+                }
+                startup_recovery_scan_ready_.store(true, std::memory_order_release);
+                viewer_.wakeMainLoop();
+            });
+    }
+
+    void ProjectLifecycle::applyStartupRecoveryScan() {
+        if (!startup_recovery_scan_ready_.exchange(
+                false, std::memory_order_acquire)) {
+            return;
+        }
+        if (startup_recovery_scan_thread_.joinable()) {
+            startup_recovery_scan_thread_.join();
+        }
+        LOG_TIMER("startup.recovery.apply");
+        offerStartupCrashRecovery();
     }
 
     void ProjectLifecycle::offerStartupCrashRecovery() {
@@ -8998,8 +9084,10 @@ namespace lfs::vis::project {
         gui->dismissStartupOverlay();
     }
 
-    std::optional<ProjectLifecycle::RecoveryCandidate>
-    ProjectLifecycle::selectStartupRecoveryCandidate() {
+    std::vector<ProjectLifecycle::RecoveryCandidate>
+    ProjectLifecycle::inspectStartupRecoveryCandidates() {
+        const lfs::io::project::RecoveryInspectionOptions detection_options{
+            .verify_payloads = false};
         std::vector<RecoveryCandidate> offers;
         std::filesystem::path mru_path;
         {
@@ -9020,7 +9108,7 @@ namespace lfs::vis::project {
             auto inspection =
                 lfs::io::project::
                     inspect_autosave_recovery(
-                        mru_path);
+                        mru_path, {}, detection_options);
             if (!inspection) {
                 LOG_WARN(
                     "Startup recovery scan skipped for {}: {}",
@@ -9068,7 +9156,7 @@ namespace lfs::vis::project {
         for (const auto& scratch_dir : scratch_dirs) {
             for (auto& inspection :
                  lfs::io::project::scan_scratch_autosaves(
-                     scratch_dir)) {
+                     scratch_dir, detection_options)) {
                 if (inspection.disposition !=
                         lfs::io::project::
                             RecoveryDisposition::Offer ||
@@ -9085,7 +9173,7 @@ namespace lfs::vis::project {
                 auto wallclock = inspection.wallclock_unix_ns;
                 auto overlay =
                     lfs::io::project::inspect_autosave_recovery(
-                        master);
+                        master, {}, detection_options);
                 if (overlay &&
                     overlay->disposition ==
                         lfs::io::project::
@@ -9114,6 +9202,22 @@ namespace lfs::vis::project {
                 });
             }
         }
+        return offers;
+    }
+
+    std::optional<ProjectLifecycle::RecoveryCandidate>
+    ProjectLifecycle::selectStartupRecoveryCandidate() {
+        std::optional<std::vector<RecoveryCandidate>> inspected;
+        {
+            const std::lock_guard lock(startup_recovery_scan_mutex_);
+            if (startup_recovery_scan_candidates_) {
+                inspected = std::move(startup_recovery_scan_candidates_);
+                startup_recovery_scan_candidates_.reset();
+            }
+        }
+        auto offers = inspected
+                          ? std::move(*inspected)
+                          : inspectStartupRecoveryCandidates();
         offers.erase(
             std::remove_if(
                 offers.begin(), offers.end(),
