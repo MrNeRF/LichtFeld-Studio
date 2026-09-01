@@ -1543,6 +1543,12 @@ namespace lfs::io {
             constexpr double COMPRESSION_RATIO = 0.4;
             constexpr size_t OVERHEAD = 4096;
             const int sh_degree = splat_data.get_max_sh_degree();
+            if (sh_degree < 0 || sh_degree > 3) {
+                return make_error(
+                    ErrorCode::INVALID_DATASET,
+                    std::format("SOG export supports SH degree 0..3 (got {})", sh_degree),
+                    options.output_path);
+            }
 
             struct ShKmeansResult {
                 Tensor centroids;
@@ -1564,10 +1570,34 @@ namespace lfs::io {
             double t_archive_done_ms = 0.0;
 
             const auto join_sh_kmeans_if_started = [&]() {
+                // The k-means kernel has no cancellation token, so cancellation checkpoints must join it.
                 if (sh_kmeans_future.valid() && !sh_kmeans_result) {
                     sh_kmeans_result.emplace(sh_kmeans_future.get());
                 }
             };
+
+            const size_t texture_size = static_cast<size_t>(width) * height * CHANNELS;
+
+            size_t estimated_size = texture_size * 5;
+            if (sh_degree > 0) {
+                estimated_size += texture_size * 2;
+            }
+            estimated_size = static_cast<size_t>(estimated_size * COMPRESSION_RATIO) + OVERHEAD;
+
+            if (auto result = check_disk_space(options.output_path, estimated_size); !result) {
+                return std::unexpected(result.error());
+            }
+
+            if (auto result = verify_writable(options.output_path); !result) {
+                return std::unexpected(result.error());
+            }
+
+            if (num_rows > static_cast<int64_t>(std::numeric_limits<int>::max())) {
+                return make_error(ErrorCode::INVALID_DATASET,
+                                  "SOG export supports at most INT_MAX splats",
+                                  options.output_path);
+            }
+            const int num_rows_int = static_cast<int>(num_rows);
 
             if (sh_degree > 0) {
                 static const int SH_COEFFS_TABLE[] = {0, 3, 8, 15};
@@ -1577,9 +1607,7 @@ namespace lfs::io {
                 palette_size = std::min(
                                    64, static_cast<int>(std::pow(2, std::floor(std::log2(num_rows / 1024.0))))) *
                                1024;
-                palette_size = std::clamp(
-                    palette_size, 1024,
-                    static_cast<int>(std::min<int64_t>(num_rows, std::numeric_limits<int>::max())));
+                palette_size = std::clamp(palette_size, 1, num_rows_int);
 
                 // k-means expects 1D float32 swizzled layout. Resident shN may be:
                 //  - Float32 swizzled (training default / legacy)
@@ -1667,31 +1695,6 @@ namespace lfs::io {
                             std::chrono::duration<double, std::milli>(finished - export_started).count()};
                     });
                 t_kmeans_launch_ms = milliseconds(export_started, std::chrono::steady_clock::now());
-            }
-
-            const size_t texture_size = static_cast<size_t>(width) * height * CHANNELS;
-
-            size_t estimated_size = texture_size * 5;
-            if (sh_degree > 0) {
-                estimated_size += texture_size * 2;
-            }
-            estimated_size = static_cast<size_t>(estimated_size * COMPRESSION_RATIO) + OVERHEAD;
-
-            if (auto result = check_disk_space(options.output_path, estimated_size); !result) {
-                join_sh_kmeans_if_started();
-                return std::unexpected(result.error());
-            }
-
-            if (auto result = verify_writable(options.output_path); !result) {
-                join_sh_kmeans_if_started();
-                return std::unexpected(result.error());
-            }
-
-            if (num_rows > static_cast<int64_t>(std::numeric_limits<int>::max())) {
-                join_sh_kmeans_if_started();
-                return make_error(ErrorCode::INVALID_DATASET,
-                                  "SOG export supports at most INT_MAX splats",
-                                  options.output_path);
             }
 
             const auto morton_started = std::chrono::steady_clock::now();
