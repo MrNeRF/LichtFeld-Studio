@@ -20,10 +20,6 @@
       "src/core/splat_data.cpp:1346"
     ],
     "io": [
-      "src/io/cuda/kmeans.cu:141",
-      "src/io/cuda/kmeans.cu:148",
-      "src/io/cuda/kmeans.cu:151",
-      "src/io/cuda/kmeans.cu:162",
       "src/io/cuda/morton_encoding.cu:208",
       "src/io/cuda/rad_encode_quant.cu:263",
       "src/io/cuda/rad_encode_quant.cu:264",
