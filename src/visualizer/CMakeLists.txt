@@ -575,6 +575,7 @@ if (WIN32)
             _USE_MATH_DEFINES
     )
     target_link_libraries(lfs_visualizer PRIVATE
+            Advapi32    # Read the Windows application light/dark preference
             Ole32       # OLE drag-drop (IDropTarget)
             Shell32     # SHChangeNotify (file association)
             dxgi        # DXGI per-process VRAM query

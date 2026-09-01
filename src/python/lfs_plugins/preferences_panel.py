@@ -67,6 +67,7 @@ class PreferencesPanel(Panel):
         self._scene_upscaler_presets = {}
         self._keymap = KeymapBindingsSection()
         self._theme_catalog = []
+        self._theme_families = []
         self._language_catalog = []
         self._last_state = None
         self._section = "general"
@@ -108,7 +109,8 @@ class PreferencesPanel(Panel):
                 f"{section}_expanded",
                 lambda section=section: section in self._expanded_sections,
             )
-        model.bind("theme_idx", self._theme_index, self._set_theme_index)
+        model.bind("theme_family_idx", self._theme_family_index, self._set_theme_family_index)
+        model.bind_func("theme_has_variants", self._theme_has_variants)
         model.bind("progress_bar_idx", self._progress_bar_index, self._set_progress_bar_index)
         model.bind("scale_idx", self._scale_index, self._set_scale_index)
         model.bind(
@@ -191,7 +193,9 @@ class PreferencesPanel(Panel):
         )
         model.bind_event("open_mcp_log_folder", self._on_open_mcp_log_folder)
         model.bind_event("toggle_section", self._on_toggle_section)
-        model.bind_record_list("themes")
+        model.bind_event("set_theme_variant", self._set_theme_variant)
+        model.bind_record_list("theme_families")
+        model.bind_record_list("theme_variants")
         model.bind_record_list("progress_bar_styles")
         model.bind_record_list("scales")
         model.bind_record_list("scene_upscalers")
@@ -235,6 +239,7 @@ class PreferencesPanel(Panel):
         if state != self._last_state:
             self._last_state = state
             self._sync_scene_upscaler_preset_records()
+            self._sync_theme_variant_records()
             self._dirty_selection()
             self._dirty_mcp()
         self._keymap.on_update(doc)
@@ -242,6 +247,8 @@ class PreferencesPanel(Panel):
     def _state(self):
         return (
             lf.ui.get_theme(),
+            lf.ui.get_theme_family(),
+            lf.ui.get_theme_mode(),
             lf.ui.get_progress_bar_style(),
             float(lf.ui.get_ui_scale_preference()),
             self._scene_upscaler(),
@@ -260,19 +267,37 @@ class PreferencesPanel(Panel):
             lf.ui.themes(),
             key=lambda theme: (theme.get("order", 0), theme.get("name", theme.get("id", ""))),
         )
+        families = {}
+        for theme in self._theme_catalog:
+            family_id = theme.get("family_id") or theme["id"]
+            family = families.setdefault(
+                family_id,
+                {
+                    "id": family_id,
+                    "name": theme.get("family_name") or theme.get("name") or family_id,
+                    "order": theme.get("order", 0),
+                    "variants": [],
+                },
+            )
+            family["order"] = min(family["order"], theme.get("order", 0))
+            family["variants"].append(theme)
+        self._theme_families = sorted(
+            families.values(), key=lambda family: (family["order"], family["name"])
+        )
         self._language_catalog = list(lf.ui.get_languages())
         if not self._handle:
             return
         self._handle.update_record_list(
-            "themes",
+            "theme_families",
             [
                 {
                     "index": str(index),
-                    "label": lf.ui.tr(theme.get("label_key") or theme.get("name") or theme["id"]),
+                    "label": family["name"],
                 }
-                for index, theme in enumerate(self._theme_catalog)
+                for index, family in enumerate(self._theme_families)
             ],
         )
+        self._sync_theme_variant_records()
         self._handle.update_record_list(
             "progress_bar_styles",
             [
@@ -314,20 +339,82 @@ class PreferencesPanel(Panel):
         )
         self._reload_file_associations()
 
-    def _theme_index(self):
-        current = lf.ui.get_theme()
-        for index, theme in enumerate(self._theme_catalog):
-            if theme["id"] == current:
+    def _theme_family_index(self):
+        current = lf.ui.get_theme_family()
+        for index, family in enumerate(self._theme_families):
+            if family["id"] == current:
                 return str(index)
         return "0"
 
-    def _set_theme_index(self, value):
+    def _set_theme_family_index(self, value):
         try:
             index = int(value)
         except (TypeError, ValueError):
             return
-        if 0 <= index < len(self._theme_catalog):
-            lf.ui.set_theme(self._theme_catalog[index]["id"])
+        if 0 <= index < len(self._theme_families):
+            family = self._theme_families[index]
+            variants = family["variants"]
+            available_modes = {variant["mode"] for variant in variants}
+            mode = lf.ui.get_theme_mode()
+            if len(variants) == 1:
+                mode = variants[0]["mode"]
+            elif mode != "auto" and mode not in available_modes:
+                mode = "dark" if "dark" in available_modes else "light"
+            lf.ui.set_theme_family(family["id"], mode)
+            self._sync_theme_variant_records()
+            self._refresh_selection()
+
+    def _selected_theme_family(self):
+        current = lf.ui.get_theme_family()
+        return next(
+            (family for family in self._theme_families if family["id"] == current),
+            None,
+        )
+
+    def _theme_has_variants(self):
+        family = self._selected_theme_family()
+        return bool(family and len(family["variants"]) > 1)
+
+    def _sync_theme_variant_records(self):
+        if not self._handle:
+            return
+        family = self._selected_theme_family()
+        selection_mode = lf.ui.get_theme_mode()
+        records = []
+        if family and len(family["variants"]) > 1:
+            variants = sorted(
+                family["variants"],
+                key=lambda variant: (variant.get("order", 0), variant.get("mode", "")),
+            )
+            for variant in variants:
+                records.append(
+                    {
+                        "mode": variant["mode"],
+                        "label": variant.get("variant_name") or variant.get("name") or variant["mode"],
+                        "selected": selection_mode == variant["mode"],
+                    }
+                )
+            modes = {variant["mode"] for variant in variants}
+            if {"dark", "light"}.issubset(modes) and lf.ui.supports_system_theme():
+                records.append(
+                    {
+                        "mode": "auto",
+                        "label": lf.ui.tr("menu.view.theme.auto"),
+                        "selected": selection_mode == "auto",
+                    }
+                )
+        self._handle.update_record_list("theme_variants", records)
+        self._handle.dirty("theme_has_variants")
+
+    def _set_theme_variant(self, _handle, _event, args):
+        if not args:
+            return
+        mode = str(args[0])
+        family = self._selected_theme_family()
+        if not family:
+            return
+        if lf.ui.set_theme_family(family["id"], mode):
+            self._sync_theme_variant_records()
             self._refresh_selection()
 
     def _progress_bar_index(self):
@@ -1102,11 +1189,13 @@ class PreferencesPanel(Panel):
 
     def _refresh_selection(self):
         self._last_state = self._state()
+        self._sync_theme_variant_records()
         self._dirty_selection()
 
     def _dirty_selection(self):
         if self._handle:
-            self._handle.dirty("theme_idx")
+            self._handle.dirty("theme_family_idx")
+            self._handle.dirty("theme_has_variants")
             self._handle.dirty("progress_bar_idx")
             self._handle.dirty("scale_idx")
             self._handle.dirty("scene_upscaler_idx")

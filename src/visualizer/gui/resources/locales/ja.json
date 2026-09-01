@@ -44,6 +44,7 @@
     "tools.plugin_marketplace": "プラグインマーケットプレイス",
     "view": "表示",
     "view.theme": "テーマ",
+    "view.theme.auto": "自動",
     "view.theme.dark": "ダーク",
     "view.theme.light": "ライト",
     "view.theme.gruvbox": "Gruvbox",

@@ -44,6 +44,7 @@
     "tools.plugin_marketplace": "Marketplace des plugins",
     "view": "Affichage",
     "view.theme": "Thème",
+    "view.theme.auto": "Automatique",
     "view.theme.dark": "Sombre",
     "view.theme.light": "Clair",
     "view.theme.gruvbox": "Gruvbox",

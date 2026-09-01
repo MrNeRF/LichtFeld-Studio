@@ -44,6 +44,7 @@
     "tools.plugin_marketplace": "Marketplace wtyczek",
     "view": "Widok",
     "view.theme": "Motyw",
+    "view.theme.auto": "Automatycznie",
     "view.theme.dark": "Ciemny",
     "view.theme.light": "Jasny",
     "view.theme.gruvbox": "Gruvbox",

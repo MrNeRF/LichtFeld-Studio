@@ -4904,6 +4904,30 @@ namespace lfs::python {
             "Get current stable theme id");
 
         m.def(
+            "set_theme_family",
+            [](const std::string& family_id, const std::string& mode) {
+                return vis::setThemeFamilySelection(family_id, mode);
+            },
+            nb::arg("family_id"),
+            nb::arg("mode"),
+            "Select a theme family using dark, light, or automatic system mode");
+
+        m.def(
+            "get_theme_family",
+            []() -> std::string { return vis::currentThemeFamilyId(); },
+            "Get the selected theme family id");
+
+        m.def(
+            "get_theme_mode",
+            []() -> std::string { return vis::currentThemeSelectionMode(); },
+            "Get the selected family mode: dark, light, or auto");
+
+        m.def(
+            "supports_system_theme",
+            []() { return vis::supportsSystemThemePreference(); },
+            "Return whether automatic OS light/dark theme detection is supported");
+
+        m.def(
             "themes",
             []() {
                 nb::list themes;
@@ -4913,6 +4937,9 @@ namespace lfs::python {
                     item["name"] = info.name;
                     item["label_key"] = info.label_key;
                     item["mode"] = info.mode;
+                    item["family_id"] = info.family_id;
+                    item["family_name"] = info.family_name;
+                    item["variant_name"] = info.variant_name;
                     item["order"] = info.order;
                     themes.append(item);
                 });

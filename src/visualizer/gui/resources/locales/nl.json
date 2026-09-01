@@ -44,6 +44,7 @@
     "tools.plugin_marketplace": "Plugin-marktplaats",
     "view": "Weergave",
     "view.theme": "Thema",
+    "view.theme.auto": "Automatisch",
     "view.theme.dark": "Donker",
     "view.theme.light": "Licht",
     "view.theme.gruvbox": "Gruvbox",

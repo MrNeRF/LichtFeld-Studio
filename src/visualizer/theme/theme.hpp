@@ -197,6 +197,9 @@ namespace lfs::vis {
         std::string name;
         std::string label_key;
         std::string mode;
+        std::string family_id;
+        std::string family_name;
+        std::string variant_name;
         int order = 0;
     };
     using ThemePresetInfoVisitor = std::function<void(const ThemePresetInfo& info)>;
@@ -208,6 +211,10 @@ namespace lfs::vis {
     // Presets (loaded from JSON files with hot-reload support)
     [[nodiscard]] LFS_VIS_API const Theme& darkTheme();
     LFS_VIS_API bool setThemeByName(const std::string& name);
+    LFS_VIS_API bool setThemeFamilySelection(const std::string& family_id, const std::string& mode);
+    [[nodiscard]] LFS_VIS_API const std::string& currentThemeFamilyId();
+    [[nodiscard]] LFS_VIS_API const std::string& currentThemeSelectionMode();
+    [[nodiscard]] LFS_VIS_API bool supportsSystemThemePreference();
     LFS_VIS_API bool checkThemeFileChanges(); // Call periodically to hot-reload; returns true when any preset changed
 
     // Runtime vignette control (does not persist to theme file)

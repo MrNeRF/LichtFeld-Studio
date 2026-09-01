@@ -2591,6 +2591,18 @@ def set_theme(name: str) -> None:
 def get_theme() -> str:
     """Get current stable theme id"""
 
+def set_theme_family(family_id: str, mode: str) -> bool:
+    """Select a theme family using dark, light, or automatic system mode"""
+
+def get_theme_family() -> str:
+    """Get the selected theme family id"""
+
+def get_theme_mode() -> str:
+    """Get the selected family mode: dark, light, or auto"""
+
+def supports_system_theme() -> bool:
+    """Return whether automatic OS light/dark theme detection is supported"""
+
 def themes() -> list:
     """Get available theme presets with stable ids and UI metadata"""
 

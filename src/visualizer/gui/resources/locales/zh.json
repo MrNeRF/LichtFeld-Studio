@@ -44,6 +44,7 @@
     "tools.plugin_marketplace": "插件市场",
     "view": "视图",
     "view.theme": "主题",
+    "view.theme.auto": "自动",
     "view.theme.dark": "深色",
     "view.theme.light": "浅色",
     "view.theme.gruvbox": "Gruvbox",

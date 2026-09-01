@@ -117,7 +117,7 @@ namespace {
 
 } // namespace
 
-TEST(ThemeRegistry, ManifestOwnsCatalogMetadata) {
+TEST(ThemeRegistry, VersionTwoManifestOwnsThemeFamilies) {
     const auto manifest_path = lfs::vis::getAssetPath("themes/manifest.json");
 
     std::ifstream manifest_file;
@@ -126,9 +126,9 @@ TEST(ThemeRegistry, ManifestOwnsCatalogMetadata) {
     nlohmann::json manifest;
     manifest_file >> manifest;
 
-    ASSERT_EQ(manifest.value("schema_version", 0), 1);
-    ASSERT_TRUE(manifest.contains("themes"));
-    ASSERT_TRUE(manifest["themes"].is_array());
+    ASSERT_EQ(manifest.value("schema_version", 0), 2);
+    ASSERT_TRUE(manifest.contains("families"));
+    ASSERT_TRUE(manifest["families"].is_array());
 
     const auto infos = themePresetInfos();
     std::map<std::string, lfs::vis::ThemePresetInfo> info_by_id;
@@ -136,38 +136,61 @@ TEST(ThemeRegistry, ManifestOwnsCatalogMetadata) {
         info_by_id.emplace(info.id, info);
     }
 
-    ASSERT_EQ(info_by_id.size(), manifest["themes"].size());
+    std::size_t variant_count = 0;
+    for (const auto& family_entry : manifest["families"]) {
+        ASSERT_TRUE(family_entry.is_object());
+        ASSERT_TRUE(family_entry.contains("file"));
+        ASSERT_TRUE(family_entry.contains("order"));
 
-    for (const auto& entry : manifest["themes"]) {
-        ASSERT_TRUE(entry.is_object());
-        ASSERT_TRUE(entry.contains("id"));
-        ASSERT_TRUE(entry.contains("file"));
-        ASSERT_TRUE(entry.contains("fallback"));
-        ASSERT_TRUE(entry.contains("label_key"));
-        ASSERT_TRUE(entry.contains("mode"));
-        ASSERT_TRUE(entry.contains("order"));
-
-        const std::string id = entry["id"].get<std::string>();
-        ASSERT_TRUE(info_by_id.contains(id)) << id;
-
-        const auto& info = info_by_id.at(id);
-        EXPECT_EQ(info.label_key, entry["label_key"].get<std::string>()) << id;
-        EXPECT_EQ(info.mode, entry["mode"].get<std::string>()) << id;
-        EXPECT_EQ(info.order, entry["order"].get<int>()) << id;
-
-        const std::string theme_file = entry["file"].get<std::string>();
-        const auto theme_path = lfs::vis::getAssetPath("themes/" + theme_file);
+        const std::string family_file = family_entry["file"].get<std::string>();
+        const auto theme_path = lfs::vis::getAssetPath("themes/" + family_file);
 
         std::ifstream theme_stream;
-        ASSERT_TRUE(lfs::core::open_file_for_read(theme_path, theme_stream)) << theme_file;
+        ASSERT_TRUE(lfs::core::open_file_for_read(theme_path, theme_stream)) << family_file;
 
-        nlohmann::json theme;
-        theme_stream >> theme;
-        EXPECT_FALSE(theme.contains("id")) << theme_file;
-        EXPECT_FALSE(theme.contains("label_key")) << theme_file;
-        EXPECT_FALSE(theme.contains("mode")) << theme_file;
-        EXPECT_FALSE(theme.contains("order")) << theme_file;
+        nlohmann::json family;
+        theme_stream >> family;
+        ASSERT_EQ(family.value("schema_version", 0), 2) << family_file;
+        ASSERT_TRUE(family.contains("id")) << family_file;
+        ASSERT_TRUE(family.contains("name")) << family_file;
+        ASSERT_TRUE(family.contains("variants")) << family_file;
+        ASSERT_TRUE(family["variants"].is_object()) << family_file;
+        EXPECT_FALSE(family.contains("fonts")) << family_file;
+        if (const auto shared = family.find("shared"); shared != family.end())
+            EXPECT_TRUE(shared->is_object()) << family_file;
+
+        const std::string family_id = family["id"].get<std::string>();
+        const std::string family_name = family["name"].get<std::string>();
+        const int family_order = family_entry["order"].get<int>();
+        for (const std::string mode : {"dark", "light"}) {
+            const auto variant = family["variants"].find(mode);
+            if (variant == family["variants"].end())
+                continue;
+
+            ASSERT_TRUE(variant->is_object()) << family_file << ':' << mode;
+            ASSERT_TRUE(variant->contains("id")) << family_file << ':' << mode;
+            ASSERT_TRUE(variant->contains("name")) << family_file << ':' << mode;
+            ASSERT_TRUE(variant->contains("label_key")) << family_file << ':' << mode;
+            ASSERT_TRUE(variant->contains("fallback")) << family_file << ':' << mode;
+            EXPECT_TRUE(variant->contains("fonts")) << family_file << ':' << mode;
+            EXPECT_TRUE((*variant)["fonts"].is_object()) << family_file << ':' << mode;
+
+            const std::string id = (*variant)["id"].get<std::string>();
+            ASSERT_TRUE(info_by_id.contains(id)) << id;
+            const auto& info = info_by_id.at(id);
+            EXPECT_EQ(info.label_key, (*variant)["label_key"].get<std::string>()) << id;
+            EXPECT_EQ(info.mode, mode) << id;
+            EXPECT_EQ(info.family_id, family_id) << id;
+            EXPECT_EQ(info.family_name, family_name) << id;
+            EXPECT_EQ(info.variant_name, (*variant)["name"].get<std::string>()) << id;
+            EXPECT_EQ(
+                info.order,
+                family_order + variant->value("order", mode == "light" ? 1 : 0))
+                << id;
+            ++variant_count;
+        }
     }
+    EXPECT_EQ(variant_count, info_by_id.size());
 }
 
 TEST(ThemeRegistry, CatalogIsStableAndSelfDescribing) {
@@ -182,6 +205,9 @@ TEST(ThemeRegistry, CatalogIsStableAndSelfDescribing) {
         EXPECT_FALSE(info.name.empty()) << info.id;
         EXPECT_FALSE(info.label_key.empty()) << info.id;
         EXPECT_TRUE(info.mode == "dark" || info.mode == "light") << info.id;
+        EXPECT_FALSE(info.family_id.empty()) << info.id;
+        EXPECT_FALSE(info.family_name.empty()) << info.id;
+        EXPECT_FALSE(info.variant_name.empty()) << info.id;
         EXPECT_GT(info.order, previous_order) << info.id;
         EXPECT_TRUE(ids.insert(info.id).second) << info.id;
         previous_order = info.order;
@@ -211,6 +237,32 @@ TEST(ThemeRegistry, CurrentThemeUsesStablePresetId) {
     }
 }
 
+TEST(ThemeRegistry, LegacyStandaloneThemeJsonRemainsLoadable) {
+    const auto path =
+        std::filesystem::temp_directory_path() / "lfs_legacy_theme_v1.json";
+    {
+        std::ofstream file(path);
+        file << R"({
+            "name": "Legacy Theme",
+            "palette": {"primary": [0.1, 0.2, 0.3, 1.0]},
+            "fonts": {"large_size": 19.0},
+            "button": {"tint_normal": 0.42}
+        })";
+    }
+
+    lfs::vis::Theme loaded = lfs::vis::darkTheme();
+    ASSERT_TRUE(lfs::vis::loadTheme(loaded, lfs::core::path_to_utf8(path)));
+    EXPECT_EQ(loaded.name, "Legacy Theme");
+    EXPECT_FLOAT_EQ(loaded.palette.primary.x, 0.1f);
+    EXPECT_FLOAT_EQ(loaded.palette.primary.y, 0.2f);
+    EXPECT_FLOAT_EQ(loaded.palette.primary.z, 0.3f);
+    EXPECT_FLOAT_EQ(loaded.fonts.large_size, 19.0f);
+    EXPECT_FLOAT_EQ(loaded.button.tint_normal, 0.42f);
+
+    std::error_code error;
+    std::filesystem::remove(path, error);
+}
+
 TEST(ThemePreferencesContract, InvalidValuesFallBackToBuiltInDefaults) {
     const auto root = std::filesystem::temp_directory_path() / "lfs_theme_preferences_invalid";
     std::error_code error;
@@ -225,6 +277,42 @@ TEST(ThemePreferencesContract, InvalidValuesFallBackToBuiltInDefaults) {
     EXPECT_EQ(lfs::vis::loadThemePreferenceName(), "dark");
     EXPECT_FLOAT_EQ(lfs::vis::loadUiScalePreference(), 0.0f);
     EXPECT_TRUE(lfs::vis::loadLanguagePreference().empty());
+    std::filesystem::remove_all(root, error);
+}
+
+TEST(ThemePreferencesContract, FamilyAutoSelectionResolvesWithoutLosingFamily) {
+    const auto root = std::filesystem::temp_directory_path() / "lfs_theme_preferences_family_auto";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << lfs::format_for_developer(paths.error());
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+    std::ofstream(paths->preferencesFile()) << R"({"theme":"catppuccin:auto"})";
+
+    const std::string resolved = lfs::vis::loadThemePreferenceName();
+    EXPECT_TRUE(resolved == "catppuccin_mocha" || resolved == "catppuccin_latte");
+    EXPECT_EQ(lfs::vis::currentThemeFamilyId(), "catppuccin");
+    EXPECT_EQ(lfs::vis::currentThemeSelectionMode(),
+              lfs::vis::supportsSystemThemePreference() ? "auto" : "dark");
+
+    std::filesystem::remove_all(root, error);
+}
+
+TEST(ThemePreferencesContract, LegacyCatppuccinAliasStillSelectsMocha) {
+    const auto root = std::filesystem::temp_directory_path() / "lfs_theme_preferences_legacy_catppuccin";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << lfs::format_for_developer(paths.error());
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+    std::ofstream(paths->preferencesFile()) << R"({"theme":"catppuccin"})";
+
+    EXPECT_EQ(lfs::vis::loadThemePreferenceName(), "catppuccin_mocha");
+    EXPECT_EQ(lfs::vis::currentThemeFamilyId(), "catppuccin");
+    EXPECT_EQ(lfs::vis::currentThemeSelectionMode(), "dark");
+
     std::filesystem::remove_all(root, error);
 }
 

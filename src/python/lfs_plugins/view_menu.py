@@ -34,19 +34,53 @@ class ViewMenu:
 
     def menu_items(self):
         tr = lf.ui.tr
-        current_theme = lf.ui.get_theme()
         theme_catalog = sorted(
             lf.ui.themes(),
             key=lambda theme: (theme.get("order", 0), theme.get("name", theme.get("id", ""))),
         )
-        theme_items = [
-            menu_toggle(
-                tr(theme.get("label_key") or theme.get("name") or theme["id"]),
-                lambda theme_id=theme["id"]: lf.ui.set_theme(theme_id),
-                current_theme == theme["id"],
+        families = {}
+        for theme in theme_catalog:
+            family_id = theme.get("family_id") or theme["id"]
+            family = families.setdefault(
+                family_id,
+                {
+                    "id": family_id,
+                    "name": theme.get("family_name") or theme.get("name") or family_id,
+                    "order": theme.get("order", 0),
+                    "variants": [],
+                },
             )
-            for theme in theme_catalog
-        ]
+            family["order"] = min(family["order"], theme.get("order", 0))
+            family["variants"].append(theme)
+
+        current_family = lf.ui.get_theme_family()
+        current_mode = lf.ui.get_theme_mode()
+        theme_items = []
+        for family in sorted(
+            families.values(), key=lambda item: (item["order"], item["name"])
+        ):
+            variants = sorted(
+                family["variants"],
+                key=lambda variant: (variant.get("order", 0), variant.get("mode", "")),
+            )
+            available_modes = {variant["mode"] for variant in variants}
+            if len(variants) == 1:
+                selection_mode = variants[0]["mode"]
+            elif current_mode == "auto":
+                selection_mode = "auto"
+            elif current_mode in available_modes:
+                selection_mode = current_mode
+            else:
+                selection_mode = "dark" if "dark" in available_modes else "light"
+            theme_items.append(
+                menu_toggle(
+                    family["name"],
+                    lambda family_id=family["id"], mode=selection_mode: lf.ui.set_theme_family(
+                        family_id, mode
+                    ),
+                    current_family == family["id"],
+                )
+            )
 
         pref = lf.ui.get_ui_scale_preference()
         scale_items = []

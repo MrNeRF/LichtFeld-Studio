@@ -44,6 +44,7 @@
     "tools.plugin_marketplace": "플러그인 마켓플레이스",
     "view": "보기",
     "view.theme": "테마",
+    "view.theme.auto": "자동",
     "view.theme.dark": "다크",
     "view.theme.light": "라이트",
     "view.theme.gruvbox": "Gruvbox",
