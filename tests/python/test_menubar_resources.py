@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Regression checks for retained RmlUI menu bar resources."""
 
+import json
+import re
 from pathlib import Path
 
 
@@ -203,6 +205,146 @@ def test_theme_auto_visibility_and_variant_button_width_are_capability_driven():
     assert "SDL_GetSystemTheme()" in theme_cpp
     assert "SDL_SYSTEM_THEME_LIGHT" in theme_cpp
     assert "SDL_SYSTEM_THEME_DARK" in theme_cpp
+
+
+def test_all_optional_theme_gradients_reach_rml_consumers():
+    theme_cpp = (
+        PROJECT_ROOT / "src" / "visualizer" / "theme" / "theme.cpp"
+    ).read_text(encoding="utf-8")
+    rml_theme_cpp = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "rml_theme.cpp"
+    ).read_text(encoding="utf-8")
+    resources = (
+        PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+    )
+    signal = json.loads(
+        (
+            PROJECT_ROOT
+            / "src"
+            / "visualizer"
+            / "gui"
+            / "assets"
+            / "themes"
+            / "signal.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    gradient_tokens = {
+        "window_body": ("window.body_decor", "components.theme.rcss"),
+        "panel_body": ("panel.body_decor", "panel_host.theme.rcss"),
+        "window_title": ("window.title_decor", "components.theme.rcss"),
+        "section_header": ("components.header_decor", "components.theme.rcss"),
+        "section_header_hover": (
+            "components.header_hover_decor",
+            "components.theme.rcss",
+        ),
+        "progress": ("components.progress_fill_decor", "components.theme.rcss"),
+        "scrubber_track": ("components.scrub_bg_decor", "components.theme.rcss"),
+        "scrubber_fill": ("components.scrub_fill_decor", "components.theme.rcss"),
+        "histogram_header": (
+            "panel.histogram_hero_decor",
+            "histogram_panel.theme.rcss",
+        ),
+        "histogram_fill": (
+            "panel.histogram_fill_decor",
+            "histogram_panel.theme.rcss",
+        ),
+        "histogram_selection": (
+            "panel.histogram_fill_selected_decor",
+            "histogram_panel.theme.rcss",
+        ),
+    }
+
+    for mode in ("dark", "light"):
+        defined = {
+            key
+            for key in signal["variants"][mode]["gradients"]
+            if not key.startswith("_")
+        }
+        assert defined == set(gradient_tokens)
+
+    for gradient, (token, resource_name) in gradient_tokens.items():
+        assert f'apply_gradient("{gradient}", t.gradients.{gradient})' in theme_cpp
+        assert f"hashGradient(seed, gradients.{gradient})" in rml_theme_cpp
+        assert f"t.gradients.{gradient}" in rml_theme_cpp
+        resource = (resources / resource_name).read_text(encoding="utf-8")
+        assert f"@{{{token}}}" in resource
+
+
+def test_sequencer_quality_scrubber_uses_shared_theme_gradients():
+    sequencer_rml = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+        / "sequencer.rml"
+    ).read_text(encoding="utf-8")
+    sequencer_rcss = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+        / "sequencer.rcss"
+    ).read_text(encoding="utf-8")
+
+    assert 'id="quality-scrub" class="scrub-field"' in sequencer_rml
+    assert 'id="quality-fill" class="scrub-field-fill"' in sequencer_rml
+    quality_scrubber = sequencer_rcss.split("/* ── Quality Scrub Field", 1)[1].split(
+        "#btn-equirect", 1
+    )[0]
+    assert "decorator: vertical-gradient" not in quality_scrubber
+    assert "decorator: horizontal-gradient" not in quality_scrubber
+    assert "color: #cdd6f4;" not in quality_scrubber
+
+
+def test_asset_manager_palette_is_fully_theme_driven():
+    resources = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+    )
+    base_rcss = (resources / "asset_manager.rcss").read_text(encoding="utf-8")
+    theme_rcss = (resources / "asset_manager.theme.rcss").read_text(encoding="utf-8")
+    rml = (resources / "asset_manager.rml").read_text(encoding="utf-8")
+
+    # Layout resources must not smuggle in a dark fallback palette. Entity
+    # references such as &#215; are not color literals.
+    assert re.search(r"(?<!&)#[0-9a-fA-F]{3,8}\b", base_rcss) is None
+    assert re.search(r"\brgba?\s*\(", base_rcss) is None
+    assert re.search(r"(?<!&)#[0-9a-fA-F]{3,8}\b", rml) is None
+
+    required_theme_rules = {
+        ".asset-button": ("@{surface_bright}", "@{border}", "@{text}"),
+        ".asset-import-button": ("@{blend(surface,primary,button.tint_normal)}",),
+        ".asset-icon-grid > span,\n.asset-icon-list > span": ("@{text}",),
+        ".asset-refresh-button img,\n.asset-folder-menu img,\n.asset-card-menu img": (
+            "@{alpha(text,0.90)}",
+        ),
+        "#asset-sidebar": ("@{blend(surface,background,0.35)}", "@{border}"),
+        ".asset-card": ("@{surface_bright}", "@{border}"),
+        ".asset-list-row": ("@{surface_bright}", "@{border}", "@{text}"),
+        "#asset-info-panel": ("@{blend(surface,background,0.35)}", "@{border}"),
+        ".asset-info-warning": ("@{alpha(error,0.10)}", "@{error}"),
+    }
+    for selector, expected_tokens in required_theme_rules.items():
+        body = theme_rcss.split(f"{selector} {{", 1)[1].split("\n}", 1)[0]
+        for token in expected_tokens:
+            assert token in body
+
+    assert 'class="asset-add-folder-glyph"' in rml
+    assert "stroke=" not in rml
 
 
 def test_open_menu_requests_passive_mouse_render_and_blocks_viewport_hit_testing():

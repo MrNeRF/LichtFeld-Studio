@@ -242,11 +242,11 @@ TEST(ThemeRegistry, CurrentThemeUsesStablePresetId) {
 
     ASSERT_TRUE(lfs::vis::setThemeByName("Catppuccin Mocha"));
     EXPECT_EQ(lfs::vis::currentThemeId(), "catppuccin_mocha");
-    EXPECT_EQ(lfs::vis::theme().name, "Catppuccin Mocha");
+    EXPECT_EQ(lfs::vis::theme().name, "Mocha");
 
     ASSERT_TRUE(lfs::vis::setThemeByName("catppuccin-latte"));
     EXPECT_EQ(lfs::vis::currentThemeId(), "catppuccin_latte");
-    EXPECT_EQ(lfs::vis::theme().name, "Catppuccin Latte");
+    EXPECT_EQ(lfs::vis::theme().name, "Latte");
 
     if (!original_theme.empty()) {
         EXPECT_TRUE(lfs::vis::setThemeByName(original_theme));
@@ -264,7 +264,14 @@ TEST(ThemeRegistry, OptionalGradientsLoadAndLegacyThemesKeepDerivedFallbacks) {
     ASSERT_TRUE(lfs::vis::theme().gradients.window_body.has_value());
     ASSERT_TRUE(lfs::vis::theme().gradients.panel_body.has_value());
     ASSERT_TRUE(lfs::vis::theme().gradients.window_title.has_value());
+    ASSERT_TRUE(lfs::vis::theme().gradients.section_header.has_value());
+    ASSERT_TRUE(lfs::vis::theme().gradients.section_header_hover.has_value());
     ASSERT_TRUE(lfs::vis::theme().gradients.progress.has_value());
+    ASSERT_TRUE(lfs::vis::theme().gradients.scrubber_track.has_value());
+    ASSERT_TRUE(lfs::vis::theme().gradients.scrubber_fill.has_value());
+    ASSERT_TRUE(lfs::vis::theme().gradients.histogram_header.has_value());
+    ASSERT_TRUE(lfs::vis::theme().gradients.histogram_fill.has_value());
+    ASSERT_TRUE(lfs::vis::theme().gradients.histogram_selection.has_value());
     EXPECT_FLOAT_EQ(lfs::vis::theme().gradients.progress->start.x, 0.224f);
     EXPECT_FLOAT_EQ(lfs::vis::theme().gradients.progress->end.z, 1.0f);
 

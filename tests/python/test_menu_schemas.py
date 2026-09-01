@@ -163,6 +163,7 @@ def _install_lichtfeld_stub(monkeypatch):
 
 def test_menu_helpers_and_builtin_schemas(monkeypatch):
     monkeypatch.delitem(sys.modules, "lfs_plugins", raising=False)
+    monkeypatch.delitem(sys.modules, "lfs_plugins.layouts", raising=False)
     monkeypatch.delitem(sys.modules, "lfs_plugins.layouts.menus", raising=False)
     monkeypatch.delitem(sys.modules, "lfs_plugins.edit_menu", raising=False)
     monkeypatch.delitem(sys.modules, "lfs_plugins.select_menu", raising=False)
@@ -170,6 +171,15 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     monkeypatch.delitem(sys.modules, "lfs_plugins.view_menu", raising=False)
 
     state = _install_lichtfeld_stub(monkeypatch)
+
+    # These are schema-only tests. Import the menu modules without executing
+    # lfs_plugins.__init__, which initializes the plugin manager and its HTTPS
+    # stack. On Windows that unrelated path can load OpenSSL DLLs from the C++
+    # build directory before Python's _ssl extension resolves its own runtime.
+    package_stub = ModuleType("lfs_plugins")
+    package_stub.__path__ = [str(PROJECT_ROOT / "src" / "python" / "lfs_plugins")]
+    package_stub.__package__ = "lfs_plugins"
+    monkeypatch.setitem(sys.modules, "lfs_plugins", package_stub)
 
     menus_mod = import_module("lfs_plugins.layouts.menus")
     edit_mod = import_module("lfs_plugins.edit_menu")
