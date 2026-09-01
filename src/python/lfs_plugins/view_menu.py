@@ -56,6 +56,7 @@ class ViewMenu:
         current_family = lf.ui.get_theme_family()
         current_mode = lf.ui.get_theme_mode()
         theme_items = []
+        active_theme_label = current_family
         for family in sorted(
             families.values(), key=lambda item: (item["order"], item["name"])
         ):
@@ -64,6 +65,26 @@ class ViewMenu:
                 key=lambda variant: (variant.get("order", 0), variant.get("mode", "")),
             )
             available_modes = {variant["mode"] for variant in variants}
+            family_label = family["name"]
+            if current_family == family["id"]:
+                if current_mode == "auto":
+                    active_variant_label = tr("menu.view.theme.auto")
+                else:
+                    active_variant = next(
+                        (variant for variant in variants if variant["mode"] == current_mode),
+                        None,
+                    )
+                    if active_variant:
+                        active_variant_label = (
+                            active_variant.get("variant_name")
+                            or active_variant.get("name")
+                            or current_mode.title()
+                        )
+                    else:
+                        active_variant_label = current_mode.title()
+                active_theme_label = f"{family['name']} · {active_variant_label}"
+                family_label = active_theme_label
+
             if len(variants) == 1:
                 mode = variants[0]["mode"]
                 theme_items.append(
@@ -105,7 +126,7 @@ class ViewMenu:
                     )
                 )
 
-            theme_items.append(menu_submenu(family["name"], variant_items))
+            theme_items.append(menu_submenu(family_label, variant_items))
 
         pref = lf.ui.get_ui_scale_preference()
         scale_items = []
@@ -120,7 +141,7 @@ class ViewMenu:
             )
 
         return [
-            menu_submenu(tr("menu.view.theme"), theme_items),
+            menu_submenu(f"{tr('menu.view.theme')} · {active_theme_label}", theme_items),
             menu_submenu(tr("menu.view.ui_scale"), scale_items),
             menu_separator(),
             menu_toggle(

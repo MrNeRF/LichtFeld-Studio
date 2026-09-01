@@ -120,16 +120,25 @@ def test_toolbar_icons_use_contrast_aware_theme_tokens():
 
     assert "readableIconColor" in rml_theme_cpp
     assert "MIN_ICON_CONTRAST = 4.5f" in rml_theme_cpp
+    assert "const std::array backgrounds" in rml_theme_cpp
+    assert "VIEWPORT_GIZMO_OPACITY = 0.64f" in rml_theme_cpp
+    assert 'colorToRmlAlpha(viewport_toolbar_icon, 0.70f)' in rml_theme_cpp
     for token in (
         "menu.toolbar_icon",
         "menu.toolbar_selected_decor",
         "menu.toolbar_selected_icon",
-        "viewport.gizmo_bg",
+        "viewport.toolbar_glass_decor",
+        "viewport.toolbar_text",
+        "viewport.toolbar_selected_decor",
+        "viewport.toolbar_selected_icon",
+        "viewport.gizmo_decor",
         "viewport.gizmo_icon",
-        "viewport.gizmo_hover_bg",
+        "viewport.gizmo_hover_decor",
         "viewport.gizmo_hover_icon",
         "viewport.gizmo_disabled_icon",
-        "viewport.gizmo_selected_hover_bg",
+        "viewport.gizmo_selected_decor",
+        "viewport.gizmo_selected_icon",
+        "viewport.gizmo_selected_hover_decor",
         "viewport.gizmo_selected_hover_icon",
     ):
         assert f'{{"{token}"' in rml_theme_cpp
@@ -137,12 +146,15 @@ def test_toolbar_icons_use_contrast_aware_theme_tokens():
     assert "image-color: @{menu.toolbar_icon};" in menubar_theme
     assert "@{menu.toolbar_selected_decor};" in menubar_theme
     assert "image-color: @{menu.toolbar_selected_icon};" in menubar_theme
-    assert "background-color: @{viewport.gizmo_bg};" in viewport_theme
+    assert "@{viewport.toolbar_glass_decor};" in viewport_theme
+    assert "@{viewport.toolbar_selected_decor};" in viewport_theme
+    assert "image-color: @{viewport.toolbar_selected_icon};" in viewport_theme
+    assert "@{viewport.gizmo_decor};" in viewport_theme
     assert "image-color: @{viewport.gizmo_icon};" in viewport_theme
-    assert "background-color: @{viewport.gizmo_hover_bg};" in viewport_theme
+    assert "@{viewport.gizmo_hover_decor};" in viewport_theme
     assert "image-color: @{viewport.gizmo_hover_icon};" in viewport_theme
-    assert "@{controls.selected_decor};" in viewport_theme
-    assert "image-color: @{controls.selected_icon};" in viewport_theme
+    assert "@{viewport.gizmo_selected_decor};" in viewport_theme
+    assert "image-color: @{viewport.gizmo_selected_icon};" in viewport_theme
     assert "width: 27dp;" in viewport_layout
     assert "height: 27dp;" in viewport_layout
     assert "width: 18dp;" in viewport_layout

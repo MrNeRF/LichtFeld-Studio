@@ -12,12 +12,14 @@
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/Factory.h>
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <format>
 #include <fstream>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <string_view>
@@ -165,6 +167,31 @@ namespace lfs::vis::gui::rml_theme {
 
             constexpr ThemeColor BLACK{0.0f, 0.0f, 0.0f, 1.0f};
             constexpr ThemeColor WHITE{1.0f, 1.0f, 1.0f, 1.0f};
+            return minimum_contrast(BLACK) >= minimum_contrast(WHITE) ? BLACK : WHITE;
+        }
+
+        ThemeColor readableIconColor(const ThemeGradient& translucent_gradient,
+                                     const float opacity,
+                                     const ThemeColor& preferred) {
+            constexpr ThemeColor BLACK{0.0f, 0.0f, 0.0f, 1.0f};
+            constexpr ThemeColor WHITE{1.0f, 1.0f, 1.0f, 1.0f};
+            const std::array backgrounds{
+                blend(BLACK, translucent_gradient.start, opacity),
+                blend(BLACK, translucent_gradient.end, opacity),
+                blend(WHITE, translucent_gradient.start, opacity),
+                blend(WHITE, translucent_gradient.end, opacity)};
+            const auto minimum_contrast = [&](const ThemeColor& foreground) {
+                float minimum = std::numeric_limits<float>::max();
+                for (const auto& background : backgrounds)
+                    minimum = std::min(minimum, contrastRatio(background, foreground));
+                return minimum;
+            };
+
+            constexpr float MIN_ICON_CONTRAST = 4.5f;
+            const ThemeColor preferred_opaque{preferred.x, preferred.y, preferred.z, 1.0f};
+            if (minimum_contrast(preferred_opaque) >= MIN_ICON_CONTRAST)
+                return preferred_opaque;
+
             return minimum_contrast(BLACK) >= minimum_contrast(WHITE) ? BLACK : WHITE;
         }
 
@@ -493,12 +520,8 @@ namespace lfs::vis::gui::rml_theme {
             menu_toolbar_bg.w = 1.0f;
             const ThemeColor menu_toolbar_selected_bg =
                 blend(menu_toolbar_bg, p.primary, std::clamp(t.menu.active_alpha, 0.24f, 0.55f));
-            const ThemeColor viewport_gizmo_bg{p.surface.x, p.surface.y, p.surface.z, 1.0f};
-            const ThemeColor viewport_gizmo_hover_bg = blend(viewport_gizmo_bg, p.primary, 0.16f);
-            const ThemeColor viewport_gizmo_selected_bg{p.primary.x, p.primary.y, p.primary.z, 1.0f};
-            const ThemeColor viewport_gizmo_selected_hover_bg =
-                blend(viewport_gizmo_selected_bg,
-                      readableIconColor(viewport_gizmo_selected_bg, p.text), 0.10f);
+            const ThemeColor viewport_glass_base =
+                blend(p.surface, p.background, is_light ? 0.04f : 0.10f);
 
             const auto window_surface =
                 colorToRml(is_light ? lighten(p.surface, 0.015f) : lighten(p.surface, 0.02f));
@@ -576,6 +599,108 @@ namespace lfs::vis::gui::rml_theme {
             const auto progress_fill_decor = std::format("decorator: horizontal-gradient({} {}); background-color: transparent",
                                                          colorToRml(progress_gradient.start),
                                                          colorToRml(progress_gradient.end));
+            const auto translucent_vertical_decor = [](const ThemeGradient& gradient,
+                                                        const float alpha) {
+                return std::format(
+                    "decorator: vertical-gradient({} {}); background-color: transparent",
+                    colorToRmlAlpha(gradient.start, alpha),
+                    colorToRmlAlpha(gradient.end, alpha));
+            };
+            const ThemeGradient viewport_glass_gradient = t.gradients.panel_body.value_or(
+                ThemeGradient{viewport_glass_base, viewport_glass_base});
+            const float viewport_toolbar_glass_opacity = is_light ? 0.70f : 0.68f;
+            const ThemeColor viewport_toolbar_icon =
+                readableIconColor(viewport_glass_gradient, viewport_toolbar_glass_opacity, p.text);
+            const auto viewport_toolbar_glass_decor = t.gradients.panel_body
+                                                           ? translucent_vertical_decor(
+                                                                 viewport_glass_gradient,
+                                                                 viewport_toolbar_glass_opacity)
+                                                           : std::format(
+                                                                 "decorator: none; background-color: {}",
+                                                                 colorToRmlAlpha(viewport_glass_base,
+                                                                                 viewport_toolbar_glass_opacity));
+            const ThemeColor viewport_toolbar_selected_bg =
+                blend(viewport_glass_base, p.primary, 0.56f);
+            const ThemeGradient viewport_toolbar_selected_gradient{
+                blend(viewport_glass_gradient.start, progress_gradient.start, 0.56f),
+                blend(viewport_glass_gradient.end, progress_gradient.end, 0.56f)};
+            constexpr float VIEWPORT_TOOLBAR_SELECTED_OPACITY = 0.82f;
+            const auto viewport_toolbar_selected_decor = t.gradients.progress
+                                                             ? translucent_vertical_decor(
+                                                                   viewport_toolbar_selected_gradient,
+                                                                   VIEWPORT_TOOLBAR_SELECTED_OPACITY)
+                                                             : std::format(
+                                                                   "decorator: none; background-color: {}",
+                                                                   colorToRmlAlpha(
+                                                                       viewport_toolbar_selected_bg,
+                                                                       VIEWPORT_TOOLBAR_SELECTED_OPACITY));
+            const ThemeColor viewport_toolbar_selected_icon = t.gradients.progress
+                                                                  ? readableIconColor(
+                                                                        viewport_toolbar_selected_gradient,
+                                                                        VIEWPORT_TOOLBAR_SELECTED_OPACITY,
+                                                                        p.text)
+                                                                  : readableIconColor(
+                                                                        viewport_toolbar_selected_bg, p.text);
+            const auto viewport_toolbar_shadow = t.shadows.enabled
+                                                     ? std::format(
+                                                           "0dp 3dp 12dp {}",
+                                                           colorToRmlAlpha(
+                                                               ThemeColor{0.0f, 0.0f, 0.0f, 1.0f},
+                                                               is_light ? 0.18f : 0.30f))
+                                                     : std::string{"none"};
+
+            const ThemeGradient viewport_gizmo_gradient = viewport_glass_gradient;
+            const ThemeGradient viewport_gizmo_hover_gradient{
+                blend(viewport_gizmo_gradient.start, p.primary, 0.16f),
+                blend(viewport_gizmo_gradient.end, p.primary, 0.16f)};
+            const ThemeGradient viewport_gizmo_selected_gradient = progress_gradient;
+            constexpr float VIEWPORT_GIZMO_OPACITY = 0.64f;
+            constexpr float VIEWPORT_GIZMO_HOVER_OPACITY = 0.76f;
+            constexpr float VIEWPORT_GIZMO_SELECTED_OPACITY = 0.82f;
+            constexpr float VIEWPORT_GIZMO_SELECTED_HOVER_OPACITY = 0.88f;
+            const ThemeColor viewport_gizmo_selected_icon =
+                readableIconColor(viewport_gizmo_selected_gradient,
+                                  VIEWPORT_GIZMO_SELECTED_OPACITY, p.text);
+            const ThemeGradient viewport_gizmo_selected_hover_gradient{
+                blend(viewport_gizmo_selected_gradient.start,
+                      viewport_gizmo_selected_icon, 0.10f),
+                blend(viewport_gizmo_selected_gradient.end,
+                      viewport_gizmo_selected_icon, 0.10f)};
+            const auto viewport_gizmo_decor = t.gradients.panel_body
+                                                  ? translucent_vertical_decor(
+                                                        viewport_gizmo_gradient,
+                                                        VIEWPORT_GIZMO_OPACITY)
+                                                  : std::format(
+                                                        "decorator: none; background-color: {}",
+                                                        colorToRmlAlpha(viewport_glass_base,
+                                                                        VIEWPORT_GIZMO_OPACITY));
+            const auto viewport_gizmo_hover_decor = t.gradients.panel_body
+                                                        ? translucent_vertical_decor(
+                                                              viewport_gizmo_hover_gradient,
+                                                              VIEWPORT_GIZMO_HOVER_OPACITY)
+                                                        : std::format(
+                                                              "decorator: none; background-color: {}",
+                                                              colorToRmlAlpha(
+                                                                  viewport_gizmo_hover_gradient.start,
+                                                                  VIEWPORT_GIZMO_HOVER_OPACITY));
+            const auto viewport_gizmo_selected_decor = t.gradients.progress
+                                                           ? translucent_vertical_decor(
+                                                                 viewport_gizmo_selected_gradient,
+                                                                 VIEWPORT_GIZMO_SELECTED_OPACITY)
+                                                           : std::format(
+                                                                 "decorator: none; background-color: {}",
+                                                                 colorToRmlAlpha(
+                                                                     viewport_gizmo_selected_gradient.start,
+                                                                     VIEWPORT_GIZMO_SELECTED_OPACITY));
+            const auto viewport_gizmo_selected_hover_decor = t.gradients.progress
+                                                                 ? translucent_vertical_decor(
+                                                                       viewport_gizmo_selected_hover_gradient,
+                                                                       VIEWPORT_GIZMO_SELECTED_HOVER_OPACITY)
+                                                                 : std::format(
+                                                                       "decorator: none; background-color: {}",
+                                                                       colorToRmlAlpha(
+                                                                           viewport_gizmo_selected_hover_gradient.start,
+                                                                           VIEWPORT_GIZMO_SELECTED_HOVER_OPACITY));
             const auto menu_chrome_decor = t.gradients.window_title
                                                ? std::format(
                                                      "decorator: vertical-gradient({} {}); background-color: {}",
@@ -803,24 +928,35 @@ namespace lfs::vis::gui::rml_theme {
                                                    is_light ? 0.18f : 0.44f)},
                 {"overlay.surface", colorToRmlAlpha(p.surface, 0.95f)},
                 {"overlay.border", colorToRmlAlpha(p.border, 0.4f)},
-                {"viewport.icon_dim",
-                 is_light ? colorToRmlAlpha(ThemeColor{0.90f, 0.93f, 0.98f, 1.0f}, 0.88f)
-                          : colorToRmlAlpha(p.text, 0.90f)},
-                {"viewport.icon_disabled",
-                  is_light ? colorToRmlAlpha(ThemeColor{0.90f, 0.93f, 0.98f, 1.0f}, 0.42f)
-                           : colorToRmlAlpha(p.text_dim, 0.48f)},
-                {"viewport.gizmo_bg", colorToRml(viewport_gizmo_bg)},
+                {"viewport.icon_dim", colorToRml(viewport_toolbar_icon)},
+                {"viewport.icon_disabled", colorToRmlAlpha(viewport_toolbar_icon, 0.70f)},
+                {"viewport.toolbar_text", colorToRml(viewport_toolbar_icon)},
+                {"viewport.toolbar_glass_decor", viewport_toolbar_glass_decor},
+                {"viewport.toolbar_border", colorToRmlAlpha(
+                                                blend(p.border, p.surface_bright, 0.38f),
+                                                is_light ? 0.72f : 0.62f)},
+                {"viewport.toolbar_shadow", viewport_toolbar_shadow},
+                {"viewport.toolbar_selected_decor", viewport_toolbar_selected_decor},
+                {"viewport.toolbar_selected_icon", colorToRml(viewport_toolbar_selected_icon)},
+                {"viewport.gizmo_decor", viewport_gizmo_decor},
                 {"viewport.gizmo_icon",
-                 colorToRml(readableIconColor(viewport_gizmo_bg, p.text))},
-                {"viewport.gizmo_hover_bg", colorToRml(viewport_gizmo_hover_bg)},
+                 colorToRml(readableIconColor(
+                     viewport_gizmo_gradient, VIEWPORT_GIZMO_OPACITY, p.text))},
+                {"viewport.gizmo_hover_decor", viewport_gizmo_hover_decor},
                 {"viewport.gizmo_hover_icon",
-                 colorToRml(readableIconColor(viewport_gizmo_hover_bg, p.text))},
+                 colorToRml(readableIconColor(
+                     viewport_gizmo_hover_gradient, VIEWPORT_GIZMO_HOVER_OPACITY, p.text))},
                 {"viewport.gizmo_disabled_icon",
-                 colorToRml(readableIconColor(viewport_gizmo_bg, p.text_dim))},
-                {"viewport.gizmo_selected_hover_bg",
-                 colorToRml(viewport_gizmo_selected_hover_bg)},
+                 colorToRmlAlpha(readableIconColor(
+                                     viewport_gizmo_gradient, VIEWPORT_GIZMO_OPACITY, p.text_dim),
+                                 0.62f)},
+                {"viewport.gizmo_selected_decor", viewport_gizmo_selected_decor},
+                {"viewport.gizmo_selected_icon", colorToRml(viewport_gizmo_selected_icon)},
+                {"viewport.gizmo_selected_hover_decor", viewport_gizmo_selected_hover_decor},
                 {"viewport.gizmo_selected_hover_icon",
-                 colorToRml(readableIconColor(viewport_gizmo_selected_hover_bg, p.text))},
+                 colorToRml(readableIconColor(viewport_gizmo_selected_hover_gradient,
+                                               VIEWPORT_GIZMO_SELECTED_HOVER_OPACITY,
+                                               p.text))},
                 {"viewport.selected_hover", colorToRml(ThemeColor{
                                                 std::min(1.0f, p.primary.x + 0.1f),
                                                 std::min(1.0f, p.primary.y + 0.1f),

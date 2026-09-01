@@ -11,6 +11,10 @@ body {
     bottom: 0;
     display: flex;
     flex-direction: column;
+    box-sizing: border-box;
+    border-width: 1dp;
+    border-radius: 5dp;
+    overflow: hidden;
 }
 
 .scene-header {

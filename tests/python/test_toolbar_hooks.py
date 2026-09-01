@@ -1506,8 +1506,8 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     gizmo_button_start = rcss.index(".viewport-gizmo-controls .icon-btn {")
     gizmo_button_end = rcss.index(".viewport-gizmo-controls .icon-btn:hover")
     gizmo_button_rcss = rcss[gizmo_button_start:gizmo_button_end]
-    assert "width: 30dp;\n    height: 30dp;\n    min-width: 30dp;\n    min-height: 30dp;" in gizmo_button_rcss
-    assert ".viewport-gizmo-controls .icon-btn img {\n    width: 20dp;\n    height: 20dp;" in rcss
+    assert "width: 27dp;\n    height: 27dp;\n    min-width: 27dp;\n    min-height: 27dp;" in gizmo_button_rcss
+    assert ".viewport-gizmo-controls .icon-btn img {\n    width: 18dp;\n    height: 18dp;" in rcss
     assert "viewport-nav-toolbar" not in rcss
     assert "viewport-nav-row" not in rcss
     assert "viewport-nav-separator" not in rcss
@@ -1537,6 +1537,69 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert "viewport-export-status" not in rml[panel_start:panel_end]
 
 
+def test_viewport_toolbar_uses_theme_glass_without_backdrop_filter():
+    project_root = Path(__file__).parent.parent.parent
+    resources = project_root / "src/visualizer/gui/rmlui/resources"
+    rcss = (resources / "viewport_overlay.rcss").read_text(encoding="utf-8")
+    theme_rcss = (resources / "viewport_overlay.theme.rcss").read_text(
+        encoding="utf-8"
+    )
+    resolver = (
+        project_root / "src/visualizer/gui/rmlui/rml_theme.cpp"
+    ).read_text(encoding="utf-8")
+
+    toolbar_start = rcss.index(".toolbar-vertical {")
+    toolbar_end = rcss.index("\n}", toolbar_start)
+    toolbar_rule = rcss[toolbar_start:toolbar_end]
+    for declaration in (
+        "top: 14dp;",
+        "bottom: 14dp;",
+        "width: 38dp;",
+        "padding: 5dp 3dp;",
+    ):
+        assert declaration in toolbar_rule
+
+    for token in (
+        "viewport.toolbar_glass_decor",
+        "viewport.toolbar_border",
+        "viewport.toolbar_shadow",
+        "viewport.toolbar_text",
+        "viewport.toolbar_selected_decor",
+        "viewport.toolbar_selected_icon",
+        "viewport.gizmo_decor",
+        "viewport.gizmo_hover_decor",
+        "viewport.gizmo_selected_decor",
+        "viewport.gizmo_selected_hover_decor",
+    ):
+        assert f"@{{{token}}}" in theme_rcss
+        assert f'{{"{token}"' in resolver
+
+    centered_toolbar_start = theme_rcss.index(".toolbar-hcenter .toolbar-container {")
+    centered_toolbar_end = theme_rcss.index("\n}", centered_toolbar_start)
+    centered_toolbar_rule = theme_rcss[centered_toolbar_start:centered_toolbar_end]
+    assert "@{viewport.toolbar_glass_decor};" in centered_toolbar_rule
+    assert "border-color: @{viewport.toolbar_border};" in centered_toolbar_rule
+    assert "box-shadow: @{viewport.toolbar_shadow};" in centered_toolbar_rule
+
+    tool_panel_start = theme_rcss.index(".viewport-transform-panel {")
+    tool_panel_end = theme_rcss.index("\n}", tool_panel_start)
+    tool_panel_rule = theme_rcss[tool_panel_start:tool_panel_end]
+    assert "@{viewport.toolbar_glass_decor};" in tool_panel_rule
+    assert "color: @{viewport.toolbar_text};" in tool_panel_rule
+    assert "border-color: @{viewport.toolbar_border};" in tool_panel_rule
+    assert "box-shadow: @{viewport.toolbar_shadow};" in tool_panel_rule
+
+    centered_selected_start = theme_rcss.index(".toolbar-hcenter .icon-btn.selected {")
+    centered_selected_end = theme_rcss.index("\n}", centered_selected_start)
+    centered_selected_rule = theme_rcss[centered_selected_start:centered_selected_end]
+    assert "@{viewport.toolbar_selected_decor};" in centered_selected_rule
+    assert ".toolbar-hcenter .icon-btn.selected img" in theme_rcss
+    assert ".viewport-transform-panel .icon-btn.selected img" in theme_rcss
+
+    assert "backdrop-filter" not in theme_rcss
+    assert "filter:" not in theme_rcss
+
+
 def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
     project_root = Path(__file__).parent.parent.parent
     resources = project_root / "src/visualizer/gui/rmlui/resources"
@@ -1544,6 +1607,8 @@ def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
     right_panel_theme = (resources / "right_panel.theme.rcss").read_text(encoding="utf-8")
     shell_theme = (resources / "shell.theme.rcss").read_text(encoding="utf-8")
     panel_host_theme = (resources / "panel_host.theme.rcss").read_text(encoding="utf-8")
+    scene_tree_rcss = (resources / "scene_tree.rcss").read_text(encoding="utf-8")
+    scene_tree_theme = (resources / "scene_tree.theme.rcss").read_text(encoding="utf-8")
     resolver = (
         project_root / "src/visualizer/gui/rmlui/rml_theme.cpp"
     ).read_text(encoding="utf-8")
@@ -1577,9 +1642,19 @@ def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
     active_rule = right_panel_theme[active_start:active_end]
     assert "border-bottom-color: @{right_panel.tab_active_bottom_border};" in active_rule
 
-    assert "background-color: @{menu.background};" in shell_theme
-    assert "@{panel.body_decor};" in panel_host_theme
-    assert "background-color: transparent;" not in panel_host_theme
+    assert "@{panel.body_decor};" in shell_theme
+    assert "@{chrome.right_panel_decor};" in right_panel_theme
+    assert "@{panel.host_body_decor};" in panel_host_theme
+    assert '{"panel.host_body_decor"' in resolver
+
+    scene_body_start = scene_tree_rcss.index("body {")
+    scene_body_end = scene_tree_rcss.index("\n}", scene_body_start)
+    scene_body_rule = scene_tree_rcss[scene_body_start:scene_body_end]
+    assert "box-sizing: border-box;" in scene_body_rule
+    assert "border-width: 1dp;" in scene_body_rule
+    assert "border-radius: 5dp;" in scene_body_rule
+    assert "overflow: hidden;" in scene_body_rule
+    assert "border-color: @{right_panel.border};" in scene_tree_theme
 
 
 def test_gt_compare_modes_show_matching_color_legends():

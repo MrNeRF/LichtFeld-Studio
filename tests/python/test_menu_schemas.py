@@ -265,9 +265,14 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
 
     view_items = view_mod.ViewMenu().menu_items()
     assert view_items[0]["type"] == "submenu"
+    assert view_items[0]["label"] == "tr:menu.view.theme · LichtFeld · Dark"
     assert view_items[1]["type"] == "submenu"
     theme_families = view_items[0]["items"]
-    assert [item["label"] for item in theme_families] == ["LichtFeld", "Signal", "Gruvbox"]
+    assert [item["label"] for item in theme_families] == [
+        "LichtFeld · Dark",
+        "Signal",
+        "Gruvbox",
+    ]
     assert theme_families[0]["type"] == "submenu"
     assert [item["label"] for item in theme_families[0]["items"]] == [
         "Dark",
@@ -287,7 +292,16 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert theme_families[2]["type"] == "toggle"
 
     state["supports_system_theme"] = False
-    theme_families = view_mod.ViewMenu().menu_items()[0]["items"]
+    updated_view_items = view_mod.ViewMenu().menu_items()
+    assert updated_view_items[0]["label"] == (
+        "tr:menu.view.theme · Signal · tr:menu.view.theme.auto"
+    )
+    theme_families = updated_view_items[0]["items"]
+    assert [item["label"] for item in theme_families] == [
+        "LichtFeld",
+        "Signal · tr:menu.view.theme.auto",
+        "Gruvbox",
+    ]
     assert [item["label"] for item in theme_families[0]["items"]] == ["Dark", "Light"]
     assert [item["label"] for item in theme_families[1]["items"]] == ["Night", "Day"]
     assert view_items[1]["items"][1]["label"] == "100%"

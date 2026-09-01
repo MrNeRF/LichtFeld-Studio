@@ -94,11 +94,10 @@ body {
 .toolbar-vertical {
     position: absolute;
     left: 0;
-    top: 0;
-    bottom: 0;
-    width: 40dp;
-    padding-top: 6dp;
-    padding-bottom: 8dp;
+    top: 14dp;
+    bottom: 14dp;
+    width: 38dp;
+    padding: 5dp 3dp;
     flex-direction: column;
     align-items: center;
     pointer-events: auto;
