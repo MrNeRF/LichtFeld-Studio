@@ -166,15 +166,15 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 30dp;
-    height: 30dp;
-    min-width: 30dp;
-    min-height: 30dp;
+    width: 27dp;
+    height: 27dp;
+    min-width: 27dp;
+    min-height: 27dp;
     margin: 0;
     padding: 3dp;
     border-width: 1dp;
     border-color: transparent;
-    border-radius: 6dp;
+    border-radius: 5dp;
     box-sizing: border-box;
     flex-shrink: 0;
     opacity: 0.88;
@@ -187,8 +187,8 @@ body {
 }
 
 .viewport-gizmo-controls .icon-btn img {
-    width: 20dp;
-    height: 20dp;
+    width: 18dp;
+    height: 18dp;
 }
 
 .toolbar-hcenter {

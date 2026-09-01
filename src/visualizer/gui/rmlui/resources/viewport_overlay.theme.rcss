@@ -1,7 +1,7 @@
 /* Theme-dependent viewport overlay controls. */
 
 .toolbar-container {
-    background-color: @{toolbar.background};
+    @{chrome.toolbar_decor};
     border-radius: @{num(size.window_rounding)}dp;
 }
 
@@ -48,6 +48,7 @@
 
 .toolbar-vertical {
     background-color: transparent;
+    decorator: none;
     border-radius: 0;
 }
 
@@ -101,14 +102,22 @@
 }
 
 .toolbar-vertical .icon-btn:hover,
-.toolbar-hcenter .icon-btn:hover,
-.viewport-gizmo-controls .icon-btn:hover {
+.toolbar-hcenter .icon-btn:hover {
     background-color: @{alpha(primary,0.16)};
     border-color: @{alpha(primary,0.42)};
 }
 
+.viewport-gizmo-controls .icon-btn:hover {
+    background-color: @{viewport.gizmo_hover_bg};
+    border-color: @{primary};
+}
+
+.viewport-gizmo-controls .icon-btn:hover img {
+    image-color: @{viewport.gizmo_hover_icon};
+}
+
 .icon-btn.selected {
-    background-color: @{primary};
+    @{controls.selected_decor};
 }
 
 .toolbar-vertical .icon-btn.selected,
@@ -117,12 +126,12 @@
 }
 
 .viewport-gizmo-controls .icon-btn.selected {
-    background-color: @{viewport.gizmo_selected_bg};
+    @{controls.selected_decor};
     border-color: @{primary};
 }
 
 .viewport-gizmo-controls .icon-btn.selected img {
-    image-color: @{viewport.gizmo_selected_icon};
+    image-color: @{controls.selected_icon};
 }
 
 .icon-btn.selected:hover {
@@ -144,7 +153,7 @@
 }
 
 .icon-btn.selected img {
-    image-color: @{background};
+    image-color: @{controls.selected_icon};
 }
 
 .icon-btn.disabled,

@@ -5,23 +5,23 @@ body {
 }
 
 #menu-row {
-    background-color: @{menu.background};
+    @{chrome.menu_decor};
 }
 
 #menu-left {
-    background-color: @{menu.background};
+    background-color: transparent;
 }
 
 #menu-items {
-    background-color: @{menu.background};
+    background-color: transparent;
 }
 
 #menu-right {
-    background-color: @{menu.background};
+    background-color: transparent;
 }
 
 #menu-toolbar {
-    background-color: @{menu.background};
+    background-color: transparent;
 }
 
 .menu-label:hover {
@@ -102,11 +102,11 @@ body {
 }
 
 .menu-window-utility-btn.selected {
-    background-color: @{menu.toolbar_selected_bg};
+    @{menu.toolbar_selected_decor};
 }
 
 .menu-toolbar-btn.selected {
-    background-color: @{menu.toolbar_selected_bg};
+    @{menu.toolbar_selected_decor};
     border-color: @{primary};
 }
 

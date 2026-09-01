@@ -106,6 +106,9 @@ def test_toolbar_icons_use_contrast_aware_theme_tokens():
     viewport_theme = (resources / "viewport_overlay.theme.rcss").read_text(
         encoding="utf-8"
     )
+    viewport_layout = (resources / "viewport_overlay.rcss").read_text(
+        encoding="utf-8"
+    )
     rml_theme_cpp = (
         PROJECT_ROOT
         / "src"
@@ -119,25 +122,68 @@ def test_toolbar_icons_use_contrast_aware_theme_tokens():
     assert "MIN_ICON_CONTRAST = 4.5f" in rml_theme_cpp
     for token in (
         "menu.toolbar_icon",
-        "menu.toolbar_selected_bg",
+        "menu.toolbar_selected_decor",
         "menu.toolbar_selected_icon",
         "viewport.gizmo_bg",
         "viewport.gizmo_icon",
+        "viewport.gizmo_hover_bg",
+        "viewport.gizmo_hover_icon",
         "viewport.gizmo_disabled_icon",
-        "viewport.gizmo_selected_bg",
-        "viewport.gizmo_selected_icon",
         "viewport.gizmo_selected_hover_bg",
         "viewport.gizmo_selected_hover_icon",
     ):
         assert f'{{"{token}"' in rml_theme_cpp
 
     assert "image-color: @{menu.toolbar_icon};" in menubar_theme
-    assert "background-color: @{menu.toolbar_selected_bg};" in menubar_theme
+    assert "@{menu.toolbar_selected_decor};" in menubar_theme
     assert "image-color: @{menu.toolbar_selected_icon};" in menubar_theme
     assert "background-color: @{viewport.gizmo_bg};" in viewport_theme
     assert "image-color: @{viewport.gizmo_icon};" in viewport_theme
-    assert "background-color: @{viewport.gizmo_selected_bg};" in viewport_theme
-    assert "image-color: @{viewport.gizmo_selected_icon};" in viewport_theme
+    assert "background-color: @{viewport.gizmo_hover_bg};" in viewport_theme
+    assert "image-color: @{viewport.gizmo_hover_icon};" in viewport_theme
+    assert "@{controls.selected_decor};" in viewport_theme
+    assert "image-color: @{controls.selected_icon};" in viewport_theme
+    assert "width: 27dp;" in viewport_layout
+    assert "height: 27dp;" in viewport_layout
+    assert "width: 18dp;" in viewport_layout
+    assert "height: 18dp;" in viewport_layout
+
+
+def test_optional_gradients_style_the_primary_application_chrome():
+    resources = (
+        PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+    )
+    rml_theme_cpp = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "rml_theme.cpp"
+    ).read_text(encoding="utf-8")
+    consumers = {
+        "chrome.menu_decor": ("shell.theme.rcss", "menubar.theme.rcss"),
+        "chrome.status_decor": ("shell.theme.rcss", "statusbar.theme.rcss"),
+        "chrome.right_panel_decor": ("right_panel.theme.rcss",),
+        "chrome.right_panel_edge_shape": ("right_panel.theme.rcss",),
+        "chrome.right_panel_separator_decor": ("right_panel.theme.rcss",),
+        "chrome.toolbar_decor": ("viewport_overlay.theme.rcss",),
+        "controls.selected_decor": ("viewport_overlay.theme.rcss",),
+        "controls.selected_icon": ("viewport_overlay.theme.rcss",),
+    }
+    for token, filenames in consumers.items():
+        assert f'{{"{token}"' in rml_theme_cpp
+        for filename in filenames:
+            resource = (resources / filename).read_text(encoding="utf-8")
+            assert f"@{{{token}}}" in resource
+
+    panel_host_theme = (resources / "panel_host.theme.rcss").read_text(
+        encoding="utf-8"
+    )
+    assert '{"panel.host_body_decor"' in rml_theme_cpp
+    assert '"decorator: none; background-color: transparent"' in rml_theme_cpp
+    assert "@{panel.host_body_decor}" in panel_host_theme
+    assert '"width: 1dp; height: 100%' in rml_theme_cpp
 
 
 def test_rml_tooltips_request_only_pending_animation_frames():
@@ -278,7 +324,7 @@ def test_all_optional_theme_gradients_reach_rml_consumers():
 
     gradient_tokens = {
         "window_body": ("window.body_decor", "components.theme.rcss"),
-        "panel_body": ("panel.body_decor", "panel_host.theme.rcss"),
+        "panel_body": ("panel.body_decor", "shell.theme.rcss"),
         "window_title": ("window.title_decor", "components.theme.rcss"),
         "section_header": ("components.header_decor", "components.theme.rcss"),
         "section_header_hover": (

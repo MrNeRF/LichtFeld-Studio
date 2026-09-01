@@ -64,19 +64,19 @@
       "gradients": {
         "_info": "Every gradient is optional; missing or invalid entries use the standard palette-based fallback",
 
-        "window_body": { "start": [0.086, 0.118, 0.220, 1.0], "end": [0.031, 0.047, 0.090, 1.0] },
+        "window_body": { "start": [0.098, 0.133, 0.245, 1.0], "end": [0.052, 0.032, 0.110, 1.0] },
         "_window_body": "Vertical floating-window body gradient",
 
-        "panel_body": { "start": [0.082, 0.114, 0.216, 1.0], "end": [0.039, 0.059, 0.118, 1.0] },
+        "panel_body": { "start": [0.094, 0.129, 0.239, 1.0], "end": [0.046, 0.035, 0.122, 1.0] },
         "_panel_body": "Vertical hosted-panel body gradient",
 
-        "window_title": { "start": [0.176, 0.243, 0.475, 1.0], "end": [0.075, 0.106, 0.220, 1.0] },
+        "window_title": { "start": [0.176, 0.302, 0.612, 1.0], "end": [0.235, 0.102, 0.435, 1.0] },
         "_window_title": "Vertical floating-window title gradient",
 
-        "section_header": { "start": [0.137, 0.184, 0.345, 1.0], "end": [0.075, 0.110, 0.227, 1.0] },
+        "section_header": { "start": [0.137, 0.231, 0.475, 1.0], "end": [0.180, 0.086, 0.353, 1.0] },
         "_section_header": "Vertical section header gradient",
 
-        "section_header_hover": { "start": [0.196, 0.271, 0.510, 1.0], "end": [0.098, 0.145, 0.302, 1.0] },
+        "section_header_hover": { "start": [0.220, 0.361, 0.702, 1.0], "end": [0.310, 0.137, 0.553, 1.0] },
         "_section_header_hover": "Vertical hovered section header gradient",
 
         "progress": { "start": [0.220, 0.580, 1.000, 1.0], "end": [0.686, 0.420, 1.000, 1.0] },
@@ -242,19 +242,19 @@
       "gradients": {
         "_info": "Every gradient is optional; missing or invalid entries use the standard palette-based fallback",
 
-        "window_body": { "start": [1.000, 1.000, 1.000, 1.0], "end": [0.867, 0.918, 0.984, 1.0] },
+        "window_body": { "start": [1.000, 1.000, 1.000, 1.0], "end": [0.878, 0.855, 0.984, 1.0] },
         "_window_body": "Vertical floating-window body gradient",
 
-        "panel_body": { "start": [0.984, 0.992, 1.000, 1.0], "end": [0.831, 0.894, 0.980, 1.0] },
+        "panel_body": { "start": [0.984, 0.992, 1.000, 1.0], "end": [0.820, 0.835, 0.980, 1.0] },
         "_panel_body": "Vertical hosted-panel body gradient",
 
-        "window_title": { "start": [0.902, 0.945, 1.000, 1.0], "end": [0.690, 0.812, 0.980, 1.0] },
+        "window_title": { "start": [0.824, 0.902, 1.000, 1.0], "end": [0.792, 0.690, 0.976, 1.0] },
         "_window_title": "Vertical floating-window title gradient",
 
-        "section_header": { "start": [0.941, 0.969, 1.000, 1.0], "end": [0.753, 0.851, 0.984, 1.0] },
+        "section_header": { "start": [0.902, 0.949, 1.000, 1.0], "end": [0.812, 0.733, 0.980, 1.0] },
         "_section_header": "Vertical section header gradient",
 
-        "section_header_hover": { "start": [0.843, 0.910, 1.000, 1.0], "end": [0.635, 0.773, 0.973, 1.0] },
+        "section_header_hover": { "start": [0.784, 0.882, 1.000, 1.0], "end": [0.733, 0.596, 0.965, 1.0] },
         "_section_header_hover": "Vertical hovered section header gradient",
 
         "progress": { "start": [0.035, 0.318, 0.820, 1.0], "end": [0.455, 0.188, 0.824, 1.0] },
