@@ -11,11 +11,11 @@ namespace lfs::io {
     using lfs::core::Tensor;
 
     /**
-     * @brief Compute Morton codes and sort indices using compact 32-bit buffers.
+     * @brief Compute 63-bit Morton codes and sort indices on the GPU.
      *
-     * SOG export only needs 30-bit Morton keys and supports at most INT_MAX
-     * splats on the GPU sort path, so this avoids the 64-bit key/index buffers
-     * used by the generic API.
+     * SOG export uses 21 bits per axis over the global bounds. This finer grid
+     * avoids the dense-cell scrambling caused by a single 10-bit pass while
+     * retaining the source order for equal keys.
      *
      * @param positions Tensor of shape [N, 3] containing 3D positions (Float32, CUDA)
      * @return Tensor of sorted indices (Int32, CUDA)

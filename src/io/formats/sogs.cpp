@@ -14,7 +14,10 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
+#include "core/sh_value_quant_kernels.hpp"
+#include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "cuda/kmeans.hpp"
 #include "cuda/morton_encoding.hpp"
 #include "io/atomic_output.hpp"
@@ -1539,9 +1542,134 @@ namespace lfs::io {
             constexpr int CHANNELS = 4;
             constexpr double COMPRESSION_RATIO = 0.4;
             constexpr size_t OVERHEAD = 4096;
+            const int sh_degree = splat_data.get_max_sh_degree();
+
+            struct ShKmeansResult {
+                Tensor centroids;
+                Tensor labels;
+                double milliseconds = 0.0;
+                double done_ms = 0.0;
+            };
+            std::future<ShKmeansResult> sh_kmeans_future;
+            std::optional<ShKmeansResult> sh_kmeans_result;
+            int sh_coeffs = 0;
+            int sh_dims = 0;
+            int palette_size = 0;
+            Tensor shN_float_swizzled;
+            double t_kmeans_launch_ms = 0.0;
+            double t_kmeans_done_ms = 0.0;
+            double t_join_ms = 0.0;
+            double t_labels_encoded_ms = 0.0;
+            double t_webp5_archived_ms = 0.0;
+            double t_archive_done_ms = 0.0;
+
+            const auto join_sh_kmeans_if_started = [&]() {
+                if (sh_kmeans_future.valid() && !sh_kmeans_result) {
+                    sh_kmeans_result.emplace(sh_kmeans_future.get());
+                }
+            };
+
+            if (sh_degree > 0) {
+                static const int SH_COEFFS_TABLE[] = {0, 3, 8, 15};
+                sh_coeffs = SH_COEFFS_TABLE[sh_degree];
+                sh_dims = sh_coeffs * 3;
+
+                palette_size = std::min(
+                                   64, static_cast<int>(std::pow(2, std::floor(std::log2(num_rows / 1024.0))))) *
+                               1024;
+                palette_size = std::clamp(
+                    palette_size, 1024,
+                    static_cast<int>(std::min<int64_t>(num_rows, std::numeric_limits<int>::max())));
+
+                // k-means expects 1D float32 swizzled layout. Resident shN may be:
+                //  - Float32 swizzled (training default / legacy)
+                //  - Float16 pad-dropped q16 — must dequant+reswizzle first
+                //  - any other dtype/layout is rejected
+                const auto& shN_raw = splat_data.shN_raw();
+                if (!shN_raw.is_valid() || shN_raw.numel() == 0) {
+                    return make_error(ErrorCode::INVALID_DATASET,
+                                      "Invalid SH tensor for SOG export",
+                                      options.output_path);
+                }
+
+                if (shN_raw.ndim() == 1 && shN_raw.dtype() == lfs::core::DataType::Float32) {
+                    shN_float_swizzled = shN_raw;
+                } else if (shN_raw.dtype() == lfs::core::DataType::Float16 &&
+                           splat_data.shN_value_quantized() &&
+                           splat_data.shN_value_bounds().is_valid() &&
+                           splat_data.shN_value_bounds().numel() > 0) {
+                    const size_t n = static_cast<size_t>(num_rows);
+                    const uint32_t k = static_cast<uint32_t>(splat_data.max_sh_coeffs_rest());
+                    const size_t float_count = lfs::core::sh_swizzled_float_count(n, k);
+                    shN_float_swizzled = Tensor::empty(
+                        {float_count}, Device::CUDA, lfs::core::DataType::Float32);
+
+                    const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+                    if (shN_float_swizzled.stream() != stream)
+                        shN_float_swizzled.set_stream(stream);
+                    const auto q16 = lfs::core::resolve_q16_bind_ptrs(splat_data);
+                    if (q16.codes == nullptr || q16.bounds == nullptr) {
+                        return make_error(ErrorCode::INVALID_DATASET,
+                                          "Invalid q16 SH codes or bounds for SOG export",
+                                          options.output_path);
+                    }
+                    lfs::core::sh_value_quant::decode_shN_u16_to_float4(
+                        reinterpret_cast<const std::uint16_t*>(q16.codes),
+                        q16.bounds,
+                        shN_float_swizzled.ptr<float>(),
+                        n,
+                        k,
+                        stream);
+                    const cudaError_t sync_status = cudaStreamSynchronize(stream);
+                    if (sync_status != cudaSuccess) {
+                        return make_error(
+                            ErrorCode::ENCODING_FAILED,
+                            std::format("Failed to decode quantized SH tensor for SOG export: {}",
+                                        cudaGetErrorString(sync_status)),
+                            options.output_path);
+                    }
+                } else {
+                    // Fallback for IEEE-f16 without q16 bounds and any other layout:
+                    // materialise canonical [N,K,3], then re-swizzle to float1D.
+                    Tensor shN_canon = splat_data.shN_canonical();
+                    if (!shN_canon.is_valid() || shN_canon.ndim() != 3 ||
+                        shN_canon.dtype() != lfs::core::DataType::Float32) {
+                        return make_error(ErrorCode::INVALID_DATASET,
+                                          "Failed to materialise float SH for SOG export",
+                                          options.output_path);
+                    }
+                    if (shN_canon.device() != Device::CUDA) {
+                        shN_canon = shN_canon.cuda();
+                    }
+                    const size_t n = static_cast<size_t>(num_rows);
+                    const uint32_t k = static_cast<uint32_t>(shN_canon.size(1));
+                    const size_t float_count = lfs::core::sh_swizzled_float_count(n, k);
+                    shN_float_swizzled = Tensor::zeros({float_count}, Device::CUDA, lfs::core::DataType::Float32);
+                    lfs::core::reorder_sh_to_swizzled(
+                        shN_canon.ptr<float>(),
+                        shN_float_swizzled.ptr<float>(),
+                        n, k, k);
+                }
+
+                sh_kmeans_future = std::async(
+                    std::launch::async,
+                    [shN_float_swizzled, num_rows, sh_coeffs, palette_size,
+                     iterations = options.kmeans_iterations, export_started]() mutable {
+                        const auto started = std::chrono::steady_clock::now();
+                        auto [centroids, labels] = lfs::io::kmeans_sh_swizzled(
+                            shN_float_swizzled, static_cast<int>(num_rows), sh_coeffs,
+                            palette_size, iterations);
+                        const auto finished = std::chrono::steady_clock::now();
+                        return ShKmeansResult{
+                            std::move(centroids),
+                            std::move(labels),
+                            std::chrono::duration<double, std::milli>(finished - started).count(),
+                            std::chrono::duration<double, std::milli>(finished - export_started).count()};
+                    });
+                t_kmeans_launch_ms = milliseconds(export_started, std::chrono::steady_clock::now());
+            }
 
             const size_t texture_size = static_cast<size_t>(width) * height * CHANNELS;
-            const int sh_degree = splat_data.get_max_sh_degree();
 
             size_t estimated_size = texture_size * 5;
             if (sh_degree > 0) {
@@ -1550,14 +1678,17 @@ namespace lfs::io {
             estimated_size = static_cast<size_t>(estimated_size * COMPRESSION_RATIO) + OVERHEAD;
 
             if (auto result = check_disk_space(options.output_path, estimated_size); !result) {
+                join_sh_kmeans_if_started();
                 return std::unexpected(result.error());
             }
 
             if (auto result = verify_writable(options.output_path); !result) {
+                join_sh_kmeans_if_started();
                 return std::unexpected(result.error());
             }
 
             if (num_rows > static_cast<int64_t>(std::numeric_limits<int>::max())) {
+                join_sh_kmeans_if_started();
                 return make_error(ErrorCode::INVALID_DATASET,
                                   "SOG export supports at most INT_MAX splats",
                                   options.output_path);
@@ -1567,6 +1698,7 @@ namespace lfs::io {
             auto means_cuda = as_cuda_contiguous(splat_data.means_raw());
             auto sort_indices_tensor = morton_sort_indices_for_positions(means_cuda);
             if (!sort_indices_tensor.is_valid()) {
+                join_sh_kmeans_if_started();
                 return make_error(ErrorCode::ENCODING_FAILED,
                                   "Failed to compute Morton order for SOG export",
                                   options.output_path);
@@ -1586,6 +1718,7 @@ namespace lfs::io {
 
             // Check archive was created successfully
             if (!archive.is_valid()) {
+                join_sh_kmeans_if_started();
                 return make_error(ErrorCode::ARCHIVE_CREATION_FAILED, archive.last_error(), options.output_path);
             }
 
@@ -1594,11 +1727,14 @@ namespace lfs::io {
                 const uint8_t* data;
                 int width;
                 int height;
+                int method;
+                float quality;
             };
             using EncodedWebp = std::vector<uint8_t>;
             struct EncodedWebpResult {
                 EncodedWebp bytes;
                 double milliseconds = 0.0;
+                double finished_ms = 0.0;
             };
             struct WebpTiming {
                 std::string filename;
@@ -1610,7 +1746,7 @@ namespace lfs::io {
             webp_futures.reserve(sh_degree > 0 ? 7 : 5);
             auto webp_started = std::chrono::steady_clock::time_point::max();
 
-            const auto encode_webp = [&options, milliseconds](PendingWebp image) -> Result<EncodedWebpResult> {
+            const auto encode_webp = [&options, milliseconds, export_started](PendingWebp image) -> Result<EncodedWebpResult> {
                 const auto encode_started = std::chrono::steady_clock::now();
 
                 WebPConfig config;
@@ -1619,6 +1755,8 @@ namespace lfs::io {
                                       std::format("Invalid WebP configuration for '{}'", image.filename),
                                       options.output_path);
                 }
+                config.method = image.method;
+                config.quality = image.quality;
                 config.exact = 1;
                 if (!WebPValidateConfig(&config)) {
                     return make_error(ErrorCode::ENCODING_FAILED,
@@ -1661,7 +1799,8 @@ namespace lfs::io {
                 const auto encode_finished = std::chrono::steady_clock::now();
                 EncodedWebpResult encoded{
                     EncodedWebp(writer.mem, writer.mem + writer.size),
-                    milliseconds(encode_started, encode_finished)};
+                    milliseconds(encode_started, encode_finished),
+                    milliseconds(export_started, encode_finished)};
                 WebPMemoryWriterClear(&writer);
                 WebPPictureFree(&picture);
                 return encoded;
@@ -1669,8 +1808,9 @@ namespace lfs::io {
             std::vector<PendingWebp> pending_webps;
             pending_webps.reserve(sh_degree > 0 ? 7 : 5);
             const auto queue_webp = [&](const char* filename, const std::vector<uint8_t>& data,
-                                        const int image_width, const int image_height) {
-                pending_webps.push_back({filename, data.data(), image_width, image_height});
+                                        const int image_width, const int image_height,
+                                        const int method, const float quality) {
+                pending_webps.push_back({filename, data.data(), image_width, image_height, method, quality});
                 if (webp_started == std::chrono::steady_clock::time_point::max()) {
                     webp_started = std::chrono::steady_clock::now();
                 }
@@ -1689,63 +1829,6 @@ namespace lfs::io {
                 return (static_cast<size_t>(num_rows) + PACK_CHUNK_SIZE - 1) / PACK_CHUNK_SIZE;
             };
 
-            struct ShKmeansResult {
-                Tensor centroids;
-                Tensor labels;
-                double milliseconds = 0.0;
-            };
-            std::future<ShKmeansResult> sh_kmeans_future;
-            std::optional<ShKmeansResult> sh_kmeans_result;
-            int sh_coeffs = 0;
-            int sh_dims = 0;
-            int palette_size = 0;
-            Tensor shN_float_swizzled;
-
-            if (sh_degree > 0) {
-                static const int SH_COEFFS_TABLE[] = {0, 3, 8, 15};
-                sh_coeffs = SH_COEFFS_TABLE[sh_degree];
-                sh_dims = sh_coeffs * 3;
-
-                palette_size = std::min(64, static_cast<int>(std::pow(2, std::floor(std::log2(num_rows / 1024.0))))) * 1024;
-                palette_size = std::clamp(palette_size, 1024, static_cast<int>(num_rows));
-
-                // k-means expects 1D float32 swizzled layout. Resident shN may be:
-                //  - Float32 swizzled (training default / legacy)
-                //  - Float16 pad-dropped q16 — must dequant+reswizzle first
-                //  - any other dtype/layout is rejected
-                const auto& shN_raw = splat_data.shN_raw();
-                if (!shN_raw.is_valid() || shN_raw.numel() == 0) {
-                    return make_error(ErrorCode::INVALID_DATASET,
-                                      "Invalid SH tensor for SOG export",
-                                      options.output_path);
-                }
-
-                if (shN_raw.ndim() == 1 && shN_raw.dtype() == lfs::core::DataType::Float32) {
-                    shN_float_swizzled = shN_raw;
-                } else {
-                    // Dequantize / reformat via canonical [N,K,3], then re-swizzle to float1D.
-                    // shN_canonical() handles q16 (Float16 + bounds) and float swizzled.
-                    Tensor shN_canon = splat_data.shN_canonical();
-                    if (!shN_canon.is_valid() || shN_canon.ndim() != 3 ||
-                        shN_canon.dtype() != lfs::core::DataType::Float32) {
-                        return make_error(ErrorCode::INVALID_DATASET,
-                                          "Failed to materialise float SH for SOG export",
-                                          options.output_path);
-                    }
-                    if (shN_canon.device() != Device::CUDA) {
-                        shN_canon = shN_canon.cuda();
-                    }
-                    const size_t n = static_cast<size_t>(num_rows);
-                    const uint32_t k = static_cast<uint32_t>(shN_canon.size(1));
-                    const size_t float_count = lfs::core::sh_swizzled_float_count(n, k);
-                    shN_float_swizzled = Tensor::zeros({float_count}, Device::CUDA, lfs::core::DataType::Float32);
-                    lfs::core::reorder_sh_to_swizzled(
-                        shN_canon.ptr<float>(),
-                        shN_float_swizzled.ptr<float>(),
-                        n, k, k);
-                }
-            }
-
             auto rotations = splat_data.rotation_raw().cpu();
             const auto* rot_ptr = rotations.ptr<float>();
             auto scales = splat_data.scaling_raw().cpu();
@@ -1756,23 +1839,9 @@ namespace lfs::io {
             const auto* opacity_ptr = opacity.ptr<float>();
 
             if (!report_progress(0.10f, "Positions")) {
+                join_sh_kmeans_if_started();
+                wait_for_webp_encodes();
                 return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
-            }
-
-            if (sh_degree > 0) {
-                sh_kmeans_future = std::async(
-                    std::launch::async,
-                    [shN_float_swizzled, num_rows, sh_coeffs, palette_size, iterations = options.kmeans_iterations]() mutable {
-                        const auto started = std::chrono::steady_clock::now();
-                        auto [centroids, labels] = lfs::io::kmeans_sh_swizzled(
-                            shN_float_swizzled, static_cast<int>(num_rows), sh_coeffs,
-                            palette_size, iterations);
-                        const auto finished = std::chrono::steady_clock::now();
-                        return ShKmeansResult{
-                            std::move(centroids),
-                            std::move(labels),
-                            std::chrono::duration<double, std::milli>(finished - started).count()};
-                    });
             }
 
             const auto join_sh_kmeans = [&]() -> ShKmeansResult& {
@@ -1791,6 +1860,47 @@ namespace lfs::io {
                     }
                 }
                 wait_for_webp_encodes();
+            };
+
+            constexpr size_t OVERLAPPED_WEBP_COUNT = 5;
+            size_t archived_webps = 0;
+            const auto archive_ready_webps = [&]() -> Result<void> {
+                while (archived_webps < std::min(OVERLAPPED_WEBP_COUNT, webp_futures.size())) {
+                    auto& future = webp_futures[archived_webps];
+                    if (future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
+                        break;
+                    }
+
+                    Result<EncodedWebpResult> encoded;
+                    try {
+                        encoded = future.get();
+                    } catch (...) {
+                        join_sh_kmeans_and_wait_for_webp_encodes();
+                        throw;
+                    }
+                    if (!encoded) {
+                        join_sh_kmeans_and_wait_for_webp_encodes();
+                        return std::unexpected(encoded.error());
+                    }
+                    if (debug_logging_enabled) {
+                        webp_timings.push_back({pending_webps[archived_webps].filename, encoded->milliseconds});
+                    }
+                    if (pending_webps[archived_webps].filename == "shN_labels.webp") {
+                        t_labels_encoded_ms = encoded->finished_ms;
+                    }
+                    auto result = archive.add_file(
+                        pending_webps[archived_webps].filename,
+                        encoded->bytes.data(), encoded->bytes.size());
+                    if (!result) {
+                        join_sh_kmeans_and_wait_for_webp_encodes();
+                        return std::unexpected(result.error());
+                    }
+                    ++archived_webps;
+                    if (archived_webps == OVERLAPPED_WEBP_COUNT) {
+                        t_webp5_archived_ms = milliseconds(export_started, std::chrono::steady_clock::now());
+                    }
+                }
+                return {};
             };
 
             double pack_ms = 0.0;
@@ -1865,8 +1975,16 @@ namespace lfs::io {
                 }
             });
             pack_ms += milliseconds(means_pack_started, std::chrono::steady_clock::now());
-            queue_webp("means_l.webp", means_l, width, height);
-            queue_webp("means_u.webp", means_u, width, height);
+            constexpr int OVERLAPPED_WEBP_METHOD = 4;
+            constexpr float OVERLAPPED_WEBP_QUALITY = 100.0f;
+            constexpr int CRITICAL_WEBP_METHOD = 1;
+            constexpr float CRITICAL_CENTROIDS_WEBP_QUALITY = 100.0f;
+            constexpr float CRITICAL_LABELS_WEBP_QUALITY = 90.0f;
+
+            queue_webp("means_l.webp", means_l, width, height,
+                       OVERLAPPED_WEBP_METHOD, OVERLAPPED_WEBP_QUALITY);
+            queue_webp("means_u.webp", means_u, width, height,
+                       OVERLAPPED_WEBP_METHOD, OVERLAPPED_WEBP_QUALITY);
 
             if (!report_progress(0.20f, "Rotations")) {
                 join_sh_kmeans_and_wait_for_webp_encodes();
@@ -1912,7 +2030,8 @@ namespace lfs::io {
                 }
             });
             pack_ms += milliseconds(quats_pack_started, std::chrono::steady_clock::now());
-            queue_webp("quats.webp", quats, width, height);
+            queue_webp("quats.webp", quats, width, height,
+                       OVERLAPPED_WEBP_METHOD, OVERLAPPED_WEBP_QUALITY);
 
             if (!report_progress(0.30f, "Scales k-means")) {
                 join_sh_kmeans_and_wait_for_webp_encodes();
@@ -1937,7 +2056,8 @@ namespace lfs::io {
                 }
             });
             pack_ms += milliseconds(scales_pack_started, std::chrono::steady_clock::now());
-            queue_webp("scales.webp", scales_data, width, height);
+            queue_webp("scales.webp", scales_data, width, height,
+                       OVERLAPPED_WEBP_METHOD, OVERLAPPED_WEBP_QUALITY);
 
             if (!report_progress(0.45f, "Colors k-means")) {
                 join_sh_kmeans_and_wait_for_webp_encodes();
@@ -1964,7 +2084,12 @@ namespace lfs::io {
                 }
             });
             pack_ms += milliseconds(sh0_pack_started, std::chrono::steady_clock::now());
-            queue_webp("sh0.webp", sh0_data, width, height);
+            queue_webp("sh0.webp", sh0_data, width, height,
+                       OVERLAPPED_WEBP_METHOD, OVERLAPPED_WEBP_QUALITY);
+
+            if (auto result = archive_ready_webps(); !result) {
+                return std::unexpected(result.error());
+            }
 
             nlohmann::json sh_n_meta;
             std::vector<uint8_t> sh_centroids_buf;
@@ -1977,9 +2102,20 @@ namespace lfs::io {
                 }
 
                 const auto kmeans_sh_join_started = std::chrono::steady_clock::now();
+                while (sh_kmeans_future.wait_for(std::chrono::milliseconds(5)) !=
+                       std::future_status::ready) {
+                    if (auto result = archive_ready_webps(); !result) {
+                        return std::unexpected(result.error());
+                    }
+                }
+                if (auto result = archive_ready_webps(); !result) {
+                    return std::unexpected(result.error());
+                }
                 auto& sh_kmeans_data = join_sh_kmeans();
                 kmeans_sh_wait_ms = milliseconds(
                     kmeans_sh_join_started, std::chrono::steady_clock::now());
+                t_join_ms = milliseconds(export_started, std::chrono::steady_clock::now());
+                t_kmeans_done_ms = sh_kmeans_data.done_ms;
                 auto sh_centroids = std::move(sh_kmeans_data.centroids);
                 auto sh_labels = std::move(sh_kmeans_data.labels);
                 if (!sh_centroids.is_valid() || !sh_labels.is_valid()) {
@@ -2027,7 +2163,8 @@ namespace lfs::io {
                     }
                 }
 
-                queue_webp("shN_centroids.webp", sh_centroids_buf, centroids_width, centroids_height);
+                queue_webp("shN_centroids.webp", sh_centroids_buf, centroids_width, centroids_height,
+                           CRITICAL_WEBP_METHOD, CRITICAL_CENTROIDS_WEBP_QUALITY);
 
                 auto sh_labels_cpu = sh_labels.cpu();
                 const auto* sh_labels_ptr = static_cast<const int32_t*>(sh_labels_cpu.data_ptr());
@@ -2049,7 +2186,8 @@ namespace lfs::io {
                 });
                 pack_ms += milliseconds(sh_labels_pack_started, std::chrono::steady_clock::now());
 
-                queue_webp("shN_labels.webp", sh_labels_buf, width, height);
+                queue_webp("shN_labels.webp", sh_labels_buf, width, height,
+                           CRITICAL_WEBP_METHOD, CRITICAL_LABELS_WEBP_QUALITY);
 
                 sh_n_meta["count"] = actual_palette_size;
                 sh_n_meta["bands"] = sh_degree;
@@ -2059,9 +2197,9 @@ namespace lfs::io {
 
             // The non-SH encodes started as their buffers were queued above, and the SH
             // encodes started after their buffers were completed. Consume and archive all
-            // results in archive order below, releasing each encoded buffer immediately.
+            // remaining results in archive order below, releasing each encoded buffer immediately.
             const auto archive_started = std::chrono::steady_clock::now();
-            for (size_t i = 0; i < webp_futures.size(); ++i) {
+            for (size_t i = archived_webps; i < webp_futures.size(); ++i) {
                 auto encoded = [&]() -> Result<EncodedWebpResult> {
                     try {
                         return webp_futures[i].get();
@@ -2077,11 +2215,18 @@ namespace lfs::io {
                 if (debug_logging_enabled) {
                     webp_timings.push_back({pending_webps[i].filename, encoded->milliseconds});
                 }
+                if (pending_webps[i].filename == "shN_labels.webp") {
+                    t_labels_encoded_ms = encoded->finished_ms;
+                }
                 auto result = archive.add_file(
                     pending_webps[i].filename, encoded->bytes.data(), encoded->bytes.size());
                 if (!result) {
                     wait_for_webp_encodes();
                     return std::unexpected(result.error());
+                }
+                archived_webps = i + 1;
+                if (archived_webps == OVERLAPPED_WEBP_COUNT) {
+                    t_webp5_archived_ms = milliseconds(export_started, std::chrono::steady_clock::now());
                 }
             }
             const auto webp_finished = std::chrono::steady_clock::now();
@@ -2123,6 +2268,7 @@ namespace lfs::io {
                 return std::unexpected(result.error());
             }
             const auto archive_finished = std::chrono::steady_clock::now();
+            t_archive_done_ms = milliseconds(export_started, archive_finished);
 
             if (!report_progress(1.0f, "Complete")) {
                 return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
@@ -2143,7 +2289,10 @@ namespace lfs::io {
                 }
                 LOG_DEBUG(
                     "SOG export stages: morton_ms={:.3f} pack_ms={:.3f} cluster_scales_ms={:.3f} "
-                    "cluster_sh0_ms={:.3f} kmeans_sh_ms={:.3f} kmeans_sh_wait_ms={:.3f} webp_total_ms={:.3f} "
+                    "cluster_sh0_ms={:.3f} kmeans_sh_ms={:.3f} kmeans_sh_wait_ms={:.3f} "
+                    "t_kmeans_launch_ms={:.3f} t_join_ms={:.3f} t_kmeans_done_ms={:.3f} "
+                    "t_labels_encoded_ms={:.3f} t_webp5_archived_ms={:.3f} "
+                    "t_archive_done_ms={:.3f} webp_total_ms={:.3f} "
                     "{} archive_ms={:.3f} total_ms={:.3f}",
                     milliseconds(morton_started, morton_finished),
                     pack_ms,
@@ -2151,6 +2300,12 @@ namespace lfs::io {
                     cluster_sh0_ms,
                     kmeans_sh_ms,
                     kmeans_sh_wait_ms,
+                    t_kmeans_launch_ms,
+                    t_join_ms,
+                    t_kmeans_done_ms,
+                    t_labels_encoded_ms,
+                    t_webp5_archived_ms,
+                    t_archive_done_ms,
                     milliseconds(webp_started, webp_finished),
                     webp_timing_fields,
                     milliseconds(archive_started, archive_finished),

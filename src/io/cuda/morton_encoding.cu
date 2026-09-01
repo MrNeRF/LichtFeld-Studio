@@ -16,26 +16,26 @@ namespace lfs::io {
 
     namespace {
 
-        // Part1By2 from splat-transform - spreads bits for 10-bit input
+        // Spread 21 input bits into every third bit of a 63-bit Morton key.
         // https://fgiesen.wordpress.com/2009/12/13/decoding-morton-codes/
-        __device__ __forceinline__ uint32_t Part1By2(uint32_t x) {
-            x &= 0x000003ff;
-            x = (x ^ (x << 16)) & 0xff0000ff;
-            x = (x ^ (x << 8)) & 0x0300f00f;
-            x = (x ^ (x << 4)) & 0x030c30c3;
-            x = (x ^ (x << 2)) & 0x09249249;
+        __device__ __forceinline__ uint64_t part1by2_21(uint64_t x) {
+            x &= 0x1fffffULL;
+            x = (x | (x << 32)) & 0x1f00000000ffffULL;
+            x = (x | (x << 16)) & 0x1f0000ff0000ffULL;
+            x = (x | (x << 8)) & 0x100f00f00f00f00fULL;
+            x = (x | (x << 4)) & 0x10c30c30c30c30c3ULL;
+            x = (x | (x << 2)) & 0x1249249249249249ULL;
             return x;
         }
 
-        // Morton encoding: Z-major order
-        __device__ __forceinline__ uint32_t encodeMorton3(uint32_t x, uint32_t y, uint32_t z) {
-            return (Part1By2(z) << 2) + (Part1By2(y) << 1) + Part1By2(x);
+        // Morton encoding: Z-major order, with 21 bits per axis.
+        __device__ __forceinline__ uint64_t encodeMorton3(uint32_t x, uint32_t y, uint32_t z) {
+            return (part1by2_21(z) << 2) | (part1by2_21(y) << 1) | part1by2_21(x);
         }
 
-        template <typename CodeT>
         __global__ void morton_encode_kernel(
             const float* __restrict__ positions,
-            CodeT* __restrict__ morton_codes,
+            int64_t* __restrict__ morton_codes,
             const int n_positions,
             const float min_x, const float min_y, const float min_z,
             const float xmul, const float ymul, const float zmul) {
@@ -48,12 +48,14 @@ namespace lfs::io {
             const float y = positions[idx * 3 + 1];
             const float z = positions[idx * 3 + 2];
 
-            // Normalize to [0, 1023] range per-axis
-            const uint32_t ix = min(1023u, static_cast<uint32_t>((x - min_x) * xmul));
-            const uint32_t iy = min(1023u, static_cast<uint32_t>((y - min_y) * ymul));
-            const uint32_t iz = min(1023u, static_cast<uint32_t>((z - min_z) * zmul));
+            // Normalize to [0, 2^21 - 1] range per-axis. The resulting 63-bit
+            // key is stored in signed int64 because all encoded keys are positive.
+            constexpr uint32_t AXIS_MAX = (1u << 21) - 1u;
+            const uint32_t ix = min(AXIS_MAX, static_cast<uint32_t>((x - min_x) * xmul));
+            const uint32_t iy = min(AXIS_MAX, static_cast<uint32_t>((y - min_y) * ymul));
+            const uint32_t iz = min(AXIS_MAX, static_cast<uint32_t>((z - min_z) * zmul));
 
-            morton_codes[idx] = static_cast<CodeT>(encodeMorton3(ix, iy, iz));
+            morton_codes[idx] = static_cast<int64_t>(encodeMorton3(ix, iy, iz));
         }
 
         struct float3_minmax {
@@ -154,9 +156,10 @@ namespace lfs::io {
             const float ylen = params.bbox.max_val.y - params.bbox.min_val.y;
             const float zlen = params.bbox.max_val.z - params.bbox.min_val.z;
 
-            params.xmul = (xlen == 0.0f) ? 0.0f : 1024.0f / xlen;
-            params.ymul = (ylen == 0.0f) ? 0.0f : 1024.0f / ylen;
-            params.zmul = (zlen == 0.0f) ? 0.0f : 1024.0f / zlen;
+            constexpr float AXIS_GRID_SIZE = static_cast<float>(1u << 21);
+            params.xmul = (xlen == 0.0f) ? 0.0f : AXIS_GRID_SIZE / xlen;
+            params.ymul = (ylen == 0.0f) ? 0.0f : AXIS_GRID_SIZE / ylen;
+            params.zmul = (zlen == 0.0f) ? 0.0f : AXIS_GRID_SIZE / zlen;
             return params;
         }
 
@@ -173,15 +176,15 @@ namespace lfs::io {
         const int n_positions = static_cast<int>(positions.size(0));
         const MortonParams params = compute_morton_params(positions, n_positions);
 
-        auto morton_codes = Tensor::empty({static_cast<size_t>(n_positions)}, Device::CUDA, DataType::Int32);
+        auto morton_codes = Tensor::empty({static_cast<size_t>(n_positions)}, Device::CUDA, DataType::Int64);
         auto indices = Tensor::empty({static_cast<size_t>(n_positions)}, Device::CUDA, DataType::Int32);
 
         constexpr int BLOCK_SIZE = 256;
         const int grid_size = (n_positions + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
-        morton_encode_kernel<int32_t><<<grid_size, BLOCK_SIZE>>>(
+        morton_encode_kernel<<<grid_size, BLOCK_SIZE>>>(
             positions.ptr<float>(),
-            morton_codes.ptr<int32_t>(),
+            morton_codes.ptr<int64_t>(),
             n_positions,
             params.bbox.min_val.x, params.bbox.min_val.y, params.bbox.min_val.z,
             params.xmul, params.ymul, params.zmul);
@@ -195,10 +198,12 @@ namespace lfs::io {
         thrust::device_ptr<int32_t> indices_ptr(indices.ptr<int32_t>());
         thrust::sequence(indices_ptr, indices_ptr + n_positions, 0);
 
-        thrust::device_ptr<int32_t> keys_ptr(morton_codes.ptr<int32_t>());
+        thrust::device_ptr<int64_t> keys_ptr(morton_codes.ptr<int64_t>());
         thrust::device_ptr<int32_t> values_ptr(indices.ptr<int32_t>());
 
-        thrust::sort_by_key(keys_ptr, keys_ptr + n_positions, values_ptr);
+        // Stable ordering makes ties deterministic and retains source order,
+        // matching the stable JavaScript sort used by splat-transform.
+        thrust::stable_sort_by_key(keys_ptr, keys_ptr + n_positions, values_ptr);
 
         err = cudaGetLastError();
         if (err != cudaSuccess) {
