@@ -1274,12 +1274,6 @@ namespace lfs::io {
                     return;
                 }
 
-                if (archive_write_set_options(a_, "zip:compression=store") != ARCHIVE_OK) {
-                    last_error_ = std::format("Failed to configure ZIP store compression: {}",
-                                              archive_error_string(a_) ? archive_error_string(a_) : "unknown error");
-                    return;
-                }
-
                 // Use wide-character API on Windows for proper Unicode path handling
                 int result;
 #ifdef _WIN32
@@ -1353,6 +1347,19 @@ namespace lfs::io {
                 archive_entry_set_filetype(entry, AE_IFREG);
                 archive_entry_set_perm(entry, 0644);
                 archive_entry_set_mtime(entry, time_t, 0);
+
+                const bool is_webp = filename.size() >= 5 && filename.compare(filename.size() - 5, 5, ".webp") == 0;
+                const int compression_result = is_webp
+                                                   ? archive_write_zip_set_compression_store(a_)
+                                                   : archive_write_zip_set_compression_deflate(a_);
+                if (compression_result != ARCHIVE_OK) {
+                    const char* err = archive_error_string(a_);
+                    archive_entry_free(entry);
+                    return make_error(ErrorCode::WRITE_FAILURE,
+                                      std::format("Failed to configure compression for '{}': {}",
+                                                  filename, err ? err : "unknown error"),
+                                      output_path_);
+                }
 
                 if (archive_write_header(a_, entry) != ARCHIVE_OK) {
                     const char* err = archive_error_string(a_);
@@ -1505,6 +1512,8 @@ namespace lfs::io {
 
         try {
             const auto export_started = std::chrono::steady_clock::now();
+            const bool debug_logging_enabled =
+                lfs::core::Logger::get().is_enabled(lfs::core::LogLevel::Debug);
             const auto milliseconds = [](const auto begin, const auto end) {
                 return std::chrono::duration<double, std::milli>(end - begin).count();
             };
@@ -1591,8 +1600,6 @@ namespace lfs::io {
                 EncodedWebp bytes;
                 double milliseconds = 0.0;
             };
-            std::vector<EncodedWebpResult> encoded_webps;
-            encoded_webps.reserve(sh_degree > 0 ? 7 : 5);
             struct WebpTiming {
                 std::string filename;
                 double milliseconds = 0.0;
@@ -2051,8 +2058,9 @@ namespace lfs::io {
             }
 
             // The non-SH encodes started as their buffers were queued above, and the SH
-            // encodes started after their buffers were completed. Consume all results in
-            // archive order below.
+            // encodes started after their buffers were completed. Consume and archive all
+            // results in archive order below, releasing each encoded buffer immediately.
+            const auto archive_started = std::chrono::steady_clock::now();
             for (size_t i = 0; i < webp_futures.size(); ++i) {
                 auto encoded = [&]() -> Result<EncodedWebpResult> {
                     try {
@@ -2066,15 +2074,13 @@ namespace lfs::io {
                     wait_for_webp_encodes();
                     return std::unexpected(encoded.error());
                 }
-                webp_timings.push_back({pending_webps[i].filename, encoded->milliseconds});
-                encoded_webps.emplace_back(std::move(*encoded));
-            }
-
-            const auto archive_started = std::chrono::steady_clock::now();
-            for (size_t i = 0; i < encoded_webps.size(); ++i) {
+                if (debug_logging_enabled) {
+                    webp_timings.push_back({pending_webps[i].filename, encoded->milliseconds});
+                }
                 auto result = archive.add_file(
-                    pending_webps[i].filename, encoded_webps[i].bytes.data(), encoded_webps[i].bytes.size());
+                    pending_webps[i].filename, encoded->bytes.data(), encoded->bytes.size());
                 if (!result) {
+                    wait_for_webp_encodes();
                     return std::unexpected(result.error());
                 }
             }
@@ -2126,28 +2132,30 @@ namespace lfs::io {
                 return std::unexpected(result.error());
             }
 
-            std::string webp_timing_fields;
-            for (const auto& timing : webp_timings) {
-                if (!webp_timing_fields.empty()) {
-                    webp_timing_fields += ' ';
-                }
-                webp_timing_fields += std::format("{}={:.3f}ms", timing.filename, timing.milliseconds);
-            }
             const auto export_finished = std::chrono::steady_clock::now();
-            LOG_DEBUG(
-                "SOG export stages: morton_ms={:.3f} pack_ms={:.3f} cluster_scales_ms={:.3f} "
-                "cluster_sh0_ms={:.3f} kmeans_sh_ms={:.3f} kmeans_sh_wait_ms={:.3f} webp_total_ms={:.3f} "
-                "{} archive_ms={:.3f} total_ms={:.3f}",
-                milliseconds(morton_started, morton_finished),
-                pack_ms,
-                cluster_scales_ms,
-                cluster_sh0_ms,
-                kmeans_sh_ms,
-                kmeans_sh_wait_ms,
-                milliseconds(webp_started, webp_finished),
-                webp_timing_fields,
-                milliseconds(archive_started, archive_finished),
-                milliseconds(export_started, export_finished));
+            if (debug_logging_enabled) {
+                std::string webp_timing_fields;
+                for (const auto& timing : webp_timings) {
+                    if (!webp_timing_fields.empty()) {
+                        webp_timing_fields += ' ';
+                    }
+                    webp_timing_fields += std::format("{}={:.3f}ms", timing.filename, timing.milliseconds);
+                }
+                LOG_DEBUG(
+                    "SOG export stages: morton_ms={:.3f} pack_ms={:.3f} cluster_scales_ms={:.3f} "
+                    "cluster_sh0_ms={:.3f} kmeans_sh_ms={:.3f} kmeans_sh_wait_ms={:.3f} webp_total_ms={:.3f} "
+                    "{} archive_ms={:.3f} total_ms={:.3f}",
+                    milliseconds(morton_started, morton_finished),
+                    pack_ms,
+                    cluster_scales_ms,
+                    cluster_sh0_ms,
+                    kmeans_sh_ms,
+                    kmeans_sh_wait_ms,
+                    milliseconds(webp_started, webp_finished),
+                    webp_timing_fields,
+                    milliseconds(archive_started, archive_finished),
+                    milliseconds(export_started, export_finished));
+            }
             LOG_INFO("SOG export complete: {} splats", num_rows);
             return {};
         } catch (const lfs::Exception& e) {

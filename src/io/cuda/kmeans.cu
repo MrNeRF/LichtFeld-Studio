@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cuda_runtime.h>
 #include <numeric>
+#include <optional>
 #include <random>
 #include <thrust/device_ptr.h>
 #include <thrust/sequence.h>
@@ -28,45 +29,53 @@ namespace lfs::io {
         constexpr int BLOCK_SIZE = 256;
         constexpr int SWIZZLED_POINTS_PER_THREAD = 2;
 
+        struct CudaTimingState {
+            bool enabled = false;
+        };
+
         class CudaEventTimer {
         public:
-            CudaEventTimer() {
-                LFS_CUDA_CHECK(cudaEventCreate(&start_));
-                if (const auto status = cudaEventCreate(&stop_); status != cudaSuccess) {
-                    cudaEventDestroy(start_);
-                    start_ = nullptr;
-                    LFS_CUDA_CHECK(status);
+            explicit CudaEventTimer(CudaTimingState& state)
+                : state_(&state) {
+                if (!state_->enabled) {
+                    return;
+                }
+
+                const auto start_status = cudaEventCreate(&start_);
+                if (start_status != cudaSuccess) {
+                    disable("cudaEventCreate(start)", start_status);
+                    return;
+                }
+
+                const auto stop_status = cudaEventCreate(&stop_);
+                if (stop_status != cudaSuccess) {
+                    disable("cudaEventCreate(stop)", stop_status);
                 }
             }
 
             ~CudaEventTimer() {
-                if (start_) {
-                    cudaEventDestroy(start_);
-                }
-                if (stop_) {
-                    cudaEventDestroy(stop_);
-                }
+                destroy(start_, "cudaEventDestroy(start)");
+                destroy(stop_, "cudaEventDestroy(stop)");
             }
 
             CudaEventTimer(const CudaEventTimer&) = delete;
             CudaEventTimer& operator=(const CudaEventTimer&) = delete;
 
             CudaEventTimer(CudaEventTimer&& other) noexcept
-                : start_(other.start_), stop_(other.stop_) {
+                : state_(other.state_), start_(other.start_), stop_(other.stop_) {
+                other.state_ = nullptr;
                 other.start_ = nullptr;
                 other.stop_ = nullptr;
             }
 
             CudaEventTimer& operator=(CudaEventTimer&& other) noexcept {
                 if (this != &other) {
-                    if (start_) {
-                        cudaEventDestroy(start_);
-                    }
-                    if (stop_) {
-                        cudaEventDestroy(stop_);
-                    }
+                    destroy(start_, "cudaEventDestroy(start)");
+                    destroy(stop_, "cudaEventDestroy(stop)");
+                    state_ = other.state_;
                     start_ = other.start_;
                     stop_ = other.stop_;
+                    other.state_ = nullptr;
                     other.start_ = nullptr;
                     other.stop_ = nullptr;
                 }
@@ -74,20 +83,63 @@ namespace lfs::io {
             }
 
             void record_start() {
-                LFS_CUDA_CHECK(cudaEventRecord(start_, nullptr));
+                record(start_, "cudaEventRecord(start)");
             }
 
             void record_stop() {
-                LFS_CUDA_CHECK(cudaEventRecord(stop_, nullptr));
+                record(stop_, "cudaEventRecord(stop)");
             }
 
-            float elapsed_ms() const {
-                float milliseconds = 0.0f;
-                LFS_CUDA_CHECK(cudaEventElapsedTime(&milliseconds, start_, stop_));
-                return milliseconds;
+            bool elapsed_ms(float& milliseconds) {
+                if (!active()) {
+                    return false;
+                }
+                const auto status = cudaEventElapsedTime(&milliseconds, start_, stop_);
+                if (status != cudaSuccess) {
+                    disable("cudaEventElapsedTime", status);
+                    return false;
+                }
+                return true;
             }
 
         private:
+            bool active() const {
+                return state_ && state_->enabled && start_ && stop_;
+            }
+
+            void record(cudaEvent_t event, const char* operation) {
+                if (!active()) {
+                    return;
+                }
+                const auto status = cudaEventRecord(event, nullptr);
+                if (status != cudaSuccess) {
+                    disable(operation, status);
+                }
+            }
+
+            void disable(const char* operation, const cudaError_t status) {
+                LOG_DEBUG("SOG k-means timing disabled after {} failed: {}",
+                          operation, cudaGetErrorString(status));
+                if (state_) {
+                    state_->enabled = false;
+                }
+                destroy(start_, "cudaEventDestroy(start)");
+                destroy(stop_, "cudaEventDestroy(stop)");
+            }
+
+            static void destroy(cudaEvent_t& event, const char* operation) noexcept {
+                if (!event) {
+                    return;
+                }
+                const auto status = cudaEventDestroy(event);
+                event = nullptr;
+                if (status != cudaSuccess) {
+                    LOG_DEBUG("SOG k-means timing cleanup {} failed: {}",
+                              operation, cudaGetErrorString(status));
+                }
+            }
+
+            CudaTimingState* state_ = nullptr;
             cudaEvent_t start_ = nullptr;
             cudaEvent_t stop_ = nullptr;
         };
@@ -694,8 +746,13 @@ namespace lfs::io {
                 return {centroids, labels};
             }
 
-            CudaEventTimer init_sampling_timer;
-            init_sampling_timer.record_start();
+            CudaTimingState timing_state{
+                lfs::core::Logger::get().is_enabled(lfs::core::LogLevel::Debug)};
+            std::optional<CudaEventTimer> init_sampling_timer;
+            if (timing_state.enabled) {
+                init_sampling_timer.emplace(timing_state);
+                init_sampling_timer->record_start();
+            }
 
             auto centroids = Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(N_DIMS)},
                                            Device::CUDA, DataType::Float32);
@@ -759,7 +816,9 @@ namespace lfs::io {
             auto super_indices = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
             build_csr_offsets_gpu(super_membership.ptr<int>(), super_offsets.ptr<int>(),
                                   super_indices.ptr<int>(), k, NUM_SUPER_CLUSTERS);
-            init_sampling_timer.record_stop();
+            if (init_sampling_timer) {
+                init_sampling_timer->record_stop();
+            }
 
             auto labels = Tensor::zeros({static_cast<size_t>(n)}, Device::CUDA, DataType::Int32);
             auto centroid_sums = Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(N_DIMS)},
@@ -777,8 +836,8 @@ namespace lfs::io {
             assign_timers.reserve(static_cast<size_t>(timed_iterations));
             accumulate_finalize_timers.reserve(static_cast<size_t>(timed_iterations));
             for (int iter = 0; iter < timed_iterations; ++iter) {
-                assign_timers.emplace_back();
-                accumulate_finalize_timers.emplace_back();
+                assign_timers.emplace_back(timing_state);
+                accumulate_finalize_timers.emplace_back(timing_state);
             }
 
             const auto kmeans_ticket = ::lfs::core::cuda_record_range(
@@ -837,23 +896,34 @@ namespace lfs::io {
 
             LFS_CUDA_AWAIT(kmeans_ticket, cudaDeviceSynchronize(), "io.kmeans.swizzled_hierarchical_iteration_sync");
 
-            float hierarchical_assign_ms = 0.0f;
-            float final_exact_assign_ms = 0.0f;
-            float accumulate_finalize_ms = 0.0f;
-            for (int iter = 0; iter < iterations; ++iter) {
-                const float assign_ms = assign_timers[static_cast<size_t>(iter)].elapsed_ms();
-                if (iter == iterations - 1) {
-                    final_exact_assign_ms = assign_ms;
-                } else {
-                    hierarchical_assign_ms += assign_ms;
+            if (timing_state.enabled && init_sampling_timer) {
+                float init_sampling_ms = 0.0f;
+                float hierarchical_assign_ms = 0.0f;
+                float final_exact_assign_ms = 0.0f;
+                float accumulate_finalize_ms = 0.0f;
+                bool timings_valid = init_sampling_timer->elapsed_ms(init_sampling_ms);
+                for (int iter = 0; iter < iterations; ++iter) {
+                    float assign_ms = 0.0f;
+                    float accumulate_finalize_iter_ms = 0.0f;
+                    timings_valid = assign_timers[static_cast<size_t>(iter)].elapsed_ms(assign_ms) &&
+                                    accumulate_finalize_timers[static_cast<size_t>(iter)].elapsed_ms(
+                                        accumulate_finalize_iter_ms) &&
+                                    timings_valid;
+                    if (iter == iterations - 1) {
+                        final_exact_assign_ms = assign_ms;
+                    } else {
+                        hierarchical_assign_ms += assign_ms;
+                    }
+                    accumulate_finalize_ms += accumulate_finalize_iter_ms;
                 }
-                accumulate_finalize_ms += accumulate_finalize_timers[static_cast<size_t>(iter)].elapsed_ms();
+                if (timings_valid && timing_state.enabled) {
+                    LOG_DEBUG(
+                        "SH k-means CUDA stages: init_sampling_ms=%0.3f hierarchical_assign_ms=%0.3f "
+                        "final_exact_assign_ms=%0.3f accumulate_finalize_ms=%0.3f",
+                        init_sampling_ms, hierarchical_assign_ms,
+                        final_exact_assign_ms, accumulate_finalize_ms);
+                }
             }
-            LOG_DEBUG(
-                "SH k-means CUDA stages: init_sampling_ms=%0.3f hierarchical_assign_ms=%0.3f "
-                "final_exact_assign_ms=%0.3f accumulate_finalize_ms=%0.3f",
-                init_sampling_timer.elapsed_ms(), hierarchical_assign_ms,
-                final_exact_assign_ms, accumulate_finalize_ms);
             return {centroids, labels};
         }
 
