@@ -8994,19 +8994,32 @@ namespace lfs::vis::project {
             startup_recovery_scan_candidates_.reset();
         }
         startup_recovery_scan_thread_ = std::jthread(
-            [this, known = std::move(known)] {
+            [this, known = std::move(known)](
+                const std::stop_token stop_token) {
                 LOG_TIMER("startup.recovery.scan");
                 try {
+                    if (stop_token.stop_requested()) {
+                        return;
+                    }
                     lfs::io::project::sweep_stale_licht_artifacts_for_known_masters(known);
+                    if (stop_token.stop_requested()) {
+                        return;
+                    }
                     const lfs::io::project::RecoveryInspectionOptions detection_options{
                         .verify_payloads = false};
                     lfs::io::project::sweep_stale_scratch_autosaves(
                         temp_project_directory_, detection_options);
+                    if (stop_token.stop_requested()) {
+                        return;
+                    }
                     if (!legacy_recovery_directory_.empty() &&
                         freezeNormalizedPath(legacy_recovery_directory_) !=
                             freezeNormalizedPath(temp_project_directory_)) {
                         lfs::io::project::sweep_stale_scratch_autosaves(
                             legacy_recovery_directory_, detection_options);
+                        if (stop_token.stop_requested()) {
+                            return;
+                        }
                     }
                     if (!legacy_working_tmp_directory_.empty() &&
                         freezeNormalizedPath(legacy_working_tmp_directory_) !=
@@ -9015,20 +9028,29 @@ namespace lfs::vis::project {
                             freezeNormalizedPath(legacy_recovery_directory_)) {
                         lfs::io::project::sweep_stale_scratch_autosaves(
                             legacy_working_tmp_directory_, detection_options);
+                        if (stop_token.stop_requested()) {
+                            return;
+                        }
                     }
                     auto candidates = inspectStartupRecoveryCandidates();
+                    if (stop_token.stop_requested()) {
+                        return;
+                    }
                     {
                         const std::lock_guard lock(startup_recovery_scan_mutex_);
+                        if (stop_token.stop_requested()) {
+                            return;
+                        }
                         startup_recovery_scan_candidates_ = std::move(candidates);
                     }
                 } catch (const std::exception& error) {
-                    LOG_ERROR("Startup recovery scan failed: {}", error.what());
+                    LOG_WARN("Startup recovery scan failed: {}", error.what());
                     const std::lock_guard lock(startup_recovery_scan_mutex_);
-                    startup_recovery_scan_candidates_.emplace();
+                    startup_recovery_scan_candidates_.reset();
                 } catch (...) {
-                    LOG_ERROR("Startup recovery scan failed with an unknown exception");
+                    LOG_WARN("Startup recovery scan failed with an unknown exception");
                     const std::lock_guard lock(startup_recovery_scan_mutex_);
-                    startup_recovery_scan_candidates_.emplace();
+                    startup_recovery_scan_candidates_.reset();
                 }
                 startup_recovery_scan_ready_.store(true, std::memory_order_release);
                 viewer_.wakeMainLoop();

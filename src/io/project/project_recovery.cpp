@@ -120,14 +120,18 @@ namespace lfs::io::project {
             const std::chrono::steady_clock::time_point started =
                 std::chrono::steady_clock::now();
 
-            ~RecoveryCandidateTimer() {
-                LOG_DEBUG(
-                    "startup.recovery.candidate kind={} path={} ms={:.3f}",
-                    kind,
-                    path.generic_string(),
-                    std::chrono::duration<double, std::milli>(
-                        std::chrono::steady_clock::now() - started)
-                        .count());
+            ~RecoveryCandidateTimer() noexcept {
+                try {
+                    LOG_DEBUG(
+                        "startup.recovery.candidate kind={} path={} ms={:.3f}",
+                        kind,
+                        path.generic_string(),
+                        std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - started)
+                            .count());
+                } catch (...) {
+                    // LFS-CENSUS-OK(empty-catch): debug timing is best effort.
+                }
             }
         };
 
