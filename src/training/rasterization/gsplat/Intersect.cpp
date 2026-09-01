@@ -103,14 +103,7 @@ namespace gsplat_lfs {
                 if (needed <= current) {
                     return current;
                 }
-                size_t grown = current * 2;
-                if (grown < needed * 2) {
-                    grown = needed * 2;
-                }
-                if (grown < needed) {
-                    grown = needed;
-                }
-                return grown;
+                return needed + needed / 4;
             }
 
             void ensure_isect_buffers(size_t n_isects, cudaStream_t stream) {
@@ -317,7 +310,8 @@ namespace gsplat_lfs {
 
         auto schedule_proactive_grow = [&](const int64_t n) {
             if (n > 0 && n * 5 > static_cast<int64_t>(cache.isect_capacity) * 4) {
-                const size_t want = static_cast<size_t>(n) * 2;
+                const size_t count = static_cast<size_t>(n);
+                const size_t want = count + count / 4;
                 if (want > cache.isect_capacity) {
                     cache.pending_isect_capacity = want;
                 }

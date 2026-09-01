@@ -48,7 +48,7 @@ namespace lfs::io::project {
         friend constexpr auto operator<=>(const Version&, const Version&) = default;
     };
 
-    inline constexpr Version CURRENT_CONTAINER_VERSION{1, 0};
+    inline constexpr Version CURRENT_CONTAINER_VERSION{1, 1};
 
     struct LFS_IO_API Fourcc {
         std::array<std::uint8_t, 4> bytes{};
@@ -552,8 +552,11 @@ namespace lfs::io::project {
         lfs::core::Uuid commit_uuid;
         lfs::core::Uuid snapshot_uuid;
         std::uint64_t wallclock_unix_ns = 0;
-        Version min_reader_version = CURRENT_CONTAINER_VERSION;
-        Version min_safe_writer_version = CURRENT_CONTAINER_VERSION;
+        // The 1.1 container can still carry 1.0-compatible commits.  A
+        // producer raises these fields when it publishes a feature that an
+        // older reader cannot preserve, such as checkpoint history.
+        Version min_reader_version{1, 0};
+        Version min_safe_writer_version{1, 0};
         CapabilitySet extra_reader_capabilities;
         CapabilitySet extra_writer_capabilities;
     };

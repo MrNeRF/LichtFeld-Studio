@@ -189,6 +189,37 @@ namespace {
         return {std::move(uuids), std::move(bytes)};
     }
 
+    std::pair<lfs::core::Uuid, std::vector<std::byte>>
+    bound_checkpoint_identity(const std::filesystem::path& path) {
+        auto opened = lfs::test::licht::require_result_ptr(
+            lfs::io::project::ProjectDocument::open(
+                path,
+                {
+                    .defer_geometry_payloads = true,
+                }));
+        const auto bound = lfs::test::licht::require_result(
+            opened->bound_checkpoint_uuid());
+        std::vector<std::byte> bytes;
+        if (!bound) {
+            return {lfs::core::Uuid{}, std::move(bytes)};
+        }
+        const auto bound_uuid = *bound;
+        const auto* checkpoint =
+            opened->find_checkpoint(bound_uuid);
+        if (!checkpoint || checkpoint->size() == 0) {
+            return {bound_uuid, std::move(bytes)};
+        }
+        bytes.resize(static_cast<std::size_t>(
+            checkpoint->size()));
+        auto read = checkpoint->read_at(
+            0, std::span<std::byte>(
+                   bytes.data(), bytes.size()));
+        if (!read) {
+            bytes.clear();
+        }
+        return {bound_uuid, std::move(bytes)};
+    }
+
     lfs::Error posted_work_cancelled_error() {
         return lfs::make_error(lfs::ErrorInit{
             .code = lfs::ErrorCode::Cancelled,
@@ -7963,6 +7994,8 @@ namespace lfs::vis {
                     return node.name ==
                            "Light edit before first ckpt";
                 }));
+            // This fixture has no checkpoint history yet. Light autosave
+            // preserves existing CKPT chapters but never creates one.
             EXPECT_TRUE(restored->checkpoint_uuids()
                             .empty());
         }
@@ -13146,7 +13179,7 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
-           EditModeSaveDropsFormerTrainingCheckpoint) {
+           EditModeSaveRetainsUnboundCheckpointHistory) {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
         }
@@ -13246,8 +13279,12 @@ namespace lfs::vis {
             lfs::test::licht::require_result_ptr(
                 lfs::io::project::ProjectDocument::open(
                     project_path));
-        EXPECT_TRUE(saved_document->checkpoint_uuids()
-                        .empty());
+        // Owner decision B: Edit Mode drops only the binding; historical CKPT
+        // chapters remain live and unbound through save and compaction.
+        EXPECT_EQ(saved_document->checkpoint_uuids().size(), 1u);
+        const auto bound = saved_document->bound_checkpoint_uuid();
+        ASSERT_TRUE(bound);
+        EXPECT_FALSE(*bound);
         const auto training_uuid =
             saved_document->scene_graph()
                 .training_model_uuid();
@@ -13521,7 +13558,7 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
-           EditModeWithoutHydratedSessionDropsCheckpoint) {
+           EditModeWithoutHydratedSessionRetainsCheckpointHistory) {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
         }
@@ -13575,8 +13612,12 @@ namespace lfs::vis {
             lfs::test::licht::require_result_ptr(
                 lfs::io::project::ProjectDocument::open(
                     project_path));
-        EXPECT_TRUE(saved_document->checkpoint_uuids()
-                        .empty());
+        // Owner decision B: a non-hydrated Edit Mode transition drops only
+        // the binding; the former checkpoint remains historical and unbound.
+        EXPECT_EQ(saved_document->checkpoint_uuids().size(), 1u);
+        const auto bound = saved_document->bound_checkpoint_uuid();
+        ASSERT_TRUE(bound);
+        EXPECT_FALSE(*bound);
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -13611,7 +13652,9 @@ namespace lfs::vis {
             lfs::core::generate_uuid_v4(),
             dataset_path);
         const auto before =
-            checkpoint_identity(project_path);
+            bound_checkpoint_identity(project_path);
+        ASSERT_FALSE(before.first.is_nil());
+        ASSERT_FALSE(before.second.empty());
 
         auto options = projectOptions();
         VisualizerImpl viewer(options);
@@ -13662,8 +13705,11 @@ namespace lfs::vis {
                     JobType::ProjectWrite);
             }));
         const auto after =
-            checkpoint_identity(project_path);
-        ASSERT_FALSE(after.first.empty());
+            bound_checkpoint_identity(project_path);
+        ASSERT_FALSE(after.first.is_nil());
+        ASSERT_FALSE(after.second.empty());
+        // The old CKPT remains historical; compare the newly bound chapter.
+        EXPECT_NE(after.first, before.first);
         EXPECT_NE(after.second, before.second);
     }
 

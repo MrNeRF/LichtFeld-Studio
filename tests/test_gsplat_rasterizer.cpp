@@ -12,6 +12,7 @@
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "optimizer/adam_optimizer.hpp"
+#include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/gsplat/Common.h"
 #include "training/rasterization/gsplat/Ops.h"
 #include "training/rasterization/gsplat_rasterizer.hpp"
@@ -526,6 +527,172 @@ TEST(GsplatRasterizerQuantTest, RejectsFloat16ShRestWithoutQ16Bounds) {
         EXPECT_NE(std::string_view(error.what()).find("unsupported SH-rest storage"),
                   std::string_view::npos);
     }
+}
+
+TEST(GsplatRasterizerEdgeScores, GutFusedScoresRespectEdgeMapAndCameraModel) {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
+        GTEST_SKIP() << "CUDA device unavailable";
+    }
+
+    auto run = [](Camera camera, const Tensor& edge_map) {
+        auto splat = make_visible_splat(32);
+        AdamConfig cfg;
+        cfg.lr = 1e-3f;
+        cfg.initial_capacity = 64;
+        AdamOptimizer optimizer(*splat, cfg);
+        optimizer.allocate_gradients(64);
+        auto background = Tensor::zeros({3}, Device::CUDA);
+        auto scores = Tensor::zeros({32}, Device::CUDA);
+
+        auto result = gsplat_rasterize_forward(
+            camera, *splat, background, 0, 0, 0, 0, 1.0f, false,
+            GsplatRenderMode::RGB, true);
+        EXPECT_TRUE(result.has_value()) << result.error();
+        if (!result) {
+            return scores.cpu();
+        }
+        auto output = std::move(result->first);
+        auto context = std::move(result->second);
+        if (context.n_isects == 0) {
+            ADD_FAILURE() << "fixture must produce intersections";
+            return scores.cpu();
+        }
+        auto grad_image = Tensor::ones_like(output.image);
+        auto grad_alpha = Tensor::zeros_like(output.alpha);
+        gsplat_rasterize_backward(
+            context, grad_image, grad_alpha, *splat, optimizer, Tensor{}, edge_map, scores);
+        return scores.cpu();
+    };
+
+    const auto pinhole_ones = run(make_camera(64, 64), Tensor::ones({64, 64}, Device::CUDA));
+    bool has_positive = false;
+    for (size_t i = 0; i < static_cast<size_t>(pinhole_ones.numel()); ++i) {
+        const float value = pinhole_ones.ptr<float>()[i];
+        ASSERT_TRUE(std::isfinite(value));
+        ASSERT_GE(value, 0.0f);
+        has_positive |= value > 0.0f;
+    }
+    EXPECT_TRUE(has_positive);
+
+    const auto pinhole_zeros = run(make_camera(64, 64), Tensor::zeros({64, 64}, Device::CUDA));
+    for (size_t i = 0; i < static_cast<size_t>(pinhole_zeros.numel()); ++i) {
+        EXPECT_FLOAT_EQ(pinhole_zeros.ptr<float>()[i], 0.0f);
+    }
+
+    const auto fisheye_ones = run(make_fisheye_camera(64, 64), Tensor::ones({64, 64}, Device::CUDA));
+    bool fisheye_has_positive = false;
+    for (size_t i = 0; i < static_cast<size_t>(fisheye_ones.numel()); ++i) {
+        const float value = fisheye_ones.ptr<float>()[i];
+        ASSERT_TRUE(std::isfinite(value));
+        ASSERT_GE(value, 0.0f);
+        fisheye_has_positive |= value > 0.0f;
+    }
+    EXPECT_TRUE(fisheye_has_positive);
+}
+
+TEST(GsplatRasterizerEdgeScores, GutAndFastGsHavePositiveScoreCorrelation) {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
+        GTEST_SKIP() << "CUDA device unavailable";
+    }
+
+    constexpr int width = 64;
+    constexpr int height = 64;
+    constexpr int count = 32;
+    auto camera = make_camera(width, height);
+    const auto edge_map = Tensor::ones({height, width}, Device::CUDA);
+
+    auto gut_model = make_visible_splat(count);
+    AdamConfig gut_config;
+    gut_config.lr = 1e-3f;
+    gut_config.initial_capacity = 64;
+    AdamOptimizer gut_optimizer(*gut_model, gut_config);
+    gut_optimizer.allocate_gradients(64);
+    auto background = Tensor::zeros({3}, Device::CUDA);
+    auto gut_scores = Tensor::zeros({count}, Device::CUDA);
+    auto gut_result = gsplat_rasterize_forward(
+        camera, *gut_model, background, 0, 0, 0, 0, 1.0f, false,
+        GsplatRenderMode::RGB, true);
+    ASSERT_TRUE(gut_result.has_value()) << gut_result.error();
+    auto gut_output = std::move(gut_result->first);
+    auto gut_context = std::move(gut_result->second);
+    gsplat_rasterize_backward(
+        gut_context, Tensor::ones_like(gut_output.image), Tensor::zeros_like(gut_output.alpha),
+        *gut_model, gut_optimizer, Tensor{}, edge_map, gut_scores);
+
+    auto fast_model = make_visible_splat(count);
+    AdamOptimizer fast_optimizer(*fast_model, gut_config);
+    fast_optimizer.allocate_gradients(64);
+    auto fast_result = fast_rasterize_forward(
+        camera, *fast_model, background, 0, 0, 0, 0, false);
+    ASSERT_TRUE(fast_result.has_value()) << lfs::format_for_developer(fast_result.error());
+    auto fast_output = std::move(fast_result->first);
+    auto fast_context = std::move(fast_result->second);
+    auto fast_scores = Tensor::zeros({count}, Device::CUDA);
+    FastGSFusedExtraGradients fused;
+    fused.edge_weight_map = edge_map.ptr<float>();
+    fused.edge_score_out = fast_scores.ptr<float>();
+    fast_rasterize_backward(
+        fast_context, Tensor::ones_like(fast_output.image), *fast_model, fast_optimizer,
+        Tensor{}, Tensor{}, DensificationType::None, 0, fused);
+
+    const auto gut_cpu = gut_scores.cpu();
+    const auto fast_cpu = fast_scores.cpu();
+    float gut_mean = 0.0f;
+    float fast_mean = 0.0f;
+    for (int i = 0; i < count; ++i) {
+        gut_mean += gut_cpu.ptr<float>()[i];
+        fast_mean += fast_cpu.ptr<float>()[i];
+    }
+    gut_mean /= static_cast<float>(count);
+    fast_mean /= static_cast<float>(count);
+    float covariance = 0.0f;
+    float gut_variance = 0.0f;
+    float fast_variance = 0.0f;
+    for (int i = 0; i < count; ++i) {
+        const float gut_delta = gut_cpu.ptr<float>()[i] - gut_mean;
+        const float fast_delta = fast_cpu.ptr<float>()[i] - fast_mean;
+        covariance += gut_delta * fast_delta;
+        gut_variance += gut_delta * gut_delta;
+        fast_variance += fast_delta * fast_delta;
+    }
+    ASSERT_GT(gut_variance, 0.0f);
+    ASSERT_GT(fast_variance, 0.0f);
+    const float correlation = covariance / std::sqrt(gut_variance * fast_variance);
+    EXPECT_GT(correlation, 0.75f);
+}
+
+TEST(GsplatRasterizerErrors, GutArenaExhaustionPreservesTypedResourceError) {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
+        GTEST_SKIP() << "CUDA device unavailable";
+    }
+
+    lfs::core::RasterizerMemoryArena::Config config;
+    config.virtual_size = 64ULL << 20;
+    config.max_physical = 4ULL << 10;
+    config.granularity = 4ULL << 10;
+    config.enable_vmm = false;
+    auto& manager = lfs::core::GlobalArenaManager::instance();
+    manager.reconfigure_for_testing(config);
+
+    auto camera = make_camera(64, 64);
+    auto splat = make_visible_splat(32);
+    auto background = Tensor::zeros({3}, Device::CUDA);
+    bool caught_typed_resource_error = false;
+    try {
+        (void)gsplat_rasterize_forward(
+            camera, *splat, background, 0, 0, 0, 0, 1.0f, false,
+            GsplatRenderMode::RGB, true);
+    } catch (const lfs::Exception& exception) {
+        caught_typed_resource_error =
+            exception.error().code() == lfs::ErrorCode::ResourceExhausted &&
+            exception.error().detail().find("gsplat forward arena allocation failed") !=
+                std::string::npos;
+    }
+    manager.reset();
+    EXPECT_TRUE(caught_typed_resource_error);
 }
 
 TEST_F(GsplatRasterizerTest, ForwardWritesChwAndBackwardIsStable) {

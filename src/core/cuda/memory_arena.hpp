@@ -17,6 +17,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -25,6 +26,8 @@ namespace lfs::core {
     class GlobalArenaManager;
     LFS_CORE_API GlobalArenaManager& global_arena_manager();
     LFS_CORE_API void shutdown_global_arena_manager();
+    LFS_CORE_API void log_arena_failure_vram_snapshot(
+        std::string_view label, size_t committed_bytes, size_t frame_peak_bytes);
 
     class RasterizerMemoryArena {
     public:
@@ -271,7 +274,8 @@ namespace lfs::core {
             uint32_t previous_ = 0;
         };
 
-        std::function<char*(size_t)> get_allocator(uint64_t frame_id);
+        std::function<char*(size_t)> get_allocator(uint64_t frame_id,
+                                                   const char* label = nullptr);
         std::vector<BufferHandle> get_frame_buffers(uint64_t frame_id) const;
         void reset_frame(uint64_t frame_id); // Keeps allocation, resets offset
         void cleanup_frames(int keep_recent = 3);
@@ -317,7 +321,8 @@ namespace lfs::core {
         // backing — a device sync cannot observe the in-flight Vulkan batch.
         void drain_external_release();
         bool install_external_backing_impl(ExternalBacking backing, bool wait);
-        char* allocate_internal(Arena& arena, size_t size, uint64_t frame_id);
+        char* allocate_internal(Arena& arena, size_t size, uint64_t frame_id,
+                                const char* label);
         void release_arena_storage(Arena& arena);
         bool grow_arena(Arena& arena, size_t required_size);
         size_t align_size(size_t size) const;

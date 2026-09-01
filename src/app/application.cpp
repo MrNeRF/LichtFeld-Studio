@@ -281,23 +281,21 @@ namespace lfs::app {
                 recovery_document(
                     std::move(*document),
                     std::move(recovery_session));
-            const auto checkpoint_uuids =
-                recovery_document.document()
-                    .checkpoint_uuids();
-            if (checkpoint_uuids.size() != 1) {
+            auto checkpoint_uuid =
+                recovery_document.document().bound_checkpoint_uuid();
+            if (!checkpoint_uuid) {
+                return std::move(checkpoint_uuid).error();
+            }
+            if (!*checkpoint_uuid) {
                 return training_project_error(
-                    lfs::ErrorCode::DataLoss,
-                    std::format(
-                        "Training project must contain exactly one CKPT "
-                        "instance (found {})",
-                        checkpoint_uuids.size()),
+                    lfs::ErrorCode::FailedPrecondition,
+                    "Training project has no SCNG-bound CKPT instance",
                     LFS_SOURCE_SITE_CURRENT());
             }
-            const auto checkpoint_uuid =
-                checkpoint_uuids.front();
+            const auto bound_checkpoint_uuid = **checkpoint_uuid;
             const auto* checkpoint =
                 recovery_document.document()
-                    .find_checkpoint(checkpoint_uuid);
+                    .find_checkpoint(bound_checkpoint_uuid);
             if (!checkpoint) {
                 return training_project_error(
                     lfs::ErrorCode::ContractViolation,
@@ -392,7 +390,7 @@ namespace lfs::app {
             if (!hydration->trainer_state_pending ||
                 !hydration->checkpoint_uuid ||
                 *hydration->checkpoint_uuid !=
-                    checkpoint_uuid ||
+                    bound_checkpoint_uuid ||
                 !hydration->checkpoint_header) {
                 return training_project_error(
                     lfs::ErrorCode::ContractViolation,
@@ -413,7 +411,7 @@ namespace lfs::app {
                 .params =
                     std::move(checkpoint_params),
                 .checkpoint_uuid =
-                    checkpoint_uuid,
+                    bound_checkpoint_uuid,
                 .iteration =
                     hydration
                         ->checkpoint_header

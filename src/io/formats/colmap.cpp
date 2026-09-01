@@ -2376,6 +2376,9 @@ namespace lfs::io {
         bool used_recursive_image_lookup = false;
         size_t depth_matched_count = 0;
         size_t normal_matched_count = 0;
+        size_t undistort_crop_failures = 0;
+        size_t undistort_camera_count = 0;
+        size_t undistort_fisheye_crop_failures = 0;
 
         // Accumulate camera positions for scene center
         std::vector<float> camera_positions;
@@ -2701,6 +2704,14 @@ namespace lfs::io {
                 normal_path);
 
             camera->precompute_undistortion();
+            ++undistort_camera_count;
+            if (camera->undistort_params().crop_solve_failed) {
+                ++undistort_crop_failures;
+                if (camera_model_type == lfs::core::CameraModelType::FISHEYE ||
+                    camera_model_type == lfs::core::CameraModelType::THIN_PRISM_FISHEYE) {
+                    ++undistort_fisheye_crop_failures;
+                }
+            }
             attach_sfm_observations(*camera, img, cam_data, points_xyz);
             if (!image_file_present) {
                 camera->set_has_image(false);
@@ -2708,6 +2719,17 @@ namespace lfs::io {
             }
 
             cameras.push_back(std::move(camera));
+        }
+
+        if (undistort_crop_failures > 0) {
+            if (undistort_fisheye_crop_failures > 0) {
+                LOG_WARN("Undistort crop solve failed for {} of {} cameras; original intrinsics kept; "
+                         "fisheye-family lenses cannot be rectified to pinhole and are handled natively by GUT",
+                         undistort_crop_failures, undistort_camera_count);
+            } else {
+                LOG_WARN("Undistort crop solve failed for {} of {} cameras; original intrinsics kept",
+                         undistort_crop_failures, undistort_camera_count);
+            }
         }
 
         if (cameras.empty()) {

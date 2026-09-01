@@ -337,9 +337,9 @@ namespace lfs::app {
                 lfs::io::project::ProjectDocumentOpenOptions options;
                 options.defer_geometry_payloads = true;
                 if (auto document = lfs::io::project::ProjectDocument::open(input, options)) {
-                    const auto checkpoints = document->checkpoint_uuids();
-                    if (checkpoints.size() == 1 && document->splat_uuids().empty()) {
-                        if (const auto* checkpoint = document->find_checkpoint(checkpoints.front())) {
+                    const auto bound = document->bound_checkpoint_uuid();
+                    if (bound && *bound && document->splat_uuids().empty()) {
+                        if (const auto* checkpoint = document->find_checkpoint(**bound)) {
                             fill_stamp_from_checkpoint_stream(stamp, *checkpoint);
                         }
                     }
@@ -358,9 +358,14 @@ namespace lfs::app {
                 return false;
             }
 
-            const auto checkpoints = document->checkpoint_uuids();
+            const auto bound = document->bound_checkpoint_uuid();
+            if (!bound) {
+                LOG_ERROR("Failed to resolve project training checkpoint: {}",
+                          lfs::format_for_developer(bound.error()));
+                return false;
+            }
             const auto splats = document->splat_uuids();
-            const auto model_count = checkpoints.size() + splats.size();
+            const auto model_count = (bound->has_value() ? 1u : 0u) + splats.size();
             if (model_count == 0) {
                 LOG_ERROR("Project contains no splat model: {}", path_to_utf8(input));
                 std::println(stderr, "  Error: project contains no splat model");
@@ -368,15 +373,15 @@ namespace lfs::app {
             }
             if (model_count > 1) {
                 LOG_ERROR("Project contains multiple splat models ({} checkpoint(s), {} splat(s)): {}",
-                          checkpoints.size(), splats.size(), path_to_utf8(input));
+                          bound->has_value() ? 1 : 0, splats.size(), path_to_utf8(input));
                 std::println(stderr,
                              "  Error: project contains {} checkpoint model(s) and {} splat model(s); export from the LichtFeld Studio GUI instead",
-                             checkpoints.size(), splats.size());
+                             bound->has_value() ? 1 : 0, splats.size());
                 return false;
             }
 
-            if (checkpoints.size() == 1) {
-                const auto* checkpoint = document->find_checkpoint(checkpoints.front());
+            if (bound->has_value()) {
+                const auto* checkpoint = document->find_checkpoint(**bound);
                 if (!checkpoint) {
                     LOG_ERROR("Project checkpoint handle disappeared: {}", path_to_utf8(input));
                     std::println(stderr, "  Error: project checkpoint handle disappeared");
