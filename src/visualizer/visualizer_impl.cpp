@@ -2015,7 +2015,8 @@ namespace lfs::vis {
             startup_project_open_attempted_ = true;
             if (project_lifecycle_) {
                 project_lifecycle_->openStartupProject(
-                    options_.startup_project);
+                    options_.startup_project,
+                    true);
             }
         }
         return true;
@@ -2522,11 +2523,15 @@ namespace lfs::vis {
         if (!python::is_plugin_preload_running()) {
             python::flush_signals();
         }
-        if (!gui_frame_rendered_) {
+        const bool first_gui_frame = !gui_frame_rendered_;
+        if (first_gui_frame) {
             gui_session_restore_.onFirstGuiFrame();
             tryApplyProjectSessionRestore();
         }
         gui_frame_rendered_ = true;
+        if (first_gui_frame && project_lifecycle_) {
+            project_lifecycle_->runStartupRecoveryScan();
+        }
         update_work_processed_ = false;
 
         // Render-on-demand: VSync handles frame pacing, waitEvents saves CPU when idle
