@@ -117,6 +117,40 @@ namespace lfs::vis::gui::rml_theme {
                     base.z + (accent.z - base.z) * factor, 1.0f};
         }
 
+        float linearColorChannel(const float channel) {
+            return channel <= 0.04045f
+                       ? channel / 12.92f
+                       : std::pow((channel + 0.055f) / 1.055f, 2.4f);
+        }
+
+        float relativeLuminance(const ThemeColor& color) {
+            return 0.2126f * linearColorChannel(color.x) +
+                   0.7152f * linearColorChannel(color.y) +
+                   0.0722f * linearColorChannel(color.z);
+        }
+
+        float contrastRatio(const ThemeColor& lhs, const ThemeColor& rhs) {
+            const float lhs_luminance = relativeLuminance(lhs);
+            const float rhs_luminance = relativeLuminance(rhs);
+            const float lighter = std::max(lhs_luminance, rhs_luminance);
+            const float darker = std::min(lhs_luminance, rhs_luminance);
+            return (lighter + 0.05f) / (darker + 0.05f);
+        }
+
+        ThemeColor readableIconColor(const ThemeColor& background,
+                                     const ThemeColor& preferred) {
+            constexpr float MIN_ICON_CONTRAST = 4.5f;
+            const ThemeColor preferred_opaque{preferred.x, preferred.y, preferred.z, 1.0f};
+            if (contrastRatio(background, preferred_opaque) >= MIN_ICON_CONTRAST)
+                return preferred_opaque;
+
+            constexpr ThemeColor BLACK{0.0f, 0.0f, 0.0f, 1.0f};
+            constexpr ThemeColor WHITE{1.0f, 1.0f, 1.0f, 1.0f};
+            return contrastRatio(background, BLACK) >= contrastRatio(background, WHITE)
+                       ? BLACK
+                       : WHITE;
+        }
+
         template <typename T>
         void hashCombine(std::size_t& seed, const T& value) {
             seed ^= std::hash<T>{}(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
@@ -438,6 +472,16 @@ namespace lfs::vis::gui::rml_theme {
             const auto border = colorToRml(p.border);
             const auto background = colorToRml(p.background);
 
+            ThemeColor menu_toolbar_bg = t.menu_background();
+            menu_toolbar_bg.w = 1.0f;
+            const ThemeColor menu_toolbar_selected_bg =
+                blend(menu_toolbar_bg, p.primary, std::clamp(t.menu.active_alpha, 0.24f, 0.55f));
+            const ThemeColor viewport_gizmo_bg{p.surface.x, p.surface.y, p.surface.z, 1.0f};
+            const ThemeColor viewport_gizmo_selected_bg{p.primary.x, p.primary.y, p.primary.z, 1.0f};
+            const ThemeColor viewport_gizmo_selected_hover_bg =
+                blend(viewport_gizmo_selected_bg,
+                      readableIconColor(viewport_gizmo_selected_bg, p.text), 0.10f);
+
             const auto window_surface =
                 colorToRml(is_light ? lighten(p.surface, 0.015f) : lighten(p.surface, 0.02f));
             const auto window_body_decor = t.gradients.window_body
@@ -453,9 +497,15 @@ namespace lfs::vis::gui::rml_theme {
                                                     colorToRml(t.gradients.panel_body->end), surface)
                                               : std::format("background-color: {}", surface);
             const bool enhanced_panel_chrome = t.gradients.panel_body.has_value();
+            const int enhanced_tab_rounding =
+                std::max(4, static_cast<int>(std::round(t.sizes.tab_rounding)));
+            const int enhanced_header_rounding =
+                std::max(4, static_cast<int>(std::round(t.sizes.frame_rounding)));
             const auto right_panel_tab_shape = enhanced_panel_chrome
-                                                   ? "margin: 3dp 2dp; padding: 0 8dp; min-height: 22dp; "
-                                                     "border-bottom-width: 1dp; border-radius: 5dp"
+                                                   ? std::format(
+                                                         "margin: 3dp 2dp; padding: 0 8dp; min-height: 22dp; "
+                                                         "border-bottom-width: 1dp; border-radius: {}dp",
+                                                         enhanced_tab_rounding)
                                                    : "margin: 0; padding: 0 14dp; min-height: 28dp; "
                                                      "border-top-left-radius: 4dp; border-top-right-radius: 4dp";
             const auto right_panel_tab_label_shape =
@@ -495,7 +545,8 @@ namespace lfs::vis::gui::rml_theme {
             const auto header_shape = t.gradients.section_header
                                           ? std::format(
                                                 "margin: 4dp 0 2dp 0; border-width: 1dp; "
-                                                "border-radius: 5dp; border-color: {}",
+                                                "border-radius: {}dp; border-color: {}",
+                                                enhanced_header_rounding,
                                                 colorToRmlAlpha(p.border, 0.58f))
                                           : "margin: 0 -6dp; border-width: 0; "
                                             "border-top-width: 4dp; border-radius: 0";
@@ -599,6 +650,10 @@ namespace lfs::vis::gui::rml_theme {
                 {"components.border_soft", colorToRmlAlpha(p.border, 0.3f)},
                 {"components.border_med", colorToRmlAlpha(p.border, 0.5f)},
                 {"components.text_hi", colorToRmlAlpha(p.text, 0.9f)},
+                {"menu.toolbar_icon", colorToRml(readableIconColor(menu_toolbar_bg, p.text))},
+                {"menu.toolbar_selected_bg", colorToRml(menu_toolbar_selected_bg)},
+                {"menu.toolbar_selected_icon",
+                 colorToRml(readableIconColor(menu_toolbar_selected_bg, p.text))},
                 {"menu.bottom_border", darkenColorToRml(p.surface, t.menu.bottom_border_darken)},
                 {"components.scroll_track", colorToRmlAlpha(p.background, 0.5f)},
                 {"components.scroll_thumb", colorToRmlAlpha(p.text_dim, 0.63f)},
@@ -671,8 +726,20 @@ namespace lfs::vis::gui::rml_theme {
                  is_light ? colorToRmlAlpha(ThemeColor{0.90f, 0.93f, 0.98f, 1.0f}, 0.88f)
                           : colorToRmlAlpha(p.text, 0.90f)},
                 {"viewport.icon_disabled",
-                 is_light ? colorToRmlAlpha(ThemeColor{0.90f, 0.93f, 0.98f, 1.0f}, 0.42f)
-                          : colorToRmlAlpha(p.text_dim, 0.48f)},
+                  is_light ? colorToRmlAlpha(ThemeColor{0.90f, 0.93f, 0.98f, 1.0f}, 0.42f)
+                           : colorToRmlAlpha(p.text_dim, 0.48f)},
+                {"viewport.gizmo_bg", colorToRml(viewport_gizmo_bg)},
+                {"viewport.gizmo_icon",
+                 colorToRml(readableIconColor(viewport_gizmo_bg, p.text))},
+                {"viewport.gizmo_disabled_icon",
+                 colorToRml(readableIconColor(viewport_gizmo_bg, p.text_dim))},
+                {"viewport.gizmo_selected_bg", colorToRml(viewport_gizmo_selected_bg)},
+                {"viewport.gizmo_selected_icon",
+                 colorToRml(readableIconColor(viewport_gizmo_selected_bg, p.text))},
+                {"viewport.gizmo_selected_hover_bg",
+                 colorToRml(viewport_gizmo_selected_hover_bg)},
+                {"viewport.gizmo_selected_hover_icon",
+                 colorToRml(readableIconColor(viewport_gizmo_selected_hover_bg, p.text))},
                 {"viewport.selected_hover", colorToRml(ThemeColor{
                                                 std::min(1.0f, p.primary.x + 0.1f),
                                                 std::min(1.0f, p.primary.y + 0.1f),

@@ -98,6 +98,48 @@ def test_menubar_submenus_are_stacked_above_overlay_and_hit_testable():
     assert "transition: none;" in toolbar_button_rule
 
 
+def test_toolbar_icons_use_contrast_aware_theme_tokens():
+    resources = (
+        PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+    )
+    menubar_theme = (resources / "menubar.theme.rcss").read_text(encoding="utf-8")
+    viewport_theme = (resources / "viewport_overlay.theme.rcss").read_text(
+        encoding="utf-8"
+    )
+    rml_theme_cpp = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "rml_theme.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert "readableIconColor" in rml_theme_cpp
+    assert "MIN_ICON_CONTRAST = 4.5f" in rml_theme_cpp
+    for token in (
+        "menu.toolbar_icon",
+        "menu.toolbar_selected_bg",
+        "menu.toolbar_selected_icon",
+        "viewport.gizmo_bg",
+        "viewport.gizmo_icon",
+        "viewport.gizmo_disabled_icon",
+        "viewport.gizmo_selected_bg",
+        "viewport.gizmo_selected_icon",
+        "viewport.gizmo_selected_hover_bg",
+        "viewport.gizmo_selected_hover_icon",
+    ):
+        assert f'{{"{token}"' in rml_theme_cpp
+
+    assert "image-color: @{menu.toolbar_icon};" in menubar_theme
+    assert "background-color: @{menu.toolbar_selected_bg};" in menubar_theme
+    assert "image-color: @{menu.toolbar_selected_icon};" in menubar_theme
+    assert "background-color: @{viewport.gizmo_bg};" in viewport_theme
+    assert "image-color: @{viewport.gizmo_icon};" in viewport_theme
+    assert "background-color: @{viewport.gizmo_selected_bg};" in viewport_theme
+    assert "image-color: @{viewport.gizmo_selected_icon};" in viewport_theme
+
+
 def test_rml_tooltips_request_only_pending_animation_frames():
     tooltip_header = (
         PROJECT_ROOT
@@ -276,6 +318,37 @@ def test_all_optional_theme_gradients_reach_rml_consumers():
         assert f"@{{{token}}}" in resource
 
 
+def test_signal_family_keeps_a_distinct_visual_language():
+    themes = (
+        PROJECT_ROOT / "src" / "visualizer" / "gui" / "assets" / "themes"
+    )
+    signal = json.loads((themes / "signal.json").read_text(encoding="utf-8"))
+    lichtfeld = json.loads((themes / "lichtfeld.json").read_text(encoding="utf-8"))
+
+    for mode in ("dark", "light"):
+        variant = signal["variants"][mode]
+        palette = variant["palette"]
+        progress = variant["gradients"]["progress"]
+        assert progress["start"] == palette["primary"]
+        assert progress["end"] == palette["secondary"]
+        assert variant["sizes"]["window_rounding"] >= 12.0
+        assert variant["sizes"]["frame_rounding"] >= 7.0
+
+    signal_day = signal["variants"]["light"]
+    lichtfeld_light = lichtfeld["variants"]["light"]
+    canvas_distance = sum(
+        abs(a - b)
+        for a, b in zip(
+            signal_day["palette"]["background"][:3],
+            lichtfeld_light["palette"]["background"][:3],
+        )
+    )
+    assert canvas_distance >= 0.10
+    assert signal_day["sizes"]["window_rounding"] >= (
+        lichtfeld_light["sizes"]["window_rounding"] + 4.0
+    )
+
+
 def test_sequencer_quality_scrubber_uses_shared_theme_gradients():
     sequencer_rml = (
         PROJECT_ROOT
@@ -295,6 +368,15 @@ def test_sequencer_quality_scrubber_uses_shared_theme_gradients():
         / "resources"
         / "sequencer.rcss"
     ).read_text(encoding="utf-8")
+    sequencer_theme = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+        / "sequencer.theme.rcss"
+    ).read_text(encoding="utf-8")
 
     assert 'id="quality-scrub" class="scrub-field"' in sequencer_rml
     assert 'id="quality-fill" class="scrub-field-fill"' in sequencer_rml
@@ -304,6 +386,17 @@ def test_sequencer_quality_scrubber_uses_shared_theme_gradients():
     assert "decorator: vertical-gradient" not in quality_scrubber
     assert "decorator: horizontal-gradient" not in quality_scrubber
     assert "color: #cdd6f4;" not in quality_scrubber
+    assert sequencer_theme.count("@{panel.body_decor}") == 2
+    assert "@{components.header_decor}" in sequencer_theme
+
+    assert "@media (max-width: 1620dp)" not in sequencer_rcss
+    responsive_rules = sequencer_rcss.split("@media", 1)[1]
+    assert ".quality-group" not in responsive_rules
+    assert "#quality-scrub" not in responsive_rules
+    assert ".speed-text" not in responsive_rules
+    assert "#btn-speed" not in responsive_rules
+    assert "#sequence-fps-field" not in responsive_rules
+    assert "#resolution-field" not in responsive_rules
 
 
 def test_asset_manager_palette_is_fully_theme_driven():
@@ -326,16 +419,17 @@ def test_asset_manager_palette_is_fully_theme_driven():
     assert re.search(r"(?<!&)#[0-9a-fA-F]{3,8}\b", rml) is None
 
     required_theme_rules = {
+        "#asset-popup": ("@{panel.body_decor}", "@{text}", "@{border}"),
         ".asset-button": ("@{surface_bright}", "@{border}", "@{text}"),
         ".asset-import-button": ("@{blend(surface,primary,button.tint_normal)}",),
         ".asset-icon-grid > span,\n.asset-icon-list > span": ("@{text}",),
         ".asset-refresh-button img,\n.asset-folder-menu img,\n.asset-card-menu img": (
             "@{alpha(text,0.90)}",
         ),
-        "#asset-sidebar": ("@{blend(surface,background,0.35)}", "@{border}"),
+        "#asset-sidebar": ("@{alpha(background,0.32)}", "@{border}"),
         ".asset-card": ("@{surface_bright}", "@{border}"),
         ".asset-list-row": ("@{surface_bright}", "@{border}", "@{text}"),
-        "#asset-info-panel": ("@{blend(surface,background,0.35)}", "@{border}"),
+        "#asset-info-panel": ("@{alpha(background,0.32)}", "@{border}"),
         ".asset-info-warning": ("@{alpha(error,0.10)}", "@{error}"),
     }
     for selector, expected_tokens in required_theme_rules.items():

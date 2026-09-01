@@ -1072,16 +1072,11 @@ body {
     margin-bottom: 2dp;
 }
 
-@media (max-width: 1620dp) {
-    .quality-group,
-    #quality-scrub,
-    .speed-text,
+@media (max-width: 1240dp) {
     .ctx-indicator {
         display: none;
     }
-}
 
-@media (max-width: 1380dp) {
     #btn-camera-path .transport-label,
     #btn-export .transport-label,
     #btn-clear .transport-label {
@@ -1095,25 +1090,22 @@ body {
     }
 }
 
-@media (max-width: 1280dp) {
-    #btn-film-strip,
-    #btn-equirect,
-    #btn-load-sequence {
-        display: none;
-    }
-}
-
 @media (max-width: 1120dp) {
     #btn-camera-path,
-    #btn-speed,
-    #sequence-fps-field,
     #btn-snap,
     #btn-follow,
     #btn-preview,
     #btn-format,
-    #resolution-field,
     #btn-clear,
     .transport-sep {
+        display: none;
+    }
+}
+
+@media (max-width: 1040dp) {
+    #btn-film-strip,
+    #btn-equirect,
+    #btn-load-sequence {
         display: none;
     }
 }

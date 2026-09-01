@@ -272,7 +272,7 @@ TEST(ThemeRegistry, OptionalGradientsLoadAndLegacyThemesKeepDerivedFallbacks) {
     ASSERT_TRUE(lfs::vis::theme().gradients.histogram_header.has_value());
     ASSERT_TRUE(lfs::vis::theme().gradients.histogram_fill.has_value());
     ASSERT_TRUE(lfs::vis::theme().gradients.histogram_selection.has_value());
-    EXPECT_FLOAT_EQ(lfs::vis::theme().gradients.progress->start.x, 0.224f);
+    EXPECT_FLOAT_EQ(lfs::vis::theme().gradients.progress->start.x, 0.220f);
     EXPECT_FLOAT_EQ(lfs::vis::theme().gradients.progress->end.z, 1.0f);
 
     if (!original_theme.empty())

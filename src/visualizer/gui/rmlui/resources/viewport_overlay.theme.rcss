@@ -52,7 +52,13 @@
 }
 
 .viewport-gizmo-controls .icon-btn {
-    background-color: @{toolbar.background};
+    background-color: @{viewport.gizmo_bg};
+    border-color: @{overlay.border};
+    opacity: 1;
+}
+
+.viewport-gizmo-controls .icon-btn img {
+    image-color: @{viewport.gizmo_icon};
 }
 
 .toolbar-separator {
@@ -106,9 +112,17 @@
 }
 
 .toolbar-vertical .icon-btn.selected,
-.toolbar-hcenter .icon-btn.selected,
-.viewport-gizmo-controls .icon-btn.selected {
+.toolbar-hcenter .icon-btn.selected {
     border-color: @{alpha(text,0.25)};
+}
+
+.viewport-gizmo-controls .icon-btn.selected {
+    background-color: @{viewport.gizmo_selected_bg};
+    border-color: @{primary};
+}
+
+.viewport-gizmo-controls .icon-btn.selected img {
+    image-color: @{viewport.gizmo_selected_icon};
 }
 
 .icon-btn.selected:hover {
@@ -116,9 +130,17 @@
 }
 
 .toolbar-vertical .icon-btn.selected:hover,
-.toolbar-hcenter .icon-btn.selected:hover,
-.viewport-gizmo-controls .icon-btn.selected:hover {
+.toolbar-hcenter .icon-btn.selected:hover {
     border-color: @{alpha(text,0.35)};
+}
+
+.viewport-gizmo-controls .icon-btn.selected:hover {
+    background-color: @{viewport.gizmo_selected_hover_bg};
+    border-color: @{primary};
+}
+
+.viewport-gizmo-controls .icon-btn.selected:hover img {
+    image-color: @{viewport.gizmo_selected_hover_icon};
 }
 
 .icon-btn.selected img {
@@ -134,6 +156,18 @@
 
 .icon-btn.disabled img {
     image-color: @{viewport.icon_disabled};
+}
+
+.viewport-gizmo-controls .icon-btn.disabled,
+.viewport-gizmo-controls .icon-btn.disabled:hover,
+.viewport-gizmo-controls .icon-btn.disabled:active {
+    background-color: @{viewport.gizmo_bg};
+    border-color: @{overlay.border};
+    opacity: 1;
+}
+
+.viewport-gizmo-controls .icon-btn.disabled img {
+    image-color: @{viewport.gizmo_disabled_icon};
 }
 
 .viewport-metrics-card {

@@ -7,7 +7,7 @@
 }
 
 #asset-popup {
-    background-color: @{surface};
+    @{panel.body_decor};
     color: @{text};
     border-color: @{border};
 }
@@ -32,7 +32,7 @@
 }
 
 #asset-popup-toolbar {
-    background-color: @{blend(surface,background,0.5)};
+    background-color: @{alpha(surface,0.72)};
     border-bottom-color: @{border};
 }
 
@@ -141,7 +141,7 @@
 /* ── Sidebar ─────────────────────────────────────────────── */
 
 #asset-sidebar {
-    background-color: @{blend(surface,background,0.35)};
+    background-color: @{alpha(background,0.32)};
     border-bottom-color: @{border};
 }
 
@@ -209,7 +209,7 @@
 /* ── Gallery ─────────────────────────────────────────────── */
 
 #asset-gallery {
-    background-color: @{surface};
+    background-color: @{alpha(surface,0.58)};
 }
 
 .asset-gallery-header {
@@ -329,7 +329,7 @@
 /* ── Info Panel ──────────────────────────────────────────── */
 
 #asset-info-panel {
-    background-color: @{blend(surface,background,0.35)};
+    background-color: @{alpha(background,0.32)};
     border-top-color: @{border};
 }
 
