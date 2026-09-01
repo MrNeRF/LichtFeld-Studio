@@ -515,7 +515,7 @@ namespace spz {
                             bufSh[k] = g.sh[i + k * 3 + channel];
                         }
                         for (size_t band = 0; band < static_cast<size_t>(g.shDegree) &&
-                                                       band < static_cast<size_t>(SH_MAX_DEGREE);
+                                              band < static_cast<size_t>(SH_MAX_DEGREE);
                              ++band) {
                             if (c.rotFlipShFuncs[band]) {
                                 c.rotFlipShFuncs[band](bufSh.data() + band * (band + 2));
