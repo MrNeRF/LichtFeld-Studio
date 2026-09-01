@@ -3510,6 +3510,8 @@ namespace lfs::vis::project {
             lfs::io::project::
                 ProjectDocumentAutosaveOptions>
             autosave) {
+        const auto start_write_started =
+            std::chrono::steady_clock::now();
         auto license = document->project().license();
         if (!license) {
             return lfs::Status::failure(std::move(license).error());
@@ -3733,6 +3735,15 @@ namespace lfs::vis::project {
                 "The project writer could not start.",
                 error.what(), "project.job");
         }
+        const auto start_write_finished =
+            std::chrono::steady_clock::now();
+        LOG_DEBUG(
+            "Project GUI save stages: purpose={} worker_start={:.3f} ms destination={}",
+            static_cast<int>(purpose),
+            std::chrono::duration<double, std::milli>(
+                start_write_finished - start_write_started)
+                .count(),
+            project_write_destination_.string());
         return {};
     }
 
@@ -5789,6 +5800,10 @@ namespace lfs::vis::project {
     lfs::Result<void>
     ProjectLifecycle::synchronizeDocumentFromViewer(
         const DocumentSyncMode mode) {
+        const auto sync_started = std::chrono::steady_clock::now();
+        auto scene_capture_finished = sync_started;
+        auto payload_capture_finished = sync_started;
+        auto selection_capture_finished = sync_started;
         if (!document_) {
             return fail<void>(
                 lfs::ErrorCode::FailedPrecondition,
@@ -5909,6 +5924,7 @@ namespace lfs::vis::project {
             document_->scene_graph().to_bytes();
         const auto new_scene_bytes =
             captured_scene->to_bytes();
+        scene_capture_finished = std::chrono::steady_clock::now();
         if (!sameBytes(
                 old_scene_bytes, new_scene_bytes)) {
             document_->edit_scene_graph() =
@@ -6166,6 +6182,7 @@ namespace lfs::vis::project {
                     document_->remove_mesh(uuid));
             }
         }
+        payload_capture_finished = std::chrono::steady_clock::now();
 
         const bool all_geometry_loaded =
             std::ranges::all_of(
@@ -6324,6 +6341,7 @@ namespace lfs::vis::project {
             last_captured_selection_serial_ =
                 selection_serial;
         }
+        selection_capture_finished = std::chrono::steady_clock::now();
 
         const auto project_root =
             projectRootFor(*document_);
@@ -6480,6 +6498,25 @@ namespace lfs::vis::project {
             false, std::memory_order_release);
         payload_dirty_.store(
             false, std::memory_order_release);
+        const auto sync_finished = std::chrono::steady_clock::now();
+        LOG_DEBUG(
+            "Project document synchronization stages: mode={} scene_capture={:.3f} ms payload_capture={:.3f} ms selection_capture={:.3f} ms metadata_capture={:.3f} ms total={:.3f} ms",
+            static_cast<int>(mode),
+            std::chrono::duration<double, std::milli>(
+                scene_capture_finished - sync_started)
+                .count(),
+            std::chrono::duration<double, std::milli>(
+                payload_capture_finished - scene_capture_finished)
+                .count(),
+            std::chrono::duration<double, std::milli>(
+                selection_capture_finished - payload_capture_finished)
+                .count(),
+            std::chrono::duration<double, std::milli>(
+                sync_finished - selection_capture_finished)
+                .count(),
+            std::chrono::duration<double, std::milli>(
+                sync_finished - sync_started)
+                .count());
         return {};
     }
 
