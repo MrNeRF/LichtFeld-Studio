@@ -12,18 +12,61 @@
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/gui/rmlui/rml_theme.hpp"
+#include "visualizer/post_work_utils.hpp"
 
 #include <algorithm>
 #include <array>
+#include <functional>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
 namespace lfs::python {
 
     namespace gui = lfs::vis::gui;
 
     namespace {
+        template <typename F>
+            requires(!std::is_void_v<std::invoke_result_t<F>>)
+        auto invoke_on_viewer(F&& fn, std::invoke_result_t<F> fallback) {
+            auto* const viewer = get_visualizer();
+            if (!viewer || viewer->isOnViewerThread())
+                return std::invoke(std::forward<F>(fn));
+            if (!viewer->acceptsPostedWork())
+                return fallback;
+
+            nb::gil_scoped_release release;
+            return vis::post_work_and_wait(
+                [viewer](vis::Visualizer::WorkItem work) {
+                    return viewer->postWork(std::move(work));
+                },
+                std::forward<F>(fn),
+                [fallback]() { return fallback; });
+        }
+
+        template <typename F>
+            requires(std::is_void_v<std::invoke_result_t<F>>)
+        void invoke_on_viewer(F&& fn) {
+            auto* const viewer = get_visualizer();
+            if (!viewer || viewer->isOnViewerThread()) {
+                std::invoke(std::forward<F>(fn));
+                return;
+            }
+            if (!viewer->acceptsPostedWork())
+                return;
+
+            nb::gil_scoped_release release;
+            vis::post_work_and_wait(
+                [viewer](vis::Visualizer::WorkItem work) {
+                    return viewer->postWork(std::move(work));
+                },
+                std::forward<F>(fn), [] {});
+        }
+
         void throw_type_error(const std::string& message) {
             throw nb::type_error(message.c_str());
         }
@@ -479,7 +522,12 @@ namespace lfs::python {
         info.initial_width = initial_width;
         info.initial_height = initial_height;
 
-        if (!gui::PanelRegistry::instance().register_panel(std::move(info))) {
+        const bool registered = invoke_on_viewer(
+            [info = std::move(info)]() mutable {
+                return gui::PanelRegistry::instance().register_panel(std::move(info));
+            },
+            false);
+        if (!registered) {
             throw_value_error(
                 std::string("register_panel: runtime rejected panel '") + panel_id + "'");
         }
@@ -610,81 +658,129 @@ namespace lfs::python {
 
         m.def(
             "get_panel_names", [](PanelSpace space) {
-                return gui::PanelRegistry::instance().get_panel_names(to_gui_space(space));
+                return invoke_on_viewer(
+                    [space] {
+                        return gui::PanelRegistry::instance().get_panel_names(to_gui_space(space));
+                    },
+                    std::vector<std::string>{});
             },
             nb::arg("space") = PanelSpace::Floating, "Get registered panel ids for a given space");
 
         m.def(
             "set_panel_enabled", [](const std::string& panel_id, bool enabled) {
-                gui::PanelRegistry::instance().set_panel_enabled(panel_id, enabled);
+                invoke_on_viewer([panel_id, enabled] {
+                    gui::PanelRegistry::instance().set_panel_enabled(panel_id, enabled);
+                });
             },
             nb::arg("panel_id"), nb::arg("enabled"), "Enable or disable a panel by id");
 
         m.def(
             "reset_layout", []() -> std::string {
-                auto* const gui_manager = get_gui_manager();
-                if (!gui_manager)
-                    return "GUI manager is unavailable";
-                const auto result = gui_manager->resetLayout();
-                return result ? std::string{} : result.error();
+                return invoke_on_viewer(
+                    []() -> std::string {
+                        auto* const gui_manager = get_gui_manager();
+                        if (!gui_manager)
+                            return "GUI manager is unavailable";
+                        const auto result = gui_manager->resetLayout();
+                        return result ? std::string{} : result.error();
+                    },
+                    "GUI manager is unavailable");
             },
             "Reset the saved UI layout and apply the default dock arrangement immediately.");
 
         m.def(
             "reset_window_state", []() -> std::string {
-                auto* const gui_manager = get_gui_manager();
-                if (!gui_manager)
-                    return "GUI manager is unavailable";
-                const auto result = gui_manager->resetWindowState();
-                return result ? std::string{} : result.error();
+                return invoke_on_viewer(
+                    []() -> std::string {
+                        auto* const gui_manager = get_gui_manager();
+                        if (!gui_manager)
+                            return "GUI manager is unavailable";
+                        const auto result = gui_manager->resetWindowState();
+                        return result ? std::string{} : result.error();
+                    },
+                    "GUI manager is unavailable");
             },
             "Reset persisted window geometry and apply the default geometry immediately.");
 
         m.def(
             "is_panel_enabled", [](const std::string& panel_id) {
-                return gui::PanelRegistry::instance().is_panel_enabled(panel_id);
+                return invoke_on_viewer(
+                    [panel_id] {
+                        return gui::PanelRegistry::instance().is_panel_enabled(panel_id);
+                    },
+                    false);
             },
             nb::arg("panel_id"), "Check if a panel is enabled");
 
         m.def(
             "get_main_panel_tabs", []() {
-                return gui::PanelRegistry::instance().get_panels_for_space(gui::PanelSpace::MainPanelTab);
+                return invoke_on_viewer(
+                    [] {
+                        return gui::PanelRegistry::instance().get_panels_for_space(
+                            gui::PanelSpace::MainPanelTab);
+                    },
+                    std::vector<gui::PanelSummary>{});
             },
             "Get all main panel tabs as typed panel summaries");
 
         m.def(
             "get_panel", [](const std::string& panel_id) {
-                return gui::PanelRegistry::instance().get_panel(panel_id);
+                return invoke_on_viewer(
+                    [panel_id] {
+                        return gui::PanelRegistry::instance().get_panel(panel_id);
+                    },
+                    std::optional<gui::PanelDetails>{});
             },
             nb::arg("panel_id"), "Get typed panel info by id (None if not found)");
 
         m.def(
             "set_panel_label", [](const std::string& panel_id, const std::string& new_label) {
-                return gui::PanelRegistry::instance().set_panel_label(panel_id, new_label);
+                return invoke_on_viewer(
+                    [panel_id, new_label] {
+                        return gui::PanelRegistry::instance().set_panel_label(panel_id, new_label);
+                    },
+                    false);
             },
             nb::arg("panel_id"), nb::arg("label"), "Set the display label for a panel");
 
         m.def(
             "set_panel_order", [](const std::string& panel_id, int new_order) {
-                return gui::PanelRegistry::instance().set_panel_order(panel_id, new_order);
+                return invoke_on_viewer(
+                    [panel_id, new_order] {
+                        return gui::PanelRegistry::instance().set_panel_order(panel_id, new_order);
+                    },
+                    false);
             },
             nb::arg("panel_id"), nb::arg("order"), "Set the sort order for a panel");
 
         m.def(
             "set_panel_space", [](const std::string& panel_id, PanelSpace space) {
-                return gui::PanelRegistry::instance().set_panel_space(panel_id, to_gui_space(space));
+                return invoke_on_viewer(
+                    [panel_id, space] {
+                        return gui::PanelRegistry::instance().set_panel_space(
+                            panel_id, to_gui_space(space));
+                    },
+                    false);
             },
             nb::arg("panel_id"), nb::arg("space"), "Set the panel space (where it renders)");
 
         m.def(
             "set_panel_parent", [](const std::string& panel_id, const std::string& parent_id) {
-                return gui::PanelRegistry::instance().set_panel_parent(panel_id, parent_id);
+                return invoke_on_viewer(
+                    [panel_id, parent_id] {
+                        return gui::PanelRegistry::instance().set_panel_parent(panel_id, parent_id);
+                    },
+                    false);
             },
             nb::arg("panel_id"), nb::arg("parent"), "Set the parent panel (embeds as collapsible section)");
 
         m.def(
             "has_main_panel_tabs", []() {
-                return gui::PanelRegistry::instance().has_panels(gui::PanelSpace::MainPanelTab);
+                return invoke_on_viewer(
+                    [] {
+                        return gui::PanelRegistry::instance().has_panels(gui::PanelSpace::MainPanelTab);
+                    },
+                    false);
             },
             "Check if any main panel tabs are registered");
     }
