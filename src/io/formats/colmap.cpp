@@ -426,40 +426,6 @@ namespace lfs::io {
         return Tensor::from_vector(R_data, {3, 3}, Device::CPU);
     }
 
-    // -----------------------------------------------------------------------------
-    //  Image data structure
-    // -----------------------------------------------------------------------------
-    constexpr uint64_t INVALID_POINT3D_ID = std::numeric_limits<uint64_t>::max();
-
-    struct ImagePoint2D {
-        double x = 0.0;
-        double y = 0.0;
-        uint64_t point3D_id = INVALID_POINT3D_ID;
-    };
-
-    struct ImageData {
-        uint32_t image_id = 0;
-        uint32_t camera_id = 0;
-        std::string name;
-        std::vector<float> qvec = {1.0f, 0.0f, 0.0f, 0.0f}; // [w, x, y, z]
-        std::vector<float> tvec = {0.0f, 0.0f, 0.0f};
-        std::vector<ImagePoint2D> points2D;
-    };
-
-    struct Point3DTrackElement {
-        uint32_t image_id = 0;
-        uint32_t point2D_idx = 0;
-    };
-
-    struct Point3DData {
-        uint64_t point3D_id = 0;
-        double xyz[3] = {0.0, 0.0, 0.0};
-        uint8_t color[3] = {255, 255, 255};
-        double error = 0.0;
-        size_t track_count = 0;
-        std::vector<Point3DTrackElement> track;
-    };
-
     namespace {
         struct Point3DTextPointCloudData {
             std::vector<float> positions;
@@ -996,7 +962,18 @@ namespace lfs::io {
     // -----------------------------------------------------------------------------
     //  Binary-file loader
     // -----------------------------------------------------------------------------
-    static std::unique_ptr<std::vector<char>>
+    struct BinaryBuffer {
+        std::unique_ptr<char[]> storage;
+        size_t byte_size = 0;
+
+        [[nodiscard]] char* data() noexcept { return storage.get(); }
+        [[nodiscard]] const char* data() const noexcept { return storage.get(); }
+        [[nodiscard]] size_t size() const noexcept { return byte_size; }
+        [[nodiscard]] const char* begin() const noexcept { return data(); }
+        [[nodiscard]] const char* end() const noexcept { return data() + size(); }
+    };
+
+    static std::unique_ptr<BinaryBuffer>
     read_binary(const std::filesystem::path& p) {
         LOG_TRACE("Reading binary file: {}", lfs::core::path_to_utf8(p));
         std::ifstream f;
@@ -1039,7 +1016,9 @@ namespace lfs::io {
         }
 
         const auto sz = static_cast<std::streamsize>(file_size);
-        auto buf = std::make_unique<std::vector<char>>(static_cast<size_t>(file_size));
+        auto buf = std::make_unique<BinaryBuffer>();
+        buf->byte_size = static_cast<size_t>(file_size);
+        buf->storage = std::make_unique_for_overwrite<char[]>(buf->byte_size);
 
         f.seekg(0, std::ios::beg);
         if (!f.good()) {
@@ -1159,7 +1138,11 @@ namespace lfs::io {
                                               SkipTally* pose_tally = nullptr,
                                               SkipTally* point2d_tally = nullptr) {
         LOG_TIMER_TRACE("Read images.bin");
-        auto buf_owner = read_binary(file_path);
+        std::unique_ptr<BinaryBuffer> buf_owner;
+        {
+            LOG_TIMER_DEBUG("COLMAP images.bin read");
+            buf_owner = read_binary(file_path);
+        }
         const char* cur = buf_owner->data();
         const char* end = cur + buf_owner->size();
 
@@ -1181,45 +1164,35 @@ namespace lfs::io {
                     .add("image_count", n_images)
                     .add("remaining_bytes", static_cast<std::uint64_t>(end - cur)));
         }
-        LOG_DEBUG("Reading {} images from binary file", n_images);
-        std::vector<ImageData> images;
-        images.reserve(n_images);
-        std::unordered_set<uint32_t> image_ids;
-        std::unordered_set<std::string> image_names;
+        struct ImageRecordSpan {
+            const char* begin = nullptr;
+            const char* end = nullptr;
+        };
+        std::vector<ImageRecordSpan> records(n_images);
 
+        // The offset pass performs every structural read in record order. It
+        // therefore retains the old first-error taxonomy while making the
+        // independent record bodies available to the parallel parser.
         for (uint64_t i = 0; i < n_images; ++i) {
             if (should_poll_cancel(static_cast<size_t>(i))) {
                 throw_if_load_cancel_requested(options, "COLMAP image metadata load cancelled");
             }
-            ImageData img;
-            img.image_id = read_u32(cur, end, "images.bin image id");
-
-            // Read quaternion [w, x, y, z]
-            for (int k = 0; k < 4; ++k) {
-                img.qvec[k] = static_cast<float>(read_f64(cur, end, "images.bin quaternion"));
+            records[i].begin = cur;
+            const uint32_t image_id = read_u32(cur, end, "images.bin image id");
+            for (int k = 0; k < 7; ++k) {
+                (void)read_f64(cur, end, k < 4 ? "images.bin quaternion" : "images.bin translation");
             }
-
-            // Read translation [x, y, z]
-            for (int k = 0; k < 3; ++k) {
-                img.tvec[k] = static_cast<float>(read_f64(cur, end, "images.bin translation"));
-            }
-
-            img.camera_id = read_u32(cur, end, "images.bin camera id");
-
+            (void)read_u32(cur, end, "images.bin camera id");
             const void* terminator = std::memchr(cur, '\0', static_cast<size_t>(end - cur));
             if (terminator == nullptr) {
                 throw_colmap_error(
                     lfs::ErrorCode::DataLoss,
                     std::format("images.bin image name must be null-terminated "
                                 "(record_index={}, image_id={}, remaining_bytes={})",
-                                i, img.image_id, static_cast<size_t>(end - cur)),
+                                i, image_id, static_cast<size_t>(end - cur)),
                     lfs::SmallFields{}.add("record_index", i));
             }
-            const char* name_end = static_cast<const char*>(terminator);
-            img.name.assign(cur, name_end);
-            cur = name_end + 1;
-            bool valid = !img.name.empty();
-
+            cur = static_cast<const char*>(terminator) + 1;
             const uint64_t npts = read_u64(cur, end, "images.bin point2D count");
             constexpr size_t POINT2D_RECORD_BYTES = 2 * sizeof(double) + sizeof(uint64_t);
             if (npts > static_cast<uint64_t>(end - cur) / POINT2D_RECORD_BYTES) {
@@ -1227,34 +1200,81 @@ namespace lfs::io {
                     lfs::ErrorCode::DataLoss,
                     std::format("images.bin point2D count exceeds the remaining payload "
                                 "(image_id={}, point_count={}, remaining_bytes={}, record_bytes={})",
-                                img.image_id, npts, static_cast<size_t>(end - cur),
-                                POINT2D_RECORD_BYTES),
+                                image_id, npts, static_cast<size_t>(end - cur), POINT2D_RECORD_BYTES),
                     lfs::SmallFields{}
                         .add("point_count", npts)
                         .add("remaining_bytes", static_cast<std::uint64_t>(end - cur)));
             }
-            img.points2D.reserve(npts);
-            for (uint64_t j = 0; j < npts; ++j) {
-                ImagePoint2D point;
-                point.x = read_f64(cur, end, "images.bin point2D x");
-                point.y = read_f64(cur, end, "images.bin point2D y");
-                point.point3D_id = read_u64(cur, end, "images.bin point3D id");
-                if (std::isfinite(point.x) && std::isfinite(point.y)) {
-                    img.points2D.push_back(point);
-                } else if (point2d_tally) {
-                    point2d_tally->record(std::format("image_id={},point_index={}", img.image_id, j));
+            cur += static_cast<size_t>(npts) * POINT2D_RECORD_BYTES;
+            records[i].end = cur;
+        }
+
+        LOG_DEBUG("Reading {} images from binary file", n_images);
+        std::vector<ImageData> parsed(n_images);
+        std::vector<uint8_t> valid(n_images, 0);
+        std::vector<SkipTally> point2d_tallies(point2d_tally ? n_images : 0);
+        std::atomic<bool> cancelled = false;
+        {
+            LOG_TIMER_DEBUG("COLMAP images.bin parse");
+            tbb::parallel_for(size_t{0}, static_cast<size_t>(n_images), [&](const size_t i) {
+                if (should_poll_cancel(i) && is_load_cancel_requested(options)) {
+                    cancelled.store(true, std::memory_order_relaxed);
+                    return;
                 }
+                const char* record_cur = records[i].begin;
+                const char* record_end = records[i].end;
+                auto& img = parsed[i];
+                img.image_id = read_u32(record_cur, record_end, "images.bin image id");
+                for (int k = 0; k < 4; ++k) {
+                    img.qvec[k] = static_cast<float>(read_f64(record_cur, record_end, "images.bin quaternion"));
+                }
+                for (int k = 0; k < 3; ++k) {
+                    img.tvec[k] = static_cast<float>(read_f64(record_cur, record_end, "images.bin translation"));
+                }
+                img.camera_id = read_u32(record_cur, record_end, "images.bin camera id");
+                const char* name_end = static_cast<const char*>(
+                    std::memchr(record_cur, '\0', static_cast<size_t>(record_end - record_cur)));
+                img.name.assign(record_cur, name_end);
+                record_cur = name_end + 1;
+                bool image_valid = !img.name.empty();
+                const uint64_t npts = read_u64(record_cur, record_end, "images.bin point2D count");
+                img.points2D.reserve(npts);
+                auto* local_point2d_tally = point2d_tally ? &point2d_tallies[i] : nullptr;
+                for (uint64_t j = 0; j < npts; ++j) {
+                    ImagePoint2D point;
+                    point.x = read_f64(record_cur, record_end, "images.bin point2D x");
+                    point.y = read_f64(record_cur, record_end, "images.bin point2D y");
+                    point.point3D_id = read_u64(record_cur, record_end, "images.bin point3D id");
+                    if (std::isfinite(point.x) && std::isfinite(point.y)) {
+                        img.points2D.push_back(point);
+                    } else if (local_point2d_tally) {
+                        local_point2d_tally->record(std::format("image_id={},point_index={}", img.image_id, j));
+                    }
+                }
+                const double qnorm = std::sqrt(
+                    static_cast<double>(img.qvec[0]) * img.qvec[0] +
+                    static_cast<double>(img.qvec[1]) * img.qvec[1] +
+                    static_cast<double>(img.qvec[2]) * img.qvec[2] +
+                    static_cast<double>(img.qvec[3]) * img.qvec[3]);
+                image_valid = image_valid && std::isfinite(qnorm) && std::abs(qnorm - 1.0) <= 1e-4 &&
+                              std::ranges::all_of(img.tvec, [](const float value) { return std::isfinite(value); });
+                valid[i] = image_valid ? 1 : 0;
+            });
+        }
+        if (cancelled.load(std::memory_order_relaxed)) {
+            throw_if_load_cancel_requested(options, "COLMAP image metadata load cancelled");
+        }
+
+        std::vector<ImageData> images;
+        images.reserve(n_images);
+        std::unordered_set<uint32_t> image_ids;
+        std::unordered_set<std::string> image_names;
+        for (size_t i = 0; i < parsed.size(); ++i) {
+            if (point2d_tally) {
+                point2d_tally->merge(point2d_tallies[i]);
             }
-
-            const double qnorm = std::sqrt(
-                static_cast<double>(img.qvec[0]) * img.qvec[0] +
-                static_cast<double>(img.qvec[1]) * img.qvec[1] +
-                static_cast<double>(img.qvec[2]) * img.qvec[2] +
-                static_cast<double>(img.qvec[3]) * img.qvec[3]);
-            valid = valid && std::isfinite(qnorm) && std::abs(qnorm - 1.0) <= 1e-4 &&
-                    std::ranges::all_of(img.tvec, [](const float value) { return std::isfinite(value); });
-
-            if (!valid) {
+            auto& img = parsed[i];
+            if (!valid[i]) {
                 if (pose_tally) {
                     pose_tally->record(std::format("image_id={}", img.image_id));
                 }
@@ -1265,7 +1285,7 @@ namespace lfs::io {
                                    std::format("images.bin image ids must be unique among kept images "
                                                "(record_index={}, image_id={})",
                                                i, img.image_id),
-                                   lfs::SmallFields{}.add("image_id", static_cast<std::uint64_t>(img.image_id)));
+                                   lfs::SmallFields{}.add("image_id", static_cast<uint64_t>(img.image_id)));
             }
             if (!image_names.insert(img.name).second) {
                 throw_colmap_error(lfs::ErrorCode::DataLoss,
@@ -1276,7 +1296,6 @@ namespace lfs::io {
             }
             images.push_back(std::move(img));
         }
-
         if (cur != end) {
             throw_colmap_error(lfs::ErrorCode::DataLoss,
                                "images.bin: trailing bytes",
@@ -1421,6 +1440,7 @@ namespace lfs::io {
                                                          const LoadOptions& options = {},
                                                          SkipTally* tally = nullptr) {
         LOG_TIMER_TRACE("Read points3D.bin");
+        LOG_TIMER_DEBUG("COLMAP points3D parse");
         auto buf_owner = read_binary(file_path);
         const char* cur = buf_owner->data();
         const char* end = cur + buf_owner->size();
@@ -1439,62 +1459,100 @@ namespace lfs::io {
                     .add("point_count", N)
                     .add("remaining_bytes", static_cast<std::uint64_t>(end - cur)));
         }
-        LOG_DEBUG("Reading {} 3D points from binary file", N);
-
-        std::vector<Point3DData> points;
-        points.reserve(N);
-        std::unordered_set<uint64_t> point_ids;
-
+        struct PointRecordSpan {
+            const char* begin = nullptr;
+            const char* end = nullptr;
+            uint64_t point_id = 0;
+            uint64_t track_length = 0;
+        };
+        std::vector<PointRecordSpan> records(N);
         for (uint64_t i = 0; i < N; ++i) {
             if (should_poll_cancel(static_cast<size_t>(i))) {
                 throw_if_load_cancel_requested(options, "COLMAP point cloud load cancelled");
             }
-            Point3DData point;
-            point.point3D_id = read_u64(cur, end, "points3D.bin point id");
-
-            point.xyz[0] = read_f64(cur, end, "points3D.bin x");
-            point.xyz[1] = read_f64(cur, end, "points3D.bin y");
-            point.xyz[2] = read_f64(cur, end, "points3D.bin z");
-            bool valid = std::ranges::all_of(point.xyz, [](const double value) { return std::isfinite(value); });
-
+            records[i].begin = cur;
+            records[i].point_id = read_u64(cur, end, "points3D.bin point id");
+            (void)read_f64(cur, end, "points3D.bin x");
+            (void)read_f64(cur, end, "points3D.bin y");
+            (void)read_f64(cur, end, "points3D.bin z");
             if (static_cast<size_t>(end - cur) < 3) {
                 throw_colmap_error(
                     lfs::ErrorCode::DataLoss,
                     std::format("points3D.bin color payload requires three remaining bytes "
                                 "(point_id={}, remaining_bytes={}, required_bytes=3, record_index={})",
-                                point.point3D_id, static_cast<size_t>(end - cur), i),
+                                records[i].point_id, static_cast<size_t>(end - cur), i),
                     lfs::SmallFields{}.add("remaining_bytes", static_cast<std::uint64_t>(end - cur)));
             }
-            point.color[0] = static_cast<uint8_t>(*cur++);
-            point.color[1] = static_cast<uint8_t>(*cur++);
-            point.color[2] = static_cast<uint8_t>(*cur++);
-
-            point.error = read_f64(cur, end, "points3D.bin error");
-            valid = valid && std::isfinite(point.error);
+            cur += 3;
+            (void)read_f64(cur, end, "points3D.bin error");
             const uint64_t track_len = read_u64(cur, end, "points3D.bin track length");
             if (track_len > static_cast<uint64_t>(end - cur) / (2 * sizeof(uint32_t))) {
                 throw_colmap_error(
                     lfs::ErrorCode::DataLoss,
                     std::format("points3D.bin track length must fit the remaining payload "
                                 "(point_id={}, track_length={}, remaining_bytes={}, track_record_bytes={})",
-                                point.point3D_id, track_len, static_cast<size_t>(end - cur),
+                                records[i].point_id, track_len, static_cast<size_t>(end - cur),
                                 2 * sizeof(uint32_t)),
                     lfs::SmallFields{}
                         .add("track_length", track_len)
                         .add("remaining_bytes", static_cast<std::uint64_t>(end - cur)));
             }
-            point.track_count = static_cast<size_t>(track_len);
-            point.track.reserve(track_len);
-            for (uint64_t j = 0; j < track_len; ++j) {
-                Point3DTrackElement track;
-                track.image_id = read_u32(cur, end, "points3D.bin track image id");
-                track.point2D_idx = read_u32(cur, end, "points3D.bin track point index");
-                point.track.push_back(track);
-            }
-            if (!valid) {
-                if (tally) {
-                    tally->record(std::format("point_id={}", point.point3D_id));
+            cur += static_cast<size_t>(track_len) * 2 * sizeof(uint32_t);
+            records[i].track_length = track_len;
+            records[i].end = cur;
+        }
+        LOG_DEBUG("Reading {} 3D points from binary file", N);
+        std::vector<Point3DData> parsed(N);
+        std::vector<uint8_t> valid(N, 0);
+        std::vector<SkipTally> local_tallies(tally ? N : 0);
+        std::atomic<bool> cancelled = false;
+        {
+            tbb::parallel_for(size_t{0}, static_cast<size_t>(N), [&](const size_t i) {
+                if (should_poll_cancel(i) && is_load_cancel_requested(options)) {
+                    cancelled.store(true, std::memory_order_relaxed);
+                    return;
                 }
+                const char* record_cur = records[i].begin;
+                const char* record_end = records[i].end;
+                auto& point = parsed[i];
+                point.point3D_id = read_u64(record_cur, record_end, "points3D.bin point id");
+                point.xyz[0] = read_f64(record_cur, record_end, "points3D.bin x");
+                point.xyz[1] = read_f64(record_cur, record_end, "points3D.bin y");
+                point.xyz[2] = read_f64(record_cur, record_end, "points3D.bin z");
+                bool point_valid = std::ranges::all_of(point.xyz, [](const double value) { return std::isfinite(value); });
+                point.color[0] = static_cast<uint8_t>(*record_cur++);
+                point.color[1] = static_cast<uint8_t>(*record_cur++);
+                point.color[2] = static_cast<uint8_t>(*record_cur++);
+                point.error = read_f64(record_cur, record_end, "points3D.bin error");
+                point_valid = point_valid && std::isfinite(point.error);
+                const uint64_t track_len = read_u64(record_cur, record_end, "points3D.bin track length");
+                point.track_count = static_cast<size_t>(track_len);
+                point.track.reserve(track_len);
+                for (uint64_t j = 0; j < track_len; ++j) {
+                    Point3DTrackElement track;
+                    track.image_id = read_u32(record_cur, record_end, "points3D.bin track image id");
+                    track.point2D_idx = read_u32(record_cur, record_end, "points3D.bin track point index");
+                    point.track.push_back(track);
+                }
+                valid[i] = point_valid ? 1 : 0;
+                if (!point_valid && tally) {
+                    local_tallies[i].record(std::format("point_id={}", point.point3D_id));
+                }
+            });
+        }
+        if (cancelled.load(std::memory_order_relaxed)) {
+            throw_if_load_cancel_requested(options, "COLMAP point cloud load cancelled");
+        }
+
+        std::vector<Point3DData> points;
+        points.reserve(N);
+        std::unordered_set<uint64_t> point_ids;
+        for (size_t i = 0; i < parsed.size(); ++i) {
+            if (tally) {
+                tally->merge(local_tallies[i]);
+            }
+            auto& point = parsed[i];
+            if (!valid[i]) {
                 continue;
             }
             if (!point_ids.insert(point.point3D_id).second) {
@@ -1506,13 +1564,11 @@ namespace lfs::io {
             }
             points.push_back(std::move(point));
         }
-
         if (cur != end) {
             throw_colmap_error(lfs::ErrorCode::DataLoss,
                                "points3D.bin: trailing bytes",
                                lfs::SmallFields{}.add("points_read", points.size()));
         }
-
         return points;
     }
 
@@ -1569,6 +1625,56 @@ namespace lfs::io {
     PointCloud read_point3D_binary(const std::filesystem::path& file_path,
                                    const LoadOptions& options = {}) {
         return point3D_records_to_point_cloud(read_point3D_binary_records(file_path, options));
+    }
+
+    Result<LoadOutcome<std::vector<ImageData>>> read_colmap_images_binary(
+        const std::filesystem::path& file_path,
+        const LoadOptions& options) {
+        try {
+            SkipTally pose_tally;
+            SkipTally point2d_tally;
+            auto images = read_images_binary(file_path, options, &pose_tally, &point2d_tally);
+            std::vector<Diagnostic> warnings;
+            if (auto diagnostic = pose_tally.to_diagnostic(
+                    lfs::ErrorCode::DataLoss, "image(s) with an invalid pose")) {
+                warnings.push_back(std::move(*diagnostic));
+            }
+            if (auto diagnostic = point2d_tally.to_diagnostic(
+                    lfs::ErrorCode::DataLoss, "point2D observation(s)")) {
+                warnings.push_back(std::move(*diagnostic));
+            }
+            return LoadOutcome<std::vector<ImageData>>{std::move(images), std::move(warnings)};
+        } catch (const LoadCancelledError& e) {
+            return make_error(ErrorCode::CANCELLED, e.what(), file_path);
+        } catch (const lfs::Exception& e) {
+            return std::unexpected(from_lfs_error(lfs::Error(e.error()).with_context(
+                "read COLMAP images.bin", LFS_SOURCE_SITE_CURRENT())));
+        } catch (const std::exception& e) {
+            return make_error(ErrorCode::CORRUPTED_DATA,
+                              std::format("Failed to read COLMAP images.bin: {}", e.what()), file_path);
+        }
+    }
+
+    Result<LoadOutcome<std::vector<Point3DData>>> read_colmap_point3D_binary_records(
+        const std::filesystem::path& file_path,
+        const LoadOptions& options) {
+        try {
+            SkipTally tally;
+            auto records = read_point3D_binary_records(file_path, options, &tally);
+            std::vector<Diagnostic> warnings;
+            if (auto diagnostic = tally.to_diagnostic(lfs::ErrorCode::DataLoss, "point(s)")) {
+                warnings.push_back(std::move(*diagnostic));
+            }
+            return LoadOutcome<std::vector<Point3DData>>{std::move(records), std::move(warnings)};
+        } catch (const LoadCancelledError& e) {
+            return make_error(ErrorCode::CANCELLED, e.what(), file_path);
+        } catch (const lfs::Exception& e) {
+            return std::unexpected(from_lfs_error(lfs::Error(e.error()).with_context(
+                "read COLMAP points3D.bin", LFS_SOURCE_SITE_CURRENT())));
+        } catch (const std::exception& e) {
+            return make_error(ErrorCode::CORRUPTED_DATA,
+                              std::format("Failed to read COLMAP points3D.bin: {}", e.what()), file_path);
+        }
     }
 
     // -----------------------------------------------------------------------------
@@ -2034,7 +2140,7 @@ namespace lfs::io {
         if (buffer->size() < POINTS3D_PARALLEL_MIN_BYTES) {
             points.reserve(std::max<size_t>(buffer->size() / 96, 1));
             file_lines = for_each_data_line(
-                std::span<const char>(*buffer),
+                std::span<const char>(buffer->data(), buffer->size()),
                 options,
                 "COLMAP point cloud parse cancelled",
                 [&](const std::string_view line, const size_t source_line) {
@@ -2053,7 +2159,8 @@ namespace lfs::io {
                 SkipTally tally;
             };
 
-            const auto chunks = split_line_aligned_chunks(std::span<const char>(*buffer));
+            const auto chunks = split_line_aligned_chunks(
+                std::span<const char>(buffer->data(), buffer->size()));
             std::vector<RecordChunkResult> results(chunks.size());
             // oneTBB propagates parse/cancellation exceptions to the caller and cancels sibling work.
             tbb::parallel_for(size_t{0}, chunks.size(), [&](const size_t chunk_index) {
@@ -2136,7 +2243,7 @@ namespace lfs::io {
             }
 
             data.file_lines = for_each_data_line(
-                std::span<const char>(*buffer),
+                std::span<const char>(buffer->data(), buffer->size()),
                 options,
                 "COLMAP point cloud parse cancelled",
                 [&](const std::string_view line, const size_t source_line) {
@@ -2158,7 +2265,8 @@ namespace lfs::io {
                 SkipTally tally;
             };
 
-            const auto chunks = split_line_aligned_chunks(std::span<const char>(*buffer));
+            const auto chunks = split_line_aligned_chunks(
+                std::span<const char>(buffer->data(), buffer->size()));
             std::vector<PointCloudChunkResult> results(chunks.size());
             // oneTBB propagates parse/cancellation exceptions to the caller and cancels sibling work.
             tbb::parallel_for(size_t{0}, chunks.size(), [&](const size_t chunk_index) {
@@ -2260,11 +2368,79 @@ namespace lfs::io {
         return cloud;
     }
 
-    std::unordered_map<uint64_t, std::array<float, 3>>
+    struct ColmapPointPositions {
+        std::unordered_map<uint64_t, std::array<float, 3>> sparse;
+        std::vector<std::array<float, 3>> dense;
+        std::vector<uint8_t> dense_valid;
+
+        [[nodiscard]] bool empty() const noexcept {
+            return sparse.empty() && dense.empty();
+        }
+
+        [[nodiscard]] const std::array<float, 3>* find(const uint64_t id) const noexcept {
+            if (!dense.empty()) {
+                if (id < dense_valid.size() && dense_valid[static_cast<size_t>(id)]) {
+                    return &dense[static_cast<size_t>(id)];
+                }
+                return nullptr;
+            }
+            const auto it = sparse.find(id);
+            return it == sparse.end() ? nullptr : &it->second;
+        }
+    };
+
+    ColmapPointPositions make_colmap_point_positions(const std::vector<Point3DData>& records) {
+        ColmapPointPositions positions;
+        uint64_t max_id = 0;
+        size_t valid_count = 0;
+        for (const auto& point : records) {
+            if (std::isfinite(point.xyz[0]) && std::isfinite(point.xyz[1]) &&
+                std::isfinite(point.xyz[2])) {
+                max_id = std::max(max_id, point.point3D_id);
+                ++valid_count;
+            }
+        }
+        constexpr uint64_t DENSE_ID_MULTIPLIER = 4;
+        if (valid_count > 0 && max_id <= DENSE_ID_MULTIPLIER * records.size() &&
+            max_id < static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+            const auto dense_size = static_cast<size_t>(max_id) + 1;
+            positions.dense.resize(dense_size);
+            positions.dense_valid.resize(dense_size, 0);
+            for (const auto& point : records) {
+                if (std::isfinite(point.xyz[0]) && std::isfinite(point.xyz[1]) &&
+                    std::isfinite(point.xyz[2])) {
+                    const auto index = static_cast<size_t>(point.point3D_id);
+                    positions.dense[index] = {
+                        static_cast<float>(point.xyz[0]),
+                        static_cast<float>(point.xyz[1]),
+                        static_cast<float>(point.xyz[2])};
+                    positions.dense_valid[index] = 1;
+                }
+            }
+        } else {
+            positions.sparse.reserve(records.size());
+            for (const auto& point : records) {
+                if (std::isfinite(point.xyz[0]) && std::isfinite(point.xyz[1]) &&
+                    std::isfinite(point.xyz[2])) {
+                    positions.sparse.emplace(
+                        point.point3D_id,
+                        std::array<float, 3>{
+                            static_cast<float>(point.xyz[0]),
+                            static_cast<float>(point.xyz[1]),
+                            static_cast<float>(point.xyz[2])});
+                }
+            }
+        }
+        return positions;
+    }
+
+    ColmapPointPositions
     load_colmap_point_positions_if_needed(const std::filesystem::path& base,
                                           const std::vector<ImageData>& images,
-                                          const LoadOptions& options) {
-        std::unordered_map<uint64_t, std::array<float, 3>> points_xyz;
+                                          const LoadOptions& options,
+                                          ColmapPointCloudRecords* shared_records = nullptr,
+                                          SkipTally* point_tally = nullptr) {
+        ColmapPointPositions points_xyz;
         bool any_observations = false;
         for (const auto& image : images) {
             if (!image.points2D.empty()) {
@@ -2281,23 +2457,24 @@ namespace lfs::io {
             const fs::path points_bin = find_file_in_paths(search_paths, "points3D.bin");
             const fs::path points_txt = find_file_in_paths(search_paths, "points3D.txt");
             std::vector<Point3DData> records;
-            if (!points_bin.empty()) {
-                records = read_point3D_binary_records(points_bin, options);
+            const std::vector<Point3DData>* records_ptr = nullptr;
+            if (shared_records && shared_records->loaded) {
+                records_ptr = &shared_records->records;
+            } else if (!points_bin.empty()) {
+                records = read_point3D_binary_records(points_bin, options, point_tally);
+                if (shared_records) {
+                    shared_records->records = std::move(records);
+                    shared_records->loaded = true;
+                    records_ptr = &shared_records->records;
+                } else {
+                    records_ptr = &records;
+                }
             } else if (!points_txt.empty()) {
                 records = read_point3D_text_records(points_txt, options, TrackParseMode::CountOnly);
+                records_ptr = &records;
             }
-            points_xyz.reserve(records.size());
-            for (const auto& point : records) {
-                if (!std::isfinite(point.xyz[0]) || !std::isfinite(point.xyz[1]) ||
-                    !std::isfinite(point.xyz[2])) {
-                    continue;
-                }
-                points_xyz.emplace(
-                    point.point3D_id,
-                    std::array<float, 3>{
-                        static_cast<float>(point.xyz[0]),
-                        static_cast<float>(point.xyz[1]),
-                        static_cast<float>(point.xyz[2])});
+            if (records_ptr) {
+                points_xyz = make_colmap_point_positions(*records_ptr);
             }
         } catch (const std::exception& e) {
             LOG_WARN("COLMAP SfM points unavailable for eval depth_absrel: {}", e.what());
@@ -2309,7 +2486,7 @@ namespace lfs::io {
         Camera& camera,
         const ImageData& image,
         const CameraDataIntermediate& cam_data,
-        const std::unordered_map<uint64_t, std::array<float, 3>>& points_xyz) {
+        const ColmapPointPositions& points_xyz) {
         if (image.points2D.empty() || points_xyz.empty()) {
             return;
         }
@@ -2327,8 +2504,8 @@ namespace lfs::io {
             if (point.point3D_id == INVALID_POINT3D_ID) {
                 continue;
             }
-            const auto xyz = points_xyz.find(point.point3D_id);
-            if (xyz == points_xyz.end()) {
+            const auto* xyz = points_xyz.find(point.point3D_id);
+            if (!xyz) {
                 continue;
             }
             if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
@@ -2337,9 +2514,9 @@ namespace lfs::io {
             observations.push_back(Camera::SfmObservation{
                 .u = static_cast<float>(point.x) * u_scale,
                 .v = static_cast<float>(point.y) * v_scale,
-                .x = xyz->second[0],
-                .y = xyz->second[1],
-                .z = xyz->second[2]});
+                .x = (*xyz)[0],
+                .y = (*xyz)[1],
+                .z = (*xyz)[2]});
         }
         camera.set_sfm_observations(std::move(observations));
     }
@@ -2353,9 +2530,10 @@ namespace lfs::io {
                             const std::vector<ImageData>& images,
                             const std::string& images_folder,
                             const LoadOptions& options = {},
-                            const std::unordered_map<uint64_t, std::array<float, 3>>& points_xyz = {}) {
+                            const ColmapPointPositions& points_xyz = {}) {
 
         LOG_TIMER_TRACE("Assemble COLMAP cameras");
+        LOG_TIMER_DEBUG("COLMAP assemble: cameras");
 
         std::filesystem::path images_path = base_path / lfs::core::utf8_to_path(images_folder);
 
@@ -2366,6 +2544,10 @@ namespace lfs::io {
 
         std::vector<std::shared_ptr<Camera>> cameras;
         cameras.reserve(images.size());
+        std::vector<const ImageData*> camera_images;
+        std::vector<const CameraDataIntermediate*> camera_data;
+        camera_images.reserve(images.size());
+        camera_data.reserve(images.size());
         SkipTally image_tally;
         std::vector<std::string> missing_images;
 
@@ -2379,6 +2561,8 @@ namespace lfs::io {
         size_t undistort_crop_failures = 0;
         size_t undistort_camera_count = 0;
         size_t undistort_fisheye_crop_failures = 0;
+        std::unordered_map<uint32_t, std::optional<lfs::core::UndistortParams>> undistort_cache;
+        undistort_cache.reserve(cam_map.size());
 
         // Accumulate camera positions for scene center
         std::vector<float> camera_positions;
@@ -2424,20 +2608,19 @@ namespace lfs::io {
             Tensor T = Tensor::from_vector(img.tvec, {3}, Device::CPU);
 
             // Calculate camera position: -R^T * T
-            auto R_cpu = R.cpu();
-            auto T_cpu = T.cpu();
-
             float RT[9];
+            const float* R_ptr = R.ptr<float>();
             for (int r = 0; r < 3; ++r) {
                 for (int c = 0; c < 3; ++c) {
-                    RT[r * 3 + c] = R_cpu.ptr<float>()[c * 3 + r]; // Transpose
+                    RT[r * 3 + c] = R_ptr[c * 3 + r]; // Transpose
                 }
             }
 
             float cam_pos[3] = {0, 0, 0};
+            const float* T_ptr = T.ptr<float>();
             for (int r = 0; r < 3; ++r) {
                 for (int c = 0; c < 3; ++c) {
-                    cam_pos[r] -= RT[r * 3 + c] * T_cpu.ptr<float>()[c];
+                    cam_pos[r] -= RT[r * 3 + c] * T_ptr[c];
                 }
             }
 
@@ -2703,7 +2886,18 @@ namespace lfs::io {
                 depth_path,
                 normal_path);
 
-            camera->precompute_undistortion();
+            const auto undistort_it = undistort_cache.find(img.camera_id);
+            if (undistort_it == undistort_cache.end()) {
+                if (camera->has_distortion()) {
+                    LOG_TIMER_DEBUG("COLMAP assemble: undistort");
+                    camera->precompute_undistortion();
+                    undistort_cache.emplace(img.camera_id, camera->undistort_params());
+                } else {
+                    undistort_cache.emplace(img.camera_id, std::nullopt);
+                }
+            } else if (undistort_it->second) {
+                camera->adopt_undistortion(*undistort_it->second);
+            }
             ++undistort_camera_count;
             if (camera->undistort_params().crop_solve_failed) {
                 ++undistort_crop_failures;
@@ -2712,13 +2906,32 @@ namespace lfs::io {
                     ++undistort_fisheye_crop_failures;
                 }
             }
-            attach_sfm_observations(*camera, img, cam_data, points_xyz);
             if (!image_file_present) {
                 camera->set_has_image(false);
                 missing_images.push_back(img.name);
             }
-
+            camera_images.push_back(&img);
+            camera_data.push_back(&cam_data);
             cameras.push_back(std::move(camera));
+        }
+
+        std::atomic<bool> observation_cancelled = false;
+        {
+            LOG_TIMER_DEBUG("COLMAP assemble: sfm observations");
+            tbb::parallel_for(tbb::blocked_range<size_t>(0, cameras.size(), 32),
+                              [&](const tbb::blocked_range<size_t>& range) {
+                                  for (size_t i = range.begin(); i != range.end(); ++i) {
+                                      if (should_poll_cancel(i) && is_load_cancel_requested(options)) {
+                                          observation_cancelled.store(true, std::memory_order_relaxed);
+                                          return;
+                                      }
+                                      attach_sfm_observations(*cameras[i], *camera_images[i],
+                                                              *camera_data[i], points_xyz);
+                                  }
+                              });
+        }
+        if (observation_cancelled.load(std::memory_order_relaxed)) {
+            throw_if_load_cancel_requested(options, "COLMAP camera assembly cancelled");
         }
 
         if (undistort_crop_failures > 0) {
@@ -3761,16 +3974,34 @@ namespace lfs::io {
 
     Result<LoadOutcome<PointCloud>> read_colmap_point_cloud(
         const std::filesystem::path& filepath,
-        const LoadOptions& options) {
+        const LoadOptions& options,
+        ColmapPointCloudRecords* point_records) {
         LOG_TIMER_TRACE("Read COLMAP point cloud");
         try {
             const fs::path points3d_file = get_sparse_file_path(filepath, "points3D.bin");
             SkipTally tally;
-            auto records = read_point3D_binary_records(points3d_file, options, &tally);
-            auto cloud = point3D_records_to_point_cloud(records);
+            std::vector<Point3DData> records;
             std::vector<Diagnostic> warnings;
-            if (auto diagnostic = tally.to_diagnostic(lfs::ErrorCode::DataLoss, "point(s)")) {
-                warnings.push_back(std::move(*diagnostic));
+            if (point_records && point_records->loaded) {
+                records = std::move(point_records->records);
+                warnings = std::move(point_records->warnings);
+                point_records->loaded = false;
+            } else {
+                records = read_point3D_binary_records(points3d_file, options, &tally);
+                if (point_records) {
+                    point_records->warnings.clear();
+                    if (auto diagnostic = tally.to_diagnostic(lfs::ErrorCode::DataLoss, "point(s)")) {
+                        warnings.push_back(*diagnostic);
+                        point_records->warnings.push_back(std::move(*diagnostic));
+                    }
+                    point_records->loaded = false;
+                }
+            }
+            auto cloud = point3D_records_to_point_cloud(records);
+            if (!point_records) {
+                if (auto diagnostic = tally.to_diagnostic(lfs::ErrorCode::DataLoss, "point(s)")) {
+                    warnings.push_back(std::move(*diagnostic));
+                }
             }
             return LoadOutcome<PointCloud>{std::move(cloud), std::move(warnings)};
         } catch (const LoadCancelledError& e) {
@@ -3788,16 +4019,34 @@ namespace lfs::io {
 
     Result<LoadOutcome<ColmapPointCloudLoadStats>> read_colmap_point_cloud_with_stats(
         const std::filesystem::path& filepath,
-        const LoadOptions& options) {
+        const LoadOptions& options,
+        ColmapPointCloudRecords* point_records) {
         LOG_TIMER_TRACE("Read COLMAP point cloud");
         try {
             const fs::path points3d_file = get_sparse_file_path(filepath, "points3D.bin");
             SkipTally tally;
-            auto records = read_point3D_binary_records(points3d_file, options, &tally);
-            auto stats = point3D_records_to_point_cloud_with_stats(std::move(records), options);
+            std::vector<Point3DData> records;
             std::vector<Diagnostic> warnings;
-            if (auto diagnostic = tally.to_diagnostic(lfs::ErrorCode::DataLoss, "point(s)")) {
-                warnings.push_back(std::move(*diagnostic));
+            if (point_records && point_records->loaded) {
+                records = std::move(point_records->records);
+                warnings = std::move(point_records->warnings);
+                point_records->loaded = false;
+            } else {
+                records = read_point3D_binary_records(points3d_file, options, &tally);
+                if (point_records) {
+                    point_records->warnings.clear();
+                    if (auto diagnostic = tally.to_diagnostic(lfs::ErrorCode::DataLoss, "point(s)")) {
+                        warnings.push_back(*diagnostic);
+                        point_records->warnings.push_back(std::move(*diagnostic));
+                    }
+                    point_records->loaded = false;
+                }
+            }
+            auto stats = point3D_records_to_point_cloud_with_stats(std::move(records), options);
+            if (!point_records) {
+                if (auto diagnostic = tally.to_diagnostic(lfs::ErrorCode::DataLoss, "point(s)")) {
+                    warnings.push_back(std::move(*diagnostic));
+                }
             }
             return LoadOutcome<ColmapPointCloudLoadStats>{std::move(stats), std::move(warnings)};
         } catch (const LoadCancelledError& e) {
@@ -3857,7 +4106,8 @@ namespace lfs::io {
     Result<LoadOutcome<std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>>>
     read_colmap_cameras_and_images(const std::filesystem::path& base,
                                    const std::string& images_folder,
-                                   const LoadOptions& options) {
+                                   const LoadOptions& options,
+                                   ColmapPointCloudRecords* point_records) {
 
         LOG_TIMER_TRACE("Read COLMAP cameras and images");
 
@@ -3869,6 +4119,7 @@ namespace lfs::io {
             SkipTally camera_tally;
             SkipTally pose_tally;
             SkipTally point2d_tally;
+            SkipTally point_tally;
             auto cam_map = read_cameras_binary(cams_file, scale_factor, options, &camera_tally);
             auto images = read_images_binary(images_file, options, &pose_tally, &point2d_tally);
 
@@ -3877,7 +4128,13 @@ namespace lfs::io {
                 return std::unexpected(validation.error());
             }
 
-            auto points_xyz = load_colmap_point_positions_if_needed(base, images, options);
+            auto points_xyz = load_colmap_point_positions_if_needed(
+                base, images, options, point_records, point_records ? &point_tally : nullptr);
+            if (point_records && point_records->loaded) {
+                if (auto diagnostic = point_tally.to_diagnostic(lfs::ErrorCode::DataLoss, "point(s)")) {
+                    point_records->warnings.push_back(std::move(*diagnostic));
+                }
+            }
             auto assembled = assemble_colmap_cameras(base, cam_map, images, images_folder, options, points_xyz);
             if (!assembled) {
                 return std::unexpected(assembled.error());
