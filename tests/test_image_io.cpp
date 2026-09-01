@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <stb_image_write.h>
 #include <vector>
 
 namespace {
@@ -89,6 +90,83 @@ TEST(ImageIoTest, ConvertsSixteenBitPngMemoryToUint8) {
     EXPECT_EQ(decoded[6], 128);
     EXPECT_EQ(decoded[9], 255);
     lfs::core::free_image(decoded);
+}
+
+TEST(ImageIoTest, GrayAlphaPathAndMemoryExpansionMatch) {
+    const auto source_path = std::filesystem::path(PROJECT_ROOT_PATH) / "data/bicycle/images_4/_DSC8679.JPG";
+    auto [source, source_width, source_height, source_channels] = lfs::core::load_image(source_path);
+    ASSERT_NE(source, nullptr);
+    ASSERT_EQ(source_channels, 3);
+
+    const auto path = std::filesystem::temp_directory_path() / "lfs_image_io_gray_alpha.png";
+    const auto pixel_count = static_cast<std::size_t>(source_width) * source_height;
+    std::vector<std::uint8_t> gray_alpha(pixel_count * 2);
+    for (std::size_t i = 0; i < pixel_count; ++i) {
+        const auto red = source[i * 3 + 0];
+        const auto green = source[i * 3 + 1];
+        const auto blue = source[i * 3 + 2];
+        gray_alpha[i * 2 + 0] = static_cast<std::uint8_t>((299u * red + 587u * green + 114u * blue + 500u) / 1000u);
+        gray_alpha[i * 2 + 1] = 200;
+    }
+    lfs::core::free_image(source);
+    ASSERT_TRUE(lfs::core::save_png(path, gray_alpha.data(), source_width, source_height, 2, 8, 0));
+
+    auto [from_path, path_width, path_height, path_channels] = lfs::core::load_image(path);
+    ASSERT_NE(from_path, nullptr);
+    ASSERT_EQ(path_channels, 3);
+    const auto encoded = read_file(path);
+    auto [from_memory, memory_width, memory_height, memory_channels] =
+        lfs::core::load_image_from_memory(encoded.data(), encoded.size());
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+
+    ASSERT_NE(from_memory, nullptr);
+    EXPECT_EQ(path_width, source_width);
+    EXPECT_EQ(path_height, source_height);
+    EXPECT_EQ(memory_width, source_width);
+    EXPECT_EQ(memory_height, source_height);
+    EXPECT_EQ(memory_channels, 3);
+    ASSERT_TRUE(std::equal(from_path, from_path + pixel_count * 3, from_memory));
+    for (std::size_t i = 0; i < pixel_count; ++i)
+        EXPECT_EQ(from_path[i * 3 + 2], (static_cast<unsigned int>(from_path[i * 3 + 0]) + from_path[i * 3 + 1]) / 2);
+
+    lfs::core::free_image(from_path);
+    lfs::core::free_image(from_memory);
+}
+
+TEST(ImageIoTest, DecodesTgaFromPathAndMemory) {
+    const auto source_path = std::filesystem::path(PROJECT_ROOT_PATH) / "data/bicycle/images_4/_DSC8679.JPG";
+    auto [source, source_width, source_height, source_channels] = lfs::core::load_image(source_path);
+    ASSERT_NE(source, nullptr);
+    ASSERT_EQ(source_channels, 3);
+
+    const auto path = std::filesystem::temp_directory_path() / "lfs_image_io.tga";
+    ASSERT_NE(stbi_write_tga(path.string().c_str(), source_width, source_height, source_channels, source), 0);
+    lfs::core::free_image(source);
+
+    auto [from_path, path_width, path_height, path_channels] = lfs::core::load_image(path);
+    ASSERT_NE(from_path, nullptr);
+    const auto encoded = read_file(path);
+    auto [from_memory, memory_width, memory_height, memory_channels] =
+        lfs::core::load_image_from_memory(encoded.data(), encoded.size());
+    const auto [probe_width, probe_height, probe_channels] = lfs::core::get_image_info(path);
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+
+    ASSERT_NE(from_memory, nullptr);
+    EXPECT_EQ(path_width, source_width);
+    EXPECT_EQ(path_height, source_height);
+    EXPECT_EQ(path_channels, 3);
+    EXPECT_EQ(memory_width, source_width);
+    EXPECT_EQ(memory_height, source_height);
+    EXPECT_EQ(memory_channels, 3);
+    EXPECT_EQ(probe_width, source_width);
+    EXPECT_EQ(probe_height, source_height);
+    EXPECT_EQ(probe_channels, 3);
+    EXPECT_TRUE(std::equal(from_path, from_path + static_cast<std::size_t>(source_width) * source_height * 3, from_memory));
+
+    lfs::core::free_image(from_path);
+    lfs::core::free_image(from_memory);
 }
 
 TEST(ImageIoTest, FloatTiffInferenceRangeNormalization) {

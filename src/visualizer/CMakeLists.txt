@@ -225,6 +225,7 @@ target_include_directories(lfs_visualizer
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/external
         ${CMAKE_SOURCE_DIR}/external/httplib
 )
 

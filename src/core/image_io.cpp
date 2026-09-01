@@ -71,6 +71,16 @@ namespace {
         return downscale_resample_nch<T>(src_rgb, w, h, nw, nh, 3);
     }
 
+    template <typename T>
+    void expand_pixel_to_rgb(T* destination, const int channels, const T red, const T green, const T blue) {
+        destination[0] = red;
+        destination[1] = channels > 1 ? green : red;
+        destination[2] = channels > 2 ? blue
+                         : channels == 2
+                             ? static_cast<T>((static_cast<unsigned long long>(red) + green) / 2)
+                             : red;
+    }
+
     lfs::core::Tensor normalize_image_for_save(lfs::core::Tensor image) {
         if (image.ndim() == 4)
             image = image.squeeze(0); // [B,C,H,W] -> [C,H,W]
@@ -192,13 +202,9 @@ namespace {
                 } else {
                     for (size_t pixel = 0; pixel < pixels; ++pixel) {
                         const size_t index = pixel * decoded.channels;
-                        const T first = source[index];
-                        base[pixel * 3 + 0] = first;
-                        base[pixel * 3 + 1] = decoded.channels > 1 ? source[index + 1] : first;
-                        base[pixel * 3 + 2] = decoded.channels >= 3 ? source[index + 2]
-                                              : decoded.channels == 2
-                                                  ? static_cast<T>((first + source[index + 1]) / 2)
-                                                  : first;
+                        expand_pixel_to_rgb(base + pixel * 3, decoded.channels, source[index],
+                                            decoded.channels > 1 ? source[index + 1] : source[index],
+                                            decoded.channels > 2 ? source[index + 2] : source[index]);
                     }
                 }
             } else if (decoded.sample_type == image_codecs::SampleType::UInt16) {
@@ -209,12 +215,9 @@ namespace {
                         return static_cast<uint8_t>((static_cast<uint32_t>(source[index + channel]) * 255u + 32767u) / 65535u);
                     };
                     const T first = convert(0);
-                    base[pixel * 3 + 0] = first;
-                    base[pixel * 3 + 1] = decoded.channels > 1 ? convert(1) : first;
-                    base[pixel * 3 + 2] = decoded.channels >= 3 ? convert(2)
-                                          : decoded.channels == 2
-                                              ? static_cast<T>((first + base[pixel * 3 + 1]) / 2)
-                                              : first;
+                    expand_pixel_to_rgb(base + pixel * 3, decoded.channels, first,
+                                        decoded.channels > 1 ? convert(1) : first,
+                                        decoded.channels > 2 ? convert(2) : first);
                 }
             } else {
                 const auto* source = reinterpret_cast<const float*>(decoded.data.data());
@@ -224,12 +227,9 @@ namespace {
                 for (size_t pixel = 0; pixel < pixels; ++pixel) {
                     const size_t index = pixel * decoded.channels;
                     const T first = convert(index);
-                    base[pixel * 3 + 0] = first;
-                    base[pixel * 3 + 1] = decoded.channels > 1 ? convert(index + 1) : first;
-                    base[pixel * 3 + 2] = decoded.channels >= 3 ? convert(index + 2)
-                                          : decoded.channels == 2
-                                              ? static_cast<T>((first + base[pixel * 3 + 1]) / 2)
-                                              : first;
+                    expand_pixel_to_rgb(base + pixel * 3, decoded.channels, first,
+                                        decoded.channels > 1 ? convert(index + 1) : first,
+                                        decoded.channels > 2 ? convert(index + 2) : first);
                 }
             }
         } else {
@@ -240,13 +240,9 @@ namespace {
                 } else {
                     for (size_t pixel = 0; pixel < pixels; ++pixel) {
                         const size_t index = pixel * decoded.channels;
-                        const T first = source[index];
-                        base[pixel * 3 + 0] = first;
-                        base[pixel * 3 + 1] = decoded.channels > 1 ? source[index + 1] : first;
-                        base[pixel * 3 + 2] = decoded.channels >= 3 ? source[index + 2]
-                                              : decoded.channels == 2
-                                                  ? static_cast<T>((static_cast<unsigned long long>(first) + base[pixel * 3 + 1]) / 2)
-                                                  : first;
+                        expand_pixel_to_rgb(base + pixel * 3, decoded.channels, source[index],
+                                            decoded.channels > 1 ? source[index + 1] : source[index],
+                                            decoded.channels > 2 ? source[index + 2] : source[index]);
                     }
                 }
             } else if (decoded.sample_type == image_codecs::SampleType::UInt8) {
@@ -257,12 +253,9 @@ namespace {
                         return static_cast<uint16_t>(static_cast<uint16_t>(source[index + channel]) * 257u);
                     };
                     const T first = convert(0);
-                    base[pixel * 3 + 0] = first;
-                    base[pixel * 3 + 1] = decoded.channels > 1 ? convert(1) : first;
-                    base[pixel * 3 + 2] = decoded.channels >= 3 ? convert(2)
-                                          : decoded.channels == 2
-                                              ? static_cast<T>((static_cast<unsigned long long>(first) + base[pixel * 3 + 1]) / 2)
-                                              : first;
+                    expand_pixel_to_rgb(base + pixel * 3, decoded.channels, first,
+                                        decoded.channels > 1 ? convert(1) : first,
+                                        decoded.channels > 2 ? convert(2) : first);
                 }
             } else {
                 const auto* source = reinterpret_cast<const float*>(decoded.data.data());
@@ -272,12 +265,9 @@ namespace {
                 for (size_t pixel = 0; pixel < pixels; ++pixel) {
                     const size_t index = pixel * decoded.channels;
                     const T first = convert(index);
-                    base[pixel * 3 + 0] = first;
-                    base[pixel * 3 + 1] = decoded.channels > 1 ? convert(index + 1) : first;
-                    base[pixel * 3 + 2] = decoded.channels >= 3 ? convert(index + 2)
-                                          : decoded.channels == 2
-                                              ? static_cast<T>((static_cast<unsigned long long>(first) + base[pixel * 3 + 1]) / 2)
-                                              : first;
+                    expand_pixel_to_rgb(base + pixel * 3, decoded.channels, first,
+                                        decoded.channels > 1 ? convert(index + 1) : first,
+                                        decoded.channels > 2 ? convert(index + 2) : first);
                 }
             }
         }
@@ -407,9 +397,10 @@ namespace lfs::core {
         };
         for (size_t i = 0; i < pixel_count; ++i) {
             const size_t src = i * decoded.channels;
-            out[i * 3 + 0] = sample_to_u8(src);
-            out[i * 3 + 1] = decoded.channels > 1 ? sample_to_u8(src + 1) : out[i * 3 + 0];
-            out[i * 3 + 2] = decoded.channels > 2 ? sample_to_u8(src + 2) : out[i * 3 + 0];
+            const auto first = sample_to_u8(src);
+            expand_pixel_to_rgb(out + i * 3, decoded.channels, first,
+                                decoded.channels > 1 ? sample_to_u8(src + 1) : first,
+                                decoded.channels > 2 ? sample_to_u8(src + 2) : first);
         }
         return {out, decoded.width, decoded.height, 3};
     }

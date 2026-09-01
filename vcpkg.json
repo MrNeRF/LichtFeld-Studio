@@ -59,7 +59,6 @@
       ]
     },
     "spdlog",
-    "stb",
     "tbb",
     "tiff",
     "tinyexr",

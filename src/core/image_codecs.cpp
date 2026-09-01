@@ -7,6 +7,7 @@
 
 #include <jpeglib.h>
 #include <png.h>
+#define STB_IMAGE_STATIC
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 #include <tiffio.h>
@@ -479,7 +480,7 @@ namespace lfs::core::image_codecs {
             stbi_uc* decoded = stbi_load_from_memory(file_data.data(), static_cast<int>(file_data.size()),
                                                      &width, &height, &channels, 0);
             if (!decoded) {
-                error = "BMP decode failed";
+                error = "STB decode failed";
                 return false;
             }
             result.width = width;
@@ -601,6 +602,17 @@ namespace lfs::core::image_codecs {
             result = {width, height, channels, SampleType::UInt8};
             return true;
         }
+        if (extension == ".tga") {
+            int width = 0;
+            int height = 0;
+            int channels = 0;
+            if (!stbi_info_from_memory(data.data(), static_cast<int>(data.size()), &width, &height, &channels)) {
+                error = "Invalid TGA header";
+                return false;
+            }
+            result = {width, height, channels, SampleType::UInt8};
+            return true;
+        }
         if (is_hdr(data) || extension == ".hdr") {
             int width = 0;
             int height = 0;
@@ -638,6 +650,8 @@ namespace lfs::core::image_codecs {
             return decode_stb(data, true, result, error);
         if (is_bmp(data))
             return decode_stb(data, false, result, error);
+        if (extension == ".tga")
+            return decode_stb(data, false, result, error);
         error = "Unsupported image format: " + path.string();
         return false;
     }
@@ -653,8 +667,8 @@ namespace lfs::core::image_codecs {
             std::vector<std::uint8_t> image_data(data, data + size);
             return decode_png(image_data, result, error);
         }
-        error = "Unsupported image buffer format";
-        return false;
+        std::vector<std::uint8_t> image_data(data, data + size);
+        return decode_stb(image_data, false, result, error);
     }
 
     bool decode_jpeg_memory(const std::uint8_t* data, const size_t size, Image& result, std::string& error) {

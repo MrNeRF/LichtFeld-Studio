@@ -152,8 +152,6 @@ target_link_libraries(lfs_core
         unofficial::tinyexr::tinyexr
         OpenMeshCore
 )
-target_include_directories(lfs_core PRIVATE ${Stb_INCLUDE_DIR})
-
 # OpenMP for tensor multi-threaded operations
 find_package(OpenMP)
 if(OpenMP_CXX_FOUND)

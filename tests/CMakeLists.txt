@@ -586,6 +586,7 @@ target_include_directories(lichtfeld_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/app/include
     ${CMAKE_SOURCE_DIR}/src/visualizer # For visualizer-relative headers (e.g. gui/ui_widgets.hpp)
     ${CMAKE_SOURCE_DIR}/external/spz   # SPZ library headers
+    ${CMAKE_SOURCE_DIR}/external       # Vendored stb headers
     ${NB_DIR}/include
     ${CUDAToolkit_INCLUDE_DIRS}
 )
