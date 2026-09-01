@@ -3142,9 +3142,43 @@ namespace lfs::io::project {
                 "project.path"));
         }
         const auto& path = source_path;
-        auto lock_result = detail::WriterLock::acquire(destination_path);
-        if (!lock_result) {
-            return status_failure(std::move(lock_result).error());
+        std::optional<detail::WriterLock> source_lock;
+        std::optional<detail::WriterLock> destination_lock;
+        const auto acquire_lock =
+            [](const std::filesystem::path& lock_path,
+               std::optional<detail::WriterLock>& target)
+            -> lfs::Result<void> {
+            auto lock_result = detail::WriterLock::acquire(lock_path);
+            if (!lock_result) {
+                return lfs::Result<void>::failure(
+                    std::move(lock_result).error());
+            }
+            target.emplace(std::move(*lock_result));
+            return {};
+        };
+        if (source_path == destination_path) {
+            if (auto locked = acquire_lock(destination_path, destination_lock);
+                !locked) {
+                return status_failure(std::move(locked).error());
+            }
+        } else if (source_path < destination_path) {
+            if (auto locked = acquire_lock(source_path, source_lock);
+                !locked) {
+                return status_failure(std::move(locked).error());
+            }
+            if (auto locked = acquire_lock(destination_path, destination_lock);
+                !locked) {
+                return status_failure(std::move(locked).error());
+            }
+        } else {
+            if (auto locked = acquire_lock(destination_path, destination_lock);
+                !locked) {
+                return status_failure(std::move(locked).error());
+            }
+            if (auto locked = acquire_lock(source_path, source_lock);
+                !locked) {
+                return status_failure(std::move(locked).error());
+            }
         }
         auto source_result =
             ProjectReader::open(source_path, options.compatibility);
@@ -3216,7 +3250,7 @@ namespace lfs::io::project {
         impl->destination_path = destination_path;
         impl->active_path =
             detail::make_sibling_temp_path(destination_path, "compact");
-        impl->lock.emplace(std::move(*lock_result));
+        impl->lock.emplace(std::move(*destination_lock));
         impl->superblock = SuperblockInfo{
             .format = CURRENT_CONTAINER_VERSION,
             .role = ContainerRole::Master,

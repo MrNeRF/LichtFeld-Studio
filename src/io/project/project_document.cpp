@@ -4138,29 +4138,49 @@ namespace lfs::io::project {
             options.file_uuid.is_nil()
                 ? lfs::core::generate_uuid_v4()
                 : options.file_uuid;
+        const CompactionOptions compaction_options{
+            .compatibility =
+                impl_->source_reader
+                    ? impl_->source_reader
+                          ->reader_options()
+                    : ReaderOptions{},
+            .new_file_uuid = file_uuid,
+            .new_project_uuid =
+                save_as_project_uuid,
+            .commit_uuid =
+                options.save_as_compaction_commit_uuid.is_nil()
+                    ? lfs::core::generate_uuid_v4()
+                    : options.save_as_compaction_commit_uuid,
+            .snapshot_uuid = options.commit.snapshot_uuid,
+            .creation_time_unix_ns =
+                options.save_as_creation_time_unix_ns,
+            .wallclock_unix_ns = options.commit.wallclock_unix_ns,
+            .disk_reserve_bytes = options.disk_reserve_bytes,
+            .boundary_observer = {},
+            .private_staging = true,
+        };
         auto compacted = ProjectWriter::compact_to(
-            original_path, temporary,
-            CompactionOptions{
-                .compatibility =
-                    impl_->source_reader
-                        ? impl_->source_reader
-                              ->reader_options()
-                        : ReaderOptions{},
-                .new_file_uuid = file_uuid,
-                .new_project_uuid =
-                    save_as_project_uuid,
-                .commit_uuid =
-                    options.save_as_compaction_commit_uuid.is_nil()
-                        ? lfs::core::generate_uuid_v4()
-                        : options.save_as_compaction_commit_uuid,
-                .snapshot_uuid = options.commit.snapshot_uuid,
-                .creation_time_unix_ns =
-                    options.save_as_creation_time_unix_ns,
-                .wallclock_unix_ns = options.commit.wallclock_unix_ns,
-                .disk_reserve_bytes = options.disk_reserve_bytes,
-                .boundary_observer = {},
-                .private_staging = true,
-            });
+            original_path, temporary, compaction_options);
+        if (!compacted &&
+            compacted.error().code() == lfs::ErrorCode::Unavailable) {
+            // Save As is read-only on the original and may proceed while
+            // another process holds its writer lock. In that case, first
+            // make the private source snapshot that the old Save As path
+            // used, then compact that snapshot under its own writer lock.
+            error.clear();
+            if (!std::filesystem::copy_file(
+                    original_path, temporary,
+                    std::filesystem::copy_options::none, error)) {
+                remove_temporary();
+                return fail<ProjectDocumentSaveReport>(
+                    lfs::ErrorCode::Unavailable,
+                    "The project could not be staged for Save As.",
+                    std::format("copy_file failed: {}", error.message()),
+                    "project.save_as.copy");
+            }
+            compacted = ProjectWriter::compact(
+                temporary, compaction_options);
+        }
         if (!compacted) {
             remove_temporary();
             return std::move(compacted).error();
