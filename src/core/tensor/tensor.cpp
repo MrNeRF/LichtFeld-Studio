@@ -1665,7 +1665,7 @@ namespace lfs::core {
         }
 
         {
-            LOG_TIMER_DEBUG("PLY export: prefault");
+            LOG_TIMER_DEBUG("Tensor: pageable host prefault");
             prefault_pageable_host_memory(result.data_, result.bytes());
         }
 
