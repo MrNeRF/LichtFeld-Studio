@@ -8,10 +8,6 @@ add_subdirectory(rasterization/fastgs)
 # Add LibTorch-free gsplat backend
 add_subdirectory(rasterization/gsplat)
 
-# Keep the dedicated edge rasterizer only as a test oracle. Training no longer
-# links or invokes it after edge scoring is folded into FastGS backward.
-add_subdirectory(rasterization/edge_compute)
-
 # LibTorch-free CUDA kernels
 set(LFS_TRAINING_KERNEL_SOURCES
     kernels/loss_tensor_contract.cpp

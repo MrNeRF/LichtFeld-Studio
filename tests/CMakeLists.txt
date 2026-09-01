@@ -405,7 +405,6 @@ set(TEST_FILES
     test_tensor_kernels_6c_elem.cpp
     test_tensor_lazy_stateful_ops.cpp
     test_fastgs_kernels.cpp
-    test_edge_rasterizer.cpp
     test_fastgs_fuzz.cpp
     test_fastgs_tile_culling_boundary.cpp
     fastgs_tile_culling_boundary_cuda.cu
@@ -661,9 +660,6 @@ endif()
 # Link libraries
 target_link_libraries(lichtfeld_tests PRIVATE
     ${LFS_TEST_INTERNAL_LINK_LIBS}
-
-    # Dedicated edge rasterizer is retained only as a parity/test oracle.
-    edge_compute_backend
 
     # External libraries
     GTest::gtest
