@@ -160,22 +160,89 @@ def decode_index(data: bytes, commit):
     return u64(decoded, 24), rows
 
 
+def _iter_uncompressed_chunks(payload: bytes, stop_after: int):
+    dctx = zstandard.ZstdDecompressor()
+    produced = 0
+
+    def emit(reader, remaining: int):
+        nonlocal produced
+        while remaining > 0 and produced < stop_after:
+            chunk = reader.read(min(1 << 20, remaining, stop_after - produced))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            produced += len(chunk)
+            yield chunk
+
+    if payload[:8] != b"LFSZFRM\x00":
+        yield from emit(dctx.stream_reader(payload), stop_after)
+        return
+    count = u32(payload, 12)
+    cursor = 16 + count * 16
+    for i in range(count):
+        stored_n = u64(payload, 16 + i * 16)
+        uncomp_n = u64(payload, 16 + i * 16 + 8)
+        frame = payload[cursor : cursor + stored_n]
+        cursor += stored_n
+        yield from emit(dctx.stream_reader(frame), uncomp_n)
+        if produced >= stop_after:
+            return
+
+
 def read_first_uncompressed(data: bytes, row, limit=4096):
     take = min(row["stored_bytes"], 8 * 1024 * 1024)
     payload = bytes(data[row["payload_offset"] : row["payload_offset"] + take])
     if row["compression"] == "Stored":
         return payload[:limit]
-    if payload[:8] != b"LFSZFRM\x00":
-        try:
-            return zstandard.ZstdDecompressor().decompress(
-                payload, max_output_size=min(row["uncompressed_bytes"], 1_000_000)
-            )[:limit]
-        except Exception:
-            return payload[:limit]
-    stored_bytes = u64(payload, 16)
-    table = 16 + u32(payload, 12) * 16
-    frame = payload[table : table + stored_bytes]
-    return zstandard.ZstdDecompressor().stream_reader(frame).read(limit)
+    out = bytearray()
+    for chunk in _iter_uncompressed_chunks(payload, limit):
+        out += chunk
+        if len(out) >= limit:
+            break
+    return bytes(out[:limit])
+
+
+def read_logical_prefix(data: bytes, row, limit=64) -> bytes:
+    """First logical payload bytes, including ByteShuffle unshuffle of the header."""
+    if row["compression"] == "Stored":
+        return bytes(
+            data[row["payload_offset"] : row["payload_offset"] + min(limit, row["stored_bytes"])]
+        )
+    payload = bytes(
+        data[row["payload_offset"] : row["payload_offset"] + row["stored_bytes"]]
+    )
+    if row["compression"] != "ByteShuffleZstdFramed":
+        return read_first_uncompressed(data, row, limit)
+
+    uncompressed_bytes = row["uncompressed_bytes"]
+    if uncompressed_bytes < 4 or uncompressed_bytes % 4 != 0:
+        return read_first_uncompressed(data, row, limit)
+
+    n_words = uncompressed_bytes // 4
+    words = min((limit + 3) // 4, n_words)
+    last_needed = 3 * n_words + words
+    collected = {}
+    pos = 0
+    for chunk in _iter_uncompressed_chunks(payload, last_needed):
+        start = pos
+        pos += len(chunk)
+        for plane in range(4):
+            for word in range(words):
+                offset = plane * n_words + word
+                if start <= offset < pos:
+                    collected[offset] = chunk[offset - start]
+        if len(collected) == 4 * words:
+            break
+
+    if len(collected) != 4 * words:
+        raise RuntimeError(
+            f"ByteShuffle prefix incomplete: got {len(collected)} of {4 * words} bytes"
+        )
+    logical = bytearray(words * 4)
+    for word in range(words):
+        for plane in range(4):
+            logical[word * 4 + plane] = collected[plane * n_words + word]
+    return bytes(logical[:limit])
 
 
 def parse_ckpt_header(data: bytes):
@@ -246,16 +313,7 @@ def decode_framed_payload(data: bytes, row) -> bytes:
 
 
 def decode_ckpt_header(data: bytes, row):
-    if row["compression"] == "ByteShuffleZstdFramed":
-        decoded = decode_framed_payload(data, row)
-        if len(decoded) != row["uncompressed_bytes"]:
-            return {
-                "error": (
-                    f"size mismatch {len(decoded)} != {row['uncompressed_bytes']}"
-                )
-            }
-        return parse_ckpt_header(unshuffle_f32_planes(decoded))
-    return parse_ckpt_header(read_first_uncompressed(data, row, 64))
+    return parse_ckpt_header(read_logical_prefix(data, row, 64))
 
 
 def encode_head(superblock: bytes, slot_id: int, sequence: int, commit, preview) -> bytes:
