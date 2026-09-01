@@ -18,6 +18,7 @@
 
 namespace {
     namespace fs = std::filesystem;
+    constexpr size_t READ_CHUNK_BYTES = 64ull * 1024ull * 1024ull;
 
     template <typename T>
     void append_pod(std::vector<char>& bytes, const T value) {
@@ -31,6 +32,24 @@ namespace {
         std::memcpy(&value, bytes.data() + offset, sizeof(T));
         offset += sizeof(T);
         return value;
+    }
+
+    void append_valid_image(std::vector<char>& bytes,
+                            const uint32_t image_id,
+                            const uint32_t camera_id,
+                            const std::string_view name) {
+        append_pod(bytes, image_id);
+        append_pod(bytes, 1.0);
+        append_pod(bytes, 0.0);
+        append_pod(bytes, 0.0);
+        append_pod(bytes, 0.0);
+        append_pod(bytes, 0.0);
+        append_pod(bytes, 0.0);
+        append_pod(bytes, 0.0);
+        append_pod(bytes, camera_id);
+        bytes.insert(bytes.end(), name.begin(), name.end());
+        bytes.push_back('\0');
+        append_pod(bytes, uint64_t{0});
     }
 
     struct ImageReference {
@@ -268,6 +287,39 @@ namespace {
         for (size_t i = 0; i < point_reference.size(); ++i) {
             expect_point_equal(points_result->value[i], point_reference[i]);
         }
+
+        fs::remove_all(temp_dir, ec);
+    }
+
+    TEST(ColmapBinaryParallelParseTest, ReadsFilesBelowAndAcrossParallelReadChunks) {
+        const fs::path temp_dir = fs::temp_directory_path() / "lfs_colmap_binary_parallel_read_chunks";
+        std::error_code ec;
+        fs::remove_all(temp_dir, ec);
+        ASSERT_TRUE(fs::create_directories(temp_dir));
+
+        std::vector<char> small_bytes;
+        append_pod(small_bytes, uint64_t{1});
+        append_valid_image(small_bytes, 1, 7, "small.png");
+        ASSERT_LT(small_bytes.size(), READ_CHUNK_BYTES);
+        const fs::path small_path = temp_dir / "small_images.bin";
+        write_bytes(small_path, small_bytes);
+        const auto small_result = lfs::io::read_colmap_images_binary(small_path);
+        ASSERT_TRUE(small_result.has_value()) << small_result.error().format();
+        ASSERT_EQ(small_result->value.size(), 1u);
+        EXPECT_EQ(small_result->value.front().name, "small.png");
+
+        std::string long_name(2 * READ_CHUNK_BYTES + 123, 'x');
+        std::vector<char> spanning_bytes;
+        append_pod(spanning_bytes, uint64_t{1});
+        append_valid_image(spanning_bytes, 2, 7, long_name);
+        ASSERT_GT(spanning_bytes.size(), 2 * READ_CHUNK_BYTES);
+        const fs::path spanning_path = temp_dir / "spanning_images.bin";
+        write_bytes(spanning_path, spanning_bytes);
+        const auto spanning_result = lfs::io::read_colmap_images_binary(spanning_path);
+        ASSERT_TRUE(spanning_result.has_value()) << spanning_result.error().format();
+        ASSERT_EQ(spanning_result->value.size(), 1u);
+        EXPECT_EQ(spanning_result->value.front().name.size(), long_name.size());
+        EXPECT_EQ(spanning_result->value.front().name, long_name);
 
         fs::remove_all(temp_dir, ec);
     }

@@ -65,10 +65,9 @@ namespace lfs::io {
         std::vector<Point3DTrackElement> track;
     };
 
-    // Optional hand-off between the camera/image and point-cloud phases of a
-    // binary COLMAP load. The camera phase fills this only when SfM
-    // observations require points; the point-cloud phase then consumes the
-    // records instead of reading points3D.bin again.
+    // Filled only by read_colmap_cameras_and_images when SfM observations
+    // require the points; consumed (and cleared) by the first point-cloud
+    // read; never mutated otherwise.
     struct ColmapPointCloudRecords {
         std::vector<Point3DData> records;
         std::vector<Diagnostic> warnings;

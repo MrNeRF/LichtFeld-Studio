@@ -38,10 +38,20 @@
 #include <unordered_set>
 #include <vector>
 
-#ifdef __linux__
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#elif defined(__unix__) || defined(__APPLE__)
 #include <cerrno>
 #include <fcntl.h>
+#endif
+
+#ifdef __linux__
 #include <sys/syscall.h>
+#endif
+#if defined(__unix__) || defined(__APPLE__)
 #include <unistd.h>
 #endif
 
@@ -1020,22 +1030,119 @@ namespace lfs::io {
         buf->byte_size = static_cast<size_t>(file_size);
         buf->storage = std::make_unique_for_overwrite<char[]>(buf->byte_size);
 
-        f.seekg(0, std::ios::beg);
-        if (!f.good()) {
-            throw_colmap_error(lfs::ErrorCode::Internal,
-                               std::format("Could not seek binary file: {}",
-                                           lfs::core::path_to_utf8(p)));
-        }
+        constexpr size_t READ_CHUNK_BYTES = 64ull * 1024ull * 1024ull;
         if (sz > 0) {
+            const size_t byte_count = static_cast<size_t>(sz);
+            const size_t chunk_count = byte_count / READ_CHUNK_BYTES +
+                                       (byte_count % READ_CHUNK_BYTES != 0 ? 1 : 0);
+            std::vector<size_t> chunk_actual(chunk_count, 0);
+            std::vector<uint8_t> chunk_failed(chunk_count, 0);
+
+#if defined(_WIN32)
+            f.close();
+            HANDLE handle = CreateFileW(p.c_str(), GENERIC_READ,
+                                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                        nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+            if (handle == INVALID_HANDLE_VALUE) {
+                throw_colmap_error(lfs::ErrorCode::Internal,
+                                   "Failed to open " + lfs::core::path_to_utf8(p));
+            }
+            tbb::parallel_for(size_t{0}, chunk_count, [&](const size_t chunk) {
+                const size_t offset = chunk * READ_CHUNK_BYTES;
+                const DWORD request = static_cast<DWORD>(
+                    std::min(READ_CHUNK_BYTES, byte_count - offset));
+                OVERLAPPED operation{};
+                operation.Offset = static_cast<DWORD>(offset);
+                operation.OffsetHigh = static_cast<DWORD>(offset >> 32);
+                operation.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+                if (operation.hEvent == nullptr) {
+                    chunk_failed[chunk] = 1;
+                    return;
+                }
+                DWORD transferred = 0;
+                const BOOL immediate = ReadFile(handle, buf->data() + offset, request,
+                                                nullptr, &operation);
+                if (!immediate) {
+                    if (GetLastError() != ERROR_IO_PENDING ||
+                        !GetOverlappedResult(handle, &operation, &transferred, TRUE)) {
+                        CloseHandle(operation.hEvent);
+                        chunk_failed[chunk] = 1;
+                        return;
+                    }
+                } else {
+                    transferred = request;
+                }
+                CloseHandle(operation.hEvent);
+                chunk_actual[chunk] = static_cast<size_t>(transferred);
+                if (transferred != request) {
+                    chunk_failed[chunk] = 1;
+                }
+            });
+            CloseHandle(handle);
+#elif defined(__unix__) || defined(__APPLE__)
+            f.close();
+            const int fd = ::open(p.c_str(), O_RDONLY);
+            if (fd < 0) {
+                throw_colmap_error(lfs::ErrorCode::Internal,
+                                   "Failed to open " + lfs::core::path_to_utf8(p));
+            }
+            tbb::parallel_for(size_t{0}, chunk_count, [&](const size_t chunk) {
+                const size_t offset = chunk * READ_CHUNK_BYTES;
+                const size_t request = std::min(READ_CHUNK_BYTES, byte_count - offset);
+                size_t completed = 0;
+                while (completed < request) {
+                    const ssize_t count = ::pread(fd, buf->data() + offset + completed,
+                                                  request - completed,
+                                                  static_cast<off_t>(offset + completed));
+                    if (count < 0) {
+                        if (errno == EINTR) {
+                            continue;
+                        }
+                        chunk_failed[chunk] = 1;
+                        break;
+                    }
+                    if (count == 0) {
+                        chunk_failed[chunk] = 1;
+                        break;
+                    }
+                    completed += static_cast<size_t>(count);
+                }
+                chunk_actual[chunk] = completed;
+                if (completed != request) {
+                    chunk_failed[chunk] = 1;
+                }
+            });
+            ::close(fd);
+#else
+            f.seekg(0, std::ios::beg);
+            if (!f.good()) {
+                throw_colmap_error(lfs::ErrorCode::Internal,
+                                   std::format("Could not seek binary file: {}",
+                                               lfs::core::path_to_utf8(p)));
+            }
             f.read(buf->data(), sz);
-        }
-        if (!f || f.gcount() != sz) {
-            throw_colmap_error(
-                lfs::ErrorCode::DataLoss,
-                "Short read on " + lfs::core::path_to_utf8(p),
-                lfs::SmallFields{}
-                    .add("expected_bytes", static_cast<std::int64_t>(sz))
-                    .add("actual_bytes", static_cast<std::int64_t>(f.gcount())));
+            chunk_actual[0] = static_cast<size_t>(f.gcount());
+            if (!f || f.gcount() != sz) {
+                chunk_failed[0] = 1;
+            }
+#endif
+
+            for (size_t chunk = 0; chunk < chunk_count; ++chunk) {
+                if (chunk_failed[chunk]) {
+#if defined(_WIN32) || defined(__unix__) || defined(__APPLE__)
+                    const size_t expected = std::min(READ_CHUNK_BYTES,
+                                                     byte_count - chunk * READ_CHUNK_BYTES);
+#else
+                    const size_t expected = byte_count;
+#endif
+                    throw_colmap_error(
+                        lfs::ErrorCode::DataLoss,
+                        "Short read on " + lfs::core::path_to_utf8(p),
+                        lfs::SmallFields{}
+                            .add("expected_bytes", static_cast<std::int64_t>(expected))
+                            .add("actual_bytes", static_cast<std::int64_t>(chunk_actual[chunk])));
+                }
+            }
         }
         LOG_TRACE("Read {} bytes from {}", sz, lfs::core::path_to_utf8(p));
         return buf;
@@ -1441,7 +1548,11 @@ namespace lfs::io {
                                                          SkipTally* tally = nullptr) {
         LOG_TIMER_TRACE("Read points3D.bin");
         LOG_TIMER_DEBUG("COLMAP points3D parse");
-        auto buf_owner = read_binary(file_path);
+        std::unique_ptr<BinaryBuffer> buf_owner;
+        {
+            LOG_TIMER_DEBUG("COLMAP points3D.bin read");
+            buf_owner = read_binary(file_path);
+        }
         const char* cur = buf_owner->data();
         const char* end = cur + buf_owner->size();
 
@@ -1527,12 +1638,11 @@ namespace lfs::io {
                 point_valid = point_valid && std::isfinite(point.error);
                 const uint64_t track_len = read_u64(record_cur, record_end, "points3D.bin track length");
                 point.track_count = static_cast<size_t>(track_len);
-                point.track.reserve(track_len);
+                point.track.resize(static_cast<size_t>(track_len));
                 for (uint64_t j = 0; j < track_len; ++j) {
-                    Point3DTrackElement track;
+                    auto& track = point.track[static_cast<size_t>(j)];
                     track.image_id = read_u32(record_cur, record_end, "points3D.bin track image id");
                     track.point2D_idx = read_u32(record_cur, record_end, "points3D.bin track point index");
-                    point.track.push_back(track);
                 }
                 valid[i] = point_valid ? 1 : 0;
                 if (!point_valid && tally) {
@@ -2521,6 +2631,152 @@ namespace lfs::io {
         camera.set_sfm_observations(std::move(observations));
     }
 
+    struct ColmapCameraCalibration {
+        float focal_x = 0.0f;
+        float focal_y = 0.0f;
+        float center_x = 0.0f;
+        float center_y = 0.0f;
+        Tensor radial_distortion;
+        Tensor tangential_distortion;
+        lfs::core::CameraModelType camera_model_type = lfs::core::CameraModelType::PINHOLE;
+    };
+
+    static std::optional<ColmapCameraCalibration>
+    make_colmap_camera_calibration(const CameraDataIntermediate& cam_data) {
+        const auto model_it = camera_model_ids.find(cam_data.model_id);
+        if (model_it == camera_model_ids.end()) {
+            return std::nullopt;
+        }
+
+        const CAMERA_MODEL model = model_it->second.first;
+        const auto& params = cam_data.params;
+        ColmapCameraCalibration calibration;
+        switch (model) {
+        case CAMERA_MODEL::SIMPLE_PINHOLE:
+            calibration.focal_x = calibration.focal_y = params[0];
+            calibration.center_x = params[1];
+            calibration.center_y = params[2];
+            calibration.radial_distortion = Tensor::empty({0}, Device::CPU);
+            calibration.tangential_distortion = Tensor::empty({0}, Device::CPU);
+            break;
+
+        case CAMERA_MODEL::PINHOLE:
+            calibration.focal_x = params[0];
+            calibration.focal_y = params[1];
+            calibration.center_x = params[2];
+            calibration.center_y = params[3];
+            calibration.radial_distortion = Tensor::empty({0}, Device::CPU);
+            calibration.tangential_distortion = Tensor::empty({0}, Device::CPU);
+            break;
+
+        case CAMERA_MODEL::SIMPLE_RADIAL:
+            calibration.focal_x = calibration.focal_y = params[0];
+            calibration.center_x = params[1];
+            calibration.center_y = params[2];
+            calibration.radial_distortion = params[3] != 0.0f
+                                                ? Tensor::from_vector({params[3]}, {1}, Device::CPU)
+                                                : Tensor::empty({0}, Device::CPU);
+            calibration.tangential_distortion = Tensor::empty({0}, Device::CPU);
+            break;
+
+        case CAMERA_MODEL::RADIAL:
+            calibration.focal_x = calibration.focal_y = params[0];
+            calibration.center_x = params[1];
+            calibration.center_y = params[2];
+            calibration.radial_distortion = make_distortion_tensor({params[3], params[4]});
+            calibration.tangential_distortion = Tensor::empty({0}, Device::CPU);
+            break;
+
+        case CAMERA_MODEL::OPENCV:
+            calibration.focal_x = params[0];
+            calibration.focal_y = params[1];
+            calibration.center_x = params[2];
+            calibration.center_y = params[3];
+            calibration.radial_distortion = make_distortion_tensor({params[4], params[5]});
+            calibration.tangential_distortion = make_distortion_tensor({params[6], params[7]});
+            break;
+
+        case CAMERA_MODEL::FULL_OPENCV:
+            calibration.focal_x = params[0];
+            calibration.focal_y = params[1];
+            calibration.center_x = params[2];
+            calibration.center_y = params[3];
+            calibration.radial_distortion = make_distortion_tensor(
+                {params[4], params[5], params[8], params[9], params[10], params[11]});
+            calibration.tangential_distortion = make_distortion_tensor({params[6], params[7]});
+            break;
+
+        case CAMERA_MODEL::OPENCV_FISHEYE:
+            calibration.focal_x = params[0];
+            calibration.focal_y = params[1];
+            calibration.center_x = params[2];
+            calibration.center_y = params[3];
+            calibration.radial_distortion = Tensor::from_vector(
+                {params[4], params[5], params[6], params[7]}, {4}, Device::CPU);
+            calibration.tangential_distortion = Tensor::empty({0}, Device::CPU);
+            calibration.camera_model_type = lfs::core::CameraModelType::FISHEYE;
+            break;
+
+        case CAMERA_MODEL::RADIAL_FISHEYE:
+            calibration.focal_x = calibration.focal_y = params[0];
+            calibration.center_x = params[1];
+            calibration.center_y = params[2];
+            calibration.radial_distortion = Tensor::from_vector({params[3], params[4]}, {2}, Device::CPU);
+            calibration.tangential_distortion = Tensor::empty({0}, Device::CPU);
+            calibration.camera_model_type = lfs::core::CameraModelType::FISHEYE;
+            break;
+
+        case CAMERA_MODEL::SIMPLE_RADIAL_FISHEYE:
+            calibration.focal_x = calibration.focal_y = params[0];
+            calibration.center_x = params[1];
+            calibration.center_y = params[2];
+            calibration.radial_distortion = Tensor::from_vector({params[3]}, {1}, Device::CPU);
+            calibration.tangential_distortion = Tensor::empty({0}, Device::CPU);
+            calibration.camera_model_type = lfs::core::CameraModelType::FISHEYE;
+            break;
+
+        case CAMERA_MODEL::THIN_PRISM_FISHEYE:
+            // fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, sx1, sy1
+            calibration.focal_x = params[0];
+            calibration.focal_y = params[1];
+            calibration.center_x = params[2];
+            calibration.center_y = params[3];
+            calibration.radial_distortion = Tensor::from_vector(
+                {params[4], params[5], params[8], params[9]}, {4}, Device::CPU);
+            calibration.tangential_distortion = Tensor::from_vector(
+                {params[6], params[7], params[10], params[11]}, {4}, Device::CPU);
+            calibration.camera_model_type = lfs::core::CameraModelType::THIN_PRISM_FISHEYE;
+            break;
+
+        case CAMERA_MODEL::EQUIRECTANGULAR:
+            calibration.focal_x = calibration.focal_y = EQUIRECTANGULAR_DUMMY_FOCAL;
+            calibration.center_x = 0.5f * static_cast<float>(cam_data.width);
+            calibration.center_y = 0.5f * static_cast<float>(cam_data.height);
+            calibration.radial_distortion = Tensor::empty({0}, Device::CPU);
+            calibration.tangential_distortion = Tensor::empty({0}, Device::CPU);
+            calibration.camera_model_type = lfs::core::CameraModelType::EQUIRECTANGULAR;
+            break;
+
+        case CAMERA_MODEL::FOV:
+        default:
+            return std::nullopt;
+        }
+        return calibration;
+    }
+
+    static bool colmap_calibration_has_distortion(const ColmapCameraCalibration& calibration) {
+        if (calibration.camera_model_type == lfs::core::CameraModelType::EQUIRECTANGULAR) {
+            return false;
+        }
+        if (calibration.radial_distortion.is_valid() && calibration.radial_distortion.numel() > 0) {
+            return true;
+        }
+        if (calibration.tangential_distortion.is_valid() && calibration.tangential_distortion.numel() > 0) {
+            return true;
+        }
+        return calibration.camera_model_type != lfs::core::CameraModelType::PINHOLE;
+    }
+
     // -----------------------------------------------------------------------------
     //  Assemble cameras with dimension verification
     // -----------------------------------------------------------------------------
@@ -2551,11 +2807,25 @@ namespace lfs::io {
         SkipTally image_tally;
         std::vector<std::string> missing_images;
 
+        struct CameraAssemblyEntry {
+            std::shared_ptr<Camera> camera;
+            const ImageData* image = nullptr;
+            const CameraDataIntermediate* camera_data = nullptr;
+            std::array<float, 3> position{};
+            bool missing_image = false;
+            bool depth_matched = false;
+            bool normal_matched = false;
+            size_t undistort_crop_failures = 0;
+            size_t undistort_fisheye_crop_failures = 0;
+        };
+        std::vector<CameraAssemblyEntry> assembled(images.size());
+        std::vector<SkipTally> image_tallies(images.size());
+        std::vector<std::optional<Error>> errors(images.size());
+
         RecursiveFileCache image_cache(images_path, options.cancel_requested);
         MaskDirCache mask_cache(base_path, options.cancel_requested);
         DepthDirCache depth_cache(base_path, options.cancel_requested);
         NormalDirCache normal_cache(base_path, options.cancel_requested);
-        bool used_recursive_image_lookup = false;
         size_t depth_matched_count = 0;
         size_t normal_matched_count = 0;
         size_t undistort_crop_failures = 0;
@@ -2563,31 +2833,70 @@ namespace lfs::io {
         size_t undistort_fisheye_crop_failures = 0;
         std::unordered_map<uint32_t, std::optional<lfs::core::UndistortParams>> undistort_cache;
         undistort_cache.reserve(cam_map.size());
+        std::unordered_map<uint32_t, ColmapCameraCalibration> calibrations;
+        calibrations.reserve(cam_map.size());
+
+        // Undistortion depends only on the COLMAP camera calibration, not on
+        // the image pose. Compute it once per camera before workers start so
+        // the image loop only installs an immutable memoized value.
+        for (const auto& [camera_id, cam_data] : cam_map) {
+            auto calibration = make_colmap_camera_calibration(cam_data);
+            if (!calibration) {
+                continue;
+            }
+            if (colmap_calibration_has_distortion(*calibration)) {
+                LOG_TIMER_DEBUG("COLMAP assemble: undistort");
+                undistort_cache.emplace(
+                    camera_id,
+                    lfs::core::compute_undistort_params(
+                        calibration->focal_x, calibration->focal_y,
+                        calibration->center_x, calibration->center_y,
+                        cam_data.width, cam_data.height,
+                        calibration->radial_distortion,
+                        calibration->tangential_distortion,
+                        calibration->camera_model_type));
+            } else {
+                undistort_cache.emplace(camera_id, std::nullopt);
+            }
+            calibrations.emplace(camera_id, std::move(*calibration));
+        }
+
+        // Preserve the serial loader's compact UID assignment even though
+        // camera construction below is indexed by the source image.
+        std::vector<int> camera_indices(images.size(), -1);
+        int next_camera_index = 0;
+        for (size_t i = 0; i < images.size(); ++i) {
+            const auto camera_it = cam_map.find(images[i].camera_id);
+            if (camera_it != cam_map.end() && calibrations.contains(images[i].camera_id)) {
+                camera_indices[i] = next_camera_index++;
+            }
+        }
 
         // Accumulate camera positions for scene center
         std::vector<float> camera_positions;
         camera_positions.reserve(images.size() * 3);
 
-        for (size_t i = 0; i < images.size(); ++i) {
-            if (should_poll_cancel(i)) {
-                throw_if_load_cancel_requested(options, "COLMAP camera assembly cancelled");
+        std::atomic<bool> cancelled = false;
+        std::atomic<bool> used_recursive_image_lookup = false;
+        tbb::parallel_for(size_t{0}, images.size(), [&](const size_t i) {
+            if (should_poll_cancel(i) && is_load_cancel_requested(options)) {
+                cancelled.store(true, std::memory_order_relaxed);
+                return;
             }
             const ImageData& img = images[i];
+            auto& output = assembled[i];
+            output.image = &img;
             const std::filesystem::path image_rel_path = lfs::core::utf8_to_path(img.name);
             std::filesystem::path image_path = images_path / image_rel_path;
 
             if (!safe_exists(image_path)) {
                 if (auto image_lookup = image_cache.lookup(image_rel_path);
                     image_lookup.found()) {
-                    if (!used_recursive_image_lookup) {
-                        LOG_WARN("COLMAP images are not in the expected flat layout under '{}'; "
-                                 "falling back to recursive image lookup",
-                                 lfs::core::path_to_utf8(images_path));
-                        used_recursive_image_lookup = true;
-                    }
+                    used_recursive_image_lookup.store(true, std::memory_order_relaxed);
                     image_path = std::move(image_lookup.path);
                 } else if (image_lookup.ambiguous()) {
-                    return make_ambiguous_image_reference_error(images_path, img.name);
+                    errors[i] = make_ambiguous_image_reference_error(images_path, img.name).error();
+                    return;
                 }
             }
 
@@ -2595,11 +2904,27 @@ namespace lfs::io {
 
             auto it = cam_map.find(img.camera_id);
             if (it == cam_map.end()) {
-                image_tally.record(img.name);
-                continue;
+                image_tallies[i].record(img.name);
+                return;
             }
 
             const auto& cam_data = it->second;
+
+            const auto model_it = camera_model_ids.find(cam_data.model_id);
+            if (model_it == camera_model_ids.end()) {
+                errors[i] = make_error(
+                                ErrorCode::UNSUPPORTED_FORMAT,
+                                std::format("Invalid camera model ID {} for image '{}'", cam_data.model_id, img.name),
+                                image_path)
+                                .error();
+                return;
+            }
+            const auto calibration_it = calibrations.find(img.camera_id);
+            if (calibration_it == calibrations.end()) {
+                image_tallies[i].record(img.name);
+                return;
+            }
+            const auto& calibration = calibration_it->second;
 
             // Convert quaternion to rotation matrix
             Tensor R = qvec2rotmat(img.qvec);
@@ -2624,148 +2949,15 @@ namespace lfs::io {
                 }
             }
 
-            // Extract camera parameters based on model
-            auto model_it = camera_model_ids.find(cam_data.model_id);
-            if (model_it == camera_model_ids.end()) {
-                return make_error(ErrorCode::UNSUPPORTED_FORMAT,
-                                  std::format("Invalid camera model ID {} for image '{}'", cam_data.model_id, img.name),
-                                  image_path);
-            }
-
-            CAMERA_MODEL model = model_it->second.first;
-            const auto& params = cam_data.params;
-
-            float focal_x = 0, focal_y = 0, center_x = 0, center_y = 0;
-            Tensor radial_dist, tangential_dist;
-            lfs::core::CameraModelType camera_model_type = lfs::core::CameraModelType::PINHOLE;
-
-            switch (model) {
-            case CAMERA_MODEL::SIMPLE_PINHOLE:
-                focal_x = focal_y = params[0];
-                center_x = params[1];
-                center_y = params[2];
-                radial_dist = Tensor::empty({0}, Device::CPU);
-                tangential_dist = Tensor::empty({0}, Device::CPU);
-                break;
-
-            case CAMERA_MODEL::PINHOLE:
-                focal_x = params[0];
-                focal_y = params[1];
-                center_x = params[2];
-                center_y = params[3];
-                radial_dist = Tensor::empty({0}, Device::CPU);
-                tangential_dist = Tensor::empty({0}, Device::CPU);
-                break;
-
-            case CAMERA_MODEL::SIMPLE_RADIAL:
-                focal_x = focal_y = params[0];
-                center_x = params[1];
-                center_y = params[2];
-                if (params[3] != 0.0f) {
-                    radial_dist = Tensor::from_vector({params[3]}, {1}, Device::CPU);
-                } else {
-                    radial_dist = Tensor::empty({0}, Device::CPU);
-                }
-                tangential_dist = Tensor::empty({0}, Device::CPU);
-                camera_model_type = lfs::core::CameraModelType::PINHOLE;
-                break;
-
-            case CAMERA_MODEL::RADIAL:
-                focal_x = focal_y = params[0];
-                center_x = params[1];
-                center_y = params[2];
-                radial_dist = make_distortion_tensor({params[3], params[4]});
-                tangential_dist = Tensor::empty({0}, Device::CPU);
-                break;
-
-            case CAMERA_MODEL::OPENCV:
-                focal_x = params[0];
-                focal_y = params[1];
-                center_x = params[2];
-                center_y = params[3];
-                radial_dist = make_distortion_tensor({params[4], params[5]});
-                tangential_dist = make_distortion_tensor({params[6], params[7]});
-                break;
-
-            case CAMERA_MODEL::FULL_OPENCV:
-                focal_x = params[0];
-                focal_y = params[1];
-                center_x = params[2];
-                center_y = params[3];
-                radial_dist = make_distortion_tensor({params[4], params[5], params[8], params[9], params[10], params[11]});
-                tangential_dist = make_distortion_tensor({params[6], params[7]});
-                break;
-
-            case CAMERA_MODEL::OPENCV_FISHEYE:
-                focal_x = params[0];
-                focal_y = params[1];
-                center_x = params[2];
-                center_y = params[3];
-                radial_dist = Tensor::from_vector({params[4], params[5], params[6], params[7]}, {4}, Device::CPU);
-                tangential_dist = Tensor::empty({0}, Device::CPU);
-                camera_model_type = lfs::core::CameraModelType::FISHEYE;
-                break;
-
-            case CAMERA_MODEL::RADIAL_FISHEYE:
-                focal_x = focal_y = params[0];
-                center_x = params[1];
-                center_y = params[2];
-                radial_dist = Tensor::from_vector({params[3], params[4]}, {2}, Device::CPU);
-                tangential_dist = Tensor::empty({0}, Device::CPU);
-                camera_model_type = lfs::core::CameraModelType::FISHEYE;
-                break;
-
-            case CAMERA_MODEL::SIMPLE_RADIAL_FISHEYE:
-                focal_x = focal_y = params[0];
-                center_x = params[1];
-                center_y = params[2];
-                radial_dist = Tensor::from_vector({params[3]}, {1}, Device::CPU);
-                tangential_dist = Tensor::empty({0}, Device::CPU);
-                camera_model_type = lfs::core::CameraModelType::FISHEYE;
-                break;
-
-            case CAMERA_MODEL::THIN_PRISM_FISHEYE:
-                // fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, sx1, sy1
-                focal_x = params[0];
-                focal_y = params[1];
-                center_x = params[2];
-                center_y = params[3];
-                radial_dist = Tensor::from_vector({params[4], params[5], params[8], params[9]}, {4}, Device::CPU);       // k1,k2,k3,k4
-                tangential_dist = Tensor::from_vector({params[6], params[7], params[10], params[11]}, {4}, Device::CPU); // p1,p2,sx1,sy1
-                camera_model_type = lfs::core::CameraModelType::THIN_PRISM_FISHEYE;
-                break;
-
-            case CAMERA_MODEL::FOV:
-                image_tally.record(img.name);
-                continue;
-
-            case CAMERA_MODEL::EQUIRECTANGULAR:
-                // Equirectangular 360 panorama. params = [width, height]; no real
-                // intrinsics. The EQUIRECTANGULAR rasterizer derives projection
-                // from the image dimensions, so we only set placeholder focal/center.
-                focal_x = focal_y = EQUIRECTANGULAR_DUMMY_FOCAL;
-                center_x = 0.5f * static_cast<float>(cam_data.width);
-                center_y = 0.5f * static_cast<float>(cam_data.height);
-                radial_dist = Tensor::empty({0}, Device::CPU);
-                tangential_dist = Tensor::empty({0}, Device::CPU);
-                camera_model_type = lfs::core::CameraModelType::EQUIRECTANGULAR;
-                break;
-
-            default:
-                image_tally.record(img.name);
-                continue;
-            }
-
-            camera_positions.push_back(cam_pos[0]);
-            camera_positions.push_back(cam_pos[1]);
-            camera_positions.push_back(cam_pos[2]);
+            output.position = {cam_pos[0], cam_pos[1], cam_pos[2]};
 
             std::filesystem::path mask_path;
             if (auto mask_lookup = mask_cache.lookup(img.name); mask_lookup.found()) {
                 mask_path = std::move(mask_lookup.path);
             } else if (mask_lookup.ambiguous()) {
                 if (options.load_masks) {
-                    return make_ambiguous_mask_reference_error(base_path, img.name);
+                    errors[i] = make_ambiguous_mask_reference_error(base_path, img.name).error();
+                    return;
                 }
                 LOG_WARN("Mask for image '{}' is ambiguous; skipping sidecar because mask usage is disabled",
                          img.name);
@@ -2774,15 +2966,17 @@ namespace lfs::io {
             std::filesystem::path depth_path;
             if (auto depth_lookup = depth_cache.lookup(img.name); depth_lookup.found()) {
                 depth_path = std::move(depth_lookup.path);
-                ++depth_matched_count;
+                output.depth_matched = true;
             } else if (depth_lookup.ambiguous()) {
                 if (options.load_depths) {
-                    return make_error(
-                        ErrorCode::INVALID_DATASET,
-                        std::format("Depth map for image '{}' is ambiguous across the dataset depth folders. "
-                                    "Keep depth maps in the same relative subdirectories as the images or rename them uniquely.",
-                                    img.name),
-                        base_path);
+                    errors[i] = make_error(
+                                    ErrorCode::INVALID_DATASET,
+                                    std::format("Depth map for image '{}' is ambiguous across the dataset depth folders. "
+                                                "Keep depth maps in the same relative subdirectories as the images or rename them uniquely.",
+                                                img.name),
+                                    base_path)
+                                    .error();
+                    return;
                 }
                 LOG_WARN("Depth map for image '{}' is ambiguous; skipping sidecar because depth usage is disabled",
                          img.name);
@@ -2791,15 +2985,17 @@ namespace lfs::io {
             std::filesystem::path normal_path;
             if (auto normal_lookup = normal_cache.lookup(img.name); normal_lookup.found()) {
                 normal_path = std::move(normal_lookup.path);
-                ++normal_matched_count;
+                output.normal_matched = true;
             } else if (normal_lookup.ambiguous()) {
                 if (options.load_normals) {
-                    return make_error(
-                        ErrorCode::INVALID_DATASET,
-                        std::format("Normal map for image '{}' is ambiguous across the dataset normal folders. "
-                                    "Keep normal maps in the same relative subdirectories as the images or rename them uniquely.",
-                                    img.name),
-                        base_path);
+                    errors[i] = make_error(
+                                    ErrorCode::INVALID_DATASET,
+                                    std::format("Normal map for image '{}' is ambiguous across the dataset normal folders. "
+                                                "Keep normal maps in the same relative subdirectories as the images or rename them uniquely.",
+                                                img.name),
+                                    base_path)
+                                    .error();
+                    return;
                 }
                 LOG_WARN("Normal map for image '{}' is ambiguous; skipping sidecar because normal usage is disabled",
                          img.name);
@@ -2817,11 +3013,14 @@ namespace lfs::io {
                 auto [img_w, img_h, img_c] = get_image_info_cached();
                 auto [mask_w, mask_h, mask_c] = lfs::core::get_image_info(mask_path);
                 if (img_w != mask_w || img_h != mask_h) {
-                    return make_error(ErrorCode::MASK_SIZE_MISMATCH,
-                                      std::format("Mask '{}' is {}x{} but image '{}' is {}x{}",
-                                                  lfs::core::path_to_utf8(mask_path.filename()), mask_w, mask_h,
-                                                  img.name, img_w, img_h),
-                                      mask_path);
+                    errors[i] = make_error(
+                                    ErrorCode::MASK_SIZE_MISMATCH,
+                                    std::format("Mask '{}' is {}x{} but image '{}' is {}x{}",
+                                                lfs::core::path_to_utf8(mask_path.filename()), mask_w, mask_h,
+                                                img.name, img_w, img_h),
+                                    mask_path)
+                                    .error();
+                    return;
                 }
             }
             if (image_file_present && options.load_depths && !depth_path.empty()) {
@@ -2833,11 +3032,14 @@ namespace lfs::io {
                                                        img_h,
                                                        cam_data.original_width,
                                                        cam_data.original_height)) {
-                    return make_error(ErrorCode::DEPTH_SIZE_MISMATCH,
-                                      std::format("Depth map '{}' is {}x{} but image '{}' is {}x{}",
-                                                  lfs::core::path_to_utf8(depth_path.filename()), depth_w, depth_h,
-                                                  img.name, img_w, img_h),
-                                      depth_path);
+                    errors[i] = make_error(
+                                    ErrorCode::DEPTH_SIZE_MISMATCH,
+                                    std::format("Depth map '{}' is {}x{} but image '{}' is {}x{}",
+                                                lfs::core::path_to_utf8(depth_path.filename()), depth_w, depth_h,
+                                                img.name, img_w, img_h),
+                                    depth_path)
+                                    .error();
+                    return;
                 }
             }
             if (image_file_present && options.load_normals && !normal_path.empty()) {
@@ -2854,15 +3056,17 @@ namespace lfs::io {
                                  "ignoring it so auto-generate can overwrite that file",
                                  lfs::core::path_to_utf8(normal_path.filename()),
                                  normal_w, normal_h, img.name, img_w, img_h);
-                        if (normal_matched_count > 0)
-                            --normal_matched_count;
+                        output.normal_matched = false;
                         normal_path.clear();
                     } else {
-                        return make_error(ErrorCode::NORMAL_SIZE_MISMATCH,
-                                          std::format("Normal map '{}' is {}x{} but image '{}' is {}x{}",
-                                                      lfs::core::path_to_utf8(normal_path.filename()), normal_w, normal_h,
-                                                      img.name, img_w, img_h),
-                                          normal_path);
+                        errors[i] = make_error(
+                                        ErrorCode::NORMAL_SIZE_MISMATCH,
+                                        std::format("Normal map '{}' is {}x{} but image '{}' is {}x{}",
+                                                    lfs::core::path_to_utf8(normal_path.filename()), normal_w, normal_h,
+                                                    img.name, img_w, img_h),
+                                        normal_path)
+                                        .error();
+                        return;
                     }
                 }
             }
@@ -2871,48 +3075,71 @@ namespace lfs::io {
             auto camera = std::make_shared<Camera>(
                 R,
                 T,
-                focal_x, focal_y,
-                center_x, center_y,
-                radial_dist,
-                tangential_dist,
-                camera_model_type,
+                calibration.focal_x, calibration.focal_y,
+                calibration.center_x, calibration.center_y,
+                calibration.radial_distortion,
+                calibration.tangential_distortion,
+                calibration.camera_model_type,
                 img.name,
                 image_path,
                 mask_path,
                 cam_data.width,
                 cam_data.height,
-                static_cast<int>(cameras.size()),
+                camera_indices[i],
                 static_cast<int>(img.camera_id),
                 depth_path,
                 normal_path);
 
             const auto undistort_it = undistort_cache.find(img.camera_id);
-            if (undistort_it == undistort_cache.end()) {
-                if (camera->has_distortion()) {
-                    LOG_TIMER_DEBUG("COLMAP assemble: undistort");
-                    camera->precompute_undistortion();
-                    undistort_cache.emplace(img.camera_id, camera->undistort_params());
-                } else {
-                    undistort_cache.emplace(img.camera_id, std::nullopt);
-                }
-            } else if (undistort_it->second) {
+            if (undistort_it != undistort_cache.end() && undistort_it->second) {
                 camera->adopt_undistortion(*undistort_it->second);
             }
-            ++undistort_camera_count;
             if (camera->undistort_params().crop_solve_failed) {
-                ++undistort_crop_failures;
-                if (camera_model_type == lfs::core::CameraModelType::FISHEYE ||
-                    camera_model_type == lfs::core::CameraModelType::THIN_PRISM_FISHEYE) {
-                    ++undistort_fisheye_crop_failures;
+                output.undistort_crop_failures = 1;
+                if (calibration.camera_model_type == lfs::core::CameraModelType::FISHEYE ||
+                    calibration.camera_model_type == lfs::core::CameraModelType::THIN_PRISM_FISHEYE) {
+                    output.undistort_fisheye_crop_failures = 1;
                 }
             }
             if (!image_file_present) {
                 camera->set_has_image(false);
-                missing_images.push_back(img.name);
+                output.missing_image = true;
             }
-            camera_images.push_back(&img);
-            camera_data.push_back(&cam_data);
-            cameras.push_back(std::move(camera));
+            output.camera_data = &cam_data;
+            output.camera = std::move(camera);
+        });
+
+        if (cancelled.load(std::memory_order_relaxed)) {
+            throw_if_load_cancel_requested(options, "COLMAP camera assembly cancelled");
+        }
+        for (const auto& error : errors) {
+            if (error) {
+                return std::unexpected<Error>(*error);
+            }
+        }
+        if (used_recursive_image_lookup.load(std::memory_order_relaxed)) {
+            LOG_WARN("COLMAP images are not in the expected flat layout under '{}'; "
+                     "falling back to recursive image lookup",
+                     lfs::core::path_to_utf8(images_path));
+        }
+        for (size_t i = 0; i < assembled.size(); ++i) {
+            auto& output = assembled[i];
+            image_tally.merge(image_tallies[i]);
+            if (!output.camera) {
+                continue;
+            }
+            camera_positions.insert(camera_positions.end(), output.position.begin(), output.position.end());
+            camera_images.push_back(output.image);
+            camera_data.push_back(output.camera_data);
+            cameras.push_back(std::move(output.camera));
+            if (output.missing_image) {
+                missing_images.push_back(output.image->name);
+            }
+            depth_matched_count += output.depth_matched ? 1 : 0;
+            normal_matched_count += output.normal_matched ? 1 : 0;
+            undistort_camera_count += 1;
+            undistort_crop_failures += output.undistort_crop_failures;
+            undistort_fisheye_crop_failures += output.undistort_fisheye_crop_failures;
         }
 
         std::atomic<bool> observation_cancelled = false;
@@ -3985,24 +4212,16 @@ namespace lfs::io {
             if (point_records && point_records->loaded) {
                 records = std::move(point_records->records);
                 warnings = std::move(point_records->warnings);
+                point_records->records.clear();
+                point_records->warnings.clear();
                 point_records->loaded = false;
             } else {
                 records = read_point3D_binary_records(points3d_file, options, &tally);
-                if (point_records) {
-                    point_records->warnings.clear();
-                    if (auto diagnostic = tally.to_diagnostic(lfs::ErrorCode::DataLoss, "point(s)")) {
-                        warnings.push_back(*diagnostic);
-                        point_records->warnings.push_back(std::move(*diagnostic));
-                    }
-                    point_records->loaded = false;
-                }
-            }
-            auto cloud = point3D_records_to_point_cloud(records);
-            if (!point_records) {
                 if (auto diagnostic = tally.to_diagnostic(lfs::ErrorCode::DataLoss, "point(s)")) {
                     warnings.push_back(std::move(*diagnostic));
                 }
             }
+            auto cloud = point3D_records_to_point_cloud(records);
             return LoadOutcome<PointCloud>{std::move(cloud), std::move(warnings)};
         } catch (const LoadCancelledError& e) {
             return make_error(ErrorCode::CANCELLED, e.what(), filepath);
@@ -4030,24 +4249,16 @@ namespace lfs::io {
             if (point_records && point_records->loaded) {
                 records = std::move(point_records->records);
                 warnings = std::move(point_records->warnings);
+                point_records->records.clear();
+                point_records->warnings.clear();
                 point_records->loaded = false;
             } else {
                 records = read_point3D_binary_records(points3d_file, options, &tally);
-                if (point_records) {
-                    point_records->warnings.clear();
-                    if (auto diagnostic = tally.to_diagnostic(lfs::ErrorCode::DataLoss, "point(s)")) {
-                        warnings.push_back(*diagnostic);
-                        point_records->warnings.push_back(std::move(*diagnostic));
-                    }
-                    point_records->loaded = false;
-                }
-            }
-            auto stats = point3D_records_to_point_cloud_with_stats(std::move(records), options);
-            if (!point_records) {
                 if (auto diagnostic = tally.to_diagnostic(lfs::ErrorCode::DataLoss, "point(s)")) {
                     warnings.push_back(std::move(*diagnostic));
                 }
             }
+            auto stats = point3D_records_to_point_cloud_with_stats(std::move(records), options);
             return LoadOutcome<ColmapPointCloudLoadStats>{std::move(stats), std::move(warnings)};
         } catch (const LoadCancelledError& e) {
             return make_error(ErrorCode::CANCELLED, e.what(), filepath);
