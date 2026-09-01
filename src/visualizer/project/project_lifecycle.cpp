@@ -3268,6 +3268,8 @@ namespace lfs::vis::project {
         last_autosaved_scene_serial_ =
             scene_mutation_serial_.load(
                 std::memory_order_acquire);
+        last_autosaved_parameter_serial_.reset();
+        autosave_quiesce_logged_ = false;
         clearAutosaveFailureBackoff();
     }
 
@@ -5189,9 +5191,12 @@ namespace lfs::vis::project {
                     project_write_dirty_epoch_;
                 last_autosaved_scene_serial_ =
                     project_write_scene_serial_;
+                last_autosaved_parameter_serial_ =
+                    project_write_parameter_serial_;
                 last_autosave_at_ =
                     std::chrono::steady_clock::
                         now();
+                autosave_quiesce_logged_ = false;
                 autosave_memory_warning_published_ = false;
                 LOG_INFO(
                     "Autosave sidecar sequence {} published",
@@ -5422,11 +5427,19 @@ namespace lfs::vis::project {
         const auto scene_serial =
             scene_mutation_serial_.load(
                 std::memory_order_acquire);
+        const auto* const parameter_manager =
+            viewer_.getParameterManager();
+        const auto parameter_serial =
+            parameter_manager
+                ? parameter_manager->dirtySerial()
+                : 0;
         const bool plausibly_dirty =
             scene_dirty_.load(
                 std::memory_order_acquire) ||
             payload_dirty_.load(
                 std::memory_order_acquire) ||
+            (parameter_manager &&
+             parameter_manager->isDirty()) ||
             hasHardDirtyChapters(*document_);
         if (!plausibly_dirty) {
             return;
@@ -5457,6 +5470,23 @@ namespace lfs::vis::project {
                 settings_
                     .autosave_dirty_epoch_threshold);
         if (!(timer_due || epoch_due)) {
+            return;
+        }
+        if (last_autosaved_parameter_serial_ &&
+            scene_serial ==
+                last_autosaved_scene_serial_ &&
+            !scene_dirty_.load(
+                std::memory_order_acquire) &&
+            !payload_dirty_.load(
+                std::memory_order_acquire) &&
+            parameter_serial ==
+                *last_autosaved_parameter_serial_) {
+            if (!autosave_quiesce_logged_) {
+                LOG_DEBUG(
+                    "Autosave skipped: no changes since sequence {}",
+                    autosave_sequence_);
+                autosave_quiesce_logged_ = true;
+            }
             return;
         }
         if (isBackgroundAutosaveSuppressed()) {

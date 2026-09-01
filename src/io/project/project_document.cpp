@@ -3216,6 +3216,7 @@ namespace lfs::io::project {
         std::span<const std::byte> preview_png = options.preview_png;
 #if !defined(LFS_FORMAT_TEST_TARGET)
         if (!is_autosave &&
+            !options.leave_unbound &&
             (options.commit.kind == CommitKind::Explicit ||
              options.commit.kind == CommitKind::Recovered)) {
             const auto project_root =
