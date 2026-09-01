@@ -287,8 +287,7 @@ namespace gsplat_lfs {
                 return sort_values_storage ? sort_values_storage->as<int32_t>() : nullptr;
             }
 
-            void ensure_cum_tiles(size_t n_elements, cudaStream_t stream) {
-                (void)stream;
+            void ensure_cum_tiles(size_t n_elements) {
                 if (n_elements <= cum_tiles_capacity && cum_tiles) {
                     return;
                 }
@@ -306,8 +305,7 @@ namespace gsplat_lfs {
                 }
             }
 
-            void ensure_isect_buffers(size_t n_isects, cudaStream_t stream) {
-                (void)stream;
+            void ensure_isect_buffers(size_t n_isects) {
                 if (n_isects == 0) {
                     return;
                 }
@@ -518,7 +516,7 @@ namespace gsplat_lfs {
             nullptr, nullptr,
             stream);
 
-        cache.ensure_cum_tiles(n_elements, stream);
+        cache.ensure_cum_tiles(n_elements);
         int64_t* d_cum_tiles = cache.cum_tiles.as<int64_t>();
         compute_cumsum_gpu(tiles_per_gauss_out, d_cum_tiles, n_elements, stream);
 
@@ -556,7 +554,7 @@ namespace gsplat_lfs {
         }
 
         auto fill_and_sort_capacity = [&](const size_t cap) {
-            cache.ensure_isect_buffers(cap, stream);
+            cache.ensure_isect_buffers(cap);
             cache.ensure_sort_buffers(cache.isect_capacity, stream);
             const size_t sort_n = cache.isect_capacity;
             launch_fill_isect_sentinels_kernel(

@@ -6468,9 +6468,8 @@ namespace lfs::training {
                             fast_ctx->release_forward_context();
                             fast_ctx.reset();
                         } else if (gsplat_ctx) {
-                            // Isect/flatten ids are TLS high-water (not owned by
-                            // the context) — do not cudaFree; only end the arena
-                            // frame that held the other forward scratch.
+                            // Isect/flatten ids belong to the TLS VMM cache, not
+                            // the context; only end the arena frame here.
                             auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
                             gsplat_ctx->isect_ids_ptr = nullptr;
                             gsplat_ctx->flatten_ids_ptr = nullptr;

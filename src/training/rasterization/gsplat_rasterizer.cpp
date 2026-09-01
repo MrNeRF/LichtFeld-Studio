@@ -499,7 +499,7 @@ namespace lfs::training {
                 thin_prism_ptr,
                 result,
                 fwd_stream);
-            // isect_ids / flatten_ids are borrowed from TLS high-water cache —
+            // isect_ids / flatten_ids are borrowed from the TLS VMM cache —
             // never transfer ownership or free on error paths.
 
             RenderOutput render_output;
@@ -556,7 +556,7 @@ namespace lfs::training {
             ctx.last_ids_ptr = last_ids_ptr_out;
             ctx.compensations_ptr = compensations_ptr_out;
 
-            // Borrowed TLS high-water pointers (valid through backward; do not free)
+            // Borrowed TLS VMM pointers (valid through backward; do not free)
             ctx.isect_ids_ptr = result.isect_ids;
             ctx.flatten_ids_ptr = result.flatten_ids;
             ctx.n_isects = result.n_isects;
@@ -615,7 +615,7 @@ namespace lfs::training {
 
             return std::pair{render_output, ctx};
         } catch (...) {
-            // Isect buffers are TLS high-water — leave them; only unwind arena.
+            // Isect buffers belong to the TLS VMM cache; only unwind the arena.
             // End on the same stream begin_frame used (same guard → same value),
             // not the streamless device-sync path, so the arena frame chain stays
             // intact for the next frame instead of falling back to a full sync.
@@ -899,8 +899,8 @@ namespace lfs::training {
                     stream);
             }
 
-            // Isect/flatten ids stay in the TLS high-water cache for the next
-            // forward (no per-step cudaFree). Arena still ends with the frame.
+            // Isect/flatten ids stay in the TLS VMM cache for the next forward.
+            // Arena still ends with the frame.
             arena.end_frame(ctx.frame_id, stream);
         } catch (...) {
             arena.end_frame(ctx.frame_id, stream);

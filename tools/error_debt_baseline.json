@@ -226,8 +226,6 @@
       "src/training/depth_anchor/depth_anchor_cache.cpp:400",
       "src/training/include/lfs/cuda_scratch.hpp:35",
       "src/training/include/lfs/cuda_scratch.hpp:42",
-      "src/training/rasterization/edge_compute/rasterization/src/rasterization_api.cu:116",
-      "src/training/rasterization/edge_compute/rasterization/src/rasterization_api.cu:191",
       "src/training/rasterization/fastgs/rasterization/src/rasterization_api.cu:409",
       "src/training/rasterization/fastgs/rasterization/src/rasterization_api.cu:533",
       "src/training/rasterization/fastgs/rasterization/src/rasterization_api.cu:673",
@@ -1061,7 +1059,6 @@
     ],
     "training": [
       "src/training/include/lfs/training/live_model_mutation_guard.hpp:35",
-      "src/training/rasterization/edge_compute/utils/utils.h:12",
       "src/training/rasterization/fastgs/utils/utils.h:20"
     ],
     "visualizer": [
