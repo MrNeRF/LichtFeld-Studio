@@ -34,6 +34,7 @@
 #include <string_view>
 #include <system_error>
 #include <tbb/parallel_for.h>
+#include <tbb/task_group.h>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -402,7 +403,7 @@ namespace lfs::io {
     // -----------------------------------------------------------------------------
     //  Quaternion to rotation matrix (torch-free)
     // -----------------------------------------------------------------------------
-    inline Tensor qvec2rotmat(const std::vector<float>& q_raw) {
+    inline std::array<float, 9> qvec2rotmat_values(const std::vector<float>& q_raw) {
         LFS_ASSERT_MSG(q_raw.size() == 4,
                        std::format("quaternion must have four elements "
                                    "(component_count={})",
@@ -428,12 +429,15 @@ namespace lfs::io {
         float z = q_raw[3] / len;
 
         // Build rotation matrix [3, 3]
-        std::vector<float> R_data = {
+        return {
             1.0f - 2.0f * (y * y + z * z), 2.0f * (x * y - z * w), 2.0f * (x * z + y * w),
             2.0f * (x * y + z * w), 1.0f - 2.0f * (x * x + z * z), 2.0f * (y * z - x * w),
             2.0f * (x * z - y * w), 2.0f * (y * z + x * w), 1.0f - 2.0f * (x * x + y * y)};
+    }
 
-        return Tensor::from_vector(R_data, {3, 3}, Device::CPU);
+    inline Tensor qvec2rotmat(const std::vector<float>& q_raw) {
+        const auto values = qvec2rotmat_values(q_raw);
+        return Tensor::from_vector(std::vector<float>(values.begin(), values.end()), {3, 3}, Device::CPU);
     }
 
     namespace {
@@ -876,7 +880,36 @@ namespace lfs::io {
         }
     }
 
-    static Result<void> validate_colmap_dataset_layout_impl(
+    struct ColmapDatasetCaches {
+        std::unique_ptr<RecursiveFileCache> images;
+        std::unique_ptr<MaskDirCache> masks;
+        std::unique_ptr<DepthDirCache> depths;
+        std::unique_ptr<NormalDirCache> normals;
+    };
+
+    static ColmapDatasetCaches build_colmap_dataset_caches(
+        const fs::path& base,
+        const fs::path& images_path,
+        const LoadOptions& options) {
+        ColmapDatasetCaches caches;
+        tbb::task_group tasks;
+        tasks.run([&] {
+            caches.images = std::make_unique<RecursiveFileCache>(images_path, options.cancel_requested);
+        });
+        tasks.run([&] {
+            caches.masks = std::make_unique<MaskDirCache>(base, options.cancel_requested);
+        });
+        tasks.run([&] {
+            caches.depths = std::make_unique<DepthDirCache>(base, options.cancel_requested);
+        });
+        tasks.run([&] {
+            caches.normals = std::make_unique<NormalDirCache>(base, options.cancel_requested);
+        });
+        tasks.wait();
+        return caches;
+    }
+
+    static Result<ColmapDatasetCaches> validate_colmap_dataset_layout_impl(
         const fs::path& base,
         const std::string& images_folder,
         const std::vector<ImageData>& images,
@@ -893,14 +926,10 @@ namespace lfs::io {
 
         log_unused_sidecars(base, options);
         const auto basename_layout = scan_image_basename_layout(images_path, options);
-        RecursiveFileCache image_cache(images_path, options.cancel_requested);
-        std::optional<MaskDirCache> mask_cache;
-        std::optional<DepthDirCache> depth_cache;
-        if (options.load_masks) {
-            mask_cache.emplace(base, options.cancel_requested);
-        }
-        if (options.load_depths) {
-            depth_cache.emplace(base, options.cancel_requested);
+        ColmapDatasetCaches caches;
+        {
+            LOG_TIMER_DEBUG("COLMAP assemble: caches");
+            caches = build_colmap_dataset_caches(base, images_path, options);
         }
 
         std::unordered_map<std::string, size_t> basename_only_metadata_counts;
@@ -938,11 +967,11 @@ namespace lfs::io {
                 }
             }
 
-            if (auto image_lookup = image_cache.lookup(image_rel_path); image_lookup.found()) {
-                if (options.load_masks && mask_cache->lookup(image.name).ambiguous()) {
+            if (auto image_lookup = caches.images->lookup(image_rel_path); image_lookup.found()) {
+                if (options.load_masks && caches.masks->lookup(image.name).ambiguous()) {
                     return make_ambiguous_mask_reference_error(base, image.name);
                 }
-                if (options.load_depths && depth_cache->lookup(image.name).ambiguous()) {
+                if (options.load_depths && caches.depths->lookup(image.name).ambiguous()) {
                     return make_error(
                         ErrorCode::INVALID_DATASET,
                         std::format("Depth map for image '{}' is ambiguous across the dataset depth folders. "
@@ -966,7 +995,7 @@ namespace lfs::io {
                 images_path);
         }
 
-        return {};
+        return caches;
     }
 
     // -----------------------------------------------------------------------------
@@ -1547,12 +1576,12 @@ namespace lfs::io {
                                                          const LoadOptions& options = {},
                                                          SkipTally* tally = nullptr) {
         LOG_TIMER_TRACE("Read points3D.bin");
-        LOG_TIMER_DEBUG("COLMAP points3D parse");
         std::unique_ptr<BinaryBuffer> buf_owner;
         {
-            LOG_TIMER_DEBUG("COLMAP points3D.bin read");
+            LOG_TIMER_DEBUG("COLMAP points3D read");
             buf_owner = read_binary(file_path);
         }
+        LOG_TIMER_DEBUG("COLMAP points3D parse");
         const char* cur = buf_owner->data();
         const char* end = cur + buf_owner->size();
 
@@ -1614,6 +1643,13 @@ namespace lfs::io {
         }
         LOG_DEBUG("Reading {} 3D points from binary file", N);
         std::vector<Point3DData> parsed(N);
+        // Keep the public Point3DData::track representation, but perform its
+        // vector allocations in one ordered pass. The parallel pass then only
+        // fills already-sized storage and cannot serialize on the allocator.
+        for (size_t i = 0; i < static_cast<size_t>(N); ++i) {
+            parsed[i].track_count = static_cast<size_t>(records[i].track_length);
+            parsed[i].track.resize(static_cast<size_t>(records[i].track_length));
+        }
         std::vector<uint8_t> valid(N, 0);
         std::vector<SkipTally> local_tallies(tally ? N : 0);
         std::atomic<bool> cancelled = false;
@@ -1638,7 +1674,6 @@ namespace lfs::io {
                 point_valid = point_valid && std::isfinite(point.error);
                 const uint64_t track_len = read_u64(record_cur, record_end, "points3D.bin track length");
                 point.track_count = static_cast<size_t>(track_len);
-                point.track.resize(static_cast<size_t>(track_len));
                 for (uint64_t j = 0; j < track_len; ++j) {
                     auto& track = point.track[static_cast<size_t>(j)];
                     track.image_id = read_u32(record_cur, record_end, "points3D.bin track image id");
@@ -2786,6 +2821,7 @@ namespace lfs::io {
                             const std::vector<ImageData>& images,
                             const std::string& images_folder,
                             const LoadOptions& options = {},
+                            ColmapDatasetCaches caches = {},
                             const ColmapPointPositions& points_xyz = {}) {
 
         LOG_TIMER_TRACE("Assemble COLMAP cameras");
@@ -2822,10 +2858,12 @@ namespace lfs::io {
         std::vector<SkipTally> image_tallies(images.size());
         std::vector<std::optional<Error>> errors(images.size());
 
-        RecursiveFileCache image_cache(images_path, options.cancel_requested);
-        MaskDirCache mask_cache(base_path, options.cancel_requested);
-        DepthDirCache depth_cache(base_path, options.cancel_requested);
-        NormalDirCache normal_cache(base_path, options.cancel_requested);
+        LFS_ASSERT_MSG(caches.images && caches.masks && caches.depths && caches.normals,
+                       "COLMAP camera assembly requires validated dataset caches");
+        const auto& image_cache = *caches.images;
+        const auto& mask_cache = *caches.masks;
+        const auto& depth_cache = *caches.depths;
+        const auto& normal_cache = *caches.normals;
         size_t depth_matched_count = 0;
         size_t normal_matched_count = 0;
         size_t undistort_crop_failures = 0;
@@ -2878,236 +2916,253 @@ namespace lfs::io {
 
         std::atomic<bool> cancelled = false;
         std::atomic<bool> used_recursive_image_lookup = false;
-        tbb::parallel_for(size_t{0}, images.size(), [&](const size_t i) {
-            if (should_poll_cancel(i) && is_load_cancel_requested(options)) {
-                cancelled.store(true, std::memory_order_relaxed);
-                return;
-            }
-            const ImageData& img = images[i];
-            auto& output = assembled[i];
-            output.image = &img;
-            const std::filesystem::path image_rel_path = lfs::core::utf8_to_path(img.name);
-            std::filesystem::path image_path = images_path / image_rel_path;
-
-            if (!safe_exists(image_path)) {
-                if (auto image_lookup = image_cache.lookup(image_rel_path);
-                    image_lookup.found()) {
-                    used_recursive_image_lookup.store(true, std::memory_order_relaxed);
-                    image_path = std::move(image_lookup.path);
-                } else if (image_lookup.ambiguous()) {
-                    errors[i] = make_ambiguous_image_reference_error(images_path, img.name).error();
+        auto rotation_storage = std::make_shared<std::vector<float>>(images.size() * 9);
+        auto translation_storage = std::make_shared<std::vector<float>>(images.size() * 3);
+        const Tensor rotation_batch = Tensor::from_external_owner(
+            rotation_storage->data(), {images.size(), 3, 3}, Device::CPU, DataType::Float32,
+            rotation_storage, images.size());
+        const Tensor translation_batch = Tensor::from_external_owner(
+            translation_storage->data(), {images.size(), 3}, Device::CPU, DataType::Float32,
+            translation_storage, images.size());
+        {
+            LOG_TIMER_DEBUG("COLMAP assemble: parallel build");
+            tbb::parallel_for(size_t{0}, images.size(), [&](const size_t i) {
+                if (should_poll_cancel(i) && is_load_cancel_requested(options)) {
+                    cancelled.store(true, std::memory_order_relaxed);
                     return;
                 }
-            }
+                const ImageData& img = images[i];
+                auto& output = assembled[i];
+                output.image = &img;
+                const std::filesystem::path image_rel_path = lfs::core::utf8_to_path(img.name);
+                std::filesystem::path image_path = images_path / image_rel_path;
 
-            const bool image_file_present = safe_is_regular_file(image_path);
-
-            auto it = cam_map.find(img.camera_id);
-            if (it == cam_map.end()) {
-                image_tallies[i].record(img.name);
-                return;
-            }
-
-            const auto& cam_data = it->second;
-
-            const auto model_it = camera_model_ids.find(cam_data.model_id);
-            if (model_it == camera_model_ids.end()) {
-                errors[i] = make_error(
-                                ErrorCode::UNSUPPORTED_FORMAT,
-                                std::format("Invalid camera model ID {} for image '{}'", cam_data.model_id, img.name),
-                                image_path)
-                                .error();
-                return;
-            }
-            const auto calibration_it = calibrations.find(img.camera_id);
-            if (calibration_it == calibrations.end()) {
-                image_tallies[i].record(img.name);
-                return;
-            }
-            const auto& calibration = calibration_it->second;
-
-            // Convert quaternion to rotation matrix
-            Tensor R = qvec2rotmat(img.qvec);
-
-            // Create translation tensor
-            Tensor T = Tensor::from_vector(img.tvec, {3}, Device::CPU);
-
-            // Calculate camera position: -R^T * T
-            float RT[9];
-            const float* R_ptr = R.ptr<float>();
-            for (int r = 0; r < 3; ++r) {
-                for (int c = 0; c < 3; ++c) {
-                    RT[r * 3 + c] = R_ptr[c * 3 + r]; // Transpose
+                if (!safe_exists(image_path)) {
+                    if (auto image_lookup = image_cache.lookup(image_rel_path);
+                        image_lookup.found()) {
+                        used_recursive_image_lookup.store(true, std::memory_order_relaxed);
+                        image_path = std::move(image_lookup.path);
+                    } else if (image_lookup.ambiguous()) {
+                        errors[i] = make_ambiguous_image_reference_error(images_path, img.name).error();
+                        return;
+                    }
                 }
-            }
 
-            float cam_pos[3] = {0, 0, 0};
-            const float* T_ptr = T.ptr<float>();
-            for (int r = 0; r < 3; ++r) {
-                for (int c = 0; c < 3; ++c) {
-                    cam_pos[r] -= RT[r * 3 + c] * T_ptr[c];
-                }
-            }
+                const bool image_file_present = safe_is_regular_file(image_path);
 
-            output.position = {cam_pos[0], cam_pos[1], cam_pos[2]};
-
-            std::filesystem::path mask_path;
-            if (auto mask_lookup = mask_cache.lookup(img.name); mask_lookup.found()) {
-                mask_path = std::move(mask_lookup.path);
-            } else if (mask_lookup.ambiguous()) {
-                if (options.load_masks) {
-                    errors[i] = make_ambiguous_mask_reference_error(base_path, img.name).error();
+                auto it = cam_map.find(img.camera_id);
+                if (it == cam_map.end()) {
+                    image_tallies[i].record(img.name);
                     return;
                 }
-                LOG_WARN("Mask for image '{}' is ambiguous; skipping sidecar because mask usage is disabled",
-                         img.name);
-            }
 
-            std::filesystem::path depth_path;
-            if (auto depth_lookup = depth_cache.lookup(img.name); depth_lookup.found()) {
-                depth_path = std::move(depth_lookup.path);
-                output.depth_matched = true;
-            } else if (depth_lookup.ambiguous()) {
-                if (options.load_depths) {
+                const auto& cam_data = it->second;
+
+                const auto model_it = camera_model_ids.find(cam_data.model_id);
+                if (model_it == camera_model_ids.end()) {
                     errors[i] = make_error(
-                                    ErrorCode::INVALID_DATASET,
-                                    std::format("Depth map for image '{}' is ambiguous across the dataset depth folders. "
-                                                "Keep depth maps in the same relative subdirectories as the images or rename them uniquely.",
-                                                img.name),
-                                    base_path)
+                                    ErrorCode::UNSUPPORTED_FORMAT,
+                                    std::format("Invalid camera model ID {} for image '{}'", cam_data.model_id, img.name),
+                                    image_path)
                                     .error();
                     return;
                 }
-                LOG_WARN("Depth map for image '{}' is ambiguous; skipping sidecar because depth usage is disabled",
-                         img.name);
-            }
+                const auto calibration_it = calibrations.find(img.camera_id);
+                if (calibration_it == calibrations.end()) {
+                    image_tallies[i].record(img.name);
+                    return;
+                }
+                const auto& calibration = calibration_it->second;
 
-            std::filesystem::path normal_path;
-            if (auto normal_lookup = normal_cache.lookup(img.name); normal_lookup.found()) {
-                normal_path = std::move(normal_lookup.path);
-                output.normal_matched = true;
-            } else if (normal_lookup.ambiguous()) {
-                if (options.load_normals) {
-                    errors[i] = make_error(
-                                    ErrorCode::INVALID_DATASET,
-                                    std::format("Normal map for image '{}' is ambiguous across the dataset normal folders. "
-                                                "Keep normal maps in the same relative subdirectories as the images or rename them uniquely.",
-                                                img.name),
-                                    base_path)
-                                    .error();
-                    return;
-                }
-                LOG_WARN("Normal map for image '{}' is ambiguous; skipping sidecar because normal usage is disabled",
-                         img.name);
-            }
+                // Keep the per-image pose data in pageable batch storage. CPU
+                // Tensor::empty uses the pinned allocator, whose mutex would turn
+                // these tiny per-image allocations into a serial section.
+                const auto rotation = qvec2rotmat_values(img.qvec);
+                std::copy(rotation.begin(), rotation.end(), rotation_storage->begin() + i * 9);
+                std::copy(img.tvec.begin(), img.tvec.end(), translation_storage->begin() + i * 3);
+                // Drop the batch dimension before handing the views to Camera. Both
+                // slices are dense, so contiguous() preserves the shared pageable
+                // storage and its lifetime while making the tensor contract explicit.
+                Tensor R = rotation_batch.slice(0, i, i + 1).squeeze(0).contiguous();
+                Tensor T = translation_batch.slice(0, i, i + 1).squeeze(0).contiguous();
 
-            // Validate mask/depth dimensions match image dimensions
-            std::optional<std::tuple<int, int, int>> image_info;
-            auto get_image_info_cached = [&]() {
-                if (!image_info.has_value()) {
-                    image_info = lfs::core::get_image_info(image_path);
+                // Calculate camera position: -R^T * T
+                float RT[9];
+                const float* R_ptr = R.ptr<float>();
+                for (int r = 0; r < 3; ++r) {
+                    for (int c = 0; c < 3; ++c) {
+                        RT[r * 3 + c] = R_ptr[c * 3 + r]; // Transpose
+                    }
                 }
-                return *image_info;
-            };
-            if (image_file_present && options.load_masks && !mask_path.empty()) {
-                auto [img_w, img_h, img_c] = get_image_info_cached();
-                auto [mask_w, mask_h, mask_c] = lfs::core::get_image_info(mask_path);
-                if (img_w != mask_w || img_h != mask_h) {
-                    errors[i] = make_error(
-                                    ErrorCode::MASK_SIZE_MISMATCH,
-                                    std::format("Mask '{}' is {}x{} but image '{}' is {}x{}",
-                                                lfs::core::path_to_utf8(mask_path.filename()), mask_w, mask_h,
-                                                img.name, img_w, img_h),
-                                    mask_path)
-                                    .error();
-                    return;
+
+                float cam_pos[3] = {0, 0, 0};
+                const float* T_ptr = T.ptr<float>();
+                for (int r = 0; r < 3; ++r) {
+                    for (int c = 0; c < 3; ++c) {
+                        cam_pos[r] -= RT[r * 3 + c] * T_ptr[c];
+                    }
                 }
-            }
-            if (image_file_present && options.load_depths && !depth_path.empty()) {
-                auto [img_w, img_h, img_c] = get_image_info_cached();
-                auto [depth_w, depth_h, depth_c] = lfs::core::get_image_info(depth_path);
-                if (!sidecar_dimensions_match_contract(depth_w,
-                                                       depth_h,
-                                                       img_w,
-                                                       img_h,
-                                                       cam_data.original_width,
-                                                       cam_data.original_height)) {
-                    errors[i] = make_error(
-                                    ErrorCode::DEPTH_SIZE_MISMATCH,
-                                    std::format("Depth map '{}' is {}x{} but image '{}' is {}x{}",
-                                                lfs::core::path_to_utf8(depth_path.filename()), depth_w, depth_h,
-                                                img.name, img_w, img_h),
-                                    depth_path)
-                                    .error();
-                    return;
+
+                output.position = {cam_pos[0], cam_pos[1], cam_pos[2]};
+
+                std::filesystem::path mask_path;
+                if (auto mask_lookup = mask_cache.lookup(img.name); mask_lookup.found()) {
+                    mask_path = std::move(mask_lookup.path);
+                } else if (mask_lookup.ambiguous()) {
+                    if (options.load_masks) {
+                        errors[i] = make_ambiguous_mask_reference_error(base_path, img.name).error();
+                        return;
+                    }
+                    LOG_WARN("Mask for image '{}' is ambiguous; skipping sidecar because mask usage is disabled",
+                             img.name);
                 }
-            }
-            if (image_file_present && options.load_normals && !normal_path.empty()) {
-                auto [img_w, img_h, img_c] = get_image_info_cached();
-                auto [normal_w, normal_h, normal_c] = lfs::core::get_image_info(normal_path);
-                if (!sidecar_dimensions_match_contract(normal_w,
-                                                       normal_h,
-                                                       img_w,
-                                                       img_h,
-                                                       cam_data.original_width,
-                                                       cam_data.original_height)) {
-                    if (options.normal_auto_generate) {
-                        LOG_WARN("Normal map '{}' is {}x{} but image '{}' is {}x{}; "
-                                 "ignoring it so auto-generate can overwrite that file",
-                                 lfs::core::path_to_utf8(normal_path.filename()),
-                                 normal_w, normal_h, img.name, img_w, img_h);
-                        output.normal_matched = false;
-                        normal_path.clear();
-                    } else {
+
+                std::filesystem::path depth_path;
+                if (auto depth_lookup = depth_cache.lookup(img.name); depth_lookup.found()) {
+                    depth_path = std::move(depth_lookup.path);
+                    output.depth_matched = true;
+                } else if (depth_lookup.ambiguous()) {
+                    if (options.load_depths) {
                         errors[i] = make_error(
-                                        ErrorCode::NORMAL_SIZE_MISMATCH,
-                                        std::format("Normal map '{}' is {}x{} but image '{}' is {}x{}",
-                                                    lfs::core::path_to_utf8(normal_path.filename()), normal_w, normal_h,
+                                        ErrorCode::INVALID_DATASET,
+                                        std::format("Depth map for image '{}' is ambiguous across the dataset depth folders. "
+                                                    "Keep depth maps in the same relative subdirectories as the images or rename them uniquely.",
+                                                    img.name),
+                                        base_path)
+                                        .error();
+                        return;
+                    }
+                    LOG_WARN("Depth map for image '{}' is ambiguous; skipping sidecar because depth usage is disabled",
+                             img.name);
+                }
+
+                std::filesystem::path normal_path;
+                if (auto normal_lookup = normal_cache.lookup(img.name); normal_lookup.found()) {
+                    normal_path = std::move(normal_lookup.path);
+                    output.normal_matched = true;
+                } else if (normal_lookup.ambiguous()) {
+                    if (options.load_normals) {
+                        errors[i] = make_error(
+                                        ErrorCode::INVALID_DATASET,
+                                        std::format("Normal map for image '{}' is ambiguous across the dataset normal folders. "
+                                                    "Keep normal maps in the same relative subdirectories as the images or rename them uniquely.",
+                                                    img.name),
+                                        base_path)
+                                        .error();
+                        return;
+                    }
+                    LOG_WARN("Normal map for image '{}' is ambiguous; skipping sidecar because normal usage is disabled",
+                             img.name);
+                }
+
+                // Validate mask/depth dimensions match image dimensions
+                std::optional<std::tuple<int, int, int>> image_info;
+                auto get_image_info_cached = [&]() {
+                    if (!image_info.has_value()) {
+                        image_info = lfs::core::get_image_info(image_path);
+                    }
+                    return *image_info;
+                };
+                if (image_file_present && options.load_masks && !mask_path.empty()) {
+                    auto [img_w, img_h, img_c] = get_image_info_cached();
+                    auto [mask_w, mask_h, mask_c] = lfs::core::get_image_info(mask_path);
+                    if (img_w != mask_w || img_h != mask_h) {
+                        errors[i] = make_error(
+                                        ErrorCode::MASK_SIZE_MISMATCH,
+                                        std::format("Mask '{}' is {}x{} but image '{}' is {}x{}",
+                                                    lfs::core::path_to_utf8(mask_path.filename()), mask_w, mask_h,
                                                     img.name, img_w, img_h),
-                                        normal_path)
+                                        mask_path)
                                         .error();
                         return;
                     }
                 }
-            }
-
-            // Create Camera
-            auto camera = std::make_shared<Camera>(
-                R,
-                T,
-                calibration.focal_x, calibration.focal_y,
-                calibration.center_x, calibration.center_y,
-                calibration.radial_distortion,
-                calibration.tangential_distortion,
-                calibration.camera_model_type,
-                img.name,
-                image_path,
-                mask_path,
-                cam_data.width,
-                cam_data.height,
-                camera_indices[i],
-                static_cast<int>(img.camera_id),
-                depth_path,
-                normal_path);
-
-            const auto undistort_it = undistort_cache.find(img.camera_id);
-            if (undistort_it != undistort_cache.end() && undistort_it->second) {
-                camera->adopt_undistortion(*undistort_it->second);
-            }
-            if (camera->undistort_params().crop_solve_failed) {
-                output.undistort_crop_failures = 1;
-                if (calibration.camera_model_type == lfs::core::CameraModelType::FISHEYE ||
-                    calibration.camera_model_type == lfs::core::CameraModelType::THIN_PRISM_FISHEYE) {
-                    output.undistort_fisheye_crop_failures = 1;
+                if (image_file_present && options.load_depths && !depth_path.empty()) {
+                    auto [img_w, img_h, img_c] = get_image_info_cached();
+                    auto [depth_w, depth_h, depth_c] = lfs::core::get_image_info(depth_path);
+                    if (!sidecar_dimensions_match_contract(depth_w,
+                                                           depth_h,
+                                                           img_w,
+                                                           img_h,
+                                                           cam_data.original_width,
+                                                           cam_data.original_height)) {
+                        errors[i] = make_error(
+                                        ErrorCode::DEPTH_SIZE_MISMATCH,
+                                        std::format("Depth map '{}' is {}x{} but image '{}' is {}x{}",
+                                                    lfs::core::path_to_utf8(depth_path.filename()), depth_w, depth_h,
+                                                    img.name, img_w, img_h),
+                                        depth_path)
+                                        .error();
+                        return;
+                    }
                 }
-            }
-            if (!image_file_present) {
-                camera->set_has_image(false);
-                output.missing_image = true;
-            }
-            output.camera_data = &cam_data;
-            output.camera = std::move(camera);
-        });
+                if (image_file_present && options.load_normals && !normal_path.empty()) {
+                    auto [img_w, img_h, img_c] = get_image_info_cached();
+                    auto [normal_w, normal_h, normal_c] = lfs::core::get_image_info(normal_path);
+                    if (!sidecar_dimensions_match_contract(normal_w,
+                                                           normal_h,
+                                                           img_w,
+                                                           img_h,
+                                                           cam_data.original_width,
+                                                           cam_data.original_height)) {
+                        if (options.normal_auto_generate) {
+                            LOG_WARN("Normal map '{}' is {}x{} but image '{}' is {}x{}; "
+                                     "ignoring it so auto-generate can overwrite that file",
+                                     lfs::core::path_to_utf8(normal_path.filename()),
+                                     normal_w, normal_h, img.name, img_w, img_h);
+                            output.normal_matched = false;
+                            normal_path.clear();
+                        } else {
+                            errors[i] = make_error(
+                                            ErrorCode::NORMAL_SIZE_MISMATCH,
+                                            std::format("Normal map '{}' is {}x{} but image '{}' is {}x{}",
+                                                        lfs::core::path_to_utf8(normal_path.filename()), normal_w, normal_h,
+                                                        img.name, img_w, img_h),
+                                            normal_path)
+                                            .error();
+                            return;
+                        }
+                    }
+                }
+
+                // Create Camera
+                auto camera = std::make_shared<Camera>(
+                    R,
+                    T,
+                    calibration.focal_x, calibration.focal_y,
+                    calibration.center_x, calibration.center_y,
+                    calibration.radial_distortion,
+                    calibration.tangential_distortion,
+                    calibration.camera_model_type,
+                    img.name,
+                    image_path,
+                    mask_path,
+                    cam_data.width,
+                    cam_data.height,
+                    camera_indices[i],
+                    static_cast<int>(img.camera_id),
+                    depth_path,
+                    normal_path);
+
+                const auto undistort_it = undistort_cache.find(img.camera_id);
+                if (undistort_it != undistort_cache.end() && undistort_it->second) {
+                    camera->adopt_undistortion(*undistort_it->second);
+                }
+                if (camera->undistort_params().crop_solve_failed) {
+                    output.undistort_crop_failures = 1;
+                    if (calibration.camera_model_type == lfs::core::CameraModelType::FISHEYE ||
+                        calibration.camera_model_type == lfs::core::CameraModelType::THIN_PRISM_FISHEYE) {
+                        output.undistort_fisheye_crop_failures = 1;
+                    }
+                }
+                if (!image_file_present) {
+                    camera->set_has_image(false);
+                    output.missing_image = true;
+                }
+                output.camera_data = &cam_data;
+                output.camera = std::move(camera);
+            });
+        }
 
         if (cancelled.load(std::memory_order_relaxed)) {
             throw_if_load_cancel_requested(options, "COLMAP camera assembly cancelled");
@@ -3122,24 +3177,27 @@ namespace lfs::io {
                      "falling back to recursive image lookup",
                      lfs::core::path_to_utf8(images_path));
         }
-        for (size_t i = 0; i < assembled.size(); ++i) {
-            auto& output = assembled[i];
-            image_tally.merge(image_tallies[i]);
-            if (!output.camera) {
-                continue;
+        {
+            LOG_TIMER_DEBUG("COLMAP assemble: compact");
+            for (size_t i = 0; i < assembled.size(); ++i) {
+                auto& output = assembled[i];
+                image_tally.merge(image_tallies[i]);
+                if (!output.camera) {
+                    continue;
+                }
+                camera_positions.insert(camera_positions.end(), output.position.begin(), output.position.end());
+                camera_images.push_back(output.image);
+                camera_data.push_back(output.camera_data);
+                cameras.push_back(std::move(output.camera));
+                if (output.missing_image) {
+                    missing_images.push_back(output.image->name);
+                }
+                depth_matched_count += output.depth_matched ? 1 : 0;
+                normal_matched_count += output.normal_matched ? 1 : 0;
+                undistort_camera_count += 1;
+                undistort_crop_failures += output.undistort_crop_failures;
+                undistort_fisheye_crop_failures += output.undistort_fisheye_crop_failures;
             }
-            camera_positions.insert(camera_positions.end(), output.position.begin(), output.position.end());
-            camera_images.push_back(output.image);
-            camera_data.push_back(output.camera_data);
-            cameras.push_back(std::move(output.camera));
-            if (output.missing_image) {
-                missing_images.push_back(output.image->name);
-            }
-            depth_matched_count += output.depth_matched ? 1 : 0;
-            normal_matched_count += output.normal_matched ? 1 : 0;
-            undistort_camera_count += 1;
-            undistort_crop_failures += output.undistort_crop_failures;
-            undistort_fisheye_crop_failures += output.undistort_fisheye_crop_failures;
         }
 
         std::atomic<bool> observation_cancelled = false;
@@ -3189,9 +3247,13 @@ namespace lfs::io {
                 images_path);
         }
 
-        // Compute scene center as mean of camera positions
-        Tensor scene_center_tensor = Tensor::from_vector(camera_positions, {cameras.size(), 3}, Device::CPU);
-        Tensor scene_center = scene_center_tensor.mean({0}, false);
+        Tensor scene_center;
+        {
+            LOG_TIMER_DEBUG("COLMAP assemble: scene center");
+            // Compute scene center as mean of camera positions
+            Tensor scene_center_tensor = Tensor::from_vector(camera_positions, {cameras.size(), 3}, Device::CPU);
+            scene_center = scene_center_tensor.mean({0}, false);
+        }
 
         const size_t training_image_count = static_cast<size_t>(
             std::count_if(cameras.begin(), cameras.end(), [](const auto& camera) {
@@ -4299,7 +4361,11 @@ namespace lfs::io {
                 images = read_images_text_camera_metadata_only(images_txt, options);
             }
 
-            return validate_colmap_dataset_layout_impl(base, images_folder, images, options);
+            auto validation = validate_colmap_dataset_layout_impl(base, images_folder, images, options);
+            if (!validation) {
+                return std::unexpected(validation.error());
+            }
+            return {};
         } catch (const LoadCancelledError& e) {
             return make_error(ErrorCode::CANCELLED, e.what(), base);
         } catch (const lfs::Exception& e) {
@@ -4335,7 +4401,8 @@ namespace lfs::io {
             auto images = read_images_binary(images_file, options, &pose_tally, &point2d_tally);
 
             LOG_INFO("Read {} cameras and {} images from COLMAP", cam_map.size(), images.size());
-            if (auto validation = validate_colmap_dataset_layout_impl(base, images_folder, images, options); !validation) {
+            auto validation = validate_colmap_dataset_layout_impl(base, images_folder, images, options);
+            if (!validation) {
                 return std::unexpected(validation.error());
             }
 
@@ -4346,7 +4413,8 @@ namespace lfs::io {
                     point_records->warnings.push_back(std::move(*diagnostic));
                 }
             }
-            auto assembled = assemble_colmap_cameras(base, cam_map, images, images_folder, options, points_xyz);
+            auto assembled = assemble_colmap_cameras(
+                base, cam_map, images, images_folder, options, std::move(*validation), points_xyz);
             if (!assembled) {
                 return std::unexpected(assembled.error());
             }
@@ -4448,11 +4516,13 @@ namespace lfs::io {
             auto images = read_images_text_camera_metadata_only(images_file, options, &pose_tally);
 
             LOG_INFO("Read {} cameras and {} images from COLMAP text files", cam_map.size(), images.size());
-            if (auto validation = validate_colmap_dataset_layout_impl(base, images_folder, images, options); !validation) {
+            auto validation = validate_colmap_dataset_layout_impl(base, images_folder, images, options);
+            if (!validation) {
                 return std::unexpected(validation.error());
             }
             auto points_xyz = load_colmap_point_positions_if_needed(base, images, options);
-            auto assembled = assemble_colmap_cameras(base, cam_map, images, images_folder, options, points_xyz);
+            auto assembled = assemble_colmap_cameras(
+                base, cam_map, images, images_folder, options, std::move(*validation), points_xyz);
             if (!assembled) {
                 return std::unexpected(assembled.error());
             }
