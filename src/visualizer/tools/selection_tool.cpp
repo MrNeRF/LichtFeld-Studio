@@ -220,16 +220,23 @@ namespace lfs::vis::tools {
     }
 
     void SelectionTool::adjustWindowScale(const float factor) {
-        // Isotropic by contract: both axes scale by the same factor, preserving
-        // the current aspect ratio (clamped per axis).
+        // Isotropic by contract: both axes scale by ONE common factor, bounded so
+        // that neither axis leaves [0.05, 1.0]. Clamping the axes separately let a
+        // window that hit a limit on one axis keep changing on the other and
+        // silently change shape.
         if (tool_context_) {
             if (auto* const rm = tool_context_->getRenderingManager()) {
                 auto settings = rm->getSettings();
-                settings.depth_filter_scale_x =
-                    std::clamp(settings.depth_filter_scale_x * factor, 0.05f, 1.0f);
-                settings.depth_filter_scale_y =
-                    std::clamp(settings.depth_filter_scale_y * factor, 0.05f, 1.0f);
-                window_scale_ = settings.depth_filter_scale_x;
+                // Same bound formula as selection_controls._scale_factor_bounds,
+                // applied here to the current scales rather than its drawn-reference
+                // scales. Inputs are already sanitized to [0.05, 1.0].
+                const float sx = settings.depth_filter_scale_x;
+                const float sy = settings.depth_filter_scale_y;
+                const float f_min = std::max(0.05f / sx, 0.05f / sy);
+                const float f_max = std::min(1.0f / sx, 1.0f / sy);
+                const float f = std::clamp(factor, f_min, std::max(f_min, f_max));
+                settings.depth_filter_scale_x = std::clamp(sx * f, 0.05f, 1.0f);
+                settings.depth_filter_scale_y = std::clamp(sy * f, 0.05f, 1.0f);
                 rm->updateSettings(settings);
             }
         }
@@ -255,7 +262,6 @@ namespace lfs::vis::tools {
             settings.show_ellipsoid = true;
         }
         settings.depth_filter_enabled = depth_filter_enabled_;
-        window_scale_ = settings.depth_filter_scale_x;
         const glm::quat camera_quat = glm::quat_cast(viewport.camera.R);
         const glm::vec2 half_extents =
             depthWindowFarPlaneHalfExtents(viewport, settings, depth_far_, settings.depth_filter_scale_x,

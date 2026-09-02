@@ -712,6 +712,42 @@ TEST_F(DepthWindowDragLifecycleTest, SecondDepthDragReplacementKeepsIncomingOver
     EXPECT_TRUE(lfs::vis::op::depthWindowOverlayState().visible);
 }
 
+TEST_F(DepthWindowDragLifecycleTest, DepthWindowScrollScalePreservesAspectAtLimits) {
+    const auto set_scales = [&](const float scale_x, const float scale_y) {
+        auto settings = rendering_manager_->getSettings();
+        settings.depth_filter_scale_x = scale_x;
+        settings.depth_filter_scale_y = scale_y;
+        rendering_manager_->updateSettings(settings);
+    };
+    const auto expect_scales = [&](const float scale_x, const float scale_y) {
+        const auto settings = rendering_manager_->getSettings();
+        EXPECT_NEAR(settings.depth_filter_scale_x, scale_x, 1e-5f);
+        EXPECT_NEAR(settings.depth_filter_scale_y, scale_y, 1e-5f);
+    };
+
+    // Upper limit: X is already at 1.0, so growing must leave BOTH axes alone.
+    set_scales(1.0f, 0.5f);
+    selection_tool_->adjustWindowScale(1.05f);
+    expect_scales(1.0f, 0.5f);
+
+    // Interior: both axes scale by the same factor.
+    set_scales(0.8f, 0.4f);
+    selection_tool_->adjustWindowScale(1.05f);
+    expect_scales(0.84f, 0.42f);
+
+    // Lower limit: Y is already on the floor, so shrinking must leave BOTH alone.
+    set_scales(0.1f, 0.05f);
+    selection_tool_->adjustWindowScale(0.95f);
+    expect_scales(0.1f, 0.05f);
+
+    // Extreme aspect: the common factor interval collapses to exactly 1.
+    set_scales(0.05f, 1.0f);
+    selection_tool_->adjustWindowScale(1.05f);
+    expect_scales(0.05f, 1.0f);
+    selection_tool_->adjustWindowScale(0.95f);
+    expect_scales(0.05f, 1.0f);
+}
+
 TEST_F(DepthWindowDragLifecycleTest, FocusLossClearsDepthWindowDragPreview) {
     expectMidDragPreviewActive();
     // The viewer is constructed without initialize(), so no InputController is
