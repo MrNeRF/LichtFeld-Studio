@@ -231,13 +231,13 @@ TEST_F(PointCloudSelectionTest, BoxAndSphereVolumeSelectPointMeans) {
     setLinePointCloudMeans();
 
     rendering_manager_->setCropboxGizmoState(
-        true, glm::vec3(-1.0f), glm::vec3(1.0f), glm::mat4(1.0f), false);
+        true, glm::vec3(-1.0f), glm::vec3(1.0f), glm::mat4(1.0f), false, -1);
     auto box = service_->selectBoxVolume(lfs::vis::SelectionMode::Replace);
     ASSERT_TRUE(box.success) << box.error;
     EXPECT_EQ(point_selection_values(pc), (std::vector<uint8_t>{0, 1, 1, 1, 0}));
 
     rendering_manager_->setEllipsoidGizmoState(
-        true, glm::vec3(0.75f), glm::mat4(1.0f), false);
+        true, glm::vec3(0.75f), glm::mat4(1.0f), false, -1);
     auto sphere = service_->selectSphereVolume(lfs::vis::SelectionMode::Replace);
     ASSERT_TRUE(sphere.success) << sphere.error;
     EXPECT_EQ(point_selection_values(pc), (std::vector<uint8_t>{0, 1, 1, 1, 0}));

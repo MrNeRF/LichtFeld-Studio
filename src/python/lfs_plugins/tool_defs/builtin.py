@@ -133,8 +133,15 @@ def _poll_can_align(_context) -> bool:
     return _poll_builtin_tool_available("builtin.align") and not _selection_is_crop_volume()
 
 
-def _poll_can_select(_context) -> bool:
-    return _poll_builtin_tool_available("builtin.select")
+def _poll_can_select(context) -> bool:
+    # The native editor knows about non-Gaussian selection domains (initial
+    # point clouds and cameras), while the context remains the compatibility
+    # fallback for scenes containing Gaussians.
+    has_selectable_content = (
+        _poll_has_gaussians(context)
+        or _poll_builtin_tool_available("builtin.select")
+    )
+    return has_selectable_content and not _selection_is_crop_volume()
 
 
 def _poll_can_cropbox(context) -> bool:
