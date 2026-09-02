@@ -3,14 +3,39 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "py_ui.hpp"
+#include "python/python_runtime.hpp"
+#include "visualizer/post_work_utils.hpp"
 #include "visualizer/preferences.hpp"
 #include "visualizer/theme/theme.hpp"
+#include "visualizer/visualizer.hpp"
+
+#include <functional>
+#include <type_traits>
+#include <utility>
 
 namespace lfs::python {
 
     namespace {
         std::tuple<float, float, float, float> theme_color_to_tuple(const lfs::vis::ThemeColor& c) {
             return {c.x, c.y, c.z, c.w};
+        }
+
+        template <typename F>
+        void invoke_on_viewer_thread(F&& fn) {
+            static_assert(std::is_void_v<std::invoke_result_t<F>>);
+            auto* const viewer = get_visualizer();
+            if (!viewer || viewer->isOnViewerThread()) {
+                std::invoke(std::forward<F>(fn));
+                return;
+            }
+            if (!viewer->acceptsPostedWork())
+                return;
+
+            nb::gil_scoped_release release;
+            vis::post_work_and_wait(
+                [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
+                std::forward<F>(fn),
+                []() {});
         }
     } // namespace
 
@@ -137,9 +162,11 @@ namespace lfs::python {
               "Return the viewport controls style (solid, translucent, or frosted)");
         m.def(
             "set_viewport_chrome_style",
-            [](const std::string& style) {
-                lfs::vis::saveViewportChromeStylePreference(style);
-                lfs::vis::refreshThemePresentation();
+            [](std::string style) {
+                invoke_on_viewer_thread([style = std::move(style)]() {
+                    lfs::vis::saveViewportChromeStylePreference(style);
+                    lfs::vis::refreshThemePresentation();
+                });
             },
             nb::arg("style"), "Set the viewport controls style (solid, translucent, or frosted)");
     }

@@ -14,6 +14,7 @@
 #include <RmlUi/Core/Factory.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <cctype>
 #include <cmath>
@@ -62,6 +63,8 @@ namespace lfs::vis::gui::rml_theme {
         std::string components_rcss_cache;
         bool components_rcss_valid = false;
         std::mutex components_rcss_mutex;
+        std::atomic_bool frosted_glass_available{true};
+        std::atomic_size_t viewport_chrome_runtime_revision{0};
 
         std::string rcssCacheKey(const std::filesystem::path& path) {
             return lfs::core::path_to_utf8(path.lexically_normal());
@@ -111,6 +114,24 @@ namespace lfs::vis::gui::rml_theme {
         components_rcss_cache.clear();
         components_rcss_valid = false;
         base_rcss_cache.clear();
+    }
+
+    std::string effectiveViewportChromeStyle() {
+        std::string style = loadViewportChromeStylePreference();
+        if (style == "frosted" &&
+            !frosted_glass_available.load(std::memory_order_relaxed)) {
+            style = "translucent";
+        }
+        return style;
+    }
+
+    bool setFrostedGlassAvailable(const bool available) {
+        if (frosted_glass_available.exchange(available, std::memory_order_relaxed) == available)
+            return false;
+
+        viewport_chrome_runtime_revision.fetch_add(1, std::memory_order_relaxed);
+        invalidateThemeMediaCache();
+        return true;
     }
 
     namespace {
@@ -509,7 +530,7 @@ namespace lfs::vis::gui::rml_theme {
         std::unordered_map<std::string, std::string> namedThemeTokens(const Theme& t) {
             const auto& p = t.palette;
             const bool is_light = t.isLightTheme();
-            const std::string viewport_chrome_style = loadViewportChromeStylePreference();
+            const std::string viewport_chrome_style = effectiveViewportChromeStyle();
             const bool viewport_chrome_solid = viewport_chrome_style == "solid";
             const bool viewport_chrome_frosted = viewport_chrome_style == "frosted";
             const auto text = colorToRml(p.text);
@@ -823,8 +844,6 @@ namespace lfs::vis::gui::rml_theme {
                                                  colorToRmlAlpha(RmlColor{1, 1, 1, 1}, is_light ? 0.08f : 0.05f));
             }
             const std::string no_shadow = "none";
-            const std::string layered_shadow_1 =
-                t.shadows.enabled ? layeredShadow(t, 1) : no_shadow;
             const std::string layered_shadow_3 =
                 t.shadows.enabled ? layeredShadow(t, 3) : no_shadow;
             const std::string layered_shadow_4 =
@@ -869,13 +888,10 @@ namespace lfs::vis::gui::rml_theme {
                 {"components.scroll_hover", colorToRmlAlpha(p.primary, 0.78f)},
                 {"components.scrollbar_rounding", std::format("{}", scrollbar_rounding)},
                 {"components.title_surface", colorToRml(title_surface_col)},
-                {"layered_shadow.1", layered_shadow_1},
                 {"layered_shadow.3", layered_shadow_3},
                 {"layered_shadow.4", layered_shadow_4},
                 {"asset.icon.check", assetToken("icon/check.png")},
                 {"asset.icon.dropdown_arrow", assetToken("icon/dropdown-arrow.png")},
-                {"panel.body_bg", surface},
-                {"panel.body_bg_or_transparent", colorToRmlAlpha(p.surface, 0.0f)},
                 {"panel.row_hover", colorToRmlAlpha(p.primary, 0.12f)},
                 {"panel.row_selected", colorToRmlAlpha(p.primary, 0.28f)},
                 {"panel.row_selected_hover", colorToRmlAlpha(p.primary, 0.38f)},
@@ -903,7 +919,6 @@ namespace lfs::vis::gui::rml_theme {
                 {"panel.primary_border_faint", colorToRmlAlpha(p.primary, 0.13f)},
                 {"panel.primary_accent", colorToRmlAlpha(p.primary, 0.22f)},
                 {"right_panel.tab_hover", colorToRmlAlpha(p.surface_bright, 0.5f)},
-                {"right_panel.tab_active_bg", colorToRmlAlpha(p.surface_bright, 0.4f)},
                 {"right_panel.tab_shape", right_panel_tab_shape},
                 {"right_panel.tab_label_shape", right_panel_tab_label_shape},
                 {"right_panel.tab_hover_decor", right_panel_tab_hover_decor},
@@ -922,7 +937,6 @@ namespace lfs::vis::gui::rml_theme {
                 {"right_panel.splitter_hover", colorToRmlAlpha(p.info, 0.6f)},
                 {"right_panel.splitter_active", colorToRmlAlpha(p.info, 0.8f)},
                 {"right_panel.border", colorToRmlAlpha(p.border, 0.6f)},
-                {"right_panel.separator", colorToRmlAlpha(p.border, 0.4f)},
                 {"right_panel.resize_hover", colorToRmlAlpha(p.info, 0.3f)},
                 {"right_panel.resize_active", colorToRmlAlpha(p.info, 0.5f)},
                 {"modal.surface", colorToRmlAlpha(p.surface, 0.98f)},
@@ -1188,6 +1202,7 @@ namespace lfs::vis::gui::rml_theme {
         hashOverlay(seed, o);
         hashGradients(seed, t.gradients);
         hashCombine(seed, themePresentationRevision());
+        hashCombine(seed, viewport_chrome_runtime_revision.load(std::memory_order_relaxed));
         return seed;
     }
 

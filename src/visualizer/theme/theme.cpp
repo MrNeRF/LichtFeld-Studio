@@ -1457,7 +1457,8 @@ namespace lfs::vis {
             file >> j;
             t.name = j.value("name", "Custom");
             return applyThemeJson(t, j, true, false);
-        } catch (...) {
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load theme '{}': {}", path, e.what());
             return false;
         }
     }
@@ -1491,7 +1492,9 @@ namespace lfs::vis {
 
                 theme.name = variant->value("name", theme.name);
                 return applyThemeJson(theme, *variant, true, false);
-            } catch (...) {
+            } catch (const std::exception& e) {
+                LOG_WARN("Failed to load theme family variant '{}' from '{}': {}",
+                         variant_mode, lfs::core::path_to_utf8(path), e.what());
                 return false;
             }
         }

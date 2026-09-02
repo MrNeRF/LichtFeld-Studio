@@ -627,8 +627,10 @@ body {
 
 #selection-block .viewport-selection-panel {
     min-width: 0;
-    width: auto;
-    max-width: 100%;
+    /* Window-relative: the panel tracks the viewport width and the sliders
+       grow into it (capped below), instead of collapsing to the icon row. */
+    width: 65%;
+    max-width: 1500dp;
     padding: 5dp 6dp;
     border-radius: 6dp;
     gap: 4dp;

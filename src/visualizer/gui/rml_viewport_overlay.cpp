@@ -140,6 +140,7 @@ namespace lfs::vis::gui {
         append(RenderReason::LodStats, "lod_stats");
         append(RenderReason::LeftDockResize, "left_dock_resize");
         append(RenderReason::ProjectDrag, "project_drag");
+        append(RenderReason::ThemePresentation, "theme_presentation");
         return sources.empty() ? "unknown" : sources;
     }
 
@@ -1046,7 +1047,7 @@ namespace lfs::vis::gui {
         });
     }
 
-    void RmlViewportOverlay::renderFrostedGlass() const {
+    void RmlViewportOverlay::renderFrostedGlass() {
         if (viewport_chrome_style_ != "frosted" || !document_ || !rml_manager_)
             return;
         auto* const renderer = rml_manager_->getVulkanRenderInterface();
@@ -1108,8 +1109,19 @@ namespace lfs::vis::gui {
         for (Rml::Element* panel : panels)
             append_region(panel, 8.0f);
 
-        if (!regions.empty())
-            renderer->RenderFrostedGlass({regions.data(), regions.size()});
+        if (regions.empty())
+            return;
+
+        const bool rendered = renderer->RenderFrostedGlass({regions.data(), regions.size()});
+        if (!rml_theme::setFrostedGlassAvailable(rendered))
+            return;
+
+        if (rendered) {
+            LOG_INFO("Frosted viewport chrome is available; restoring frosted theme tokens");
+        } else {
+            LOG_WARN("Frosted viewport chrome is unavailable; using translucent theme tokens");
+        }
+        markRenderNeeded(RenderReason::ThemePresentation);
     }
 
     void RmlViewportOverlay::renderCached() {

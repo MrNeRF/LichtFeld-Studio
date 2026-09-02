@@ -100,7 +100,7 @@ namespace lfs::vis::gui {
         void reloadResources();
         void render();
         void renderCached();
-        void renderFrostedGlass() const;
+        void renderFrostedGlass();
         void processInput(const PanelInputState& input);
         bool wantsInput() const { return wants_input_; }
         [[nodiscard]] bool needsAnimationFrame() const {
@@ -151,6 +151,7 @@ namespace lfs::vis::gui {
             LeftDockResize = 1u << 16,
             PerfHud = 1u << 17,
             ProjectDrag = 1u << 18,
+            ThemePresentation = 1u << 19,
         };
         void markRenderNeeded(RenderReason reason);
         [[nodiscard]] std::string renderReasonSources() const;

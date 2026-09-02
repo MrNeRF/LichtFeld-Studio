@@ -255,7 +255,7 @@
       "src/visualizer/gui/panels/python_console_panel.cpp:574",
       "src/visualizer/gui/panels/python_console_panel.cpp:576",
       "src/visualizer/gui/rmlui/rml_panel_host.cpp:242",
-      "src/visualizer/gui/rmlui/rml_theme.cpp:757",
+      "src/visualizer/gui/rmlui/rml_theme.cpp:703",
       "src/visualizer/gui/rmlui/rmlui_manager.cpp:300",
       "src/visualizer/gui/rmlui/rmlui_vk_backend.cpp:990",
       "src/visualizer/gui/sequencer_ui_manager.cpp:213",
@@ -267,11 +267,9 @@
       "src/visualizer/selection/selection_service.cpp:2472",
       "src/visualizer/selection/selection_service.cpp:2611",
       "src/visualizer/sequencer/rml_sequencer_panel.cpp:1325",
-      "src/visualizer/theme/theme.cpp:879",
-      "src/visualizer/theme/theme.cpp:1225",
-      "src/visualizer/theme/theme.cpp:1427",
-      "src/visualizer/theme/theme.cpp:1443",
-      "src/visualizer/theme/theme.cpp:1477"
+      "src/visualizer/theme/theme.cpp:626",
+      "src/visualizer/theme/theme.cpp:876",
+      "src/visualizer/theme/theme.cpp:1047"
     ]
   },
   "expected-string": {

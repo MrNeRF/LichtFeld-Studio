@@ -241,6 +241,12 @@ def get_progress_bar_style() -> str:
 def set_progress_bar_style(style: str) -> None:
     """Set the status bar progress style (classic or minecraft)"""
 
+def get_viewport_chrome_style() -> str:
+    """Return the viewport controls style (solid, translucent, or frosted)"""
+
+def set_viewport_chrome_style(style: str) -> None:
+    """Set the viewport controls style (solid, translucent, or frosted)"""
+
 class PanelSpace(enum.Enum):
     SIDE_PANEL = 0
 
@@ -2601,7 +2607,9 @@ def get_theme_mode() -> str:
     """Get the selected family mode: dark, light, or auto"""
 
 def supports_system_theme() -> bool:
-    """Return whether automatic OS light/dark detection is available in this session"""
+    """
+    Return whether automatic OS light/dark detection is available in this session
+    """
 
 def themes() -> list:
     """Get available theme presets with stable ids and UI metadata"""

@@ -1547,6 +1547,9 @@ def test_viewport_toolbar_uses_theme_glass_without_backdrop_filter():
     resolver = (
         project_root / "src/visualizer/gui/rmlui/rml_theme.cpp"
     ).read_text(encoding="utf-8")
+    viewport_overlay = (
+        project_root / "src/visualizer/gui/rml_viewport_overlay.cpp"
+    ).read_text(encoding="utf-8")
 
     toolbar_start = rcss.index(".toolbar-vertical {")
     toolbar_end = rcss.index("\n}", toolbar_start)
@@ -1574,9 +1577,9 @@ def test_viewport_toolbar_uses_theme_glass_without_backdrop_filter():
     selection_panel_start = rcss.index("#selection-block .viewport-selection-panel {")
     selection_panel_end = rcss.index("\n}", selection_panel_start)
     selection_panel_rule = rcss[selection_panel_start:selection_panel_end]
-    assert "width: auto;" in selection_panel_rule
-    assert "max-width: 100%;" in selection_panel_rule
-    assert "width: 65%;" not in selection_panel_rule
+    assert "width: 65%;" in selection_panel_rule
+    assert "max-width: 1500dp;" in selection_panel_rule
+    assert "instead of collapsing to the icon row" in selection_panel_rule
 
     for token in (
         "viewport.toolbar_glass_decor",
@@ -1617,6 +1620,46 @@ def test_viewport_toolbar_uses_theme_glass_without_backdrop_filter():
 
     assert "backdrop-filter" not in theme_rcss
     assert "filter:" not in theme_rcss
+    assert "effectiveViewportChromeStyle()" in resolver
+    assert "setFrostedGlassAvailable(rendered)" in viewport_overlay
+    assert "markRenderNeeded(RenderReason::ThemePresentation)" in viewport_overlay
+
+    for unused_token in (
+        "layered_shadow.1",
+        "panel.body_bg",
+        "panel.body_bg_or_transparent",
+        "right_panel.tab_active_bg",
+        "right_panel.separator",
+    ):
+        assert f'{{"{unused_token}"' not in resolver
+
+
+def test_python_theme_mutations_are_marshaled_to_viewer_thread():
+    project_root = Path(__file__).parent.parent.parent
+    py_ui = (project_root / "src/python/lfs/py_ui.cpp").read_text(encoding="utf-8")
+    py_ui_theme = (
+        project_root / "src/python/lfs/py_ui_theme.cpp"
+    ).read_text(encoding="utf-8")
+    ui_stub = (
+        project_root / "src/python/stubs/lichtfeld/ui/__init__.pyi"
+    ).read_text(encoding="utf-8")
+
+    for source in (py_ui, py_ui_theme):
+        assert "viewer->isOnViewerThread()" in source
+        assert "nb::gil_scoped_release release;" in source
+        assert "vis::post_work_and_wait(" in source
+
+    for source, binding in (
+        (py_ui, "set_theme"),
+        (py_ui, "set_theme_family"),
+        (py_ui_theme, "set_viewport_chrome_style"),
+    ):
+        start = source.index(f'"{binding}",')
+        end = source.index("nb::arg", start)
+        assert "invoke_on_viewer_thread(" in source[start:end]
+
+    assert "def get_viewport_chrome_style() -> str:" in ui_stub
+    assert "def set_viewport_chrome_style(style: str) -> None:" in ui_stub
 
 
 def test_empty_viewport_rejects_independent_split_activation_and_hides_orphan_ui():

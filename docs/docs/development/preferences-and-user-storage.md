@@ -68,11 +68,13 @@ settings, keymaps, and the Asset Manager catalog are published with
 same-directory atomic replacement so an interrupted write cannot expose a
 partially written destination.
 
-The `theme` preference stores a v2 family selection as `family_id:mode`, where
-`mode` is `dark`, `light`, or `auto`. Legacy preset ids are still accepted on
-read. Theme JSON files themselves are packaged application assets: the current
-user tree has no custom-theme install directory, and no preference reset or
-migration operation should imply that one exists.
+Family-aware theme selectors store the `theme` preference as `family_id:mode`,
+where `mode` is `dark`, `light`, or `auto`. Compatibility paths, including the
+legacy `set_theme` API and the Appearance section reset, may instead store a
+stable preset id. Both forms are accepted on read. Theme JSON files themselves
+are packaged application assets: the current user tree has no custom-theme
+install directory, and no preference reset or migration operation should imply
+that one exists.
 
 `viewport_chrome_style` is intentionally separate from the theme manifest. Its
 default is `translucent`; resetting Appearance restores that value. The chosen

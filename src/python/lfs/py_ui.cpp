@@ -51,11 +51,13 @@
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/operator/operator_context.hpp"
 #include "visualizer/operator/operator_registry.hpp"
+#include "visualizer/post_work_utils.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/theme/theme.hpp"
 #include "visualizer/tools/unified_tool_registry.hpp"
 #include "visualizer/training/training_manager.hpp"
+#include "visualizer/visualizer.hpp"
 #include <RmlUi/Core/Core.h>
 #include <typeinfo>
 
@@ -75,6 +77,7 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <future>
 #include <glm/glm.hpp>
 #include <memory>
@@ -82,8 +85,10 @@
 #include <stack>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 #ifdef _WIN32
 #include <shellapi.h>
@@ -112,6 +117,39 @@ namespace lfs::python {
         constexpr float ALERT_BG_ALPHA = 0.15f;
         constexpr int PROP_ENUM_COLOR_COUNT = 3;
         constexpr float BOX_BORDER_SIZE = 1.0f;
+
+        template <typename F>
+        auto invoke_on_viewer_thread(F&& fn, std::invoke_result_t<F> fallback) {
+            auto* const viewer = get_visualizer();
+            if (!viewer || viewer->isOnViewerThread())
+                return std::invoke(std::forward<F>(fn));
+            if (!viewer->acceptsPostedWork())
+                return fallback;
+
+            nb::gil_scoped_release release;
+            return vis::post_work_and_wait(
+                [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
+                std::forward<F>(fn),
+                [fallback]() { return fallback; });
+        }
+
+        template <typename F>
+        void invoke_on_viewer_thread(F&& fn) {
+            static_assert(std::is_void_v<std::invoke_result_t<F>>);
+            auto* const viewer = get_visualizer();
+            if (!viewer || viewer->isOnViewerThread()) {
+                std::invoke(std::forward<F>(fn));
+                return;
+            }
+            if (!viewer->acceptsPostedWork())
+                return;
+
+            nb::gil_scoped_release release;
+            vis::post_work_and_wait(
+                [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
+                std::forward<F>(fn),
+                []() {});
+        }
 
         // Icon cache for Python toolbar
         std::unordered_map<std::string, uint64_t> g_icon_cache;
@@ -4891,10 +4929,11 @@ namespace lfs::python {
         // Theme control (for Python-driven View menu)
         m.def(
             "set_theme",
-            [](const std::string& name) {
-                if (vis::setThemeByName(name)) {
-                    vis::saveThemePreferenceName(name);
-                }
+            [](std::string name) {
+                invoke_on_viewer_thread([name = std::move(name)]() {
+                    if (vis::setThemeByName(name))
+                        vis::saveThemePreferenceName(name);
+                });
             },
             nb::arg("name"), "Set theme by stable theme id");
 
@@ -4905,8 +4944,12 @@ namespace lfs::python {
 
         m.def(
             "set_theme_family",
-            [](const std::string& family_id, const std::string& mode) {
-                return vis::setThemeFamilySelection(family_id, mode);
+            [](std::string family_id, std::string mode) {
+                return invoke_on_viewer_thread(
+                    [family_id = std::move(family_id), mode = std::move(mode)]() {
+                        return vis::setThemeFamilySelection(family_id, mode);
+                    },
+                    false);
             },
             nb::arg("family_id"),
             nb::arg("mode"),
