@@ -2090,6 +2090,10 @@
         }
       }
     },
+    "computing": {
+      "title": "Computing histogram…",
+      "message": "The distribution will appear as soon as the data is ready."
+    },
     "delete_failed": {
       "title": "Delete Failed",
       "status": "Delete failed: {message}",

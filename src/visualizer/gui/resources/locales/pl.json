@@ -2090,6 +2090,10 @@
         }
       }
     },
+    "computing": {
+      "title": "Obliczanie histogramu…",
+      "message": "Rozkład pojawi się, gdy tylko dane będą gotowe."
+    },
     "delete_failed": {
       "title": "Usuwanie nie powiodło się",
       "status": "Usuwanie nie powiodło się: {message}",

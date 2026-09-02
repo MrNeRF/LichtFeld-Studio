@@ -2090,6 +2090,10 @@
         }
       }
     },
+    "computing": {
+      "title": "Histogram wordt berekend…",
+      "message": "De verdeling verschijnt zodra de gegevens klaar zijn."
+    },
     "delete_failed": {
       "title": "Verwijderen mislukt",
       "status": "Verwijderen mislukt: {message}",

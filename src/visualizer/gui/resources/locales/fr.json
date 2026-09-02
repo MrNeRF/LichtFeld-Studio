@@ -2090,6 +2090,10 @@
         }
       }
     },
+    "computing": {
+      "title": "Calcul de l'histogramme…",
+      "message": "La distribution apparaîtra dès que les données seront prêtes."
+    },
     "delete_failed": {
       "title": "Échec de la suppression",
       "status": "Échec de la suppression : {message}",

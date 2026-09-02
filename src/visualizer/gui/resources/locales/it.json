@@ -2090,6 +2090,10 @@
         }
       }
     },
+    "computing": {
+      "title": "Calcolo dell'istogramma…",
+      "message": "La distribuzione apparirà non appena i dati saranno pronti."
+    },
     "delete_failed": {
       "title": "Eliminazione non riuscita",
       "status": "Eliminazione non riuscita: {message}",

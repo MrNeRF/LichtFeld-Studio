@@ -2090,6 +2090,10 @@
         }
       }
     },
+    "computing": {
+      "title": "正在计算直方图…",
+      "message": "数据准备就绪后将显示分布。"
+    },
     "delete_failed": {
       "title": "删除失败",
       "status": "删除失败：{message}",

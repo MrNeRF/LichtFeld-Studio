@@ -2090,6 +2090,10 @@
         }
       }
     },
+    "computing": {
+      "title": "히스토그램 계산 중…",
+      "message": "데이터가 준비되는 즉시 분포가 표시됩니다."
+    },
     "delete_failed": {
       "title": "삭제 실패",
       "status": "삭제 실패: {message}",

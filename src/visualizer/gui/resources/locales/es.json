@@ -2090,6 +2090,10 @@
         }
       }
     },
+    "computing": {
+      "title": "Calculando el histograma…",
+      "message": "La distribución aparecerá en cuanto los datos estén listos."
+    },
     "delete_failed": {
       "title": "Error al eliminar",
       "status": "Error al eliminar: {message}",
