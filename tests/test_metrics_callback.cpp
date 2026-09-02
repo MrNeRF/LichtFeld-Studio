@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/image_io.hpp"
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
 #include "training/dataset.hpp"
@@ -12,7 +13,6 @@
 #include <cmath>
 #include <expected>
 #include <filesystem>
-#include <fstream>
 #include <gtest/gtest.h>
 #include <memory>
 #include <string>
@@ -26,18 +26,10 @@ TEST(MetricsEvaluator, UsesRenderCallback) {
     const auto output_dir = std::filesystem::temp_directory_path() /
                             ("lfs_metrics_callback_" + std::to_string(unique_suffix));
     ASSERT_TRUE(std::filesystem::create_directories(output_dir));
-    const auto image_path = output_dir / "target.ppm";
-
-    {
-        std::ofstream image(image_path, std::ios::binary);
-        ASSERT_TRUE(image.is_open());
-        image << "P6\n"
-              << width << ' ' << height << "\n255\n";
-        const std::vector<unsigned char> pixels(
-            static_cast<std::size_t>(width * height * 3), 128);
-        image.write(reinterpret_cast<const char*>(pixels.data()),
-                    static_cast<std::streamsize>(pixels.size()));
-    }
+    const auto image_path = output_dir / "target.png";
+    const std::vector<unsigned char> pixels(
+        static_cast<std::size_t>(width * height * 3), 128);
+    ASSERT_TRUE(lfs::core::save_png(image_path, pixels.data(), width, height, 3, 8, 0));
 
     auto rotation = lfs::core::Tensor::from_vector(
         {1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F},
@@ -55,7 +47,7 @@ TEST(MetricsEvaluator, UsesRenderCallback) {
         lfs::core::Tensor{},
         lfs::core::Tensor{},
         lfs::core::CameraModelType::PINHOLE,
-        "target.ppm",
+        "target.png",
         image_path,
         std::filesystem::path{},
         width,
