@@ -237,6 +237,7 @@ namespace lfs::vis {
             };
             struct SplatLoadState {
                 JobHandle job;
+                bool replace_first = false;
                 std::atomic<bool> worker_complete{false};
                 mutable std::mutex mutex;
                 std::deque<SplatLoadCompletion> completions;

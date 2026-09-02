@@ -120,9 +120,9 @@ namespace lfs::python {
             nb::object callback;
 
             void operator()(float progress, const std::string& message) const {
+                nb::gil_scoped_acquire gil;
                 if (!callback)
                     return;
-                nb::gil_scoped_acquire gil;
                 try {
                     callback(progress, message);
                 } catch (const std::exception& e) {
@@ -135,9 +135,9 @@ namespace lfs::python {
             nb::object callback;
 
             bool operator()(float progress, const std::string& stage) const {
+                nb::gil_scoped_acquire gil;
                 if (!callback)
                     return true;
-                nb::gil_scoped_acquire gil;
                 try {
                     nb::object result = callback(progress, stage);
                     if (nb::isinstance<nb::bool_>(result))

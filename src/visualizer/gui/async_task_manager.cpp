@@ -936,6 +936,7 @@ namespace lfs::vis::gui {
             return false;
 
         splat_load_state_.job = *created;
+        splat_load_state_.replace_first = replace_first;
         splat_load_state_.worker_complete.store(false, std::memory_order_release);
         {
             const std::lock_guard lock(splat_load_state_.mutex);
@@ -948,7 +949,7 @@ namespace lfs::vis::gui {
                     .path = std::move(paths[index]),
                     .name_hint = index < name_hints.size() ? std::move(name_hints[index]) : std::string{},
                     .is_visible = index >= visibility.size() || visibility[index],
-                    .replace_scene = replace_first});
+                    .replace_scene = replace_first && index == 0});
             }
         }
 
@@ -1049,6 +1050,12 @@ namespace lfs::vis::gui {
                              LOC(lichtfeld::Strings::Runtime::TASK_APPLYING));
                 const auto attach_started_at = std::chrono::steady_clock::now();
                 std::string node_name;
+                if (splat_load_state_.replace_first && splat_load_state_.loaded_count == 0) {
+                    // A replace-first batch replaces the scene with its first
+                    // file that succeeds, including a later request when
+                    // earlier requests failed.
+                    completion.request.replace_scene = true;
+                }
                 if (completion.request.replace_scene && splat_load_state_.loaded_count == 0) {
                     node_name = scene_manager->attachLoadedSplatFile(
                         completion.request.path,
@@ -1991,6 +1998,8 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::cancelImport() {
+        const auto splat_job = splat_load_state_.job;
+        const auto import_job = import_state_.job;
         const bool had_activity = isImporting() ||
                                   import_state_.show_completion.load() ||
                                   import_state_.thread.has_value() ||
@@ -2019,11 +2028,17 @@ namespace lfs::vis::gui {
             splat_load_state_.thread.reset();
         }
 
-        if (const auto state =
-                jobs_.update(import_state_.job);
-            state && state->running()) {
-            jobs_.canceled(import_state_.job);
-        }
+        const auto cancel_if_running = [this](const JobHandle handle) {
+            if (const auto state = jobs_.update(handle); state && state->running())
+                jobs_.canceled(handle);
+        };
+        cancel_if_running(import_job);
+        if (splat_job && splat_job != import_job)
+            cancel_if_running(splat_job);
+        if (splat_job)
+            jobs_.free(splat_job);
+        if (import_job && import_job != splat_job)
+            jobs_.free(import_job);
         import_state_.load_complete.store(false);
         import_state_.show_completion.store(false);
         splat_load_state_.worker_complete.store(false, std::memory_order_release);
@@ -2043,6 +2058,7 @@ namespace lfs::vis::gui {
             splat_load_state_.completions.clear();
             splat_load_state_.requests.clear();
         }
+        splat_load_state_.replace_first = false;
         splat_load_state_.job = {};
         import_state_.job = {};
         PanelRegistry::instance().invalidate_poll_cache();
