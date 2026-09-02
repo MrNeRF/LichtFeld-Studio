@@ -2118,6 +2118,10 @@
         "title": "Metriek niet beschikbaar",
         "message": "De geselecteerde metriek kon niet uit het gecombineerde Gaussische model worden gelezen."
       },
+      "compute_failed": {
+        "title": "Histogram mislukt",
+        "message": "Histogramberekening mislukt: {error}"
+      },
       "no_visible_values": {
         "title": "Geen zichtbare waarden",
         "message": "De geselecteerde metriek bevat geen zichtbare eindige monsters om weer te geven."

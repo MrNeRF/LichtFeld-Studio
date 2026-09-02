@@ -2118,6 +2118,10 @@
         "title": "Métrique indisponible",
         "message": "La métrique sélectionnée n'a pas pu être lue depuis le modèle de gaussiennes combiné."
       },
+      "compute_failed": {
+        "title": "Échec de l'histogramme",
+        "message": "Échec du calcul de l'histogramme : {error}"
+      },
       "no_visible_values": {
         "title": "Aucune valeur visible",
         "message": "La métrique sélectionnée ne contient aucun échantillon fini visible à afficher."

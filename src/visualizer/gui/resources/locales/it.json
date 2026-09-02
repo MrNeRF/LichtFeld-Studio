@@ -2118,6 +2118,10 @@
         "title": "Metrica non disponibile",
         "message": "Non è stato possibile leggere la metrica selezionata dal modello combinato di Gaussiane."
       },
+      "compute_failed": {
+        "title": "Istogramma non riuscito",
+        "message": "Calcolo dell'istogramma non riuscito: {error}"
+      },
       "no_visible_values": {
         "title": "Nessun valore visibile",
         "message": "La metrica selezionata non contiene campioni finiti e visibili da visualizzare."

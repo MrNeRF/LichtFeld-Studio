@@ -2118,6 +2118,10 @@
         "title": "指标不可用",
         "message": "无法从合并的高斯模型中读取所选指标。"
       },
+      "compute_failed": {
+        "title": "直方图计算失败",
+        "message": "直方图计算失败：{error}"
+      },
       "no_visible_values": {
         "title": "无可见值",
         "message": "所选指标不包含任何可显示的有限样本。"

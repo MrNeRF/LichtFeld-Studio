@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -42,6 +43,7 @@ RML_KM_META = 1 << 3
 _HISTOGRAM_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="lfs-histogram")
 _HISTOGRAM_DEBOUNCE_SECONDS = 0.025
 _HISTOGRAM_CACHE_LIMIT = 4
+_LOGGER = logging.getLogger(__name__)
 
 
 def _tr(key: str, fallback: str) -> str:
@@ -264,6 +266,7 @@ class HistogramPanel(Panel):
         self._histogram_compute_future: Future | None = None
         self._histogram_compute_timer: threading.Timer | None = None
         self._histogram_compute_token = 0
+        self._histogram_compute_cancel_event = threading.Event()
         self._compute_executor = _HISTOGRAM_EXECUTOR
         self._ui_scheduler = None
         self._computing = False
@@ -1196,6 +1199,7 @@ class HistogramPanel(Panel):
             self._handle.dirty_all()
 
     def _cancel_histogram_compute(self):
+        self._histogram_compute_cancel_event.set()
         self._histogram_compute_token += 1
         if self._histogram_compute_timer is not None:
             self._histogram_compute_timer.cancel()
@@ -1207,8 +1211,9 @@ class HistogramPanel(Panel):
     def _queue_histogram_compute(self, scene, model, cache_key, scope_ids, *, view_only=False):
         del view_only  # The worker always computes the requested view; this keeps UI work bounded.
         self._cancel_histogram_compute()
-        self._histogram_compute_token += 1
         token = self._histogram_compute_token
+        cancel_event = threading.Event()
+        self._histogram_compute_cancel_event = cancel_event
         metric_id = self._metric_id
         bin_count = self._histogram_bin_count
         compare_metric_id = self._compare_metric_id
@@ -1221,7 +1226,7 @@ class HistogramPanel(Panel):
         )
 
         def submit():
-            if token != self._histogram_compute_token:
+            if token != self._histogram_compute_token or cancel_event.is_set():
                 return
             self._histogram_compute_timer = None
             try:
@@ -1237,6 +1242,7 @@ class HistogramPanel(Panel):
                     custom_range,
                     compare_y_range,
                     scope_ids,
+                    cancel_event,
                 )
             except Exception as exc:
                 self._schedule_histogram_result(token, cache_key, {"kind": "error", "error": exc})
@@ -1258,20 +1264,43 @@ class HistogramPanel(Panel):
         self._schedule_histogram_result(token, cache_key, result)
 
     def _schedule_histogram_result(self, token: int, cache_key: tuple, result: dict[str, object]):
+        if result.get("kind") == "error":
+            error = result.get("error")
+            error_text = str(error) if error is not None else "Unknown error"
+            if not error_text:
+                error_text = type(error).__name__ if error is not None else "Unknown error"
+            _LOGGER.warning("Histogram computation failed: %s", error_text)
+
         def apply_result():
             if token != self._histogram_compute_token or cache_key != self._histogram_cache_key(
                 int(lf.get_scene_generation()), self._selection_generation_value()
             ):
                 return
+            kind = result.get("kind")
+            if kind == "cancelled":
+                return
             self._histogram_compute_future = None
-            if result.get("kind") == "ok":
+            if kind == "ok":
                 self._histogram_cache[cache_key] = result
                 self._histogram_cache.move_to_end(cache_key)
                 while len(self._histogram_cache) > _HISTOGRAM_CACHE_LIMIT:
                     self._histogram_cache.popitem(last=False)
                 self._apply_histogram_result(result)
-            elif result.get("kind") == "empty":
+            elif kind == "empty":
                 self._apply_empty_histogram_result(result)
+            elif kind == "error":
+                error = result.get("error")
+                error_text = str(error) if error is not None else "Unknown error"
+                if not error_text:
+                    error_text = type(error).__name__ if error is not None else "Unknown error"
+                self._set_empty(
+                    _tr("histogram.empty.compute_failed.title", "Histogram failed"),
+                    _trf(
+                        "histogram.empty.compute_failed.message",
+                        "Histogram computation failed: {error}",
+                        error=error_text,
+                    ),
+                )
             else:
                 self._set_empty(
                     _tr("histogram.empty.metric_unavailable.title", "Metric unavailable"),
@@ -1307,29 +1336,51 @@ class HistogramPanel(Panel):
         custom_range: tuple[float | None, float | None],
         compare_y_range: tuple[float | None, float | None],
         scope_ids,
+        cancel_event: threading.Event | None = None,
     ) -> dict[str, object]:
         """Compute the complete snapshot away from the UI thread."""
+        if HistogramPanel._histogram_compute_cancelled(cancel_event):
+            return {"kind": "cancelled"}
         panel = HistogramPanel.__new__(HistogramPanel)
         panel._metric_id = metric_id
-        values = panel._extract_metric_values(scene, model, metric_id)
+        values = panel._extract_metric_values(scene, model, metric_id, cancel_event)
+        if HistogramPanel._histogram_compute_cancelled(cancel_event):
+            return {"kind": "cancelled"}
         if values is None:
-            return {"kind": "error"}
+            return {
+                "kind": "error",
+                "error": RuntimeError(f"Metric extraction returned no values for '{metric_id}'"),
+            }
 
         visible_mask = panel._extract_visible_mask(model, values)
-        scope_mask = panel._selection_scope_mask(scene, values, scope_ids)
+        if HistogramPanel._histogram_compute_cancelled(cancel_event):
+            return {"kind": "cancelled"}
+        scope_mask = panel._selection_scope_mask(scene, values, scope_ids, cancel_event)
+        if HistogramPanel._histogram_compute_cancelled(cancel_event):
+            return {"kind": "cancelled"}
         scope_active = scope_mask is not None
         if scope_mask is not None:
             visible_mask = scope_mask if visible_mask is None else visible_mask & scope_mask
         finite_mask = values.isfinite()
         if visible_mask is not None and visible_mask.shape == values.shape:
             finite_mask = finite_mask & visible_mask
-        primary = panel._build_series_result(values, finite_mask, metric_id, bin_count, custom_range)
+        primary = panel._build_series_result(
+            values, finite_mask, metric_id, bin_count, custom_range, cancel_event
+        )
+        if HistogramPanel._histogram_compute_cancelled(cancel_event):
+            return {"kind": "cancelled"}
+        if isinstance(primary, dict) and primary.get("kind") == "cancelled":
+            return primary
         if primary is None:
             return {"kind": "empty", "scope_active": scope_active}
 
         compare = None
         if compare_metric_id:
-            compare_values = panel._extract_metric_values(scene, model, compare_metric_id)
+            compare_values = panel._extract_metric_values(
+                scene, model, compare_metric_id, cancel_event
+            )
+            if HistogramPanel._histogram_compute_cancelled(cancel_event):
+                return {"kind": "cancelled"}
             if compare_values is None or compare_values.shape != values.shape:
                 compare = {"kind": "unavailable"}
             else:
@@ -1346,24 +1397,45 @@ class HistogramPanel(Panel):
                     compare_y_bin_count,
                     custom_range,
                     compare_y_range,
+                    cancel_event,
                 )
+                if HistogramPanel._histogram_compute_cancelled(cancel_event):
+                    return {"kind": "cancelled"}
+                if isinstance(compare, dict) and compare.get("kind") == "cancelled":
+                    return compare
+        if HistogramPanel._histogram_compute_cancelled(cancel_event):
+            return {"kind": "cancelled"}
         return {"kind": "ok", "primary": primary, "compare": compare}
 
-    def _build_series_result(self, values, finite_mask, metric_id, bin_count, custom_range):
+    @staticmethod
+    def _histogram_compute_cancelled(cancel_event: threading.Event | None) -> bool:
+        return cancel_event is not None and cancel_event.is_set()
+
+    def _build_series_result(
+        self, values, finite_mask, metric_id, bin_count, custom_range, cancel_event=None
+    ):
         values_cpu = values.contiguous().cpu().to("float32")
         finite_mask_cpu = finite_mask.contiguous().cpu().to("bool")
+        if self._histogram_compute_cancelled(cancel_event):
+            return {"kind": "cancelled"}
         valid_values = values_cpu[finite_mask_cpu]
         if int(valid_values.numel) == 0:
             return None
         valid_np = np.asarray(valid_values.numpy(copy=True), dtype=np.float32).reshape(-1)
+        if self._histogram_compute_cancelled(cancel_event):
+            return {"kind": "cancelled"}
         sorted_np = np.sort(valid_np)
         auto_min, auto_max = self._histogram_bounds(valid_values, metric_id)
+        if self._histogram_compute_cancelled(cancel_event):
+            return {"kind": "cancelled"}
         histogram_min, histogram_max = HistogramPanel._resolve_and_snap_bounds(
             valid_values, auto_min, auto_max, custom_range
         )
         counts, edges = HistogramPanel._histogram_counts_numpy(
             valid_np, histogram_min, histogram_max, int(bin_count)
         )
+        if self._histogram_compute_cancelled(cancel_event):
+            return {"kind": "cancelled"}
         bin_indices = HistogramPanel._bin_indices_numpy(
             np.asarray(values_cpu.numpy(copy=True), dtype=np.float32).reshape(-1),
             np.asarray(finite_mask_cpu.numpy(copy=True), dtype=bool).reshape(-1),
@@ -1371,6 +1443,8 @@ class HistogramPanel(Panel):
             histogram_max,
             int(bin_count),
         )
+        if self._histogram_compute_cancelled(cancel_event):
+            return {"kind": "cancelled"}
         sorted_values = lf.Tensor.from_numpy(sorted_np.astype(np.float32, copy=False))
         return {
             "values": values_cpu,
@@ -1403,18 +1477,25 @@ class HistogramPanel(Panel):
         y_bin_count,
         custom_range,
         y_custom_range,
+        cancel_event=None,
     ):
         x_cpu = x_values.contiguous().cpu().to("float32")
         y_cpu = y_values.contiguous().cpu().to("float32")
         mask_cpu = finite_mask.contiguous().cpu().to("bool")
+        if self._histogram_compute_cancelled(cancel_event):
+            return {"kind": "cancelled"}
         x_valid = x_cpu[mask_cpu]
         y_valid = y_cpu[mask_cpu]
         if int(x_valid.numel) == 0:
             return {"kind": "empty"}
         x_np = np.asarray(x_valid.numpy(copy=True), dtype=np.float32).reshape(-1)
         y_np = np.asarray(y_valid.numpy(copy=True), dtype=np.float32).reshape(-1)
+        if self._histogram_compute_cancelled(cancel_event):
+            return {"kind": "cancelled"}
         x_auto_min, x_auto_max = self._histogram_bounds(x_valid, x_metric_id)
         y_auto_min, y_auto_max = self._histogram_bounds(y_valid, y_metric_id)
+        if self._histogram_compute_cancelled(cancel_event):
+            return {"kind": "cancelled"}
         x_min, x_max = HistogramPanel._resolve_and_snap_bounds(x_valid, x_auto_min, x_auto_max, custom_range)
         y_min, y_max = HistogramPanel._resolve_and_snap_bounds(y_valid, y_auto_min, y_auto_max, y_custom_range)
         x_edges = HistogramPanel._compute_bin_edges(x_min, x_max, int(x_bin_count))
@@ -1426,9 +1507,23 @@ class HistogramPanel(Panel):
         heatmap = np.histogram2d(
             x_np[in_range], y_np[in_range], bins=[x_edges, y_edges]
         )[0].T.astype(np.int64, copy=False).reshape(-1)
+        if self._histogram_compute_cancelled(cancel_event):
+            return {"kind": "cancelled"}
         all_x = np.asarray(x_cpu.numpy(copy=True), dtype=np.float32).reshape(-1)
         all_y = np.asarray(y_cpu.numpy(copy=True), dtype=np.float32).reshape(-1)
         mask_np = np.asarray(mask_cpu.numpy(copy=True), dtype=bool).reshape(-1)
+        if self._histogram_compute_cancelled(cancel_event):
+            return {"kind": "cancelled"}
+        x_bin_indices = self._bin_indices_numpy(
+            all_x, mask_np, x_min, x_max, int(x_bin_count)
+        )
+        if self._histogram_compute_cancelled(cancel_event):
+            return {"kind": "cancelled"}
+        y_bin_indices = self._bin_indices_numpy(
+            all_y, mask_np, y_min, y_max, int(y_bin_count)
+        )
+        if self._histogram_compute_cancelled(cancel_event):
+            return {"kind": "cancelled"}
         return {
             "kind": "ok",
             "x_values": x_cpu,
@@ -1446,8 +1541,8 @@ class HistogramPanel(Panel):
             "x_max": x_max,
             "y_min": y_min,
             "y_max": y_max,
-            "x_bin_indices": HistogramPanel._bin_indices_numpy(all_x, mask_np, x_min, x_max, int(x_bin_count)),
-            "y_bin_indices": HistogramPanel._bin_indices_numpy(all_y, mask_np, y_min, y_max, int(y_bin_count)),
+            "x_bin_indices": x_bin_indices,
+            "y_bin_indices": y_bin_indices,
             "counts": [int(value) for value in heatmap.tolist()],
             "x_edges": x_edges,
             "y_edges": y_edges,
@@ -1777,14 +1872,22 @@ class HistogramPanel(Panel):
             list(self._build_bin_records(self._hist_counts, self._hist_edges)),
         )
 
-    def _extract_metric_values(self, scene, model, metric_id: str | None = None) -> lf.Tensor | None:
+    def _extract_metric_values(
+        self,
+        scene,
+        model,
+        metric_id: str | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> lf.Tensor | None:
         metric_id = self._metric_id if metric_id is None else metric_id
         try:
+            if self._histogram_compute_cancelled(cancel_event):
+                return None
             if metric_id == "opacity":
                 return self._float_tensor(model.get_opacity()).reshape([-1])
 
             if metric_id in {"position_x", "position_y", "position_z", "world_distance", "distance"}:
-                world_means = self._extract_world_space_means(scene, model)
+                world_means = self._extract_world_space_means(scene, model, cancel_event)
                 if metric_id == "position_x":
                     return world_means[:, 0]
                 if metric_id == "position_y":
@@ -1816,15 +1919,19 @@ class HistogramPanel(Panel):
         except Exception:
             return None
 
-    def _extract_world_space_means(self, scene, model) -> lf.Tensor:
+    def _extract_world_space_means(
+        self, scene, model, cancel_event: threading.Event | None = None
+    ) -> lf.Tensor:
         means = self._float_tensor(model.get_means()).reshape([-1, 3])
         if means.numel == 0:
             return lf.Tensor.zeros([0, 3], dtype="float32", device=self._device_string(means))
 
-        world_means = self._world_space_means(scene, means)
+        world_means = self._world_space_means(scene, means, cancel_event)
         return means if world_means is None else world_means
 
-    def _world_space_means(self, scene, means: lf.Tensor) -> lf.Tensor | None:
+    def _world_space_means(
+        self, scene, means: lf.Tensor, cancel_event: threading.Event | None = None
+    ) -> lf.Tensor | None:
         nodes = self._visible_splat_nodes(scene)
         if not nodes:
             return None
@@ -1833,6 +1940,8 @@ class HistogramPanel(Panel):
         offset = 0
 
         for node in nodes:
+            if self._histogram_compute_cancelled(cancel_event):
+                return None
             count = int(getattr(node, "gaussian_count", 0) or 0)
             if count <= 0:
                 continue
@@ -2194,7 +2303,13 @@ class HistogramPanel(Panel):
             scope_ids.add(node_id)
         return scope_ids or None
 
-    def _selection_scope_mask(self, scene, reference: lf.Tensor, scope_ids=None) -> lf.Tensor | None:
+    def _selection_scope_mask(
+        self,
+        scene,
+        reference: lf.Tensor,
+        scope_ids=None,
+        cancel_event: threading.Event | None = None,
+    ) -> lf.Tensor | None:
         if scope_ids is None:
             scope_ids = self._selection_scope_node_ids()
         if not scope_ids:
@@ -2206,6 +2321,8 @@ class HistogramPanel(Panel):
             return None
         node_by_id: dict[int, object] = {}
         for node in nodes:
+            if self._histogram_compute_cancelled(cancel_event):
+                return None
             try:
                 node_by_id[int(node.id)] = node
             except Exception:
@@ -2215,6 +2332,8 @@ class HistogramPanel(Panel):
             visited: set[int] = set()
             current = node_id
             while current >= 0 and current not in visited:
+                if self._histogram_compute_cancelled(cancel_event):
+                    return False
                 if current in scope_ids:
                     return True
                 visited.add(current)
@@ -2237,6 +2356,8 @@ class HistogramPanel(Panel):
         counted = 0
         any_in_scope = False
         for node in visible_nodes:
+            if self._histogram_compute_cancelled(cancel_event):
+                return None
             count = int(getattr(node, "gaussian_count", 0) or 0)
             if count <= 0:
                 continue

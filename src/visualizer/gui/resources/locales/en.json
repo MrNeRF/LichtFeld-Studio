@@ -2118,6 +2118,10 @@
         "title": "Metric unavailable",
         "message": "The selected metric could not be read from the combined Gaussian model."
       },
+      "compute_failed": {
+        "title": "Histogram failed",
+        "message": "Histogram computation failed: {error}"
+      },
       "no_visible_values": {
         "title": "No visible values",
         "message": "The selected metric does not contain any visible finite samples to visualize."

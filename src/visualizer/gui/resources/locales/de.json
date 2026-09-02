@@ -2118,6 +2118,10 @@
         "title": "Metrik nicht verfügbar",
         "message": "Die ausgewählte Metrik konnte nicht aus dem kombinierten Gauß-Modell gelesen werden."
       },
+      "compute_failed": {
+        "title": "Histogramm fehlgeschlagen",
+        "message": "Histogrammberechnung fehlgeschlagen: {error}"
+      },
       "no_visible_values": {
         "title": "Keine sichtbaren Werte",
         "message": "Die ausgewählte Metrik enthält keine sichtbaren endlichen Stichproben zur Darstellung."
