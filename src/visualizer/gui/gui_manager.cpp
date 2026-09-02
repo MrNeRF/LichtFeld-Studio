@@ -7098,7 +7098,14 @@ namespace lfs::vis::gui {
         add(isViewportExportLocked(), "viewport_export");
         add(static_cast<bool>(rmlui_manager_.dragPayload()), "drag_payload");
         add(startup_overlay_.needsAnimationFrame(), "startup_overlay");
-        add(rml_modal_overlay_ && rml_modal_overlay_->needsAnimationFrame(), "modal_overlay");
+        if (rml_modal_overlay_) {
+            if (const auto modal_demand = rml_modal_overlay_->animationDemandDescription();
+                !modal_demand.empty()) {
+                if (!result.empty())
+                    result += ',';
+                result += modal_demand;
+            }
+        }
         add(rml_toast_overlay_ && rml_toast_overlay_->needsAnimationFrame(), "toast_overlay");
         add(global_context_menu_ && global_context_menu_->needsAnimationFrame(), "context_menu");
         add(video_widget_ && video_widget_->isVideoPlaying(), "video");
