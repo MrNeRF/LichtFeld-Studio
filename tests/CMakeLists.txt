@@ -466,6 +466,7 @@ set(TEST_FILES
     test_ppisp_exposure_seed.cpp
     test_metrics_evaluator_appearance.cpp
     test_export_env_composite.cpp
+    test_image_io.cpp
     test_undistort.cpp
     test_viewport_region_utils.cpp
     test_viewport_interop_decision.cpp
@@ -585,6 +586,7 @@ target_include_directories(lichtfeld_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/app/include
     ${CMAKE_SOURCE_DIR}/src/visualizer # For visualizer-relative headers (e.g. gui/ui_widgets.hpp)
     ${CMAKE_SOURCE_DIR}/external/spz   # SPZ library headers
+    ${CMAKE_SOURCE_DIR}/external       # Vendored stb headers
     ${NB_DIR}/include
     ${CUDAToolkit_INCLUDE_DIRS}
 )
@@ -665,7 +667,6 @@ target_link_libraries(lichtfeld_tests PRIVATE
     GTest::gtest
     nanobind-static
     ${TORCH_LIBRARIES}
-    OpenImageIO::OpenImageIO
     OpenMeshCore
     assimp::assimp
 

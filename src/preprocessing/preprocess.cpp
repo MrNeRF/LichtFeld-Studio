@@ -5,6 +5,7 @@
 #include "preprocessing/preprocess.hpp"
 
 #include "core/cuda_error.hpp"
+#include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/nn/models/moge2.hpp"
 #include "core/path_utils.hpp"
@@ -16,9 +17,6 @@
 #include <cuda_runtime.h>
 
 #include "indicators.hpp"
-#include <OpenImageIO/imagebuf.h>
-#include <OpenImageIO/imagebufalgo.h>
-#include <OpenImageIO/imageio.h>
 #include <curl/curl.h>
 #include <openssl/evp.h>
 
@@ -483,83 +481,27 @@ namespace {
     }
 
     Image load_image_rgb(const fs::path& path) {
-        auto input = OIIO::ImageInput::open(path_to_string(path));
-        if (!input)
-            throw std::runtime_error("Failed to open image: " + path_to_string(path) + ": " + OIIO::geterror());
-
-        const OIIO::ImageSpec spec = input->spec();
-        if (spec.width <= 0 || spec.height <= 0 || spec.nchannels <= 0)
-            throw std::runtime_error("Invalid image shape for " + path_to_string(path));
-
+        auto [pixels, width, height, channels] = lfs::core::load_image_float(path);
+        if (!pixels || width <= 0 || height <= 0 || channels <= 0)
+            throw std::runtime_error("Failed to load image: " + path_to_string(path));
         Image out;
-        out.width = spec.width;
-        out.height = spec.height;
+        out.width = width;
+        out.height = height;
         out.rgb_hwc.resize(static_cast<std::size_t>(out.width) * out.height * 3);
-
-        auto fill_rgb = [&](const auto& raw, float scale) {
-            for (int y = 0; y < out.height; ++y) {
-                for (int x = 0; x < out.width; ++x) {
-                    const std::size_t src = (static_cast<std::size_t>(y) * out.width + x) * spec.nchannels;
-                    const std::size_t dst = (static_cast<std::size_t>(y) * out.width + x) * 3;
-                    out.rgb_hwc[dst + 0] = static_cast<float>(raw[src + 0]) * scale;
-                    out.rgb_hwc[dst + 1] = static_cast<float>(spec.nchannels > 1 ? raw[src + 1] : raw[src + 0]) * scale;
-                    out.rgb_hwc[dst + 2] = static_cast<float>(spec.nchannels > 2 ? raw[src + 2] : raw[src + 0]) * scale;
-                }
-            }
-        };
-
-        const std::size_t raw_values = static_cast<std::size_t>(spec.width) * spec.height * spec.nchannels;
-        if (spec.format == OIIO::TypeDesc::UINT8) {
-            std::vector<std::uint8_t> raw(raw_values);
-            if (!input->read_image(0, 0, 0, spec.nchannels, OIIO::TypeDesc::UINT8, raw.data())) {
-                const auto error = input->geterror();
-                input->close();
-                throw std::runtime_error("Failed to read image: " + path_to_string(path) + ": " + error);
-            }
-            input->close();
-            fill_rgb(raw, 1.0f / 255.0f);
-            return out;
+        for (size_t pixel = 0, count = static_cast<size_t>(width) * height; pixel < count; ++pixel) {
+            const size_t source = pixel * channels;
+            const size_t destination = pixel * 3;
+            out.rgb_hwc[destination + 0] = pixels[source];
+            out.rgb_hwc[destination + 1] = channels > 1 ? pixels[source + 1] : pixels[source];
+            out.rgb_hwc[destination + 2] = channels > 2 ? pixels[source + 2] : pixels[source];
         }
-
-        if (spec.format == OIIO::TypeDesc::UINT16) {
-            std::vector<std::uint16_t> raw(raw_values);
-            if (!input->read_image(0, 0, 0, spec.nchannels, OIIO::TypeDesc::UINT16, raw.data())) {
-                const auto error = input->geterror();
-                input->close();
-                throw std::runtime_error("Failed to read image: " + path_to_string(path) + ": " + error);
-            }
-            input->close();
-            fill_rgb(raw, 1.0f / 65535.0f);
-            return out;
-        }
-
-        std::vector<float> raw(raw_values);
-        if (!input->read_image(0, 0, 0, spec.nchannels, OIIO::TypeDesc::FLOAT, raw.data())) {
-            const auto error = input->geterror();
-            input->close();
-            throw std::runtime_error("Failed to read image: " + path_to_string(path) + ": " + error);
-        }
-        input->close();
-
-        float max_channel = 0.0f;
-        for (int y = 0; y < out.height; ++y) {
-            for (int x = 0; x < out.width; ++x) {
-                const std::size_t src = (static_cast<std::size_t>(y) * out.width + x) * spec.nchannels;
-                const std::size_t dst = (static_cast<std::size_t>(y) * out.width + x) * 3;
-                out.rgb_hwc[dst + 0] = raw[src + 0];
-                out.rgb_hwc[dst + 1] = spec.nchannels > 1 ? raw[src + 1] : raw[src + 0];
-                out.rgb_hwc[dst + 2] = spec.nchannels > 2 ? raw[src + 2] : raw[src + 0];
-                max_channel = std::max({max_channel, out.rgb_hwc[dst + 0], out.rgb_hwc[dst + 1], out.rgb_hwc[dst + 2]});
-            }
-        }
-
-        const float scale = max_channel > 255.5f ? (1.0f / 65535.0f)
-                            : max_channel > 1.5f ? (1.0f / 255.0f)
+        const float max_channel = *std::max_element(out.rgb_hwc.begin(), out.rgb_hwc.end());
+        const float scale = max_channel > 255.5f ? 1.0f / 65535.0f
+                            : max_channel > 1.5f ? 1.0f / 255.0f
                                                  : 1.0f;
-        if (scale != 1.0f) {
-            for (float& channel : out.rgb_hwc)
-                channel = std::clamp(channel * scale, 0.0f, 1.0f);
-        }
+        for (float& channel : out.rgb_hwc)
+            channel = std::clamp(channel * scale, 0.0f, 1.0f);
+        lfs::core::free_image_float(pixels);
         return out;
     }
 
@@ -599,13 +541,8 @@ namespace {
         resized.height = new_height;
         resized.rgb_hwc.resize(static_cast<std::size_t>(new_width) * new_height * 3);
 
-        OIIO::ImageBuf src(OIIO::ImageSpec(image.width, image.height, 3, OIIO::TypeDesc::FLOAT),
-                           const_cast<float*>(image.rgb_hwc.data()));
-        OIIO::ImageBuf dst(OIIO::ImageSpec(new_width, new_height, 3, OIIO::TypeDesc::FLOAT),
-                           resized.rgb_hwc.data());
-        OIIO::ROI roi(0, new_width, 0, new_height, 0, 1, 0, 3);
-        if (!OIIO::ImageBufAlgo::resample(dst, src, true, roi, 0))
-            throw std::runtime_error("Image resize failed: " + dst.geterror());
+        lfs::core::resample_bilinear_f32(image.rgb_hwc.data(), image.width, image.height, 3,
+                                         resized.rgb_hwc.data(), new_width, new_height);
         return resized;
     }
 
@@ -672,37 +609,16 @@ namespace {
                    const std::vector<PixelT>& data,
                    int png_compression) {
         static_assert(std::is_same_v<PixelT, uint8_t> || std::is_same_v<PixelT, uint16_t>);
-        constexpr auto kFormat = std::is_same_v<PixelT, uint16_t> ? OIIO::TypeDesc::UINT16
-                                                                  : OIIO::TypeDesc::UINT8;
         if (channels < 1 || channels > 4)
             throw std::runtime_error("Internal error: invalid image channel count");
         if (data.size() != static_cast<std::size_t>(width) * height * channels)
             throw std::runtime_error("Internal error: image buffer has wrong size");
 
         fs::create_directories(path.parent_path());
-        auto output = OIIO::ImageOutput::create(path_to_string(path));
-        if (!output)
-            throw std::runtime_error("Failed to create image output: " + path_to_string(path));
-
-        OIIO::ImageSpec spec(width, height, channels, kFormat);
         const int compression = std::clamp(png_compression, 0, 9);
-        spec.attribute("png:compressionLevel", compression);
-        if (compression == 0) {
-            spec.attribute("compression", "none");
-        } else if (compression == 1) {
-            spec.attribute("compression", "pngfast");
-        }
-        if (!output->open(path_to_string(path), spec)) {
-            const auto error = output->geterror();
-            output->close();
-            throw std::runtime_error("Failed to open image output: " + path_to_string(path) + ": " + error);
-        }
-        if (!output->write_image(kFormat, data.data())) {
-            const auto error = output->geterror();
-            output->close();
-            throw std::runtime_error("Failed to write image output: " + path_to_string(path) + ": " + error);
-        }
-        output->close();
+        const int bit_depth = std::is_same_v<PixelT, uint16_t> ? 16 : 8;
+        if (!lfs::core::save_png(path, data.data(), width, height, channels, bit_depth, compression))
+            throw std::runtime_error("Failed to write image output: " + path_to_string(path));
     }
 
     VectorMap tensor_to_vector3(const lfs::core::Tensor& tensor, int fallback_width,

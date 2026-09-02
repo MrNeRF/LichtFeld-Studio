@@ -4,6 +4,7 @@
 
 #include "core/camera.hpp"
 #include "core/executable_path.hpp"
+#include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
@@ -16,7 +17,6 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering.hpp"
 #include "screen_overlay_renderer.hpp"
-#include <OpenImageIO/imageio.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -92,48 +92,44 @@ namespace lfs::rendering {
         }
 
         const std::string path_utf8 = lfs::core::path_to_utf8(resolved_path);
-        std::unique_ptr<OIIO::ImageInput> input(OIIO::ImageInput::open(path_utf8));
-        if (!input) {
-            return std::unexpected(std::format("Failed to open environment map {}: {}",
-                                               path_utf8,
-                                               OIIO::geterror()));
-        }
-
-        const auto& spec = input->spec();
-        if (spec.width <= 0 || spec.height <= 0 || spec.nchannels <= 0) {
-            input->close();
+        auto [source, width, height, channels] = lfs::core::load_image_float(resolved_path);
+        if (!source)
+            return std::unexpected(std::format("Failed to read environment map {}", path_utf8));
+        if (width <= 0 || height <= 0 || channels <= 0) {
+            lfs::core::free_image_float(source);
             return std::unexpected(std::format("Invalid environment map dimensions for {}", path_utf8));
         }
-
-        const int read_channels = spec.nchannels >= 3 ? 3 : 1;
-        std::vector<float> source_pixels(
-            static_cast<size_t>(spec.width) * static_cast<size_t>(spec.height) *
-            static_cast<size_t>(read_channels));
-        if (!input->read_image(0, 0, 0, read_channels, OIIO::TypeDesc::FLOAT, source_pixels.data())) {
-            const std::string error =
-                std::format("Failed to read environment map {}: {}", path_utf8, input->geterror());
-            input->close();
-            return std::unexpected(error);
-        }
-        input->close();
+        const int read_channels = channels >= 3 ? 3 : 1;
 
         auto image = std::make_shared<EnvironmentImage>();
         image->path = resolved_path;
-        image->width = spec.width;
-        image->height = spec.height;
+        image->width = width;
+        image->height = height;
         if (read_channels == 3) {
-            image->pixels = std::move(source_pixels);
+            if (channels == 3) {
+                image->pixels.assign(source, source + static_cast<size_t>(width) * height * 3);
+            } else {
+                const size_t pixel_count =
+                    static_cast<size_t>(width) * static_cast<size_t>(height);
+                image->pixels.resize(pixel_count * 3u);
+                for (size_t pixel = 0; pixel < pixel_count; ++pixel) {
+                    image->pixels[pixel * 3u + 0u] = source[pixel * channels + 0u];
+                    image->pixels[pixel * 3u + 1u] = source[pixel * channels + 1u];
+                    image->pixels[pixel * 3u + 2u] = source[pixel * channels + 2u];
+                }
+            }
         } else {
             const size_t pixel_count =
-                static_cast<size_t>(spec.width) * static_cast<size_t>(spec.height);
+                static_cast<size_t>(width) * static_cast<size_t>(height);
             image->pixels.resize(pixel_count * 3u);
             for (size_t pixel = 0; pixel < pixel_count; ++pixel) {
-                const float value = source_pixels[pixel];
+                const float value = source[pixel * channels];
                 image->pixels[pixel * 3u + 0u] = value;
                 image->pixels[pixel * 3u + 1u] = value;
                 image->pixels[pixel * 3u + 2u] = value;
             }
         }
+        lfs::core::free_image_float(source);
 
         cache.image = image;
         LOG_INFO("Loaded tensor environment map {}", resolved_path.string());

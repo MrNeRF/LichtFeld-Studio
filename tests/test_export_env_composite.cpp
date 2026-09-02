@@ -15,6 +15,7 @@
 #include <gtest/gtest.h>
 #include <vector>
 
+#include "core/image_io.hpp"
 #include "core/tensor.hpp"
 #include "environment_image.hpp"
 #include "environment_math.hpp"
@@ -25,6 +26,21 @@ namespace {
 
     using lfs::core::Tensor;
     namespace envmath = lfs::rendering::envmath;
+
+    TEST(EnvironmentImageLoadTest, ExtractsRgbFromRgbaSource) {
+        const auto path = std::filesystem::temp_directory_path() / "lfs_rgba_environment_test.png";
+        const std::vector<uint8_t> rgba = {10, 20, 30, 255, 40, 50, 60, 128};
+        ASSERT_TRUE(lfs::core::save_png(path, rgba.data(), 2, 1, 4, 8, 0));
+
+        const auto loaded = lfs::rendering::loadEnvironmentImage(path);
+        std::error_code ec;
+        std::filesystem::remove(path, ec);
+        if (!loaded)
+            FAIL() << loaded.error();
+        ASSERT_EQ(loaded->pixels, (std::vector<float>{10.0f / 255.0f, 20.0f / 255.0f,
+                                                      30.0f / 255.0f, 40.0f / 255.0f,
+                                                      50.0f / 255.0f, 60.0f / 255.0f}));
+    }
 
     constexpr const char* kEnvironmentAsset = "resources/assets/environments/alps_field_1k.hdr";
     constexpr int WIDTH = 96;

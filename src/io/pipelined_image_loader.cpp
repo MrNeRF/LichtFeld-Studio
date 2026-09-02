@@ -1036,10 +1036,10 @@ namespace lfs::io {
             if (img_data) {
                 ch = 3;
             } else {
-                auto [oiio_data, ow, oh, oc] = lfs::core::load_image(path, 1, 0);
-                if (!oiio_data)
+                auto [decoded_data, ow, oh, oc] = lfs::core::load_image(path, 1, 0);
+                if (!decoded_data)
                     throw std::runtime_error("Failed to decode image: " + path_str);
-                img_data = oiio_data;
+                img_data = decoded_data;
                 w = ow;
                 h = oh;
                 ch = oc;

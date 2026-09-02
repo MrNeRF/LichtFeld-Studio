@@ -22,7 +22,7 @@ cmake --preset debug
 cmake --build --preset debug
 ```
 
-Neither preset disables USD, FFmpeg, OpenImageIO, RmlUi, Python, MCP, or GUI
+Neither preset disables USD, FFmpeg, RmlUi, Python, MCP, or GUI
 support. The compiler cache can be disabled without changing the feature set:
 
 ```sh

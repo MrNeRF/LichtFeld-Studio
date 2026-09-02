@@ -5,11 +5,11 @@
 #include <gtest/gtest.h>
 
 #include "core/cuda/undistort/undistort.hpp"
+#include "core/image_io.hpp"
 #include "core/path_utils.hpp"
 #include "io/nvcodec_image_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
 
-#include <OpenImageIO/imageio.h>
 #include <cuda_runtime.h>
 
 #include <algorithm>
@@ -44,28 +44,22 @@ namespace {
 
     fs::path write_depth_png_from_bicycle_content(const std::string& filename, const uint16_t variant) {
         const fs::path source_path = bicycle_image_path();
-        std::unique_ptr<OIIO::ImageInput> input(OIIO::ImageInput::open(path_string(source_path)));
-        if (!input) {
-            throw std::runtime_error("Failed to open bicycle source: " + path_string(source_path));
-        }
+        auto [source_data, source_width, source_height, source_channels] = lfs::core::load_image(source_path);
+        if (!source_data || source_channels != 3)
+            throw std::runtime_error("Failed to read bicycle source: " + path_string(source_path));
+        std::vector<uint8_t> rgb(source_data, source_data + static_cast<size_t>(source_width) * source_height * 3);
+        lfs::core::free_image(source_data);
 
-        const OIIO::ImageSpec source_spec = input->spec();
-        std::vector<uint8_t> rgb(static_cast<size_t>(source_spec.width) * source_spec.height * 3);
-        if (!input->read_image(0, 0, 0, 3, OIIO::TypeDesc::UINT8, rgb.data())) {
-            throw std::runtime_error("Failed to read bicycle source: " + input->geterror());
-        }
-        input->close();
-
-        std::vector<uint16_t> depth(static_cast<size_t>(source_spec.width) * source_spec.height);
-        for (int y = 0; y < source_spec.height; ++y) {
-            for (int x = 0; x < source_spec.width; ++x) {
-                const size_t rgb_idx = (static_cast<size_t>(y) * source_spec.width + x) * 3;
+        std::vector<uint16_t> depth(static_cast<size_t>(source_width) * source_height);
+        for (int y = 0; y < source_height; ++y) {
+            for (int x = 0; x < source_width; ++x) {
+                const size_t rgb_idx = (static_cast<size_t>(y) * source_width + x) * 3;
                 const uint32_t luma =
                     static_cast<uint32_t>(rgb[rgb_idx + 0]) * 77u +
                     static_cast<uint32_t>(rgb[rgb_idx + 1]) * 150u +
                     static_cast<uint32_t>(rgb[rgb_idx + 2]) * 29u;
                 const uint16_t base = static_cast<uint16_t>((luma >> 8u) * 257u);
-                depth[static_cast<size_t>(y) * source_spec.width + x] =
+                depth[static_cast<size_t>(y) * source_width + x] =
                     static_cast<uint16_t>(base ^ variant ^
                                           static_cast<uint16_t>((x * 17 + y * 31) & 0xffu));
             }
@@ -75,20 +69,8 @@ namespace {
 
         const fs::path output_path =
             fs::temp_directory_path() / filename;
-        std::unique_ptr<OIIO::ImageOutput> output(OIIO::ImageOutput::create(path_string(output_path)));
-        if (!output) {
-            throw std::runtime_error("Failed to create depth PNG output: " + OIIO::geterror());
-        }
-
-        OIIO::ImageSpec spec(source_spec.width, source_spec.height, 1, OIIO::TypeDesc::UINT16);
-        spec.attribute("png:compressionLevel", 1);
-        if (!output->open(path_string(output_path), spec)) {
-            throw std::runtime_error("Failed to open depth PNG output: " + output->geterror());
-        }
-        if (!output->write_image(OIIO::TypeDesc::UINT16, depth.data())) {
-            throw std::runtime_error("Failed to write depth PNG output: " + output->geterror());
-        }
-        output->close();
+        if (!lfs::core::save_png(output_path, depth.data(), source_width, source_height, 1, 16, 1))
+            throw std::runtime_error("Failed to write depth PNG output");
         return output_path;
     }
 
