@@ -37,6 +37,10 @@
 
 namespace lfs::vis {
 
+    // Starts with file-only work: shader blobs are cached for the first
+    // renderer initialization without touching Vulkan.
+    LFS_VIS_API void preloadVkSplatSpirvFiles();
+
     class VksplatViewportRenderer {
     public:
         struct RenderResult {

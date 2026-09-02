@@ -512,6 +512,8 @@ foreach (LOCALE_FILE ${LOCALE_FILES})
     get_filename_component(LOCALE_NAME ${LOCALE_FILE} NAME)
     configure_file(${LOCALE_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/locales/${LOCALE_NAME}" COPYONLY)
 endforeach ()
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locale_index.json
+        "${VISUALIZER_BUILD_RESOURCE_DIR}/locale_index.json" COPYONLY)
 
 set(LFS_VISUALIZER_DEV_RESOURCE_DEFINITIONS)
 if(LFS_DEV_IMPORT_SOURCE_RESOURCES AND NOT BUILD_PORTABLE)
@@ -589,6 +591,9 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locales/
         DESTINATION share/LichtFeld-Studio/locales
         FILES_MATCHING
         PATTERN "*.json"
+)
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locale_index.json
+        DESTINATION share/LichtFeld-Studio
 )
 
 # Add custom target for resource files (makes them show up in IDEs)

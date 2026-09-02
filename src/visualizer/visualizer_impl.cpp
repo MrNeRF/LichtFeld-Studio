@@ -41,6 +41,7 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/model_renderability.hpp"
 #include "rendering/scene_upscaler_registry.hpp"
+#include "rendering/vksplat_viewport_renderer.hpp"
 #include "scene/scene_manager.hpp"
 #include "tools/align_tool.hpp"
 #include "tools/builtin_tools.hpp"
@@ -329,6 +330,8 @@ namespace lfs::vis {
     }
 
     VisualizerImpl::~VisualizerImpl() {
+        if (vksplat_spirv_preload_future_.valid())
+            vksplat_spirv_preload_future_.wait();
         // ProjectLifecycle owns worker threads and calls back into the viewer
         // while shutting down. Destroy it before invalidating the service
         // locator or releasing any of the components it observes.
@@ -1972,6 +1975,17 @@ namespace lfs::vis {
             gui_initialized_ = true;
         }
 
+        // The native window is created hidden so Vulkan can bring up its
+        // surface and bootstrap frame. It is safe to expose it now: DPI and
+        // persisted window state were resolved by WindowManager::init(), and
+        // the GUI manager has installed its focus/input state. Python UI
+        // registration is deliberately below this point so the first visible
+        // frame is not held up by interpreter startup.
+        {
+            LOG_TIMER("startup.window.showWindow");
+            window_manager_->showWindow();
+        }
+
         // InputController requires the GUI focus state to be initialized.
         if (!input_controller_) {
             input_controller_ = std::make_unique<InputController>(
@@ -2005,11 +2019,6 @@ namespace lfs::vis {
                 python::ensure_builtin_ui_registered();
             }
         }
-        {
-            LOG_TIMER("startup.window.showWindow");
-            window_manager_->showWindow();
-        }
-
         fully_initialized_ = true;
         if (!startup_project_open_attempted_) {
             startup_project_open_attempted_ = true;
@@ -2031,6 +2040,12 @@ namespace lfs::vis {
         motion_only_wake_skipped_ = isMotionOnlyWake();
         if (motion_only_wake_skipped_)
             return;
+
+        if (pipeline_cache_flush_due_ && update_started_at >= *pipeline_cache_flush_due_) {
+            pipeline_cache_flush_due_.reset();
+            if (auto* const context = window_manager_->getVulkanContext())
+                context->flushPipelineCache();
+        }
 
         if (fully_initialized_ && gui_frame_rendered_ && !startup_plugin_preload_started_) {
             startup_plugin_preload_started_ = true;
@@ -2355,6 +2370,14 @@ namespace lfs::vis {
             consider_timeout(std::max(kScheduledRedrawMinWaitSeconds, *redraw_wait),
                              "python_scheduled_redraw");
 
+        if (pipeline_cache_flush_due_) {
+            const double flush_wait = std::chrono::duration<double>(
+                                          *pipeline_cache_flush_due_ - std::chrono::steady_clock::now())
+                                          .count();
+            wait_seconds = std::min(wait_seconds,
+                                    std::max(kScheduledRedrawMinWaitSeconds, flush_wait));
+        }
+
         window_manager_->waitEvents(wait_seconds);
         last_wake_reason_ = window_manager_->frameInput().had_event ? "event" : "timeout";
         last_wake_timeout_source_ = window_manager_->frameInput().had_event ? "none" : timeout_source;
@@ -2611,6 +2634,11 @@ namespace lfs::vis {
         gui_frame_rendered_ = true;
         if (first_gui_frame && project_lifecycle_) {
             project_lifecycle_->runStartupRecoveryScan();
+        }
+        if (first_gui_frame) {
+            pipeline_cache_flush_due_ = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+            vksplat_spirv_preload_future_ = std::async(
+                std::launch::async, [] { preloadVkSplatSpirvFiles(); });
         }
         update_work_processed_ = false;
 

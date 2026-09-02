@@ -11,6 +11,7 @@ from urllib.parse import quote
 import lichtfeld as lf
 from . import rml_widgets as w
 from .types import Panel
+from .panels import panel_class
 from .ui import RuntimeState
 from .rml_keys import (
     KI_1, KI_ADD, KI_C, KI_DOWN, KI_END, KI_ESCAPE, KI_F, KI_HOME, KI_I,
@@ -43,15 +44,8 @@ def _encode_rml_path(path: Path | str) -> str:
     return quote(str(path), safe=_RML_PATH_SAFE_CHARS)
 
 
+@panel_class("image_preview")
 class ImagePreviewPanel(Panel):
-    id = "lfs.image_preview"
-    label = "Image Preview"
-    space = lf.ui.PanelSpace.FLOATING
-    order = 98
-    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    template = "rmlui/image_preview.rml"
-    size = (900, 600)
-    update_policy = "dirty"
 
     def __init__(self):
         global _instance, _pending_open

@@ -565,6 +565,10 @@ namespace lfs::vis::gui {
 
     } // namespace
 
+    void warmupNativeFileDialogBackend() {
+        (void)ensureDialogBackendInitialized();
+    }
+
     std::filesystem::path OpenImageFileDialog(const std::filesystem::path& defaultPath) {
         std::filesystem::path result;
         runDialog(makeOpenFileRequest(imageFilters(), defaultPath), result);

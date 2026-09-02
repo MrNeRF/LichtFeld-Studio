@@ -54,6 +54,22 @@
 
 namespace lfs::vis {
     namespace {
+        std::map<std::string, std::string> makeVkSplatSpirvPaths();
+    }
+
+    void preloadVkSplatSpirvFiles() {
+        const auto paths = makeVkSplatSpirvPaths();
+        std::vector<std::string> unique_paths;
+        unique_paths.reserve(paths.size());
+        for (const auto& [unused_name, path] : paths) {
+            (void)unused_name;
+            if (std::find(unique_paths.begin(), unique_paths.end(), path) == unique_paths.end())
+                unique_paths.push_back(path);
+        }
+        preloadSpirvFiles(unique_paths);
+    }
+
+    namespace {
         namespace indirect = lfs::rendering::vulkan::indirect_layout;
 
         using lfs::core::DataType;
@@ -4735,6 +4751,7 @@ namespace lfs::vis {
                                          context.hasConditionalRendering(),
                                          context.vkCmdBeginConditionalRendering(),
                                          context.vkCmdEndConditionalRendering());
+            context.flushPipelineCache();
             renderer_.assignBufferLabels(buffers_);
             renderer_.setCpuTimerCallback([](const std::string_view name, const double ms) {
                 LOG_PERF("{} took {:.2f}ms", name, ms);

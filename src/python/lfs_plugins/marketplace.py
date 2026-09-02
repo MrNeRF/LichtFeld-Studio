@@ -8,7 +8,6 @@ import json
 import logging
 import threading
 import time
-import urllib.request
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Set, Tuple
 
@@ -265,6 +264,8 @@ def _resolve_github_entry(source_url: str, owner: str, repo: str) -> Marketplace
 
 
 def _fetch_repo_metadata(owner: str, repo: str) -> dict:
+    import urllib.request
+
     url = f"{GITHUB_API_URL}/{owner}/{repo}"
     req = urllib.request.Request(
         url,

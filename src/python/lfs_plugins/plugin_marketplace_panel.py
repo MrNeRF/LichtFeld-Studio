@@ -21,6 +21,7 @@ from .marketplace import (
 from .localization import localized_count
 from .plugin import PluginInfo, PluginState
 from .types import Panel
+from .panels import panel_class
 from .ui import RuntimeState
 
 __lfs_panel_classes__ = ["PluginMarketplacePanel"]
@@ -68,21 +69,9 @@ class CardOpState:
     finished_at: float = 0.0
 
 
+@panel_class("plugin_marketplace")
 class PluginMarketplacePanel(Panel):
     """Floating plugin window for browsing, installing, and managing plugins."""
-
-    id = "lfs.plugin_marketplace"
-    label = "Plugin Marketplace"
-    space = lf.ui.PanelSpace.FLOATING
-    order = 91
-    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    template = "rmlui/plugin_marketplace.rml"
-    height_mode = lf.ui.PanelHeightMode.FILL
-    size = (770, 560)
-    # The card slots depend on the live viewport width, which changes while a
-    # floating window is resized even when the model itself is not dirty.
-    update_policy = "interval"
-    update_interval_ms = 250
 
     def __init__(self):
         self._catalog = PluginMarketplaceCatalog()

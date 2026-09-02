@@ -36,6 +36,7 @@
 #include "visualizer/visualizer.hpp"
 
 #include "app/mcp_gui_tools.hpp"
+#include "gui/gpu_memory_query.hpp"
 #include "io/loader.hpp"
 #include "io/video/video_encoder.hpp"
 #include "mcp/mcp_http_server.hpp"
@@ -53,6 +54,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cuda_runtime.h>
+#include <curand.h>
 #include <format>
 #include <future>
 #include <mutex>
@@ -1100,8 +1102,33 @@ namespace lfs::app {
         void warmupCudaAsync() {
             LOG_INFO("Initializing CUDA (async)...");
             cudaWarmupFuture() = std::async(std::launch::async, [] {
+                auto& profiler = lfs::diagnostics::VramProfiler::instance();
+                // NVML is intentionally first touched here, after the window
+                // has been made visible. The primary context already exists
+                // from the small preflight probe, so this current reading is
+                // also the useful late baseline for the ledger.
+                const auto process_used_now = [] {
+                    return lfs::vis::gui::queryGpuMemory().process_used;
+                };
+                const std::size_t before_context = process_used_now();
+                const std::size_t after_context = process_used_now();
+                profiler.recordCudaPhaseBytes(
+                    "primary_context",
+                    after_context > before_context ? after_context - before_context : 0);
+
+                const std::size_t before_curand = process_used_now();
+                curandGenerator_t generator = nullptr;
+                if (curandCreateGenerator(&generator, CURAND_RNG_PSEUDO_DEFAULT) ==
+                    CURAND_STATUS_SUCCESS) {
+                    curandDestroyGenerator(generator);
+                }
+                const std::size_t after_curand = process_used_now();
+                profiler.recordCudaPhaseBytes(
+                    "curand_load",
+                    after_curand > before_curand ? after_curand - before_curand : 0);
+                profiler.setCudaContextBaselineBytes(process_used_now());
                 fast_lfs::rasterization::warmup_kernels();
-                lfs::diagnostics::VramProfiler::instance().captureCudaWarmupDelta();
+                profiler.captureCudaWarmupDelta();
             });
         }
 
@@ -1277,10 +1304,14 @@ namespace lfs::app {
                 }
             }
 
-            mcp::register_core_tools();
-            mcp::register_core_resources();
-            register_gui_scene_tools(viewer.get());
-            register_gui_scene_resources(viewer.get());
+            mcp::ToolRegistry::instance().set_lazy_initializer([viewer_ptr = viewer.get()] {
+                mcp::register_core_tools();
+                register_gui_scene_tools(viewer_ptr);
+            });
+            mcp::ResourceRegistry::instance().set_lazy_initializer([viewer_ptr = viewer.get()] {
+                mcp::register_core_resources();
+                register_gui_scene_resources(viewer_ptr);
+            });
 
             mcp::setActiveMcpHttpServer(&mcp_http);
             vis::setRuntimeServiceControls({

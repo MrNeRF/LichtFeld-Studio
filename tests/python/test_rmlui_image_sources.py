@@ -24,7 +24,7 @@ def _install_lf_stub(monkeypatch):
     lf_stub.ui = SimpleNamespace(
         Panel=_Panel,
         PanelSpace=SimpleNamespace(FLOATING="FLOATING"),
-        PanelHeightMode=SimpleNamespace(CONTENT="CONTENT"),
+        PanelHeightMode=SimpleNamespace(FILL="FILL", CONTENT="CONTENT"),
         PanelOption=SimpleNamespace(DEFAULT_CLOSED="DEFAULT_CLOSED"),
         tr=lambda key: key,
         open_url=lambda _url: None,
@@ -185,7 +185,7 @@ def test_getting_started_panel_escapes_thumbnail_paths(panel_modules, tmp_path):
 def test_getting_started_panel_uses_dirty_update_policy(panel_modules):
     _, getting_started = panel_modules
     assert getting_started.GettingStartedPanel.update_policy == "dirty"
-    assert "update_interval_ms" not in getting_started.GettingStartedPanel.__dict__
+    assert getting_started.GettingStartedPanel.update_interval_ms == 100
 
 
 def test_image_preview_uses_dirty_update_policy(panel_modules):
