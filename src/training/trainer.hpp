@@ -33,6 +33,7 @@
 #include <filesystem>
 #include <functional>
 #include <istream>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -137,6 +138,21 @@ namespace lfs::training {
             float psnr = 0.0f;
             std::optional<float> ssim;
             bool used_mask = false;
+        };
+
+        struct CameraMetricsInputCacheEntry {
+            int camera_uid = -1;
+            std::filesystem::path image_path;
+            std::filesystem::path mask_path;
+            GTLoadConfigSnapshot gt_config{};
+            int mask_mode = 0;
+            bool use_alpha_as_mask = false;
+            bool invert_masks = false;
+            float mask_threshold = 0.0f;
+            bool undistort_prepared = false;
+            lfs::core::Tensor gt_image;
+            lfs::core::Tensor mask;
+            std::uint64_t last_used = 0;
         };
 
         struct ProjectSnapshotRuntimeMetrics {
@@ -897,6 +913,9 @@ namespace lfs::training {
         mutable std::mutex active_image_loader_mutex_;
         mutable std::mutex camera_loss_heatmap_mutex_;
         mutable std::mutex gt_load_config_mutex_;
+        mutable std::mutex camera_metrics_input_cache_mutex_;
+        std::list<CameraMetricsInputCacheEntry> camera_metrics_input_cache_;
+        std::uint64_t camera_metrics_input_cache_clock_ = 0;
 
         // Control flags for thread communication
         std::atomic<bool> pause_requested_{false};
