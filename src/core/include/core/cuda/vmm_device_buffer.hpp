@@ -4,7 +4,6 @@
 #pragma once
 
 #include "core/error.hpp"
-#include "core/export.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -15,7 +14,7 @@ namespace lfs::core {
     // A stable virtual reservation whose physical prefix is committed in
     // allocation-granularity increments. This is intentionally not
     // exportable: it has no shareable handles or initialization memset.
-    class LFS_CORE_API VmmDeviceBuffer final {
+    class VmmDeviceBuffer final {
     public:
         VmmDeviceBuffer() noexcept = default;
         VmmDeviceBuffer(const VmmDeviceBuffer&) = delete;

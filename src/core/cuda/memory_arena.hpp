@@ -26,7 +26,7 @@ namespace lfs::core {
     class GlobalArenaManager;
     LFS_CORE_API GlobalArenaManager& global_arena_manager();
     LFS_CORE_API void shutdown_global_arena_manager();
-    LFS_CORE_API void log_arena_failure_vram_snapshot(
+    void log_arena_failure_vram_snapshot(
         std::string_view label, size_t committed_bytes, size_t frame_peak_bytes);
 
     class RasterizerMemoryArena {

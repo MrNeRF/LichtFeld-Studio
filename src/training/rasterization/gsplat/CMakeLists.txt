@@ -63,6 +63,8 @@ target_link_libraries(gsplat_backend_lfs
         CUDA::cudart
         CUDA::curand
         glm::glm
+        PUBLIC
+        lfs_core_cuda
 )
 
 target_compile_options(gsplat_backend_lfs PRIVATE
