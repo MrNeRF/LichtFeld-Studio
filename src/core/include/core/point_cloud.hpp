@@ -16,7 +16,11 @@ namespace lfs::core {
         Tensor colors; // [N, 3] uint8 or float32
 
         // For Gaussian point clouds (optional, can be empty for basic point clouds)
-        Tensor normals;  // [N, 3] float32
+        Tensor normals; // [N, 3] float32
+        // PLY export may request the conventional zero normal columns without
+        // materialising an [N,3] tensor. This is intentionally separate from
+        // `normals`: callers that provide actual normals still take precedence.
+        bool emit_zero_normals = false;
         Tensor sh0;      // [N, 3, 1] float32
         Tensor shN;      // [N, 3, (sh_degree+1)^2-1] float32
         Tensor opacity;  // [N, 1] float32
@@ -36,12 +40,12 @@ namespace lfs::core {
 
         // Check if this is a Gaussian point cloud (has additional attributes)
         bool is_gaussian() const {
-            return sh0.numel() > 0;
+            return sh0.is_valid() && sh0.numel() > 0;
         }
 
         // Get number of points
         int64_t size() const {
-            return means.numel() > 0 ? means.shape()[0] : 0;
+            return means.is_valid() && means.numel() > 0 ? means.shape()[0] : 0;
         }
 
         // Move to device
@@ -50,6 +54,7 @@ namespace lfs::core {
             pc.means = means.is_valid() ? means.to(device) : means;
             pc.colors = colors.is_valid() ? colors.to(device) : colors;
             pc.normals = normals.is_valid() ? normals.to(device) : normals;
+            pc.emit_zero_normals = emit_zero_normals;
             pc.sh0 = sh0.is_valid() ? sh0.to(device) : sh0;
             pc.shN = shN.is_valid() ? shN.to(device) : shN;
             pc.opacity = opacity.is_valid() ? opacity.to(device) : opacity;
@@ -61,7 +66,7 @@ namespace lfs::core {
 
         // Convert colors to float [0,1] if they're uint8
         void normalize_colors() {
-            if (colors.numel() > 0 && colors.dtype() == DataType::UInt8) {
+            if (colors.is_valid() && colors.numel() > 0 && colors.dtype() == DataType::UInt8) {
                 colors = colors.to(DataType::Float32) / 255.0f;
             }
         }

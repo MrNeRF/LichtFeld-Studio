@@ -26,6 +26,8 @@
 #include <iomanip>
 #include <numeric>
 #include <print>
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
 #include <utility>
 
 // SIMD intrinsics for CPU optimization
@@ -39,6 +41,25 @@
 #endif
 
 namespace lfs::core {
+
+    void prefault_pageable_host_memory(void* data, const size_t bytes) {
+        constexpr size_t page_bytes = 4096;
+        constexpr size_t min_prefault_bytes = 64ULL * 1024ULL * 1024ULL;
+        if (data == nullptr || bytes < min_prefault_bytes) {
+            return;
+        }
+
+        const size_t page_count = (bytes - 1) / page_bytes + 1;
+        auto* const pages = static_cast<volatile unsigned char*>(data);
+        tbb::parallel_for(
+            tbb::blocked_range<size_t>(0, page_count, 4096),
+            [pages, bytes](const tbb::blocked_range<size_t>& range) {
+                for (size_t page = range.begin(); page != range.end(); ++page) {
+                    const size_t offset = std::min(page * size_t{4096}, bytes - 1);
+                    pages[offset] = 0;
+                }
+            });
+    }
 
     std::atomic<size_t> Tensor::next_id_{1};
 
@@ -1631,6 +1652,49 @@ namespace lfs::core {
         }
 
         return t;
+    }
+
+    Tensor Tensor::to_pageable_host(const cudaStream_t stream) const {
+        materialize_if_deferred();
+        LFS_ASSERT_MSG(is_valid(), "pageable host transfer requires a valid tensor");
+
+        const Tensor source = is_contiguous_ ? *this : contiguous();
+        Tensor result = empty_pageable_host(source.shape_, source.dtype_);
+        if (source.numel() == 0) {
+            return result;
+        }
+
+        {
+            LOG_TIMER_DEBUG("Tensor: pageable host prefault");
+            prefault_pageable_host_memory(result.data_, result.bytes());
+        }
+
+        if (source.device_ == Device::CPU) {
+            std::memcpy(result.data_, source.data_ptr(), source.bytes());
+            return result;
+        }
+
+        const cudaStream_t transfer_stream = stream
+                                                 ? prepare_inputs_for_stream({&source}, stream)
+                                                 : prepare_inputs_for_stream({&source});
+        LFS_CUDA_CHECK_MSG_STREAM_ARGS(
+            cudaMemcpyAsync(result.data_, source.data_ptr(), source.bytes(),
+                            cudaMemcpyDeviceToHost, transfer_stream),
+            transfer_stream,
+            reinterpret_cast<uintptr_t>(result.data_),
+            reinterpret_cast<uintptr_t>(source.data_ptr()),
+            source.bytes(),
+            "while copying tensor '{}' shape={} dtype={} to pageable CPU",
+            tensor_debug_name(*this), source.shape_.str(), dtype_name(source.dtype_));
+        LFS_CUDA_CHECK_MSG_STREAM_ARGS(
+            cudaStreamSynchronize(transfer_stream),
+            transfer_stream,
+            reinterpret_cast<uintptr_t>(result.data_),
+            reinterpret_cast<uintptr_t>(source.data_ptr()),
+            source.bytes(),
+            "while completing copy of tensor '{}' shape={} dtype={} to pageable CPU",
+            tensor_debug_name(*this), source.shape_.str(), dtype_name(source.dtype_));
+        return result;
     }
 
     // ============= Type Conversion =============

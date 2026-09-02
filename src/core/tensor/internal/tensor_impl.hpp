@@ -1527,6 +1527,10 @@ namespace lfs::core {
         // ============= FACTORY METHODS =============
         static Tensor empty(TensorShape shape, Device device = Device::CUDA,
                             DataType dtype = DataType::Float32, bool use_pinned = true);
+        // Allocate ordinary pageable host storage. Unlike the default CPU path,
+        // this never consults PinnedMemoryAllocator or cudaHostAlloc.
+        static Tensor empty_pageable_host(TensorShape shape,
+                                          DataType dtype = DataType::Float32);
         static Tensor empty_unpinned(TensorShape shape, DataType dtype = DataType::Float32);
         static Tensor zeros(TensorShape shape, Device device = Device::CUDA,
                             DataType dtype = DataType::Float32);
@@ -1931,6 +1935,8 @@ namespace lfs::core {
         Tensor clone() const;      // Deep copy
         Tensor contiguous() const; // Materialize to contiguous if strided
         Tensor to(Device device, cudaStream_t stream = nullptr) const;
+        // Synchronous export-oriented copy to ordinary pageable host memory.
+        Tensor to_pageable_host(cudaStream_t stream = nullptr) const;
         Tensor to(DataType dtype) const;
         bool is_contiguous() const { return is_contiguous_; }
 
@@ -3387,6 +3393,11 @@ namespace lfs::core {
             device_,
             dtype_);
     }
+
+    // Parallel first-touch for a large ordinary (pageable) host allocation.
+    // The caller must have allocated the storage with empty_pageable_host() or
+    // another pageable allocator.
+    LFS_CORE_API void prefault_pageable_host_memory(void* data, size_t bytes);
 
 } // namespace lfs::core
 
