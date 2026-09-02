@@ -497,6 +497,8 @@ TEST_F(SelectionOperatorModalTest, ClosedPolygonShiftAddsVertexAndCtrlRemovesVer
 
 class DepthWindowDragLifecycleTest : public ::testing::Test {
 protected:
+    [[nodiscard]] virtual glm::ivec2 viewerSize() const { return {200, 200}; }
+
     void SetUp() override {
         lfs::event::EventBridge::instance().clear_all();
         lfs::core::event::bus().clear_all();
@@ -504,8 +506,9 @@ protected:
         lfs::vis::op::undoHistory().clear();
 
         options_.show_startup_overlay = false;
-        options_.width = 200;
-        options_.height = 200;
+        const glm::ivec2 viewer_size = viewerSize();
+        options_.width = viewer_size.x;
+        options_.height = viewer_size.y;
         viewer_ = std::make_unique<lfs::vis::VisualizerImpl>(options_);
         viewer_->initializeTools();
 
@@ -573,10 +576,25 @@ protected:
         EXPECT_TRUE(rendering_manager_->depthWindowDragPreview());
     }
 
-    bool startDepthDrag(const double x = 10.0, const double y = 10.0) {
+    bool startDepthDrag(
+        const double x = 10.0,
+        const double y = 10.0,
+        const int modifiers = lfs::vis::input::KEYMOD_SHIFT | lfs::vis::input::KEYMOD_ALT) {
         auto props = depthDragProps(x, y);
+        props.set("modifiers", modifiers);
         const auto result = lfs::vis::op::operators().invoke(lfs::vis::op::BuiltinOp::DepthWindowDrag, &props);
         return result.status == lfs::vis::op::OperatorResult::RUNNING_MODAL;
+    }
+
+    [[nodiscard]] lfs::vis::op::DepthWindowRect currentDepthWindowRect() const {
+        const auto settings = rendering_manager_->getSettings();
+        return lfs::vis::op::depthWindowRenderRect(
+            options_.width,
+            options_.height,
+            settings.depth_filter_scale_x,
+            settings.depth_filter_scale_y,
+            settings.depth_filter_offset_x,
+            settings.depth_filter_offset_y);
     }
 
     lfs::vis::ViewerOptions options_{};
@@ -585,6 +603,126 @@ protected:
     lfs::vis::SceneManager* scene_manager_ = nullptr;
     lfs::vis::tools::SelectionTool* selection_tool_ = nullptr;
 };
+
+class DepthWindowDragGeometryTest : public DepthWindowDragLifecycleTest {
+protected:
+    [[nodiscard]] glm::ivec2 viewerSize() const override { return {320, 200}; }
+};
+
+TEST_F(DepthWindowDragGeometryTest, SmallDrawKeepsAnchorAndMeetsMinimumSize) {
+    ASSERT_TRUE(startDepthDrag(20.0, 20.0));
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(mouse_move(24.0, 24.0)),
+              OperatorResult::RUNNING_MODAL);
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(
+                  mouse_button(static_cast<int>(lfs::vis::input::AppMouseButton::LEFT),
+                               lfs::vis::input::ACTION_RELEASE,
+                               24.0,
+                               24.0)),
+              OperatorResult::FINISHED);
+
+    const auto rect = currentDepthWindowRect();
+    EXPECT_NEAR(rect.size().x, 16.0f, 1.0f);
+    EXPECT_NEAR(rect.size().y, 10.0f, 1.0f);
+    // Tight anchor tolerance: the pre-fix sanitizer path lands the anchor about
+    // 0.7 px off (19.2, 19.4), so 1 px would let the old behaviour pass.
+    EXPECT_NEAR(rect.min.x, 20.0f, 0.25f);
+    EXPECT_NEAR(rect.min.y, 20.0f, 0.25f);
+}
+
+TEST_F(DepthWindowDragGeometryTest, SmallConstrainedDrawIsSquareAtAnchor) {
+    ASSERT_TRUE(startDepthDrag(
+        20.0, 20.0,
+        lfs::vis::input::KEYMOD_SHIFT | lfs::vis::input::KEYMOD_ALT |
+            lfs::vis::input::KEYMOD_CTRL));
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(mouse_move(24.0, 24.0)),
+              OperatorResult::RUNNING_MODAL);
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(
+                  mouse_button(static_cast<int>(lfs::vis::input::AppMouseButton::LEFT),
+                               lfs::vis::input::ACTION_RELEASE,
+                               24.0,
+                               24.0)),
+              OperatorResult::FINISHED);
+
+    const auto rect = currentDepthWindowRect();
+    EXPECT_NEAR(rect.size().x, 16.0f, 1.0f);
+    EXPECT_NEAR(rect.size().y, 16.0f, 1.0f);
+    EXPECT_NEAR(rect.size().x, rect.size().y, 1e-4f);
+    EXPECT_NEAR(rect.min.x, 20.0f, 1.0f);
+    EXPECT_NEAR(rect.min.y, 20.0f, 1.0f);
+}
+
+TEST_F(DepthWindowDragGeometryTest, ConstrainedDrawNearBoundFlipsAwayFromEdge) {
+    ASSERT_TRUE(startDepthDrag(
+        300.0, 100.0,
+        lfs::vis::input::KEYMOD_SHIFT | lfs::vis::input::KEYMOD_ALT |
+            lfs::vis::input::KEYMOD_CTRL));
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(mouse_move(304.0, 104.0)),
+              OperatorResult::RUNNING_MODAL);
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(
+                  mouse_button(static_cast<int>(lfs::vis::input::AppMouseButton::LEFT),
+                               lfs::vis::input::ACTION_RELEASE,
+                               304.0,
+                               104.0)),
+              OperatorResult::FINISHED);
+
+    const auto rect = currentDepthWindowRect();
+    EXPECT_NEAR(rect.size().x, 16.0f, 1.0f);
+    EXPECT_NEAR(rect.size().y, 16.0f, 1.0f);
+    EXPECT_NEAR(rect.size().x, rect.size().y, 1e-4f);
+    EXPECT_NEAR(rect.max.x, 300.0f, 1.0f);
+    EXPECT_NEAR(rect.min.y, 100.0f, 1.0f);
+    EXPECT_LE(rect.max.x, 314.0f);
+}
+
+TEST_F(DepthWindowDragGeometryTest, ConstrainedOverflowStillShrinksByCommonFactor) {
+    ASSERT_TRUE(startDepthDrag(
+        60.0, 100.0,
+        lfs::vis::input::KEYMOD_SHIFT | lfs::vis::input::KEYMOD_ALT |
+            lfs::vis::input::KEYMOD_CTRL));
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(mouse_move(314.0, 194.0)),
+              OperatorResult::RUNNING_MODAL);
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(
+                  mouse_button(static_cast<int>(lfs::vis::input::AppMouseButton::LEFT),
+                               lfs::vis::input::ACTION_RELEASE,
+                               314.0,
+                               194.0)),
+              OperatorResult::FINISHED);
+
+    const auto rect = currentDepthWindowRect();
+    EXPECT_NEAR(rect.size().x, 94.0f, 1.0f);
+    EXPECT_NEAR(rect.size().y, 94.0f, 1.0f);
+    EXPECT_NEAR(rect.size().x, rect.size().y, 1e-4f);
+    EXPECT_NEAR(rect.min.x, 60.0f, 1.0f);
+    EXPECT_NEAR(rect.min.y, 100.0f, 1.0f);
+}
+
+TEST_F(DepthWindowDragLifecycleTest, EdgeFloorPreservesLegacyLeftEdgeBehavior) {
+    auto settings = rendering_manager_->getSettings();
+    settings.depth_filter_scale_x = 0.1f;
+    settings.depth_filter_scale_y = 0.5f;
+    settings.depth_filter_offset_x = 0.0f;
+    settings.depth_filter_offset_y = 0.0f;
+    rendering_manager_->updateSettings(settings);
+
+    ASSERT_TRUE(startDepthDrag(90.0, 100.0));
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(mouse_move(95.0, 104.0)),
+              OperatorResult::RUNNING_MODAL);
+    auto rect = currentDepthWindowRect();
+    EXPECT_FLOAT_EQ(rect.min.x, 95.0f);
+    EXPECT_FLOAT_EQ(rect.max.x, 110.0f);
+
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(mouse_move(104.0, 100.0)),
+              OperatorResult::RUNNING_MODAL);
+    rect = currentDepthWindowRect();
+    EXPECT_FLOAT_EQ(rect.min.x, 104.0f);
+    EXPECT_FLOAT_EQ(rect.max.x, 114.0f);
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(
+                  mouse_button(static_cast<int>(lfs::vis::input::AppMouseButton::LEFT),
+                               lfs::vis::input::ACTION_RELEASE,
+                               104.0,
+                               100.0)),
+              OperatorResult::FINISHED);
+}
 
 TEST_F(DepthWindowDragLifecycleTest, CommitClearsDepthWindowDragPreview) {
     expectMidDragPreviewActive();

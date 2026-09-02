@@ -38,6 +38,140 @@ namespace lfs::vis::op {
                 dragBoundsMin());
         }
 
+        struct GrowDirection {
+            bool positive_x;
+            bool positive_y;
+        };
+
+        enum class MinimumWindowPolicy {
+            LegacyEdge,
+            PreserveAnchor,
+        };
+
+        [[nodiscard]] DepthWindowRect growToMinimumWindow(
+            DepthWindowRect rect,
+            const glm::vec2& anchor,
+            const GrowDirection dir,
+            const DepthWindowPanelMapping& panel,
+            const std::optional<float> aspect_px,
+            const MinimumWindowPolicy policy) {
+            // Match the sanitizer's 5% floor in the drag geometry whenever the
+            // bounds permit, so scale and offset are derived from the same
+            // rectangle. The neither-side-fits fallback may still rely on the
+            // sanitizer.
+            glm::vec2 minimum{
+                0.05f * static_cast<float>(panel.render_width),
+                0.05f * static_cast<float>(panel.render_height),
+            };
+            if (aspect_px) {
+                minimum.x = std::max(minimum.x, minimum.y * *aspect_px);
+                minimum.y = minimum.x / *aspect_px;
+            }
+
+            const glm::vec2 bounds_lo = dragBoundsMin();
+            const glm::vec2 bounds_hi = dragBoundsMax(panel);
+            if (policy == MinimumWindowPolicy::LegacyEdge) {
+                for (int axis = 0; axis < 2; ++axis) {
+                    const float deficit = minimum[axis] - (rect.max[axis] - rect.min[axis]);
+                    if (deficit <= 0.0f) {
+                        continue;
+                    }
+                    const bool positive = axis == 0 ? dir.positive_x : dir.positive_y;
+                    if (positive) {
+                        rect.max[axis] = std::min(rect.max[axis] + deficit, bounds_hi[axis]);
+                        rect.min[axis] = rect.max[axis] - minimum[axis];
+                    } else {
+                        rect.min[axis] = std::max(rect.min[axis] - deficit, bounds_lo[axis]);
+                        rect.max[axis] = rect.min[axis] + minimum[axis];
+                    }
+                }
+                return rect;
+            }
+
+            const auto available = [&](const int axis, const bool positive) {
+                return std::max(
+                    positive ? bounds_hi[axis] - anchor[axis]
+                             : anchor[axis] - bounds_lo[axis],
+                    0.0f);
+            };
+            const auto set_axis = [&](DepthWindowRect& out,
+                                      const int axis,
+                                      const bool positive,
+                                      const float extent) {
+                if (positive) {
+                    out.min[axis] = anchor[axis];
+                    out.max[axis] = anchor[axis] + extent;
+                } else {
+                    out.min[axis] = anchor[axis] - extent;
+                    out.max[axis] = anchor[axis];
+                }
+            };
+
+            if (!aspect_px) {
+                for (int axis = 0; axis < 2; ++axis) {
+                    if (rect.max[axis] - rect.min[axis] >= minimum[axis]) {
+                        continue;
+                    }
+                    const bool requested = axis == 0 ? dir.positive_x : dir.positive_y;
+                    const float requested_available = available(axis, requested);
+                    const float flipped_available = available(axis, !requested);
+                    if (requested_available >= minimum[axis]) {
+                        set_axis(rect, axis, requested, minimum[axis]);
+                    } else if (flipped_available >= minimum[axis]) {
+                        set_axis(rect, axis, !requested, minimum[axis]);
+                    } else {
+                        const bool positive = requested_available >= flipped_available
+                                                  ? requested
+                                                  : !requested;
+                        set_axis(rect, axis, positive,
+                                 std::min(minimum[axis], available(axis, positive)));
+                    }
+                }
+                return rect;
+            }
+
+            if (rect.size().x >= minimum.x && rect.size().y >= minimum.y) {
+                return rect;
+            }
+
+            GrowDirection selected = dir;
+            const bool x_has_side = available(0, dir.positive_x) >= minimum.x ||
+                                    available(0, !dir.positive_x) >= minimum.x;
+            const bool y_has_side = available(1, dir.positive_y) >= minimum.y ||
+                                    available(1, !dir.positive_y) >= minimum.y;
+            float scale = 1.0f;
+            if (x_has_side && y_has_side) {
+                if (available(0, selected.positive_x) < minimum.x) {
+                    selected.positive_x = !selected.positive_x;
+                }
+                if (available(1, selected.positive_y) < minimum.y) {
+                    selected.positive_y = !selected.positive_y;
+                }
+            } else {
+                const GrowDirection candidates[] = {
+                    dir,
+                    {!dir.positive_x, dir.positive_y},
+                    {dir.positive_x, !dir.positive_y},
+                    {!dir.positive_x, !dir.positive_y},
+                };
+                scale = -1.0f;
+                for (const auto candidate : candidates) {
+                    const float candidate_scale = std::min({
+                        1.0f,
+                        available(0, candidate.positive_x) / minimum.x,
+                        available(1, candidate.positive_y) / minimum.y,
+                    });
+                    if (candidate_scale > scale) {
+                        scale = candidate_scale;
+                        selected = candidate;
+                    }
+                }
+            }
+            set_axis(rect, 0, selected.positive_x, minimum.x * scale);
+            set_axis(rect, 1, selected.positive_y, minimum.y * scale);
+            return rect;
+        }
+
         DepthWindowOverlayState g_overlay_state;
         std::uint64_t g_overlay_revision = 0;
         std::uint64_t g_depth_drag_revision = 0;
@@ -319,11 +453,18 @@ namespace lfs::vis::op {
 
         DepthWindowRect DepthWindowDragOperator::deriveCornerRect(
             const glm::vec2& pointer) const {
+            const GrowDirection direction{
+                .positive_x = pointer.x - anchor_render_.x >= 0.0f,
+                .positive_y = pointer.y - anchor_render_.y >= 0.0f,
+            };
             if (!constrained_) {
-                return {
-                    .min = glm::min(anchor_render_, pointer),
-                    .max = glm::max(anchor_render_, pointer),
-                };
+                return growToMinimumWindow(
+                    {
+                        .min = glm::min(anchor_render_, pointer),
+                        .max = glm::max(anchor_render_, pointer),
+                    },
+                    anchor_render_, direction, panel_, std::nullopt,
+                    MinimumWindowPolicy::PreserveAnchor);
             }
 
             const glm::vec2 delta = pointer - anchor_render_;
@@ -359,10 +500,13 @@ namespace lfs::vis::op {
 
             const glm::vec2 corner = anchor_render_ +
                                      signs * glm::vec2(constrained_width, constrained_height);
-            return {
-                .min = glm::min(anchor_render_, corner),
-                .max = glm::max(anchor_render_, corner),
-            };
+            return growToMinimumWindow(
+                {
+                    .min = glm::min(anchor_render_, corner),
+                    .max = glm::max(anchor_render_, corner),
+                },
+                anchor_render_, direction, panel_, aspect_px_,
+                MinimumWindowPolicy::PreserveAnchor);
         }
 
         DepthWindowRect DepthWindowDragOperator::deriveMoveRect(
@@ -400,30 +544,13 @@ namespace lfs::vis::op {
                 .min = glm::min(rect.min, rect.max),
                 .max = glm::max(rect.min, rect.max),
             };
-            // Enforce the sanitizer's 5% floor on the geometry itself: if the
-            // sanitizer expanded a smaller rect after the fact, the derived
-            // offsets would belong to the pre-expansion rect and the dragged
-            // edge would drift off the pointer near a crossing. Grow away
-            // from the fixed edge (the initial rect's center side).
-            const glm::vec2 min_size{
-                0.05f * static_cast<float>(panel_.render_width),
-                0.05f * static_cast<float>(panel_.render_height)};
-            const glm::vec2 bounds_lo = dragBoundsMin();
-            const glm::vec2 bounds_hi = dragBoundsMax(panel_);
-            for (int axis = 0; axis < 2; ++axis) {
-                const float deficit = min_size[axis] - (out.max[axis] - out.min[axis]);
-                if (deficit <= 0.0f) {
-                    continue;
-                }
-                if (pointer[axis] >= initial_rect_.center()[axis]) {
-                    out.max[axis] = std::min(out.max[axis] + deficit, bounds_hi[axis]);
-                    out.min[axis] = out.max[axis] - min_size[axis];
-                } else {
-                    out.min[axis] = std::max(out.min[axis] - deficit, bounds_lo[axis]);
-                    out.max[axis] = out.min[axis] + min_size[axis];
-                }
-            }
-            return out;
+            const glm::vec2 initial_center = initial_rect_.center();
+            return growToMinimumWindow(
+                out, {}, {
+                             .positive_x = pointer.x >= initial_center.x,
+                             .positive_y = pointer.y >= initial_center.y,
+                         },
+                panel_, std::nullopt, MinimumWindowPolicy::LegacyEdge);
         }
 
         void DepthWindowDragOperator::applyRect(const DepthWindowRect& rect) {
