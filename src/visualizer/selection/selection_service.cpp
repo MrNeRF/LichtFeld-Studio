@@ -2925,7 +2925,9 @@ namespace lfs::vis {
                             rendering::dataWorldTransformToVisualizerWorld(
                                 scene_manager_->getScene().getWorldTransform(node->id));
                         if (filters.crop_filter) {
-                            applyCropFilterToMeans(selection, node->point_cloud->means, means_to_visualizer);
+                            applyCropFilterToMeans(
+                                selection, node->point_cloud->means, means_to_visualizer,
+                                nullptr, nullptr, nullptr, nullptr, nullptr, true, node->id);
                         }
                         if (filters.depth_filter) {
                             applyDepthFilterToMeans(selection, node->point_cloud->means, means_to_visualizer);
@@ -3155,7 +3157,9 @@ namespace lfs::vis {
                 rendering::dataWorldTransformToVisualizerWorld(
                     scene_manager_->getScene().getWorldTransform(node->id));
             if (filters.crop_filter) {
-                applyCropFilterToMeans(candidate, means, means_to_visualizer);
+                applyCropFilterToMeans(
+                    candidate, means, means_to_visualizer,
+                    nullptr, nullptr, nullptr, nullptr, nullptr, true, node->id);
             }
             if (filters.depth_filter) {
                 applyDepthFilterToMeans(candidate, means, means_to_visualizer);
@@ -3783,7 +3787,9 @@ namespace lfs::vis {
                     rendering::dataWorldTransformToVisualizerWorld(
                         scene_manager_->getScene().getWorldTransform(node->id));
                 if (session.filters.crop_filter) {
-                    applyCropFilterToMeans(selection_out, node->point_cloud->means, means_to_visualizer);
+                    applyCropFilterToMeans(
+                        selection_out, node->point_cloud->means, means_to_visualizer,
+                        nullptr, nullptr, nullptr, nullptr, nullptr, true, node->id);
                 }
                 if (session.filters.depth_filter) {
                     applyDepthFilterToMeans(selection_out, node->point_cloud->means, means_to_visualizer);
@@ -4609,7 +4615,8 @@ namespace lfs::vis {
                                                   const core::Tensor* crop_box_max,
                                                   const core::Tensor* ellipsoid_transform,
                                                   const core::Tensor* ellipsoid_radii,
-                                                  const bool use_scene_filters) const {
+                                                  const bool use_scene_filters,
+                                                  const core::NodeId point_cloud_node_id) const {
         LOG_TIMER("SelectionService::applyCropFilterToMeans");
         if (!scene_manager_ || !selection.is_valid() || !means.is_valid() || means.size(0) != selection.size(0)) {
             return;
@@ -4656,9 +4663,16 @@ namespace lfs::vis {
             crop_min_ptr = crop_box_min;
             crop_max_ptr = crop_box_max;
         } else if (use_scene_filters) {
-            if (const auto* const cb =
-                    findRenderableByNodeId(render_state.cropboxes, scene_manager_->getActiveSelectionCropBoxId());
-                cb && cb->data) {
+            core::NodeId cropbox_id = core::NULL_NODE;
+            if (point_cloud_node_id != core::NULL_NODE) {
+                cropbox_id = scene_manager_->getScene().getCropBoxForSplat(point_cloud_node_id);
+            }
+            if (cropbox_id == core::NULL_NODE) {
+                cropbox_id = scene_manager_->getActiveSelectionCropBoxId();
+            }
+
+            if (const auto* const cb = findRenderableByNodeId(render_state.cropboxes, cropbox_id);
+                cb && cb->data && cb->data->enabled) {
                 const glm::mat4 inv_transform = glm::inverse(cb->world_transform);
                 const float* const t_ptr = glm::value_ptr(inv_transform);
                 crop_t = core::Tensor::from_vector(std::vector<float>(t_ptr, t_ptr + 16), {4, 4});

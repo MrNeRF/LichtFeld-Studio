@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "core/scene.hpp"
 #include "core/selection_domain.hpp"
 #include "core/tensor.hpp"
 #include "rendering/rendering_types.hpp"
@@ -279,7 +280,8 @@ namespace lfs::vis {
                                     const core::Tensor* crop_box_max = nullptr,
                                     const core::Tensor* ellipsoid_transform = nullptr,
                                     const core::Tensor* ellipsoid_radii = nullptr,
-                                    bool use_scene_filters = true) const;
+                                    bool use_scene_filters = true,
+                                    core::NodeId point_cloud_node_id = core::NULL_NODE) const;
         void applyDepthFilterToMeans(core::Tensor& selection,
                                      const core::Tensor& means,
                                      const glm::mat4& means_to_visualizer) const;
