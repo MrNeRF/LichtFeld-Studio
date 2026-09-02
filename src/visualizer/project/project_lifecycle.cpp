@@ -427,7 +427,7 @@ namespace lfs::vis::project {
                     "project.dataset_embed");
             }
             lfs::io::project::Hash128Stream hasher;
-            std::array<char, 1024 * 1024> buffer{};
+            std::vector<char> buffer(1024 * 1024);
             while (input) {
                 input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
                 const auto count = input.gcount();
@@ -628,7 +628,7 @@ namespace lfs::vis::project {
                 lfs::io::project::Hash128Stream hasher;
                 auto copied = source->visit_stream(
                     [&](std::istream& input, const std::uint64_t size) -> lfs::Result<void> {
-                        std::array<char, 1024 * 1024> buffer{};
+                        std::vector<char> buffer(1024 * 1024);
                         std::uint64_t copied_bytes = 0;
                         while (input && copied_bytes < size) {
                             const auto remaining = size - copied_bytes;

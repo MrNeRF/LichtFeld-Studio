@@ -35,6 +35,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace lfs::io::project {
 
@@ -2807,7 +2808,7 @@ namespace lfs::io::project {
                     source.source_path.string(), "project.dataset_embed");
             }
             Hash128Stream hasher;
-            std::array<char, 1024 * 1024> buffer{};
+            std::vector<char> buffer(1024 * 1024);
             while (input) {
                 input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
                 const auto count = input.gcount();
