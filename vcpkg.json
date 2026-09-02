@@ -5,7 +5,6 @@
     "curl",
     "args",
     "assimp",
-    "boost-preprocessor",
     {
       "name": "ffmpeg",
       "features": [
@@ -80,7 +79,6 @@
       ]
     },
     "shader-slang",
-    "usd",
     "xxhash",
     "zstd"
   ],
@@ -117,10 +115,6 @@
     {
       "name": "args",
       "version": "6.4.8"
-    },
-    {
-      "name": "boost-preprocessor",
-      "version": "1.90.0#1"
     },
     {
       "name": "ffmpeg",
@@ -177,10 +171,6 @@
     {
       "name": "volk",
       "version": "1.4.341.0"
-    },
-    {
-      "name": "usd",
-      "version": "26.3"
     },
     {
       "name": "python3",

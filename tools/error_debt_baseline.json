@@ -118,7 +118,6 @@
   },
   "empty-catch": {
     "app": [
-      "src/app/main.cpp:185",
       "src/app/mcp_gui_tools.cpp:5197"
     ],
     "core": [

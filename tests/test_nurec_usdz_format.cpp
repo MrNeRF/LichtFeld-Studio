@@ -7,11 +7,11 @@
 #define NOMINMAX
 #endif
 
+#include "io/formats/usd_flat/half.hpp"
 #include <archive.h>
 #include <archive_entry.h>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
-#include <pxr/base/gf/half.h>
 #include <zlib.h>
 
 #include <algorithm>
@@ -279,9 +279,7 @@ namespace {
             for (size_t i = 0; i < result.size(); ++i) {
                 const uint16_t bits = static_cast<uint16_t>(binary[i * 2 + 0]) |
                                       (static_cast<uint16_t>(binary[i * 2 + 1]) << 8u);
-                pxr::GfHalf half_value;
-                half_value.setBits(bits);
-                result[i] = static_cast<float>(half_value);
+                result[i] = lfs::io::usd_flat::half_to_float(bits);
             }
             return result;
         }

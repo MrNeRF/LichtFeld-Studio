@@ -18,6 +18,8 @@ results
 data
 !tests/data/
 tests/data/*
+!tests/data/usd/
+!tests/data/usd/**
 !tests/data/param_json_golden/
 tests/data/param_json_golden/*
 !tests/data/param_json_golden/*.json
@@ -68,7 +70,6 @@ lib/
 !external/tree-sitter/lib/src/
 !external/tree-sitter/lib/src/query.c
 generatedSchema.usda
-plugInfo.json
 
 # Compiled SPIR-V shader binaries (regenerated from slang/glsl by CMake;
 # slangc + glslang are required by the build anyway, so checking these in
