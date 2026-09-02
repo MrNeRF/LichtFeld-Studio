@@ -78,6 +78,7 @@ namespace lfs::vis {
             return scene_manager_->getScene();
         }
         bool postWork(WorkItem work) override;
+        bool pumpPostedWorkForProjectWrite() override;
         bool postRenderWork(WorkItem work);
         [[nodiscard]] bool isOnViewerThread() const override {
             return std::this_thread::get_id() == viewer_thread_id_;
@@ -305,6 +306,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
         friend class VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
         friend class VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
+        friend class VisualizerImplResetTest_AsyncCaptureKeepsNewerSceneDirty_Test;
         friend class VisualizerImplResetTest_AutosaveSkipsWhileManualProjectWriteJobIsRunning_Test;
         friend class VisualizerImplResetTest_RecoveredProjectSwitchDeletesTempOnlyAfterReplacement_Test;
         friend class VisualizerImplResetTest_FailedNewProjectKeepsRecoveredSessionTemp_Test;

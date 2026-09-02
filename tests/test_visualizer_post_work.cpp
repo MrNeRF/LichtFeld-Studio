@@ -14202,6 +14202,62 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
+           AsyncCaptureKeepsNewerSceneDirty) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.input_controller_ = std::make_unique<InputController>(
+            nullptr, viewer.getViewport());
+        auto* const lifecycle = viewer.project_lifecycle_.get();
+        ASSERT_NE(lifecycle, nullptr);
+
+        struct HeadroomGuard {
+            HeadroomGuard() {
+                lfs::io::project::detail::
+                    set_splat_capture_no_headroom_for_testing(false);
+            }
+            ~HeadroomGuard() {
+                lfs::io::project::detail::
+                    set_splat_capture_no_headroom_for_testing(std::nullopt);
+            }
+        } headroom;
+
+        auto cpu_model = lfs::test::licht::make_splat(65536);
+        auto cuda_model = std::make_unique<lfs::core::SplatData>(
+            0,
+            cpu_model->means().to(lfs::core::Device::CUDA),
+            cpu_model->sh0().to(lfs::core::Device::CUDA),
+            lfs::core::Tensor{},
+            cpu_model->scaling_raw().to(lfs::core::Device::CUDA),
+            cpu_model->rotation_raw().to(lfs::core::Device::CUDA),
+            cpu_model->opacity_raw().to(lfs::core::Device::CUDA), 1.0f);
+        ASSERT_NE(viewer.getScene().addSplat("Async dirty", std::move(cuda_model)),
+                  lfs::core::NULL_NODE);
+        const auto* const node = viewer.getScene().getNode("Async dirty");
+        ASSERT_NE(node, nullptr);
+        ASSERT_NE(node->model, nullptr);
+
+        auto started = lifecycle->synchronizeDocumentFromViewer(
+            project::ProjectLifecycle::DocumentSyncMode::Autosave);
+        ASSERT_TRUE(started)
+            << lfs::format_for_developer(started.error());
+        ASSERT_TRUE(viewer.jobs().anyRunning(JobType::ProjectWrite));
+
+        node->model->means().fill_(23.0f);
+        lifecycle->markSceneMutation(
+            static_cast<std::uint32_t>(
+                lfs::core::Scene::MutationType::MODEL_CHANGED));
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+            }));
+        EXPECT_TRUE(lifecycle->hasDirtyProject());
+    }
+
+    TEST_F(VisualizerImplResetTest,
            PreTrainingProjectSaveRestoresCameraEnabledAndHidden) {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";

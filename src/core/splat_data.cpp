@@ -1003,6 +1003,52 @@ namespace lfs::core {
         return copy;
     }
 
+    SplatData SplatData::clone_async(const cudaStream_t stream) const {
+        const auto clone_tensor = [stream](const Tensor& source) {
+            if (!source.is_valid()) {
+                return Tensor{};
+            }
+            const Tensor contiguous = source.contiguous();
+            if (contiguous.device() != Device::CUDA || stream == nullptr) {
+                return contiguous.clone();
+            }
+            Tensor result = Tensor::empty(
+                contiguous.shape(), Device::CUDA, contiguous.dtype());
+            contiguous.sync_to_stream(stream);
+            result.set_stream(stream);
+            if (contiguous.bytes() != 0) {
+                LFS_CUDA_CHECK(cudaMemcpyAsync(
+                    result.data_ptr(), contiguous.data_ptr(),
+                    contiguous.bytes(), cudaMemcpyDeviceToDevice, stream));
+            }
+            result.record_stream(stream);
+            return result;
+        };
+
+        SplatData copy;
+        copy._max_sh_degree = _max_sh_degree;
+        copy._active_sh_degree = _active_sh_degree;
+        copy._scene_scale = _scene_scale;
+        copy._means = clone_tensor(_means);
+        copy._sh0 = clone_tensor(_sh0);
+        copy._shN = clone_tensor(_shN);
+        copy._shN_value_bounds = clone_tensor(_shN_value_bounds);
+        copy._scaling = clone_tensor(_scaling);
+        copy._rotation = clone_tensor(_rotation);
+        copy._opacity = clone_tensor(_opacity);
+        copy._densification_info = clone_tensor(_densification_info);
+        copy._max_screen_share = clone_tensor(_max_screen_share);
+        copy._deleted = clone_tensor(_deleted);
+        copy._deleted_count.store(
+            _deleted_count.load(std::memory_order_relaxed),
+            std::memory_order_relaxed);
+        copy._deleted_mask_version.store(
+            _deleted_mask_version.load(std::memory_order_relaxed),
+            std::memory_order_relaxed);
+        copy._frozen_ranges = _frozen_ranges;
+        return copy;
+    }
+
     // ========== MOVE SEMANTICS ==========
 
     SplatData::SplatData(SplatData&& other) noexcept

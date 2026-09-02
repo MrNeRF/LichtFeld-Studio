@@ -3648,6 +3648,22 @@ namespace lfs::vis {
         return true;
     }
 
+    bool VisualizerImpl::pumpPostedWorkForProjectWrite() {
+        if (!isOnViewerThread()) {
+            return false;
+        }
+        std::vector<WorkItem> work;
+        {
+            std::lock_guard lock(work_queue_mutex_);
+            work.swap(work_queue_);
+        }
+        if (work.empty()) {
+            return false;
+        }
+        runPostedWork(work, "viewer.project_wait", viewer_thread_id_);
+        return true;
+    }
+
     bool VisualizerImpl::postRenderWork(WorkItem work) {
         {
             std::lock_guard lock(work_queue_mutex_);

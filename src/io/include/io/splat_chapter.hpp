@@ -35,6 +35,8 @@ namespace lfs::io::project {
         Hash128 content_xxh3_128;
     };
 
+    class AsyncSplatCapture;
+
     class LFS_IO_API SplatChapterPayload {
     public:
         [[nodiscard]] static lfs::Result<SplatChapterPayload>
@@ -44,6 +46,14 @@ namespace lfs::io::project {
         [[nodiscard]] static lfs::Result<SplatChapterPayload>
         capture(const lfs::core::SplatData& model, SplatSourceKind source_kind,
                 bool is_training_model);
+
+        // Enqueue a device-only snapshot on a dedicated stream. A null pointer
+        // means the coordinator rejected the extra device allocation; callers
+        // should use capture() synchronously in that case.
+        [[nodiscard]] static lfs::Result<std::unique_ptr<AsyncSplatCapture>>
+        start_async_capture(const lfs::core::SplatData& model,
+                            SplatSourceKind source_kind,
+                            bool is_training_model);
 
         [[nodiscard]] std::span<const std::byte> bytes() const noexcept {
             return bytes_;
@@ -71,10 +81,29 @@ namespace lfs::io::project {
         std::uint32_t lfsp_version_ = 0;
     };
 
+    class LFS_IO_API AsyncSplatCapture {
+    public:
+        AsyncSplatCapture(AsyncSplatCapture&&) noexcept;
+        AsyncSplatCapture& operator=(AsyncSplatCapture&&) noexcept;
+        AsyncSplatCapture(const AsyncSplatCapture&) = delete;
+        AsyncSplatCapture& operator=(const AsyncSplatCapture&) = delete;
+        ~AsyncSplatCapture();
+
+        [[nodiscard]] lfs::Result<SplatChapterPayload> complete();
+
+    private:
+        friend class SplatChapterPayload;
+        struct Impl;
+        explicit AsyncSplatCapture(std::unique_ptr<Impl> impl);
+        std::unique_ptr<Impl> impl_;
+    };
+
     namespace detail {
         // Test-only override of the stream-hydrate window. nullopt restores 16 MiB.
         LFS_IO_API void set_splat_stream_window_bytes_for_testing(
             std::optional<std::size_t> window_bytes);
+        LFS_IO_API void set_splat_capture_no_headroom_for_testing(
+            std::optional<bool> forced);
     } // namespace detail
 
 } // namespace lfs::io::project

@@ -215,6 +215,110 @@ namespace {
         }));
     }
 
+    TEST_F(SplatRawPayloadTest, AsyncGeneratedCaptureMatchesSynchronousBytes) {
+        const auto path = std::filesystem::path(PROJECT_ROOT_PATH) /
+                          "tests/data/bike.ply";
+        auto loaded = lfs::io::load_ply(path);
+        ASSERT_TRUE(loaded.has_value())
+            << lfs::format_for_developer(loaded.error());
+        if (loaded->value.means().device() != lfs::core::Device::CUDA) {
+            GTEST_SKIP() << "async capture requires a CUDA-backed splat";
+        }
+
+        struct HeadroomGuard {
+            HeadroomGuard() {
+                lfs::io::project::detail::
+                    set_splat_capture_no_headroom_for_testing(false);
+            }
+            ~HeadroomGuard() {
+                lfs::io::project::detail::
+                    set_splat_capture_no_headroom_for_testing(std::nullopt);
+            }
+        } headroom;
+
+        auto synchronous = SplatChapterPayload::capture(
+            loaded->value, lfs::io::project::SplatSourceKind::Generated, false);
+        ASSERT_TRUE(synchronous.has_value())
+            << lfs::format_for_developer(synchronous.error());
+        auto pending = SplatChapterPayload::start_async_capture(
+            loaded->value, lfs::io::project::SplatSourceKind::Generated, false);
+        ASSERT_TRUE(pending.has_value())
+            << lfs::format_for_developer(pending.error());
+        ASSERT_TRUE(*pending);
+        auto asynchronous = (*pending)->complete();
+        ASSERT_TRUE(asynchronous.has_value())
+            << lfs::format_for_developer(asynchronous.error());
+        ASSERT_EQ(asynchronous->bytes().size(), synchronous->bytes().size());
+        EXPECT_TRUE(std::equal(
+            asynchronous->bytes().begin(), asynchronous->bytes().end(),
+            synchronous->bytes().begin()));
+    }
+
+    TEST_F(SplatRawPayloadTest, AsyncCaptureKeepsSnapshotBeforeMutation) {
+        const auto path = std::filesystem::path(PROJECT_ROOT_PATH) /
+                          "tests/data/bike.ply";
+        auto loaded = lfs::io::load_ply(path);
+        ASSERT_TRUE(loaded.has_value())
+            << lfs::format_for_developer(loaded.error());
+        if (loaded->value.means().device() != lfs::core::Device::CUDA) {
+            GTEST_SKIP() << "async capture requires a CUDA-backed splat";
+        }
+        struct HeadroomGuard {
+            HeadroomGuard() {
+                lfs::io::project::detail::
+                    set_splat_capture_no_headroom_for_testing(false);
+            }
+            ~HeadroomGuard() {
+                lfs::io::project::detail::
+                    set_splat_capture_no_headroom_for_testing(std::nullopt);
+            }
+        } headroom;
+
+        auto before = SplatChapterPayload::capture(
+            loaded->value, lfs::io::project::SplatSourceKind::Generated, false);
+        ASSERT_TRUE(before.has_value())
+            << lfs::format_for_developer(before.error());
+        auto pending = SplatChapterPayload::start_async_capture(
+            loaded->value, lfs::io::project::SplatSourceKind::Generated, false);
+        ASSERT_TRUE(pending.has_value())
+            << lfs::format_for_developer(pending.error());
+        ASSERT_TRUE(*pending);
+        loaded->value.means().fill_(17.0f);
+        auto asynchronous = (*pending)->complete();
+        ASSERT_TRUE(asynchronous.has_value())
+            << lfs::format_for_developer(asynchronous.error());
+        ASSERT_EQ(asynchronous->bytes().size(), before->bytes().size());
+        EXPECT_TRUE(std::equal(
+            asynchronous->bytes().begin(), asynchronous->bytes().end(),
+            before->bytes().begin()));
+    }
+
+    TEST_F(SplatRawPayloadTest, AsyncCaptureFallsBackWithoutHeadroom) {
+        const auto path = std::filesystem::path(PROJECT_ROOT_PATH) /
+                          "tests/data/bike.ply";
+        auto loaded = lfs::io::load_ply(path);
+        ASSERT_TRUE(loaded.has_value())
+            << lfs::format_for_developer(loaded.error());
+        if (loaded->value.means().device() != lfs::core::Device::CUDA) {
+            GTEST_SKIP() << "async capture requires a CUDA-backed splat";
+        }
+        struct HeadroomGuard {
+            HeadroomGuard() {
+                lfs::io::project::detail::
+                    set_splat_capture_no_headroom_for_testing(true);
+            }
+            ~HeadroomGuard() {
+                lfs::io::project::detail::
+                    set_splat_capture_no_headroom_for_testing(std::nullopt);
+            }
+        } headroom;
+        auto pending = SplatChapterPayload::start_async_capture(
+            loaded->value, lfs::io::project::SplatSourceKind::Generated, false);
+        ASSERT_TRUE(pending.has_value())
+            << lfs::format_for_developer(pending.error());
+        EXPECT_FALSE(*pending);
+    }
+
     TEST_F(SplatRawPayloadTest, StreamHydrateMatchesRawBytesAndContentHash) {
         auto stream = stream_of(payload);
         auto streamed = SplatChapterPayload::hydrate_lfsp_stream(

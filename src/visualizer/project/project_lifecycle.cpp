@@ -2617,6 +2617,7 @@ namespace lfs::vis::project {
                 std::make_shared<ProjectDocument>(
                     std::move(*created));
             last_captured_selection_serial_.reset();
+            captured_splat_serials_.clear();
         } else {
             LOG_ERROR(
                 "Cannot create initial project document: {}",
@@ -2734,8 +2735,7 @@ namespace lfs::vis::project {
                 "Project switching is blocked until the close save finishes",
                 "project.save");
         }
-        if (viewer_.jobs().anyRunning(
-                JobType::ProjectWrite) ||
+        if (viewer_.jobs().anyRunning(JobType::ProjectWrite) ||
             viewer_.jobs().anyRunning(JobType::DatasetEmbed)) {
             return fail<void>(
                 lfs::ErrorCode::FailedPrecondition,
@@ -3364,8 +3364,9 @@ namespace lfs::vis::project {
         if (project_write_purpose_ !=
                 ProjectWritePurpose::Autosave &&
             project_write_purpose_ !=
-                ProjectWritePurpose::
-                    TrainingAutosave) {
+                ProjectWritePurpose::TrainingAutosave &&
+            project_write_purpose_ !=
+                ProjectWritePurpose::GeometryCapture) {
             return fail<void>(
                 lfs::ErrorCode::FailedPrecondition,
                 "A project write is already in progress.",
@@ -3375,7 +3376,18 @@ namespace lfs::vis::project {
         // Autosave occupies the exclusive ProjectWrite
         // slot. Join and settle it so a user Save / Save
         // As never loses the slot to a background write.
+        const bool geometry_capture =
+            project_write_purpose_ ==
+            ProjectWritePurpose::GeometryCapture;
         joinPendingWrite();
+        if (geometry_capture &&
+            !last_project_write_error_.empty()) {
+            return fail<void>(
+                last_project_write_error_code_.value_or(
+                    lfs::ErrorCode::Unavailable),
+                "The geometry snapshot could not be captured.",
+                last_project_write_error_, "project.capture");
+        }
         return {};
     }
 
@@ -3422,6 +3434,7 @@ namespace lfs::vis::project {
             std::make_shared<ProjectDocument>(
                 std::move(*opened));
         last_captured_selection_serial_.reset();
+        captured_splat_serials_.clear();
         cached_project_info_.reset();
         cached_bound_checkpoint_iteration_.reset();
         clearStoredTrainingSession();
@@ -3748,6 +3761,100 @@ namespace lfs::vis::project {
                 start_write_finished - start_write_started)
                 .count(),
             project_write_destination_.string());
+        return {};
+    }
+
+    lfs::Result<void>
+    ProjectLifecycle::startAsyncSplatCaptures(
+        std::vector<PendingSplatCapture> captures,
+        const std::uint64_t scene_serial) {
+        auto& jobs = viewer_.jobs();
+        auto handle = jobs.init(
+            JobType::ProjectWrite, "Preparing geometry snapshot");
+        if (!handle) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "Another project write is already running.",
+                "Geometry snapshot capture shares the project-write job slot",
+                "project.job");
+        }
+        if (project_write_thread_.joinable()) {
+            project_write_thread_.join();
+        }
+        project_write_job_ = *handle;
+        project_write_purpose_ = ProjectWritePurpose::GeometryCapture;
+        project_write_scene_serial_ = scene_serial;
+        project_write_parameter_serial_ =
+            viewer_.getParameterManager()
+                ? viewer_.getParameterManager()->dirtySerial()
+                : 0;
+        project_write_destination_.clear();
+        last_project_write_error_.clear();
+        last_project_write_error_code_.reset();
+        last_project_write_typed_error_.reset();
+        {
+            const std::lock_guard lock(pending_splat_capture_mutex_);
+            completed_splat_captures_.clear();
+        }
+        try {
+            project_write_thread_ = std::jthread(
+                [this, handle = *handle,
+                 captures = std::move(captures)](
+                    const std::stop_token stop) mutable {
+                    auto& registry = viewer_.jobs();
+                    registry.work(handle);
+                    std::vector<CompletedSplatCapture> completed;
+                    completed.reserve(captures.size());
+                    std::string error;
+                    std::optional<lfs::ErrorCode> error_code;
+                    std::optional<lfs::Error> typed_error;
+                    for (std::size_t i = 0; i < captures.size(); ++i) {
+                        if (stop.stop_requested() ||
+                            registry.cancelRequested(handle)) {
+                            break;
+                        }
+                        registry.report(
+                            handle,
+                            0.05F + 0.90F *
+                                        static_cast<float>(i) /
+                                        static_cast<float>(captures.size()),
+                            "Downloading geometry snapshot");
+                        auto payload = captures[i].capture->complete();
+                        if (!payload) {
+                            error_code = payload.error().code();
+                            typed_error = payload.error();
+                            error = developerError(payload.error());
+                            break;
+                        }
+                        completed.push_back({
+                            .uuid = captures[i].uuid,
+                            .scene_serial = captures[i].scene_serial,
+                            .payload = std::move(*payload),
+                        });
+                    }
+                    {
+                        const std::lock_guard lock(
+                            pending_splat_capture_mutex_);
+                        completed_splat_captures_ = std::move(completed);
+                    }
+                    registry.finishWork(
+                        handle,
+                        stop.stop_requested() ||
+                            registry.cancelRequested(handle),
+                        std::move(error), error_code,
+                        std::move(typed_error));
+                    queueProjectWriteSettlement(handle);
+                });
+        } catch (const std::exception& error) {
+            jobs.failed(*handle, error.what());
+            jobs.free(*handle);
+            project_write_job_.reset();
+            project_write_purpose_ = ProjectWritePurpose::None;
+            return fail<void>(
+                lfs::ErrorCode::Unavailable,
+                "The geometry snapshot worker could not start.",
+                error.what(), "project.job");
+        }
         return {};
     }
 
@@ -4959,6 +5066,10 @@ namespace lfs::vis::project {
         if (project_write_thread_.joinable()) {
             project_write_thread_.join();
         }
+        // The worker queues its viewer-side publication through postWork. Give
+        // explicit Save/Save As callers the same ownership boundary as a
+        // regular frame before falling back to direct settlement for shutdown.
+        viewer_.pumpPostedWorkForProjectWrite();
         settleProjectWrite();
     }
 
@@ -5009,6 +5120,47 @@ namespace lfs::vis::project {
                 error,
                 "Project write worker reported cancellation",
                 "project.job");
+        }
+        if (project_write_purpose_ ==
+            ProjectWritePurpose::GeometryCapture) {
+            if (error.empty()) {
+                std::vector<CompletedSplatCapture> completed;
+                {
+                    const std::lock_guard lock(
+                        pending_splat_capture_mutex_);
+                    completed = std::move(completed_splat_captures_);
+                }
+                const std::lock_guard document_lock(
+                    document_access_mutex_);
+                for (auto& item : completed) {
+                    if (auto set = document_->set_splat(
+                            item.uuid, std::move(item.payload));
+                        !set) {
+                        last_project_write_error_code_ = set.error().code();
+                        last_project_write_typed_error_ = set.error();
+                        error = developerError(set.error());
+                        break;
+                    }
+                    captured_splat_serials_[item.uuid] = item.scene_serial;
+                }
+            }
+            if (error.empty()) {
+                jobs.completed(*project_write_job_);
+            } else if (snapshot->worker_canceled) {
+                jobs.canceled(*project_write_job_);
+            } else {
+                jobs.failed(*project_write_job_, error);
+            }
+            if (!error.empty()) {
+                last_project_write_error_ = error;
+            }
+            jobs.free(*project_write_job_);
+            project_write_job_.reset();
+            project_write_purpose_ = ProjectWritePurpose::None;
+            project_write_destination_.clear();
+            project_write_automatic_ = false;
+            cached_project_info_.reset();
+            return;
         }
         if (!error.empty() &&
             project_write_purpose_ ==
@@ -5160,6 +5312,7 @@ namespace lfs::vis::project {
                         ProjectDocument>(
                         std::move(*reopened));
                 last_captured_selection_serial_.reset();
+                captured_splat_serials_.clear();
                 cached_bound_checkpoint_iteration_
                     .reset();
             }
@@ -5687,6 +5840,7 @@ namespace lfs::vis::project {
             std::make_shared<ProjectDocument>(
                 std::move(*opened));
         last_captured_selection_serial_.reset();
+        captured_splat_serials_.clear();
         cached_project_info_.reset();
         cached_bound_checkpoint_iteration_.reset();
         clearStoredTrainingSession();
@@ -5810,6 +5964,8 @@ namespace lfs::vis::project {
     ProjectLifecycle::synchronizeDocumentFromViewer(
         const DocumentSyncMode mode) {
         const auto sync_started = std::chrono::steady_clock::now();
+        const auto sync_scene_serial = scene_mutation_serial_.load(
+            std::memory_order_acquire);
         auto scene_capture_finished = sync_started;
         auto payload_capture_finished = sync_started;
         auto selection_capture_finished = sync_started;
@@ -5929,13 +6085,21 @@ namespace lfs::vis::project {
                 captured_scene_uuids.insert(node.uuid);
             }
         }
+        const auto old_training_uuid =
+            document_->scene_graph().training_model_uuid();
+        if (!old_training_uuid) {
+            return lfs::Status::failure(
+                std::move(old_training_uuid).error());
+        }
+        const bool drops_training_binding =
+            training_uuid.is_nil() && old_training_uuid->has_value();
         const auto old_scene_bytes =
             document_->scene_graph().to_bytes();
         const auto new_scene_bytes =
             captured_scene->to_bytes();
         scene_capture_finished = std::chrono::steady_clock::now();
-        if (!sameBytes(
-                old_scene_bytes, new_scene_bytes)) {
+        if (drops_training_binding ||
+            !sameBytes(old_scene_bytes, new_scene_bytes)) {
             document_->edit_scene_graph() =
                 std::move(*captured_scene);
         }
@@ -5964,6 +6128,98 @@ namespace lfs::vis::project {
             payload_dirty_.load(
                 std::memory_order_acquire) ||
             !document_->source_path();
+
+        std::vector<PendingSplatCapture> async_captures;
+        if (!viewer_.jobs().anyRunning(
+                JobType::ProjectWrite)) {
+            for (const auto* node : scene.getNodes()) {
+                if (!node || node->type != lfs::core::NodeType::SPLAT ||
+                    node->payload_hydration !=
+                        lfs::core::PayloadHydrationState::Loaded) {
+                    continue;
+                }
+                const auto binding = bindings.find(node->uuid);
+                if (binding == bindings.end() ||
+                    binding->second.fourcc != "SPLT") {
+                    continue;
+                }
+                const bool already_present =
+                    document_->find_splat(node->uuid) ||
+                    std::ranges::any_of(
+                        document_->payload_states(),
+                        [&](const auto& state) {
+                            return state.instance_uuid == node->uuid &&
+                                   state.fourcc.to_string() == "SPLT";
+                        });
+                if (already_present && !capture_payloads) {
+                    continue;
+                }
+                const auto captured = captured_splat_serials_.find(node->uuid);
+                if (captured != captured_splat_serials_.end() &&
+                    captured->second >= sync_scene_serial) {
+                    continue;
+                }
+
+                std::unique_ptr<lfs::core::SplatData> extracted_model;
+                const lfs::core::SplatData* model = node->model.get();
+                if (!model) {
+                    extracted_model = scene.extractConsolidatedNodeModel(
+                        node->uuid);
+                    model = extracted_model.get();
+                }
+                if (!model) {
+                    return fail<void>(
+                        lfs::ErrorCode::DataLoss,
+                        "A loaded splat node has no model.",
+                        node->uuid.to_string(), "SPLT");
+                }
+                auto async = lfs::io::project::SplatChapterPayload::
+                    start_async_capture(
+                        *model,
+                        lfs::io::project::SplatSourceKind::Generated,
+                        false);
+                if (!async) {
+                    if (async.error().code() !=
+                        lfs::ErrorCode::ResourceExhausted) {
+                        return lfs::Status::failure(std::move(async).error());
+                    }
+                    LOG_WARN(
+                        "SPLT async capture falling back to synchronous capture for {}: {}",
+                        node->uuid.to_string(),
+                        developerError(async.error()));
+                } else if (*async) {
+                    async_captures.push_back({
+                        .uuid = node->uuid,
+                        .scene_serial = sync_scene_serial,
+                        .capture = std::move(*async),
+                    });
+                }
+            }
+        }
+        if (!async_captures.empty()) {
+            if (auto started = startAsyncSplatCaptures(
+                    std::move(async_captures), sync_scene_serial);
+                !started) {
+                return started;
+            }
+            // Autosave resumes on the next viewer maintenance tick after the
+            // posted worker settlement. Explicit callers join the same worker
+            // below and then repeat synchronization.
+            if (mode == DocumentSyncMode::Autosave ||
+                mode == DocumentSyncMode::LightTrainingAutosave) {
+                return {};
+            }
+            joinPendingWrite();
+            if (!last_project_write_error_.empty()) {
+                return fail<void>(
+                    last_project_write_error_code_.value_or(
+                        lfs::ErrorCode::Unavailable),
+                    "The geometry snapshot could not be captured.",
+                    last_project_write_error_, "project.capture");
+            }
+            return synchronizeDocumentFromViewer(mode);
+        }
+
         for (const auto* node : scene.getNodes()) {
             if (!node) {
                 continue;
@@ -5975,6 +6231,11 @@ namespace lfs::vis::project {
             }
             const auto& fourcc =
                 binding->second.fourcc;
+            const auto captured_splat = captured_splat_serials_.find(node->uuid);
+            const bool splat_already_captured =
+                fourcc == "SPLT" &&
+                captured_splat != captured_splat_serials_.end() &&
+                captured_splat->second >= sync_scene_serial;
             if (fourcc == "SPLT") {
                 live_splats.insert(node->uuid);
             } else if (fourcc == "PCLD") {
@@ -6000,7 +6261,11 @@ namespace lfs::vis::project {
                                state.fourcc.to_string() ==
                                    fourcc;
                     });
-            if (already_present && !capture_payloads) {
+            // An async capture has already installed the SPLT bytes, but its
+            // provenance is still registered by this synchronization pass.
+            // Do not let the clean-payload fast path skip that metadata.
+            if (already_present && !capture_payloads &&
+                !splat_already_captured) {
                 continue;
             }
             if (node->payload_hydration !=
@@ -6017,7 +6282,9 @@ namespace lfs::vis::project {
                 continue;
             }
 
-            if (fourcc == "SPLT") {
+            if (splat_already_captured) {
+                // The payload was installed by the posted capture settlement.
+            } else if (fourcc == "SPLT") {
                 std::unique_ptr<lfs::core::SplatData>
                     extracted_model;
                 const lfs::core::SplatData* model =
@@ -6453,10 +6720,14 @@ namespace lfs::vis::project {
                 std::move(staged_references);
         }
 
+        const auto sync_scene_serial_end = scene_mutation_serial_.load(
+            std::memory_order_acquire);
         scene_dirty_.store(
-            false, std::memory_order_release);
+            sync_scene_serial_end != sync_scene_serial,
+            std::memory_order_release);
         payload_dirty_.store(
-            false, std::memory_order_release);
+            sync_scene_serial_end != sync_scene_serial,
+            std::memory_order_release);
         const auto sync_finished = std::chrono::steady_clock::now();
         LOG_DEBUG(
             "Project document synchronization stages: mode={} scene_capture={:.3f} ms payload_capture={:.3f} ms selection_capture={:.3f} ms metadata_capture={:.3f} ms total={:.3f} ms",
@@ -7345,6 +7616,7 @@ namespace lfs::vis::project {
         clearStoredTrainingSession();
         document_ = candidate;
         last_captured_selection_serial_.reset();
+        captured_splat_serials_.clear();
         bindTrainerSnapshotTarget();
         cleanupRecoverySession();
         // Removal runs only after the replacement
@@ -8047,6 +8319,7 @@ namespace lfs::vis::project {
             std::make_shared<ProjectDocument>(
                 std::move(*created));
         last_captured_selection_serial_.reset();
+        captured_splat_serials_.clear();
         cleanupRecoverySession();
         if (discard_master) {
             removeDiscardedAutosaveArtifacts(
