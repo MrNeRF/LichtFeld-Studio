@@ -246,7 +246,7 @@ namespace tinyusdz {
             return true;
 
 #else  // !WIN32
-            // assume posix
+       // assume posix
             FILE* fp = fopen(filepath.c_str(), writable ? "rw" : "r");
             if (!fp) {
                 if (err) {
