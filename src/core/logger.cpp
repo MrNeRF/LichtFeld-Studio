@@ -691,28 +691,41 @@ namespace lfs::core {
         return impl_->memory_sink ? impl_->memory_sink->text() : std::string{};
     }
 
-    ScopedTimer::ScopedTimer(std::string name, const LogLevel level, const SourceSite loc)
-        : start_(std::chrono::high_resolution_clock::now()),
-          name_(std::move(name)),
-          level_(level),
+    ScopedTimer::ScopedTimer(const std::string_view name, const LogLevel level,
+                             const SourceSite loc)
+        : level_(level),
           loc_(loc) {
+        const bool log_enabled = Logger::get().is_enabled(level_);
         try {
             diagnostics_scope_active_ = lfs::diagnostics::VramProfiler::instance().enabled();
-            if (diagnostics_scope_active_) {
-                lfs::diagnostics::VramProfiler::instance().pushTimerScope(name_);
-            }
         } catch (...) {
             diagnostics_scope_active_ = false;
         }
+
+        disabled_ = !log_enabled && !diagnostics_scope_active_;
+        if (disabled_)
+            return;
+
+        start_ = std::chrono::high_resolution_clock::now();
+        name_ = name;
+        if (diagnostics_scope_active_) {
+            try {
+                lfs::diagnostics::VramProfiler::instance().pushTimerScope(name_);
+            } catch (...) {
+                diagnostics_scope_active_ = false;
+            }
+        }
     }
 
-    ScopedTimer::ScopedTimer(std::string name, const double min_log_ms,
+    ScopedTimer::ScopedTimer(const std::string_view name, const double min_log_ms,
                              const LogLevel level, const SourceSite loc)
-        : ScopedTimer(std::move(name), level, loc) {
+        : ScopedTimer(name, level, loc) {
         min_log_ms_ = min_log_ms;
     }
 
     ScopedTimer::~ScopedTimer() {
+        if (disabled_)
+            return;
         const auto duration = std::chrono::high_resolution_clock::now() - start_;
         const auto ms = std::chrono::duration<double, std::milli>(duration).count();
         if (diagnostics_scope_active_) {
@@ -723,7 +736,8 @@ namespace lfs::core {
         }
         if (ms < min_log_ms_)
             return;
-        Logger::get().log(level_, loc_, std::format("{} took {:.2f}ms", name_, ms));
+        if (Logger::get().is_enabled(level_))
+            Logger::get().log(level_, loc_, std::format("{} took {:.2f}ms", name_, ms));
     }
 
 } // namespace lfs::core

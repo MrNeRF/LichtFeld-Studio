@@ -187,6 +187,18 @@ namespace lfs::vis::gui {
         static constexpr std::size_t kMaxPendingUploads = 3;
         std::vector<PendingUpload> pending_uploads;
 
+        struct RetiredImage {
+            VkImage image = VK_NULL_HANDLE;
+            VkImageView image_view = VK_NULL_HANDLE;
+            VmaAllocation allocation = VK_NULL_HANDLE;
+            std::uint64_t retire_serial = 0;
+            std::uint64_t generation = 0;
+            std::string vram_label;
+            std::vector<PendingUpload> pending_uploads;
+        };
+        static constexpr std::size_t kMaxRetiredImages = 8;
+        std::vector<RetiredImage> retired_images;
+
         int width = 0;
         int height = 0;
 
@@ -263,6 +275,105 @@ namespace lfs::vis::gui {
                 }
             }
             pending_uploads.erase(write, pending_uploads.end());
+        }
+
+        [[nodiscard]] bool releaseRetiredUploads(RetiredImage& retired, const bool wait) {
+            auto write = retired.pending_uploads.begin();
+            bool all_ready = true;
+            for (auto read = retired.pending_uploads.begin();
+                 read != retired.pending_uploads.end(); ++read) {
+                bool ready = read->fence == VK_NULL_HANDLE;
+                if (!ready && wait) {
+                    lfs::rendering::WaitContext wait_ctx;
+                    wait_ctx.fingerprint = "ui_texture.retired_upload.wait";
+                    const auto wait_outcome = lfs::rendering::wait_fence_bounded(
+                        device,
+                        read->fence,
+                        std::stop_token{},
+                        lfs::rendering::VulkanWaitPolicy{},
+                        wait_ctx);
+                    ready = wait_outcome.has_value() &&
+                            *wait_outcome == lfs::rendering::WaitOutcome::Ready;
+                } else if (!ready) {
+                    ready = vkGetFenceStatus(device, read->fence) == VK_SUCCESS;
+                }
+
+                if (ready) {
+                    destroyPendingUpload(*read);
+                } else {
+                    all_ready = false;
+                    if (write != read)
+                        *write = *read;
+                    ++write;
+                }
+            }
+            retired.pending_uploads.erase(write, retired.pending_uploads.end());
+            return all_ready;
+        }
+
+        void releaseRetiredImages(const bool wait) {
+            if (wait && context) {
+                const auto serial = context->lastSuccessfulFrameSubmitSerial();
+                if (serial != 0 && !context->waitForRetiredFrameSubmitSerial(serial))
+                    LOG_WARN("Vulkan UI texture could not retire frame serial {}: {}",
+                             serial,
+                             context->lastError());
+            }
+            const auto retired_serial = context ? context->retiredFrameSubmitSerial()
+                                                : std::numeric_limits<std::uint64_t>::max();
+            auto write = retired_images.begin();
+            for (auto read = retired_images.begin(); read != retired_images.end(); ++read) {
+                const bool uploads_ready = releaseRetiredUploads(*read, wait);
+                if (read->retire_serial <= retired_serial && uploads_ready) {
+                    image_barriers.forgetImage(read->image, read->generation);
+                    if (read->image_view != VK_NULL_HANDLE)
+                        vkDestroyImageView(device, read->image_view, nullptr);
+                    if (read->image != VK_NULL_HANDLE)
+                        vmaDestroyImage(allocator, read->image, read->allocation);
+                    if (!read->vram_label.empty()) {
+                        lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                            "vulkan.ui_texture.image", read->vram_label, 0);
+                    }
+                    continue;
+                }
+                if (write != read)
+                    *write = std::move(*read);
+                ++write;
+            }
+            retired_images.erase(write, retired_images.end());
+        }
+
+        void retireCurrentImage() {
+            if (image == VK_NULL_HANDLE)
+                return;
+            tryReleasePendingUpload();
+            const std::uint64_t serial = context ? context->lastSuccessfulFrameSubmitSerial() : 0;
+            if (serial == 0) {
+                image_barriers.forgetImage(image, image_generation_);
+                if (image_view != VK_NULL_HANDLE)
+                    vkDestroyImageView(device, image_view, nullptr);
+                vmaDestroyImage(allocator, image, image_allocation);
+                image = VK_NULL_HANDLE;
+                image_view = VK_NULL_HANDLE;
+                image_allocation = VK_NULL_HANDLE;
+                return;
+            }
+            if (retired_images.size() >= kMaxRetiredImages)
+                releaseRetiredImages(true);
+            retired_images.push_back({
+                .image = image,
+                .image_view = image_view,
+                .allocation = image_allocation,
+                .retire_serial = serial,
+                .generation = image_generation_,
+                .vram_label = std::move(image_vram_label),
+                .pending_uploads = std::move(pending_uploads),
+            });
+            pending_uploads.clear();
+            image = VK_NULL_HANDLE;
+            image_view = VK_NULL_HANDLE;
+            image_allocation = VK_NULL_HANDLE;
+            image_vram_label.clear();
         }
 
         // Block only when the ring is full: wait on the oldest entry to free a slot.
@@ -522,31 +633,8 @@ namespace lfs::vis::gui {
             }
 
             if (image != VK_NULL_HANDLE) {
-                waitAndReleasePendingUpload();
-                // Descriptor updates and image destruction are only legal once
-                // every submitted RmlUI draw that can reference the old view has
-                // retired. Resize is already a cold path; pay the bounded fence
-                // wait here instead of retaining every historical image forever.
-                if (context != nullptr && !context->waitForSubmittedFrames()) {
-                    LOG_ERROR("Vulkan UI texture resize could not drain submitted frames: {}",
-                              context->lastError());
-                    return false;
-                }
-                if (!image_vram_label.empty()) {
-                    lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
-                        "vulkan.ui_texture.image",
-                        image_vram_label,
-                        0);
-                }
-                image_barriers.forgetImage(image, image_generation_);
-                if (image_view != VK_NULL_HANDLE) {
-                    vkDestroyImageView(device, image_view, nullptr);
-                }
-                vmaDestroyImage(allocator, image, image_allocation);
-                image = VK_NULL_HANDLE;
-                image_view = VK_NULL_HANDLE;
-                image_allocation = VK_NULL_HANDLE;
-                image_vram_label.clear();
+                releaseRetiredImages(false);
+                retireCurrentImage();
             }
             width = new_width;
             height = new_height;
@@ -941,6 +1029,7 @@ namespace lfs::vis::gui {
 
         void destroyImage() {
             waitAndReleasePendingUpload();
+            releaseRetiredImages(true);
             const bool has_interop_resources =
                 mode == Mode::CudaInterop || interop.valid() ||
                 interop_image.image != VK_NULL_HANDLE ||

@@ -592,10 +592,30 @@ namespace lfs::vis::gui {
 
         const bool hovered = local_x >= 0 && local_y >= 0 &&
                              local_x < overlay_w && local_y < overlay_h;
+        const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
+                                      input.key_alt, input.key_super);
+        bool replayed_button_events = false;
+        for (const auto& event : input.mouse_button_events) {
+            if (event.button >= 3)
+                continue;
+            const float event_x = event.x - overlay_x;
+            const float event_y = event.y - overlay_y;
+            if (event_x < 0.0f || event_y < 0.0f ||
+                event_x >= overlay_w || event_y >= overlay_h)
+                continue;
+            if (event.down && isLanguageSelectHit(event_x, event_y))
+                ensureLanguageDropdownFontsLoaded();
+            rml_context_->ProcessMouseMove(static_cast<int>(event_x),
+                                           static_cast<int>(event_y), mods);
+            if (event.down)
+                rml_context_->ProcessMouseButtonDown(event.button, mods);
+            else
+                rml_context_->ProcessMouseButtonUp(event.button, mods);
+            replayed_button_events = true;
+            result.event_forwarded = true;
+        }
 
         if (hovered) {
-            const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
-                                          input.key_alt, input.key_super);
             const bool opening_language_select =
                 input.mouse_clicked[0] && isLanguageSelectHit(local_x, local_y);
             if (isLanguageSelectOpen() || opening_language_select)
@@ -604,17 +624,18 @@ namespace lfs::vis::gui {
                                            static_cast<int>(local_y), mods);
             result.event_forwarded = true;
 
-            if (input.mouse_clicked[0]) {
+            if (!replayed_button_events && input.mouse_clicked[0]) {
                 rml_context_->ProcessMouseButtonDown(0, mods);
                 result.event_forwarded = true;
             }
-            if (input.mouse_released[0]) {
+            if (!replayed_button_events && input.mouse_released[0]) {
                 rml_context_->ProcessMouseButtonUp(0, mods);
                 result.event_forwarded = true;
             }
 
             if (input.mouse_wheel != 0.0f) {
-                rml_context_->ProcessMouseWheel(Rml::Vector2f(0.0f, -input.mouse_wheel), mods);
+                rml_context_->ProcessMouseWheel(
+                    Rml::Vector2f(-input.mouse_wheel_x, -input.mouse_wheel), mods);
                 result.event_forwarded = true;
             }
         }

@@ -86,8 +86,7 @@ class AssetManagerPanel(Panel):
     height_mode = lf.ui.PanelHeightMode.FILL
     size = (980, 620)
     options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    update_policy = "interval"
-    update_interval_ms = 250
+    update_policy = "dirty"
 
     STORAGE_PATH: Optional[Path] = None
 

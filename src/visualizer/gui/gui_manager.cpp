@@ -2847,6 +2847,8 @@ namespace lfs::vis::gui {
             for (auto& value : input.mouse_released)
                 value = false;
             input.mouse_wheel = 0.0f;
+            input.mouse_wheel_x = 0.0f;
+            input.mouse_button_events.clear();
             input.key_ctrl = false;
             input.key_shift = false;
             input.key_alt = false;
@@ -3578,6 +3580,12 @@ namespace lfs::vis::gui {
         };
         ops.needs_animation = [](void* host) -> bool {
             return static_cast<RmlPanelHost*>(host)->needsAnimationFrame();
+        };
+        ops.needs_immediate_animation = [](void* host) -> bool {
+            return static_cast<RmlPanelHost*>(host)->needsImmediateAnimationFrame();
+        };
+        ops.animation_demand_description = [](void* host) {
+            return static_cast<RmlPanelHost*>(host)->animationDemandDescription();
         };
         ops.next_scheduled_update_delay = [](void* host, double* out_seconds) -> bool {
             const auto delay =
@@ -5152,6 +5160,8 @@ namespace lfs::vis::gui {
                 for (auto& v : masked_input.mouse_down)
                     v = false;
                 masked_input.mouse_wheel = 0;
+                masked_input.mouse_wheel_x = 0;
+                masked_input.mouse_button_events.clear();
                 rml_right_panel_.processInput(rp_layout, masked_input);
             } else {
                 rml_right_panel_.processInput(rp_layout, panel_input);
@@ -7043,6 +7053,69 @@ namespace lfs::vis::gui {
         return false;
     }
 
+    std::string GuiManager::describeAnimationDemand() const {
+        if (!lfs::core::Logger::get().is_enabled(lfs::core::LogLevel::Performance))
+            return {};
+
+        const auto now = std::chrono::steady_clock::now();
+        if (last_animation_demand_description_at_ != std::chrono::steady_clock::time_point{} &&
+            now - last_animation_demand_description_at_ < std::chrono::seconds(1))
+            return animation_demand_description_cache_;
+
+        std::string result;
+        const auto add = [&result](const bool active, const std::string_view source) {
+            if (!active)
+                return;
+            if (!result.empty())
+                result += ',';
+            result += source;
+        };
+
+        add(ui_toggle_pending_ && now >= ui_toggle_next_allowed_at_, "ui_toggle");
+        add(fullscreen_toggle_pending_ && now >= fullscreen_toggle_next_allowed_at_,
+            "fullscreen_toggle");
+        add(interactive_transition_resume_training_ || now < interactive_transition_guard_until_,
+            "interactive_transition");
+        add(isViewportExportLocked(), "viewport_export");
+        add(static_cast<bool>(rmlui_manager_.dragPayload()), "drag_payload");
+        add(startup_overlay_.needsAnimationFrame(), "startup_overlay");
+        add(rml_modal_overlay_ && rml_modal_overlay_->needsAnimationFrame(), "modal_overlay");
+        add(rml_toast_overlay_ && rml_toast_overlay_->needsAnimationFrame(), "toast_overlay");
+        add(global_context_menu_ && global_context_menu_->needsAnimationFrame(), "context_menu");
+        add(video_widget_ && video_widget_->isVideoPlaying(), "video");
+        add(ui_layout_settle_frames_ > 0, "layout_settle");
+        add(isVramHudPublishDue(now), "vram_hud");
+        add(rml_viewport_overlay_.needsAnimationFrame(), "viewport_overlay");
+        add(rml_menu_bar_.needsAnimationFrame(), "menu_bar");
+        if (const auto right_panel_demand = rml_right_panel_.animationDemandDescription();
+            !right_panel_demand.empty()) {
+            if (!result.empty())
+                result += ',';
+            result += right_panel_demand;
+        }
+        add(rml_status_bar_.animationFrameDue(now), "status_bar");
+
+        if (!python::is_plugin_preload_running()) {
+            const auto panel_sources = PanelRegistry::instance().describeAnimationDemand(
+                panelAnimationVisibility());
+            if (!panel_sources.empty()) {
+                if (!result.empty())
+                    result += ',';
+                result += "panels=";
+                result += panel_sources;
+            }
+        }
+
+        last_animation_demand_description_at_ = now;
+        animation_demand_description_cache_ = result.empty() ? "none" : std::move(result);
+        return animation_demand_description_cache_;
+    }
+
+    bool GuiManager::needsImmediateAnimationFrame() const {
+        return PanelRegistry::instance().needsImmediateAnimationFrameForVisiblePanels(
+            panelAnimationVisibility());
+    }
+
     PanelAnimationVisibility GuiManager::panelAnimationVisibility() const {
         return {
             .active_main_tab = panel_layout_.getActiveTab(),
@@ -7053,13 +7126,26 @@ namespace lfs::vis::gui {
         };
     }
 
-    std::optional<double> GuiManager::secondsUntilNextAnimationFrame() const {
-        auto min_delay = [](std::optional<double> a, std::optional<double> b) -> std::optional<double> {
-            if (!a)
+    std::optional<double> GuiManager::secondsUntilNextAnimationFrame(const char** source) const {
+        if (source)
+            *source = nullptr;
+
+        auto min_delay = [source](std::optional<double> a,
+                                  std::optional<double> b,
+                                  const char* b_source) -> std::optional<double> {
+            if (!a) {
+                if (source)
+                    *source = b_source;
                 return b;
+            }
             if (!b)
                 return a;
-            return std::min(*a, *b);
+            if (*b < *a) {
+                if (source)
+                    *source = b_source;
+                return b;
+            }
+            return a;
         };
 
         std::optional<double> result;
@@ -7068,11 +7154,14 @@ namespace lfs::vis::gui {
         if (!python::is_plugin_preload_running()) {
             result = min_delay(result,
                                PanelRegistry::instance().nextScheduledAnimationDelayForVisiblePanels(
-                                   panelAnimationVisibility()));
+                                   panelAnimationVisibility()),
+                               "panels");
         }
 
-        result = min_delay(result, rml_viewport_overlay_.nextScheduledUpdateDelay());
-        result = min_delay(result, rml_status_bar_.secondsUntilAnimationFrame(now));
+        result = min_delay(result, rml_viewport_overlay_.nextScheduledUpdateDelay(),
+                           "viewport_overlay");
+        result = min_delay(result, rml_status_bar_.secondsUntilAnimationFrame(now),
+                           "status_bar");
 
         // VRAM HUD cadence: when armed and not yet due, wake at the publish deadline.
         if (isVramHudOverlayVisible()) {
@@ -7081,7 +7170,7 @@ namespace lfs::vis::gui {
                 const double remaining =
                     std::chrono::duration<double>(next_vram_hud_publish_ - now).count();
                 if (remaining > 0.0)
-                    result = min_delay(result, remaining);
+                    result = min_delay(result, remaining, "vram_hud");
             }
         }
 

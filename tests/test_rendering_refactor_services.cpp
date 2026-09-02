@@ -676,6 +676,23 @@ namespace lfs::vis {
         EXPECT_EQ(manager.getModelForRendering(), state.combined_model);
     }
 
+    TEST_F(SceneManagerRenderStateTest, VisibleSelectionMaskIsCachedForUnchangedGenerations) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+
+        scene.addSplat("Visible", makeTwoPointTestSplat(0.0f, 1.0f));
+        scene.addSplat("Hidden", makeTestSplat(2.0f));
+        scene.setNodeVisibility("Hidden", false);
+        scene.setSelection({0});
+
+        const auto first = scene.getVisibleSelectionMask();
+        const auto second = scene.getVisibleSelectionMask();
+
+        ASSERT_NE(first, nullptr);
+        ASSERT_NE(second, nullptr);
+        EXPECT_EQ(first.get(), second.get());
+    }
+
     TEST_F(SceneManagerRenderStateTest, PointCloudTransformIsTrackedSeparatelyFromModelTransforms) {
         SceneManager manager;
         auto& scene = manager.getScene();

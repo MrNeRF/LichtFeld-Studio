@@ -79,6 +79,7 @@ namespace lfs::event {
             return false;
 
         current_language_ = initial_language;
+        language_generation_.fetch_add(1, std::memory_order_release);
         LOG_INFO("Language set to: {}", initial_language);
         return true;
     }
@@ -93,6 +94,7 @@ namespace lfs::event {
         available_languages_.clear();
         language_names_.clear();
         overrides_.clear();
+        language_generation_.fetch_add(1, std::memory_order_release);
     }
 
     const char* LocalizationManager::get(std::string_view key) const {
@@ -204,6 +206,7 @@ namespace lfs::event {
             return false;
 
         current_language_ = language_code;
+        language_generation_.fetch_add(1, std::memory_order_release);
         LOG_INFO("Language set to: {}", language_code);
         return true;
     }

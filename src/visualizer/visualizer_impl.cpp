@@ -50,6 +50,7 @@
 #include "window/vulkan_context.hpp"
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_messagebox.h>
+#include <SDL3/SDL_video.h>
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -148,7 +149,6 @@ namespace lfs::vis {
         constexpr double kGuiScheduledUpdateMinWaitSeconds = 0.001;
         // Backstop cap for GUI-only continuous demand (python_redraw / gui_animation only).
         // MAILBOX presents never block, so free-running would pin the GPU at full GUI cost.
-        constexpr double kGuiAnimationFrameInterval = 1.0 / 30.0;
 #if defined(__linux__)
         constexpr auto kWindowResizePaintDemandWindow = std::chrono::milliseconds(160);
 #endif
@@ -2028,6 +2028,10 @@ namespace lfs::vis {
         update_work_processed_ = false;
         window_manager_->updateWindowSize();
 
+        motion_only_wake_skipped_ = isMotionOnlyWake();
+        if (motion_only_wake_skipped_)
+            return;
+
         if (fully_initialized_ && gui_frame_rendered_ && !startup_plugin_preload_started_) {
             startup_plugin_preload_started_ = true;
             LOG_TIMER("startup.python.preload_plugins_async");
@@ -2168,9 +2172,44 @@ namespace lfs::vis {
         processing_render_work_ = false;
     }
 
-    bool VisualizerImpl::hasPendingRenderWork() {
+    bool VisualizerImpl::hasPendingRenderWork() const {
         std::lock_guard lock(work_queue_mutex_);
         return !render_work_queue_.empty();
+    }
+
+    bool VisualizerImpl::hasPendingWork() const {
+        std::lock_guard lock(work_queue_mutex_);
+        return !work_queue_.empty();
+    }
+
+    bool VisualizerImpl::isMotionOnlyWake() const {
+        if (!window_manager_ || !gui_manager_ ||
+            python::is_plugin_preload_running() || !has_last_frame_demand_ ||
+            last_frame_demand_.needsContinuousLoop() || hasPendingWork() ||
+            hasPendingRenderWork() || app_store().store().has_dirty() ||
+            python::has_redraw_request())
+            return false;
+
+        // pollDirtyState() does not consume the dirty mask. Checking it before
+        // the shortcut prevents a scene/model change arriving between frames
+        // from being skipped on every subsequent mouse-only wake.
+        if (rendering_manager_ && rendering_manager_->pollDirtyState())
+            return false;
+
+        if (gui_manager_->needsAnimationFrame() ||
+            gui_manager_->secondsUntilTooltipReveal())
+            return false;
+
+        const auto& input = window_manager_->frameInput();
+        if (!input.had_event || !input.mouse_moved || input.window_event ||
+            input.mouse_wheel != 0.0f || input.mouse_down[0] || input.mouse_down[1] ||
+            input.mouse_down[2] || !input.mouse_button_events.empty() ||
+            !input.keys_pressed.empty() || !input.keys_repeated.empty() ||
+            !input.keys_released.empty() || !input.text_codepoints.empty() ||
+            !input.text_inputs.empty() || input.has_text_editing)
+            return false;
+
+        return !gui_manager_->passiveMouseMoveNeedsRender(input.mouse_x, input.mouse_y);
     }
 
     bool VisualizerImpl::inputFrameRequestsRender() const {
@@ -2256,15 +2295,42 @@ namespace lfs::vis {
         return demand;
     }
 
+    double VisualizerImpl::guiAnimationFrameInterval() const {
+        const auto now = std::chrono::steady_clock::now();
+        if (display_refresh_queried_at_ != std::chrono::steady_clock::time_point{} &&
+            now - display_refresh_queried_at_ < std::chrono::seconds(1))
+            return gui_animation_frame_interval_;
+
+        display_refresh_queried_at_ = now;
+        float refresh_rate = 60.0f;
+        if (window_manager_ && window_manager_->getWindow()) {
+            const SDL_DisplayID display_id = SDL_GetDisplayForWindow(window_manager_->getWindow());
+            if (const SDL_DisplayMode* const mode = SDL_GetCurrentDisplayMode(display_id);
+                mode && mode->refresh_rate > 0.0f)
+                refresh_rate = mode->refresh_rate;
+        }
+        refresh_rate = std::clamp(refresh_rate, 30.0f, 240.0f);
+        gui_animation_frame_interval_ = 1.0 / static_cast<double>(refresh_rate);
+        return gui_animation_frame_interval_;
+    }
+
     void VisualizerImpl::waitForNextEvent(const bool is_training) {
         if (!window_manager_)
             return;
 
         auto wait_seconds = is_training ? 0.1 : 0.5;
+        std::string timeout_source = is_training ? "training_default" : "idle_default";
+        const auto consider_timeout = [&wait_seconds, &timeout_source](
+                                          const double candidate,
+                                          const char* source) {
+            if (candidate < wait_seconds) {
+                wait_seconds = candidate;
+                timeout_source = source;
+            }
+        };
         if (rendering_manager_ && rendering_manager_->hasPendingViewportResizeSettle()) {
             const double settle_wait = rendering_manager_->secondsUntilViewportResizeSettleReady();
-            wait_seconds = std::min(wait_seconds,
-                                    std::max(kResizeSettleMinWaitSeconds, settle_wait));
+            consider_timeout(std::max(kResizeSettleMinWaitSeconds, settle_wait), "resize_settle");
         }
 
         // Wake exactly when a pending tooltip is due so the reveal costs a single
@@ -2273,22 +2339,34 @@ namespace lfs::vis {
         // so finite-delay panels wake on time without gui_animation spin.
         if (gui_manager_) {
             if (const auto tooltip_wait = gui_manager_->secondsUntilTooltipReveal())
-                wait_seconds = std::min(wait_seconds,
-                                        std::max(kTooltipRevealMinWaitSeconds, *tooltip_wait));
-            if (const auto anim_wait = gui_manager_->secondsUntilNextAnimationFrame())
-                wait_seconds = std::min(wait_seconds,
-                                        std::max(kGuiScheduledUpdateMinWaitSeconds, *anim_wait));
+                consider_timeout(std::max(kTooltipRevealMinWaitSeconds, *tooltip_wait),
+                                 "tooltip_reveal");
+            const char* gui_source = nullptr;
+            const auto anim_wait = gui_manager_->secondsUntilNextAnimationFrame(&gui_source);
+            const std::string gui_timeout_source = gui_source ? std::format("gui.{}", gui_source)
+                                                              : "gui_animation";
+            if (anim_wait)
+                consider_timeout(std::max(kGuiScheduledUpdateMinWaitSeconds, *anim_wait),
+                                 gui_timeout_source.c_str());
         }
 
         // Wake no later than a Python-scheduled redraw deadline (paced overlay animation).
         if (const auto redraw_wait = python::seconds_until_scheduled_redraw())
-            wait_seconds = std::min(wait_seconds,
-                                    std::max(kScheduledRedrawMinWaitSeconds, *redraw_wait));
+            consider_timeout(std::max(kScheduledRedrawMinWaitSeconds, *redraw_wait),
+                             "python_scheduled_redraw");
 
         window_manager_->waitEvents(wait_seconds);
+        last_wake_reason_ = window_manager_->frameInput().had_event ? "event" : "timeout";
+        last_wake_timeout_source_ = window_manager_->frameInput().had_event ? "none" : timeout_source;
     }
 
     void VisualizerImpl::render() {
+
+        if (motion_only_wake_skipped_) {
+            motion_only_wake_skipped_ = false;
+            window_manager_->pollEvents();
+            return;
+        }
 
         auto now = std::chrono::high_resolution_clock::now();
         float delta_time = std::chrono::duration<float>(now - last_frame_time_).count();
@@ -2403,7 +2481,7 @@ namespace lfs::vis {
         const bool is_training = trainer_manager_ && trainer_manager_->isRunning();
         const FrameDemand frame_demand = collectFrameDemand(viewport_export_locked, store_dirty);
         if (gui_frame_rendered_ && !frame_demand.shouldRenderFrame()) {
-            LOG_PERF("loop_idle skip_gui_render=true needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} window_resize_paint_pending={} viewport_resize_deferring={} viewport_resize_settle_ready={}",
+            LOG_PERF("loop_idle skip_gui_render=true needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} window_resize_paint_pending={} viewport_resize_deferring={} viewport_resize_settle_ready={} wake_reason={} wake_timeout_source={}",
                      frame_demand.scene_dirty,
                      frame_demand.continuous_input,
                      frame_demand.python_animation,
@@ -2418,7 +2496,9 @@ namespace lfs::vis {
                      frame_demand.swapchain_resize_ready,
                      frame_demand.window_resize_paint_pending,
                      frame_demand.viewport_resize_deferring,
-                     frame_demand.viewport_resize_settle_ready);
+                     frame_demand.viewport_resize_settle_ready,
+                     last_wake_reason_,
+                     last_wake_timeout_source_);
             if (!python::is_plugin_preload_running()) {
                 python::flush_signals();
             }
@@ -2535,12 +2615,22 @@ namespace lfs::vis {
         update_work_processed_ = false;
 
         // Render-on-demand: VSync handles frame pacing, waitEvents saves CPU when idle
-        const FrameDemand next_demand = collectFrameDemand(viewport_export_locked, false, false);
+        // The demand walk is the expensive part of the frame loop (notably the
+        // visible Python panel traversal). Reuse the demand collected before the
+        // render and refresh only the cheap flags that can be created by the
+        // just-finished presentation.
+        FrameDemand next_demand = frame_demand;
+        next_demand.python_redraw = python::has_redraw_request();
+        next_demand.render_work = hasPendingRenderWork();
+        next_demand.store_dirty = app_store().store().has_dirty();
+        last_frame_demand_ = next_demand;
+        has_last_frame_demand_ = true;
 
         // Continuous demand that is only python_redraw and/or gui_animation — pace it
         // so GUI-only animation does not free-run against a MAILBOX swapchain.
         const bool gui_only_animation =
             next_demand.needsContinuousLoop() &&
+            !(gui_manager_ && gui_manager_->needsImmediateAnimationFrame()) &&
             !python::is_plugin_preload_running() &&
             !next_demand.scene_dirty && !next_demand.continuous_input &&
             !next_demand.python_animation && !next_demand.python_overlay &&
@@ -2553,7 +2643,7 @@ namespace lfs::vis {
         const auto py_redraw_due = python::seconds_until_scheduled_redraw();
         const double py_redraw_due_in = py_redraw_due ? *py_redraw_due : -1.0;
 
-        LOG_PERF("loop_end needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} window_resize_paint_pending={} viewport_resize_deferring={} viewport_resize_settle_ready={} gui_only_throttle={} py_redraw_due_in={:.4f}",
+        LOG_PERF("loop_end needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} window_resize_paint_pending={} viewport_resize_deferring={} viewport_resize_settle_ready={} gui_only_throttle={} py_redraw_due_in={:.4f} gui_anim_sources={} wake_reason={} wake_timeout_source={}",
                  next_demand.scene_dirty,
                  next_demand.continuous_input,
                  next_demand.python_animation,
@@ -2570,22 +2660,34 @@ namespace lfs::vis {
                  next_demand.viewport_resize_deferring,
                  next_demand.viewport_resize_settle_ready,
                  gui_only_animation,
-                 py_redraw_due_in);
+                 py_redraw_due_in,
+                 gui_manager_ ? gui_manager_->describeAnimationDemand() : std::string{"none"},
+                 last_wake_reason_,
+                 last_wake_timeout_source_);
 
         if (next_demand.needsContinuousLoop()) {
             if (gui_only_animation) {
                 // GUI-only animation must not free-run against a MAILBOX swapchain.
-                // Cap at kGuiAnimationFrameInterval; waitEvents still wakes instantly on input.
+                // Cap at the display interval; waitEvents still wakes instantly on input.
+                const double gui_animation_frame_interval = guiAnimationFrameInterval();
                 const double elapsed = std::chrono::duration<double>(
                                            std::chrono::high_resolution_clock::now() - last_frame_time_)
                                            .count();
-                if (elapsed >= kGuiAnimationFrameInterval) {
+                if (elapsed >= gui_animation_frame_interval) {
                     window_manager_->pollEvents();
+                    last_wake_reason_ = window_manager_->frameInput().had_event ? "event" : "poll";
+                    last_wake_timeout_source_ = "none";
                 } else {
-                    window_manager_->waitEvents(kGuiAnimationFrameInterval - elapsed);
+                    window_manager_->waitEvents(gui_animation_frame_interval - elapsed);
+                    last_wake_reason_ = window_manager_->frameInput().had_event ? "event" : "timeout";
+                    last_wake_timeout_source_ = window_manager_->frameInput().had_event
+                                                    ? "none"
+                                                    : "gui_animation_paced";
                 }
             } else {
                 window_manager_->pollEvents();
+                last_wake_reason_ = window_manager_->frameInput().had_event ? "event" : "poll";
+                last_wake_timeout_source_ = "none";
             }
         } else {
             // Idle: wait to minimize CPU/GPU work. Mouse-motion-only viewport wakes

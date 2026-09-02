@@ -22,8 +22,7 @@ class PreferencesPanel(Panel):
     height_mode = lf.ui.PanelHeightMode.FILL
     size = (780, 440)
     options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    update_policy = "interval"
-    update_interval_ms = 50
+    update_policy = "dirty"
 
     SCALE_OPTIONS = (
         (0.0, "menu.view.ui_scale.auto"),

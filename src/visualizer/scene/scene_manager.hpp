@@ -429,6 +429,14 @@ namespace lfs::vis {
         std::jthread consolidated_compaction_thread_;
         bool consolidated_compaction_running_ = false;
         bool consolidated_compaction_pending_ = false;
+
+        mutable std::shared_ptr<const SceneRenderState> cached_render_state_;
+        mutable std::uint64_t cached_render_scene_generation_ = 0;
+        mutable std::uint64_t cached_render_selection_generation_ = 0;
+        mutable std::uint64_t cached_render_gaussian_selection_generation_ = 0;
+        mutable std::uint64_t cached_render_scene_generation_local_ = 0;
+        mutable const lfs::core::SplatData* cached_render_model_ = nullptr;
+        mutable ContentType cached_render_content_type_ = ContentType::Empty;
     };
 
 } // namespace lfs::vis

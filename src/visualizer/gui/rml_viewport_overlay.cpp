@@ -798,6 +798,18 @@ namespace lfs::vis::gui {
                                               static_cast<float>(rml_my)))
                                         : nullptr;
         const bool point_interactive = viewportOverlayHoverRoot(point_element) != nullptr;
+        const bool has_interactive_button_event = std::any_of(
+            input.mouse_button_events.begin(), input.mouse_button_events.end(), [&](const auto& event) {
+                if (event.button >= 3)
+                    return false;
+                const float event_x = event.x - vp_pos_.x;
+                const float event_y = event.y - vp_pos_.y;
+                if (event_x < 0.0f || event_y < 0.0f ||
+                    event_x >= vp_size_.x || event_y >= vp_size_.y)
+                    return false;
+                return viewportOverlayHoverRoot(rml_context_->GetElementAtPoint(
+                           Rml::Vector2f(event_x, event_y))) != nullptr;
+            });
         const bool hover_target_changed = point_element != last_hover_element_;
         if (focused_text_target &&
             mouse_clicked &&
@@ -807,7 +819,7 @@ namespace lfs::vis::gui {
             markRenderNeeded(RenderReason::Keyboard);
         }
         if (external_mouse_capture && !point_interactive && !hovered_interactive_ &&
-            !vram_drag_capture) {
+            !vram_drag_capture && !has_interactive_button_event) {
             tooltip_.setHover({}, nullptr);
             return;
         }
@@ -853,29 +865,56 @@ namespace lfs::vis::gui {
         const bool over_interactive = is_inside && hover_root != nullptr;
         hovered_interactive_ = over_interactive;
 
-        if (over_interactive || vram_drag_capture) {
+        bool replayed_button_events = false;
+        for (const auto& event : input.mouse_button_events) {
+            if (event.button >= 3)
+                continue;
+            const float event_x = event.x - vp_pos_.x;
+            const float event_y = event.y - vp_pos_.y;
+            const bool event_inside = event_x >= 0.0f && event_x < vp_size_.x &&
+                                      event_y >= 0.0f && event_y < vp_size_.y;
+            const auto* const event_element = event_inside
+                                                  ? rml_context_->GetElementAtPoint(
+                                                        Rml::Vector2f(event_x, event_y))
+                                                  : nullptr;
+            if (!vram_drag_capture && viewportOverlayHoverRoot(event_element) == nullptr)
+                continue;
+            rml_context_->ProcessMouseMove(static_cast<int>(event_x),
+                                           static_cast<int>(event_y), mods);
+            markRenderNeeded(RenderReason::PointerButton);
+            if (event.down)
+                rml_context_->ProcessMouseButtonDown(event.button, mods);
+            else
+                rml_context_->ProcessMouseButtonUp(event.button, mods);
+            replayed_button_events = true;
+        }
+
+        if (over_interactive || vram_drag_capture || replayed_button_events) {
             wants_input_ = true;
             guiFocusState().want_capture_mouse = true;
 
-            if (input.mouse_clicked[0]) {
-                markRenderNeeded(RenderReason::PointerButton);
-                rml_context_->ProcessMouseButtonDown(0, mods);
-            }
-            if (input.mouse_released[0]) {
-                markRenderNeeded(RenderReason::PointerButton);
-                rml_context_->ProcessMouseButtonUp(0, mods);
-            }
-            if (input.mouse_clicked[1]) {
-                markRenderNeeded(RenderReason::PointerButton);
-                rml_context_->ProcessMouseButtonDown(1, mods);
-            }
-            if (input.mouse_released[1]) {
-                markRenderNeeded(RenderReason::PointerButton);
-                rml_context_->ProcessMouseButtonUp(1, mods);
+            if (!replayed_button_events && (over_interactive || vram_drag_capture)) {
+                if (input.mouse_clicked[0]) {
+                    markRenderNeeded(RenderReason::PointerButton);
+                    rml_context_->ProcessMouseButtonDown(0, mods);
+                }
+                if (input.mouse_released[0]) {
+                    markRenderNeeded(RenderReason::PointerButton);
+                    rml_context_->ProcessMouseButtonUp(0, mods);
+                }
+                if (input.mouse_clicked[1]) {
+                    markRenderNeeded(RenderReason::PointerButton);
+                    rml_context_->ProcessMouseButtonDown(1, mods);
+                }
+                if (input.mouse_released[1]) {
+                    markRenderNeeded(RenderReason::PointerButton);
+                    rml_context_->ProcessMouseButtonUp(1, mods);
+                }
             }
             if (input.mouse_wheel != 0.0f) {
                 markRenderNeeded(RenderReason::PointerWheel);
-                rml_context_->ProcessMouseWheel(Rml::Vector2f(0.0f, -input.mouse_wheel), mods);
+                rml_context_->ProcessMouseWheel(
+                    Rml::Vector2f(-input.mouse_wheel_x, -input.mouse_wheel), mods);
             }
 
             if (hover)
