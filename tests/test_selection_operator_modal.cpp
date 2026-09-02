@@ -654,7 +654,11 @@ TEST_F(DepthWindowDragLifecycleTest, ModalReplacementRestoresDepthWindowAndPushe
     EXPECT_FLOAT_EQ(restored.depth_filter_offset_x, 0.0f);
     EXPECT_FLOAT_EQ(restored.depth_filter_offset_y, 0.0f);
     EXPECT_FALSE(rendering_manager_->depthWindowDragPreview());
+    // The replacing stroke's undo transaction is still open here. A
+    // DepthWindowSettingsUndoEntry pushed by the replaced drag would be queued
+    // there, invisible to undoCount(), but visible to transactionBytes().
     EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+    EXPECT_EQ(lfs::vis::op::undoHistory().transactionBytes(), 0u);
     lfs::vis::op::operators().cancelModalOperator();
 }
 
