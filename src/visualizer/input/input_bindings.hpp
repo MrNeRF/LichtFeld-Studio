@@ -140,6 +140,7 @@ namespace lfs::vis::input {
         TOGGLE_SCENE_SELECTION_VISIBILITY,
         TOGGLE_SCENE_SELECTION_TRAINING,
         DEPTH_ADJUST_SIZE,
+        DEPTH_WINDOW_DRAG,
 
     };
 

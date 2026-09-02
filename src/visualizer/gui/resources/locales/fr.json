@@ -1422,6 +1422,7 @@
     "action.depth_adjust_far": "Ajuster la boîte de profondeur",
     "action.depth_adjust_side": "Ajuster la boîte de profondeur",
     "action.depth_adjust_size": "Ajuster la taille de la fenêtre",
+    "action.depth_window_drag": "Faire glisser la fenêtre de profondeur",
     "action.toggle_selection_depth_filter": "Basculer la boîte de profondeur",
     "action.toggle_selection_crop_filter": "Basculer le filtre de recadrage de sélection",
     "action.brush_resize": "Redimensionner le pinceau",

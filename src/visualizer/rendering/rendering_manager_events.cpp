@@ -6,7 +6,11 @@
 #include "core/logger.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
+#include "input/input_controller.hpp"
+#include "operator/operator_registry.hpp"
+#include "operator/ops/depth_window_ops.hpp"
 #include "rendering_manager.hpp"
+#include "window/window_manager.hpp"
 #include <algorithm>
 
 namespace lfs::vis {
@@ -110,6 +114,19 @@ namespace lfs::vis {
         }
 
         applySplitModeChange(result);
+        if (splitViewUsesGTComparison(result.current_mode)) {
+            // "selection.depth_window_drag" == to_string(BuiltinOp::DepthWindowDrag)
+            if (op::operators().activeModalId() == "selection.depth_window_drag") {
+                op::operators().cancelModalOperator();
+            }
+            op::clearDepthWindowHover();
+            if (auto* const window = services().windowOrNull()) {
+                if (auto* const input = window->inputController()) {
+                    input->releaseDepthWindowCursor();
+                }
+            }
+            setDepthWindowDragPreview(false);
+        }
         if (!splitViewUsesGTComparison(result.current_mode)) {
             invalidateCameraMetricsRequests(true);
         }

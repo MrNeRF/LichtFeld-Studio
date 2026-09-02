@@ -1422,6 +1422,7 @@
     "action.depth_adjust_far": "深度ボックスを調整",
     "action.depth_adjust_side": "深度ボックスを調整",
     "action.depth_adjust_size": "ウィンドウサイズを調整",
+    "action.depth_window_drag": "深度ウィンドウをドラッグ",
     "action.toggle_selection_depth_filter": "深度ボックス切替",
     "action.toggle_selection_crop_filter": "選択クロップフィルター切替",
     "action.brush_resize": "ブラシサイズ変更",

@@ -134,7 +134,8 @@ namespace lfs::python {
 
         [[nodiscard]] float informational_half_width_from_settings(const vis::RenderSettings& settings,
                                                                    const float depth_far) {
-            return convert_scale_to_legacy_half_width(settings.depth_filter_scale, depth_far, settings);
+            return convert_scale_to_legacy_half_width(settings.depth_filter_scale_x, depth_far,
+                                                      settings); // legacy converters are X-only by contract
         }
 
         void configure_depth_filter(vis::RenderSettings& settings, const bool enabled,
@@ -171,8 +172,10 @@ namespace lfs::python {
         void write_legacy_window_scale(vis::RenderSettings& settings,
                                        const float frustum_half_width,
                                        const float depth_far) {
-            settings.depth_filter_scale =
+            const float clamped_scale =
                 convert_legacy_half_width_to_scale(frustum_half_width, depth_far, settings);
+            settings.depth_filter_scale_x = clamped_scale;
+            settings.depth_filter_scale_y = clamped_scale;
         }
 
         void apply_legacy_depth_filter(const bool enabled,
@@ -209,7 +212,8 @@ namespace lfs::python {
                                        const float depth_far,
                                        const float scale,
                                        const float offset_x,
-                                       const float offset_y) {
+                                       const float offset_y,
+                                       const std::optional<float> scale_y) {
             auto* const tool = get_selection_tool();
             if (tool && !tool->isEnabled()) {
                 // A disable request cannot half-apply; skip everything so the call
@@ -228,13 +232,16 @@ namespace lfs::python {
                 // tool is next enabled (or another apply path stamps settings).
                 throw std::runtime_error("Selection tool is not active/enabled; activate it before setting the depth filter window");
             }
-            const float clamped_scale = std::clamp(scale, MIN_WINDOW_SCALE, MAX_WINDOW_SCALE);
+            const float clamped_scale_x = std::clamp(scale, MIN_WINDOW_SCALE, MAX_WINDOW_SCALE);
+            const float clamped_scale_y =
+                std::clamp(scale_y.value_or(scale), MIN_WINDOW_SCALE, MAX_WINDOW_SCALE);
             const float clamped_offset_x = std::clamp(offset_x, -1.0f, 1.0f);
             const float clamped_offset_y = std::clamp(offset_y, -1.0f, 1.0f);
             auto* const rm = get_rm();
             if (rm) {
                 auto settings = rm->getSettings();
-                settings.depth_filter_scale = clamped_scale;
+                settings.depth_filter_scale_x = clamped_scale_x;
+                settings.depth_filter_scale_y = clamped_scale_y;
                 settings.depth_filter_offset_x = clamped_offset_x;
                 settings.depth_filter_offset_y = clamped_offset_y;
                 rm->updateSettings(settings);
@@ -254,7 +261,8 @@ namespace lfs::python {
             auto settings = rm->getSettings();
             configure_depth_filter(settings, enabled, depth_near, depth_far,
                                    std::max(informational_half_width, 0.05f));
-            settings.depth_filter_scale = clamped_scale;
+            settings.depth_filter_scale_x = clamped_scale_x;
+            settings.depth_filter_scale_y = clamped_scale_y;
             settings.depth_filter_offset_x = clamped_offset_x;
             settings.depth_filter_offset_y = clamped_offset_y;
             rm->updateSettings(settings);
@@ -505,16 +513,17 @@ namespace lfs::python {
                                                                                                                                     "Prefer set_depth_filter_window.");
 
         sel.def(
-            "set_depth_filter_window", [](bool enabled, float depth_near, float depth_far, float scale, float offset_x, float offset_y) {
-                apply_depth_filter_window(enabled, depth_near, depth_far, scale, offset_x, offset_y);
+            "set_depth_filter_window", [](bool enabled, float depth_near, float depth_far, float scale, float offset_x, float offset_y, std::optional<float> scale_y) {
+                apply_depth_filter_window(enabled, depth_near, depth_far, scale, offset_x, offset_y, scale_y);
             },
-            nb::arg("enabled"), nb::arg("depth_near") = 0.0f, nb::arg("depth_far") = 100.0f, nb::arg("scale") = 0.35f, nb::arg("offset_x") = 0.0f, nb::arg("offset_y") = 0.0f, "Set the screen-space selection depth window.\n"
-                                                                                                                                                                               "scale is the on-screen fraction of the viewport (0.05-1.0, default 0.35).\n"
-                                                                                                                                                                               "offset_x/offset_y are fractions of available travel (-1 to 1, default 0).\n"
-                                                                                                                                                                               "When the Selection tool exists but is not active/enabled, enable/modify\n"
-                                                                                                                                                                               "requests (enabled=True) raise RuntimeError because they cannot be applied\n"
-                                                                                                                                                                               "atomically; disable requests (enabled=False) are silent atomic no-ops,\n"
-                                                                                                                                                                               "matching the legacy calls' contract.");
+            nb::arg("enabled"), nb::arg("depth_near") = 0.0f, nb::arg("depth_far") = 100.0f, nb::arg("scale") = 0.35f, nb::arg("offset_x") = 0.0f, nb::arg("offset_y") = 0.0f, nb::arg("scale_y") = nb::none(), "Set the screen-space selection depth window.\n"
+                                                                                                                                                                                                                "scale is the X-axis on-screen fraction of the viewport (0.05-1.0, default 0.35).\n"
+                                                                                                                                                                                                                "scale_y is the Y-axis fraction; None uses scale for isotropic compatibility.\n"
+                                                                                                                                                                                                                "offset_x/offset_y are fractions of available travel (-1 to 1, default 0).\n"
+                                                                                                                                                                                                                "When the Selection tool exists but is not active/enabled, enable/modify\n"
+                                                                                                                                                                                                                "requests (enabled=True) raise RuntimeError because they cannot be applied\n"
+                                                                                                                                                                                                                "atomically; disable requests (enabled=False) are silent atomic no-ops,\n"
+                                                                                                                                                                                                                "matching the legacy calls' contract.");
 
         sel.def(
             "get_depth_filter", []() -> std::tuple<bool, float, float> {
@@ -569,37 +578,43 @@ namespace lfs::python {
             "window half-width (inverse of the set_depth_filter_range conversion).");
 
         sel.def(
-            "get_depth_filter_window", []() -> std::tuple<bool, float, float, float, float, float> {
+            "get_depth_filter_window", []() -> std::tuple<bool, float, float, float, float, float, float> {
                 if (const auto* const tool = get_selection_tool()) {
                     const auto* const rm = get_rm();
-                    float scale = DEFAULT_WINDOW_SCALE;
+                    float scale_x = DEFAULT_WINDOW_SCALE;
+                    float scale_y = DEFAULT_WINDOW_SCALE;
                     float offset_x = 0.0f;
                     float offset_y = 0.0f;
                     if (rm) {
                         const auto& settings = rm->getSettings();
-                        scale = settings.depth_filter_scale;
+                        scale_x = settings.depth_filter_scale_x;
+                        scale_y = settings.depth_filter_scale_y;
                         offset_x = settings.depth_filter_offset_x;
                         offset_y = settings.depth_filter_offset_y;
                     }
                     return {tool->isDepthFilterEnabled(),
                             tool->getDepthNear(),
                             tool->getDepthFar(),
-                            scale, offset_x, offset_y};
+                            scale_x,
+                            scale_y,
+                            offset_x,
+                            offset_y};
                 }
                 auto* rm = get_rm();
                 if (!rm)
-                    return {false, 0.0f, 100.0f, DEFAULT_WINDOW_SCALE, 0.0f, 0.0f};
+                    return {false, 0.0f, 100.0f, DEFAULT_WINDOW_SCALE, DEFAULT_WINDOW_SCALE, 0.0f, 0.0f};
                 const auto& settings = rm->getSettings();
                 const auto [depth_near, depth_far] = fallback_depth_near_far(settings);
                 return {settings.depth_filter_enabled,
                         depth_near,
                         depth_far,
-                        settings.depth_filter_scale,
+                        settings.depth_filter_scale_x,
+                        settings.depth_filter_scale_y,
                         settings.depth_filter_offset_x,
                         settings.depth_filter_offset_y};
             },
             "Get the screen-space selection depth window:\n"
-            "(enabled, near, far, scale, offset_x, offset_y).");
+            "(enabled, near, far, scale_x, scale_y, offset_x, offset_y).");
 
         // ─────────────────────────────────────────────────────────────────────
         // CROP FILTER

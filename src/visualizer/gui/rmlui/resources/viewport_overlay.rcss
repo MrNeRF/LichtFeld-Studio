@@ -462,6 +462,12 @@ body {
     min-width: 50dp;
 }
 
+#selection-block .depth-axis-size > .number-input.viewport-selection-depth-input {
+    /* Wide enough for the anisotropic "63x45%" Size readout at 1.5x UI scale. */
+    width: 104dp;
+    min-width: 104dp;
+}
+
 @media (max-width: 1150dp) {
     /* Deterministic 2+3 wrap: the Near/Far group takes the first line, the
        Size/X/Y group the second, each centered, with UNIFORM slider lengths
@@ -518,8 +524,10 @@ body {
 }
 
 .viewport-selection-depth-axis > .number-input.viewport-selection-depth-input {
-    width: 72dp;
-    min-width: 72dp;
+    /* Wide enough for the anisotropic "63x45%" Size readout at 1.5x UI scale
+       (88dp still clipped the percent sign). */
+    width: 104dp;
+    min-width: 104dp;
     height: 24dp;
     min-height: 24dp;
     padding: 2dp 5dp;

@@ -186,7 +186,8 @@ namespace lfs::python {
             .value("SELECT_ALL_SCENE_NODES", Action::SELECT_ALL_SCENE_NODES)
             .value("TOGGLE_SCENE_SELECTION_VISIBILITY", Action::TOGGLE_SCENE_SELECTION_VISIBILITY)
             .value("TOGGLE_SCENE_SELECTION_TRAINING", Action::TOGGLE_SCENE_SELECTION_TRAINING)
-            .value("DEPTH_ADJUST_SIZE", Action::DEPTH_ADJUST_SIZE);
+            .value("DEPTH_ADJUST_SIZE", Action::DEPTH_ADJUST_SIZE)
+            .value("DEPTH_WINDOW_DRAG", Action::DEPTH_WINDOW_DRAG);
 
         // Expose ToolMode enum
         nb::enum_<ToolMode>(keymap, "ToolMode")

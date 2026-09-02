@@ -1476,7 +1476,13 @@ namespace lfs::vis {
                               glm::vec4(screen_window ? 1.0f : 0.0f,
                                         request.filters.cull_outside_view_volume ? 1.0f : 0.0f,
                                         request.filters.dim_outside_view_volume ? 1.0f : 0.0f,
-                                        screen_window ? screen_window->scale : 0.0f));
+                                        0.0f)); // retired isotropic lane; window scale now in ViewWindow
+                    writeVec4(dst,
+                              ViewWindow,
+                              glm::vec4(screen_window ? screen_window->scale_x : 0.0f,
+                                        screen_window ? screen_window->scale_y : 0.0f,
+                                        (screen_window && screen_window->drag_preview) ? 1.0f : 0.0f,
+                                        0.0f)); // z: drag-preview live-reveal flag
                     writeVec4(dst,
                               ViewMin,
                               glm::vec4(request.filters.view_volume->min,

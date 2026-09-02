@@ -55,6 +55,8 @@ class BuiltinOp(enum.Enum):
 
     EllipsoidReset = 19
 
+    DepthWindowDrag = 20
+
 class BuiltinTool(enum.Enum):
     Select = 0
 

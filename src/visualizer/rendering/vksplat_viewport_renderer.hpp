@@ -775,10 +775,11 @@ namespace lfs::vis {
             EllipsoidExtraBase = CropExtraBase + CropParamStride * CropExtraCount,
             EllipsoidParamStride = 5,
             EllipsoidExtraCount = 15,
-            ParamCount = EllipsoidExtraBase + EllipsoidParamStride * EllipsoidExtraCount,
+            ViewWindow = EllipsoidExtraBase + EllipsoidParamStride * EllipsoidExtraCount,
+            ParamCount = ViewWindow + 1,
         };
         static_assert(EllipsoidFlags + EllipsoidParamStride <= ViewIntrinsics);
-        static_assert(EllipsoidExtraBase + EllipsoidParamStride * EllipsoidExtraCount == ParamCount);
+        static_assert(EllipsoidExtraBase + EllipsoidParamStride * EllipsoidExtraCount == ViewWindow);
 
         // Exposed for tests (O4): pure function over the request, no device state.
         [[nodiscard]] LFS_VIS_API std::expected<std::vector<float>, std::string>

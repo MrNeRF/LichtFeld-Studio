@@ -1422,6 +1422,7 @@
     "action.depth_adjust_far": "调整深度框",
     "action.depth_adjust_side": "调整深度框",
     "action.depth_adjust_size": "调整窗口大小",
+    "action.depth_window_drag": "拖动深度窗口",
     "action.toggle_selection_depth_filter": "切换深度框",
     "action.toggle_selection_crop_filter": "切换选择裁剪过滤器",
     "action.brush_resize": "调整画笔大小",

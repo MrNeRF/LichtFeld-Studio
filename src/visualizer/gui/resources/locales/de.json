@@ -1422,6 +1422,7 @@
     "action.depth_adjust_far": "Tiefenbox anpassen",
     "action.depth_adjust_side": "Tiefenbox anpassen",
     "action.depth_adjust_size": "Fenstergröße anpassen",
+    "action.depth_window_drag": "Tiefenfenster ziehen",
     "action.toggle_selection_depth_filter": "Tiefenbox umschalten",
     "action.toggle_selection_crop_filter": "Auswahl-Zuschneidefilter umschalten",
     "action.brush_resize": "Pinsel skalieren",
