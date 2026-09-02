@@ -1160,6 +1160,47 @@ def test_catalog_notice_for_failed_load_and_on_mount_warning(panel_module, monke
     panel.on_unmount(_Document())
 
 
+def test_backend_initialization_completes_without_ui_scheduler(panel_module, monkeypatch, tmp_path):
+    loaded = threading.Event()
+
+    class _LoadedIndex:
+        load_issues = []
+
+        def load(self):
+            loaded.set()
+            return True
+
+    monkeypatch.setattr(panel_module, "AssetIndex", _LoadedIndex)
+    monkeypatch.setattr(
+        panel_module,
+        "resolve_asset_manager_storage_path",
+        lambda: tmp_path / "catalog",
+    )
+    monkeypatch.setattr(
+        panel_module,
+        "resolve_default_asset_directory",
+        lambda: tmp_path / "assets",
+    )
+    monkeypatch.setattr(panel_module, "BACKEND_AVAILABLE", True)
+    monkeypatch.delattr(panel_module.lf.ui, "schedule_on_ui_thread", raising=False)
+
+    panel = panel_module.AssetManagerPanel()
+    monkeypatch.setattr(panel, "_repair_selection", lambda: None)
+    monkeypatch.setattr(panel, "_refresh_records", lambda **_kwargs: None)
+    monkeypatch.setattr(panel, "_start_catalog_verify", lambda: None)
+    monkeypatch.setattr(panel, "_scan_asset_folders", lambda: None)
+    updates = []
+    monkeypatch.setattr(panel, "_request_model_update", lambda: updates.append(True))
+
+    panel._start_backend_initialization()
+
+    assert loaded.wait(timeout=2.0)
+    assert _wait_until(lambda: not panel._backend_load_active)
+    assert isinstance(panel._asset_index, _LoadedIndex)
+    assert panel._catalog_load_failed is False
+    assert updates == [True]
+
+
 def test_unmount_cancels_running_folder_scan(panel_module, monkeypatch):
     started = threading.Event()
     observed = {}

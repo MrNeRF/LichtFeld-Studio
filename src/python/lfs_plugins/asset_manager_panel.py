@@ -242,6 +242,8 @@ class AssetManagerPanel(Panel):
             scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
             if callable(scheduler):
                 scheduler(complete)
+            else:
+                complete()
 
         threading.Thread(
             target=worker, daemon=True, name="AssetManagerCatalogLoad"

@@ -4,6 +4,8 @@
 #include "core/image_io.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -11,9 +13,21 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <stb_image_write.h>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
+
+    std::filesystem::path unique_temp_path(const std::string_view stem,
+                                           const std::string_view extension) {
+        static std::atomic_uint64_t sequence{0};
+        const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        return std::filesystem::temp_directory_path() /
+               ("lfs_image_io_" + std::string(stem) + "_" + std::to_string(timestamp) + "_" +
+                std::to_string(sequence.fetch_add(1, std::memory_order_relaxed)) +
+                std::string(extension));
+    }
 
     void append_u16(std::vector<std::uint8_t>& data, const std::uint16_t value) {
         data.push_back(static_cast<std::uint8_t>(value));
@@ -94,7 +108,7 @@ TEST(ImageIoTest, ConvertsSixteenBitPngMemoryToUint8) {
 }
 
 TEST(ImageIoTest, ThumbnailJpegUsesScaledDecode) {
-    const auto path = std::filesystem::temp_directory_path() / "lfs_image_io_thumbnail.jpg";
+    const auto path = unique_temp_path("thumbnail", ".jpg");
     constexpr int width = 1024;
     constexpr int height = 768;
     std::vector<std::uint8_t> source(static_cast<std::size_t>(width) * height * 3);

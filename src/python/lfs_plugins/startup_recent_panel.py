@@ -147,6 +147,7 @@ class StartupRecentPanel(Panel):
         self._mount_generation = 0
         self._check_cache: dict[str, dict] = {}
         self._check_in_flight: set[str] = set()
+        self._check_cache_lock = threading.Lock()
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("startup_recent")
@@ -195,8 +196,9 @@ class StartupRecentPanel(Panel):
         self._dismissed = False
         self._mounted = True
         self._mount_generation += 1
-        self._check_cache = {}
-        self._check_in_flight.clear()
+        with self._check_cache_lock:
+            self._check_cache = {}
+            self._check_in_flight.clear()
         doc.add_event_listener("keydown", self._on_keydown)
         # Title-bar close is Start Blank (Panel base wires #close-btn).
         projects_list = doc.get_element_by_id("startup-recent-list")
@@ -231,7 +233,11 @@ class StartupRecentPanel(Panel):
             paths = list(recent_fn() or [])
         except Exception:
             paths = []
-        checks = self._check_cache if self._mounted else None
+        if self._mounted:
+            with self._check_cache_lock:
+                checks = dict(self._check_cache)
+        else:
+            checks = None
         rows = build_project_rows(paths, max_rows=_MAX_ROWS, checks=checks)
         signature = tuple(
             (row["path"], row["recoverable"], row["last_opened"]) for row in rows
@@ -251,14 +257,17 @@ class StartupRecentPanel(Panel):
 
     def _start_checks(self, paths) -> None:
         pending = []
-        for path in list(paths or [])[:_MAX_ROWS]:
-            path_text = str(path)
-            if path_text not in self._check_cache and path_text not in self._check_in_flight:
-                pending.append(path_text)
-                self._check_in_flight.add(path_text)
+        with self._check_cache_lock:
+            for path in list(paths or [])[:_MAX_ROWS]:
+                path_text = str(path)
+                if path_text not in self._check_cache and path_text not in self._check_in_flight:
+                    pending.append(path_text)
+                    self._check_in_flight.add(path_text)
         if not pending:
             return
         generation = self._mount_generation
+        with self._check_cache_lock:
+            cache_snapshot = tuple(self._check_cache.values())
 
         def worker() -> None:
             for path in pending:
@@ -269,7 +278,7 @@ class StartupRecentPanel(Panel):
                     mtime_ns = 0
                 cache_key = (path, mtime_ns)
                 cached = next(
-                    (value for value in self._check_cache.values()
+                    (value for value in cache_snapshot
                      if value.get("cache_key") == cache_key),
                     None,
                 )
@@ -285,8 +294,9 @@ class StartupRecentPanel(Panel):
                     if generation != self._mount_generation or not self._mounted:
                         return
                     result_path, result_value = result
-                    self._check_in_flight.discard(result_path)
-                    self._check_cache[result_path] = result_value
+                    with self._check_cache_lock:
+                        self._check_in_flight.discard(result_path)
+                        self._check_cache[result_path] = result_value
                     self._refresh_rows(force=True)
                     if self._handle:
                         self._handle.dirty_all()
