@@ -3644,7 +3644,6 @@ namespace lfs::vis {
                     core::NodeId cropbox_id = core::NULL_NODE;
                     if (first->type == core::NodeType::CROPBOX) {
                         cropbox_id = first->id;
-                    } else if (first->type == core::NodeType::SPLAT || first->type == core::NodeType::POINTCLOUD) {
                     } else if (first->type == core::NodeType::SPLAT ||
                                first->type == core::NodeType::POINTCLOUD) {
                         cropbox_id = scene_.getCropBoxForSplat(first->id);

@@ -3131,6 +3131,7 @@ namespace lfs::vis {
             try {
                 core::waitForCUDAStream(core::getCurrentCUDAStream(), selection_stream);
             } catch (const std::exception& e) {
+                LOG_DEBUG("SelectionService: failed to synchronize point selection stream: {}", e.what());
                 return {false, 0, e.what()};
             }
         }
@@ -3241,6 +3242,7 @@ namespace lfs::vis {
             try {
                 selection_mask.sync_to_stream(core::getCurrentCUDAStream());
             } catch (const std::exception& e) {
+                LOG_DEBUG("SelectionService: failed to synchronize selection mask: {}", e.what());
                 return {false, 0, e.what()};
             }
         }
@@ -3378,6 +3380,7 @@ namespace lfs::vis {
                 group_counts = rendering::count_selection_groups(output_mask, selection_group_counts_scratch_);
             }
         } catch (const std::exception& e) {
+            LOG_DEBUG("SelectionService: failed to count selection groups: {}", e.what());
             return {false, 0, e.what()};
         }
         size_t selected_count = 0;
