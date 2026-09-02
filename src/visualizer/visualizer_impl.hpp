@@ -661,7 +661,7 @@ namespace lfs::vis {
         std::string last_wake_timeout_source_ = "none";
         FrameDemand last_frame_demand_{};
         bool has_last_frame_demand_ = false;
-        std::future<void> pipeline_cache_flush_future_;
+        std::optional<std::chrono::steady_clock::time_point> pipeline_cache_flush_due_;
         std::future<void> vksplat_spirv_preload_future_;
         bool startup_plugin_preload_started_ = false;
         bool startup_project_open_attempted_ = false;

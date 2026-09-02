@@ -1114,7 +1114,7 @@ namespace lfs::app {
                 const std::size_t after_context = process_used_now();
                 profiler.recordCudaPhaseBytes(
                     "primary_context",
-                    after_context > before_context ? after_context - before_context : after_context);
+                    after_context > before_context ? after_context - before_context : 0);
 
                 const std::size_t before_curand = process_used_now();
                 curandGenerator_t generator = nullptr;

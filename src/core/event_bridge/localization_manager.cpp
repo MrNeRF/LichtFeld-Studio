@@ -40,7 +40,7 @@ namespace lfs::event {
         fallback_strings_.clear();
         warned_missing_keys_.clear();
 
-        const fs::path index_path = fs::path(locales_dir_) / "index.json";
+        const fs::path index_path = fs::path(locales_dir_).parent_path() / "locale_index.json";
         std::ifstream index_file;
         if (!lfs::core::open_file_for_read(index_path, index_file)) {
             LOG_ERROR("Locale index not found: {}", lfs::core::path_to_utf8(index_path));

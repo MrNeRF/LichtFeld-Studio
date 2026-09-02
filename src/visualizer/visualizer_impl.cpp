@@ -330,8 +330,6 @@ namespace lfs::vis {
     }
 
     VisualizerImpl::~VisualizerImpl() {
-        if (pipeline_cache_flush_future_.valid())
-            pipeline_cache_flush_future_.wait();
         if (vksplat_spirv_preload_future_.valid())
             vksplat_spirv_preload_future_.wait();
         // ProjectLifecycle owns worker threads and calls back into the viewer
@@ -2043,6 +2041,12 @@ namespace lfs::vis {
         if (motion_only_wake_skipped_)
             return;
 
+        if (pipeline_cache_flush_due_ && update_started_at >= *pipeline_cache_flush_due_) {
+            pipeline_cache_flush_due_.reset();
+            if (auto* const context = window_manager_->getVulkanContext())
+                context->flushPipelineCache();
+        }
+
         if (fully_initialized_ && gui_frame_rendered_ && !startup_plugin_preload_started_) {
             startup_plugin_preload_started_ = true;
             LOG_TIMER("startup.python.preload_plugins_async");
@@ -2366,6 +2370,14 @@ namespace lfs::vis {
             consider_timeout(std::max(kScheduledRedrawMinWaitSeconds, *redraw_wait),
                              "python_scheduled_redraw");
 
+        if (pipeline_cache_flush_due_) {
+            const double flush_wait = std::chrono::duration<double>(
+                                          *pipeline_cache_flush_due_ - std::chrono::steady_clock::now())
+                                          .count();
+            wait_seconds = std::min(wait_seconds,
+                                    std::max(kScheduledRedrawMinWaitSeconds, flush_wait));
+        }
+
         window_manager_->waitEvents(wait_seconds);
         last_wake_reason_ = window_manager_->frameInput().had_event ? "event" : "timeout";
         last_wake_timeout_source_ = window_manager_->frameInput().had_event ? "none" : timeout_source;
@@ -2624,13 +2636,7 @@ namespace lfs::vis {
             project_lifecycle_->runStartupRecoveryScan();
         }
         if (first_gui_frame) {
-            pipeline_cache_flush_future_ = std::async(std::launch::async, [this] {
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-                if (window_manager_) {
-                    if (auto* const context = window_manager_->getVulkanContext())
-                        context->flushPipelineCache();
-                }
-            });
+            pipeline_cache_flush_due_ = std::chrono::steady_clock::now() + std::chrono::seconds(1);
             vksplat_spirv_preload_future_ = std::async(
                 std::launch::async, [] { preloadVkSplatSpirvFiles(); });
         }

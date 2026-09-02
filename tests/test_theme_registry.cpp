@@ -191,9 +191,10 @@ TEST(ResourcePath, MemoizedResolutionMatchesUncachedResolution) {
 }
 
 TEST(Localization, IndexMatchesLocaleLanguageNames) {
-    const auto locale_root = std::filesystem::path(PROJECT_ROOT_PATH) /
-                             "src/visualizer/gui/resources/locales";
-    std::ifstream index_stream(locale_root / "index.json");
+    const auto resource_root = std::filesystem::path(PROJECT_ROOT_PATH) /
+                               "src/visualizer/gui/resources";
+    const auto locale_root = resource_root / "locales";
+    std::ifstream index_stream(resource_root / "locale_index.json");
     ASSERT_TRUE(index_stream.is_open());
 
     nlohmann::json index;
@@ -213,7 +214,7 @@ TEST(Localization, IndexMatchesLocaleLanguageNames) {
 
     std::set<std::string> locale_codes;
     for (const auto& entry : std::filesystem::directory_iterator(locale_root)) {
-        if (entry.path().extension() != ".json" || entry.path().stem() == "index")
+        if (entry.path().extension() != ".json")
             continue;
         locale_codes.insert(entry.path().stem().string());
     }
