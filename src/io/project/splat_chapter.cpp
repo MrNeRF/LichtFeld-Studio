@@ -101,6 +101,7 @@ namespace lfs::io::project {
         constexpr std::uint64_t RAW_STREAM_MAX_MANIFEST_BYTES = 32ull * 1024ull * 1024ull;
 
         std::optional<bool> splat_capture_no_headroom_override;
+        std::optional<bool> splat_capture_stream_creation_failure_override;
         std::optional<std::size_t> splat_stream_window_override;
 
         std::size_t splat_stream_window_bytes() noexcept {
@@ -339,11 +340,13 @@ namespace lfs::io::project {
         }
         if (const auto status = cudaEventSynchronize(impl_->ready);
             status != cudaSuccess) {
-            return splat_error(
+            auto error = splat_error(
                 lfs::core::cuda_status_to_error_code(status),
                 "The asynchronous splat snapshot could not be completed.",
                 std::format("CUDA snapshot synchronization failed: {}",
                             cudaGetErrorString(status)));
+            impl_.reset();
+            return error;
         }
         const auto clone_finished = std::chrono::steady_clock::now();
         const auto worker_download_started = clone_finished;
@@ -495,18 +498,34 @@ namespace lfs::io::project {
         impl->clone_started = std::chrono::steady_clock::now();
         impl->source_kind = source_kind;
         impl->is_training_model = is_training_model;
-        if (const auto status = cudaStreamCreateWithFlags(
-                &impl->stream, cudaStreamNonBlocking);
-            status != cudaSuccess) {
+        const auto status = splat_capture_stream_creation_failure_override.value_or(false)
+                                ? cudaErrorUnknown
+                                : cudaStreamCreateWithFlags(
+                                      &impl->stream, cudaStreamNonBlocking);
+        if (status != cudaSuccess) {
             return splat_error(
                 lfs::ErrorCode::ResourceExhausted,
                 "The splat snapshot stream could not be created.",
                 std::format("CUDA stream creation failed: {}",
                             cudaGetErrorString(status)));
         }
+        lfs::core::SplatData cloned;
+        try {
+            cloned = model.clone_async(impl->stream);
+        } catch (const std::bad_alloc& error) {
+            LOG_WARN(
+                "SPLT async capture falling back to synchronous capture: "
+                "snapshot allocation failed after preflight: {}",
+                error.what());
+            return std::unique_ptr<AsyncSplatCapture>{};
+        } catch (const std::exception& error) {
+            return splat_error(
+                lfs::ErrorCode::Internal,
+                "The splat snapshot could not be queued.", error.what());
+        }
         try {
             impl->snapshot = std::make_unique<lfs::core::SplatData>(
-                model.clone_async(impl->stream));
+                std::move(cloned));
             if (const auto status = cudaEventCreateWithFlags(
                     &impl->ready, cudaEventDisableTiming);
                 status != cudaSuccess) {
@@ -996,6 +1015,11 @@ namespace lfs::io::project {
     void detail::set_splat_capture_no_headroom_for_testing(
         const std::optional<bool> forced) {
         splat_capture_no_headroom_override = forced;
+    }
+
+    void detail::set_splat_capture_stream_creation_failure_for_testing(
+        const std::optional<bool> forced) {
+        splat_capture_stream_creation_failure_override = forced;
     }
 
 } // namespace lfs::io::project

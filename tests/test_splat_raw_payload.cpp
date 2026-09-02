@@ -319,6 +319,40 @@ namespace {
         EXPECT_FALSE(*pending);
     }
 
+    TEST_F(SplatRawPayloadTest, AsyncCaptureReportsCudaSetupFailure) {
+        const auto path = std::filesystem::path(PROJECT_ROOT_PATH) /
+                          "tests/data/bike.ply";
+        auto loaded = lfs::io::load_ply(path);
+        ASSERT_TRUE(loaded.has_value())
+            << lfs::format_for_developer(loaded.error());
+        if (loaded->value.means().device() != lfs::core::Device::CUDA) {
+            GTEST_SKIP() << "async capture requires a CUDA-backed splat";
+        }
+
+        struct CaptureFailureGuard {
+            CaptureFailureGuard() {
+                lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(
+                    false);
+                lfs::io::project::detail::
+                    set_splat_capture_stream_creation_failure_for_testing(true);
+            }
+            ~CaptureFailureGuard() {
+                lfs::io::project::detail::
+                    set_splat_capture_stream_creation_failure_for_testing(
+                        std::nullopt);
+                lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(
+                    std::nullopt);
+            }
+        } failure;
+
+        auto pending = SplatChapterPayload::start_async_capture(
+            loaded->value, lfs::io::project::SplatSourceKind::Generated, false);
+        ASSERT_FALSE(pending.has_value());
+        EXPECT_EQ(pending.error().code(), lfs::ErrorCode::ResourceExhausted);
+        EXPECT_NE(pending.error().detail().find("CUDA stream creation failed"),
+                  std::string::npos);
+    }
+
     TEST_F(SplatRawPayloadTest, StreamHydrateMatchesRawBytesAndContentHash) {
         auto stream = stream_of(payload);
         auto streamed = SplatChapterPayload::hydrate_lfsp_stream(

@@ -104,6 +104,8 @@ namespace lfs::io::project {
             std::optional<std::size_t> window_bytes);
         LFS_IO_API void set_splat_capture_no_headroom_for_testing(
             std::optional<bool> forced);
+        LFS_IO_API void set_splat_capture_stream_creation_failure_for_testing(
+            std::optional<bool> forced);
     } // namespace detail
 
 } // namespace lfs::io::project

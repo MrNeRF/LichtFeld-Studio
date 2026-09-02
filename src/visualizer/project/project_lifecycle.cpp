@@ -6179,14 +6179,7 @@ namespace lfs::vis::project {
                         lfs::io::project::SplatSourceKind::Generated,
                         false);
                 if (!async) {
-                    if (async.error().code() !=
-                        lfs::ErrorCode::ResourceExhausted) {
-                        return lfs::Status::failure(std::move(async).error());
-                    }
-                    LOG_WARN(
-                        "SPLT async capture falling back to synchronous capture for {}: {}",
-                        node->uuid.to_string(),
-                        developerError(async.error()));
+                    return lfs::Status::failure(std::move(async).error());
                 } else if (*async) {
                     async_captures.push_back({
                         .uuid = node->uuid,
