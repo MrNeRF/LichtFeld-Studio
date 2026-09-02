@@ -126,6 +126,7 @@ namespace lfs::vis {
     }
 
     RenderingManager::~RenderingManager() {
+        event_handlers_ = lfs::event::ScopedHandler{};
         invalidateGTComparisonImageCache();
         gt_comparison_image_worker_.request_stop();
         gt_comparison_image_cv_.notify_all();

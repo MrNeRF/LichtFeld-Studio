@@ -2003,6 +2003,10 @@ namespace lfs::app {
                     });
             }
 
+            ~EventSubscriptionRegistry() {
+                handlers_ = event::ScopedHandler{};
+            }
+
             void prune_expired_locked(const Clock::time_point now) {
                 for (auto it = subscriptions_.begin(); it != subscriptions_.end();) {
                     if (now - it->second.last_access >= MCP_EVENT_SUBSCRIPTION_TTL) {

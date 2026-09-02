@@ -900,7 +900,6 @@ namespace lfs::vis {
         ViewportFrameLifecycleService frame_lifecycle_service_;
 
         // Settings
-        lfs::event::ScopedHandler event_handlers_;
         RenderSettings settings_;
         SceneUpscalerSelection scene_upscaler_runtime_selection_{};
         std::array<int, 2> panel_grid_planes_{{1, 1}};
@@ -926,6 +925,8 @@ namespace lfs::vis {
         ViewportInteractionContext viewport_interaction_context_;
 
         ViewportOverlayService viewport_overlay_service_;
+
+        lfs::event::ScopedHandler event_handlers_;
 
         friend class RenderingManagerEventsTest_SceneClearedResetsFrustumLoaderSyncCache_Test;
         friend class SceneManager;
