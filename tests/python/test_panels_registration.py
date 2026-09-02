@@ -14,6 +14,7 @@ import pytest
 def _install_recording_lf(monkeypatch):
     """Install a recording ``lichtfeld`` stub sufficient for builtin panel imports."""
     registered = []
+    registered_classes = []
     enabled = []
     step_side_effects = []
     log_errors = []
@@ -149,6 +150,7 @@ def _install_recording_lf(monkeypatch):
 
     def register_class(cls):
         registered.append(getattr(cls, "__name__", str(cls)))
+        registered_classes.append(cls)
 
     def set_panel_enabled(panel_id, enabled_flag):
         enabled.append((panel_id, enabled_flag))
@@ -277,6 +279,7 @@ def _install_recording_lf(monkeypatch):
 
     state = SimpleNamespace(
         registered=registered,
+        registered_classes=registered_classes,
         enabled=enabled,
         side_effects=step_side_effects,
         lf=lf_stub,
@@ -377,6 +380,29 @@ def test_all_good_registers_in_order_with_rendering_first(panels_module):
 
     # Image preview callback hookup is part of image_preview_panel step.
     assert any(effect[0] == "camera_preview" for effect in state.side_effects)
+
+
+def test_lazy_panel_metadata_matches_real_classes(panels_module):
+    """The proxy registration contract must equal every implementation class."""
+    module, state = panels_module
+
+    assert module.register_builtin_panels() is True
+    fields = (
+        "id", "label", "space", "order", "template", "height_mode", "size",
+        "options", "update_policy", "update_interval_ms", "style",
+    )
+    registered = {
+        cls.__name__: cls
+        for cls in state.registered_classes
+        if cls.__name__ in {spec.class_name for spec in module.PANEL_SPECS.values()}
+    }
+
+    for spec_name, spec in module.PANEL_SPECS.items():
+        real = getattr(import_module(spec.module_name), spec.class_name)
+        lazy = registered[spec.class_name]
+        assert [getattr(lazy, field) for field in fields] == [
+            getattr(real, field) for field in fields
+        ], spec_name
 
 
 def test_lichtfeld_import_failure_returns_false_and_skips_steps(monkeypatch):

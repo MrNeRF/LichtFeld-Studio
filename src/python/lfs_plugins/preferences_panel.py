@@ -6,23 +6,15 @@ import lichtfeld as lf
 
 from .keymap_bindings import KeymapBindingsSection
 from .types import Panel
+from .panels import panel_class
 
 __lfs_panel_classes__ = ["PreferencesPanel"]
 __lfs_panel_ids__ = ["lfs.preferences"]
 
 
+@panel_class("preferences")
 class PreferencesPanel(Panel):
     """Floating home for application-level preferences."""
-
-    id = "lfs.preferences"
-    label = "Preferences"
-    space = lf.ui.PanelSpace.FLOATING
-    order = 100
-    template = "rmlui/preferences.rml"
-    height_mode = lf.ui.PanelHeightMode.FILL
-    size = (780, 440)
-    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    update_policy = "dirty"
 
     SCALE_OPTIONS = (
         (0.0, "menu.view.ui_scale.auto"),

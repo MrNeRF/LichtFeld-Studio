@@ -3292,6 +3292,8 @@ namespace lfs::vis::gui {
 
     void GuiManager::init() {
         vulkan_gui_ = viewer_ && viewer_->getWindowManager() && viewer_->getWindowManager()->isVulkan();
+        deferred_startup_work_pending_ = true;
+        first_render_completed_ = false;
 
         lfs::python::set_ui_texture_service(
             [](const unsigned char*, int, int, int) -> lfs::python::TextureResult {
@@ -3452,11 +3454,6 @@ namespace lfs::vis::gui {
         rml_menu_bar_.init(&rmlui_manager_);
         rml_status_bar_.init(&rmlui_manager_, viewer_->options_.safe_mode,
                              viewer_->options_.mcp_status_provider);
-        if (global_context_menu_)
-            global_context_menu_->preload();
-        if (rml_modal_overlay_)
-            rml_modal_overlay_->preload();
-
         lfs::python::RmlPanelHostOps ops{};
         ops.create = [](void* mgr, const char* name, const char* rml,
                         const char* inline_rcss) -> void* {
@@ -3627,7 +3624,10 @@ namespace lfs::vis::gui {
         if (!dev_resource_watch_.enabled)
             return;
 
-        scanDevResourceFiles(false);
+        // The baseline is only used by later change detection. Building it in
+        // the init call needlessly blocks the first paint, so use the existing
+        // worker and adopt its result from the normal render tick.
+        launchDevResourceScan();
         dev_resource_watch_.next_scan = std::chrono::steady_clock::now() + std::chrono::seconds(1);
         LOG_INFO("Resource hot reload enabled (RmlUI: '{}', locales: '{}')",
                  dev_resource_watch_.rml_dir.empty() ? std::string("<disabled>")
@@ -4656,6 +4656,15 @@ namespace lfs::vis::gui {
         if (vulkan_gui_ && !vulkan_context) {
             updateInteractiveTransitionGuard();
             return;
+        }
+
+        if (first_render_completed_ && deferred_startup_work_pending_) {
+            deferred_startup_work_pending_ = false;
+            if (global_context_menu_)
+                global_context_menu_->preload();
+            if (rml_modal_overlay_)
+                rml_modal_overlay_->preload();
+            warmupNativeFileDialogBackend();
         }
 
         std::optional<::lfs::core::ScopedTimer> cpu_ui_before_vulkan_timer;
@@ -6025,6 +6034,11 @@ namespace lfs::vis::gui {
                 --ui_layout_settle_frames_;
 
             updateInteractiveTransitionGuard();
+            if (!first_render_completed_) {
+                first_render_completed_ = true;
+                if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr)
+                    rendering->markDirty(DirtyFlag::OVERLAY);
+            }
             return;
         }
 
@@ -6032,6 +6046,11 @@ namespace lfs::vis::gui {
             viewer_->processRenderWorkQueue();
         }
         updateInteractiveTransitionGuard();
+        if (!first_render_completed_) {
+            first_render_completed_ = true;
+            if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr)
+                rendering->markDirty(DirtyFlag::OVERLAY);
+        }
     }
 
     void GuiManager::renderSelectionOverlays(const UIContext& ctx) {

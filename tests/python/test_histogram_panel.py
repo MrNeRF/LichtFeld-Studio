@@ -176,7 +176,7 @@ def histogram_panel_module():
 
 def test_histogram_panel_uses_dirty_update_policy(histogram_panel_module):
     assert histogram_panel_module.HistogramPanel.update_policy == "dirty"
-    assert "update_interval_ms" not in histogram_panel_module.HistogramPanel.__dict__
+    assert histogram_panel_module.HistogramPanel.update_interval_ms == 100
 
 
 def test_histogram_mode_available_hides_when_paused(histogram_panel_module, monkeypatch):

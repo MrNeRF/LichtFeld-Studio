@@ -1116,6 +1116,7 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
             create_optional(pipeline_macro_compose_overlays[i], "macro_compose_overlays");
         }
     }
+    createPendingComputePipelines();
 }
 
 void VulkanGSRenderer::executeMapLodIndices(const std::uint32_t lod_count,

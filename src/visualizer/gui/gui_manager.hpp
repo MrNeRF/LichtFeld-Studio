@@ -392,6 +392,8 @@ namespace lfs::vis {
             RmlMenuBar rml_menu_bar_;
             RmlStatusBar rml_status_bar_;
             std::unique_ptr<GlobalContextMenu> global_context_menu_;
+            bool deferred_startup_work_pending_ = false;
+            bool first_render_completed_ = false;
 
             // Native drag-drop handler
             NativeDragDrop drag_drop_;

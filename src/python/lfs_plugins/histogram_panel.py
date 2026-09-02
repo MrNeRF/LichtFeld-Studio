@@ -13,6 +13,7 @@ from .histogram_support import METRICS, METRIC_BY_ID, histogram_mode_available, 
 from . import rml_widgets as w
 from .rml_keys import KI_A, KI_DELETE, KI_I
 from .types import Panel
+from .panels import panel_class
 from .ui import RuntimeState
 
 __lfs_panel_classes__ = ["HistogramPanel"]
@@ -44,16 +45,8 @@ def _trf(key: str, fallback: str, **kwargs) -> str:
     return _tr(key, fallback).format(**kwargs)
 
 
+@panel_class("histogram")
 class HistogramPanel(Panel):
-    id = "lfs.histogram"
-    label = "Histogram"
-    space = lf.ui.PanelSpace.BOTTOM_DOCK
-    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    order = 97
-    template = "rmlui/histogram_panel.rml"
-    size = (860, 660)
-    height_mode = lf.ui.PanelHeightMode.FILL
-    update_policy = "dirty"
 
     def __init__(self):
         self._doc = None

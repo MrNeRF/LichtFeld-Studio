@@ -10,6 +10,7 @@ from . import rml_widgets as w
 from .rml_keys import KI_ESCAPE, KI_RETURN
 from .training_confirm import confirm_discard_work_then
 from .types import Panel
+from .panels import panel_class
 from .ui import RuntimeState
 
 _new_project_panel = None
@@ -144,17 +145,10 @@ class _ImportDialogPanel(Panel):
         return False
 
 
+@panel_class("new_project")
 class NewProjectPanel(_ImportDialogPanel):
     """Floating panel for creating a project and optionally importing a source."""
 
-    id = "lfs.new_project"
-    label = "New Project"
-    space = lf.ui.PanelSpace.FLOATING
-    order = 11
-    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    template = "rmlui/new_project_panel.rml"
-    height_mode = lf.ui.PanelHeightMode.CONTENT
-    size = (560, 0)
     form_id = "new-project-form"
 
     DEFAULT_MAX_WIDTH = 3840
@@ -592,17 +586,10 @@ class NewProjectPanel(_ImportDialogPanel):
         self._on_do_create(_handle, _ev, _args)
 
 
+@panel_class("resume_checkpoint")
 class ResumeCheckpointPanel(_ImportDialogPanel):
     """Floating panel for configuring checkpoint resume paths."""
 
-    id = "lfs.resume_checkpoint"
-    label = "Resume Checkpoint"
-    space = lf.ui.PanelSpace.FLOATING
-    order = 12
-    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    template = "rmlui/resume_checkpoint_panel.rml"
-    height_mode = lf.ui.PanelHeightMode.CONTENT
-    size = (580, 0)
     form_id = "resume-checkpoint-form"
 
     def __init__(self):

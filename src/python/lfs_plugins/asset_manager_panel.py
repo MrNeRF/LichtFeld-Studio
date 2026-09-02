@@ -24,6 +24,7 @@ from .asset_watch import (
 from .localization import localized_count
 from .rml_keys import KI_DELETE, KI_DOWN, KI_LEFT, KI_RETURN, KI_RIGHT, KI_UP
 from .types import Panel
+from .panels import panel_class
 from .ui import RuntimeState
 
 _log = logging.getLogger(__name__)
@@ -74,20 +75,11 @@ __lfs_panel_classes__ = ["AssetManagerPanel"]
 __lfs_panel_ids__ = ["lfs.asset_manager"]
 
 
+@panel_class("asset_manager")
 class AssetManagerPanel(Panel):
     """Dockable `.licht` project catalog."""
 
     SORT_MODES = ("name", "size")
-    id = "lfs.asset_manager"
-    label = "Asset Manager"
-    space = lf.ui.PanelSpace.LEFT_DOCK
-    order = 20
-    template = "rmlui/asset_manager.rml"
-    height_mode = lf.ui.PanelHeightMode.FILL
-    size = (980, 620)
-    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    update_policy = "dirty"
-
     STORAGE_PATH: Optional[Path] = None
 
     def __init__(self):

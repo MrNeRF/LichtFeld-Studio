@@ -50,6 +50,8 @@ def test_bundled_locales_define_training_panel_strategy_and_color_keys():
     locale_dir = project_root / "src" / "visualizer" / "gui" / "resources" / "locales"
 
     for locale_path in locale_dir.glob("*.json"):
+        if locale_path.name == "index.json":
+            continue
         data = json.loads(locale_path.read_text())
         assert data["training"]["options.strategy.igs_plus"] == "IGS+"
         assert "refinement.grow_until_iter" in data["training"]

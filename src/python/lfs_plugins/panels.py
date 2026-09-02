@@ -5,6 +5,137 @@
 from __future__ import annotations
 
 import traceback
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class _PanelSpec:
+    module_name: str
+    class_name: str
+    id: str
+    label: str
+    space: str
+    order: int
+    template: str
+    height_mode: str
+    size: tuple[int, int]
+    options: tuple[str, ...] = ("DEFAULT_CLOSED",)
+    update_policy: str = "interval"
+    update_interval_ms: int = 100
+    style: str = ""
+    has_poll: bool = False
+    has_draw: bool = False
+
+
+# Keep the registration contract in one place. The implementation classes use
+# panel_metadata() too, so registration cannot silently drift from the class.
+PANEL_SPECS = {
+    "new_project": _PanelSpec(
+        "lfs_plugins.import_panels", "NewProjectPanel", "lfs.new_project",
+        "New Project", "FLOATING", 11, "rmlui/new_project_panel.rml",
+        "CONTENT", (560, 0), update_policy="dirty",
+    ),
+    "resume_checkpoint": _PanelSpec(
+        "lfs_plugins.import_panels", "ResumeCheckpointPanel", "lfs.resume_checkpoint",
+        "Resume Checkpoint", "FLOATING", 12, "rmlui/resume_checkpoint_panel.rml",
+        "CONTENT", (580, 0), update_policy="dirty",
+    ),
+    "export": _PanelSpec(
+        "lfs_plugins.export_panel", "ExportPanel", "lfs.export", "Export",
+        "FLOATING", 10, "rmlui/export_panel.rml", "CONTENT", (320, 0),
+        update_policy="dirty",
+    ),
+    "about": _PanelSpec(
+        "lfs_plugins.about_panel", "AboutPanel", "lfs.about", "About",
+        "FLOATING", 100, "rmlui/about.rml", "CONTENT", (400, 0),
+    ),
+    "account": _PanelSpec(
+        "lfs_plugins.account_panel", "AccountPanel", "lfs.account", "Account",
+        "FLOATING", 95, "rmlui/account_panel.rml", "CONTENT", (440, 0),
+    ),
+    "bug_report": _PanelSpec(
+        "lfs_plugins.bug_report_panel", "BugReportPanel", "lfs.bug_report",
+        "Report a bug", "FLOATING", 96, "rmlui/bug_report_panel.rml",
+        "CONTENT", (520, 0),
+    ),
+    "getting_started": _PanelSpec(
+        "lfs_plugins.getting_started_panel", "GettingStartedPanel",
+        "lfs.getting_started", "Getting Started", "FLOATING", 99,
+        "rmlui/getting_started.rml", "CONTENT", (560, 0), update_policy="dirty",
+    ),
+    "image_preview": _PanelSpec(
+        "lfs_plugins.image_preview_panel", "ImagePreviewPanel", "lfs.image_preview",
+        "Image Preview", "FLOATING", 98, "rmlui/image_preview.rml", "FILL",
+        (900, 600), update_policy="dirty",
+    ),
+    "histogram": _PanelSpec(
+        "lfs_plugins.histogram_panel", "HistogramPanel", "lfs.histogram", "Histogram",
+        "BOTTOM_DOCK", 97, "rmlui/histogram_panel.rml", "FILL", (860, 660),
+        update_policy="dirty", has_poll=True,
+    ),
+    "scripts": _PanelSpec(
+        "lfs_plugins.scripts_panel", "ScriptsPanel", "lfs.scripts", "Python Scripts",
+        "FLOATING", 200, "rmlui/scripts_panel.rml", "CONTENT", (520, 0),
+        update_policy="dirty",
+    ),
+    "preferences": _PanelSpec(
+        "lfs_plugins.preferences_panel", "PreferencesPanel", "lfs.preferences",
+        "Preferences", "FLOATING", 100, "rmlui/preferences.rml", "FILL", (780, 440), update_policy="dirty",
+    ),
+    "mesh2splat": _PanelSpec(
+        "lfs_plugins.mesh2splat_panel", "Mesh2SplatPanel", "native.mesh2splat",
+        "Mesh to Splat", "FLOATING", 12, "rmlui/mesh2splat_panel.rml", "CONTENT",
+        (420, 0), update_policy="dirty",
+    ),
+    "plugin_marketplace": _PanelSpec(
+        "lfs_plugins.plugin_marketplace_panel", "PluginMarketplacePanel",
+        "lfs.plugin_marketplace", "Plugin Marketplace", "FLOATING", 91,
+        "rmlui/plugin_marketplace.rml", "FILL", (770, 560),
+        update_policy="interval", update_interval_ms=250,
+    ),
+    "asset_manager": _PanelSpec(
+        "lfs_plugins.asset_manager_panel", "AssetManagerPanel", "lfs.asset_manager",
+        "Asset Manager", "LEFT_DOCK", 20, "rmlui/asset_manager.rml", "FILL",
+        (980, 620), update_policy="dirty",
+    ),
+}
+
+_PANEL_METADATA_FIELDS = (
+    "id", "label", "space", "order", "template", "height_mode", "size",
+    "options", "update_policy", "update_interval_ms", "style",
+)
+
+
+def panel_metadata(name, lf):
+    """Resolve a shared panel spec into class attributes for a runtime."""
+    spec = PANEL_SPECS[name]
+    return {
+        "id": spec.id,
+        "label": spec.label,
+        "space": getattr(lf.ui.PanelSpace, spec.space),
+        "order": spec.order,
+        "template": spec.template,
+        "height_mode": getattr(lf.ui.PanelHeightMode, spec.height_mode),
+        "size": spec.size,
+        "options": {getattr(lf.ui.PanelOption, option) for option in spec.options},
+        "update_policy": spec.update_policy,
+        "update_interval_ms": spec.update_interval_ms,
+        "style": spec.style,
+    }
+
+
+def panel_class(name):
+    """Decorate an implementation class with the shared panel contract."""
+    import lichtfeld as lf
+
+    metadata = panel_metadata(name, lf)
+
+    def decorate(cls):
+        for field in _PANEL_METADATA_FIELDS:
+            setattr(cls, field, metadata[field])
+        return cls
+
+    return decorate
 
 
 def capture_panel_chrome(panel):
@@ -22,6 +153,57 @@ def apply_panel_chrome(panel, payload):
     if hook is None:
         return
     hook(payload if isinstance(payload, dict) else {})
+
+
+def _register_lazy_panel(lf, name):
+    """Register cheap metadata now and import the implementation on first use."""
+    from importlib import import_module
+
+    spec = PANEL_SPECS[name]
+    metadata = panel_metadata(name, lf)
+
+    class LazyPanel(lf.ui.Panel):
+        _implementation = None
+        _implementation_module = spec.module_name
+        _implementation_name = spec.class_name
+
+        _delegated_instance_methods = frozenset({
+            "poll", "draw", "show", "on_bind_model", "on_mount", "on_unmount",
+            "on_update", "on_scene_changed", "capture_chrome", "apply_chrome",
+        })
+
+        def _load(self):
+            if self._implementation is None:
+                module = import_module(self._implementation_module)
+                self._implementation = getattr(module, self._implementation_name)()
+            return self._implementation
+
+        def __getattribute__(self, attribute):
+            if attribute in object.__getattribute__(self, "_delegated_instance_methods"):
+                return getattr(object.__getattribute__(self, "_load")(), attribute)
+            return super().__getattribute__(attribute)
+
+        def __getattr__(self, attribute):
+            return getattr(self._load(), attribute)
+
+    LazyPanel.__name__ = spec.class_name
+    LazyPanel.__qualname__ = spec.class_name
+    LazyPanel.__module__ = "lfs_plugins.panels"
+    for field in _PANEL_METADATA_FIELDS:
+        setattr(LazyPanel, field, metadata[field])
+    if spec.has_poll:
+        def poll(self, context):
+            return self._load().poll(context)
+
+        LazyPanel.poll = poll
+    if spec.has_draw:
+        def draw(self, layout):
+            return self._load().draw(layout)
+
+        LazyPanel.draw = draw
+    lf.register_class(LazyPanel)
+    lf.ui.set_panel_enabled(spec.id, False)
+    return LazyPanel
 
 
 def __getattr__(name):
@@ -51,12 +233,8 @@ def _build_builtin_panel_steps(lf):
         lf.register_class(TrainingPanel)
 
     def import_panels():
-        from .import_panels import NewProjectPanel, ResumeCheckpointPanel
-
-        lf.register_class(NewProjectPanel)
-        lf.ui.set_panel_enabled("lfs.new_project", False)
-        lf.register_class(ResumeCheckpointPanel)
-        lf.ui.set_panel_enabled("lfs.resume_checkpoint", False)
+        _register_lazy_panel(lf, "new_project")
+        _register_lazy_panel(lf, "resume_checkpoint")
 
     def selection_groups():
         from . import selection_groups as selection_groups_mod
@@ -88,39 +266,26 @@ def _build_builtin_panel_steps(lf):
         help_menu.register()
 
     def export_panel():
-        from .export_panel import ExportPanel
-
-        lf.register_class(ExportPanel)
-        lf.ui.set_panel_enabled("lfs.export", False)
+        _register_lazy_panel(lf, "export")
 
     def about_panel():
-        from .about_panel import AboutPanel
-
-        lf.register_class(AboutPanel)
-        lf.ui.set_panel_enabled("lfs.about", False)
+        _register_lazy_panel(lf, "about")
 
     def account_panel():
-        from .account_panel import AccountPanel
-
-        lf.register_class(AccountPanel)
-        lf.ui.set_panel_enabled("lfs.account", False)
+        _register_lazy_panel(lf, "account")
 
     def bug_report_panel():
-        from .bug_report_panel import BugReportPanel
-
-        lf.register_class(BugReportPanel)
-        lf.ui.set_panel_enabled("lfs.bug_report", False)
+        _register_lazy_panel(lf, "bug_report")
 
     def portal_account():
+        # Account session validation is a startup service, not panel UI. Keep
+        # it eager so opening Account later sees the same initialized state.
         from .portal_account import initialize_portal_account
 
         initialize_portal_account()
 
     def getting_started_panel():
-        from .getting_started_panel import GettingStartedPanel
-
-        lf.register_class(GettingStartedPanel)
-        lf.ui.set_panel_enabled("lfs.getting_started", False)
+        _register_lazy_panel(lf, "getting_started")
 
     def startup_recent_panel():
         from .startup_recent_panel import StartupRecentPanel
@@ -129,47 +294,31 @@ def _build_builtin_panel_steps(lf):
         lf.ui.set_panel_enabled("lfs.startup_recent", False)
 
     def image_preview_panel():
-        from .image_preview_panel import ImagePreviewPanel, open_camera_preview_by_uid
+        _register_lazy_panel(lf, "image_preview")
 
-        lf.register_class(ImagePreviewPanel)
-        lf.ui.set_panel_enabled("lfs.image_preview", False)
-        lf.ui.on_open_camera_preview(open_camera_preview_by_uid)
+        def open_camera_preview(uid):
+            from .image_preview_panel import open_camera_preview_by_uid
+            return open_camera_preview_by_uid(uid)
+
+        lf.ui.on_open_camera_preview(open_camera_preview)
 
     def histogram_panel():
-        from .histogram_panel import HistogramPanel
-
-        lf.register_class(HistogramPanel)
-        lf.ui.set_panel_enabled("lfs.histogram", False)
+        _register_lazy_panel(lf, "histogram")
 
     def scripts_panel():
-        from .scripts_panel import ScriptsPanel
-
-        lf.register_class(ScriptsPanel)
-        lf.ui.set_panel_enabled("lfs.scripts", False)
+        _register_lazy_panel(lf, "scripts")
 
     def preferences_panel():
-        from .preferences_panel import PreferencesPanel
-
-        lf.register_class(PreferencesPanel)
-        lf.ui.set_panel_enabled("lfs.preferences", False)
+        _register_lazy_panel(lf, "preferences")
 
     def mesh2splat_panel():
-        from .mesh2splat_panel import Mesh2SplatPanel
-
-        lf.register_class(Mesh2SplatPanel)
-        lf.ui.set_panel_enabled("native.mesh2splat", False)
+        _register_lazy_panel(lf, "mesh2splat")
 
     def plugin_marketplace_panel():
-        from .plugin_marketplace_panel import PluginMarketplacePanel
-
-        lf.register_class(PluginMarketplacePanel)
-        lf.ui.set_panel_enabled("lfs.plugin_marketplace", False)
+        _register_lazy_panel(lf, "plugin_marketplace")
 
     def asset_manager_panel():
-        from .asset_manager_panel import AssetManagerPanel
-
-        lf.register_class(AssetManagerPanel)
-        lf.ui.set_panel_enabled("lfs.asset_manager", False)
+        _register_lazy_panel(lf, "asset_manager")
 
     def overlays():
         from .overlays import register as register_overlays

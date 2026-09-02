@@ -30,6 +30,7 @@
 #include <exception>
 #include <filesystem>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -660,6 +661,8 @@ namespace lfs::vis {
         std::string last_wake_timeout_source_ = "none";
         FrameDemand last_frame_demand_{};
         bool has_last_frame_demand_ = false;
+        std::future<void> pipeline_cache_flush_future_;
+        std::future<void> vksplat_spirv_preload_future_;
         bool startup_plugin_preload_started_ = false;
         bool startup_project_open_attempted_ = false;
         bool close_save_notice_posted_ = false;

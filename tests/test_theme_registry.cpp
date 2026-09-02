@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/error.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/path_utils.hpp"
 #include "core/user_paths.hpp"
 #include "visualizer/internal/resource_paths.hpp"
@@ -168,6 +169,55 @@ TEST(ThemeRegistry, ManifestOwnsCatalogMetadata) {
         EXPECT_FALSE(theme.contains("mode")) << theme_file;
         EXPECT_FALSE(theme.contains("order")) << theme_file;
     }
+}
+
+TEST(ResourcePath, MemoizedResolutionMatchesUncachedResolution) {
+    const auto asset_root = std::filesystem::path(PROJECT_ROOT_PATH) /
+                            "src/visualizer/gui/assets";
+    ASSERT_TRUE(std::filesystem::exists(asset_root)) << asset_root;
+
+    size_t checked = 0;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(asset_root)) {
+        if (!entry.is_regular_file())
+            continue;
+        const auto relative = std::filesystem::relative(entry.path(), asset_root);
+        const auto asset_name = lfs::core::path_to_utf8(relative);
+        EXPECT_EQ(lfs::vis::getAssetPath(asset_name),
+                  lfs::vis::resolveAssetPathUncached(asset_name))
+            << asset_name;
+        ++checked;
+    }
+    EXPECT_GT(checked, 0u);
+}
+
+TEST(Localization, IndexMatchesLocaleLanguageNames) {
+    const auto locale_root = std::filesystem::path(PROJECT_ROOT_PATH) /
+                             "src/visualizer/gui/resources/locales";
+    std::ifstream index_stream(locale_root / "index.json");
+    ASSERT_TRUE(index_stream.is_open());
+
+    nlohmann::json index;
+    index_stream >> index;
+    ASSERT_TRUE(index.at("languages").is_array());
+
+    std::set<std::string> indexed_codes;
+    for (const auto& entry : index.at("languages")) {
+        const auto code = entry.at("code").get<std::string>();
+        indexed_codes.insert(code);
+        std::ifstream locale_stream(locale_root / (code + ".json"));
+        ASSERT_TRUE(locale_stream.is_open()) << code;
+        nlohmann::json locale;
+        locale_stream >> locale;
+        EXPECT_EQ(entry.at("name"), locale.at("_language_name")) << code;
+    }
+
+    std::set<std::string> locale_codes;
+    for (const auto& entry : std::filesystem::directory_iterator(locale_root)) {
+        if (entry.path().extension() != ".json" || entry.path().stem() == "index")
+            continue;
+        locale_codes.insert(entry.path().stem().string());
+    }
+    EXPECT_EQ(indexed_codes, locale_codes);
 }
 
 TEST(ThemeRegistry, CatalogIsStableAndSelfDescribing) {
