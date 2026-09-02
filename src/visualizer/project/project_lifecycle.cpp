@@ -8879,24 +8879,31 @@ namespace lfs::vis::project {
                         entry.last_known_path));
             }
         }
-        lfs::io::project::
-            sweep_stale_licht_artifacts_for_known_masters(
-                known);
-        lfs::io::project::sweep_stale_scratch_autosaves(
-            temp_project_directory_, {.verify_payloads = false});
-        if (!legacy_recovery_directory_.empty() &&
-            freezeNormalizedPath(legacy_recovery_directory_) !=
-                freezeNormalizedPath(temp_project_directory_)) {
+        if (explicit_path) {
+            // Explicit startup projects must not pay the directory-sweep cost
+            // before the first frame. Reuse the same worker used by the
+            // deferred no-path recovery scan; opening the requested project
+            // remains synchronous below so its ordering is unchanged.
+            startup_recovery_scan_pending_ = true;
+            runStartupRecoveryScan();
+        } else {
+            lfs::io::project::sweep_stale_licht_artifacts_for_known_masters(known);
             lfs::io::project::sweep_stale_scratch_autosaves(
-                legacy_recovery_directory_, {.verify_payloads = false});
-        }
-        if (!legacy_working_tmp_directory_.empty() &&
-            freezeNormalizedPath(legacy_working_tmp_directory_) !=
-                freezeNormalizedPath(temp_project_directory_) &&
-            freezeNormalizedPath(legacy_working_tmp_directory_) !=
-                freezeNormalizedPath(legacy_recovery_directory_)) {
-            lfs::io::project::sweep_stale_scratch_autosaves(
-                legacy_working_tmp_directory_, {.verify_payloads = false});
+                temp_project_directory_, {.verify_payloads = false});
+            if (!legacy_recovery_directory_.empty() &&
+                freezeNormalizedPath(legacy_recovery_directory_) !=
+                    freezeNormalizedPath(temp_project_directory_)) {
+                lfs::io::project::sweep_stale_scratch_autosaves(
+                    legacy_recovery_directory_, {.verify_payloads = false});
+            }
+            if (!legacy_working_tmp_directory_.empty() &&
+                freezeNormalizedPath(legacy_working_tmp_directory_) !=
+                    freezeNormalizedPath(temp_project_directory_) &&
+                freezeNormalizedPath(legacy_working_tmp_directory_) !=
+                    freezeNormalizedPath(legacy_recovery_directory_)) {
+                lfs::io::project::sweep_stale_scratch_autosaves(
+                    legacy_working_tmp_directory_, {.verify_payloads = false});
+            }
         }
 
         // Never auto-restore from MRU. Startup without an

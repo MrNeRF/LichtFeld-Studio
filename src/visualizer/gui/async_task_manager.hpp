@@ -15,6 +15,7 @@
 #include "io/video/video_export_options.hpp"
 #include <atomic>
 #include <chrono>
+#include <deque>
 #include <filesystem>
 #include <glm/glm.hpp>
 #include <memory>
@@ -130,6 +131,12 @@ namespace lfs::vis {
             void dismissImport();
             void cancelImport();
 
+            [[nodiscard]] bool startSplatLoad(
+                std::vector<std::filesystem::path> paths,
+                bool replace_first,
+                std::vector<std::string> name_hints = {},
+                std::vector<bool> visibility = {});
+
             // Video export
             [[nodiscard]] bool isExportingVideo() const {
                 return jobs_.anyRunning(JobType::VideoExport);
@@ -216,6 +223,31 @@ namespace lfs::vis {
             void startColmapExport(const std::filesystem::path& path);
             void startAsyncImport(const std::filesystem::path& path,
                                   const lfs::core::param::TrainingParameters& params);
+            struct SplatLoadRequest {
+                std::filesystem::path path;
+                std::string name_hint;
+                bool is_visible = true;
+                bool replace_scene = false;
+            };
+            struct SplatLoadCompletion {
+                SplatLoadRequest request;
+                std::optional<lfs::io::LoadResult> result;
+                std::string error;
+                std::chrono::milliseconds stage_elapsed{};
+            };
+            struct SplatLoadState {
+                JobHandle job;
+                bool replace_first = false;
+                std::atomic<bool> worker_complete{false};
+                mutable std::mutex mutex;
+                std::deque<SplatLoadCompletion> completions;
+                std::vector<SplatLoadRequest> requests;
+                size_t loaded_count = 0;
+                size_t failed_count = 0;
+                std::optional<std::jthread> thread;
+            };
+            SplatLoadState splat_load_state_;
+            void checkAsyncSplatLoadCompletion();
             void checkAsyncImportCompletion();
             void applyLoadedDataToScene();
             void applyAutoCropToLoadedScene();

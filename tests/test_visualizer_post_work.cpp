@@ -20,6 +20,7 @@
 #include "gui/scene_tree_session.hpp"
 #include "gui/string_keys.hpp"
 #include "input/input_controller.hpp"
+#include "io/exporter.hpp"
 #include "io/loader.hpp"
 #include "io/project_chapters.hpp"
 #include "io/project_container.hpp"
@@ -4593,6 +4594,96 @@ namespace lfs::vis {
                   "injected import failure");
         viewer.jobs().free(*handle);
         tasks.import_state_.job = {};
+    }
+
+    TEST_F(VisualizerImplResetTest, AsyncSplatLoadAttachesAndSelectsNode) {
+        const auto path = temporary_.path / "async-single.ply";
+        ASSERT_TRUE(lfs::io::save_ply(*lfs::test::licht::make_splat(2), {
+                                                                            .output_path = path,
+                                                                            .binary = true,
+                                                                            .async = false,
+                                                                        }));
+
+        lfs::vis::VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getDataLoader()->loadPLY(path));
+        auto* const manager = viewer.getSceneManager();
+        ASSERT_NE(manager, nullptr);
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil(
+            [&] {
+                tasks.pollImportCompletion();
+                return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+            }));
+
+        const auto* const node = manager->getScene().getNode("async-single");
+        ASSERT_NE(node, nullptr);
+        EXPECT_TRUE(manager->getScene().isNodeEffectivelyVisible(node->id));
+        EXPECT_EQ(manager->getSelectedNodeName(), "async-single");
+    }
+
+    TEST_F(VisualizerImplResetTest, AsyncSplatBatchAttachesInInputOrder) {
+        const auto first = temporary_.path / "async-missing-first.ply";
+        const auto second = temporary_.path / "async-second.ply";
+        const auto third = temporary_.path / "async-third.ply";
+        ASSERT_TRUE(lfs::io::save_ply(*lfs::test::licht::make_splat(1), {
+                                                                            .output_path = second,
+                                                                            .binary = true,
+                                                                            .async = false,
+                                                                        }));
+        ASSERT_TRUE(lfs::io::save_ply(*lfs::test::licht::make_splat(1), {
+                                                                            .output_path = third,
+                                                                            .binary = true,
+                                                                            .async = false,
+                                                                        }));
+
+        lfs::vis::VisualizerImpl viewer(projectOptions());
+        auto* const manager = viewer.getSceneManager();
+        ASSERT_NE(manager->getScene().addGroup("before-batch"), lfs::core::NULL_NODE);
+        ASSERT_TRUE(viewer.getDataLoader()->loadSplatFiles({first, second, third}));
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(waitUntil(
+            [&] {
+                tasks.pollImportCompletion();
+                return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+            }));
+
+        ASSERT_NE(manager->getScene().getNode("async-second"), nullptr);
+        ASSERT_NE(manager->getScene().getNode("async-third"), nullptr);
+        EXPECT_EQ(manager->getScene().getNode("before-batch"), nullptr);
+        ASSERT_EQ(manager->getScene().getNodes().size(), 2u);
+        EXPECT_EQ(manager->getScene().getNodes()[0]->name, "async-second");
+        EXPECT_EQ(manager->getScene().getNodes()[1]->name, "async-third");
+    }
+
+    TEST_F(VisualizerImplResetTest, CancelledAsyncSplatLoadLeavesSceneUnchanged) {
+        lfs::vis::VisualizerImpl viewer(projectOptions());
+        auto* const manager = viewer.getSceneManager();
+        ASSERT_NE(manager, nullptr);
+        ASSERT_NE(manager->getScene().addGroup("before-load"), lfs::core::NULL_NODE);
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(tasks.startSplatLoad({temporary_.path / "missing.ply"}, true));
+        tasks.cancelImport();
+
+        EXPECT_NE(manager->getScene().getNode("before-load"), nullptr);
+        EXPECT_EQ(manager->getScene().getNodes().size(), 1u);
+    }
+
+    TEST_F(VisualizerImplResetTest, CancelledAsyncSplatLoadFreesRegistryEntry) {
+        lfs::vis::VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        const auto missing = temporary_.path / "cancelled-missing.ply";
+
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            ASSERT_TRUE(tasks.startSplatLoad({missing}, true));
+            const auto active = viewer.jobs().active(JobType::Import);
+            ASSERT_TRUE(active);
+            const auto handle = active->handle;
+
+            tasks.cancelImport();
+
+            EXPECT_FALSE(viewer.jobs().peek(handle));
+            EXPECT_FALSE(viewer.jobs().anyRunning(JobType::Import));
+        }
     }
 
     TEST_F(VisualizerImplResetTest,
