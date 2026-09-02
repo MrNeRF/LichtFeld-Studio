@@ -120,7 +120,7 @@ namespace spz {
     // Access a PackedGaussians attribute buffer by enum tag. Lets callers iterate
     // attributes (see kAllSplatAttributes) instead of hard-coding the six member
     // names in every loop.
-    inline std::vector<uint8_t>& packedBuffer(PackedGaussians& p, SplatAttribute attr) {
+    inline PackedByteVector& packedBuffer(PackedGaussians& p, SplatAttribute attr) {
         switch (attr) {
         case SplatAttribute::Positions: return p.positions;
         case SplatAttribute::Alphas: return p.alphas;
@@ -137,7 +137,7 @@ namespace spz {
     }
 
     inline void releasePacked(PackedGaussians& p, SplatAttribute attr) {
-        std::vector<uint8_t>().swap(packedBuffer(p, attr));
+        PackedByteVector().swap(packedBuffer(p, attr));
     }
 
 } // namespace spz
