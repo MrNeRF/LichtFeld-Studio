@@ -506,8 +506,12 @@ namespace lfs::core {
 
         [[nodiscard]] bool hasTrainingData() const;
 
+        [[nodiscard]] std::shared_ptr<lfs::core::Camera> getCameraByUid(int uid);
         [[nodiscard]] std::shared_ptr<const lfs::core::Camera> getCameraByUid(int uid) const;
         [[nodiscard]] std::vector<std::shared_ptr<lfs::core::Camera>> getAllCameras() const;
+        [[nodiscard]] std::uint64_t cameraListGeneration() const noexcept {
+            return camera_list_generation_;
+        }
         [[nodiscard]] std::vector<std::shared_ptr<lfs::core::Camera>> getActiveCameras() const;
         // Rebases every camera node's asset paths from old_root to new_root and
         // refreshes the SceneNode mirror strings. Returns the number of cameras
@@ -524,6 +528,7 @@ namespace lfs::core {
         void setCameraTrainingEnabled(NodeId id, bool enabled);
 
         [[nodiscard]] std::unordered_set<int> getTrainingDisabledCameraUids() const;
+        [[nodiscard]] bool isCameraTrainingEnabled(int uid) const;
 
         [[nodiscard]] lfs::core::SplatData* getTrainingModel();
         [[nodiscard]] const lfs::core::SplatData* getTrainingModel() const;
@@ -613,6 +618,7 @@ namespace lfs::core {
 
         uint32_t pending_mutations_ = 0;
         int transaction_depth_ = 0;
+        std::uint64_t camera_list_generation_ = 0;
         void flushMutations();
         void removeConsolidatedNodeData(NodeId id);
         void rebuildConsolidatedTransformIndices() const;

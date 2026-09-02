@@ -126,6 +126,13 @@ namespace lfs::core {
         }
         pending_mutations_ |= static_cast<uint32_t>(type);
 
+        if (type == MutationType::NODE_ADDED ||
+            type == MutationType::NODE_REMOVED ||
+            type == MutationType::NODE_REPARENTED ||
+            type == MutationType::CLEARED) {
+            ++camera_list_generation_;
+        }
+
         switch (type) {
         case MutationType::TRANSFORM_CHANGED:
             invalidateTransformCache();
@@ -1573,6 +1580,15 @@ namespace lfs::core {
             }
         }
         return result;
+    }
+
+    bool Scene::isCameraTrainingEnabled(const int uid) const {
+        for (const auto& node : nodes_) {
+            if (node->type == NodeType::CAMERA && node->camera && node->camera->uid() == uid) {
+                return node->training_enabled;
+            }
+        }
+        return true;
     }
 
     const SceneNode* Scene::getNode(const std::string& name) const {
@@ -3249,6 +3265,7 @@ namespace lfs::core {
 
         pending_mutations_ = 0;
         transaction_depth_ = 0;
+        ++camera_list_generation_;
         return staged;
     }
 
@@ -4722,7 +4739,16 @@ namespace lfs::core {
         return counts;
     }
 
-    std::shared_ptr<const lfs::core::Camera> Scene::getCameraByUid(int uid) const {
+    std::shared_ptr<lfs::core::Camera> Scene::getCameraByUid(const int uid) {
+        for (const auto& node : nodes_) {
+            if (node->type == NodeType::CAMERA && node->camera && node->camera->uid() == uid) {
+                return node->camera;
+            }
+        }
+        return nullptr;
+    }
+
+    std::shared_ptr<const lfs::core::Camera> Scene::getCameraByUid(const int uid) const {
         for (const auto& node : nodes_) {
             if (node->type == NodeType::CAMERA && node->camera && node->camera->uid() == uid) {
                 return node->camera;

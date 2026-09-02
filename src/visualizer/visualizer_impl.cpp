@@ -2471,7 +2471,7 @@ namespace lfs::vis {
                         vulkan_frame.split_right_image,
                         vulkan_frame.split_right_size,
                         vulkan_frame.split_right_flip_y,
-                        vulkan_frame.image_generation);
+                        vulkan_frame.split_right_image_generation);
                 } else {
                     interop.clearSplitRightImage();
                 }
