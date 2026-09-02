@@ -34,6 +34,8 @@ The requested backend, effective backend, fallback state, and runtime readiness
 are distinct. The built-in spatial Vulkan pipeline is created lazily on first
 use. If creation fails, the frame is presented through the native path and the
 transition is logged; the saved request is not silently rewritten.
+Mode-ineligible temporal requests report `unsupported_mode`, while runtime
+failures continue to report `runtime_unavailable`.
 
 ## Spatial path
 

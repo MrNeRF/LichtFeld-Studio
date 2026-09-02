@@ -213,7 +213,8 @@ namespace lfs::vis {
 
     SceneUpscalerSelection resolveSceneUpscalerSelection(
         const SceneUpscalerBackend requested,
-        const bool runtime_available) {
+        const bool runtime_available,
+        const SceneUpscalerFallback fallback) {
         if (requested == SceneUpscalerBackend::Native || runtime_available) {
             return {
                 .requested = requested,
@@ -224,7 +225,7 @@ namespace lfs::vis {
         return {
             .requested = requested,
             .effective = SceneUpscalerBackend::Native,
-            .fallback = SceneUpscalerFallback::RuntimeUnavailable,
+            .fallback = fallback,
         };
     }
 
@@ -234,6 +235,8 @@ namespace lfs::vis {
             return "none";
         case SceneUpscalerFallback::RuntimeUnavailable:
             return "runtime_unavailable";
+        case SceneUpscalerFallback::UnsupportedMode:
+            return "unsupported_mode";
         }
         return "unknown";
     }

@@ -135,6 +135,14 @@ namespace lfs::vis {
         EXPECT_EQ(sceneUpscalerFallbackId(fallback.fallback), "runtime_unavailable");
         EXPECT_EQ(sceneUpscalerFallbackId(SceneUpscalerFallback::None), "none");
 
+        const auto unsupported_mode = resolveSceneUpscalerSelection(
+            SceneUpscalerBackend::Temporal, false, SceneUpscalerFallback::UnsupportedMode);
+        EXPECT_EQ(unsupported_mode.requested, SceneUpscalerBackend::Temporal);
+        EXPECT_EQ(unsupported_mode.effective, SceneUpscalerBackend::Native);
+        EXPECT_TRUE(unsupported_mode.fellBack());
+        EXPECT_EQ(unsupported_mode.fallback, SceneUpscalerFallback::UnsupportedMode);
+        EXPECT_EQ(sceneUpscalerFallbackId(unsupported_mode.fallback), "unsupported_mode");
+
         const auto temporal = resolveSceneUpscalerSelection(SceneUpscalerBackend::Temporal, true);
         EXPECT_EQ(temporal.requested, SceneUpscalerBackend::Temporal);
         EXPECT_EQ(temporal.effective, SceneUpscalerBackend::Temporal);

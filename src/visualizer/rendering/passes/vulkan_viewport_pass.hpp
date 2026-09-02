@@ -123,6 +123,7 @@ namespace lfs::vis {
         // incompletely prepared image during the deferral window.
         bool preserve_scene_image_binding = false;
         SceneUpscalerBackend scene_upscaler = SceneUpscalerBackend::Native;
+        bool scene_upscaler_mode_unsupported = false;
         std::optional<VulkanSceneTemporalPipelineRequest> temporal;
         std::array<std::optional<VulkanSceneTemporalPipelineRequest>, 2> split_temporal;
         std::optional<VulkanSceneDlssPipelineRequest> dlss;

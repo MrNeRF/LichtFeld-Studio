@@ -43,6 +43,16 @@ namespace lfs::vis {
         return static_cast<std::uint32_t>(phase);
     }
 
+    [[nodiscard]] inline std::uint32_t amdFsr3SplitJitterPhaseCount(
+        const int left_render_width,
+        const int left_output_width,
+        const int right_render_width,
+        const int right_output_width) noexcept {
+        const auto left = amdFsr3JitterPhaseCount(left_render_width, left_output_width);
+        const auto right = amdFsr3JitterPhaseCount(right_render_width, right_output_width);
+        return left > right ? left : right;
+    }
+
     [[nodiscard]] inline float amdFsr3CameraVerticalFovRadians(
         const lfs::rendering::FrameView& view) noexcept {
         if (view.intrinsics_override && view.size.y > 0 &&

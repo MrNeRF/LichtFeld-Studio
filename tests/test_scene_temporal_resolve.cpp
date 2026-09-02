@@ -940,6 +940,7 @@ namespace lfs::vis {
         EXPECT_EQ(amdFsr3JitterPhaseCount(1129, 1920), 23u);
         EXPECT_EQ(amdFsr3JitterPhaseCount(960, 1920), 32u);
         EXPECT_EQ(amdFsr3JitterPhaseCount(0, 1920), 1u);
+        EXPECT_EQ(amdFsr3SplitJitterPhaseCount(1280, 1920, 852, 1279), 18u);
     }
 
     TEST(VulkanSceneFsr3PipelineContract,

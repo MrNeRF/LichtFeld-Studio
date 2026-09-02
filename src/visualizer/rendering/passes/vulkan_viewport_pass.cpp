@@ -2029,10 +2029,21 @@ namespace lfs::vis {
             scene_image_uploader.upload(params, frame.scene_descriptor_set);
         }
 
+        [[nodiscard]] SceneUpscalerFallback sceneUpscalerFallback(
+            const VulkanViewportPassParams& params,
+            const bool runtime_failure = false) const noexcept {
+            return params.scene_upscaler_mode_unsupported && !runtime_failure
+                       ? SceneUpscalerFallback::UnsupportedMode
+                       : SceneUpscalerFallback::RuntimeUnavailable;
+        }
+
         void updateSceneUpscalerSelection(const SceneUpscalerBackend requested,
                                           const bool runtime_available,
-                                          const bool log_fallback_transition = true) {
-            scene_upscaler_selection = resolveSceneUpscalerSelection(requested, runtime_available);
+                                          const bool log_fallback_transition = true,
+                                          const SceneUpscalerFallback fallback =
+                                              SceneUpscalerFallback::RuntimeUnavailable) {
+            scene_upscaler_selection = resolveSceneUpscalerSelection(
+                requested, runtime_available, fallback);
             auto& profiler = lfs::diagnostics::VramProfiler::instance();
             profiler.setGauge("viewer.upscaler.requested",
                               static_cast<double>(scene_upscaler_selection.requested));
@@ -2277,7 +2288,10 @@ namespace lfs::vis {
                         reportDlssFailure("request contract is invalid");
                     }
                     updateSceneUpscalerSelection(
-                        params.scene_upscaler, false, invalid_request);
+                        params.scene_upscaler,
+                        false,
+                        invalid_request,
+                        sceneUpscalerFallback(params, invalid_request || dlss_failure_latched));
                     return false;
                 } else if (params.scene_upscaler == SceneUpscalerBackend::AmdFsr3) {
                     const bool invalid_request = !fsr3_failure_latched &&
@@ -2290,12 +2304,19 @@ namespace lfs::vis {
                         reportFsr3Failure("request contract is invalid");
                     }
                     updateSceneUpscalerSelection(
-                        params.scene_upscaler, false, invalid_request);
+                        params.scene_upscaler,
+                        false,
+                        invalid_request,
+                        sceneUpscalerFallback(params, invalid_request || fsr3_failure_latched));
                     return false;
                 } else {
                     releaseTemporalHistory();
                 }
-                updateSceneUpscalerSelection(params.scene_upscaler, false);
+                updateSceneUpscalerSelection(
+                    params.scene_upscaler,
+                    false,
+                    true,
+                    sceneUpscalerFallback(params));
                 return false;
             }
 
@@ -2572,7 +2593,11 @@ namespace lfs::vis {
                 // frame (at startup and for one frame after a backend transition). Keep the
                 // effective native fallback observable without reporting expected warm-up as
                 // an unavailable backend. Invalid requests and pipeline failures remain noisy.
-                updateSceneUpscalerSelection(params.scene_upscaler, false, invalid_request);
+                updateSceneUpscalerSelection(
+                    params.scene_upscaler,
+                    false,
+                    invalid_request,
+                    sceneUpscalerFallback(params, invalid_request));
                 return;
             }
             if (params.scene_upscaler == SceneUpscalerBackend::NvidiaDlss &&
@@ -2594,7 +2619,10 @@ namespace lfs::vis {
                 // Keep the expected warm-up fallback quiet; malformed requests and runtime
                 // failures are latched until the user explicitly selects Native and retries.
                 updateSceneUpscalerSelection(
-                    params.scene_upscaler, false, invalid_request);
+                    params.scene_upscaler,
+                    false,
+                    invalid_request,
+                    sceneUpscalerFallback(params, invalid_request || dlss_failure_latched));
                 return;
             }
             if (params.scene_upscaler == SceneUpscalerBackend::AmdFsr3 &&
@@ -2616,7 +2644,10 @@ namespace lfs::vis {
                 // Keep warm-up quiet and latch malformed/runtime failures until an explicit
                 // Native -> AMD FSR 3.1 retry.
                 updateSceneUpscalerSelection(
-                    params.scene_upscaler, false, invalid_request);
+                    params.scene_upscaler,
+                    false,
+                    invalid_request,
+                    sceneUpscalerFallback(params, invalid_request || fsr3_failure_latched));
                 return;
             }
             const auto runtime_available = [&]() -> std::optional<bool> {

@@ -1728,6 +1728,27 @@ namespace lfs::vis {
         const bool resize_deferring = frame_lifecycle_service_.isResizeDeferring();
         const auto requested_upscaler = sceneUpscalerBackendFromId(frame_settings.scene_upscaler)
                                             .value_or(SceneUpscalerBackend::Native);
+        const bool temporal_split_supported =
+            !split_view_service_.isActive(frame_settings) ||
+            splitViewUsesIndependentPanels(frame_settings.split_view_mode) ||
+            splitViewUsesPLYComparison(frame_settings.split_view_mode);
+        const bool temporal_backend_requested =
+            requested_upscaler == SceneUpscalerBackend::Temporal ||
+            requested_upscaler == SceneUpscalerBackend::NvidiaDlss ||
+            requested_upscaler == SceneUpscalerBackend::AmdFsr3;
+        const bool memory_pressure_active =
+            lfs::core::MemoryPressureCoordinator::instance().pressure_active();
+        {
+            const bool fsr3_projection_supported =
+                requested_upscaler != SceneUpscalerBackend::AmdFsr3 ||
+                !frame_settings.orthographic;
+            std::lock_guard lock(settings_mutex_);
+            scene_upscaler_mode_unsupported_ =
+                temporal_backend_requested && !resize_result.use_interactive_render_scale &&
+                !memory_pressure_active &&
+                (!fsr3_projection_supported || frame_settings.equirectangular ||
+                 frame_settings.apply_appearance_correction || !temporal_split_supported);
+        }
         if (!scene_reconstruction_request_logged_ ||
             last_scene_reconstruction_backend_ != frame_settings.scene_upscaler ||
             last_scene_reconstruction_preset_ != frame_settings.scene_upscaler_preset) {
@@ -1764,8 +1785,6 @@ namespace lfs::vis {
         // Under an active VRAM pressure lease, halve the viewer render resolution
         // to shrink per-frame output allocation. Restored automatically once the
         // coordinator observes sustained headroom. Does not affect training.
-        const bool memory_pressure_active =
-            lfs::core::MemoryPressureCoordinator::instance().pressure_active();
         if (memory_pressure_active) {
             scale = std::clamp(scale * 0.5f, 0.25f, 1.0f);
         }
@@ -1990,14 +2009,6 @@ namespace lfs::vis {
         if (lod_transition_active) {
             frame_dirty |= DirtyFlag::CAMERA;
         }
-        const bool temporal_split_supported =
-            !split_view_service_.isActive(frame_settings) ||
-            splitViewUsesIndependentPanels(frame_settings.split_view_mode) ||
-            splitViewUsesPLYComparison(frame_settings.split_view_mode);
-        const bool temporal_backend_requested =
-            requested_upscaler == SceneUpscalerBackend::Temporal ||
-            requested_upscaler == SceneUpscalerBackend::NvidiaDlss ||
-            requested_upscaler == SceneUpscalerBackend::AmdFsr3;
         const bool dlss_output_extent_supported =
             requested_upscaler != SceneUpscalerBackend::NvidiaDlss ||
             nvidiaDlssSupportsOutputExtent(current_size);
@@ -2024,10 +2035,31 @@ namespace lfs::vis {
             training_refresh_dirty != 0 && independently_dirty_temporal_sources == 0;
         const bool allow_temporal_settle =
             !training_refresh_only && !lod_results_ready && !lod_transition_active;
-        const std::uint32_t fsr3_jitter_phase_count =
+        std::uint32_t fsr3_jitter_phase_count =
             requested_upscaler == SceneUpscalerBackend::AmdFsr3
                 ? amdFsr3JitterPhaseCount(render_size.x, current_size.x)
                 : 0u;
+        if (amd_fsr3_optimal_query_allowed &&
+            split_view_service_.isIndependentDualActive(frame_settings)) {
+            const auto layouts = split_view_service_.panelLayouts(frame_settings, render_size.x);
+            const auto output_layouts =
+                split_view_service_.panelLayouts(frame_settings, current_size.x);
+            if (layouts && output_layouts && render_size.x > 1 && current_size.x > 1) {
+                const auto panel_render_width = [&](const std::size_t index) {
+                    const int proportional_width = std::max((*layouts)[index].width, 1);
+                    const glm::ivec2 panel_output{
+                        std::max((*output_layouts)[index].width, 1), current_size.y};
+                    return amdFsr3OptimalRenderExtent(panel_output, vendor_quality)
+                        .value_or(glm::ivec2{proportional_width, render_size.y})
+                        .x;
+                };
+                fsr3_jitter_phase_count = amdFsr3SplitJitterPhaseCount(
+                    panel_render_width(0),
+                    std::max((*output_layouts)[0].width, 1),
+                    panel_render_width(1),
+                    std::max((*output_layouts)[1].width, 1));
+            }
+        }
         temporal_convergence_.prepare(
             temporal_eligible,
             (frame_dirty & temporal_source_dirty) != 0,

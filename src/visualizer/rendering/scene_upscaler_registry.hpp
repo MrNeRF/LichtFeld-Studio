@@ -24,6 +24,7 @@ namespace lfs::vis {
     enum class SceneUpscalerFallback : std::uint8_t {
         None = 0,
         RuntimeUnavailable,
+        UnsupportedMode,
     };
 
     struct SceneUpscalerPreset {
@@ -67,7 +68,9 @@ namespace lfs::vis {
         std::optional<std::string_view> explicit_preset_id,
         std::string_view remembered_preset_id);
     [[nodiscard]] LFS_VIS_API SceneUpscalerSelection resolveSceneUpscalerSelection(
-        SceneUpscalerBackend requested, bool runtime_available);
+        SceneUpscalerBackend requested,
+        bool runtime_available,
+        SceneUpscalerFallback fallback = SceneUpscalerFallback::RuntimeUnavailable);
     [[nodiscard]] LFS_VIS_API std::string_view sceneUpscalerFallbackId(
         SceneUpscalerFallback fallback) noexcept;
 
