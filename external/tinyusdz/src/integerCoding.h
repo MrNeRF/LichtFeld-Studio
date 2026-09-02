@@ -29,6 +29,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 
 #define USD_API
 // PXR_NAMESPACE_OPEN_SCOPE
