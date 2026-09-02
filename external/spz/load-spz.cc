@@ -333,15 +333,27 @@ namespace spz {
         }
 
         // NGSP keeps each attribute stream independent. Compress each complete stream in
-        // one call; with ZSTD_e_end as the first directive zstd deliberately delegates to
-        // its whole-buffer compressor, preserving the compress2 byte stream and avoiding
-        // small-chunk end/flush calls that would defeat the worker pool.
+        // one logical operation; in single-threaded mode, ZSTD_e_end as the first directive
+        // delegates to zstd's whole-buffer compressor, preserving the compress2 byte stream.
+        // With workers, the call may return before all output is flushed, so keep calling it
+        // without splitting the input into small chunks that would defeat the worker pool.
         ZSTD_inBuffer input{data, size, 0};
         ZSTD_outBuffer output{out->data(), bound, 0};
-        const size_t result = ZSTD_compressStream2(cctx, &output, &input, ZSTD_e_end);
+        size_t remaining;
+        do {
+            remaining = ZSTD_compressStream2(cctx, &output, &input, ZSTD_e_end);
+            if (ZSTD_isError(remaining)) {
+                ZSTD_freeCCtx(cctx);
+                return false;
+            }
+            if (output.pos == output.size && remaining != 0) {
+                ZSTD_freeCCtx(cctx);
+                return false;
+            }
+        } while (remaining != 0);
         ZSTD_freeCCtx(cctx);
 
-        if (ZSTD_isError(result) || result != 0 || input.pos != input.size)
+        if (input.pos != input.size)
             return false;
         out->resize(output.pos);
         return true;
@@ -1024,9 +1036,9 @@ namespace spz {
             "positions", "alphas", "colors", "scales", "rotations", "sh"};
         constexpr size_t stream_name_count = sizeof(stream_names) / sizeof(stream_names[0]);
         for (size_t i = 0; i < stream_durations_ms.size(); ++i) {
-            SpzLog("SPZ load: decompress stream %s: %lld ms",
-                   i < stream_name_count ? stream_names[i] : "unknown",
-                   static_cast<long long>(stream_durations_ms[i]));
+            SpzLogDebug("SPZ load: decompress stream %s: %lld ms",
+                        i < stream_name_count ? stream_names[i] : "unknown",
+                        static_cast<long long>(stream_durations_ms[i]));
         }
         if (first_error.load(std::memory_order_relaxed) != stream_count) {
             SpzLog("[SPZ ERROR] decompressNgspStreams: ZSTD decompression failed");
@@ -1525,34 +1537,34 @@ namespace spz {
     GaussianCloud loadSpz(const std::vector<uint8_t>& data, const UnpackOptions& o) {
         const auto packed_start = std::chrono::steady_clock::now();
         PackedGaussians packed = loadSpzPacked(data);
-        SpzLog("SPZ load: packed decode: %lld ms",
-               static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                          std::chrono::steady_clock::now() - packed_start)
-                                          .count()));
+        SpzLogDebug("SPZ load: packed decode: %lld ms",
+                    static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                               std::chrono::steady_clock::now() - packed_start)
+                                               .count()));
 
         const auto unpack_start = std::chrono::steady_clock::now();
         GaussianCloud result = unpackGaussians(packed, o);
-        SpzLog("SPZ load: unpackGaussians: %lld ms",
-               static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                          std::chrono::steady_clock::now() - unpack_start)
-                                          .count()));
+        SpzLogDebug("SPZ load: unpackGaussians: %lld ms",
+                    static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                               std::chrono::steady_clock::now() - unpack_start)
+                                               .count()));
         return result;
     }
 
     GaussianCloud loadSpz(const uint8_t* data, size_t size, const UnpackOptions& o) {
         const auto packed_start = std::chrono::steady_clock::now();
         PackedGaussians packed = loadSpzPacked(data, size);
-        SpzLog("SPZ load: packed decode: %lld ms",
-               static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                          std::chrono::steady_clock::now() - packed_start)
-                                          .count()));
+        SpzLogDebug("SPZ load: packed decode: %lld ms",
+                    static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                               std::chrono::steady_clock::now() - packed_start)
+                                               .count()));
 
         const auto unpack_start = std::chrono::steady_clock::now();
         GaussianCloud result = unpackGaussians(packed, o);
-        SpzLog("SPZ load: unpackGaussians: %lld ms",
-               static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                          std::chrono::steady_clock::now() - unpack_start)
-                                          .count()));
+        SpzLogDebug("SPZ load: unpackGaussians: %lld ms",
+                    static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                               std::chrono::steady_clock::now() - unpack_start)
+                                               .count()));
         return result;
     }
 
