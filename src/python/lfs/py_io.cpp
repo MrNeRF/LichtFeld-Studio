@@ -560,7 +560,11 @@ namespace lfs::python {
                     };
                 }
 
-                auto result = loader->load(path, options);
+                io::Result<io::LoadResult> result;
+                {
+                    nb::gil_scoped_release release;
+                    result = loader->load(path, options);
+                }
                 if (!result) {
                     throw_io_error(result.error(),
                                    std::format("Failed to load '{}'", lfs::core::path_to_utf8(path)));
@@ -591,7 +595,11 @@ namespace lfs::python {
         m.def(
             "load_point_cloud",
             [](const std::filesystem::path& path) -> nb::tuple {
-                const auto result = io::load_ply_point_cloud(path);
+                std::expected<lfs::core::PointCloud, std::string> result;
+                {
+                    nb::gil_scoped_release release;
+                    result = io::load_ply_point_cloud(path);
+                }
                 if (!result)
                     throw lfs::Exception(lfs::make_error({
                         .code = lfs::ErrorCode::Internal,
@@ -623,7 +631,10 @@ namespace lfs::python {
                     };
                 }
 
-                auto result = io::save_ply(*data.data(), options);
+                auto result = [&] {
+                    nb::gil_scoped_release release;
+                    return io::save_ply(*data.data(), options);
+                }();
                 if (!result)
                     throw_io_error(result.error(), "Failed to save PLY");
             },
@@ -645,7 +656,10 @@ namespace lfs::python {
                 options.extra_attributes = parse_extra_ply_attributes(extra_attributes, path);
                 options.provenance = include_provenance ? core::make_provenance_stamp()
                                                         : core::make_minimal_provenance_stamp();
-                auto result = io::save_ply(*pc.data(), options);
+                auto result = [&] {
+                    nb::gil_scoped_release release;
+                    return io::save_ply(*pc.data(), options);
+                }();
                 if (!result)
                     throw_io_error(result.error(), "Failed to save point cloud PLY");
             },
@@ -672,7 +686,10 @@ namespace lfs::python {
                     };
                 }
 
-                auto result = io::save_sog(*data.data(), options);
+                auto result = [&] {
+                    nb::gil_scoped_release release;
+                    return io::save_sog(*data.data(), options);
+                }();
                 if (!result)
                     throw_io_error(result.error(), "Failed to save SOG");
             },
@@ -691,7 +708,10 @@ namespace lfs::python {
                 options.provenance = include_provenance ? core::make_provenance_stamp()
                                                         : core::make_minimal_provenance_stamp();
 
-                auto result = io::save_spz(*data.data(), options);
+                auto result = [&] {
+                    nb::gil_scoped_release release;
+                    return io::save_spz(*data.data(), options);
+                }();
                 if (!result)
                     throw_io_error(result.error(), "Failed to save SPZ");
             },
@@ -709,7 +729,10 @@ namespace lfs::python {
                 options.provenance = include_provenance ? core::make_provenance_stamp()
                                                         : core::make_minimal_provenance_stamp();
 
-                auto result = io::save_usd(*data.data(), options);
+                auto result = [&] {
+                    nb::gil_scoped_release release;
+                    return io::save_usd(*data.data(), options);
+                }();
                 if (!result)
                     throw_io_error(result.error(), "Failed to save USD");
             },
@@ -726,7 +749,10 @@ namespace lfs::python {
                 options.provenance = include_provenance ? core::make_provenance_stamp()
                                                         : core::make_minimal_provenance_stamp();
 
-                auto result = io::save_nurec_usdz(*data.data(), options);
+                auto result = [&] {
+                    nb::gil_scoped_release release;
+                    return io::save_nurec_usdz(*data.data(), options);
+                }();
                 if (!result)
                     throw_io_error(result.error(), "Failed to save NuRec USDZ");
             },
@@ -752,7 +778,10 @@ namespace lfs::python {
                     };
                 }
 
-                auto result = io::export_html(*data.data(), options);
+                auto result = [&] {
+                    nb::gil_scoped_release release;
+                    return io::export_html(*data.data(), options);
+                }();
                 if (!result)
                     throw_io_error(result.error(), "Failed to export HTML");
             },
@@ -763,7 +792,10 @@ namespace lfs::python {
 
         m.def(
             "is_dataset_path",
-            [](const std::filesystem::path& path) { return io::Loader::isDatasetPath(path); },
+            [](const std::filesystem::path& path) {
+                nb::gil_scoped_release release;
+                return io::Loader::isDatasetPath(path);
+            },
             nb::arg("path"),
             "Check if path is a dataset directory");
 

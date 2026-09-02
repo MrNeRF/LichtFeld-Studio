@@ -6,6 +6,7 @@
 #include "core/checkpoint_format.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/editor_context.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "core/parameter_manager.hpp"
@@ -721,26 +722,37 @@ namespace lfs::vis {
     void SceneManager::loadSplatFile(const std::filesystem::path& path) {
         LOG_TIMER("SceneManager::loadSplatFile");
 
+        auto load_result = stageSplatFile(path);
+        if (!load_result) {
+            throw std::runtime_error(load_result.error());
+        }
+        static_cast<void>(attachLoadedSplatFile(path, {}, true, std::move(*load_result), true));
+    }
+
+    bool SceneManager::canClearScene() const {
+        const auto* const trainer = services().trainerOrNull();
+        return !trainer || getContentType() != ContentType::Dataset ||
+               trainer->canPerform(TrainingAction::ClearScene);
+    }
+
+    std::expected<lfs::io::LoadResult, std::string> SceneManager::stageSplatFile(
+        const std::filesystem::path& path,
+        lfs::io::ProgressCallback progress,
+        lfs::io::CancelCallback cancel_requested) {
+        LOG_TIMER("SceneManager::stageSplatFile");
+
         try {
             LOG_INFO("Loading splat file: {}", lfs::core::path_to_utf8(path));
-
-            core::Scene::Transaction txn(scene_);
-
-            // Clear existing scene
-            if (!clear()) {
-                return;
-            }
-
-            // Load the file
             LOG_DEBUG("Creating loader for splat file");
             auto loader = lfs::io::Loader::create();
-            auto splat_allocator = makeViewerSplatTensorAllocator();
-            scene_.setCombinedModelAllocator(splat_allocator);
+            auto splat_allocator = makeExternalSplatAllocator();
             lfs::io::LoadOptions options{
                 .resize_factor = -1,
                 .max_width = 0,
                 .images_folder = "images",
                 .validate_only = false,
+                .progress = std::move(progress),
+                .cancel_requested = std::move(cancel_requested),
                 .splat_tensor_allocator = splat_allocator,
                 .shN_q16 = lfs::core::sh_value_quant::enabled()};
 
@@ -748,11 +760,53 @@ namespace lfs::vis {
             auto load_result = loader->load(path, options);
             if (!load_result) {
                 LOG_ERROR("Failed to load splat file: {}", load_result.error().format());
-                throw std::runtime_error(load_result.error().format());
+                return std::unexpected(load_result.error().format());
             }
-            quantizeViewerLoadedPlyShN(path, *load_result);
+            return std::move(*load_result);
+        } catch (const lfs::io::LoadCancelledError& error) {
+            return std::unexpected(error.what());
+        } catch (const std::exception& error) {
+            LOG_ERROR("Failed to stage splat file: {} (path: {})", error.what(),
+                      lfs::core::path_to_utf8(path));
+            return std::unexpected(error.what());
+        }
+    }
 
-            std::string name = lfs::core::path_to_utf8(path.stem());
+    std::string SceneManager::attachLoadedSplatFile(const std::filesystem::path& path,
+                                                    const std::string& name_hint,
+                                                    const bool is_visible,
+                                                    lfs::io::LoadResult load_result,
+                                                    const bool replace_scene) {
+        LOG_TIMER("SceneManager::attachLoadedSplatFile");
+        (void)is_visible;
+
+        try {
+            core::Scene::Transaction txn(scene_);
+            auto splat_allocator = makeViewerSplatTensorAllocator();
+            if (auto* splat_data = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&load_result.data);
+                splat_data && *splat_data && splat_allocator &&
+                !lfs::io::splatTensorsRendererReady(**splat_data)) {
+                if (auto migrated = lfs::io::migrateSplatTensorsToAllocator(**splat_data, splat_allocator);
+                    !migrated) {
+                    throw std::runtime_error(migrated.error().format());
+                }
+            }
+            quantizeViewerLoadedPlyShN(path, load_result);
+            if (replace_scene && !clear()) {
+                throw std::runtime_error(LOC("file_drop.blocked_during_training"));
+            }
+            scene_.setCombinedModelAllocator(splat_allocator);
+
+            std::string attached_name;
+
+            const std::string base_name = name_hint.empty() ? lfs::core::path_to_utf8(path.stem()) : name_hint;
+            std::string name = base_name;
+            if (!replace_scene) {
+                int counter = 1;
+                while (scene_.getNode(name) != nullptr) {
+                    name = std::format("{}_{}", base_name, counter++);
+                }
+            }
 
             auto ext = path.extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
@@ -765,7 +819,7 @@ namespace lfs::vis {
                 file_type = state::SceneLoaded::Type::RAD;
             }
 
-            auto* mesh_data = std::get_if<std::shared_ptr<lfs::core::MeshData>>(&load_result->data);
+            auto* mesh_data = std::get_if<std::shared_ptr<lfs::core::MeshData>>(&load_result.data);
             if (mesh_data && *mesh_data) {
                 LOG_INFO("Adding mesh '{}' ({} vertices, {} faces)", name,
                          (*mesh_data)->vertex_count(), (*mesh_data)->face_count());
@@ -806,9 +860,9 @@ namespace lfs::vis {
 
                 selectNode(node_id);
 
-                LOG_INFO("Loaded mesh '{}'", added_name);
+                attached_name = added_name;
             } else {
-                auto* splat_data = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&load_result->data);
+                auto* splat_data = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&load_result.data);
                 if (!splat_data || !*splat_data) {
                     LOG_ERROR("Expected splat/mesh file but got different data type from: {}", lfs::core::path_to_utf8(path));
                     throw std::runtime_error("Expected splat/mesh file but got different data type");
@@ -904,7 +958,7 @@ namespace lfs::vis {
                     loadPPISPCompanion(ppisp_path);
                 }
 
-                LOG_INFO("Loaded '{}' with {} gaussians", added_name, gaussian_count);
+                attached_name = added_name;
             }
 
             // Dataset loading enables point-cloud rendering by default. A later
@@ -915,6 +969,8 @@ namespace lfs::vis {
                 .enabled = false,
                 .voxel_size = DEFAULT_VOXEL_SIZE}
                 .emit();
+
+            return attached_name;
 
         } catch (const std::exception& e) {
             LOG_ERROR("Failed to load splat file: {} (path: {})", e.what(), lfs::core::path_to_utf8(path));
@@ -980,32 +1036,24 @@ namespace lfs::vis {
         }
     }
 
-    std::string SceneManager::addSplatFile(const std::filesystem::path& path, const std::string& name_hint,
-                                           const bool is_visible) {
-        LOG_TIMER_TRACE("SceneManager::addSplatFile");
+    std::string SceneManager::attachLoadedSplatNode(const std::filesystem::path& path,
+                                                    const std::string& name_hint,
+                                                    const bool is_visible,
+                                                    lfs::io::LoadResult load_result) {
+        LOG_TIMER_TRACE("SceneManager::attachLoadedSplatNode");
 
         try {
-            if (content_type_ != ContentType::SplatFiles) {
-                loadSplatFile(path);
-                return lfs::core::path_to_utf8(path.stem());
-            }
-
-            auto loader = lfs::io::Loader::create();
             auto splat_allocator = makeViewerSplatTensorAllocator();
             scene_.setCombinedModelAllocator(splat_allocator);
-            const lfs::io::LoadOptions options{
-                .resize_factor = -1,
-                .max_width = 0,
-                .images_folder = "images",
-                .validate_only = false,
-                .splat_tensor_allocator = splat_allocator,
-                .shN_q16 = lfs::core::sh_value_quant::enabled()};
-
-            auto load_result = loader->load(path, options);
-            if (!load_result) {
-                throw std::runtime_error(load_result.error().format());
+            if (auto* splat_data = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&load_result.data);
+                splat_data && *splat_data && splat_allocator &&
+                !lfs::io::splatTensorsRendererReady(**splat_data)) {
+                if (auto migrated = lfs::io::migrateSplatTensorsToAllocator(**splat_data, splat_allocator);
+                    !migrated) {
+                    throw std::runtime_error(migrated.error().format());
+                }
             }
-            quantizeViewerLoadedPlyShN(path, *load_result);
+            quantizeViewerLoadedPlyShN(path, load_result);
 
             const std::string base_name = name_hint.empty() ? lfs::core::path_to_utf8(path.stem()) : name_hint;
             std::string name = base_name;
@@ -1014,7 +1062,7 @@ namespace lfs::vis {
                 name = std::format("{}_{}", base_name, counter++);
             }
 
-            auto* mesh_data = std::get_if<std::shared_ptr<lfs::core::MeshData>>(&load_result->data);
+            auto* mesh_data = std::get_if<std::shared_ptr<lfs::core::MeshData>>(&load_result.data);
             if (mesh_data && *mesh_data) {
                 const core::NodeId node_id = scene_.addMesh(name, *mesh_data, core::NULL_NODE);
                 if (node_id == core::NULL_NODE) {
@@ -1043,12 +1091,12 @@ namespace lfs::vis {
                 if (is_visible)
                     selectNode(node_id);
 
-                LOG_INFO("Added mesh '{}' ({} vertices, {} faces)", added_name,
-                         (*mesh_data)->vertex_count(), (*mesh_data)->face_count());
+                LOG_DEBUG("Added mesh '{}' ({} vertices, {} faces)", added_name,
+                          (*mesh_data)->vertex_count(), (*mesh_data)->face_count());
                 return added_name;
             }
 
-            auto* splat_data = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&load_result->data);
+            auto* splat_data = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&load_result.data);
             if (!splat_data || !*splat_data) {
                 throw std::runtime_error("Expected splat or mesh file");
             }
@@ -1110,13 +1158,28 @@ namespace lfs::vis {
                 loadPPISPCompanion(ppisp_path);
             }
 
-            LOG_INFO("Added '{}' ({} gaussians)", added_name, gaussian_count);
+            LOG_DEBUG("Added '{}' ({} gaussians)", added_name, gaussian_count);
             return added_name;
 
         } catch (const std::exception& e) {
             LOG_ERROR("Failed to add splat file: {} (path: {})", e.what(), lfs::core::path_to_utf8(path));
             throw;
         }
+    }
+
+    std::string SceneManager::addSplatFile(const std::filesystem::path& path,
+                                           const std::string& name_hint,
+                                           const bool is_visible) {
+        if (content_type_ != ContentType::SplatFiles) {
+            loadSplatFile(path);
+            return lfs::core::path_to_utf8(path.stem());
+        }
+
+        auto load_result = stageSplatFile(path);
+        if (!load_result) {
+            throw std::runtime_error(load_result.error());
+        }
+        return attachLoadedSplatNode(path, name_hint, is_visible, std::move(*load_result));
     }
 
     size_t SceneManager::consolidateNodeModels() {
@@ -3087,10 +3150,10 @@ namespace lfs::vis {
         LOG_DEBUG("Clearing scene");
 
         // Check if clearing is allowed via state machine
-        if (services().trainerOrNull() && content_type_ == ContentType::Dataset) {
-            if (!services().trainerOrNull()->canPerform(TrainingAction::ClearScene)) {
+        if (!canClearScene()) {
+            if (const auto* const trainer = services().trainerOrNull()) {
                 LOG_WARN("Cannot clear scene: {}",
-                         services().trainerOrNull()->getActionBlockedReason(TrainingAction::ClearScene));
+                         trainer->getActionBlockedReason(TrainingAction::ClearScene));
                 return false;
             }
         }

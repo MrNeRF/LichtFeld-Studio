@@ -334,7 +334,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -1515,6 +1515,7 @@ NB_MODULE(lichtfeld, m) {
             if (master_path.empty()) {
                 return "none";
             }
+            nb::gil_scoped_release release;
             auto inspection =
                 lfs::io::project::
                     inspect_autosave_recovery(
@@ -3304,11 +3305,19 @@ Example:
 
     m.def(
         "detect_dataset_info",
-        [](const std::string& path) { return lfs::io::detect_dataset_info(python_utf8_path(path)); },
+        [](const std::string& path) {
+            const auto native_path = python_utf8_path(path);
+            nb::gil_scoped_release release;
+            return lfs::io::detect_dataset_info(native_path);
+        },
         nb::arg("path"), "Detect dataset information from a directory path");
     m.def(
         "is_dataset_path",
-        [](const std::string& path) { return lfs::io::Loader::isDatasetPath(python_utf8_path(path)); },
+        [](const std::string& path) {
+            const auto native_path = python_utf8_path(path);
+            nb::gil_scoped_release release;
+            return lfs::io::Loader::isDatasetPath(native_path);
+        },
         nb::arg("path"), "Check whether a path can be treated as a dataset source");
 
     nb::class_<lfs::core::CheckpointHeader>(m, "CheckpointHeader", "Information from a checkpoint file header")
