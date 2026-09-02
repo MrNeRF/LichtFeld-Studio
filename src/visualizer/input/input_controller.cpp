@@ -598,6 +598,17 @@ namespace lfs::vis {
         return mods;
     }
 
+    void InputController::refreshSplitDividerCache() const {
+        auto* const rendering = services().renderingOrNull();
+        if (!rendering) {
+            cached_split_divider_screen_x_.reset();
+            return;
+        }
+        cached_split_divider_screen_x_ = rendering->getSplitDividerScreenX(
+            {viewport_bounds_.x, viewport_bounds_.y},
+            {viewport_bounds_.width, viewport_bounds_.height});
+    }
+
     bool InputController::isNearSplitter(double x, double y) const {
         auto* const rendering = services().renderingOrNull();
         if (!rendering) {
@@ -612,10 +623,10 @@ namespace lfs::vis {
             return false;
         }
 
-        const auto split_x = rendering->getSplitDividerScreenX(
-            {viewport_bounds_.x, viewport_bounds_.y},
-            {viewport_bounds_.width, viewport_bounds_.height});
-        if (!split_x) {
+        if (!cached_split_divider_screen_x_) {
+            refreshSplitDividerCache();
+        }
+        if (!cached_split_divider_screen_x_) {
             return false;
         }
 
@@ -626,7 +637,7 @@ namespace lfs::vis {
                x < content_left + content_bounds.width &&
                y >= content_top &&
                y < content_top + content_bounds.height &&
-               std::abs(x - *split_x) < SPLITTER_HIT_HALF_WIDTH;
+               std::abs(x - *cached_split_divider_screen_x_) < SPLITTER_HIT_HALF_WIDTH;
     }
 
     // Core handlers
@@ -2041,6 +2052,9 @@ namespace lfs::vis {
     }
 
     void InputController::update(float delta_time) {
+        // Refresh once per input frame; mouse-move events can then query the
+        // divider without taking RenderingManager's settings mutex repeatedly.
+        refreshSplitDividerCache();
         maybeInitializeDepthViewRange();
 
         if (input_router_) {

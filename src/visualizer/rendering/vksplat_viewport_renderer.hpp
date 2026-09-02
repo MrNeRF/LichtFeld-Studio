@@ -352,7 +352,8 @@ namespace lfs::vis {
             VulkanContext& context,
             const lfs::rendering::ViewportRenderRequest& request,
             std::size_t num_splats,
-            std::size_t ring_slot);
+            std::size_t ring_slot,
+            OutputSlot output_slot);
         [[nodiscard]] lfs::Status ensureOutputImages(
             VulkanContext& context,
             glm::ivec2 size,
@@ -407,6 +408,7 @@ namespace lfs::vis {
             // Fingerprint of emphasized_node_mask currently staged in the
             // interop buffer.
             std::vector<bool> cached_emphasized_node_mask;
+            OutputSlot cached_node_mask_output_slot = OutputSlot::Main;
             bool node_mask_uploaded = false;
             std::vector<float> overlay_params_upload_cpu;
             // Output-byte fingerprint of the overlay-params table currently

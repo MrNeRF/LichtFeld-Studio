@@ -1484,11 +1484,13 @@ namespace lfs::vis::gui {
         std::string split_detail_rml;
 
         if (rm) {
-            auto split_info = rm->getSplitViewInfo();
-            split_enabled = split_info.enabled;
+            if (auto changed = rm->getSplitViewInfoIfChanged(split_info_generation_)) {
+                split_info_cache_ = std::move(*changed);
+            }
+            split_enabled = split_info_cache_.enabled;
             if (split_enabled) {
-                split_mode_rml = split_info.mode_label;
-                split_detail_rml = split_info.detail_label;
+                split_mode_rml = split_info_cache_.mode_label;
+                split_detail_rml = split_info_cache_.detail_label;
             }
         }
         setModelBool("show_split", model_.show_split, split_enabled);

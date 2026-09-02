@@ -793,8 +793,10 @@ namespace lfs::vis {
                     const float panel_v = panel.flip_y ? 1.0f - v : v;
                     const glm::vec2 clamp_max = glm::clamp(panel.uv_clamp_max,
                                                            glm::vec2(0.0f), glm::vec2(1.0f));
-                    const glm::vec2 texture_uv = glm::min(glm::vec2(panel_u, panel_v) * panel.uv_scale,
-                                                          clamp_max);
+                    const glm::vec2 texture_uv = glm::min(
+                        (glm::vec2(panel_u, panel_v) * panel.texcoord_scale + panel.texcoord_offset) *
+                            panel.uv_scale,
+                        clamp_max);
                     const std::size_t idx = static_cast<std::size_t>(y) * width + x;
                     const auto sample_color = [&](const glm::vec2 sample_uv) {
                         return glm::vec3{
@@ -1746,6 +1748,15 @@ namespace lfs::vis {
             }
 
             auto& split = vulkan_mesh_frame_.split_view;
+            // PLY panels are rendered with a 12.5%-viewport-width overlap around
+            // the cached splitter. A drag inside that overlap only changes the
+            // composite divider; leaving it is the point where panel renders must
+            // be refreshed at the new widths/origins.
+            if (splitViewUsesPLYComparison(frame_settings.split_view_mode) &&
+                (split_position < split.right.start_position ||
+                 split_position > split.left.end_position)) {
+                return false;
+            }
             const bool split_position_changed =
                 split.split_position != split_position ||
                 split.left.end_position != split_position ||
@@ -1758,12 +1769,15 @@ namespace lfs::vis {
             }
 
             split.split_position = split_position;
-            split.left.start_position = 0.0f;
-            split.left.end_position = split_position;
-            split.right.start_position = split_position;
-            split.right.end_position = 1.0f;
+            if (!splitViewUsesPLYComparison(frame_settings.split_view_mode)) {
+                split.left.start_position = 0.0f;
+                split.left.end_position = split_position;
+                split.right.start_position = split_position;
+                split.right.end_position = 1.0f;
+            }
 
-            if (vulkan_mesh_frame_.panels.size() == 2) {
+            if (vulkan_mesh_frame_.panels.size() == 2 &&
+                !splitViewUsesPLYComparison(frame_settings.split_view_mode)) {
                 vulkan_mesh_frame_.panels[0].start_position = 0.0f;
                 vulkan_mesh_frame_.panels[0].end_position = split_position;
                 vulkan_mesh_frame_.panels[1].start_position = split_position;
@@ -2462,7 +2476,26 @@ namespace lfs::vis {
 
             auto request = request_override
                                ? *request_override
-                               : buildViewportRenderRequest(frame_ctx, panel_size, &source_viewport, panel_id);
+                               : [&] {
+                                     if (frame_settings.split_view_mode == SplitViewMode::PLYComparison &&
+                                         node_visibility_override && panel_id) {
+                                         const auto layouts = makePlyComparisonPanelLayouts(
+                                             render_size.x, frame_settings.split_position);
+                                         const auto& layout = layouts[splitViewPanelIndex(*panel_id)];
+                                         // Keep the projection in full-viewport coordinates while the
+                                         // raster target is clipped; VkSplat subtracts this origin from
+                                         // projected pixels after applying the full camera intrinsics.
+                                         return buildViewportRenderRequest(
+                                             frame_ctx,
+                                             panel_size,
+                                             &source_viewport,
+                                             panel_id,
+                                             {layout.panel.x, 0},
+                                             render_size);
+                                     }
+                                     return buildViewportRenderRequest(
+                                         frame_ctx, panel_size, &source_viewport, panel_id);
+                                 }();
             std::vector<std::uint32_t> lod_touched_chunks;
             if (lod_controller_ && lod_controller_->hasTree()) {
                 lod_controller_->advanceTransition();
@@ -2584,6 +2617,8 @@ namespace lfs::vis {
                     .external_image_generation = panel.external_image_generation,
                     .uv_scale = outputUvScale(valid, alloc),
                     .uv_clamp_max = outputUvClampMax(valid, alloc),
+                    .texcoord_scale = {1.0f, 1.0f},
+                    .texcoord_offset = {0.0f, 0.0f},
                 };
             };
         const auto make_placeholder_panel =
@@ -3279,18 +3314,23 @@ namespace lfs::vis {
                     left_mask[left_node.slot_index] = true;
                     right_mask[right_node.slot_index] = true;
 
+                    const auto ply_layouts = makePlyComparisonPanelLayouts(
+                        render_size.x, frame_settings.split_position);
+                    const auto& left_layout = ply_layouts[0];
+                    const auto& right_layout = ply_layouts[1];
+
                     auto left = render_panel_image(
                         context.viewport,
-                        render_size,
-                        std::nullopt,
+                        {std::max(left_layout.panel.width, 1), render_size.y},
+                        SplitViewPanelId::Left,
                         std::optional<std::vector<bool>>(left_mask),
                         nullptr,
                         nullptr,
                         VksplatViewportRenderer::OutputSlot::SplitLeft);
                     auto right = render_panel_image(
                         context.viewport,
-                        render_size,
-                        std::nullopt,
+                        {std::max(right_layout.panel.width, 1), render_size.y},
+                        SplitViewPanelId::Right,
                         std::optional<std::vector<bool>>(right_mask),
                         nullptr,
                         nullptr,
@@ -3300,8 +3340,14 @@ namespace lfs::vis {
                         pending_split_view.split_position = frame_settings.split_position;
                         pending_split_view.background = frame_settings.background_color;
                         pending_split_view.content_rect = {0, 0, render_size.x, render_size.y};
-                        pending_split_view.left = make_split_panel(*left, 0.0f, frame_settings.split_position, false);
-                        pending_split_view.right = make_split_panel(*right, frame_settings.split_position, 1.0f, false);
+                        pending_split_view.left = make_split_panel(
+                            *left, left_layout.panel.start_position, left_layout.panel.end_position, false);
+                        pending_split_view.right = make_split_panel(
+                            *right, right_layout.panel.start_position, right_layout.panel.end_position, false);
+                        pending_split_view.left.texcoord_scale = left_layout.texcoord_scale;
+                        pending_split_view.left.texcoord_offset = left_layout.texcoord_offset;
+                        pending_split_view.right.texcoord_scale = right_layout.texcoord_scale;
+                        pending_split_view.right.texcoord_offset = right_layout.texcoord_offset;
                         rendered_metadata = makeSplitMetadata(left->metadata, right->metadata, frame_settings.split_position);
                         rendered_split_info = SplitViewInfo{
                             .enabled = true,
