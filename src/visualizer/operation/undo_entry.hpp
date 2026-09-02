@@ -330,7 +330,8 @@ namespace lfs::vis::op {
     public:
         DepthWindowSettingsUndoEntry(RenderingManager& rendering_manager,
                                      DepthWindowSettingsState before,
-                                     DepthWindowSettingsState after);
+                                     DepthWindowSettingsState after,
+                                     bool rebase_readout);
 
         void undo() override;
         void redo() override;
@@ -345,6 +346,7 @@ namespace lfs::vis::op {
         RenderingManager& rendering_manager_;
         DepthWindowSettingsState before_;
         DepthWindowSettingsState after_;
+        bool rebase_readout_ = false;
     };
 
     class LFS_VIS_API CropBoxUndoEntry : public UndoEntry {

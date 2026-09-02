@@ -4,16 +4,19 @@
 
 #include "operation/undo_entry.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "visualizer/app_store.hpp"
 
 namespace lfs::vis::op {
 
     DepthWindowSettingsUndoEntry::DepthWindowSettingsUndoEntry(
         RenderingManager& rendering_manager,
         DepthWindowSettingsState before,
-        DepthWindowSettingsState after)
+        DepthWindowSettingsState after,
+        const bool rebase_readout)
         : rendering_manager_(rendering_manager),
           before_(before),
-          after_(after) {}
+          after_(after),
+          rebase_readout_(rebase_readout) {}
 
     void DepthWindowSettingsUndoEntry::apply(const DepthWindowSettingsState& state) {
         auto settings = rendering_manager_.getSettings();
@@ -26,10 +29,16 @@ namespace lfs::vis::op {
 
     void DepthWindowSettingsUndoEntry::undo() {
         apply(before_);
+        if (rebase_readout_) {
+            publish_depth_window_draw_commit();
+        }
     }
 
     void DepthWindowSettingsUndoEntry::redo() {
         apply(after_);
+        if (rebase_readout_) {
+            publish_depth_window_draw_commit();
+        }
     }
 
     UndoMetadata DepthWindowSettingsUndoEntry::metadata() const {

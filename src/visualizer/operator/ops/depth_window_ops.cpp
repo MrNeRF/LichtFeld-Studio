@@ -564,7 +564,8 @@ namespace lfs::vis::op {
                     rendering_manager_->getSettings());
                 if (after != before_) {
                     undoHistory().push(std::make_unique<DepthWindowSettingsUndoEntry>(
-                        *rendering_manager_, before_, after));
+                        *rendering_manager_, before_, after,
+                        drag_kind_ == DragKind::Draw));
                 }
                 if (drag_kind_ == DragKind::Draw) {
                     publish_depth_window_draw_commit();

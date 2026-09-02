@@ -19,9 +19,11 @@
 #include "rendering/render_constants.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "selection/depth_window_geometry.hpp"
 #include "selection/selection_service.hpp"
 #include "tools/selection_tool.hpp"
 #include "tools/tool_base.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer_impl.hpp"
 
 #include <algorithm>
@@ -714,6 +716,60 @@ TEST_F(DepthWindowDragLifecycleTest, SecondDepthDragReplacementKeepsIncomingOver
     EXPECT_TRUE(lfs::vis::op::operators().hasModalOperator());
     EXPECT_EQ(lfs::vis::op::operators().activeModalId(), "selection.depth_window_drag");
     EXPECT_TRUE(lfs::vis::op::depthWindowOverlayState().visible);
+}
+
+TEST_F(DepthWindowDragLifecycleTest, UndoOfDrawRebasesSizeReadoutReference) {
+    const auto generation = []() {
+        return lfs::vis::app_store().depth_window_draw_generation.get();
+    };
+    const auto g0 = generation();
+
+    ASSERT_TRUE(startDepthDrag(10.0, 10.0));
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(mouse_move(60.0, 60.0)),
+              OperatorResult::RUNNING_MODAL);
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(
+                  mouse_button(static_cast<int>(lfs::vis::input::AppMouseButton::LEFT),
+                               lfs::vis::input::ACTION_RELEASE,
+                               60.0,
+                               60.0)),
+              OperatorResult::FINISHED);
+    const auto g1 = generation();
+    EXPECT_EQ(g1, g0 + 1u);
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
+
+    EXPECT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    EXPECT_EQ(generation(), g1 + 1u);
+
+    EXPECT_TRUE(lfs::vis::op::undoHistory().redo().success);
+    const auto g_after_redo = generation();
+    EXPECT_EQ(g_after_redo, g1 + 2u);
+
+    const auto settings = rendering_manager_->getSettings();
+    const auto render_center = lfs::vis::op::depthWindowRenderRect(
+                                   options_.width,
+                                   options_.height,
+                                   settings.depth_filter_scale_x,
+                                   settings.depth_filter_scale_y,
+                                   settings.depth_filter_offset_x,
+                                   settings.depth_filter_offset_y)
+                                   .center();
+    const double center_x = static_cast<double>(render_center.x);
+    const double center_y = static_cast<double>(render_center.y);
+
+    ASSERT_TRUE(startDepthDrag(center_x, center_y));
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(mouse_move(center_x + 20.0, center_y)),
+              OperatorResult::RUNNING_MODAL);
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(
+                  mouse_button(static_cast<int>(lfs::vis::input::AppMouseButton::LEFT),
+                               lfs::vis::input::ACTION_RELEASE,
+                               center_x + 20.0,
+                               center_y)),
+              OperatorResult::FINISHED);
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 2u);
+    EXPECT_EQ(generation(), g_after_redo);
+
+    EXPECT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    EXPECT_EQ(generation(), g_after_redo);
 }
 
 TEST_F(DepthWindowDragLifecycleTest, DepthWindowScrollScalePreservesAspectAtLimits) {
