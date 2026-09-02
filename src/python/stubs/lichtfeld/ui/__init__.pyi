@@ -306,7 +306,7 @@ class Panel:
 
     update_interval_ms: int = 100
 
-    update_policy: str = 'interval'
+    update_policy: str = 'dirty'
 
     @classmethod
     def poll(cls, context) -> bool: ...

@@ -40,6 +40,8 @@ namespace lfs::vis::gui {
         PanelDirectRenderResult renderDirect(const PanelDirectRenderRequest& request,
                                              const PanelDrawContext& ctx) override;
         bool needsAnimationFrame() const override;
+        bool needsImmediateAnimationFrame() const override;
+        std::string animationDemandDescription() const override;
         std::optional<double> nextScheduledAnimationDelay() const override;
         void reloadRmlResources() override;
         [[nodiscard]] std::string captureChromeJson() const override;
@@ -106,6 +108,7 @@ namespace lfs::vis::gui {
         int update_interval_ms_ = 100;
         std::chrono::steady_clock::time_point next_update_at_{};
         std::string last_language_;
+        std::uint64_t last_language_generation_ = 0;
         lfs::python::RmlImModeLayout layout_;
         std::optional<PanelInputState> current_input_;
         float prev_mouse_x_ = 0.0f;

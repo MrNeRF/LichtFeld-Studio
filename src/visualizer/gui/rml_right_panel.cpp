@@ -20,6 +20,7 @@
 #include <cassert>
 #include <cmath>
 #include <format>
+#include <limits>
 
 namespace lfs::vis::gui {
 
@@ -122,6 +123,8 @@ namespace lfs::vis::gui {
         tabs_overflow_ = false;
         can_scroll_tabs_left_ = false;
         can_scroll_tabs_right_ = false;
+        last_blurred_focus_ = nullptr;
+        last_hover_element_ = nullptr;
     }
 
     void RmlRightPanel::reloadResources() {
@@ -158,6 +161,8 @@ namespace lfs::vis::gui {
         last_over_interactive_ = false;
         last_over_resize_handle_ = false;
         rml_pointer_inside_ = false;
+        last_blurred_focus_ = nullptr;
+        last_hover_element_ = nullptr;
 
         try {
             const auto rml_path = lfs::vis::getAssetPath("rmlui/right_panel.rml");
@@ -375,16 +380,40 @@ namespace lfs::vis::gui {
             return;
 
         auto* const focused = rml_context_->GetFocusElement();
-        if (!focused)
+        if (!focused) {
+            last_blurred_focus_ = nullptr;
             return;
+        }
+
+        // Frame-input capture is applied after the right-panel render. RmlUi can
+        // retain the same focus element until its next Update(), so repeatedly
+        // marking this flag here would keep needsAnimationFrame() true forever.
+        if (focused == last_blurred_focus_) {
+            wants_keyboard_ = false;
+            return;
+        }
 
         focused->Blur();
+        last_blurred_focus_ = focused;
         wants_keyboard_ = false;
         input_dirty_ = true;
     }
 
     bool RmlRightPanel::needsAnimationFrame() const {
         return render_needed_ || input_dirty_ || splitter_dragging_ || resize_dragging_;
+    }
+
+    std::string RmlRightPanel::animationDemandDescription() const {
+        if (!needsAnimationFrame())
+            return {};
+
+        const double next_update_delay = rml_context_
+                                             ? rml_context_->GetNextUpdateDelay()
+                                             : std::numeric_limits<double>::infinity();
+        return std::format(
+            "right_panel(render_needed={},input_dirty={},splitter_dragging={},resize_dragging={},rml_delay={})",
+            render_needed_, input_dirty_, splitter_dragging_, resize_dragging_,
+            next_update_delay);
     }
 
     void RmlRightPanel::processInput(const RightPanelLayout& layout, const PanelInputState& input) {
@@ -420,6 +449,8 @@ namespace lfs::vis::gui {
             !input.keys_repeated.empty() || !input.text_codepoints.empty() ||
             !input.text_inputs.empty() || input.has_text_editing;
         auto* const focused_before = rml_context_->GetFocusElement();
+        if (pointer_event || keyboard_event)
+            last_blurred_focus_ = nullptr;
         const bool viewport_focus_blurs_panel = input.viewport_keyboard_focus && focused_before;
         const bool layout_changed =
             static_cast<int>(layout.size.x) != last_fbo_w_ ||
@@ -487,9 +518,10 @@ namespace lfs::vis::gui {
         if (over_interactive != last_over_interactive_) {
             input_dirty_ = true;
             last_over_interactive_ = over_interactive;
-        } else if (mouse_moved && over_interactive) {
+        } else if (mouse_moved && over_interactive && hover != last_hover_element_) {
             input_dirty_ = true;
         }
+        last_hover_element_ = hover;
 
         if (resize_dragging_) {
             wants_input_ = true;
@@ -556,14 +588,11 @@ namespace lfs::vis::gui {
                     rml_context_->ProcessMouseButtonUp(0, mods);
             }
         } else if (input.mouse_clicked[0]) {
-            if (auto* focused = rml_context_->GetFocusElement())
-                focused->Blur();
+            blurFocus();
         }
 
-        if (input.viewport_keyboard_focus) {
-            if (auto* focused = rml_context_->GetFocusElement())
-                focused->Blur();
-        }
+        if (input.viewport_keyboard_focus)
+            blurFocus();
 
         if (rml_input::hasFocusedKeyboardTarget(rml_context_->GetFocusElement()) &&
             !input.viewport_keyboard_focus) {

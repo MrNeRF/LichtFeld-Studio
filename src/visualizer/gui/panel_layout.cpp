@@ -150,6 +150,8 @@ namespace lfs::vis::gui {
             for (auto& v : masked.mouse_down)
                 v = false;
             masked.mouse_wheel = 0.0f;
+            masked.mouse_wheel_x = 0.0f;
+            masked.mouse_button_events.clear();
             return masked;
         };
         const PanelInputState masked_panel_input =
@@ -562,6 +564,8 @@ namespace lfs::vis::gui {
             for (auto& v : masked.mouse_down)
                 v = false;
             masked.mouse_wheel = 0.0f;
+            masked.mouse_wheel_x = 0.0f;
+            masked.mouse_button_events.clear();
             return masked;
         };
 
@@ -731,6 +735,8 @@ namespace lfs::vis::gui {
             for (auto& v : masked.mouse_down)
                 v = false;
             masked.mouse_wheel = 0.0f;
+            masked.mouse_wheel_x = 0.0f;
+            masked.mouse_button_events.clear();
             return masked;
         };
 

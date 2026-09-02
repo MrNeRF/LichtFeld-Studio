@@ -514,7 +514,8 @@ namespace lfs::vis {
         void setupViewContextBridge();
         void beginShutdown(std::string_view reason = "Viewer is shutting down");
         void processRenderWorkQueue();
-        [[nodiscard]] bool hasPendingRenderWork();
+        [[nodiscard]] bool hasPendingWork() const;
+        [[nodiscard]] bool hasPendingRenderWork() const;
         [[nodiscard]] bool inputFrameRequestsRender() const;
 
         struct FrameDemand {
@@ -559,6 +560,8 @@ namespace lfs::vis {
         [[nodiscard]] FrameDemand collectFrameDemand(bool viewport_export_locked,
                                                      bool drained_store_dirty = false,
                                                      bool consume_python_redraw = true);
+        [[nodiscard]] bool isMotionOnlyWake() const;
+        [[nodiscard]] double guiAnimationFrameInterval() const;
         void waitForNextEvent(bool is_training);
 
         class CallbackCleanup {
@@ -620,6 +623,8 @@ namespace lfs::vis {
         // State tracking
         bool fully_initialized_ = false;
         bool window_initialized_ = false;
+        mutable std::chrono::steady_clock::time_point display_refresh_queried_at_{};
+        mutable double gui_animation_frame_interval_ = 1.0 / 60.0;
         bool gui_initialized_ = false;
         bool tools_initialized_ = false;
         bool view_context_bridge_initialized_ = false;
@@ -650,6 +655,11 @@ namespace lfs::vis {
             pending_load_files_;
         int pending_training_completion_refresh_frames_ = 0;
         bool gui_frame_rendered_ = false;
+        bool motion_only_wake_skipped_ = false;
+        std::string last_wake_reason_ = "startup";
+        std::string last_wake_timeout_source_ = "none";
+        FrameDemand last_frame_demand_{};
+        bool has_last_frame_demand_ = false;
         bool startup_plugin_preload_started_ = false;
         bool startup_project_open_attempted_ = false;
         bool close_save_notice_posted_ = false;

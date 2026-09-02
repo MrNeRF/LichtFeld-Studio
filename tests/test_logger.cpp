@@ -121,6 +121,29 @@ TEST(LoggerTest, ScopedTimerThresholdKeepsZeroThresholdCompatible) {
     EXPECT_NE(messages.front().find("logger.threshold.compat took"), std::string::npos);
 }
 
+TEST(LoggerTest, ScopedTimerDisabledPathDoesNotEmit) {
+    auto& logger = lfs::core::Logger::get();
+    const auto previous_level = logger.level();
+    logger.set_level(lfs::core::LogLevel::Info);
+
+    std::vector<std::string> messages;
+    LogHandlerGuard guard([&messages](lfs::core::LogLevel level,
+                                      const lfs::core::SourceSite&,
+                                      std::string_view message) {
+        if (level == lfs::core::LogLevel::Performance)
+            messages.emplace_back(message);
+    });
+
+    {
+        lfs::core::ScopedTimer timer(
+            "logger.disabled", lfs::core::LogLevel::Performance,
+            LFS_SOURCE_SITE_CURRENT());
+    }
+
+    logger.set_level(previous_level);
+    EXPECT_TRUE(messages.empty());
+}
+
 TEST(LoggerTest, DefaultLogFilePathResolvesUnderPerUserDirectory) {
     const std::filesystem::path resolved(lfs::core::Logger::default_log_file_path());
 

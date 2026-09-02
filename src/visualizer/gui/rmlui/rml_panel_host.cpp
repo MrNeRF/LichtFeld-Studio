@@ -517,6 +517,7 @@ namespace lfs::vis::gui {
             (pw != last_measure_w_ || ph != last_layout_h_ || content_dirty_ ||
              last_content_height_ <= 0.0f);
         const float saved_scroll = scroll_el_ ? scroll_el_->GetScrollTop() : 0.0f;
+        float converged_content_h = last_content_height_;
 
         if (need_content_measure) {
             last_measure_w_ = pw;
@@ -532,7 +533,9 @@ namespace lfs::vis::gui {
             layout_h = std::clamp(layout_h, 1, kMaxFboSize);
 
             float content_h = 0.0f;
-            for (int pass = 0; pass < 3; ++pass) {
+            float previous_content_h = -1.0f;
+            bool content_height_settled = false;
+            for (int pass = 0; pass < 8; ++pass) {
                 const bool dims_changed =
                     pw != last_layout_w_ || layout_h != last_layout_h_ ||
                     padding != last_layout_padding_;
@@ -549,13 +552,17 @@ namespace lfs::vis::gui {
 
                 const int measured = std::clamp(
                     static_cast<int>(std::ceil(content_h)), 1, kMaxFboSize);
-                if (measured <= layout_h || layout_h == kMaxFboSize)
+                content_height_settled = previous_content_h >= 0.0f &&
+                                         std::abs(content_h - previous_content_h) <= 2.0f;
+                if (content_height_settled || layout_h == kMaxFboSize)
                     break;
 
+                previous_content_h = content_h;
                 layout_h = measured;
             }
 
             last_content_height_ = content_h;
+            converged_content_h = content_h;
             if (content_el_)
                 last_content_el_height_ = content_el_->GetOffsetHeight();
             const int measured = std::clamp(
@@ -597,30 +604,31 @@ namespace lfs::vis::gui {
         render_needed_ = false;
 
         if (height_mode_ == PanelHeightMode::Content) {
-            const float prev_content_h = last_content_height_;
             const float actual_content_h = computeContentHeight();
             last_content_height_ = actual_content_h;
 
             if (content_el_)
                 last_content_el_height_ = content_el_->GetOffsetHeight();
 
-            if (std::abs(actual_content_h - prev_content_h) > 2.0f) {
+            if (std::abs(actual_content_h - converged_content_h) > 2.0f) {
                 ++content_height_rearm_count_;
                 if (content_height_rearm_count_ > 8) {
                     if (!content_height_rearm_warned_) {
                         content_height_rearm_warned_ = true;
                         LOG_WARN("RmlPanelHost '{}': content-height settle exceeded 8 re-arms "
                                  "(pw={}, ph={}, prev_h={:.1f}, actual_h={:.1f}); skipping re-arm",
-                                 context_name_, pw, ph, prev_content_h, actual_content_h);
+                                 context_name_, pw, ph, converged_content_h, actual_content_h);
                     }
                 } else {
                     content_dirty_ = true;
                     direct_cache_dirty_ = true;
                     last_measure_w_ = 0;
+                    content_height_settling_ = true;
                 }
             } else {
                 content_height_rearm_count_ = 0;
                 content_height_rearm_warned_ = false;
+                content_height_settling_ = false;
             }
         }
     }
@@ -629,6 +637,15 @@ namespace lfs::vis::gui {
         if (std::isfinite(next_update_delay_) && next_update_delay_ > 0.0)
             return next_update_delay_;
         return std::nullopt;
+    }
+
+    std::string RmlPanelHost::animationDemandDescription() const {
+        if (!document_ || !needsAnimationFrame())
+            return {};
+        return std::format(
+            "document={},content_dirty={},render_needed={},animation_active={},tooltip_due={},rml_delay={}",
+            rml_path_, content_dirty_, render_needed_, animation_active_,
+            tooltip_.revealDue(), next_update_delay_);
     }
 
     void RmlPanelHost::draw(const PanelDrawContext& ctx) {
@@ -1209,6 +1226,37 @@ namespace lfs::vis::gui {
             had_input = true;
         };
 
+        // SDL can deliver multiple button transitions before the next frame.
+        // Replay each transition at its recorded position so a fast double click
+        // is not collapsed onto the final cursor position.
+        const auto replay_button_events = [&]() {
+            bool replayed = false;
+            for (const auto& event : input.mouse_button_events) {
+                if (event.button >= 3)
+                    continue;
+
+                const float event_x = event.x - panel_x + last_fbo_padding_;
+                const float event_y = event.y - panel_y + last_fbo_padding_;
+                const bool event_hovered = hitTestPanelShape(
+                    event_x, event_y, logical_w, logical_h);
+                if (!event_hovered && !mouse_captured_[event.button])
+                    continue;
+
+                rml_context_->ProcessMouseMove(static_cast<int>(event_x),
+                                               static_cast<int>(event_y), mods);
+                if (event.down)
+                    deliver_button_down(event.button);
+                else
+                    deliver_button_up(event.button);
+                had_input = true;
+                replayed = true;
+            }
+            return replayed;
+        };
+
+        const bool replayed_button_events =
+            !manual_dropdown_option_route && replay_button_events();
+
         if (manual_dropdown_option_route) {
             if (input.mouse_clicked[0]) {
                 manual_dropdown_mouse_captured_ = true;
@@ -1229,12 +1277,13 @@ namespace lfs::vis::gui {
                 had_input = true;
             }
         } else if (hovered) {
-            if (input.mouse_clicked[0])
+            if (!replayed_button_events && input.mouse_clicked[0])
                 deliver_button_down(0);
-            if (input.mouse_clicked[1])
+            if (!replayed_button_events && input.mouse_clicked[1])
                 deliver_button_down(1);
             if (input.mouse_wheel != 0.0f) {
-                rml_context_->ProcessMouseWheel(Rml::Vector2f(0, -input.mouse_wheel), mods);
+                rml_context_->ProcessMouseWheel(
+                    Rml::Vector2f(-input.mouse_wheel_x, -input.mouse_wheel), mods);
                 // Re-resolve hover against the new scroll offset so row text
                 // doesn't render against a stale layout for one frame.
                 rml_context_->ProcessMouseMove(rml_mx, rml_my, mods);

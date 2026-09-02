@@ -8,6 +8,7 @@
 #include "gui/layout_state.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/ui_context.hpp"
+#include "input/frame_input_buffer.hpp"
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <string>
@@ -42,6 +43,8 @@ namespace lfs::vis::gui {
         int screen_w = 0;
         int screen_h = 0;
         float mouse_wheel = 0;
+        float mouse_wheel_x = 0;
+        std::vector<FrameMouseButtonEvent> mouse_button_events;
         bool key_ctrl = false;
         bool key_shift = false;
         bool key_alt = false;

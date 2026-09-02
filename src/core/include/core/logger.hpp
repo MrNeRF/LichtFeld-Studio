@@ -213,18 +213,19 @@ namespace lfs::core {
     // Scoped timer for performance measurement
     class LFS_LOGGER_API ScopedTimer {
     public:
-        explicit ScopedTimer(std::string name, LogLevel level, SourceSite loc);
-        ScopedTimer(std::string name, double min_log_ms,
+        explicit ScopedTimer(std::string_view name, LogLevel level, SourceSite loc);
+        ScopedTimer(std::string_view name, double min_log_ms,
                     LogLevel level, SourceSite loc);
         ~ScopedTimer();
 
     private:
-        std::chrono::high_resolution_clock::time_point start_;
+        std::chrono::high_resolution_clock::time_point start_{};
         std::string name_;
         double min_log_ms_ = 0.0;
         LogLevel level_;
         SourceSite loc_;
         bool diagnostics_scope_active_ = false;
+        bool disabled_ = false;
     };
 
 } // namespace lfs::core

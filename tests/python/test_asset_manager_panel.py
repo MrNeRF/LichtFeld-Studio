@@ -333,8 +333,8 @@ def _scan_result(**overrides):
 
 def test_panel_contract_polls_preference_and_remains_left_dock(panel_module):
     panel_type = panel_module.AssetManagerPanel
-    assert panel_type.update_policy == "interval"
-    assert panel_type.update_interval_ms == 250
+    assert panel_type.update_policy == "dirty"
+    assert "update_interval_ms" not in panel_type.__dict__
     assert panel_type.space == panel_module.lf.ui.PanelSpace.LEFT_DOCK
     assert panel_type.order == 20
 

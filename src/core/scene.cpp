@@ -137,6 +137,7 @@ namespace lfs::core {
                 invalidateCache();
             break;
         case MutationType::SELECTION_CHANGED:
+            ++selection_generation_;
             break;
         default:
             invalidateCache();
@@ -571,6 +572,7 @@ namespace lfs::core {
         auto* node = getNodeById(id);
         if (node) {
             node->local_transform.set(transform, false);
+            invalidateTransformCache();
         }
     }
 
@@ -594,6 +596,7 @@ namespace lfs::core {
         cached_combined_.reset();
         cached_transform_indices_.reset();
         cached_visible_selection_indices_.reset();
+        invalidateVisibleSelectionMaskCache();
         cached_transforms_.clear();
         model_cache_valid_.store(false, std::memory_order_release);
         transform_cache_valid_.store(false, std::memory_order_release);
@@ -693,6 +696,7 @@ namespace lfs::core {
         single_node_model_ = nullptr;
         cached_transform_indices_.reset();
         cached_visible_selection_indices_.reset();
+        invalidateVisibleSelectionMaskCache();
         rebuildModelCacheIfNeeded(/*include_hidden_splats=*/true);
 
         if (single_node_model_ || !cached_combined_) {
@@ -808,6 +812,7 @@ namespace lfs::core {
         ++consolidated_generation_;
         cached_transform_indices_.reset();
         cached_visible_selection_indices_.reset();
+        invalidateVisibleSelectionMaskCache();
         model_cache_valid_.store(false, std::memory_order_release);
         transform_cache_valid_.store(false, std::memory_order_release);
     }
@@ -1037,6 +1042,7 @@ namespace lfs::core {
 
         cached_transform_indices_.reset();
         cached_visible_selection_indices_.reset();
+        invalidateVisibleSelectionMaskCache();
         model_cache_valid_.store(false, std::memory_order_release);
         transform_cache_valid_.store(false, std::memory_order_release);
         return true;
@@ -1649,6 +1655,7 @@ namespace lfs::core {
 
         if (!include_hidden_splats && consolidated_ && cached_combined_) {
             cached_visible_selection_indices_.reset();
+            invalidateVisibleSelectionMaskCache();
             rebuildConsolidatedTransformIndices();
             model_cache_valid_.store(true, std::memory_order_release);
             return;
@@ -1685,6 +1692,7 @@ namespace lfs::core {
             cached_combined_.reset();
             cached_transform_indices_.reset();
             cached_visible_selection_indices_.reset();
+            invalidateVisibleSelectionMaskCache();
             model_cache_valid_.store(true, std::memory_order_release);
             transform_cache_valid_.store(false, std::memory_order_release);
             return;
@@ -1703,11 +1711,13 @@ namespace lfs::core {
                 lfs::core::Tensor::zeros({n}, lfs::core::Device::CUDA, lfs::core::DataType::Int32));
             if (n == full_selection_count && visible_selection_offsets[0] == 0) {
                 cached_visible_selection_indices_.reset();
+                invalidateVisibleSelectionMaskCache();
             } else {
                 std::vector<int> visible_indices(n);
                 for (size_t i = 0; i < n; ++i) {
                     visible_indices[i] = static_cast<int>(visible_selection_offsets[0] + i);
                 }
+                invalidateVisibleSelectionMaskCache();
                 cached_visible_selection_indices_ = std::make_shared<lfs::core::Tensor>(
                     lfs::core::Tensor::from_vector(
                         visible_indices, {n}, lfs::core::Device::CPU)
@@ -1859,6 +1869,7 @@ namespace lfs::core {
             Tensor::from_vector(transform_indices_data, {stats.total_gaussians}, lfs::core::Device::CPU).cuda());
         if (stats.total_gaussians == full_selection_count) {
             cached_visible_selection_indices_.reset();
+            invalidateVisibleSelectionMaskCache();
         } else {
             std::vector<int> visible_indices(stats.total_gaussians);
             size_t visible_offset = 0;
@@ -1870,6 +1881,7 @@ namespace lfs::core {
                 }
                 visible_offset += size;
             }
+            invalidateVisibleSelectionMaskCache();
             cached_visible_selection_indices_ = std::make_shared<Tensor>(
                 Tensor::from_vector(visible_indices, {stats.total_gaussians}, lfs::core::Device::CPU).cuda());
         }
@@ -1967,7 +1979,25 @@ namespace lfs::core {
             visible_indices->numel() != static_cast<size_t>(model->size())) {
             return nullptr;
         }
-        return std::make_shared<lfs::core::Tensor>(selection->index_select(0, *visible_indices).contiguous());
+
+        const auto selection_generation = selection_generation_;
+        const auto visibility_generation = render_generation_;
+        if (cached_visible_selection_mask_ &&
+            cached_visible_selection_mask_source_ == selection.get() &&
+            cached_visible_selection_mask_model_ == model &&
+            cached_visible_selection_mask_indices_ == visible_indices.get() &&
+            cached_visible_selection_mask_selection_generation_ == selection_generation &&
+            cached_visible_selection_mask_visibility_generation_ == visibility_generation)
+            return cached_visible_selection_mask_;
+
+        cached_visible_selection_mask_ = std::make_shared<lfs::core::Tensor>(
+            selection->index_select(0, *visible_indices).contiguous());
+        cached_visible_selection_mask_source_ = selection.get();
+        cached_visible_selection_mask_model_ = model;
+        cached_visible_selection_mask_indices_ = visible_indices.get();
+        cached_visible_selection_mask_selection_generation_ = selection_generation;
+        cached_visible_selection_mask_visibility_generation_ = visibility_generation;
+        return cached_visible_selection_mask_;
     }
 
     int Scene::getVisibleNodeIndex(const std::string& name) const {
@@ -3233,6 +3263,7 @@ namespace lfs::core {
         has_selection_ = staged->has_selection_;
         has_point_cloud_selection_ =
             staged->has_point_cloud_selection_;
+        ++selection_generation_;
         selection_group_counts_dirty_ =
             staged->selection_group_counts_dirty_;
 

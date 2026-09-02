@@ -126,9 +126,12 @@ namespace lfs::vis {
 
             // State queries
             bool needsAnimationFrame() const;
+            [[nodiscard]] std::string describeAnimationDemand() const;
+            [[nodiscard]] bool needsImmediateAnimationFrame() const;
             // Min finite scheduled GUI animation/update delay (seconds). Used by the
             // idle wait path so CSS transitions / timers wake on time without spinning.
-            [[nodiscard]] std::optional<double> secondsUntilNextAnimationFrame() const;
+            [[nodiscard]] std::optional<double> secondsUntilNextAnimationFrame(
+                const char** source = nullptr) const;
             [[nodiscard]] bool isViewportExportLocked() const;
 
             // Window visibility
@@ -429,6 +432,8 @@ namespace lfs::vis {
             bool last_ui_layout_python_console_visible_ = false;
             bool last_ui_layout_bottom_dock_visible_ = false;
             bool last_ui_layout_left_dock_visible_ = false;
+            mutable std::chrono::steady_clock::time_point last_animation_demand_description_at_{};
+            mutable std::string animation_demand_description_cache_;
             enum class RightPanelPointerRegion : uint8_t {
                 None,
                 Resize,

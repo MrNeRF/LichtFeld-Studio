@@ -187,6 +187,8 @@ namespace lfs::vis::gui {
             return {};
         }
         virtual bool needsAnimationFrame() const { return false; }
+        virtual bool needsImmediateAnimationFrame() const { return false; }
+        virtual std::string animationDemandDescription() const { return {}; }
         // Finite scheduled animation/update delay in seconds (> 0). nullopt means
         // no scheduled wake (either continuous demand via needsAnimationFrame or idle).
         virtual std::optional<double> nextScheduledAnimationDelay() const { return std::nullopt; }
@@ -220,6 +222,8 @@ namespace lfs::vis::gui {
         PanelSpace default_space = PanelSpace::Floating;
         int default_order = 100;
         bool default_enabled = true;
+        std::shared_ptr<const std::string> label_storage;
+        std::shared_ptr<const std::string> id_storage;
         static constexpr int MAX_CONSECUTIVE_ERRORS = 3;
 
         bool has_option(PanelOption opt) const {
@@ -325,8 +329,10 @@ namespace lfs::vis::gui {
     struct PanelSnapshot {
         size_t index;
         IPanel* panel;
-        std::string label;
-        std::string id;
+        std::string_view label;
+        std::string_view id;
+        std::shared_ptr<const std::string> label_storage;
+        std::shared_ptr<const std::string> id_storage;
         PanelSpace space;
         uint32_t options;
         bool is_native;
@@ -393,6 +399,10 @@ namespace lfs::vis::gui {
         PanelAnimationDemand animationDemandForVisiblePanels(
             PanelAnimationVisibility visibility) const;
         bool needsAnimationFrameForVisiblePanels(PanelAnimationVisibility visibility) const;
+        [[nodiscard]] std::string describeAnimationDemand(
+            PanelAnimationVisibility visibility) const;
+        [[nodiscard]] bool needsImmediateAnimationFrameForVisiblePanels(
+            PanelAnimationVisibility visibility) const;
         // Min finite scheduled delay across visible panels (same visibility rules as
         // needsAnimationFrameForVisiblePanels). nullopt if none are scheduled.
         std::optional<double> nextScheduledAnimationDelayForVisiblePanels(

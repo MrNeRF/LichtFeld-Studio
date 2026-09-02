@@ -485,12 +485,14 @@ namespace lfs::vis::gui {
         if (!speed_events_initialized_) {
             lfs::core::events::ui::SpeedChanged::when([this](const auto& e) {
                 speed_state_.showWasd(e.current_speed);
+                model_animation_active_ = true;
                 animation_active_ = true;
                 next_refresh_at_ = {};
                 markModelDirty();
             });
             lfs::core::events::ui::ZoomSpeedChanged::when([this](const auto& e) {
                 speed_state_.showZoom(e.zoom_speed);
+                model_animation_active_ = true;
                 animation_active_ = true;
                 next_refresh_at_ = {};
                 markModelDirty();
@@ -519,6 +521,9 @@ namespace lfs::vis::gui {
             rml_manager_->destroyContext("status_bar");
         rml_context_ = nullptr;
         document_ = nullptr;
+        model_animation_active_ = false;
+        rml_animation_active_ = false;
+        animation_active_ = false;
         delete git_commit_listener_;
         git_commit_listener_ = nullptr;
         delete gpu_icon_listener_;
@@ -554,6 +559,8 @@ namespace lfs::vis::gui {
         mining_scene_ = {};
         progress_style_checked_at_ = {};
         model_dirty_ = true;
+        model_animation_active_ = false;
+        rml_animation_active_ = false;
         animation_active_ = true;
         fit_level_ = 0;
         last_dp_ratio_ = 0.0f;
@@ -1626,15 +1633,19 @@ namespace lfs::vis::gui {
             (model_.show_gpu_model ? uint32_t{1} << 7 : 0) |
             (model_.account_show_tier ? uint32_t{1} << 8 : 0);
 
-        const bool miner_visible = progress_miner_pref_ && show_training;
-        animation_active_ = wasd_visible || zoom_visible || status_msg.visible ||
-                            miner_visible;
+        // A paused trainer has a static progress display. Keep the miner's
+        // periodic refresh armed only while its particles actually advance.
+        const bool miner_visible = progress_miner_pref_ && show_training &&
+                                   training_state == TrainingState::Running;
+        model_animation_active_ = wasd_visible || zoom_visible || status_msg.visible ||
+                                  miner_visible;
+        animation_active_ = model_animation_active_ || rml_animation_active_;
         next_refresh_at_ = now + (miner_visible && training_state == TrainingState::Running
                                       ? kBusyRefreshInterval
-                                  : miner_visible     ? kMiningRefreshInterval
-                                  : animation_active_ ? kAnimatedRefreshInterval
-                                  : ctx.is_training   ? kBusyRefreshInterval
-                                                      : kIdleRefreshInterval);
+                                  : miner_visible           ? kMiningRefreshInterval
+                                  : model_animation_active_ ? kAnimatedRefreshInterval
+                                  : ctx.is_training         ? kBusyRefreshInterval
+                                                            : kIdleRefreshInterval);
         return model_dirty_;
     }
 
@@ -1804,11 +1815,17 @@ namespace lfs::vis::gui {
     void RmlStatusBar::render(const PanelDrawContext& ctx, const float x, const float y,
                               const float w_px, const float h_px,
                               const int screen_w, const int screen_h) {
-        if (!rml_context_ || !document_)
+        if (!rml_context_ || !document_) {
+            rml_animation_active_ = false;
+            animation_active_ = model_animation_active_;
             return;
+        }
 
-        if (w_px <= 0.0f || h_px <= 0.0f || screen_w <= 0 || screen_h <= 0)
+        if (w_px <= 0.0f || h_px <= 0.0f || screen_w <= 0 || screen_h <= 0) {
+            rml_animation_active_ = false;
+            animation_active_ = model_animation_active_;
             return;
+        }
 
         const float overlay_height = overlayHeight();
         const int render_w = static_cast<int>(w_px);
@@ -1828,8 +1845,11 @@ namespace lfs::vis::gui {
         const bool needs_render = size_changed || dp_changed || theme_changed || had_pending_model_dirty ||
                                   content_changed ||
                                   (animation_active_ && refresh_due);
-        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
+        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface()) {
+            rml_animation_active_ = false;
+            animation_active_ = model_animation_active_;
             return;
+        }
 
         if (needs_render) {
             rml_context_->SetDimensions(Rml::Vector2i(render_w, render_h));
@@ -1840,7 +1860,10 @@ namespace lfs::vis::gui {
             rml_context_->Update();
             fitToAvailableWidth(size_changed || dp_changed || theme_changed || section_signature_changed);
 
-            animation_active_ = animation_active_ || (rml_context_->GetNextUpdateDelay() == 0);
+            rml_animation_active_ = rml_context_->GetNextUpdateDelay() == 0;
+            animation_active_ = model_animation_active_ || rml_animation_active_;
+            if (rml_animation_active_)
+                next_refresh_at_ = now;
             last_dp_ratio_ = dp_ratio;
             last_section_signature_ = section_signature_;
             last_render_w_ = render_w;

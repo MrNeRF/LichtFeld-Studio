@@ -281,6 +281,8 @@ namespace lfs::vis::gui {
         std::chrono::steady_clock::time_point next_refresh_at_{};
         std::chrono::steady_clock::time_point next_gpu_refresh_at_{};
         bool model_dirty_ = true;
+        bool model_animation_active_ = false;
+        bool rml_animation_active_ = false;
         bool animation_active_ = false;
         bool reactive_fps_available_ = false;
         float reactive_fps_value_ = 0.0f;

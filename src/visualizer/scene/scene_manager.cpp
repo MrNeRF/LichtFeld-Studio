@@ -3215,6 +3215,28 @@ namespace lfs::vis {
     SceneRenderState SceneManager::buildRenderState() const {
         std::lock_guard<std::mutex> lock(state_mutex_);
 
+        const auto scene_generation = app_store().scene_generation.get();
+        const auto selection_generation = static_cast<std::uint64_t>(selection_.generation());
+        const auto gaussian_selection_generation = scene_.selectionGeneration();
+        const auto local_scene_generation = scene_.renderGeneration();
+        const auto* current_model = content_type_ == ContentType::Dataset
+                                        ? scene_.getTrainingModel()
+                                        : scene_.getCombinedModel();
+        // PointCloud tensors are public and can be edited in place without a Scene mutation
+        // notification. Keep the small node scan, but do not reuse a state that owns a merged
+        // point cloud unless those tensors acquire an explicit generation in the future.
+        const auto visible_point_cloud_nodes = collectVisiblePointCloudNodes(scene_);
+        const bool point_cloud_fallback = !hasRenderableGaussians(current_model) &&
+                                          !visible_point_cloud_nodes.empty();
+        if (!point_cloud_fallback && cached_render_state_ &&
+            cached_render_scene_generation_ == scene_generation &&
+            cached_render_selection_generation_ == selection_generation &&
+            cached_render_gaussian_selection_generation_ == gaussian_selection_generation &&
+            cached_render_scene_generation_local_ == local_scene_generation &&
+            cached_render_model_ == current_model &&
+            cached_render_content_type_ == content_type_)
+            return *cached_render_state_;
+
         SceneRenderState state;
 
         // Get combined model or point cloud
@@ -3231,7 +3253,6 @@ namespace lfs::vis {
         // Fall back to the visible point cloud whenever the active splat model is absent or empty.
         // This keeps dataset "ready" scenes renderable before training has produced gaussians.
         if (!hasRenderableGaussians(state.combined_model)) {
-            const auto visible_point_cloud_nodes = collectVisiblePointCloudNodes(scene_);
             if (visible_point_cloud_nodes.size() > 1) {
                 state.owned_point_cloud = buildMergedVisiblePointCloud(scene_, visible_point_cloud_nodes);
                 state.point_cloud = state.owned_point_cloud.get();
@@ -3342,7 +3363,14 @@ namespace lfs::vis {
         // getNodeMask() may promote shared→exclusive internally, call outside shared_lock
         state.selected_node_mask = selection_.getNodeMask(scene_);
 
-        return state;
+        cached_render_state_ = std::make_shared<const SceneRenderState>(std::move(state));
+        cached_render_scene_generation_ = scene_generation;
+        cached_render_selection_generation_ = selection_generation;
+        cached_render_gaussian_selection_generation_ = gaussian_selection_generation;
+        cached_render_scene_generation_local_ = local_scene_generation;
+        cached_render_model_ = current_model;
+        cached_render_content_type_ = content_type_;
+        return *cached_render_state_;
     }
 
     SceneManager::SceneInfo SceneManager::getSceneInfo() const {

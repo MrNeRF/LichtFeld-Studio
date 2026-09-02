@@ -48,7 +48,7 @@ namespace lfs::vis::gui {
             interaction.user_height = 0.0f;
         }
 
-        std::string panelDirectTimerName(const std::string& panel_id, const char* stage) {
+        std::string panelDirectTimerName(const std::string_view panel_id, const char* stage) {
             std::string name = "gui_render.panel_direct.";
             if (panel_id.empty()) {
                 name += "unknown";
@@ -331,6 +331,9 @@ namespace lfs::vis::gui {
             assert(info.panel);
             assert(!info.id.empty());
 
+            info.id_storage = std::make_shared<const std::string>(info.id);
+            info.label_storage = std::make_shared<const std::string>(info.label);
+
             if (!validatePanelContract(info, info.space))
                 return false;
 
@@ -547,7 +550,7 @@ apply_registered_chrome:
 
         {
             std::lock_guard poll_lock(poll_mutex_);
-            auto cache_it = poll_cache_.find(snap.id);
+            auto cache_it = poll_cache_.find(*snap.id_storage);
             if (cache_it != poll_cache_.end()) {
                 const auto& e = cache_it->second;
                 bool valid = true;
@@ -566,7 +569,8 @@ apply_registered_chrome:
 
         {
             std::lock_guard poll_lock(poll_mutex_);
-            poll_cache_[snap.id] = {result, gen, has_sel, training, snap.poll_dependencies};
+            poll_cache_[*snap.id_storage] = {result, gen, has_sel, training,
+                                             snap.poll_dependencies};
         }
         return result;
     }
@@ -576,8 +580,10 @@ apply_registered_chrome:
         PanelSnapshot snapshot{
             index,
             panel.panel.get(),
-            panel.label,
-            panel.id,
+            panel.label_storage ? *panel.label_storage : panel.label,
+            panel.id_storage ? *panel.id_storage : panel.id,
+            panel.label_storage,
+            panel.id_storage,
             panel.space,
             panel.options,
             panel.is_native,
@@ -722,8 +728,7 @@ apply_registered_chrome:
 
                     const bool stable_height =
                         prev_h > 0.0f && std::abs(drawn_h - prev_h) <= 1.0f;
-                    if (drawn_h > 0.0f && stable_height &&
-                        !snap.panel->needsAnimationFrame())
+                    if (drawn_h > 0.0f && stable_height)
                         break;
 
                     prev_h = drawn_h;
@@ -736,7 +741,7 @@ apply_registered_chrome:
                 std::lock_guard lock(mutex_);
                 if (snap.index < panels_.size() && panels_[snap.index].id == snap.id &&
                     panels_[snap.index].space == PanelSpace::Floating) {
-                    const auto interaction = floating_interactions_.find(snap.id);
+                    const auto interaction = floating_interactions_.find(*snap.id_storage);
                     if (interaction != floating_interactions_.end() &&
                         interaction->second.user_height > 0) {
                         h = interaction->second.user_height;
@@ -767,7 +772,7 @@ apply_registered_chrome:
                 std::lock_guard lock(mutex_);
                 if (snap.index < panels_.size() && panels_[snap.index].id == snap.id &&
                     panels_[snap.index].space == PanelSpace::Floating) {
-                    if (const auto interaction = floating_interactions_.find(snap.id);
+                    if (const auto interaction = floating_interactions_.find(*snap.id_storage);
                         interaction != floating_interactions_.end()) {
                         auto_center = interaction->second.auto_center;
                     }
@@ -1842,6 +1847,39 @@ apply_registered_chrome:
         return animationDemandForVisiblePanels(visibility).any();
     }
 
+    std::string PanelRegistry::describeAnimationDemand(
+        const PanelAnimationVisibility visibility) const {
+        std::string result;
+        std::lock_guard lock(mutex_);
+        for (const auto& p : panels_) {
+            if (!p.enabled || p.error_disabled || !p.panel ||
+                !isPanelVisibleForAnimation(p, visibility) ||
+                !p.panel->needsAnimationFrame())
+                continue;
+
+            if (!result.empty())
+                result += ',';
+            result += p.id;
+            const auto detail = p.panel->animationDemandDescription();
+            if (!detail.empty()) {
+                result += '(';
+                result += detail;
+                result += ')';
+            }
+        }
+        return result;
+    }
+
+    bool PanelRegistry::needsImmediateAnimationFrameForVisiblePanels(
+        const PanelAnimationVisibility visibility) const {
+        std::lock_guard lock(mutex_);
+        return std::any_of(panels_.begin(), panels_.end(), [&](const auto& p) {
+            return p.enabled && !p.error_disabled && p.panel &&
+                   isPanelVisibleForAnimation(p, visibility) &&
+                   p.panel->needsImmediateAnimationFrame();
+        });
+    }
+
     std::optional<double> PanelRegistry::nextScheduledAnimationDelayForVisiblePanels(
         const PanelAnimationVisibility visibility) const {
         std::optional<double> min_delay;
@@ -1861,6 +1899,7 @@ apply_registered_chrome:
         for (auto& p : panels_) {
             if (p.id == id) {
                 p.label = new_label;
+                p.label_storage = std::make_shared<const std::string>(p.label);
                 return true;
             }
         }

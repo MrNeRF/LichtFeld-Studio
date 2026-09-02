@@ -426,6 +426,8 @@ namespace lfs::core {
 
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> getVisibleSelectionIndices() const;
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> getVisibleSelectionMask() const;
+        [[nodiscard]] uint64_t renderGeneration() const noexcept { return render_generation_; }
+        [[nodiscard]] uint64_t selectionGeneration() const noexcept { return selection_generation_; }
 
         enum class MergeStorageMode {
             Clone,
@@ -561,8 +563,13 @@ namespace lfs::core {
             transform_cache_valid_.store(false, std::memory_order_release);
             cached_transform_indices_.reset();
             cached_visible_selection_indices_.reset();
+            invalidateVisibleSelectionMaskCache();
+            ++render_generation_;
         }
-        void invalidateTransformCache() { transform_cache_valid_.store(false, std::memory_order_release); }
+        void invalidateTransformCache() {
+            transform_cache_valid_.store(false, std::memory_order_release);
+            ++render_generation_;
+        }
         void markDirty() { invalidateCache(); }
         void markTransformDirty(NodeId node);
 
@@ -622,6 +629,12 @@ namespace lfs::core {
         mutable std::shared_ptr<lfs::core::SplatData> cached_combined_;
         mutable std::shared_ptr<lfs::core::Tensor> cached_transform_indices_;
         mutable std::shared_ptr<lfs::core::Tensor> cached_visible_selection_indices_;
+        mutable std::shared_ptr<lfs::core::Tensor> cached_visible_selection_mask_;
+        mutable const lfs::core::Tensor* cached_visible_selection_mask_source_ = nullptr;
+        mutable const lfs::core::SplatData* cached_visible_selection_mask_model_ = nullptr;
+        mutable const lfs::core::Tensor* cached_visible_selection_mask_indices_ = nullptr;
+        mutable uint64_t cached_visible_selection_mask_selection_generation_ = 0;
+        mutable uint64_t cached_visible_selection_mask_visibility_generation_ = 0;
         mutable std::atomic<bool> model_cache_valid_{false};
         mutable const lfs::core::SplatData* single_node_model_ = nullptr;
 
@@ -637,6 +650,8 @@ namespace lfs::core {
         mutable bool consolidated_ = false;
         mutable std::vector<ConsolidatedNodeSlot> consolidated_node_slots_;
         mutable uint64_t consolidated_generation_ = 0;
+        mutable uint64_t render_generation_ = 0;
+        mutable uint64_t selection_generation_ = 0;
 
         mutable std::shared_mutex selection_mutex_;
         mutable std::shared_ptr<lfs::core::Tensor> selection_mask_;
@@ -651,6 +666,15 @@ namespace lfs::core {
         bool selection_group_counts_dirty_ = true;
 
         void rebuildCacheIfNeeded() const;
+        void invalidateVisibleSelectionMaskCache() const {
+            cached_visible_selection_mask_.reset();
+            cached_visible_selection_mask_source_ = nullptr;
+            cached_visible_selection_mask_model_ = nullptr;
+            cached_visible_selection_mask_indices_ = nullptr;
+            cached_visible_selection_mask_selection_generation_ = 0;
+            cached_visible_selection_mask_visibility_generation_ = 0;
+        }
+
         void rebuildModelCacheIfNeeded() const;
         void rebuildModelCacheIfNeeded(bool include_hidden_splats) const;
         void rebuildTransformCacheIfNeeded() const;
