@@ -308,6 +308,10 @@ namespace lfs::core {
         // to CPU first and unpacks there, avoiding a full canonical SH allocation on CUDA.
         Tensor shN_canonical_cpu() const;
 
+        // Host-side variant for export paths. When resident q16/IEEE-f16 SH is on CUDA,
+        // decode it in bands directly into canonical [N, K, 3] host output memory.
+        Tensor shN_canonical_cpu_gpu_decoded() const;
+
         // Host-side PLY variant. Copies/dequantizes resident SH storage directly into the
         // final [N, 3*K] channel-major PLY rest layout, avoiding canonical unpack + transpose.
         Tensor shN_ply_rest_cpu() const;

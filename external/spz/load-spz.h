@@ -175,6 +175,8 @@ namespace spz {
         // Unpacking doesn't need these values since g-unzipping already fills zero bits for quantized data.
         uint8_t sh1Bits = DEFAULT_SH1_BITS;        // Bits for SH degree 1 coefficients
         uint8_t shRestBits = DEFAULT_SH_REST_BITS; // Bits for SH degree 2+ coefficients
+
+        int compressionLevel = 12; // zstd compression level for SPZ v4 streams
     };
 
     struct UnpackOptions {

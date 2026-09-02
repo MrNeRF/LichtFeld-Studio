@@ -260,10 +260,10 @@ namespace lfs::io {
                 rotation = splat.rotation_raw().contiguous().to_pageable_host();
                 opacity = splat.opacity_raw().contiguous().to_pageable_host();
                 sh0 = splat.sh0().contiguous().to_pageable_host();
-                if (sh_coeffs > 0 && splat.shN().is_valid() && splat.shN().numel() > 0) {
-                    // shN is stored swizzled; unpack on CPU to avoid a canonical CUDA copy.
-                    shN = splat.shN_canonical_cpu();
-                }
+            }
+            if (sh_coeffs > 0 && splat.shN().is_valid() && splat.shN().numel() > 0) {
+                LOG_TIMER_DEBUG("SPZ export: sh unpack");
+                shN = splat.shN_canonical_cpu_gpu_decoded();
             }
 
             LOG_TIMER_DEBUG("SPZ export: pack");
@@ -272,35 +272,47 @@ namespace lfs::io {
             cloud.rotations.resize(num_points * 4);
             cloud.alphas.resize(num_points);
             cloud.colors.resize(num_points * 3);
+            if (sh_coeffs > 0 && shN.is_valid() && shN.numel() > 0) {
+                cloud.sh.resize(num_points * sh_coeffs * 3);
+            }
 
             const auto* const means_ptr = static_cast<const float*>(means.data_ptr());
             const auto* const scaling_ptr = static_cast<const float*>(scaling.data_ptr());
             const auto* const rotation_ptr = static_cast<const float*>(rotation.data_ptr());
             const auto* const opacity_ptr = static_cast<const float*>(opacity.data_ptr());
             const auto* const sh0_ptr = static_cast<const float*>(sh0.data_ptr());
+            const bool has_sh = sh_coeffs > 0 && shN.is_valid() && shN.numel() > 0;
+            const size_t sh_values_per_point = static_cast<size_t>(sh_coeffs) * 3;
+            const auto* const shN_ptr = has_sh ? shN.ptr<float>() : nullptr;
 
-            const size_t attribute_count = static_cast<size_t>(num_points) * 3;
-            std::memcpy(cloud.positions.data(), means_ptr, attribute_count * sizeof(float));
-            std::memcpy(cloud.scales.data(), scaling_ptr, attribute_count * sizeof(float));
-            std::memcpy(cloud.colors.data(), sh0_ptr, attribute_count * sizeof(float));
-
-            // Rotation: SplatData wxyz -> SPZ xyzw
+            // Keep all row-wise conversion/copy work deterministic while allowing the large
+            // host-side buffers (especially SH) to use the available cores.
             parallel_for_chunks(static_cast<size_t>(num_points), [&](size_t begin, size_t end) {
                 for (size_t i = begin; i < end; ++i) {
+                    std::memcpy(cloud.positions.data() + i * 3,
+                                means_ptr + i * 3,
+                                3 * sizeof(float));
+                    std::memcpy(cloud.scales.data() + i * 3,
+                                scaling_ptr + i * 3,
+                                3 * sizeof(float));
+                    std::memcpy(cloud.colors.data() + i * 3,
+                                sh0_ptr + i * 3,
+                                3 * sizeof(float));
+
+                    // Rotation: SplatData wxyz -> SPZ xyzw
                     cloud.rotations[i * 4 + 0] = rotation_ptr[i * 4 + 1]; // x
                     cloud.rotations[i * 4 + 1] = rotation_ptr[i * 4 + 2]; // y
                     cloud.rotations[i * 4 + 2] = rotation_ptr[i * 4 + 3]; // z
                     cloud.rotations[i * 4 + 3] = rotation_ptr[i * 4 + 0]; // w
+
+                    cloud.alphas[i] = opacity_ptr[i];
+                    if (has_sh) {
+                        std::memcpy(cloud.sh.data() + i * sh_values_per_point,
+                                    shN_ptr + i * sh_values_per_point,
+                                    sh_values_per_point * sizeof(float));
+                    }
                 }
             });
-
-            std::memcpy(cloud.alphas.data(), opacity_ptr, static_cast<size_t>(num_points) * sizeof(float));
-
-            if (sh_coeffs > 0 && shN.is_valid() && shN.numel() > 0) {
-                cloud.sh.resize(num_points * sh_coeffs * 3);
-                const auto* const shN_ptr = static_cast<const float*>(shN.data_ptr());
-                std::memcpy(cloud.sh.data(), shN_ptr, cloud.sh.size() * sizeof(float));
-            }
 
             return cloud;
         }
@@ -447,6 +459,7 @@ namespace lfs::io {
         spz::PackOptions pack_options;
         pack_options.from = spz::CoordinateSystem::RDF;
         pack_options.version = static_cast<uint32_t>(options.version);
+        pack_options.compressionLevel = options.compression_level;
 
 #ifdef SPZ_BUILD_EXTENSIONS
         if (options.version == 4) {
@@ -464,7 +477,12 @@ namespace lfs::io {
         // Pack to memory first, then write to file ourselves to handle Unicode paths correctly
         std::vector<uint8_t> data;
         {
-            LOG_TIMER_DEBUG("SPZ export: compress");
+            const unsigned hardware_threads = std::thread::hardware_concurrency();
+            const unsigned worker_count = hardware_threads == 0 ? 1u : hardware_threads;
+            LOG_TIMER_DEBUG(std::format(
+                "SPZ export: compress (level {}, workers {})",
+                options.compression_level,
+                worker_count));
             if (!spz::saveSpz(cloud, pack_options, &data)) {
                 return make_error(ErrorCode::WRITE_FAILURE,
                                   "Failed to pack SPZ data", options.output_path);

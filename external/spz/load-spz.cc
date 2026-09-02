@@ -40,6 +40,7 @@ SOFTWARE.
 #include <future>
 #include <iostream>
 #include <limits>
+#include <numeric>
 #include <sstream>
 #include <thread>
 #include <unordered_map>
@@ -306,7 +307,7 @@ namespace spz {
     }
 
     bool compressZstd(const uint8_t* data, size_t size, std::vector<uint8_t>* out,
-                      int compressionLevel = 12) {
+                      int compressionLevel = 12, unsigned workerCount = 0) {
         size_t const bound = ZSTD_compressBound(size);
         out->resize(bound);
 
@@ -317,14 +318,27 @@ namespace spz {
             ZSTD_freeCCtx(cctx);
             return false;
         }
-        ZSTD_CCtx_setParameter(cctx, ZSTD_c_nbWorkers, std::min(16u, std::thread::hardware_concurrency()));
+        if (workerCount == 0) {
+            const unsigned hardwareThreads = std::thread::hardware_concurrency();
+            workerCount = std::min(16u, hardwareThreads == 0 ? 1u : hardwareThreads);
+        }
+        if (ZSTD_isError(ZSTD_CCtx_setParameter(cctx, ZSTD_c_nbWorkers, workerCount))) {
+            ZSTD_freeCCtx(cctx);
+            return false;
+        }
 
-        size_t const compressedSize = ZSTD_compress2(cctx, out->data(), bound, data, size);
+        // NGSP keeps each attribute stream independent. Compress each complete stream in
+        // one call; with ZSTD_e_end as the first directive zstd deliberately delegates to
+        // its whole-buffer compressor, preserving the compress2 byte stream and avoiding
+        // small-chunk end/flush calls that would defeat the worker pool.
+        ZSTD_inBuffer input{data, size, 0};
+        ZSTD_outBuffer output{out->data(), bound, 0};
+        const size_t result = ZSTD_compressStream2(cctx, &output, &input, ZSTD_e_end);
         ZSTD_freeCCtx(cctx);
 
-        if (ZSTD_isError(compressedSize))
+        if (ZSTD_isError(result) || result != 0 || input.pos != input.size)
             return false;
-        out->resize(compressedSize);
+        out->resize(output.pos);
         return true;
     }
 
@@ -851,7 +865,8 @@ namespace spz {
 
     bool compressNgspStreams(const std::vector<std::pair<const uint8_t*, size_t>>& srcs,
                              std::vector<std::vector<uint8_t>>* chunks,
-                             std::vector<uint64_t>* uncompressedSizes) {
+                             std::vector<uint64_t>* uncompressedSizes,
+                             int compressionLevel) {
 #if defined(__EMSCRIPTEN__)
         // TODO: Add support for parallel compression on WASM.
         for (const auto& s : srcs) {
@@ -859,32 +874,104 @@ namespace spz {
                 continue;
             uncompressedSizes->push_back(s.second);
             std::vector<uint8_t> chunk;
-            if (!compressZstd(s.first, s.second, &chunk)) {
+            if (!compressZstd(s.first, s.second, &chunk, compressionLevel)) {
                 SpzLog("[SPZ ERROR] compressNgspStreams: ZSTD compression failed");
                 return false;
             }
             chunks->push_back(std::move(chunk));
         }
 #else
-        std::vector<std::future<std::vector<uint8_t>>> futures;
-        for (const auto& s : srcs) {
-            if (s.second == 0)
-                continue;
-            uncompressedSizes->push_back(s.second);
-            futures.push_back(std::async(std::launch::async, [s]() -> std::vector<uint8_t> {
-                std::vector<uint8_t> chunk;
-                if (!compressZstd(s.first, s.second, &chunk)) {
-                    SpzLog("[SPZ ERROR] compressNgspStreams: ZSTD compression failed");
-                    return {};
-                }
-                return chunk;
-            }));
+        std::vector<std::pair<const uint8_t*, size_t>> streams;
+        streams.reserve(srcs.size());
+        for (const auto& stream : srcs) {
+            if (stream.second != 0)
+                streams.push_back(stream);
         }
-        for (auto& f : futures) {
-            chunks->push_back(f.get());
-            if (chunks->back().empty()) {
-                SpzLog("[SPZ ERROR] compressNgspStreams: compression failed");
-                return false;
+
+        const size_t streamCount = streams.size();
+        if (streamCount == 0)
+            return true;
+
+        const unsigned hardwareThreads = std::thread::hardware_concurrency();
+        const unsigned workerBudget = hardwareThreads == 0 ? 1u : hardwareThreads;
+
+        std::vector<unsigned> workerCounts(streamCount, 1u);
+        if (streamCount <= workerBudget) {
+            const long double totalSize = std::accumulate(
+                streams.begin(), streams.end(), 0.0L,
+                [](long double total, const auto& stream) {
+                    return total + static_cast<long double>(stream.second);
+                });
+            std::vector<long double> remainders(streamCount, 0.0L);
+            unsigned assigned = 0;
+            for (size_t i = 0; i < streamCount; ++i) {
+                const long double ideal =
+                    static_cast<long double>(workerBudget) *
+                    static_cast<long double>(streams[i].second) / totalSize;
+                const unsigned share = static_cast<unsigned>(ideal);
+                workerCounts[i] = std::max(1u, share);
+                assigned += workerCounts[i];
+                remainders[i] = ideal - static_cast<long double>(share);
+            }
+
+            while (assigned > workerBudget) {
+                size_t candidate = streamCount;
+                for (size_t i = 0; i < streamCount; ++i) {
+                    if (workerCounts[i] > 1 &&
+                        (candidate == streamCount || workerCounts[i] > workerCounts[candidate])) {
+                        candidate = i;
+                    }
+                }
+                --workerCounts[candidate];
+                --assigned;
+            }
+            while (assigned < workerBudget) {
+                size_t candidate = 0;
+                for (size_t i = 1; i < streamCount; ++i) {
+                    if (remainders[i] > remainders[candidate])
+                        candidate = i;
+                }
+                ++workerCounts[candidate];
+                remainders[candidate] -= 1.0L;
+                ++assigned;
+            }
+        }
+
+        // Compress independent attribute streams concurrently, while dividing the available
+        // zstd worker budget between them. This avoids the severe oversubscription caused by
+        // running six streams concurrently with the old per-stream worker setting. On machines
+        // with fewer hardware threads than streams, the streams are processed in batches.
+        uncompressedSizes->reserve(uncompressedSizes->size() + streamCount);
+        chunks->reserve(chunks->size() + streamCount);
+        for (const auto& stream : streams)
+            uncompressedSizes->push_back(stream.second);
+
+        for (size_t batchBegin = 0; batchBegin < streamCount;) {
+            const size_t batchSize = std::min(
+                streamCount - batchBegin, static_cast<size_t>(workerBudget));
+            std::vector<std::future<std::vector<uint8_t>>> futures;
+            futures.reserve(batchSize);
+            for (size_t i = 0; i < batchSize; ++i) {
+                const size_t streamIndex = batchBegin + i;
+                const auto stream = streams[streamIndex];
+                futures.push_back(std::async(
+                    std::launch::async,
+                    [stream, compressionLevel, workers = workerCounts[streamIndex]]() {
+                        std::vector<uint8_t> chunk;
+                        if (!compressZstd(
+                                stream.first, stream.second, &chunk, compressionLevel, workers))
+                            return std::vector<uint8_t>{};
+                        return chunk;
+                    }));
+            }
+            batchBegin += batchSize;
+
+            for (auto& future : futures) {
+                chunks->push_back(future.get());
+                if (chunks->back().empty()) {
+                    SpzLog("[SPZ ERROR] compressNgspStreams: compression failed");
+                    return false;
+                }
             }
         }
 #endif
@@ -1132,7 +1219,7 @@ namespace spz {
 
         std::vector<std::vector<uint8_t>> chunks;
         std::vector<uint64_t> uncompressedSizes;
-        if (!compressNgspStreams(srcs, &chunks, &uncompressedSizes)) {
+        if (!compressNgspStreams(srcs, &chunks, &uncompressedSizes, o.compressionLevel)) {
             return false;
         }
 
@@ -1153,6 +1240,14 @@ namespace spz {
 
         // Write plaintext zone: [header][extensions][TOC]
         out->resize(tocByteOffset + numStreams * 2 * sizeof(uint64_t));
+        size_t finalSize = out->size();
+        for (const auto& chunk : chunks) {
+            if (chunk.size() > std::numeric_limits<size_t>::max() - finalSize) {
+                return false;
+            }
+            finalSize += chunk.size();
+        }
+        out->reserve(finalSize);
         uint8_t* buf = out->data();
         std::memcpy(buf, &header, sizeof(header));
         if (!extensionData.empty()) {
