@@ -34,6 +34,8 @@ SOFTWARE.
 #include <zstd.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -42,6 +44,9 @@ SOFTWARE.
 #include <limits>
 #include <numeric>
 #include <sstream>
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
+#include <tbb/task_group.h>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -61,8 +66,8 @@ namespace spz {
 
         float sigmoid(float x) { return 1 / (1 + std::exp(-x)); }
 
-        template <typename T>
-        size_t countBytes(const std::vector<T>& vec) {
+        template <typename T, typename Allocator>
+        size_t countBytes(const std::vector<T, Allocator>& vec) {
             return vec.size() * sizeof(vec[0]);
         }
 
@@ -665,6 +670,159 @@ namespace spz {
                positions.size() == static_cast<size_t>(numPoints) * 3 * 2;
     }
 
+    bool unpackGaussians(const PackedGaussians& packed, const UnpackOptions& o,
+                         GaussianCloudOutput& output) {
+        const int32_t numPoints = packed.numPoints;
+        const int32_t shDim = dimForDegree(packed.shDegree);
+        const bool usesFloat16 = packed.usesFloat16();
+        const bool usesQuaternionSmallestThree = packed.usesQuaternionSmallestThree;
+        if (!checkSizes(packed, numPoints, shDim, usesFloat16)) {
+            return false;
+        }
+
+        const size_t count = static_cast<size_t>(numPoints);
+        if (output.positions.size() != count * 3 ||
+            output.scales.size() != count * 3 ||
+            output.rotations.size() != count * 4 ||
+            output.alphas.size() != count ||
+            output.colors.size() != count * 3 ||
+            output.sh.size() != count * static_cast<size_t>(shDim) * 3) {
+            SpzLog("[SPZ ERROR] unpackGaussians: output buffer sizes do not match the point count");
+            return false;
+        }
+
+#ifdef SPZ_BUILD_EXTENSIONS
+        const CoordinateSystem fromCoord = getPackedCoordinateSystem(packed.extensions);
+#else
+        const CoordinateSystem fromCoord = CoordinateSystem::RUB;
+#endif
+        const CoordinateConverter coordinate_converter =
+            coordinateConverter(fromCoord, o.to, packed.shDegree);
+
+        // Every output row depends only on its corresponding packed row and the immutable header /
+        // coordinate converter. All output spans are fully sized before entering the parallel fill.
+        tbb::parallel_for(
+            tbb::blocked_range<size_t>(0, count, 4096),
+            [&](const tbb::blocked_range<size_t>& range) {
+                const auto* halfData = usesFloat16
+                                           ? reinterpret_cast<const Half*>(packed.positions.data())
+                                           : nullptr;
+                // Keep the original double-precision division followed by float conversion.
+                const float position_scale = 1.0 / (1 << packed.fractionalBits);
+                for (size_t point = range.begin(); point != range.end(); ++point) {
+                    const size_t base3 = point * 3;
+                    const size_t base4 = point * 4;
+                    // The SPZ/GaussianCloud convention is xyzw, while the direct destination
+                    // is the LichtFeld tensor convention wxyz. Keep the working value in SPZ
+                    // order through coordinate conversion; reorder only when storing it.
+                    std::array<float, 4> rotation_xyzw{};
+
+                    if (usesFloat16) {
+                        // Decode legacy float16 format. We can remove this at some point as it was never released.
+                        for (size_t j = 0; j < 3; ++j) {
+                            output.positions[base3 + j] = halfToFloat(halfData[base3 + j]);
+                        }
+                    } else {
+                        // Decode 24-bit fixed point coordinates.
+                        for (size_t j = 0; j < 3; ++j) {
+                            const size_t packed_index = (base3 + j) * 3;
+                            int32_t fixed32 = packed.positions[packed_index + 0];
+                            fixed32 |= packed.positions[packed_index + 1] << 8;
+                            fixed32 |= packed.positions[packed_index + 2] << 16;
+                            fixed32 |= (fixed32 & 0x800000) ? 0xff000000 : 0; // sign extension
+                            output.positions[base3 + j] = static_cast<float>(fixed32) * position_scale;
+                        }
+                    }
+
+                    for (size_t j = 0; j < 3; ++j) {
+                        output.scales[base3 + j] = packed.scales[base3 + j] / 16.0f - 10.0f;
+                        output.colors[base3 + j] =
+                            ((packed.colors[base3 + j] / 255.0f) - 0.5f) / colorScale;
+                    }
+
+                    if (usesQuaternionSmallestThree) {
+                        unpackQuaternionSmallestThree(
+                            rotation_xyzw.data(), &packed.rotations[base4]);
+                    } else {
+                        unpackQuaternionFirstThree(
+                            rotation_xyzw.data(), &packed.rotations[point * 3]);
+                    }
+
+                    const float normalized_alpha = std::clamp(
+                        packed.alphas[point] / 255.0f, 1.0f / 255.0f, 254.0f / 255.0f);
+                    output.alphas[point] = invSigmoid(normalized_alpha);
+
+                    const size_t sh_base = point * static_cast<size_t>(shDim) * 3;
+                    for (size_t j = 0; j < static_cast<size_t>(shDim) * 3; ++j) {
+                        output.sh[sh_base + j] = unquantizeSH(packed.sh[sh_base + j]);
+                    }
+
+                    if (coordinate_converter.rotFlipPFunc) {
+                        coordinate_converter.rotFlipPFunc(output.positions.data() + base3);
+                    } else {
+                        for (size_t j = 0; j < 3; ++j) {
+                            output.positions[base3 + j] *= coordinate_converter.flipP[j];
+                        }
+                    }
+
+                    if (coordinate_converter.rotFlipQFunc) {
+                        coordinate_converter.rotFlipQFunc(rotation_xyzw.data());
+                    } else {
+                        for (size_t j = 0; j < 3; ++j) {
+                            rotation_xyzw[j] *= coordinate_converter.flipQ[j];
+                        }
+                        // Don't modify rotations[base4 + 3] (w component).
+                    }
+                    output.rotations[base4 + 0] = rotation_xyzw[3]; // w
+                    output.rotations[base4 + 1] = rotation_xyzw[0]; // x
+                    output.rotations[base4 + 2] = rotation_xyzw[1]; // y
+                    output.rotations[base4 + 3] = rotation_xyzw[2]; // z
+
+                    if (coordinate_converter.rotFlipShFuncs[0]) {
+                        // Cross-family: rotation+flip baked into rotFlipShFuncs per band.
+                        for (int band = 0; band < packed.shDegree && band < SH_MAX_DEGREE; ++band) {
+                            const size_t band_start = static_cast<size_t>(band * (band + 2));
+                            const size_t band_size = static_cast<size_t>(2 * band + 3);
+                            if (band_start + band_size > static_cast<size_t>(shDim)) {
+                                break;
+                            }
+                            std::array<float, 9> tmp{};
+                            for (int channel = 0; channel < 3; ++channel) {
+                                for (size_t k = 0; k < band_size; ++k) {
+                                    tmp[k] = output.sh[sh_base + (band_start + k) * 3 +
+                                                       static_cast<size_t>(channel)];
+                                }
+                                coordinate_converter.rotFlipShFuncs[static_cast<size_t>(band)](
+                                    tmp.data());
+                                for (size_t k = 0; k < band_size; ++k) {
+                                    output.sh[sh_base + (band_start + k) * 3 +
+                                              static_cast<size_t>(channel)] = tmp[k];
+                                }
+                            }
+                        }
+                    } else {
+                        // Within-family: rotate spherical harmonics by inverting coefficients that reference
+                        // the y and z axes, for each RGB channel.
+                        for (size_t j = 0; j < static_cast<size_t>(shDim); ++j) {
+                            const size_t sh_index = sh_base + j * 3;
+                            output.sh[sh_index + 0] *= coordinate_converter.flipSh[j];
+                            output.sh[sh_index + 1] *= coordinate_converter.flipSh[j];
+                            output.sh[sh_index + 2] *= coordinate_converter.flipSh[j];
+                        }
+                    }
+                }
+            });
+
+#ifndef SPZ_BUILD_EXTENSIONS
+        if (packed.hadSkippedExtensions) {
+            SpzLog("[SPZ WARNING] unpackGaussians: extensions were skipped at load time — "
+                   "unpacked data may be incorrect due to unknown packing behavior; "
+                   "build with SPZ_BUILD_EXTENSIONS to ensure correct results");
+        }
+#endif
+        return true;
+    }
+
     GaussianCloud unpackGaussians(const PackedGaussians& packed, const UnpackOptions& o) {
         const int32_t numPoints = packed.numPoints;
         const int32_t shDim = dimForDegree(packed.shDegree);
@@ -681,9 +839,6 @@ namespace spz {
 
 #ifdef SPZ_BUILD_EXTENSIONS
         // Copy all extensions from PackedGaussians to GaussianCloud.
-        // Note: Some extensions (like SH quantization) are only used during packing and may not
-        // be needed in the unpacked cloud, but we preserve them for metadata completeness
-        // and future extensibility.
         result.extensions = packed.extensions;
 #endif
 
@@ -713,11 +868,11 @@ namespace spz {
             }
         }
 
-        for (size_t i = 0; i < numPoints * 3; i++) {
+        for (size_t i = 0; i < count * 3; i++) {
             result.scales[i] = packed.scales[i] / 16.0f - 10.0f;
         }
 
-        for (size_t i = 0; i < numPoints; i++) {
+        for (size_t i = 0; i < count; i++) {
             if (usesQuaternionSmallestThree) {
                 unpackQuaternionSmallestThree(&result.rotations[4 * i], &packed.rotations[4 * i]);
             } else {
@@ -725,12 +880,12 @@ namespace spz {
             }
         }
 
-        for (size_t i = 0; i < numPoints; i++) {
+        for (size_t i = 0; i < count; i++) {
             const float normalized_alpha = std::clamp(packed.alphas[i] / 255.0f, 1.0f / 255.0f, 254.0f / 255.0f);
             result.alphas[i] = invSigmoid(normalized_alpha);
         }
 
-        for (size_t i = 0; i < numPoints * 3; i++) {
+        for (size_t i = 0; i < count * 3; i++) {
             result.colors[i] = ((packed.colors[i] / 255.0f) - 0.5f) / colorScale;
         }
 
@@ -840,24 +995,42 @@ namespace spz {
             }
         }
 #else
-        std::vector<std::future<bool>> futures;
+        // NGSP streams are independent; launch all of them before waiting so the large SH
+        // stream does not serialize the smaller attribute streams.
+        const size_t stream_count = infos.size();
+        std::atomic<size_t> first_error(stream_count);
+        std::vector<int64_t> stream_durations_ms(stream_count);
+        tbb::task_group tasks;
         for (size_t i = 0; i < infos.size(); i++) {
             const auto info = infos[i];
             const auto dest = dests[i];
-            futures.push_back(std::async(std::launch::async, [data, info, dest]() -> bool {
+            tasks.run([data, info, dest, i, stream_count, &first_error, &stream_durations_ms]() {
+                const auto start = std::chrono::steady_clock::now();
                 const size_t ret = ZSTD_decompress(
                     dest.first, dest.second,
                     data + info.compressedOffset, info.compressedSize);
+                stream_durations_ms[i] = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                             std::chrono::steady_clock::now() - start)
+                                             .count();
                 if (ZSTD_isError(ret) || ret != dest.second) {
-                    SpzLog("[SPZ ERROR] decompressNgspStreams: ZSTD decompression failed");
-                    return false;
+                    size_t expected = stream_count;
+                    first_error.compare_exchange_strong(
+                        expected, i, std::memory_order_relaxed);
                 }
-                return true;
-            }));
+            });
         }
-        for (auto& f : futures) {
-            if (!f.get())
-                return false;
+        tasks.wait();
+        static constexpr const char* stream_names[] = {
+            "positions", "alphas", "colors", "scales", "rotations", "sh"};
+        constexpr size_t stream_name_count = sizeof(stream_names) / sizeof(stream_names[0]);
+        for (size_t i = 0; i < stream_durations_ms.size(); ++i) {
+            SpzLog("SPZ load: decompress stream %s: %lld ms",
+                   i < stream_name_count ? stream_names[i] : "unknown",
+                   static_cast<long long>(stream_durations_ms[i]));
+        }
+        if (first_error.load(std::memory_order_relaxed) != stream_count) {
+            SpzLog("[SPZ ERROR] decompressNgspStreams: ZSTD decompression failed");
+            return false;
         }
 #endif
         return true;
@@ -1350,11 +1523,37 @@ namespace spz {
     }
 
     GaussianCloud loadSpz(const std::vector<uint8_t>& data, const UnpackOptions& o) {
-        return unpackGaussians(loadSpzPacked(data), o);
+        const auto packed_start = std::chrono::steady_clock::now();
+        PackedGaussians packed = loadSpzPacked(data);
+        SpzLog("SPZ load: packed decode: %lld ms",
+               static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                          std::chrono::steady_clock::now() - packed_start)
+                                          .count()));
+
+        const auto unpack_start = std::chrono::steady_clock::now();
+        GaussianCloud result = unpackGaussians(packed, o);
+        SpzLog("SPZ load: unpackGaussians: %lld ms",
+               static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                          std::chrono::steady_clock::now() - unpack_start)
+                                          .count()));
+        return result;
     }
 
     GaussianCloud loadSpz(const uint8_t* data, size_t size, const UnpackOptions& o) {
-        return unpackGaussians(loadSpzPacked(data, size), o);
+        const auto packed_start = std::chrono::steady_clock::now();
+        PackedGaussians packed = loadSpzPacked(data, size);
+        SpzLog("SPZ load: packed decode: %lld ms",
+               static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                          std::chrono::steady_clock::now() - packed_start)
+                                          .count()));
+
+        const auto unpack_start = std::chrono::steady_clock::now();
+        GaussianCloud result = unpackGaussians(packed, o);
+        SpzLog("SPZ load: unpackGaussians: %lld ms",
+               static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                          std::chrono::steady_clock::now() - unpack_start)
+                                          .count()));
+        return result;
     }
 
     bool saveSpz(const GaussianCloud& g, const PackOptions& o, const std::string& filename) {

@@ -31,8 +31,13 @@ SOFTWARE.
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <memory>
+#include <new>
+#include <span>
 #include <streambuf>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "splat-types.h"
@@ -45,6 +50,32 @@ SOFTWARE.
 #endif
 
 namespace spz {
+
+    // resize() value-initializes scalar elements. The decoder overwrites every byte in these
+    // buffers, so use default-initialization for the packed representation to avoid a large
+    // serial zero-fill. GaussianCloud intentionally remains the public std::vector-based API.
+    template <typename T>
+    struct default_init_allocator : std::allocator<T> {
+        using std::allocator<T>::allocator;
+
+        template <typename U>
+        struct rebind {
+            using other = default_init_allocator<U>;
+        };
+
+        template <typename U>
+        void construct(U* const ptr) noexcept {
+            static_assert(std::is_trivially_default_constructible_v<U>);
+            ::new (static_cast<void*>(ptr)) U;
+        }
+
+        template <typename U, typename... Args>
+        void construct(U* const ptr, Args&&... args) {
+            ::new (static_cast<void*>(ptr)) U(std::forward<Args>(args)...);
+        }
+    };
+
+    using PackedByteVector = std::vector<uint8_t, default_init_allocator<uint8_t>>;
 
     // These limits bound all allocations driven by an untrusted SPZ stream. They
     // remain comfortably above practical scenes while keeping the gzip/zstd and
@@ -150,12 +181,12 @@ namespace spz {
         bool usesQuaternionSmallestThree = true;      // Whether gaussians use the smallest three method to store quaternions
         bool hadSkippedExtensions = false;            // True when extensions were present in the file but ignored at load time
 
-        std::vector<uint8_t> positions;
-        std::vector<uint8_t> scales;
-        std::vector<uint8_t> rotations;
-        std::vector<uint8_t> alphas;
-        std::vector<uint8_t> colors;
-        std::vector<uint8_t> sh;
+        PackedByteVector positions;
+        PackedByteVector scales;
+        PackedByteVector rotations;
+        PackedByteVector alphas;
+        PackedByteVector colors;
+        PackedByteVector sh;
 
 #ifdef SPZ_BUILD_EXTENSIONS
         std::vector<SpzExtensionBasePtr> extensions; // List of extensions, if any
@@ -183,6 +214,18 @@ namespace spz {
         CoordinateSystem to = CoordinateSystem::UNSPECIFIED;
     };
 
+    // Caller-owned destination buffers for direct decoding. Every span must have the exact size
+    // implied by packed.numPoints and packed.shDegree. The rotation span uses LichtFeld's wxyz
+    // tensor convention; GaussianCloud retains the public SPZ xyzw convention.
+    struct GaussianCloudOutput {
+        std::span<float> positions;
+        std::span<float> scales;
+        std::span<float> rotations;
+        std::span<float> alphas;
+        std::span<float> colors;
+        std::span<float> sh;
+    };
+
     // Structure for PLY extra elements (non-vertex elements)
     struct PlyExtraElement {
         std::string name;
@@ -197,6 +240,10 @@ namespace spz {
 
     // Loads Gaussian splat from a vector of bytes in packed format.
     GaussianCloud loadSpz(const std::vector<uint8_t>& data, const UnpackOptions& options);
+
+    // Decodes directly into caller-owned output buffers without constructing a GaussianCloud.
+    bool unpackGaussians(const PackedGaussians& packed, const UnpackOptions& options,
+                         GaussianCloudOutput& output);
 
     // Loads Gaussian splat from a file / byte pointer / vector in packed format.
     PackedGaussians loadSpzPacked(const std::string& filename);

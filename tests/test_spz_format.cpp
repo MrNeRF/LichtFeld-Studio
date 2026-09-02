@@ -292,6 +292,24 @@ protected:
         return bytes;
     }
 
+    static std::vector<uint8_t> read_file(const fs::path& path) {
+        std::ifstream stream(path, std::ios::binary | std::ios::ate);
+        if (!stream) {
+            return {};
+        }
+        const auto size = stream.tellg();
+        if (size < 0) {
+            return {};
+        }
+        std::vector<uint8_t> bytes(static_cast<size_t>(size));
+        stream.seekg(0, std::ios::beg);
+        if (!bytes.empty()) {
+            stream.read(reinterpret_cast<char*>(bytes.data()),
+                        static_cast<std::streamsize>(bytes.size()));
+        }
+        return stream.good() || stream.eof() ? bytes : std::vector<uint8_t>{};
+    }
+
     static void expect_near_tensors(
         const Tensor& actual,
         const Tensor& expected,
@@ -544,6 +562,62 @@ TEST_F(SpzFormatTest, RotationQuaternionConversion) {
                           orig_rot_ptr[i * 4 + 3] * load_rot_ptr[i * 4 + 3];
         EXPECT_NEAR(std::abs(dot), 1.0f, SPZ_TOLERANCE) << "Rotation mismatch at point " << i;
     }
+}
+
+// The production loader decodes directly into tensor storage. Keep the public GaussianCloud
+// decoder as an independent reference and require every direct attribute to be bit-identical.
+TEST_F(SpzFormatTest, DirectUnpackMatchesGaussianCloudReference) {
+    const auto source = make_fixture_cloud(3, 37, 12345u);
+    const fs::path path = temp_dir / "direct_unpack_reference_v3.spz";
+    ASSERT_TRUE(write_spz_file(path, source, 3));
+    const auto bytes = read_file(path);
+    ASSERT_FALSE(bytes.empty());
+
+    spz::UnpackOptions options;
+    options.to = spz::CoordinateSystem::RDF;
+    const auto reference = spz::loadSpz(bytes, options);
+    ASSERT_EQ(reference.numPoints, source.numPoints);
+    const auto packed = spz::loadSpzPacked(bytes);
+    ASSERT_EQ(packed.numPoints, source.numPoints);
+
+    const size_t count = static_cast<size_t>(reference.numPoints);
+    std::vector<float> positions(count * 3);
+    std::vector<float> scales(count * 3);
+    std::vector<float> rotations(count * 4);
+    std::vector<float> alphas(count);
+    std::vector<float> colors(count * 3);
+    std::vector<float> sh(reference.sh.size());
+    spz::GaussianCloudOutput output{
+        std::span<float>(positions.data(), positions.size()),
+        std::span<float>(scales.data(), scales.size()),
+        std::span<float>(rotations.data(), rotations.size()),
+        std::span<float>(alphas.data(), alphas.size()),
+        std::span<float>(colors.data(), colors.size()),
+        std::span<float>(sh.data(), sh.size())};
+    ASSERT_TRUE(spz::unpackGaussians(packed, options, output));
+
+    std::vector<float> reference_rotations(rotations.size());
+    for (size_t i = 0; i < count; ++i) {
+        // GaussianCloud is xyzw; direct tensor output is wxyz.
+        reference_rotations[i * 4 + 0] = reference.rotations[i * 4 + 3];
+        reference_rotations[i * 4 + 1] = reference.rotations[i * 4 + 0];
+        reference_rotations[i * 4 + 2] = reference.rotations[i * 4 + 1];
+        reference_rotations[i * 4 + 3] = reference.rotations[i * 4 + 2];
+    }
+
+    const auto expect_bit_identical = [](const std::vector<float>& actual,
+                                         const std::vector<float>& expected,
+                                         const char* label) {
+        ASSERT_EQ(actual.size(), expected.size()) << label << " size mismatch";
+        EXPECT_EQ(std::memcmp(actual.data(), expected.data(), actual.size() * sizeof(float)), 0)
+            << label << " differs from the GaussianCloud reference";
+    };
+    expect_bit_identical(positions, reference.positions, "means");
+    expect_bit_identical(scales, reference.scales, "scaling");
+    expect_bit_identical(rotations, reference_rotations, "rotation");
+    expect_bit_identical(alphas, reference.alphas, "opacity");
+    expect_bit_identical(colors, reference.colors, "sh0");
+    expect_bit_identical(sh, reference.sh, "shN");
 }
 
 // Test SH degree 0 (no higher-order coefficients)
