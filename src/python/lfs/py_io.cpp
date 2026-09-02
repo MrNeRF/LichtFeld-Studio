@@ -458,7 +458,7 @@ namespace lfs::python {
 
         m.def(
             "inspect_project",
-            [](const std::filesystem::path& path) {
+            [](const std::filesystem::path& path, const bool resolve_preview_fallback) {
                 project::ReaderOptions options;
                 options.allow_unsupported_inspection = true;
                 std::optional<lfs::Result<project::ProjectReader>> opened;
@@ -466,7 +466,7 @@ namespace lfs::python {
                 {
                     nb::gil_scoped_release release;
                     opened = project::ProjectReader::open(path, options);
-                    if (opened && opened->has_value() &&
+                    if (resolve_preview_fallback && opened && opened->has_value() &&
                         !(**opened).preview().has_value()) {
                         const auto& reader = **opened;
                         const auto project_uuid =
@@ -519,6 +519,7 @@ namespace lfs::python {
                 };
             },
             nb::arg("path"),
+            nb::arg("resolve_preview_fallback") = true,
             "Inspect validated .licht container metadata without reading project payloads.");
 
         nb::class_<PyLoadResult>(m, "LoadResult")

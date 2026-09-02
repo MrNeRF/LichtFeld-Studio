@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """RmlUI panels for dataset and checkpoint import flows."""
 
+import threading
+import time
 from pathlib import Path
 
 import lichtfeld as lf
@@ -58,6 +60,8 @@ class _ImportDialogPanel(Panel):
 
     def on_mount(self, doc):
         super().on_mount(doc)
+        if hasattr(self, "_dialog_mounted"):
+            self._dialog_mounted = True
         self._last_lang = lf.ui.get_current_language()
         self._escape_revert = w.EscapeRevertController()
         doc.add_event_listener("keydown", self._on_keydown)
@@ -79,6 +83,11 @@ class _ImportDialogPanel(Panel):
         self._subscribe_reactive_state()
 
     def on_unmount(self, _doc):
+        if hasattr(self, "_dialog_mounted"):
+            self._dialog_mounted = False
+            self._source_generation += 1
+            self._source_probe_cancel.set()
+            self._source_probe_active = False
         self._unsubscribe_reactive_state()
 
     def _subscribe_reactive_state(self):
@@ -179,6 +188,15 @@ class NewProjectPanel(_ImportDialogPanel):
         self._embed_dataset = False
         self._advanced_expanded = False
         self._last_lang = ""
+        self._source_generation = 0
+        self._source_probe_due = 0.0
+        self._source_probe_active = False
+        self._source_probe_cancel = threading.Event()
+        self._dialog_mounted = False
+        self._colmap_available = False
+        self._target_exists_cached = False
+        self._dedupe_name_cache: dict[str, str] = {}
+        self._name_derived_from_source = False
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("new_project")
@@ -228,12 +246,17 @@ class NewProjectPanel(_ImportDialogPanel):
 
     def on_update(self, doc):
         del doc
+        changed = False
         current_lang = lf.ui.get_current_language()
         if current_lang != self._last_lang:
             self._last_lang = current_lang
             self._dirty_model()
-            return True
-        return False
+            changed = True
+        if self._source_probe_due and time.monotonic() >= self._source_probe_due:
+            self._source_probe_due = 0.0
+            self._start_source_probe()
+            changed = True
+        return changed
 
     def show(self, source_path: str = "") -> bool:
         self._name = ""
@@ -249,9 +272,18 @@ class NewProjectPanel(_ImportDialogPanel):
         self._apply_auto_crop = False
         self._embed_dataset = bool(getattr(lf.ui, "get_embed_dataset_by_default", lambda: False)())
         self._advanced_expanded = False
+        self._source_generation += 1
+        self._source_probe_cancel.set()
+        self._source_probe_cancel = threading.Event()
+        self._source_probe_due = 0.0
+        self._colmap_available = False
+        self._target_exists_cached = False
+        self._dedupe_name_cache = {}
+        self._name_derived_from_source = False
         params = lf.optimization_params()
         self._ppisp_sidecar_path = ""
         self._set_source_path(source_path, derive_name=True)
+        self._start_source_probe()
         self._ppisp_sidecar_path = (
             str(params.ppisp_sidecar_path) if params and params.has_params() else ""
         )
@@ -277,13 +309,11 @@ class NewProjectPanel(_ImportDialogPanel):
         self._dataset_info = None
         if not next_value:
             self._source_kind = "blank"
-        elif Path(next_value).is_dir() and lf.is_dataset_path(next_value):
-            self._source_kind = "dataset"
-            self._dataset_info = lf.detect_dataset_info(str(self._preview_base_path(next_value)))
-        elif Path(next_value).is_file() and self._is_splat_path(next_value):
+        elif self._is_splat_path(next_value):
             self._source_kind = "splat"
         else:
-            self._source_kind = "invalid"
+            self._source_kind = "checking"
+            self._source_probe_due = time.monotonic() + 0.3
 
         self._dirty_model(
             "source_path",
@@ -320,12 +350,114 @@ class NewProjectPanel(_ImportDialogPanel):
             stem = source.name if self._source_kind == "dataset" else source.stem
             if stem:
                 self._set_name(self._dedupe_name(stem))
+                self._name_derived_from_source = True
         if previous != self._source_path:
+            self._source_probe_active = False
+            self._source_generation += 1
+            self._source_probe_cancel.set()
+            self._source_probe_cancel = threading.Event()
             self._init_path = ""
             self._ppisp_sidecar_path = ""
 
+    def _start_source_probe(self) -> None:
+        if self._source_probe_active:
+            return
+        self._source_probe_active = True
+        path = self._source_path
+        name = self._name
+        location = str(getattr(lf.ui, "get_project_location", lambda: "")() or "")
+        generation = self._source_generation
+        cancel = self._source_probe_cancel
+
+        def worker() -> None:
+            kind = "blank" if not path else "invalid"
+            info = None
+            colmap = False
+            try:
+                if cancel.is_set():
+                    if cancel is self._source_probe_cancel:
+                        self._source_probe_active = False
+                    return
+                if path and lf.is_dataset_path(path):
+                    kind = "dataset"
+                    info = lf.detect_dataset_info(str(self._preview_base_path(path)))
+                    colmap = bool(info and getattr(info, "sparse_path", "") and
+                                  _directory_has_colmap_file(str(info.sparse_path)))
+                elif path and Path(path).is_file() and self._is_splat_path(path):
+                    kind = "splat"
+            except Exception:
+                kind = "invalid"
+            base = name.strip() or "untitled"
+            candidate = Path(location) / f"{base}.licht"
+            target_exists = candidate.exists()
+            deduped = base
+            suffix = 2
+            while (Path(location) / f"{deduped}.licht").exists():
+                deduped = f"{base}-{suffix}"
+                suffix += 1
+            result = (kind, info, colmap, target_exists, base, deduped)
+
+            def complete() -> None:
+                if generation != self._source_generation or cancel.is_set():
+                    return
+                if not self._dialog_mounted:
+                    self._source_probe_active = False
+                    self._source_probe_due = time.monotonic() + 0.3
+                    return
+                self._source_probe_active = False
+                (
+                    self._source_kind,
+                    self._dataset_info,
+                    self._colmap_available,
+                    target_exists,
+                    base,
+                    deduped,
+                ) = result
+                # A name edit can race the source probe; never publish the
+                # old name's filesystem result over the current name.
+                if self._name == name:
+                    self._target_exists_cached = target_exists
+                    self._dedupe_name_cache[base] = deduped
+                    if self._name_derived_from_source and deduped != base:
+                        self._name = deduped
+                        self._target_exists_cached = False
+                self._dirty_model()
+
+            scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
+            if callable(scheduler):
+                scheduler(complete)
+            else:
+                complete()
+
+        scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
+        if callable(scheduler):
+            threading.Thread(
+                target=worker, daemon=True, name="ImportDatasetProbe"
+            ).start()
+        else:
+            worker()
+
+    def _refresh_target_cache(self) -> None:
+        location = str(getattr(lf.ui, "get_project_location", lambda: "")() or "")
+        base = self._name.strip() or "untitled"
+        candidate = Path(location) / f"{base}.licht"
+        self._target_exists_cached = candidate.exists()
+        deduped = base
+        suffix = 2
+        while (Path(location) / f"{deduped}.licht").exists():
+            deduped = f"{base}-{suffix}"
+            suffix += 1
+        self._dedupe_name_cache[base] = deduped
+
     def _set_name(self, value):
         self._name = str(value)
+        self._name_derived_from_source = False
+        scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
+        if callable(scheduler):
+            self._target_exists_cached = False
+            self._source_probe_due = time.monotonic() + 0.3
+        else:
+            self._refresh_target_cache()
         self._dirty_model("name", "name_valid", "target_exists", "can_create", "location_preview", "create_hint")
 
     def _name_is_valid(self) -> bool:
@@ -341,10 +473,14 @@ class NewProjectPanel(_ImportDialogPanel):
         return Path(location) / f"{self._name.strip()}.licht"
 
     def _target_exists(self) -> bool:
-        return bool(self._name.strip()) and self._target_path().exists()
+        return bool(self._name.strip()) and self._target_exists_cached
 
     def _can_create(self) -> bool:
-        return self._name_is_valid() and not self._target_exists() and self._source_kind != "invalid"
+        return (
+            self._name_is_valid()
+            and not self._target_exists()
+            and self._source_kind in {"blank", "dataset", "splat"}
+        )
 
     def _location_preview(self) -> str:
         template = lf.ui.tr("new_project.location_preview") or "Will be created at: {path}"
@@ -361,22 +497,18 @@ class NewProjectPanel(_ImportDialogPanel):
 
     def _dedupe_name(self, name: str) -> str:
         base = name.strip() or "untitled"
-        location = Path(str(getattr(lf.ui, "get_project_location", lambda: "")() or ""))
-        candidate = base
-        suffix = 2
-        while (location / f"{candidate}.licht").exists():
-            candidate = f"{base}-{suffix}"
-            suffix += 1
-        return candidate
+        return self._dedupe_name_cache.get(base, base)
 
     def _dirty_model(self, *fields):
         if not self._handle:
             return
         if not fields:
             self._handle.dirty_all()
+            w.request_model_update(self._handle)
             return
         for field in fields:
             self._handle.dirty(field)
+        w.request_model_update(self._handle)
 
     def _string_attr(self, name: str) -> str:
         if self._dataset_info is None:
@@ -400,7 +532,7 @@ class NewProjectPanel(_ImportDialogPanel):
         sparse_path = getattr(self._dataset_info, "sparse_path", "")
         if not sparse_path:
             return False
-        return _directory_has_colmap_file(str(sparse_path))
+        return self._colmap_available
 
     def _show_min_track_length_warning(self) -> bool:
         return (
@@ -520,11 +652,15 @@ class NewProjectPanel(_ImportDialogPanel):
         path = lf.ui.open_dataset_folder_dialog()
         if path:
             self._set_source_path(path)
+            self._source_probe_due = 0.0
+            self._start_source_probe()
 
     def _on_browse_file(self, _handle=None, _ev=None, _args=None):
         path = lf.ui.open_ply_file_dialog("")
         if path:
             self._set_source_path(path)
+            self._source_probe_due = 0.0
+            self._start_source_probe()
 
     def _on_do_create(self, _handle=None, _ev=None, _args=None):
         if not self._can_create():

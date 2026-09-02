@@ -38,6 +38,7 @@ namespace lfs::core::image_codecs {
         void* data = nullptr;
         DecodeAllocator allocate = nullptr;
         void* user = nullptr;
+        int max_width = 0;
     };
 
     bool probe(const std::filesystem::path& path, Probe& result, std::string& error);

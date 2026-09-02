@@ -270,12 +270,14 @@ namespace {
 
     template <typename T>
     std::tuple<T*, int, int, int>
-    load_image_t(std::filesystem::path p, int res_div, int max_width) {
+    load_image_t(std::filesystem::path p, int res_div, int max_width,
+                 bool scaled_jpeg_decode = false) {
         LOG_TIMER("load_image total");
         const std::string path_utf8 = lfs::core::path_to_utf8(p);
         constexpr auto sample_type = std::is_same_v<T, uint8_t> ? image_codecs::SampleType::UInt8
                                                                 : image_codecs::SampleType::UInt16;
-        image_codecs::DecodeTarget target{3, sample_type, nullptr, allocate_image_buffer, nullptr};
+        image_codecs::DecodeTarget target{3, sample_type, nullptr, allocate_image_buffer, nullptr,
+                                          scaled_jpeg_decode ? max_width : 0};
         image_codecs::Probe direct_info;
         std::string error;
         int source_width = 0;
@@ -441,6 +443,11 @@ namespace lfs::core {
     std::tuple<unsigned char*, int, int, int>
     load_image(std::filesystem::path p, int res_div, int max_width) {
         return ::load_image_t<unsigned char>(p, res_div, max_width);
+    }
+
+    std::tuple<unsigned char*, int, int, int>
+    load_image_thumbnail(std::filesystem::path p, int max_width) {
+        return ::load_image_t<unsigned char>(p, -1, max_width, true);
     }
 
     std::tuple<uint16_t*, int, int, int>
