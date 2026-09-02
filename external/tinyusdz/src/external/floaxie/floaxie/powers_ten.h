@@ -24,24 +24,24 @@
 #ifndef FLOAXIE_POWERS_TEN_H
 #define FLOAXIE_POWERS_TEN_H
 
-namespace floaxie
-{
-	/** \brief Structure template to store compile-time values of powers of ten.
-	 *
-	 * The template represents a structure family, which stores pre-calculated
-	 * values of significands and exponents of powers of ten, represented in
-	 * integer form of the specified precision.
-	 *
-	 * The exact values are written in specializations of the template for
-	 * single precision or double precision floating point type.
-	 *
-	 * The template specializations are used in **Grisu** and **Krosh** algorithms
-	 * to get the pre-calculated cached power of ten.
-	 *
-	 * \tparam FloatType floating point type, for which precision the values are
-	 * calculated.
-	 */
-	template<typename FloatType> struct powers_ten;
-}
+namespace floaxie {
+    /** \brief Structure template to store compile-time values of powers of ten.
+     *
+     * The template represents a structure family, which stores pre-calculated
+     * values of significands and exponents of powers of ten, represented in
+     * integer form of the specified precision.
+     *
+     * The exact values are written in specializations of the template for
+     * single precision or double precision floating point type.
+     *
+     * The template specializations are used in **Grisu** and **Krosh** algorithms
+     * to get the pre-calculated cached power of ten.
+     *
+     * \tparam FloatType floating point type, for which precision the values are
+     * calculated.
+     */
+    template <typename FloatType>
+    struct powers_ten;
+} // namespace floaxie
 
 #endif // FLOAXIE_POWERS_TEN_H

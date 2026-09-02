@@ -22,42 +22,40 @@
 #define FLOAXIE_PRINT_H
 
 #include <bitset>
-#include <string>
 #include <cstdint>
+#include <string>
 
-#include <external/floaxie/floaxie/type_punning_cast.h>
 #include <external/floaxie/floaxie/bit_ops.h>
+#include <external/floaxie/floaxie/type_punning_cast.h>
 
-namespace floaxie
-{
-	/** \brief Prints `double` value in binary format, splitting sign, exponent
-	 * and mantissa parts with spaces.
-	 *
-	 * Useful for debugging purposes.
-	 */
-	std::string inline print_binary(double f)
-	{
-		auto s(std::bitset<64>(type_punning_cast<std::uint64_t>(f)).to_string());
-		s.insert(1, 1, ' ');
-		s.insert(13, 1, ' ');
-		return s;
-	}
+namespace floaxie {
+    /** \brief Prints `double` value in binary format, splitting sign, exponent
+     * and mantissa parts with spaces.
+     *
+     * Useful for debugging purposes.
+     */
+    std::string inline print_binary(double f) {
+        auto s(std::bitset<64>(type_punning_cast<std::uint64_t>(f)).to_string());
+        s.insert(1, 1, ' ');
+        s.insert(13, 1, ' ');
+        return s;
+    }
 
-	/** \brief Print arbitrary numeric value in binary format. */
-	template<typename NumericType> inline std::string print_binary(NumericType v)
-	{
-		return std::bitset<bit_size<NumericType>()>(v).to_string();
-	}
+    /** \brief Print arbitrary numeric value in binary format. */
+    template <typename NumericType>
+    inline std::string print_binary(NumericType v) {
+        return std::bitset<bit_size<NumericType>()>(v).to_string();
+    }
 
-	/** \brief Print arbitrary numeric value as if it were `double`. */
-	template<typename NumericType> inline std::string print_double_presentation(NumericType v)
-	{
-		auto s(std::bitset<64>(v).to_string());
-		s.insert(1, 1, ' ');
-		s.insert(54, 1, ' ');
-		s.insert(56, 1, ' ');
-		return s;
-	}
-}
+    /** \brief Print arbitrary numeric value as if it were `double`. */
+    template <typename NumericType>
+    inline std::string print_double_presentation(NumericType v) {
+        auto s(std::bitset<64>(v).to_string());
+        s.insert(1, 1, ' ');
+        s.insert(54, 1, ' ');
+        s.insert(56, 1, ' ');
+        return s;
+    }
+} // namespace floaxie
 
 #endif // FLOAXIE_PRINT_H

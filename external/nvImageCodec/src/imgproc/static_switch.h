@@ -51,28 +51,29 @@
 #define NVIMGCODEC_REMOVE_PAREN_IMPL(...) __VA_ARGS__
 #define NVIMGCODEC_REMOVE_PAREN(args)     NVIMGCODEC_REMOVE_PAREN_IMPL args
 
-#define NVIMGCODEC_PP_IS_PAREN_PROBE(...) ~, 1
-#define NVIMGCODEC_PP_IS_PAREN_CHECK(...) NVIMGCODEC_PP_IS_PAREN_CHECK_IMPL(__VA_ARGS__, 0)
+#define NVIMGCODEC_PP_IS_PAREN_PROBE(...)             ~, 1
+#define NVIMGCODEC_PP_IS_PAREN_CHECK(...)             NVIMGCODEC_PP_IS_PAREN_CHECK_IMPL(__VA_ARGS__, 0)
 #define NVIMGCODEC_PP_IS_PAREN_CHECK_IMPL(_0, n, ...) n
-#define NVIMGCODEC_PP_IS_PAREN(args) NVIMGCODEC_PP_IS_PAREN_CHECK(NVIMGCODEC_PP_IS_PAREN_PROBE args)
-#define NVIMGCODEC_REMOVE_OPTIONAL_PARENS(args) \
-    NVIMGCODEC_PP_CAT(NVIMGCODEC_REMOVE_OPTIONAL_PARENS_, NVIMGCODEC_PP_IS_PAREN(args))(args)
+#define NVIMGCODEC_PP_IS_PAREN(args)                  NVIMGCODEC_PP_IS_PAREN_CHECK(NVIMGCODEC_PP_IS_PAREN_PROBE args)
+#define NVIMGCODEC_REMOVE_OPTIONAL_PARENS(args)                                         \
+    NVIMGCODEC_PP_CAT(NVIMGCODEC_REMOVE_OPTIONAL_PARENS_, NVIMGCODEC_PP_IS_PAREN(args)) \
+    (args)
 #define NVIMGCODEC_REMOVE_OPTIONAL_PARENS_0(args) args
 #define NVIMGCODEC_REMOVE_OPTIONAL_PARENS_1(args) NVIMGCODEC_REMOVE_PAREN(args)
 
 #define NVIMGCODEC_PP_CAT_IMPL(a, b) a##b
 #define NVIMGCODEC_PP_CAT(a, b)      NVIMGCODEC_PP_CAT_IMPL(a, b)
 
-#define NVIMGCODEC_PP_NARG_IMPL(                                                                                  \
-    _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, n, ...)                           \
+#define NVIMGCODEC_PP_NARG_IMPL(                                                   \
+    _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, n, ...) \
     n
-#define NVIMGCODEC_PP_NARG(...)                                                                               \
+#define NVIMGCODEC_PP_NARG(...) \
     NVIMGCODEC_PP_NARG_IMPL(__VA_ARGS__, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1)
 
-#define NVIMGCODEC_PP_FOR_EACH_1(m, args, a1) m(args, a1)
-#define NVIMGCODEC_PP_FOR_EACH_2(m, args, a1, a2) m(args, a1) m(args, a2)
-#define NVIMGCODEC_PP_FOR_EACH_3(m, args, a1, a2, a3) m(args, a1) m(args, a2) m(args, a3)
-#define NVIMGCODEC_PP_FOR_EACH_4(m, args, a1, a2, a3, a4) m(args, a1) m(args, a2) m(args, a3) m(args, a4)
+#define NVIMGCODEC_PP_FOR_EACH_1(m, args, a1)                 m(args, a1)
+#define NVIMGCODEC_PP_FOR_EACH_2(m, args, a1, a2)             m(args, a1) m(args, a2)
+#define NVIMGCODEC_PP_FOR_EACH_3(m, args, a1, a2, a3)         m(args, a1) m(args, a2) m(args, a3)
+#define NVIMGCODEC_PP_FOR_EACH_4(m, args, a1, a2, a3, a4)     m(args, a1) m(args, a2) m(args, a3) m(args, a4)
 #define NVIMGCODEC_PP_FOR_EACH_5(m, args, a1, a2, a3, a4, a5) m(args, a1) m(args, a2) m(args, a3) m(args, a4) m(args, a5)
 #define NVIMGCODEC_PP_FOR_EACH_6(m, args, a1, a2, a3, a4, a5, a6) \
     m(args, a1) m(args, a2) m(args, a3) m(args, a4) m(args, a5) m(args, a6)
@@ -96,13 +97,14 @@
     m(args, a1) m(args, a2) m(args, a3) m(args, a4) m(args, a5) m(args, a6) m(args, a7) m(args, a8) m(args, a9) m(args, a10) m(args, a11) m(args, a12) m(args, a13) m(args, a14) m(args, a15)
 #define NVIMGCODEC_PP_FOR_EACH_16(m, args, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16) \
     m(args, a1) m(args, a2) m(args, a3) m(args, a4) m(args, a5) m(args, a6) m(args, a7) m(args, a8) m(args, a9) m(args, a10) m(args, a11) m(args, a12) m(args, a13) m(args, a14) m(args, a15) m(args, a16)
-#define NVIMGCODEC_PP_FOR_EACH(m, args, ...) \
-    NVIMGCODEC_PP_CAT(NVIMGCODEC_PP_FOR_EACH_, NVIMGCODEC_PP_NARG(__VA_ARGS__))(m, args, __VA_ARGS__)
+#define NVIMGCODEC_PP_FOR_EACH(m, args, ...)                                    \
+    NVIMGCODEC_PP_CAT(NVIMGCODEC_PP_FOR_EACH_, NVIMGCODEC_PP_NARG(__VA_ARGS__)) \
+    (m, args, __VA_ARGS__)
 
 #define NVIMGCODEC_TYPE_SWITCH_IMPL3(type_, type_tag_, type_name_, code_, ...) \
-    case type_tag_<NVIMGCODEC_REMOVE_OPTIONAL_PARENS(type_)>::value: {          \
-        using type_name_ = NVIMGCODEC_REMOVE_OPTIONAL_PARENS(type_);            \
-        NVIMGCODEC_REMOVE_OPTIONAL_PARENS(code_);                               \
+    case type_tag_<NVIMGCODEC_REMOVE_OPTIONAL_PARENS(type_)>::value: {         \
+        using type_name_ = NVIMGCODEC_REMOVE_OPTIONAL_PARENS(type_);           \
+        NVIMGCODEC_REMOVE_OPTIONAL_PARENS(code_);                              \
         __VA_ARGS__                                                            \
     } break;
 
@@ -136,19 +138,19 @@
 ///  ), assert(!"Unsupported input type");
 /// )
 /// ```
-#define TYPE_SWITCH(id_, type_tag_, type_name_, types, case_, default_)                    \
-    switch (id_) {                                                                         \
+#define TYPE_SWITCH(id_, type_tag_, type_name_, types, case_, default_)                     \
+    switch (id_) {                                                                          \
         NVIMGCODEC_PP_FOR_EACH(NVIMGCODEC_TYPE_SWITCH_IMPL, (type_tag_, type_name_, case_), \
-                               NVIMGCODEC_REMOVE_PAREN(types))                            \
-    default: {                                                                             \
-        NVIMGCODEC_REMOVE_OPTIONAL_PARENS(default_);                                      \
-    }                                                                                      \
+                               NVIMGCODEC_REMOVE_PAREN(types))                              \
+    default: {                                                                              \
+        NVIMGCODEC_REMOVE_OPTIONAL_PARENS(default_);                                        \
+    }                                                                                       \
     }
 
 #define NVIMGCODEC_VALUE_SWITCH_IMPL3(value_, value_name_, code_) \
     case value_: {                                                \
         const auto value_name_ = value_;                          \
-        NVIMGCODEC_REMOVE_OPTIONAL_PARENS(code_);                  \
+        NVIMGCODEC_REMOVE_OPTIONAL_PARENS(code_);                 \
     } break;
 
 #define NVIMGCODEC_VALUE_SWITCH_IMPL2(...) NVIMGCODEC_VALUE_SWITCH_IMPL3(__VA_ARGS__)
@@ -173,13 +175,13 @@
 ///   ), assert(!"Unsupported number of channels");
 /// )
 /// ```
-#define VALUE_SWITCH(value_, value_name_, values, case_, default_)                       \
-    switch (value_) {                                                                    \
-        NVIMGCODEC_PP_FOR_EACH(NVIMGCODEC_VALUE_SWITCH_IMPL, (value_name_, case_),       \
-                               NVIMGCODEC_REMOVE_PAREN(values))                         \
-    default: {                                                                           \
-        NVIMGCODEC_REMOVE_OPTIONAL_PARENS(default_);                                    \
-    }                                                                                    \
+#define VALUE_SWITCH(value_, value_name_, values, case_, default_)                 \
+    switch (value_) {                                                              \
+        NVIMGCODEC_PP_FOR_EACH(NVIMGCODEC_VALUE_SWITCH_IMPL, (value_name_, case_), \
+                               NVIMGCODEC_REMOVE_PAREN(values))                    \
+    default: {                                                                     \
+        NVIMGCODEC_REMOVE_OPTIONAL_PARENS(default_);                               \
+    }                                                                              \
     }
 
 /// Pastes the case_ code specialized for true and false values.
@@ -196,11 +198,11 @@
 ///   )
 /// )
 /// ```
-#define BOOL_SWITCH(expr_, const_name_, code_) \
-    if (expr_) {                               \
-        constexpr bool const_name_ = true;     \
+#define BOOL_SWITCH(expr_, const_name_, code_)    \
+    if (expr_) {                                  \
+        constexpr bool const_name_ = true;        \
         NVIMGCODEC_REMOVE_OPTIONAL_PARENS(code_); \
-    } else {                                   \
-        constexpr bool const_name_ = false;    \
+    } else {                                      \
+        constexpr bool const_name_ = false;       \
         NVIMGCODEC_REMOVE_OPTIONAL_PARENS(code_); \
     }

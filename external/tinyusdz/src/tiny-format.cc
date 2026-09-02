@@ -3,86 +3,86 @@
 #include "tiny-format.hh"
 
 namespace tinyusdz {
-namespace fmt {
+    namespace fmt {
 
-namespace detail {
+        namespace detail {
 
-nonstd::expected<std::vector<std::string>, std::string> tokenize(
-    const std::string &s) {
-  size_t n = s.length();
+            nonstd::expected<std::vector<std::string>, std::string> tokenize(
+                const std::string& s) {
+                size_t n = s.length();
 
-  bool open_curly_brace = false;
+                bool open_curly_brace = false;
 
-  std::vector<std::string> toks;
-  size_t si = 0;
+                std::vector<std::string> toks;
+                size_t si = 0;
 
-  for (size_t i = 0; i < n; i++) {
-    if (s[i] == '{') {
-      if (open_curly_brace) {
-        // nested '{'
-        return nonstd::make_unexpected("Nested '{'.");
-      }
+                for (size_t i = 0; i < n; i++) {
+                    if (s[i] == '{') {
+                        if (open_curly_brace) {
+                            // nested '{'
+                            return nonstd::make_unexpected("Nested '{'.");
+                        }
 
-      open_curly_brace = true;
+                        open_curly_brace = true;
 
-      if (si >= i) {  // previous char is '}'
-        // do nothing
-      } else {
-        toks.push_back(
-            std::string(s.begin() + std::string::difference_type(si),
-                        s.begin() + std::string::difference_type(i)));
+                        if (si >= i) { // previous char is '}'
+                                       // do nothing
+                        } else {
+                            toks.push_back(
+                                std::string(s.begin() + std::string::difference_type(si),
+                                            s.begin() + std::string::difference_type(i)));
 
-        si = i;
-      }
+                            si = i;
+                        }
 
-    } else if (s[i] == '}') {
-      if (open_curly_brace) {
-        // must be "{}" for now
-        if ((i - si) > 1) {
-          return nonstd::make_unexpected(
-              "Format specifier in '{}' is not yet supported.");
-        }
+                    } else if (s[i] == '}') {
+                        if (open_curly_brace) {
+                            // must be "{}" for now
+                            if ((i - si) > 1) {
+                                return nonstd::make_unexpected(
+                                    "Format specifier in '{}' is not yet supported.");
+                            }
 
-        open_curly_brace = false;
+                            open_curly_brace = false;
 
-        toks.push_back("{}");
+                            toks.push_back("{}");
 
-        si = i + 1;  // start from next char.
+                            si = i + 1; // start from next char.
 
-      } else {
-        // Currently we allow string like '}', "}}", "bora}".
-        // TODO: strict check for '{' pair.
-      }
-    }
-  }
+                        } else {
+                            // Currently we allow string like '}', "}}", "bora}".
+                            // TODO: strict check for '{' pair.
+                        }
+                    }
+                }
 
-  if (si < n) {
-    toks.push_back(std::string(s.begin() + std::string::difference_type(si),
-                               s.begin() + std::string::difference_type(n)));
-  }
+                if (si < n) {
+                    toks.push_back(std::string(s.begin() + std::string::difference_type(si),
+                                               s.begin() + std::string::difference_type(n)));
+                }
 
-  return std::move(toks);
-}
+                return std::move(toks);
+            }
 
-std::ostringstream &format_sv(std::ostringstream &ss,
-                              const std::vector<std::string> &sv) {
-  if (sv.empty()) {
-    return ss;
-  }
+            std::ostringstream& format_sv(std::ostringstream& ss,
+                                          const std::vector<std::string>& sv) {
+                if (sv.empty()) {
+                    return ss;
+                }
 
-  for (const auto &item : sv) {
-    ss << item;
-  }
+                for (const auto& item : sv) {
+                    ss << item;
+                }
 
-  return ss;
-}
+                return ss;
+            }
 
-}  // namespace detail
+        } // namespace detail
 
-std::string format(const std::string &in) { return in; }
+        std::string format(const std::string& in) { return in; }
 
-}  // namespace fmt
-}  // namespace tinyusdz
+    } // namespace fmt
+} // namespace tinyusdz
 
 #if 0
 void test(const std::string &in) {

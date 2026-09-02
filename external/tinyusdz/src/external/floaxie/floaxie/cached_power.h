@@ -24,30 +24,29 @@
 #ifndef FLOAXIE_CACHED_POWER_H
 #define FLOAXIE_CACHED_POWER_H
 
-#include <cstddef>
 #include <cassert>
+#include <cstddef>
 
-#include <external/floaxie/floaxie/powers_ten_single.h>
 #include <external/floaxie/floaxie/powers_ten_double.h>
+#include <external/floaxie/floaxie/powers_ten_single.h>
 
 #include <external/floaxie/floaxie/diy_fp.h>
 
-namespace floaxie
-{
-	/** \brief Returns pre-calculated `diy_fp` value of 10 in the specified
-	 * power using pre-calculated and compiled version of binary mantissa
-	 * and exponent.
-	 *
-	 * \tparam FloatType floating point type to call the values for.
-	 */
-	template<typename FloatType> inline diy_fp<FloatType> cached_power(int k) noexcept
-	{
-		assert(k >= -static_cast<int>(powers_ten<FloatType>::pow_0_offset));
+namespace floaxie {
+    /** \brief Returns pre-calculated `diy_fp` value of 10 in the specified
+     * power using pre-calculated and compiled version of binary mantissa
+     * and exponent.
+     *
+     * \tparam FloatType floating point type to call the values for.
+     */
+    template <typename FloatType>
+    inline diy_fp<FloatType> cached_power(int k) noexcept {
+        assert(k >= -static_cast<int>(powers_ten<FloatType>::pow_0_offset));
 
-		const std::size_t index = powers_ten<FloatType>::pow_0_offset + k;
+        const std::size_t index = powers_ten<FloatType>::pow_0_offset + k;
 
-		return diy_fp<FloatType>(powers_ten<FloatType>::f[index], powers_ten<FloatType>::e[index]);
-	}
-}
+        return diy_fp<FloatType>(powers_ten<FloatType>::f[index], powers_ten<FloatType>::e[index]);
+    }
+} // namespace floaxie
 
 #endif // FLOAXIE_CACHED_POWER_H

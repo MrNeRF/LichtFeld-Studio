@@ -27,10 +27,8 @@
 #endif
 
 // Testing for relevant C++20 constexpr library features
-#if FASTFLOAT_HAS_IS_CONSTANT_EVALUATED \
-    && FASTFLOAT_HAS_BIT_CAST \
-    && __cpp_lib_constexpr_algorithms >= 201806L /*For std::copy and std::fill*/
-#define FASTFLOAT_CONSTEXPR20 constexpr
+#if FASTFLOAT_HAS_IS_CONSTANT_EVALUATED && FASTFLOAT_HAS_BIT_CAST && __cpp_lib_constexpr_algorithms >= 201806L /*For std::copy and std::fill*/
+#define FASTFLOAT_CONSTEXPR20  constexpr
 #define FASTFLOAT_IS_CONSTEXPR 1
 #else
 #define FASTFLOAT_CONSTEXPR20

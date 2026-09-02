@@ -17,7 +17,7 @@
 
 #include <algorithm>
 #include <atomic>
-//#include <cassert>
+// #include <cassert>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -45,9 +45,9 @@
 
 // external
 
-//#include "external/fast_float/include/fast_float/fast_float.h"
-//#include "external/jsteemann/atoi.h"
-//#include "external/simple_match/include/simple_match/simple_match.hpp"
+// #include "external/fast_float/include/fast_float/fast_float.h"
+// #include "external/jsteemann/atoi.h"
+// #include "external/simple_match/include/simple_match/simple_match.hpp"
 #include "nonstd/expected.hpp"
 
 //
@@ -80,206 +80,205 @@
 
 namespace tinyusdz {
 
-namespace ascii {
+    namespace ascii {
 
-bool AsciiParser::ParseTimeSampleValue(const uint32_t type_id, value::Value *result) {
+        bool AsciiParser::ParseTimeSampleValue(const uint32_t type_id, value::Value* result) {
 
-  if (!result) {
-    return false;
-  }
+            if (!result) {
+                return false;
+            }
 
-  if (MaybeNone()) {
-    (*result) = value::ValueBlock();
-    return true;
-  }
+            if (MaybeNone()) {
+                (*result) = value::ValueBlock();
+                return true;
+            }
 
-  value::Value val;
+            value::Value val;
 
-#define PARSE_TYPE(__tyid, __type)                       \
-  if (__tyid == value::TypeTraits<__type>::type_id()) {             \
-    __type typed_val; \
-    if (!ReadBasicType(&typed_val)) {                             \
-      PUSH_ERROR_AND_RETURN("Failed to parse value with requested type `" + value::GetTypeName(__tyid) + "`"); \
-    }                                                                  \
-    val = value::Value(typed_val); \
-  } else
+#define PARSE_TYPE(__tyid, __type)                                                                                   \
+    if (__tyid == value::TypeTraits<__type>::type_id()) {                                                            \
+        __type typed_val;                                                                                            \
+        if (!ReadBasicType(&typed_val)) {                                                                            \
+            PUSH_ERROR_AND_RETURN("Failed to parse value with requested type `" + value::GetTypeName(__tyid) + "`"); \
+        }                                                                                                            \
+        val = value::Value(typed_val);                                                                               \
+    } else
 
-  // NOTE: `string` does not support multi-line string.
-  PARSE_TYPE(type_id, value::AssetPath)
-  PARSE_TYPE(type_id, value::token)
-  PARSE_TYPE(type_id, std::string)
-  PARSE_TYPE(type_id, float)
-  PARSE_TYPE(type_id, int32_t)
-  PARSE_TYPE(type_id, value::int2)
-  PARSE_TYPE(type_id, value::int3)
-  PARSE_TYPE(type_id, value::int4)
-  PARSE_TYPE(type_id, uint32_t)
-  PARSE_TYPE(type_id, int64_t)
-  PARSE_TYPE(type_id, uint64_t)
-  PARSE_TYPE(type_id, value::half)
-  PARSE_TYPE(type_id, value::half2)
-  PARSE_TYPE(type_id, value::half3)
-  PARSE_TYPE(type_id, value::half4)
-  PARSE_TYPE(type_id, float)
-  PARSE_TYPE(type_id, value::float2)
-  PARSE_TYPE(type_id, value::float3)
-  PARSE_TYPE(type_id, value::float4)
-  PARSE_TYPE(type_id, double)
-  PARSE_TYPE(type_id, value::double2)
-  PARSE_TYPE(type_id, value::double3)
-  PARSE_TYPE(type_id, value::double4)
-  PARSE_TYPE(type_id, value::quath)
-  PARSE_TYPE(type_id, value::quatf)
-  PARSE_TYPE(type_id, value::quatd)
-  PARSE_TYPE(type_id, value::color3f)
-  PARSE_TYPE(type_id, value::color4f)
-  PARSE_TYPE(type_id, value::color3d)
-  PARSE_TYPE(type_id, value::color4d)
-  PARSE_TYPE(type_id, value::vector3f)
-  PARSE_TYPE(type_id, value::normal3f)
-  PARSE_TYPE(type_id, value::point3f)
-  PARSE_TYPE(type_id, value::texcoord2f)
-  PARSE_TYPE(type_id, value::texcoord3f)
-  PARSE_TYPE(type_id, value::matrix2f)
-  PARSE_TYPE(type_id, value::matrix3f)
-  PARSE_TYPE(type_id, value::matrix4f)
-  PARSE_TYPE(type_id, value::matrix2d)
-  PARSE_TYPE(type_id, value::matrix3d)
-  PARSE_TYPE(type_id, value::matrix4d) {
-    PUSH_ERROR_AND_RETURN(" : TODO: timeSamples type " + value::GetTypeName(type_id));
-  }
+            // NOTE: `string` does not support multi-line string.
+            PARSE_TYPE(type_id, value::AssetPath)
+            PARSE_TYPE(type_id, value::token)
+            PARSE_TYPE(type_id, std::string)
+            PARSE_TYPE(type_id, float)
+            PARSE_TYPE(type_id, int32_t)
+            PARSE_TYPE(type_id, value::int2)
+            PARSE_TYPE(type_id, value::int3)
+            PARSE_TYPE(type_id, value::int4)
+            PARSE_TYPE(type_id, uint32_t)
+            PARSE_TYPE(type_id, int64_t)
+            PARSE_TYPE(type_id, uint64_t)
+            PARSE_TYPE(type_id, value::half)
+            PARSE_TYPE(type_id, value::half2)
+            PARSE_TYPE(type_id, value::half3)
+            PARSE_TYPE(type_id, value::half4)
+            PARSE_TYPE(type_id, float)
+            PARSE_TYPE(type_id, value::float2)
+            PARSE_TYPE(type_id, value::float3)
+            PARSE_TYPE(type_id, value::float4)
+            PARSE_TYPE(type_id, double)
+            PARSE_TYPE(type_id, value::double2)
+            PARSE_TYPE(type_id, value::double3)
+            PARSE_TYPE(type_id, value::double4)
+            PARSE_TYPE(type_id, value::quath)
+            PARSE_TYPE(type_id, value::quatf)
+            PARSE_TYPE(type_id, value::quatd)
+            PARSE_TYPE(type_id, value::color3f)
+            PARSE_TYPE(type_id, value::color4f)
+            PARSE_TYPE(type_id, value::color3d)
+            PARSE_TYPE(type_id, value::color4d)
+            PARSE_TYPE(type_id, value::vector3f)
+            PARSE_TYPE(type_id, value::normal3f)
+            PARSE_TYPE(type_id, value::point3f)
+            PARSE_TYPE(type_id, value::texcoord2f)
+            PARSE_TYPE(type_id, value::texcoord3f)
+            PARSE_TYPE(type_id, value::matrix2f)
+            PARSE_TYPE(type_id, value::matrix3f)
+            PARSE_TYPE(type_id, value::matrix4f)
+            PARSE_TYPE(type_id, value::matrix2d)
+            PARSE_TYPE(type_id, value::matrix3d)
+            PARSE_TYPE(type_id, value::matrix4d) {
+                PUSH_ERROR_AND_RETURN(" : TODO: timeSamples type " + value::GetTypeName(type_id));
+            }
 
 #undef PARSE_TYPE
 
-  (*result) = val;
+            (*result) = val;
 
-  return true;
-}
-
-bool AsciiParser::ParseTimeSampleValue(const std::string &type_name, value::Value *result) {
-
-  nonstd::optional<uint32_t> type_id = value::TryGetTypeId(type_name);
-
-  if (!type_id) {
-    PUSH_ERROR_AND_RETURN("Unsupported/invalid timeSamples type " + type_name);
-  }
-
-  return ParseTimeSampleValue(type_id.value(), result);
-}
-
-
-bool AsciiParser::ParseTimeSamples(const std::string &type_name,
-                                   value::TimeSamples *ts_out) {
-
-  value::TimeSamples ts;
-
-  if (!Expect('{')) {
-    return false;
-  }
-
-  if (!SkipWhitespaceAndNewline()) {
-    return false;
-  }
-
-  while (!Eof()) {
-    char c;
-    if (!Char1(&c)) {
-      return false;
-    }
-
-    if (c == '}') {
-      break;
-    }
-
-    Rewind(1);
-
-    double timeVal;
-    // -inf, inf and nan are handled.
-    if (!ReadBasicType(&timeVal)) {
-      PushError("Parse time value failed.");
-      return false;
-    }
-
-    if (!SkipWhitespace()) {
-      return false;
-    }
-
-    if (!Expect(':')) {
-      return false;
-    }
-
-    if (!SkipWhitespace()) {
-      return false;
-    }
-
-    value::Value value;
-    if (!ParseTimeSampleValue(type_name, &value)) { // could be None(ValueBlock)
-      return false;
-    }
-
-    // The last element may have separator ','
-    {
-      // Semicolon ';' is not allowed as a separator for timeSamples array
-      // values.
-      if (!SkipWhitespace()) {
-        return false;
-      }
-
-      char sep{};
-      if (!Char1(&sep)) {
-        return false;
-      }
-
-      DCOUT("sep = " << sep);
-      if (sep == '}') {
-        // End of item
-        ts.add_sample(timeVal, value);
-        break;
-      } else if (sep == ',') {
-        // ok
-      } else {
-        Rewind(1);
-
-        // Look ahead Newline + '}'
-        auto loc = CurrLoc();
-
-        if (SkipWhitespaceAndNewline()) {
-          char nc;
-          if (!Char1(&nc)) {
-            return false;
-          }
-
-          if (nc == '}') {
-            // End of item
-            ts.add_sample(timeVal, value);
-            break;
-          }
+            return true;
         }
 
-        // Rewind and continue parsing.
-        SeekTo(loc);
-      }
-    }
+        bool AsciiParser::ParseTimeSampleValue(const std::string& type_name, value::Value* result) {
 
-    if (!SkipWhitespaceAndNewline()) {
-      return false;
-    }
+            nonstd::optional<uint32_t> type_id = value::TryGetTypeId(type_name);
 
-    ts.add_sample(timeVal, value);
-  }
+            if (!type_id) {
+                PUSH_ERROR_AND_RETURN("Unsupported/invalid timeSamples type " + type_name);
+            }
 
-  DCOUT("Parse TimeSamples success. # of items = " << ts.size());
+            return ParseTimeSampleValue(type_id.value(), result);
+        }
 
-  if (ts_out) {
-    (*ts_out) = std::move(ts);
-  }
+        bool AsciiParser::ParseTimeSamples(const std::string& type_name,
+                                           value::TimeSamples* ts_out) {
 
-  return true;
-}
+            value::TimeSamples ts;
 
-}  // namespace ascii
-}  // namespace tinyusdz
+            if (!Expect('{')) {
+                return false;
+            }
 
-#else  // TINYUSDZ_DISABLE_MODULE_USDA_READER
+            if (!SkipWhitespaceAndNewline()) {
+                return false;
+            }
 
-#endif  // TINYUSDZ_DISABLE_MODULE_USDA_READER
+            while (!Eof()) {
+                char c;
+                if (!Char1(&c)) {
+                    return false;
+                }
+
+                if (c == '}') {
+                    break;
+                }
+
+                Rewind(1);
+
+                double timeVal;
+                // -inf, inf and nan are handled.
+                if (!ReadBasicType(&timeVal)) {
+                    PushError("Parse time value failed.");
+                    return false;
+                }
+
+                if (!SkipWhitespace()) {
+                    return false;
+                }
+
+                if (!Expect(':')) {
+                    return false;
+                }
+
+                if (!SkipWhitespace()) {
+                    return false;
+                }
+
+                value::Value value;
+                if (!ParseTimeSampleValue(type_name, &value)) { // could be None(ValueBlock)
+                    return false;
+                }
+
+                // The last element may have separator ','
+                {
+                    // Semicolon ';' is not allowed as a separator for timeSamples array
+                    // values.
+                    if (!SkipWhitespace()) {
+                        return false;
+                    }
+
+                    char sep{};
+                    if (!Char1(&sep)) {
+                        return false;
+                    }
+
+                    DCOUT("sep = " << sep);
+                    if (sep == '}') {
+                        // End of item
+                        ts.add_sample(timeVal, value);
+                        break;
+                    } else if (sep == ',') {
+                        // ok
+                    } else {
+                        Rewind(1);
+
+                        // Look ahead Newline + '}'
+                        auto loc = CurrLoc();
+
+                        if (SkipWhitespaceAndNewline()) {
+                            char nc;
+                            if (!Char1(&nc)) {
+                                return false;
+                            }
+
+                            if (nc == '}') {
+                                // End of item
+                                ts.add_sample(timeVal, value);
+                                break;
+                            }
+                        }
+
+                        // Rewind and continue parsing.
+                        SeekTo(loc);
+                    }
+                }
+
+                if (!SkipWhitespaceAndNewline()) {
+                    return false;
+                }
+
+                ts.add_sample(timeVal, value);
+            }
+
+            DCOUT("Parse TimeSamples success. # of items = " << ts.size());
+
+            if (ts_out) {
+                (*ts_out) = std::move(ts);
+            }
+
+            return true;
+        }
+
+    } // namespace ascii
+} // namespace tinyusdz
+
+#else // TINYUSDZ_DISABLE_MODULE_USDA_READER
+
+#endif // TINYUSDZ_DISABLE_MODULE_USDA_READER

@@ -22,33 +22,32 @@
 #ifndef FLOAXIE_K_COMP_H
 #define FLOAXIE_K_COMP_H
 
-namespace floaxie
-{
-	/** \brief Compiled value of \f$log{10} 2 \f$ */
-	constexpr auto lg_2(0.30102999566398114); // 1 / log2(10) = lg(2) ≈ 0.30102999566398114
+namespace floaxie {
+    /** \brief Compiled value of \f$log{10} 2 \f$ */
+    constexpr auto lg_2(0.30102999566398114); // 1 / log2(10) = lg(2) ≈ 0.30102999566398114
 
-	/** \brief Calculate **K** decimal exponent value by binary exponent.
-	 *
-	 * We ignore mantissa component (q) in exponent to eliminate
-	 * excessive add and subtract of it during K computation.
-	 *
-	 * Function name was changed to not confuse it with the original
-	 * k_comp() function from reference paper where this component
-	 * is considered.
-	 *
-	 * \tparam alpha α value of **Grisu** algorithm.
-	 * \tparam gamma γ value of **Grisu** algorithm.
-	 *
-	 * \param e binary exponent of the floating point value.
-	 *
-	 * \see [Printing Floating-Point Numbers Quickly and Accurately with
-	 * Integers]
-	 * (http://florian.loitsch.com/publications/dtoa-pldi2010.pdf)
-	 */
-	template<int alpha, int gamma> constexpr int k_comp_exp(int e)
-	{
-		return (alpha - e - 1) * lg_2 + (e + 1 < alpha);
-	}
-}
+    /** \brief Calculate **K** decimal exponent value by binary exponent.
+     *
+     * We ignore mantissa component (q) in exponent to eliminate
+     * excessive add and subtract of it during K computation.
+     *
+     * Function name was changed to not confuse it with the original
+     * k_comp() function from reference paper where this component
+     * is considered.
+     *
+     * \tparam alpha α value of **Grisu** algorithm.
+     * \tparam gamma γ value of **Grisu** algorithm.
+     *
+     * \param e binary exponent of the floating point value.
+     *
+     * \see [Printing Floating-Point Numbers Quickly and Accurately with
+     * Integers]
+     * (http://florian.loitsch.com/publications/dtoa-pldi2010.pdf)
+     */
+    template <int alpha, int gamma>
+    constexpr int k_comp_exp(int e) {
+        return (alpha - e - 1) * lg_2 + (e + 1 < alpha);
+    }
+} // namespace floaxie
 
 #endif // FLOAXIE_K_COMP_H

@@ -24,22 +24,21 @@
 
 #include <cstring>
 
-namespace floaxie
-{
-	/** \brief Correct type-punning cast implementation to avoid any possible
-	 * undefined behaviour.
-	 *
-	 * \see https://en.wikipedia.org/wiki/Type_punning
-	 */
-	template<typename T, typename U> inline T type_punning_cast(const U& x)
-	{
-		static_assert(sizeof(T) == sizeof(U),
-				"type_punning_cast can't handle types with different size");
+namespace floaxie {
+    /** \brief Correct type-punning cast implementation to avoid any possible
+     * undefined behaviour.
+     *
+     * \see https://en.wikipedia.org/wiki/Type_punning
+     */
+    template <typename T, typename U>
+    inline T type_punning_cast(const U& x) {
+        static_assert(sizeof(T) == sizeof(U),
+                      "type_punning_cast can't handle types with different size");
 
-		T to;
-		std::memcpy(&to, &x, sizeof(T));
-		return to;
-	}
-}
+        T to;
+        std::memcpy(&to, &x, sizeof(T));
+        return to;
+    }
+} // namespace floaxie
 
 #endif // FLOAXIE_TYPE_PUNNING_CAST
