@@ -2933,6 +2933,51 @@ namespace lfs::io {
             return filtered;
         }
 
+        Result<std::vector<PlyAttributeBlock>> filter_extra_attributes_for_point_cloud_export(
+            const PointCloud& point_cloud,
+            const PointCloud& compacted_point_cloud,
+            const std::vector<PlyAttributeBlock>& extra_attributes,
+            const std::filesystem::path& output_path) {
+            if (extra_attributes.empty() || !point_cloud.has_deleted()) {
+                return extra_attributes;
+            }
+
+            const auto keep_mask = point_cloud.deleted->logical_not();
+            const auto raw_count = static_cast<size_t>(point_cloud.size());
+            const auto visible_count = static_cast<size_t>(compacted_point_cloud.size());
+
+            std::vector<PlyAttributeBlock> filtered;
+            filtered.reserve(extra_attributes.size());
+
+            for (const auto& block : extra_attributes) {
+                if (auto result = validate_extra_attribute_tensor(block.values, output_path); !result) {
+                    return std::unexpected(result.error());
+                }
+
+                const auto rows = static_cast<size_t>(block.values.size(0));
+                if (rows == visible_count) {
+                    filtered.push_back(block);
+                    continue;
+                }
+
+                if (rows != raw_count) {
+                    return make_error(ErrorCode::INTERNAL_ERROR,
+                                      std::format("Extra PLY attribute row count {} must match either raw point count {} or visible point count {}",
+                                                  rows, raw_count, visible_count),
+                                      output_path);
+                }
+
+                auto mask = keep_mask.device() == block.values.device() ? keep_mask : keep_mask.to(block.values.device());
+
+                PlyAttributeBlock filtered_block;
+                filtered_block.values = block.values.index_select(0, mask);
+                filtered_block.names = block.names;
+                filtered.push_back(std::move(filtered_block));
+            }
+
+            return filtered;
+        }
+
         class ProgressReportingStreamBuf final : public std::streambuf {
         public:
             ProgressReportingStreamBuf(std::streambuf& target,
