@@ -2620,7 +2620,12 @@ namespace lfs::vis {
                 gt_camera_index_generation_ = scene.cameraListGeneration();
             }
             if (!camera && !gt_camera_index_cameras_.empty()) {
-                camera = gt_camera_index_cameras_.front();
+                for (const auto& candidate : gt_camera_index_cameras_) {
+                    if (candidate) {
+                        camera = candidate;
+                        break;
+                    }
+                }
             }
 
             if (camera) {

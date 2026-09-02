@@ -31,6 +31,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <cuda_runtime.h>
 #include <filesystem>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
@@ -138,6 +139,11 @@ namespace lfs::vis {
                      .output_uint8 = p.output_uint8});
             });
             initialized = true;
+        }
+
+        bool has_cuda_device() {
+            int device_count = 0;
+            return cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0;
         }
     } // namespace
 
@@ -266,6 +272,31 @@ namespace lfs::vis {
                               chw_bytes.data(),
                               chw_bytes.size()),
                   0);
+    }
+
+    TEST(GTComparisonCache, DisplayConversionCopiesCudaUInt8ChwToCpu) {
+        if (!has_cuda_device()) {
+            GTEST_SKIP() << "CUDA device required";
+        }
+
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+
+        const std::array<std::uint8_t, 12> chw_bytes{
+            0, 128, 255, 64,
+            255, 64, 128, 0,
+            191, 0, 64, 255};
+        auto cpu_uint8_chw = std::make_shared<Tensor>(Tensor::empty(
+            {size_t{3}, size_t{2}, size_t{2}}, Device::CPU, DataType::UInt8));
+        std::memcpy(cpu_uint8_chw->ptr<std::uint8_t>(), chw_bytes.data(), chw_bytes.size());
+        const auto cuda_uint8_chw = std::make_shared<Tensor>(cpu_uint8_chw->cuda());
+
+        const auto preview = gt_comparison_detail::convertDisplayTensorToUInt8(cuda_uint8_chw);
+        ASSERT_TRUE(preview);
+        EXPECT_EQ(preview->device(), Device::CPU);
+        EXPECT_NE(preview.get(), cuda_uint8_chw.get());
+        EXPECT_EQ(std::memcmp(preview->ptr<std::uint8_t>(), chw_bytes.data(), chw_bytes.size()), 0);
     }
 
     TEST(GTComparisonCache, RightImageGenerationUsesFrameGenerationForRecycledTarget) {

@@ -63,7 +63,8 @@ namespace lfs::vis::gt_comparison_detail {
             // completes its device-to-host copy before returning.
             src = src.cpu();
         }
-        if (src.dtype() == lfs::core::DataType::UInt8 &&
+        if (image->device() == lfs::core::Device::CPU &&
+            src.dtype() == lfs::core::DataType::UInt8 &&
             layout == lfs::rendering::ImageLayout::CHW) {
             return image;
         }
