@@ -6,6 +6,10 @@ add_library(lfs_scene_upscaler_amd_fsr3 SHARED
     amd_fsr3_plugin.cpp)
 
 target_compile_features(lfs_scene_upscaler_amd_fsr3 PRIVATE cxx_std_23)
+if(NOT WIN32)
+    # FidelityFX stores wchar_t in its public ABI as two-byte Windows wchar_t.
+    target_compile_options(lfs_scene_upscaler_amd_fsr3 PRIVATE -fshort-wchar)
+endif()
 target_compile_definitions(lfs_scene_upscaler_amd_fsr3 PRIVATE
     LFS_SCENE_UPSCALER_PLUGIN_BUILD=1)
 target_include_directories(lfs_scene_upscaler_amd_fsr3 PRIVATE

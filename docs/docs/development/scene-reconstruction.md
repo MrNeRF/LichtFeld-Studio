@@ -214,15 +214,16 @@ git clone --branch v1.1.4 --recurse-submodules https://github.com/GPUOpen-Librar
 cmake -S . -B build -DLFS_ENABLE_AMD_FSR3=ON -DLFS_AMD_FSR3_ROOT=/path/to/FidelityFX-SDK
 ```
 
-On Windows, `LFS_AMD_FSR3_BUILD_SDK=ON` builds the required static FSR upscaler
-and Vulkan backend libraries from an isolated copy of the user-provided SDK if
-prebuilt libraries are absent. The isolated plugin uses the matching DLL CRT in
-Release and Debug host configurations; no CRT-owned objects cross its C ABI.
-Linux builds must provide PIC-enabled
-`ffx_fsr3upscaler` and `ffx_backend_vk` libraries through
-`LFS_AMD_FSR3_LIBRARY_DIR`. Portable configurations default the plugin on and
-require the SDK unless explicitly disabled. The Windows nightly workflow checks
-out the exact v1.1.4 revision before configuration. The FidelityFX SDK MIT
+`LFS_AMD_FSR3_BUILD_SDK=ON` builds the required static FSR upscaler and Vulkan
+backend libraries from an isolated copy of the user-provided SDK if prebuilt
+libraries are absent. On Linux, CMake uses glslang from vcpkg and applies the
+two small compatibility patches required by SDK v1.1.4: a Linux shader-tool
+PCH and Vulkan scratch-buffer alignment. The Linux SDK build uses vcpkg's
+glslang with its SPIR-V optimiser. The SDK and plugin use two-byte
+`wchar_t`; a typical Linux build takes about four minutes on an eight-core
+machine. Portable configurations default the plugin on and require the SDK
+unless explicitly disabled. The Windows nightly workflow checks out the exact
+v1.1.4 revision before configuration. The FidelityFX SDK MIT
 license is staged at the plugin binary boundary and installed with package
 licenses.
 

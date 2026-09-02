@@ -220,7 +220,7 @@ dist/
 | `LFS_ENABLE_AMD_FSR3` | OFF | Build the optional external AMD FSR 3.1 viewport plugin; portable builds default this ON (override with `-DLFS_ENABLE_AMD_FSR3=OFF`) |
 | `LFS_AMD_FSR3_ROOT` | *(empty)* | Path to an AMD FidelityFX SDK v1.1.4 checkout supplied separately; required when the plugin is enabled |
 | `LFS_AMD_FSR3_LIBRARY_DIR` | *(empty)* | Optional directory containing prebuilt FidelityFX FSR 3.1 upscaler and Vulkan backend libraries |
-| `LFS_AMD_FSR3_BUILD_SDK` | ON on Windows, OFF elsewhere | Build the required FidelityFX static libraries from an isolated copy of the supplied SDK when prebuilt libraries are absent |
+| `LFS_AMD_FSR3_BUILD_SDK` | ON on Windows and Linux | Build the required FidelityFX static libraries from an isolated copy of the supplied SDK when prebuilt libraries are absent; Linux uses vcpkg glslang |
 
 The DLSS option builds a separate plugin under `scene_upscalers/nvidia`; the
 main executable and `lfs_visualizer` do not link to NGX. The plugin is opened
@@ -238,10 +238,11 @@ than silently producing a build without the requested backend.
 The FSR option follows the same boundary under `scene_upscalers/amd`. FidelityFX
 FSR 3.1 and its Vulkan backend are linked only into that optional MIT-licensed
 module; the main executable and `lfs_visualizer` do not link to FidelityFX.
-Backend initialization, per-view contexts, shared resources, and output images
-remain lazy until FSR is selected. Portable builds default the plugin on and
-require the pinned SDK checkout unless explicitly disabled. The SDK license is
-staged with the plugin and installed with the package licenses.
+When libraries are absent, Windows and Linux build them from an isolated copy
+of the supplied SDK. Linux uses glslang from vcpkg and applies two small SDK
+v1.1.4 compatibility patches. The SDK and plugin use two-byte `wchar_t`; the
+SDK archives are built PIC. The SDK license is staged with the plugin and
+installed with the package licenses.
 
 ## Preprocess Model Downloads
 

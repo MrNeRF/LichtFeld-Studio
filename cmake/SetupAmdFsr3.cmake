@@ -16,7 +16,7 @@ set(LFS_AMD_FSR3_ROOT "" CACHE PATH
     "Path to an AMD FidelityFX SDK 1.1.4 checkout; the SDK is never fetched by CMake")
 set(LFS_AMD_FSR3_LIBRARY_DIR "" CACHE PATH
     "Optional directory containing prebuilt FidelityFX FSR 3.1 Vulkan libraries")
-if(WIN32)
+if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(_lfs_amd_fsr3_build_sdk_default ON)
 else()
     set(_lfs_amd_fsr3_build_sdk_default OFF)
@@ -151,19 +151,82 @@ if(NOT _lfs_fsr3_effect_library OR NOT _lfs_fsr3_backend_library)
         message(STATUS
             "AMD FidelityFX FSR 3.1: building the user-provided SDK in an "
             "isolated build-tree copy")
-    else()
-        set(_lfs_fsr3_platform_hint "")
-        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-            set(_lfs_fsr3_platform_hint
-                " The v1.1.4 standalone generator is Visual Studio-oriented; "
-                "provide PIC-enabled Linux libraries through "
-                "LFS_AMD_FSR3_LIBRARY_DIR.")
+    elseif(LFS_AMD_FSR3_BUILD_SDK AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        include(ExternalProject)
+        set(_lfs_fsr3_stage_root "${CMAKE_BINARY_DIR}/_deps/amd-fsr3-sdk")
+        set(_lfs_fsr3_stage_source "${_lfs_fsr3_stage_root}/src")
+        set(_lfs_fsr3_stage_binary "${_lfs_fsr3_stage_root}/build")
+        set(_lfs_fsr3_stage_install "${_lfs_fsr3_stage_root}/install")
+        set(_lfs_fsr3_stage_library_dir "${_lfs_fsr3_stage_install}/lib")
+        set(_lfs_fsr3_effect_library
+            "${_lfs_fsr3_stage_library_dir}/libffx_fsr3upscaler_x64.a")
+        set(_lfs_fsr3_backend_library
+            "${_lfs_fsr3_stage_library_dir}/libffx_backend_vk_x64.a")
+
+        find_program(_lfs_fsr3_glslang_executable
+            NAMES glslang glslangValidator
+            HINTS
+                "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/glslang"
+                "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/tools/glslang"
+            NO_DEFAULT_PATH)
+        if(NOT _lfs_fsr3_glslang_executable)
+            message(FATAL_ERROR
+                "AMD FSR 3.1 Linux shader generation requires glslang from "
+                "vcpkg glslang[tools,opt] (${VCPKG_TARGET_TRIPLET}/tools/glslang). No glslang "
+                "executable was found.")
         endif()
+
+        set(_lfs_fsr3_linux_dir
+            "${CMAKE_SOURCE_DIR}/src/scene_upscalers/amd_fsr3/linux")
+        ExternalProject_Add(lfs_amd_fsr3_sdk
+            PREFIX "${_lfs_fsr3_stage_root}/prefix"
+            SOURCE_DIR "${_lfs_fsr3_stage_source}"
+            BINARY_DIR "${_lfs_fsr3_stage_binary}"
+            DOWNLOAD_COMMAND
+                "${CMAKE_COMMAND}"
+                -DFFX_SDK_SOURCE_DIR:PATH=${_lfs_fsr3_root}/sdk
+                -DFFX_SDK_DEST_DIR:PATH=<SOURCE_DIR>
+                -P "${_lfs_fsr3_linux_dir}/stage_sdk.cmake"
+            UPDATE_COMMAND ""
+            PATCH_COMMAND
+                "${CMAKE_COMMAND}"
+                -DFFX_SDK_STAGE_DIR:PATH=<SOURCE_DIR>
+                -DFFX_PATCH_DIR:PATH=${_lfs_fsr3_linux_dir}/patches
+                -P "${_lfs_fsr3_linux_dir}/apply_patches.cmake"
+            CONFIGURE_COMMAND
+                "${CMAKE_COMMAND}"
+                -S "${_lfs_fsr3_linux_dir}"
+                -B <BINARY_DIR>
+                -G "${CMAKE_GENERATOR}"
+                -DCMAKE_INSTALL_PREFIX:PATH=${_lfs_fsr3_stage_install}
+                -DFFX_SDK_SOURCE_DIR:PATH=<SOURCE_DIR>
+                -DGLSLANG_EXECUTABLE:FILEPATH=${_lfs_fsr3_glslang_executable}
+                -DCMAKE_C_COMPILER:FILEPATH=${CMAKE_C_COMPILER}
+                -DCMAKE_CXX_COMPILER:FILEPATH=${CMAKE_CXX_COMPILER}
+                -DCMAKE_BUILD_TYPE:STRING=Release
+                -DVulkan_INCLUDE_DIR:PATH=${Vulkan_INCLUDE_DIR}
+                -DVulkan_LIBRARY:FILEPATH=${Vulkan_LIBRARY}
+            BUILD_COMMAND
+                "${CMAKE_COMMAND}" --build "<BINARY_DIR>" --parallel
+            BUILD_BYPRODUCTS
+                "${_lfs_fsr3_effect_library}"
+                "${_lfs_fsr3_backend_library}"
+            INSTALL_COMMAND
+                "${CMAKE_COMMAND}" --install "<BINARY_DIR>" --config Release
+            USES_TERMINAL_CONFIGURE TRUE
+            USES_TERMINAL_BUILD TRUE
+            USES_TERMINAL_INSTALL TRUE)
+        set(_lfs_fsr3_build_target lfs_amd_fsr3_sdk)
+        message(STATUS
+            "AMD FidelityFX FSR 3.1: building the Linux SDK copy with the "
+            "standalone GLSL/Vulkan project")
+    else()
         message(FATAL_ERROR
             "AMD FidelityFX SDK at '${_lfs_fsr3_root}' has no usable Vulkan "
-            "FSR 3.1 libraries. Enable LFS_AMD_FSR3_BUILD_SDK on Windows, or "
+            "FSR 3.1 libraries. Enable LFS_AMD_FSR3_BUILD_SDK on a supported "
+            "platform, or "
             "set LFS_AMD_FSR3_LIBRARY_DIR to a directory containing "
-            "ffx_fsr3upscaler and ffx_backend_vk.${_lfs_fsr3_platform_hint} "
+            "ffx_fsr3upscaler and ffx_backend_vk. "
             "Official release: ${_lfs_amd_fsr3_download_url}")
     endif()
 endif()
