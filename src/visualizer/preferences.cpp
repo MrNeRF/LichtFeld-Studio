@@ -45,6 +45,10 @@ namespace lfs::vis {
             return style == "classic" || style == "minecraft";
         }
 
+        [[nodiscard]] bool knownViewportChromeStyle(std::string_view style) {
+            return style == "solid" || style == "translucent" || style == "frosted";
+        }
+
         [[nodiscard]] lfs::Error workingDirectoryError(
             const lfs::ErrorCode code,
             std::string user_message,
@@ -441,6 +445,22 @@ namespace lfs::vis {
         const std::string style = it->get<std::string>();
         return knownProgressBarStyle(style) ? style : "classic";
     }
+    void UserPreferences::setViewportChromeStyle(const std::string_view value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["viewport_chrome_style"] =
+            knownViewportChromeStyle(value) ? std::string(value) : "translucent";
+        impl_->saveLocked();
+    }
+    std::string UserPreferences::viewportChromeStyle() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("viewport_chrome_style");
+        if (it == impl_->values.end() || !it->is_string())
+            return "translucent";
+        const std::string style = it->get<std::string>();
+        return knownViewportChromeStyle(style) ? style : "translucent";
+    }
 
     void UserPreferences::setMcp(const McpPreferenceState& state) {
         std::scoped_lock lock(impl_->mutex);
@@ -552,6 +572,12 @@ namespace lfs::vis {
     }
     std::string loadProgressBarStylePreference() {
         return UserPreferences::instance().progressBarStyle();
+    }
+    void saveViewportChromeStylePreference(const std::string_view style) {
+        UserPreferences::instance().setViewportChromeStyle(style);
+    }
+    std::string loadViewportChromeStylePreference() {
+        return UserPreferences::instance().viewportChromeStyle();
     }
     void saveMcpPreferences(const McpPreferenceState& state) { UserPreferences::instance().setMcp(state); }
     McpPreferenceState loadMcpPreferences() { return UserPreferences::instance().mcp(); }

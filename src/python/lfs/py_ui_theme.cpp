@@ -133,6 +133,15 @@ namespace lfs::python {
             "set_progress_bar_style",
             [](const std::string& style) { lfs::vis::saveProgressBarStylePreference(style); },
             nb::arg("style"), "Set the status bar progress style (classic or minecraft)");
+        m.def("get_viewport_chrome_style", &lfs::vis::loadViewportChromeStylePreference,
+              "Return the viewport controls style (solid, translucent, or frosted)");
+        m.def(
+            "set_viewport_chrome_style",
+            [](const std::string& style) {
+                lfs::vis::saveViewportChromeStylePreference(style);
+                lfs::vis::refreshThemePresentation();
+            },
+            nb::arg("style"), "Set the viewport controls style (solid, translucent, or frosted)");
     }
 
 } // namespace lfs::python

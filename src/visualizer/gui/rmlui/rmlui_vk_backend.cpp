@@ -1661,6 +1661,203 @@ void RenderInterface_VK::RenderTextureQuad(Rml::TextureHandle texture, const flo
     m_context_offset = context_offset;
 }
 
+bool RenderInterface_VK::RenderFrostedGlass(
+    const Rml::Span<const FrostedGlassRegion> regions) {
+    if (!m_external_context || !m_p_current_command_buffer ||
+        !m_external_swapchain_image || regions.size() == 0 ||
+        m_active_render_target != active_render_target_t::Swapchain ||
+        !EnsureFrostedGlassBackdrop()) {
+        return false;
+    }
+
+    auto& backdrop = m_frosted_glass_backdrop;
+    EndActiveRendering();
+
+    TransitionImageLayout(m_external_swapchain_image,
+                          m_external_swapchain_barrier_generation,
+                          VK_IMAGE_ASPECT_COLOR_BIT,
+                          m_external_swapchain_layout,
+                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    m_external_swapchain_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    TransitionImageLayout(backdrop.primary.m_p_vk_image,
+                          backdrop.primary.m_barrier_generation,
+                          VK_IMAGE_ASPECT_COLOR_BIT,
+                          backdrop.primary_layout,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    backdrop.primary_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+
+    const auto blit = [this](const VkImage source,
+                             const VkImageLayout source_layout,
+                             const int source_width,
+                             const int source_height,
+                             const VkImage destination,
+                             const VkImageLayout destination_layout,
+                             const int destination_width,
+                             const int destination_height) {
+        VkImageBlit image_blit{};
+        image_blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        image_blit.srcSubresource.mipLevel = 0;
+        image_blit.srcSubresource.baseArrayLayer = 0;
+        image_blit.srcSubresource.layerCount = 1;
+        image_blit.srcOffsets[1] = {source_width, source_height, 1};
+        image_blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        image_blit.dstSubresource.mipLevel = 0;
+        image_blit.dstSubresource.baseArrayLayer = 0;
+        image_blit.dstSubresource.layerCount = 1;
+        image_blit.dstOffsets[1] = {destination_width, destination_height, 1};
+        vkCmdBlitImage(m_p_current_command_buffer,
+                       source, source_layout,
+                       destination, destination_layout,
+                       1, &image_blit, VK_FILTER_LINEAR);
+    };
+
+    blit(m_external_swapchain_image,
+         m_external_swapchain_layout,
+         m_width, m_height,
+         backdrop.primary.m_p_vk_image,
+         backdrop.primary_layout,
+         backdrop.primary_width, backdrop.primary_height);
+
+    TransitionImageLayout(backdrop.primary.m_p_vk_image,
+                          backdrop.primary.m_barrier_generation,
+                          VK_IMAGE_ASPECT_COLOR_BIT,
+                          backdrop.primary_layout,
+                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    backdrop.primary_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    TransitionImageLayout(backdrop.secondary.m_p_vk_image,
+                          backdrop.secondary.m_barrier_generation,
+                          VK_IMAGE_ASPECT_COLOR_BIT,
+                          backdrop.secondary_layout,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    backdrop.secondary_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    blit(backdrop.primary.m_p_vk_image,
+         backdrop.primary_layout,
+         backdrop.primary_width, backdrop.primary_height,
+         backdrop.secondary.m_p_vk_image,
+         backdrop.secondary_layout,
+         backdrop.secondary_width, backdrop.secondary_height);
+
+    TransitionImageLayout(backdrop.secondary.m_p_vk_image,
+                          backdrop.secondary.m_barrier_generation,
+                          VK_IMAGE_ASPECT_COLOR_BIT,
+                          backdrop.secondary_layout,
+                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    backdrop.secondary_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    TransitionImageLayout(backdrop.primary.m_p_vk_image,
+                          backdrop.primary.m_barrier_generation,
+                          VK_IMAGE_ASPECT_COLOR_BIT,
+                          backdrop.primary_layout,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    backdrop.primary_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    blit(backdrop.secondary.m_p_vk_image,
+         backdrop.secondary_layout,
+         backdrop.secondary_width, backdrop.secondary_height,
+         backdrop.primary.m_p_vk_image,
+         backdrop.primary_layout,
+         backdrop.primary_width, backdrop.primary_height);
+
+    TransitionImageLayout(backdrop.primary.m_p_vk_image,
+                          backdrop.primary.m_barrier_generation,
+                          VK_IMAGE_ASPECT_COLOR_BIT,
+                          backdrop.primary_layout,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    backdrop.primary_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    TransitionImageLayout(m_external_swapchain_image,
+                          m_external_swapchain_barrier_generation,
+                          VK_IMAGE_ASPECT_COLOR_BIT,
+                          m_external_swapchain_layout,
+                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    m_external_swapchain_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    BeginSwapchainRendering(VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_LOAD_OP_LOAD);
+    ResetContextRenderState();
+
+    const auto draw_backdrop = [this, &backdrop](const float x1,
+                                                 const float y1,
+                                                 const float x2,
+                                                 const float y2) {
+        if (x2 <= x1 || y2 <= y1)
+            return;
+        SetContextClipRect(x1, y1, x2, y2);
+        RenderFrostedGlassQuad(backdrop.primary);
+    };
+
+    for (const FrostedGlassRegion& region : regions) {
+        const float left = std::clamp(region.x, 0.0f, static_cast<float>(m_width));
+        const float top = std::clamp(region.y, 0.0f, static_cast<float>(m_height));
+        const float right = std::clamp(region.x + region.width,
+                                       0.0f, static_cast<float>(m_width));
+        const float bottom = std::clamp(region.y + region.height,
+                                        0.0f, static_cast<float>(m_height));
+        const float radius = std::clamp(region.radius,
+                                        0.0f,
+                                        0.5f * std::min(right - left, bottom - top));
+        if (radius < 1.0f) {
+            draw_backdrop(left, top, right, bottom);
+            continue;
+        }
+        // Two intersecting rectangles approximate the rounded clip; the exact
+        // anti-aliased radius and themed border are drawn by RmlUi above it.
+        draw_backdrop(left + radius, top, right - radius, bottom);
+        draw_backdrop(left, top + radius, right, bottom - radius);
+    }
+    ResetContextRenderState();
+    return true;
+}
+
+void RenderInterface_VK::RenderFrostedGlassQuad(texture_data_t& texture) {
+    if (!m_p_current_command_buffer || !texture.m_p_vk_image_view ||
+        m_width <= 0 || m_height <= 0) {
+        return;
+    }
+
+    // Slightly enlarge the sampled backdrop. The tiny refraction is visible on
+    // high-contrast scene edges without introducing a second shader pipeline.
+    constexpr float REFRACTION_INSET = 1.25f;
+    if (!m_frosted_glass_quad_geometry ||
+        m_frosted_glass_quad_width != m_width ||
+        m_frosted_glass_quad_height != m_height) {
+        if (m_frosted_glass_quad_geometry)
+            ReleaseGeometry(m_frosted_glass_quad_geometry);
+
+        const float x = -REFRACTION_INSET;
+        const float y = -REFRACTION_INSET;
+        const float width = static_cast<float>(m_width) + 2.0f * REFRACTION_INSET;
+        const float height = static_cast<float>(m_height) + 2.0f * REFRACTION_INSET;
+        Rml::Vertex vertices[4];
+        vertices[0].position = {x, y};
+        vertices[0].tex_coord = {0.0f, 0.0f};
+        vertices[1].position = {x + width, y};
+        vertices[1].tex_coord = {1.0f, 0.0f};
+        vertices[2].position = {x + width, y + height};
+        vertices[2].tex_coord = {1.0f, 1.0f};
+        vertices[3].position = {x, y + height};
+        vertices[3].tex_coord = {0.0f, 1.0f};
+        for (Rml::Vertex& vertex : vertices)
+            vertex.colour = Rml::ColourbPremultiplied(255, 255, 255, 255);
+        static constexpr int indices[6] = {0, 1, 2, 0, 2, 3};
+        m_frosted_glass_quad_geometry = CompileGeometry({vertices, 4}, {indices, 6});
+        m_frosted_glass_quad_width = m_width;
+        m_frosted_glass_quad_height = m_height;
+    }
+
+    const bool transform_enabled = m_is_transform_enabled;
+    const shader_vertex_user_data_t user_data = m_user_data_for_vertex_shader;
+    const Rml::Matrix4f rml_transform = m_rml_transform;
+    const Rml::Matrix4f context_transform = m_context_transform;
+    const Rml::Vector2f context_offset = m_context_offset;
+    SetTransform(nullptr);
+    if (m_frosted_glass_quad_geometry) {
+        RenderGeometry(m_frosted_glass_quad_geometry,
+                       {}, reinterpret_cast<Rml::TextureHandle>(&texture));
+    }
+    m_is_transform_enabled = transform_enabled;
+    m_user_data_for_vertex_shader = user_data;
+    m_rml_transform = rml_transform;
+    m_context_transform = context_transform;
+    m_context_offset = context_offset;
+}
+
 VkRect2D RenderInterface_VK::ContextClipScissor() const noexcept {
     return m_context_clip_enabled ? m_context_clip_scissor : m_scissor_original;
 }
@@ -1741,6 +1938,19 @@ bool RenderInterface_VK::InitializeExternal(const ExternalContext& context) {
     m_width = static_cast<int>(context.extent.width);
     m_height = static_cast<int>(context.extent.height);
 
+    VkFormatProperties color_format_properties{};
+    vkGetPhysicalDeviceFormatProperties(m_p_physical_device,
+                                        m_swapchain_format.format,
+                                        &color_format_properties);
+    constexpr VkFormatFeatureFlags required_blit_features =
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+        VK_FORMAT_FEATURE_BLIT_SRC_BIT |
+        VK_FORMAT_FEATURE_BLIT_DST_BIT |
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+    m_frosted_glass_blit_supported =
+        (color_format_properties.optimalTilingFeatures & required_blit_features) ==
+        required_blit_features;
+
     VkPhysicalDeviceProperties physical_device_properties = {};
     vkGetPhysicalDeviceProperties(m_p_physical_device, &physical_device_properties);
 
@@ -1766,6 +1976,7 @@ void RenderInterface_VK::ShutdownExternal() {
         vkDeviceWaitIdle(m_p_device);
 
     m_async_preview_textures.clear();
+    DestroyFrostedGlassBackdrop(false);
     DestroyRenderLayers();
     Destroy_Pipelines();
     Destroy_Resources();
@@ -1781,6 +1992,7 @@ void RenderInterface_VK::ShutdownExternal() {
     m_external_swapchain_image_view = VK_NULL_HANDLE;
     m_external_depth_stencil_image_view = VK_NULL_HANDLE;
     m_external_swapchain_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    m_frosted_glass_blit_supported = false;
     m_external_context = false;
 }
 
@@ -2399,6 +2611,10 @@ void RenderInterface_VK::FreeAllTransientShaderAllocations() noexcept {
 }
 
 void RenderInterface_VK::Destroy_Geometries() noexcept {
+    if (m_frosted_glass_quad_geometry) {
+        ReleaseGeometry(m_frosted_glass_quad_geometry);
+        m_frosted_glass_quad_geometry = {};
+    }
     if (m_texture_quad_geometry) {
         ReleaseGeometry(m_texture_quad_geometry);
         m_texture_quad_geometry = {};
@@ -2453,6 +2669,138 @@ VkImageAspectFlags RenderInterface_VK::DepthStencilAspectMask() const noexcept {
     case VK_FORMAT_D32_SFLOAT_S8_UINT: return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
     default: return VK_IMAGE_ASPECT_DEPTH_BIT;
     }
+}
+
+bool RenderInterface_VK::CreateFrostedGlassTexture(texture_data_t& texture,
+                                                   const int width,
+                                                   const int height,
+                                                   const std::string_view label) {
+    if (!m_p_allocator || width <= 0 || height <= 0)
+        return false;
+
+    VkImageCreateInfo image_info{};
+    image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    image_info.imageType = VK_IMAGE_TYPE_2D;
+    image_info.format = m_swapchain_format.format;
+    image_info.extent = {static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1};
+    image_info.mipLevels = 1;
+    image_info.arrayLayers = 1;
+    image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+    image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                       VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                       VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VmaAllocationCreateInfo allocation_info{};
+    allocation_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    VmaAllocationInfo allocation_stats{};
+    const VkResult image_status = vmaCreateImage(m_p_allocator,
+                                                 &image_info,
+                                                 &allocation_info,
+                                                 &texture.m_p_vk_image,
+                                                 &texture.m_p_vma_allocation,
+                                                 &allocation_stats);
+    if (image_status != VK_SUCCESS) {
+        Rml::Log::Message(Rml::Log::LT_WARNING,
+                          "[Vulkan] Failed to allocate frosted glass texture '%.*s' (%d).",
+                          static_cast<int>(label.size()), label.data(), static_cast<int>(image_status));
+        texture = {};
+        return false;
+    }
+
+    texture.m_width = width;
+    texture.m_height = height;
+    texture.m_p_vk_sampler = m_p_sampler_linear;
+    texture.m_barrier_generation = ++m_image_barrier_generation;
+    texture.m_vram_scope = "vulkan.rmlui.frosted_glass";
+    texture.m_vram_label = TextureVramLabel("backdrop", label, width, height, &texture);
+    texture.m_vram_allocation_size = allocation_stats.size;
+    RecordRmlUiVram(texture.m_vram_scope, texture.m_vram_label,
+                    texture.m_vram_allocation_size);
+
+    const std::string image_name = std::format("rmlui.frosted_glass.{}.image", label);
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
+                                  (uint64_t)texture.m_p_vk_image,
+                                  image_name.c_str());
+    vmaSetAllocationName(m_p_allocator, texture.m_p_vma_allocation, image_name.c_str());
+
+    VkImageViewCreateInfo view_info{};
+    view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view_info.image = texture.m_p_vk_image;
+    view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view_info.format = m_swapchain_format.format;
+    view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    view_info.subresourceRange.baseMipLevel = 0;
+    view_info.subresourceRange.levelCount = 1;
+    view_info.subresourceRange.baseArrayLayer = 0;
+    view_info.subresourceRange.layerCount = 1;
+    const VkResult view_status = vkCreateImageView(m_p_device,
+                                                   &view_info,
+                                                   nullptr,
+                                                   &texture.m_p_vk_image_view);
+    if (view_status != VK_SUCCESS) {
+        Rml::Log::Message(Rml::Log::LT_WARNING,
+                          "[Vulkan] Failed to create frosted glass texture view '%.*s' (%d).",
+                          static_cast<int>(label.size()), label.data(), static_cast<int>(view_status));
+        Destroy_Texture(texture);
+        texture = {};
+        return false;
+    }
+    const std::string view_name = std::format("rmlui.frosted_glass.{}.view", label);
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                  (uint64_t)texture.m_p_vk_image_view,
+                                  view_name.c_str());
+    return true;
+}
+
+void RenderInterface_VK::DestroyFrostedGlassBackdrop(const bool deferred) noexcept {
+    const auto release = [this, deferred](texture_data_t& texture) {
+        if (!texture.m_p_vk_image)
+            return;
+        if (deferred)
+            QueueTextureForDeferredDeletion(new texture_data_t(texture));
+        else
+            Destroy_Texture(texture);
+        texture = {};
+    };
+    release(m_frosted_glass_backdrop.primary);
+    release(m_frosted_glass_backdrop.secondary);
+    m_frosted_glass_backdrop = {};
+}
+
+bool RenderInterface_VK::EnsureFrostedGlassBackdrop() {
+    if (!m_frosted_glass_blit_supported || m_width <= 0 || m_height <= 0)
+        return false;
+
+    const int primary_width = std::max(1, m_width / 4);
+    const int primary_height = std::max(1, m_height / 4);
+    const int secondary_width = std::max(1, m_width / 8);
+    const int secondary_height = std::max(1, m_height / 8);
+    const bool size_matches =
+        m_frosted_glass_backdrop.primary.m_p_vk_image &&
+        m_frosted_glass_backdrop.secondary.m_p_vk_image &&
+        m_frosted_glass_backdrop.primary_width == primary_width &&
+        m_frosted_glass_backdrop.primary_height == primary_height &&
+        m_frosted_glass_backdrop.secondary_width == secondary_width &&
+        m_frosted_glass_backdrop.secondary_height == secondary_height;
+    if (size_matches)
+        return true;
+
+    DestroyFrostedGlassBackdrop(true);
+    if (!CreateFrostedGlassTexture(m_frosted_glass_backdrop.primary,
+                                   primary_width, primary_height, "primary") ||
+        !CreateFrostedGlassTexture(m_frosted_glass_backdrop.secondary,
+                                   secondary_width, secondary_height, "secondary")) {
+        DestroyFrostedGlassBackdrop(true);
+        m_frosted_glass_blit_supported = false;
+        return false;
+    }
+    m_frosted_glass_backdrop.primary_width = primary_width;
+    m_frosted_glass_backdrop.primary_height = primary_height;
+    m_frosted_glass_backdrop.secondary_width = secondary_width;
+    m_frosted_glass_backdrop.secondary_height = secondary_height;
+    return true;
 }
 
 void RenderInterface_VK::EnsureRenderLayer(Rml::LayerHandle layer_handle) {

@@ -46,6 +46,12 @@ class PreferencesPanel(Panel):
         ("minecraft", "preferences.progress_bar_minecraft"),
     )
 
+    VIEWPORT_CHROME_OPTIONS = (
+        ("solid", "preferences.viewport_chrome_solid"),
+        ("translucent", "preferences.viewport_chrome_translucent"),
+        ("frosted", "preferences.viewport_chrome_frosted"),
+    )
+
     EXPANDABLE_SECTIONS = (
         "language",
         "working_directory",
@@ -112,6 +118,11 @@ class PreferencesPanel(Panel):
         model.bind("theme_family_idx", self._theme_family_index, self._set_theme_family_index)
         model.bind_func("theme_has_variants", self._theme_has_variants)
         model.bind("progress_bar_idx", self._progress_bar_index, self._set_progress_bar_index)
+        model.bind(
+            "viewport_chrome_idx",
+            self._viewport_chrome_index,
+            self._set_viewport_chrome_index,
+        )
         model.bind("scale_idx", self._scale_index, self._set_scale_index)
         model.bind(
             "scene_upscaler_idx",
@@ -197,6 +208,7 @@ class PreferencesPanel(Panel):
         model.bind_record_list("theme_families")
         model.bind_record_list("theme_variants")
         model.bind_record_list("progress_bar_styles")
+        model.bind_record_list("viewport_chrome_styles")
         model.bind_record_list("scales")
         model.bind_record_list("scene_upscalers")
         model.bind_record_list("scene_upscaler_presets")
@@ -250,6 +262,7 @@ class PreferencesPanel(Panel):
             lf.ui.get_theme_family(),
             lf.ui.get_theme_mode(),
             lf.ui.get_progress_bar_style(),
+            lf.ui.get_viewport_chrome_style(),
             float(lf.ui.get_ui_scale_preference()),
             self._scene_upscaler(),
             self._scene_upscaler_preset(),
@@ -303,6 +316,13 @@ class PreferencesPanel(Panel):
             [
                 {"index": str(index), "label": lf.ui.tr(label)}
                 for index, (_style, label) in enumerate(self.PROGRESS_BAR_OPTIONS)
+            ],
+        )
+        self._handle.update_record_list(
+            "viewport_chrome_styles",
+            [
+                {"index": str(index), "label": lf.ui.tr(label)}
+                for index, (_style, label) in enumerate(self.VIEWPORT_CHROME_OPTIONS)
             ],
         )
         self._handle.update_record_list(
@@ -431,6 +451,22 @@ class PreferencesPanel(Panel):
             return
         if 0 <= index < len(self.PROGRESS_BAR_OPTIONS):
             lf.ui.set_progress_bar_style(self.PROGRESS_BAR_OPTIONS[index][0])
+            self._refresh_selection()
+
+    def _viewport_chrome_index(self):
+        current = lf.ui.get_viewport_chrome_style()
+        for index, (style, _label) in enumerate(self.VIEWPORT_CHROME_OPTIONS):
+            if style == current:
+                return str(index)
+        return "1"
+
+    def _set_viewport_chrome_index(self, value):
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            return
+        if 0 <= index < len(self.VIEWPORT_CHROME_OPTIONS):
+            lf.ui.set_viewport_chrome_style(self.VIEWPORT_CHROME_OPTIONS[index][0])
             self._refresh_selection()
 
     def _scale_index(self):
@@ -1167,6 +1203,7 @@ class PreferencesPanel(Panel):
         elif section == "appearance":
             lf.ui.set_theme("dark")
             lf.ui.set_progress_bar_style("classic")
+            lf.ui.set_viewport_chrome_style("translucent")
             lf.ui.set_ui_scale(0.0)
             lf.ui.set_scene_reconstruction("native", "native")
             lf.ui.reset_scene_reconstruction_preferences()
@@ -1197,6 +1234,7 @@ class PreferencesPanel(Panel):
             self._handle.dirty("theme_family_idx")
             self._handle.dirty("theme_has_variants")
             self._handle.dirty("progress_bar_idx")
+            self._handle.dirty("viewport_chrome_idx")
             self._handle.dirty("scale_idx")
             self._handle.dirty("scene_upscaler_idx")
             self._handle.dirty("scene_upscaler_preset_idx")

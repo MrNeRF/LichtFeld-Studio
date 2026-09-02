@@ -100,6 +100,7 @@ namespace lfs::vis::gui {
         void reloadResources();
         void render();
         void renderCached();
+        void renderFrostedGlass() const;
         void processInput(const PanelInputState& input);
         bool wantsInput() const { return wants_input_; }
         [[nodiscard]] bool needsAnimationFrame() const {
@@ -177,6 +178,7 @@ namespace lfs::vis::gui {
         bool viewport_content_offset_dirty_ = true;
         std::size_t last_theme_signature_ = 0;
         bool has_theme_signature_ = false;
+        std::string viewport_chrome_style_ = "translucent";
         std::string base_rcss_;
         std::string body_template_rml_;
         bool wants_input_ = false;

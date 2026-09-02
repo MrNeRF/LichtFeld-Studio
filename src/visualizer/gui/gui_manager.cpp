@@ -5758,7 +5758,7 @@ namespace lfs::vis::gui {
         float secondary_toolbar_x = 0.0f;
         float secondary_toolbar_width = 0.0f;
         if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
-            rendering && rendering->isIndependentSplitViewActive()) {
+            rendering && rendering->isIndependentSplitViewActive() && !editor_ctx.isEmpty()) {
             if (const auto primary_panel = rendering->resolveViewerPanel(
                     viewer_->getViewport(),
                     viewport_layout_.pos, viewport_layout_.size, std::nullopt, SplitViewPanelId::Left)) {
@@ -6307,6 +6307,7 @@ namespace lfs::vis::gui {
                                                         frame.swapchain_image_view,
                                                         frame.depth_stencil_image_view,
                                                         frame.frame_slot)) {
+                        rml_viewport_overlay_.renderFrostedGlass();
                         {
                             LOG_TIMER_THRESHOLD("gui_render.rmlui_record.background", 0.25);
                             rmlui_manager_.renderQueuedVulkanContexts(false);

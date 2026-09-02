@@ -1552,12 +1552,31 @@ def test_viewport_toolbar_uses_theme_glass_without_backdrop_filter():
     toolbar_end = rcss.index("\n}", toolbar_start)
     toolbar_rule = rcss[toolbar_start:toolbar_end]
     for declaration in (
-        "top: 14dp;",
-        "bottom: 14dp;",
+        "position: relative;",
         "width: 38dp;",
+        "height: auto;",
+        "max-height: 90%;",
         "padding: 5dp 3dp;",
     ):
         assert declaration in toolbar_rule
+    assert "bottom:" not in toolbar_rule
+    assert "top:" not in toolbar_rule
+    assert "transform:" not in toolbar_rule
+
+    toolbar_root_start = rcss.index(".panel-toolbar-root {")
+    toolbar_root_end = rcss.index("\n}", toolbar_root_start)
+    toolbar_root_rule = rcss[toolbar_root_start:toolbar_root_end]
+    assert "display: flex;" in toolbar_root_rule
+    assert "align-items: center;" in toolbar_root_rule
+    assert "#secondary-utility-toolbar" not in rcss
+    assert "left: -20dp;" not in rcss
+
+    selection_panel_start = rcss.index("#selection-block .viewport-selection-panel {")
+    selection_panel_end = rcss.index("\n}", selection_panel_start)
+    selection_panel_rule = rcss[selection_panel_start:selection_panel_end]
+    assert "width: auto;" in selection_panel_rule
+    assert "max-width: 100%;" in selection_panel_rule
+    assert "width: 65%;" not in selection_panel_rule
 
     for token in (
         "viewport.toolbar_glass_decor",
@@ -1598,6 +1617,68 @@ def test_viewport_toolbar_uses_theme_glass_without_backdrop_filter():
 
     assert "backdrop-filter" not in theme_rcss
     assert "filter:" not in theme_rcss
+
+
+def test_empty_viewport_rejects_independent_split_activation_and_hides_orphan_ui():
+    project_root = Path(__file__).parent.parent.parent
+    input_header = (
+        project_root / "src/visualizer/input/input_controller.hpp"
+    ).read_text(encoding="utf-8")
+    input_source = (
+        project_root / "src/visualizer/input/input_controller.cpp"
+    ).read_text(encoding="utf-8")
+    gui_manager = (
+        project_root / "src/visualizer/gui/gui_manager.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert "void toggleIndependentSplitView();" in input_header
+
+    toggle_start = input_source.index(
+        "void InputController::toggleIndependentSplitView()"
+    )
+    toggle_end = input_source.index(
+        "SplitViewPanelId InputController::splitPanelForScreenX", toggle_start
+    )
+    toggle_block = input_source[toggle_start:toggle_end]
+
+    assert "if (!isIndependentSplitViewActive())" in toggle_block
+    assert "services().sceneOrNull()" in toggle_block
+    assert "!scene_manager || scene_manager->isEmpty()" in toggle_block
+    assert "ToggleIndependentSplitView{.viewport = &viewport_}.emit();" in toggle_block
+
+    key_action_start = input_source.index(
+        "case input::Action::TOGGLE_INDEPENDENT_SPLIT_VIEW:"
+    )
+    key_action_end = input_source.index("return;", key_action_start)
+    key_action_block = input_source[key_action_start:key_action_end]
+    assert "toggleIndependentSplitView();" in key_action_block
+    assert "ToggleIndependentSplitView" not in key_action_block
+
+    toolbar_start = gui_manager.index("bool show_secondary_toolbar = false;")
+    toolbar_end = gui_manager.index(
+        "rml_viewport_overlay_.setToolbarPanels(", toolbar_start
+    )
+    toolbar_block = gui_manager[toolbar_start:toolbar_end]
+
+    assert "rendering->isIndependentSplitViewActive() && !editor_ctx.isEmpty()" in toolbar_block
+    assert "show_secondary_toolbar = secondary_panel->valid();" in toolbar_block
+
+    divider_start = gui_manager.index(
+        "RmlViewportOverlay::SplitDividerOverlayState split_divider_state;"
+    )
+    divider_end = gui_manager.index(
+        "rml_viewport_overlay_.setSplitDividerOverlay(split_divider_state);",
+        divider_start,
+    )
+    divider_block = gui_manager[divider_start:divider_end]
+
+    assert (
+        "rendering && rendering->isSplitViewActive() && "
+        "!rendering->isIndependentSplitViewActive())"
+        in divider_block
+    )
+    assert "rendering->getSplitDividerScreenX" in divider_block
+    assert "rendering->getContentBounds" in divider_block
 
 
 def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():

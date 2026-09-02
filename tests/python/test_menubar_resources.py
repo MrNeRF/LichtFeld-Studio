@@ -121,7 +121,9 @@ def test_toolbar_icons_use_contrast_aware_theme_tokens():
     assert "readableIconColor" in rml_theme_cpp
     assert "MIN_ICON_CONTRAST = 4.5f" in rml_theme_cpp
     assert "const std::array backgrounds" in rml_theme_cpp
-    assert "VIEWPORT_GIZMO_OPACITY = 0.64f" in rml_theme_cpp
+    assert "const float VIEWPORT_GIZMO_OPACITY = viewport_chrome_solid" in rml_theme_cpp
+    assert "? (is_light ? 0.48f : 0.42f)" in rml_theme_cpp
+    assert ": 0.64f;" in rml_theme_cpp
     assert 'colorToRmlAlpha(viewport_toolbar_icon, 0.70f)' in rml_theme_cpp
     for token in (
         "menu.toolbar_icon",
@@ -374,6 +376,47 @@ def test_all_optional_theme_gradients_reach_rml_consumers():
         assert f"t.gradients.{gradient}" in rml_theme_cpp
         resource = (resources / resource_name).read_text(encoding="utf-8")
         assert f"@{{{token}}}" in resource
+
+
+def test_histogram_history_icons_follow_theme_contrast():
+    resources = (
+        PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+    )
+    histogram_theme = (resources / "histogram_panel.theme.rcss").read_text(
+        encoding="utf-8"
+    )
+    rml_theme_cpp = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "rml_theme.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        ".histogram-history-icon {\n"
+        "    image-color: @{text};\n"
+        "}"
+        in histogram_theme
+    )
+    assert (
+        ".histogram-history-btn:hover .histogram-history-icon {\n"
+        "    image-color: @{primary};\n"
+        "}"
+        in histogram_theme
+    )
+    assert (
+        ".histogram-history-btn:disabled .histogram-history-icon {\n"
+        "    image-color: @{panel.histogram_history_icon_disabled};\n"
+        "}"
+        in histogram_theme
+    )
+    assert (
+        '{"panel.histogram_history_icon_disabled", '
+        "colorToRmlAlpha(p.text_dim, is_light ? 0.68f : 0.52f)}"
+        in rml_theme_cpp
+    )
 
 
 def test_signal_family_keeps_a_distinct_visual_language():

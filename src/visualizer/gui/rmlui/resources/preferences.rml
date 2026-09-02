@@ -94,6 +94,12 @@
             </select>
           </div>
           <div class="preferences-row">
+            <span class="preferences-label">@tr:preferences.viewport_chrome_style</span>
+            <select class="preferences-select" data-value="viewport_chrome_idx">
+              <option data-for="style : viewport_chrome_styles" data-attr-value="style.index">{{ style.label }}</option>
+            </select>
+          </div>
+          <div class="preferences-row">
             <span class="preferences-label">@tr:menu.view.ui_scale</span>
             <select class="preferences-select" data-value="scale_idx">
               <option data-for="scale : scales" data-attr-value="scale.index">{{ scale.label }}</option>

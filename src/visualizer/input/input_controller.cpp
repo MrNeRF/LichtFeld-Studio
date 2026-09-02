@@ -1737,8 +1737,7 @@ namespace lfs::vis {
                 return;
 
             case input::Action::TOGGLE_INDEPENDENT_SPLIT_VIEW:
-                cmd::ToggleIndependentSplitView{.viewport = &viewport_}.emit();
-                focusSplitPanel(SplitViewPanelId::Left);
+                toggleIndependentSplitView();
                 return;
 
             case input::Action::TOGGLE_GT_COMPARISON:
@@ -2771,6 +2770,18 @@ namespace lfs::vis {
     bool InputController::isIndependentSplitViewActive() const {
         auto* const rendering = services().renderingOrNull();
         return rendering && rendering->isIndependentSplitViewActive();
+    }
+
+    void InputController::toggleIndependentSplitView() {
+        if (!isIndependentSplitViewActive()) {
+            const auto* const scene_manager = services().sceneOrNull();
+            if (!scene_manager || scene_manager->isEmpty()) {
+                return;
+            }
+        }
+
+        cmd::ToggleIndependentSplitView{.viewport = &viewport_}.emit();
+        focusSplitPanel(SplitViewPanelId::Left);
     }
 
     SplitViewPanelId InputController::splitPanelForScreenX(const double x) const {

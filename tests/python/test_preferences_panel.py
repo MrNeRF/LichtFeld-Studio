@@ -61,6 +61,8 @@ def preferences_panel_module(monkeypatch):
         scene_reconstruction_presets={"native": "native", "spatial": "quality"},
         working_directory="",
         asset_manager_directory="",
+        viewport_chrome_style="translucent",
+        set_viewport_chrome_style_calls=[],
     )
 
     def set_working_directory(path):
@@ -102,6 +104,10 @@ def preferences_panel_module(monkeypatch):
 
     def reset_scene_reconstruction_preferences():
         state.scene_reconstruction_presets = {"native": "native", "spatial": "quality"}
+
+    def set_viewport_chrome_style(style):
+        state.viewport_chrome_style = str(style)
+        state.set_viewport_chrome_style_calls.append(str(style))
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
@@ -173,6 +179,8 @@ def preferences_panel_module(monkeypatch):
         reset_scene_reconstruction_preferences=reset_scene_reconstruction_preferences,
         get_progress_bar_style=lambda: "classic",
         set_progress_bar_style=lambda *_a, **_k: None,
+        get_viewport_chrome_style=lambda: state.viewport_chrome_style,
+        set_viewport_chrome_style=set_viewport_chrome_style,
     )
     lf_stub.keymap = SimpleNamespace(
         ToolMode=IntEnum(
@@ -332,6 +340,19 @@ def test_language_selection_does_not_reload_active_language(preferences_panel_mo
     panel._set_language_index("1")
 
     assert state.set_language_calls == []
+
+
+def test_viewport_chrome_selection_uses_global_style_preference(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+
+    assert panel._viewport_chrome_index() == "1"
+    panel._set_viewport_chrome_index("2")
+
+    assert state.viewport_chrome_style == "frosted"
+    assert state.set_viewport_chrome_style_calls == ["frosted"]
+    assert panel._viewport_chrome_index() == "2"
 
 
 def test_asset_manager_directory_is_saved_and_can_return_to_default(

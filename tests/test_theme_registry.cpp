@@ -710,6 +710,7 @@ TEST(ThemePreferencesContract, SafeModeNeitherReadsNorWritesPreferences) {
         EXPECT_FLOAT_EQ(lfs::vis::loadUiScalePreference(), 0.0f);
         EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "native");
         EXPECT_EQ(lfs::vis::loadSceneUpscalerPresetPreference("native"), "native");
+        EXPECT_EQ(lfs::vis::loadViewportChromeStylePreference(), "translucent");
         EXPECT_TRUE(lfs::vis::loadLanguagePreference().empty());
         const auto mcp = lfs::vis::loadMcpPreferences();
         EXPECT_TRUE(mcp.enabled);
@@ -719,6 +720,7 @@ TEST(ThemePreferencesContract, SafeModeNeitherReadsNorWritesPreferences) {
         lfs::vis::saveThemePreferenceName("gruvbox");
         lfs::vis::saveUiScalePreference(2.0f);
         lfs::vis::saveSceneUpscalerPreference("spatial", "performance");
+        lfs::vis::saveViewportChromeStylePreference("frosted");
         lfs::vis::saveLanguagePreference("fr");
         lfs::vis::saveMcpPreferences({
             .enabled = true,

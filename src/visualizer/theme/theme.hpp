@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include <cstddef>
 #include <functional>
 #include <optional>
 #include <string>
@@ -237,6 +238,10 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API const std::string& currentThemeSelectionMode();
     [[nodiscard]] LFS_VIS_API bool supportsSystemThemePreference();
     LFS_VIS_API bool checkThemeFileChanges(); // Call periodically to hot-reload; returns true when any preset changed
+    // Re-apply presentation derived from non-theme preferences while preserving
+    // the active theme family and variant selection.
+    LFS_VIS_API void refreshThemePresentation();
+    [[nodiscard]] LFS_VIS_API std::size_t themePresentationRevision();
 
     // Runtime vignette control (does not persist to theme file)
     LFS_VIS_API void setThemeVignetteEnabled(bool enabled);

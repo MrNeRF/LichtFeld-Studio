@@ -54,6 +54,7 @@ namespace lfs::vis {
         std::string g_theme_family_preference = "lichtfeld";
         std::string g_theme_mode_preference = "dark";
         bool g_auto_system_light = false;
+        std::size_t g_theme_presentation_revision = 0;
 
         void ensureThemesLoaded();
         void applyCurrentTheme(const Theme& theme, std::string_view theme_id);
@@ -1560,6 +1561,16 @@ namespace lfs::vis {
     float loadUiScalePreference() {
         return UserPreferences::instance().uiScale();
     }
+
+    void refreshThemePresentation() {
+        ++g_theme_presentation_revision;
+        applyThemePreservingCurrentId(theme());
+    }
+
+    std::size_t themePresentationRevision() {
+        return g_theme_presentation_revision;
+    }
+
     void setThemeVignetteEnabled(bool enabled) {
         Theme t = theme();
         t.vignette.enabled = enabled;

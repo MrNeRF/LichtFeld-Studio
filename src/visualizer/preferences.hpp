@@ -50,6 +50,8 @@ namespace lfs::vis {
         [[nodiscard]] bool sceneGraphSelectionMarkers();
         void setProgressBarStyle(std::string_view value);
         [[nodiscard]] std::string progressBarStyle();
+        void setViewportChromeStyle(std::string_view value);
+        [[nodiscard]] std::string viewportChromeStyle();
 
         void setMcp(const McpPreferenceState& state);
         [[nodiscard]] McpPreferenceState mcp();
@@ -91,6 +93,8 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API bool loadSceneGraphSelectionMarkersPreference();
     LFS_VIS_API void saveProgressBarStylePreference(std::string_view style);
     [[nodiscard]] LFS_VIS_API std::string loadProgressBarStylePreference();
+    LFS_VIS_API void saveViewportChromeStylePreference(std::string_view style);
+    [[nodiscard]] LFS_VIS_API std::string loadViewportChromeStylePreference();
     LFS_VIS_API void saveMcpPreferences(const McpPreferenceState& state);
     [[nodiscard]] LFS_VIS_API McpPreferenceState loadMcpPreferences();
     LFS_VIS_API void saveSceneUpscalerPreference(const std::string& backend_id,

@@ -57,9 +57,15 @@ Theme families are listed in `src/visualizer/gui/assets/themes/manifest.json`. T
 
 Variant display names are independent from their semantic mode. A family can therefore expose concise names such as `Night` and `Day` while the application still treats them as `dark` and `light` for system matching.
 
+The View menu describes the current selection in its own label (`Theme · Family · Variant`). In automatic mode it shows `Auto`, while the concrete dark/light preset follows the operating system behind that saved selection.
+
 Python UI code must read `lf.ui.themes()` instead of hardcoding the catalog. Use `lf.ui.get_theme_family()` and `lf.ui.get_theme_mode()` for selection state, and `lf.ui.set_theme_family(family_id, mode)` to select `dark`, `light`, or `auto`. The legacy preset APIs and v1 manifest remain supported for compatibility.
 
-See [Theme format v2](./theme-format.md) for the complete file contract and fallback behavior.
+Gradients are converted into shared RmlUI decorator tokens rather than inspected by individual panels. Providing `panel_body`, for example, also enables the enhanced hosted-panel chrome and supplies the viewport-toolbar base; `progress` supplies selected-control accents. The global `viewport_chrome_style` preference chooses solid, translucent, or frosted presentation without adding a manifest field. Viewport chrome blends `panel_body` with the theme's primary and secondary colors so each family remains identifiable. Flat themes remain valid because every consumer has a palette-derived fallback.
+
+Frosted presentation is composited below the cached RmlUi overlay. The Vulkan renderer downsamples the current scene twice, upscales it with linear filtering, and clips the result to visible viewport controls before RmlUi draws tint, borders, icons, and text. This keeps theme chrome cacheable and bounds the per-frame cost. If the swapchain image or format cannot use the required transfer and linear-blit features, the translucent themed layer remains the readability fallback.
+
+See [Theme format v2](./theme-format.md) for the complete file contract, consumer mapping, downloadable template, and fallback behavior.
 
 ## Hot Reload
 
@@ -96,3 +102,19 @@ Avoid `SetProperty` for static styling:
 The Python immediate-mode bridge follows the same rule. Generated elements should receive semantic classes such as `.im-control--fill` or `.im-label--centered`; only data colors, caller-supplied sizes, tooltip coordinates, and runtime state should remain inline.
 
 When in doubt, create a class in `.rml` or C++, put static layout in `.rcss`, and put palette-dependent values in `.theme.rcss`.
+
+## Viewport overlay geometry
+
+An independent split can only be activated when the scene contains content;
+the shared input command makes both `Shift+V` and the title-bar button a no-op
+for an empty scene. Closing an already active split remains possible. The GUI
+also defensively hides the secondary toolbar for an empty editor context, so an
+empty viewport keeps the normal primary toolbar without a second camera, gizmo,
+axes, orphan divider, or duplicated controls. When scene content is present,
+each toolbar root uses the resolved bounds of its own split panel; vertical
+toolbars stay centered and size to their controls instead of relying on fixed
+heights or cross-divider offsets.
+
+Keep geometry and appearance separate: C++ may update panel-relative bounds,
+visibility, and divider dimensions, while the base and themed RCSS files own
+alignment, spacing, tint, contrast, and disabled icon treatment.

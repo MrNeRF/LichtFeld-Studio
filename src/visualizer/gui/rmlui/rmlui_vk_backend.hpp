@@ -81,6 +81,17 @@ public:
     void SetContextClipRect(float x1, float y1, float x2, float y2);
     void RenderTextureQuad(Rml::TextureHandle texture, float x, float y, float w, float h);
 
+    struct FrostedGlassRegion {
+        float x = 0.0f;
+        float y = 0.0f;
+        float width = 0.0f;
+        float height = 0.0f;
+        float radius = 0.0f;
+    };
+    // Draw a blurred copy of the current swapchain beneath viewport chrome.
+    // Returns false when the swapchain or format cannot support the low-cost blit path.
+    bool RenderFrostedGlass(Rml::Span<const FrostedGlassRegion> regions);
+
     // Restrict layer render-pass area (and thus loadOp clears / scissor bounds) to the
     // capture clip rect while recording a cached-panel refresh. Pair with EndCacheCapture.
     // Nested PushLayer during the capture inherits the same restricted area. Normal
@@ -178,6 +189,17 @@ private:
         bool m_is_async_preview = false;
         // Resource identity for VulkanImageBarrierTracker (#1478).
         std::uint64_t m_barrier_generation = 0;
+    };
+
+    struct frosted_glass_backdrop_t {
+        texture_data_t primary{};
+        texture_data_t secondary{};
+        VkImageLayout primary_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VkImageLayout secondary_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        int primary_width = 0;
+        int primary_height = 0;
+        int secondary_width = 0;
+        int secondary_height = 0;
     };
 
     struct async_preview_result_t {
@@ -600,6 +622,11 @@ private:
     VkRect2D ClampToCacheCaptureArea(VkRect2D rect) const noexcept;
     void ResetDynamicRenderState();
     void RenderFullscreenTexture(texture_data_t& texture, Rml::BlendMode blend_mode);
+    bool EnsureFrostedGlassBackdrop();
+    bool CreateFrostedGlassTexture(texture_data_t& texture, int width, int height,
+                                   std::string_view label);
+    void DestroyFrostedGlassBackdrop(bool deferred) noexcept;
+    void RenderFrostedGlassQuad(texture_data_t& texture);
 
     void Update_PendingForDeletion_Textures_By_Frame(uint32_t resource_slot) noexcept;
     void Update_PendingForDeletion_Geometries(uint32_t resource_slot) noexcept;
@@ -663,6 +690,7 @@ private:
     VkRect2D m_context_clip_scissor{};
     bool m_context_clip_enabled = false;
     bool m_current_context_used_preview_texture = false;
+    bool m_frosted_glass_blit_supported = false;
     // When true, layer render passes clear/draw only this sub-rect of the full-size layer.
     bool m_cache_capture_active = false;
     VkRect2D m_cache_capture_render_area{};
@@ -674,6 +702,10 @@ private:
     std::vector<std::shared_ptr<async_preview_state_t>> m_async_preview_textures;
     std::atomic<uint64_t> m_preview_texture_generation{0};
     Rml::Vector<render_layer_t> m_render_layers;
+    frosted_glass_backdrop_t m_frosted_glass_backdrop;
+    Rml::CompiledGeometryHandle m_frosted_glass_quad_geometry = {};
+    int m_frosted_glass_quad_width = 0;
+    int m_frosted_glass_quad_height = 0;
     Rml::CompiledGeometryHandle m_texture_quad_geometry = {};
     float m_texture_quad_x = 0.0f;
     float m_texture_quad_y = 0.0f;

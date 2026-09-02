@@ -18,6 +18,7 @@ The Preferences panel currently exposes:
   sessions);
 - application theme and UI scale;
 - status bar progress bar style (`status_bar_progress_style`: `classic` or `minecraft`);
+- viewport control style (`viewport_chrome_style`: `solid`, `translucent`, or `frosted`);
 - viewport scene reconstruction backend and backend-specific preset;
 - camera navigation mode and axis/view snap;
 - per-setting remember options;
@@ -66,6 +67,17 @@ UI details that are not project layout, such as HUD state, are written to
 settings, keymaps, and the Asset Manager catalog are published with
 same-directory atomic replacement so an interrupted write cannot expose a
 partially written destination.
+
+The `theme` preference stores a v2 family selection as `family_id:mode`, where
+`mode` is `dark`, `light`, or `auto`. Legacy preset ids are still accepted on
+read. Theme JSON files themselves are packaged application assets: the current
+user tree has no custom-theme install directory, and no preference reset or
+migration operation should imply that one exists.
+
+`viewport_chrome_style` is intentionally separate from the theme manifest. Its
+default is `translucent`; resetting Appearance restores that value. The chosen
+mode controls opacity and optional backdrop processing, while the active theme
+continues to supply palette, gradient, border, icon, and contrast colors.
 
 Scene reconstruction preferences are user-global rather than `.licht` project
 state. They affect viewport presentation only and do not alter training or

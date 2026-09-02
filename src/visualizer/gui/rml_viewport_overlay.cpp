@@ -11,8 +11,10 @@
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
+#include "gui/rmlui/rmlui_vk_backend.hpp"
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
 #include "internal/resource_paths.hpp"
+#include "preferences.hpp"
 #include "python/python_runtime.hpp"
 #include "python/ui_hooks.hpp"
 #include "theme/theme.hpp"
@@ -22,10 +24,12 @@
 #include <RmlUi/Core/Input.h>
 #include <RmlUi/Core/StringUtilities.h>
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <format>
 #include <limits>
+#include <string_view>
 #include <vector>
 
 namespace lfs::vis::gui {
@@ -280,6 +284,7 @@ namespace lfs::vis::gui {
             return false;
         last_theme_signature_ = theme_signature;
         has_theme_signature_ = true;
+        viewport_chrome_style_ = loadViewportChromeStylePreference();
 
         if (base_rcss_.empty())
             base_rcss_ = rml_theme::loadBaseRCSS("rmlui/viewport_overlay.rcss");
@@ -1039,6 +1044,72 @@ namespace lfs::vis::gui {
                 .y2 = y + vp_size_.y,
             },
         });
+    }
+
+    void RmlViewportOverlay::renderFrostedGlass() const {
+        if (viewport_chrome_style_ != "frosted" || !document_ || !rml_manager_)
+            return;
+        auto* const renderer = rml_manager_->getVulkanRenderInterface();
+        if (!renderer)
+            return;
+
+        std::vector<RenderInterface_VK::FrostedGlassRegion> regions;
+        const auto is_visible = [](Rml::Element* element) {
+            for (auto* node = element; node; node = node->GetParentNode()) {
+                if (node->GetDisplay() == Rml::Style::Display::None)
+                    return false;
+            }
+            return element != nullptr;
+        };
+        const float framebuffer_x = vp_pos_.x - screen_origin_.x;
+        const float framebuffer_y = vp_pos_.y - screen_origin_.y;
+        const auto append_region = [&](Rml::Element* element, const float radius) {
+            if (!is_visible(element))
+                return;
+            const auto offset = element->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const auto size = element->GetBox().GetSize(Rml::BoxArea::Border);
+            if (size.x <= 0.0f || size.y <= 0.0f)
+                return;
+            regions.push_back({
+                .x = framebuffer_x + offset.x,
+                .y = framebuffer_y + offset.y,
+                .width = size.x,
+                .height = size.y,
+                .radius = radius,
+            });
+        };
+
+        constexpr std::array<std::string_view, 8> toolbar_ids = {
+            "primary-utility-toolbar",
+            "secondary-utility-toolbar",
+            "primary-transform-toolbar",
+            "primary-mirror-toolbar",
+            "primary-crop-toolbar",
+            "secondary-transform-toolbar",
+            "secondary-mirror-toolbar",
+            "secondary-crop-toolbar",
+        };
+        for (const std::string_view id : toolbar_ids)
+            append_region(document_->GetElementById(std::string(id)), 9.0f);
+
+        Rml::ElementList gizmo_containers;
+        document_->GetElementsByClassName(gizmo_containers, "viewport-gizmo-controls");
+        for (Rml::Element* container : gizmo_containers) {
+            if (!is_visible(container))
+                continue;
+            Rml::ElementList buttons;
+            container->GetElementsByClassName(buttons, "icon-btn");
+            for (Rml::Element* button : buttons)
+                append_region(button, 5.0f);
+        }
+
+        Rml::ElementList panels;
+        document_->GetElementsByClassName(panels, "viewport-transform-panel");
+        for (Rml::Element* panel : panels)
+            append_region(panel, 8.0f);
+
+        if (!regions.empty())
+            renderer->RenderFrostedGlass({regions.data(), regions.size()});
     }
 
     void RmlViewportOverlay::renderCached() {

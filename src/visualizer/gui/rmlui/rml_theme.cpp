@@ -7,6 +7,7 @@
 #include "core/path_utils.hpp"
 #include "gui/rmlui/rml_path_utils.hpp"
 #include "internal/resource_paths.hpp"
+#include "preferences.hpp"
 #include "theme/theme.hpp"
 
 #include <RmlUi/Core/ElementDocument.h>
@@ -508,6 +509,9 @@ namespace lfs::vis::gui::rml_theme {
         std::unordered_map<std::string, std::string> namedThemeTokens(const Theme& t) {
             const auto& p = t.palette;
             const bool is_light = t.isLightTheme();
+            const std::string viewport_chrome_style = loadViewportChromeStylePreference();
+            const bool viewport_chrome_solid = viewport_chrome_style == "solid";
+            const bool viewport_chrome_frosted = viewport_chrome_style == "frosted";
             const auto text = colorToRml(p.text);
             const auto text_dim = colorToRml(p.text_dim);
             const auto surface = colorToRml(p.surface);
@@ -606,19 +610,20 @@ namespace lfs::vis::gui::rml_theme {
                     colorToRmlAlpha(gradient.start, alpha),
                     colorToRmlAlpha(gradient.end, alpha));
             };
-            const ThemeGradient viewport_glass_gradient = t.gradients.panel_body.value_or(
+            const ThemeGradient viewport_panel_gradient = t.gradients.panel_body.value_or(
                 ThemeGradient{viewport_glass_base, viewport_glass_base});
-            const float viewport_toolbar_glass_opacity = is_light ? 0.70f : 0.68f;
+            const ThemeGradient viewport_glass_gradient{
+                blend(viewport_panel_gradient.start, p.primary, is_light ? 0.13f : 0.16f),
+                blend(viewport_panel_gradient.end, p.secondary, is_light ? 0.16f : 0.20f)};
+            const float viewport_toolbar_glass_opacity = viewport_chrome_solid
+                                                             ? 1.0f
+                                                         : viewport_chrome_frosted
+                                                             ? (is_light ? 0.50f : 0.44f)
+                                                             : (is_light ? 0.70f : 0.68f);
             const ThemeColor viewport_toolbar_icon =
                 readableIconColor(viewport_glass_gradient, viewport_toolbar_glass_opacity, p.text);
-            const auto viewport_toolbar_glass_decor = t.gradients.panel_body
-                                                           ? translucent_vertical_decor(
-                                                                 viewport_glass_gradient,
-                                                                 viewport_toolbar_glass_opacity)
-                                                           : std::format(
-                                                                 "decorator: none; background-color: {}",
-                                                                 colorToRmlAlpha(viewport_glass_base,
-                                                                                 viewport_toolbar_glass_opacity));
+            const auto viewport_toolbar_glass_decor = translucent_vertical_decor(
+                viewport_glass_gradient, viewport_toolbar_glass_opacity);
             const ThemeColor viewport_toolbar_selected_bg =
                 blend(viewport_glass_base, p.primary, 0.56f);
             const ThemeGradient viewport_toolbar_selected_gradient{
@@ -654,7 +659,11 @@ namespace lfs::vis::gui::rml_theme {
                 blend(viewport_gizmo_gradient.start, p.primary, 0.16f),
                 blend(viewport_gizmo_gradient.end, p.primary, 0.16f)};
             const ThemeGradient viewport_gizmo_selected_gradient = progress_gradient;
-            constexpr float VIEWPORT_GIZMO_OPACITY = 0.64f;
+            const float VIEWPORT_GIZMO_OPACITY = viewport_chrome_solid
+                                                     ? 1.0f
+                                                 : viewport_chrome_frosted
+                                                     ? (is_light ? 0.48f : 0.42f)
+                                                     : 0.64f;
             constexpr float VIEWPORT_GIZMO_HOVER_OPACITY = 0.76f;
             constexpr float VIEWPORT_GIZMO_SELECTED_OPACITY = 0.82f;
             constexpr float VIEWPORT_GIZMO_SELECTED_HOVER_OPACITY = 0.88f;
@@ -666,14 +675,8 @@ namespace lfs::vis::gui::rml_theme {
                       viewport_gizmo_selected_icon, 0.10f),
                 blend(viewport_gizmo_selected_gradient.end,
                       viewport_gizmo_selected_icon, 0.10f)};
-            const auto viewport_gizmo_decor = t.gradients.panel_body
-                                                  ? translucent_vertical_decor(
-                                                        viewport_gizmo_gradient,
-                                                        VIEWPORT_GIZMO_OPACITY)
-                                                  : std::format(
-                                                        "decorator: none; background-color: {}",
-                                                        colorToRmlAlpha(viewport_glass_base,
-                                                                        VIEWPORT_GIZMO_OPACITY));
+            const auto viewport_gizmo_decor = translucent_vertical_decor(
+                viewport_gizmo_gradient, VIEWPORT_GIZMO_OPACITY);
             const auto viewport_gizmo_hover_decor = t.gradients.panel_body
                                                         ? translucent_vertical_decor(
                                                               viewport_gizmo_hover_gradient,
@@ -895,7 +898,7 @@ namespace lfs::vis::gui::rml_theme {
                 {"panel.histogram_fill_decor", histogram_fill_decor},
                 {"panel.histogram_fill_selected_decor", histogram_fill_selected_decor},
                 {"panel.histogram_selection_fill", colorToRmlAlpha(p.warning, is_light ? 0.14f : 0.18f)},
-                {"panel.histogram_history_icon_disabled", colorToRmlAlpha(p.text_dim, 0.48f)},
+                {"panel.histogram_history_icon_disabled", colorToRmlAlpha(p.text_dim, is_light ? 0.68f : 0.52f)},
                 {"panel.primary_border_soft", colorToRmlAlpha(p.primary, 0.33f)},
                 {"panel.primary_border_faint", colorToRmlAlpha(p.primary, 0.13f)},
                 {"panel.primary_accent", colorToRmlAlpha(p.primary, 0.22f)},
@@ -933,7 +936,7 @@ namespace lfs::vis::gui::rml_theme {
                 {"viewport.toolbar_text", colorToRml(viewport_toolbar_icon)},
                 {"viewport.toolbar_glass_decor", viewport_toolbar_glass_decor},
                 {"viewport.toolbar_border", colorToRmlAlpha(
-                                                blend(p.border, p.surface_bright, 0.38f),
+                                                blend(blend(p.border, p.surface_bright, 0.30f), p.primary, 0.18f),
                                                 is_light ? 0.72f : 0.62f)},
                 {"viewport.toolbar_shadow", viewport_toolbar_shadow},
                 {"viewport.toolbar_selected_decor", viewport_toolbar_selected_decor},
@@ -955,8 +958,8 @@ namespace lfs::vis::gui::rml_theme {
                 {"viewport.gizmo_selected_hover_decor", viewport_gizmo_selected_hover_decor},
                 {"viewport.gizmo_selected_hover_icon",
                  colorToRml(readableIconColor(viewport_gizmo_selected_hover_gradient,
-                                               VIEWPORT_GIZMO_SELECTED_HOVER_OPACITY,
-                                               p.text))},
+                                              VIEWPORT_GIZMO_SELECTED_HOVER_OPACITY,
+                                              p.text))},
                 {"viewport.selected_hover", colorToRml(ThemeColor{
                                                 std::min(1.0f, p.primary.x + 0.1f),
                                                 std::min(1.0f, p.primary.y + 0.1f),
@@ -1184,6 +1187,7 @@ namespace lfs::vis::gui::rml_theme {
         hashCombine(seed, b.tint_active);
         hashOverlay(seed, o);
         hashGradients(seed, t.gradients);
+        hashCombine(seed, themePresentationRevision());
         return seed;
     }
 
