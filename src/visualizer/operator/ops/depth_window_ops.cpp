@@ -26,6 +26,9 @@ namespace lfs::vis::op {
     namespace {
         constexpr int kRequiredModifiers = input::KEYMOD_SHIFT | input::KEYMOD_ALT;
         constexpr float kSingularityEpsilon = 1.0e-6f;
+        // Matches the selection tool's own click-vs-drag threshold
+        // (CLICK_THRESHOLD_PX, input_controller.cpp:1265).
+        constexpr float kDrawStartThresholdPx = 5.0f;
         // Drags never pin the rect flush to the viewport boundary: a small
         // inset keeps the box outline visible even where the boundary has no
         // visual wall (e.g. the window's left edge).
@@ -297,6 +300,7 @@ namespace lfs::vis::op {
             void applyRect(const DepthWindowRect& rect);
             void restoreBeforeState();
             void restoreBeforeStateIfStillOurs();
+            void startLatch();
             void finishLatch();
             void refreshOverlay();
 
@@ -309,6 +313,7 @@ namespace lfs::vis::op {
             DepthWindowRect initial_rect_{};
             DepthWindowRect current_rect_{};
             glm::vec2 press_render_{0.0f};
+            glm::vec2 press_threshold_render_{0.0f};
             glm::vec2 anchor_render_{0.0f};
             glm::vec2 last_screen_{0.0f};
             float aspect_px_ = 1.0f;
@@ -317,6 +322,7 @@ namespace lfs::vis::op {
             DragKind drag_kind_ = DragKind::Draw;
             DepthWindowHandle active_handle_ = DepthWindowHandle::None;
             bool constrained_ = false;
+            bool draw_started_ = false;
             bool latch_active_ = false;
             bool modal_active_ = false;
             std::uint64_t overlay_revision_ = 0;
@@ -382,6 +388,7 @@ namespace lfs::vis::op {
                 before_.scale_x, before_.scale_y,
                 before_.offset_x, before_.offset_y);
             current_rect_ = initial_rect_;
+            press_threshold_render_ = screenToRender(last_screen_, panel_);
             press_render_ = glm::clamp(
                 screenToRender(last_screen_, panel_),
                 dragBoundsMin(),
@@ -436,14 +443,10 @@ namespace lfs::vis::op {
                 aspect_px_ = 1.0f;
             }
 
-            selection_tool_->setDepthWindowDragInProgress(true);
-            latch_active_ = true;
-            if (rendering_manager_) {
-                rendering_manager_->setDepthWindowDragPreview(true);
-            }
             if (drag_kind_ == DragKind::Draw) {
-                updateFromScreen(last_screen_);
+                refreshOverlay();
             } else {
+                startLatch();
                 refreshOverlay();
             }
             drag_revision_ = ++g_depth_drag_revision;
@@ -599,6 +602,14 @@ namespace lfs::vis::op {
             refreshOverlay();
         }
 
+        void DepthWindowDragOperator::startLatch() {
+            selection_tool_->setDepthWindowDragInProgress(true);
+            latch_active_ = true;
+            if (rendering_manager_) {
+                rendering_manager_->setDepthWindowDragPreview(true);
+            }
+        }
+
         void DepthWindowDragOperator::finishLatch() {
             if (!latch_active_) {
                 return;
@@ -640,7 +651,7 @@ namespace lfs::vis::op {
                 .has_hovered_panel = true,
                 // Handles only apply to a committed window: hide them while a
                 // new box is being rubber-banded.
-                .hide_handles = drag_kind_ == DragKind::Draw,
+                .hide_handles = drag_kind_ == DragKind::Draw && draw_started_,
                 .hovered_panel = panel_.panel,
                 .hovered_handle = active_handle_,
             });
@@ -666,6 +677,17 @@ namespace lfs::vis::op {
             if (event->type == ModalEvent::Type::MOUSE_MOVE) {
                 const auto* const move = event->as<MouseMoveEvent>();
                 if (move) {
+                    if (drag_kind_ == DragKind::Draw && !draw_started_) {
+                        const glm::vec2 threshold_pointer =
+                            screenToRender(glm::vec2(move->position), panel_);
+                        if (glm::length(threshold_pointer - press_threshold_render_) <
+                            kDrawStartThresholdPx) {
+                            last_screen_ = glm::vec2(move->position);
+                            return OperatorResult::RUNNING_MODAL;
+                        }
+                        draw_started_ = true;
+                        startLatch();
+                    }
                     updateFromScreen(glm::vec2(move->position));
                 }
                 return OperatorResult::RUNNING_MODAL;
@@ -682,6 +704,10 @@ namespace lfs::vis::op {
                 }
 
                 const glm::vec2 release_screen(mouse_button->position);
+                if (drag_kind_ == DragKind::Draw && !draw_started_) {
+                    last_screen_ = release_screen;
+                    return OperatorResult::CANCELLED;
+                }
                 if (pointInDepthWindowPanel(release_screen, panel_)) {
                     updateFromScreen(release_screen);
                 }
@@ -725,6 +751,16 @@ namespace lfs::vis::op {
                      key->action == input::ACTION_RELEASE)) {
                     const bool was_constrained = constrained_;
                     constrained_ = (current_modifiers_ & input::KEYMOD_CTRL) != 0;
+                    // Before the draw has started nothing may be written: a Ctrl
+                    // press is "Ctrl at onset" (a square); a Ctrl release just
+                    // clears the constraint. Neither samples current_rect_ (it
+                    // still holds the OLD window) nor calls updateFromScreen.
+                    if (drag_kind_ == DragKind::Draw && !draw_started_) {
+                        if (constrained_) {
+                            aspect_px_ = 1.0f;
+                        }
+                        return OperatorResult::RUNNING_MODAL;
+                    }
                     // On a fresh draw, Ctrl locks the shape being dragged right
                     // now, not the previous window — re-capture the live rect's
                     // ratio on every Ctrl press. Resize keeps the drag-start
@@ -759,7 +795,9 @@ namespace lfs::vis::op {
 
         void DepthWindowDragOperator::cancel(OperatorContext& /*ctx*/) {
             modal_active_ = false;
-            restoreBeforeState();
+            if (latch_active_) {
+                restoreBeforeState();
+            }
             finishLatch();
             if ((current_modifiers_ & kRequiredModifiers) == kRequiredModifiers) {
                 (void)updateDepthWindowHover(last_screen_, viewport_bounds_, true);

@@ -2657,6 +2657,14 @@ namespace lfs::vis {
 
     TEST_F(DepthWindowGtHookTest, GtToggleCancelsDepthWindowDragAndClearsHover) {
         ASSERT_TRUE(startDepthDrag());
+        const op::ModalEvent move{
+            .type = op::ModalEvent::Type::MOUSE_MOVE,
+            .data = MouseMoveEvent{
+                .position = {60.0, 60.0},
+                .delta = {50.0, 50.0},
+            },
+        };
+        ASSERT_EQ(op::operators().dispatchModalEvent(move), op::OperatorResult::RUNNING_MODAL);
         ASSERT_TRUE(rendering_manager_->depthWindowDragPreview());
         (void)lfs::vis::op::updateDepthWindowHover(
             glm::vec2(50.0f, 50.0f),
