@@ -624,8 +624,23 @@ TEST_F(DepthWindowDragLifecycleTest, GtToggleClearsDepthWindowDragPreview) {
     EXPECT_FALSE(lfs::vis::op::operators().hasModalOperator());
 }
 
-TEST_F(DepthWindowDragLifecycleTest, ModalReplacementClearsDepthWindowDragPreview) {
-    expectMidDragPreviewActive();
+TEST_F(DepthWindowDragLifecycleTest, ModalReplacementRestoresDepthWindowAndPushesNoUndo) {
+    ASSERT_TRUE(startDepthDrag(20.0, 20.0));
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(mouse_move(80.0, 80.0)),
+              OperatorResult::RUNNING_MODAL);
+    EXPECT_TRUE(rendering_manager_->depthWindowDragPreview());
+    const auto dragged = rendering_manager_->getSettings();
+    EXPECT_TRUE(dragged.depth_filter_scale_x != 0.5f ||
+                dragged.depth_filter_scale_y != 0.5f);
+
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(mouse_scroll()),
+              OperatorResult::RUNNING_MODAL);
+    const auto after_scroll = rendering_manager_->getSettings();
+    EXPECT_FLOAT_EQ(after_scroll.depth_filter_scale_x, dragged.depth_filter_scale_x);
+    EXPECT_FLOAT_EQ(after_scroll.depth_filter_scale_y, dragged.depth_filter_scale_y);
+    EXPECT_FLOAT_EQ(after_scroll.depth_filter_offset_x, dragged.depth_filter_offset_x);
+    EXPECT_FLOAT_EQ(after_scroll.depth_filter_offset_y, dragged.depth_filter_offset_y);
+
     lfs::vis::op::OperatorProperties stroke_props;
     stroke_props.set("mode", 0);
     stroke_props.set("op", 0);
@@ -633,8 +648,68 @@ TEST_F(DepthWindowDragLifecycleTest, ModalReplacementClearsDepthWindowDragPrevie
     stroke_props.set("y", 30.0);
     const auto stroke = lfs::vis::op::operators().invoke(lfs::vis::op::BuiltinOp::SelectionStroke, &stroke_props);
     ASSERT_EQ(stroke.status, lfs::vis::op::OperatorResult::RUNNING_MODAL);
+    const auto restored = rendering_manager_->getSettings();
+    EXPECT_FLOAT_EQ(restored.depth_filter_scale_x, 0.5f);
+    EXPECT_FLOAT_EQ(restored.depth_filter_scale_y, 0.5f);
+    EXPECT_FLOAT_EQ(restored.depth_filter_offset_x, 0.0f);
+    EXPECT_FLOAT_EQ(restored.depth_filter_offset_y, 0.0f);
     EXPECT_FALSE(rendering_manager_->depthWindowDragPreview());
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
     lfs::vis::op::operators().cancelModalOperator();
+}
+
+TEST_F(DepthWindowDragLifecycleTest, ModalReplacementByDragKeepsSecondDragState) {
+    ASSERT_TRUE(startDepthDrag(20.0, 20.0));
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(mouse_move(80.0, 80.0)),
+              OperatorResult::RUNNING_MODAL);
+    const auto first_drag = rendering_manager_->getSettings();
+
+    ASSERT_TRUE(startDepthDrag(170.0, 170.0));
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(mouse_move(160.0, 160.0)),
+              OperatorResult::RUNNING_MODAL);
+    const auto second_drag = rendering_manager_->getSettings();
+    EXPECT_TRUE(second_drag.depth_filter_scale_x != first_drag.depth_filter_scale_x ||
+                second_drag.depth_filter_scale_y != first_drag.depth_filter_scale_y ||
+                second_drag.depth_filter_offset_x != first_drag.depth_filter_offset_x ||
+                second_drag.depth_filter_offset_y != first_drag.depth_filter_offset_y);
+    EXPECT_TRUE(second_drag.depth_filter_scale_x != 0.5f ||
+                second_drag.depth_filter_scale_y != 0.5f ||
+                second_drag.depth_filter_offset_x != 0.0f ||
+                second_drag.depth_filter_offset_y != 0.0f);
+
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(key_press(lfs::vis::input::KEY_ESCAPE)),
+              OperatorResult::CANCELLED);
+    const auto restored = rendering_manager_->getSettings();
+    EXPECT_FLOAT_EQ(restored.depth_filter_scale_x, first_drag.depth_filter_scale_x);
+    EXPECT_FLOAT_EQ(restored.depth_filter_scale_y, first_drag.depth_filter_scale_y);
+    EXPECT_FLOAT_EQ(restored.depth_filter_offset_x, first_drag.depth_filter_offset_x);
+    EXPECT_FLOAT_EQ(restored.depth_filter_offset_y, first_drag.depth_filter_offset_y);
+}
+
+TEST_F(DepthWindowDragLifecycleTest, EscapeRestoresDepthWindowAndPushesNoUndo) {
+    ASSERT_TRUE(startDepthDrag(20.0, 20.0));
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(mouse_move(60.0, 60.0)),
+              OperatorResult::RUNNING_MODAL);
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(key_press(lfs::vis::input::KEY_ESCAPE)),
+              OperatorResult::CANCELLED);
+
+    const auto restored = rendering_manager_->getSettings();
+    EXPECT_FLOAT_EQ(restored.depth_filter_scale_x, 0.5f);
+    EXPECT_FLOAT_EQ(restored.depth_filter_scale_y, 0.5f);
+    EXPECT_FLOAT_EQ(restored.depth_filter_offset_x, 0.0f);
+    EXPECT_FLOAT_EQ(restored.depth_filter_offset_y, 0.0f);
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+}
+
+TEST_F(DepthWindowDragLifecycleTest, SecondDepthDragReplacementKeepsIncomingOverlayVisible) {
+    ASSERT_TRUE(startDepthDrag(20.0, 20.0));
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent(mouse_move(60.0, 60.0)),
+              OperatorResult::RUNNING_MODAL);
+
+    ASSERT_TRUE(startDepthDrag(170.0, 170.0));
+    EXPECT_TRUE(lfs::vis::op::operators().hasModalOperator());
+    EXPECT_EQ(lfs::vis::op::operators().activeModalId(), "selection.depth_window_drag");
+    EXPECT_TRUE(lfs::vis::op::depthWindowOverlayState().visible);
 }
 
 TEST_F(DepthWindowDragLifecycleTest, FocusLossClearsDepthWindowDragPreview) {

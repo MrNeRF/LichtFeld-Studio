@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "operator/ops/depth_window_ops.hpp"
+#include "core/logger.hpp"
 #include "core/services.hpp"
 #include "gui/gui_manager.hpp"
 #include "input/input_types.hpp"
@@ -38,6 +39,8 @@ namespace lfs::vis::op {
         }
 
         DepthWindowOverlayState g_overlay_state;
+        std::uint64_t g_overlay_revision = 0;
+        std::uint64_t g_depth_drag_revision = 0;
 
         [[nodiscard]] tools::SelectionTool* activeDepthWindowTool() {
             auto* const gui = services().guiOrNull();
@@ -86,6 +89,7 @@ namespace lfs::vis::op {
                                  g_overlay_state.hovered_panel != state.hovered_panel ||
                                  g_overlay_state.hovered_handle != state.hovered_handle;
             g_overlay_state = state;
+            ++g_overlay_revision;
             if (changed) {
                 if (auto* const rendering = services().renderingOrNull()) {
                     rendering->markDirty(DirtyFlag::OVERLAY);
@@ -116,17 +120,23 @@ namespace lfs::vis::op {
         public:
             static const OperatorDescriptor DESCRIPTOR;
 
-            // The registry may destroy a modal operator without calling
-            // cancel() when another modal replaces it; the latch must not
-            // outlive the operator.
+            // The registry may destroy a modal operator without calling cancel().
+            // Restore must precede latch release because the latch re-derives the
+            // filter volume, and only this drag's still-owned state is restored.
             ~DepthWindowDragOperator() override {
-                // latch still active here means destructor-only termination
-                // (modal replacement bypasses cancel()): the drag's overlay
-                // state - including a Draw drag's hide_handles - must not
-                // outlive the operator.
                 const bool terminated_mid_drag = latch_active_;
-                finishLatch();
                 if (terminated_mid_drag) {
+                    try {
+                        restoreBeforeStateIfStillOurs();
+                    } catch (...) {
+                        // A failed restore must not skip latch cleanup. This does
+                        // not make finishLatch()'s pre-existing update path safe.
+                        LOG_WARN("Depth window restore failed during operator teardown");
+                    }
+                }
+                finishLatch();
+                if ((terminated_mid_drag || modal_active_) &&
+                    g_overlay_revision == overlay_revision_) {
                     clearDepthWindowHover();
                 }
             }
@@ -151,6 +161,8 @@ namespace lfs::vis::op {
             [[nodiscard]] DepthWindowRect deriveEdgeRect(const glm::vec2& pointer) const;
             void updateFromScreen(const glm::vec2& screen);
             void applyRect(const DepthWindowRect& rect);
+            void restoreBeforeState();
+            void restoreBeforeStateIfStillOurs();
             void finishLatch();
             void refreshOverlay();
 
@@ -159,6 +171,7 @@ namespace lfs::vis::op {
             DepthWindowPanelMapping panel_{};
             glm::vec4 viewport_bounds_{0.0f};
             DepthWindowSettingsState before_{};
+            DepthWindowSettingsState applied_{};
             DepthWindowRect initial_rect_{};
             DepthWindowRect current_rect_{};
             glm::vec2 press_render_{0.0f};
@@ -171,6 +184,9 @@ namespace lfs::vis::op {
             DepthWindowHandle active_handle_ = DepthWindowHandle::None;
             bool constrained_ = false;
             bool latch_active_ = false;
+            bool modal_active_ = false;
+            std::uint64_t overlay_revision_ = 0;
+            std::uint64_t drag_revision_ = 0;
         };
 
         const OperatorDescriptor DepthWindowDragOperator::DESCRIPTOR = {
@@ -296,6 +312,8 @@ namespace lfs::vis::op {
             } else {
                 refreshOverlay();
             }
+            drag_revision_ = ++g_depth_drag_revision;
+            modal_active_ = true;
             return OperatorResult::RUNNING_MODAL;
         }
 
@@ -438,6 +456,7 @@ namespace lfs::vis::op {
             settings.depth_filter_offset_y = offset_for_axis(
                 center.y, static_cast<float>(panel_.render_height), scale_y);
             rendering_manager_->updateSettings(settings, DirtyFlag::SELECTION);
+            applied_ = captureDepthWindowSettings(rendering_manager_->getSettings());
         }
 
         void DepthWindowDragOperator::updateFromScreen(const glm::vec2& screen) {
@@ -466,6 +485,28 @@ namespace lfs::vis::op {
             }
         }
 
+        void DepthWindowDragOperator::restoreBeforeState() {
+            if (rendering_manager_) {
+                auto settings = rendering_manager_->getSettings();
+                settings.depth_filter_scale_x = before_.scale_x;
+                settings.depth_filter_scale_y = before_.scale_y;
+                settings.depth_filter_offset_x = before_.offset_x;
+                settings.depth_filter_offset_y = before_.offset_y;
+                rendering_manager_->updateSettings(settings, DirtyFlag::SELECTION);
+            }
+        }
+
+        void DepthWindowDragOperator::restoreBeforeStateIfStillOurs() {
+            if (!rendering_manager_ || g_depth_drag_revision != drag_revision_) {
+                return;
+            }
+            const auto settings = rendering_manager_->getSettings();
+            if (captureDepthWindowSettings(settings) != applied_) {
+                return;
+            }
+            restoreBeforeState();
+        }
+
         void DepthWindowDragOperator::refreshOverlay() {
             setOverlayState({
                 .visible = (current_modifiers_ & kRequiredModifiers) == kRequiredModifiers,
@@ -476,6 +517,7 @@ namespace lfs::vis::op {
                 .hovered_panel = panel_.panel,
                 .hovered_handle = active_handle_,
             });
+            overlay_revision_ = g_overlay_revision;
         }
 
         OperatorResult DepthWindowDragOperator::modal(OperatorContext& ctx,
@@ -530,6 +572,7 @@ namespace lfs::vis::op {
                 if (auto* const selection = ctx.scene().getSelectionService()) {
                     selection->invalidateInteractiveBrushFilterCache();
                 }
+                modal_active_ = false;
                 (void)updateDepthWindowHover(
                     release_screen, viewport_bounds_,
                     (current_modifiers_ & kRequiredModifiers) == kRequiredModifiers);
@@ -577,18 +620,18 @@ namespace lfs::vis::op {
                 return OperatorResult::PASS_THROUGH;
             }
 
+            // All scroll is reserved and ignored for this modal: scroll-to-size
+            // would write the window behind the drag's ownership tracking.
+            if (event->type == ModalEvent::Type::MOUSE_SCROLL) {
+                return OperatorResult::RUNNING_MODAL;
+            }
+
             return OperatorResult::PASS_THROUGH;
         }
 
         void DepthWindowDragOperator::cancel(OperatorContext& /*ctx*/) {
-            if (rendering_manager_) {
-                auto settings = rendering_manager_->getSettings();
-                settings.depth_filter_scale_x = before_.scale_x;
-                settings.depth_filter_scale_y = before_.scale_y;
-                settings.depth_filter_offset_x = before_.offset_x;
-                settings.depth_filter_offset_y = before_.offset_y;
-                rendering_manager_->updateSettings(settings, DirtyFlag::SELECTION);
-            }
+            modal_active_ = false;
+            restoreBeforeState();
             finishLatch();
             if ((current_modifiers_ & kRequiredModifiers) == kRequiredModifiers) {
                 (void)updateDepthWindowHover(last_screen_, viewport_bounds_, true);
