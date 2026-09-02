@@ -13,7 +13,9 @@
 #include <cstdint>
 #include <filesystem>
 #include <glm/glm.hpp>
+#include <limits>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace lfs::io {
@@ -31,6 +33,54 @@ namespace lfs::io {
         std::size_t points_after_filtering = 0;
         bool track_filter_applied = false;
     };
+
+    constexpr uint64_t INVALID_POINT3D_ID = std::numeric_limits<uint64_t>::max();
+
+    struct ImagePoint2D {
+        double x = 0.0;
+        double y = 0.0;
+        uint64_t point3D_id = INVALID_POINT3D_ID;
+    };
+
+    struct ImageData {
+        uint32_t image_id = 0;
+        uint32_t camera_id = 0;
+        std::string name;
+        std::vector<float> qvec = {1.0f, 0.0f, 0.0f, 0.0f};
+        std::vector<float> tvec = {0.0f, 0.0f, 0.0f};
+        std::vector<ImagePoint2D> points2D;
+    };
+
+    struct Point3DTrackElement {
+        uint32_t image_id = 0;
+        uint32_t point2D_idx = 0;
+    };
+
+    struct Point3DData {
+        uint64_t point3D_id = 0;
+        double xyz[3] = {0.0, 0.0, 0.0};
+        uint8_t color[3] = {255, 255, 255};
+        double error = 0.0;
+        size_t track_count = 0;
+        std::vector<Point3DTrackElement> track;
+    };
+
+    // Filled only by read_colmap_cameras_and_images when SfM observations
+    // require the points; consumed (and cleared) by the first point-cloud
+    // read; never mutated otherwise.
+    struct ColmapPointCloudRecords {
+        std::vector<Point3DData> records;
+        std::vector<Diagnostic> warnings;
+        bool loaded = false;
+    };
+
+    Result<LoadOutcome<std::vector<ImageData>>> read_colmap_images_binary(
+        const std::filesystem::path& file_path,
+        const LoadOptions& options = {});
+
+    Result<LoadOutcome<std::vector<Point3DData>>> read_colmap_point3D_binary_records(
+        const std::filesystem::path& file_path,
+        const LoadOptions& options = {});
 
     // Camera data structure used for intermediate loading before Camera creation
     struct CameraData {
@@ -71,7 +121,8 @@ namespace lfs::io {
     read_colmap_cameras_and_images(
         const std::filesystem::path& base,
         const std::string& images_folder = "images",
-        const LoadOptions& options = {});
+        const LoadOptions& options = {},
+        ColmapPointCloudRecords* point_records = nullptr);
 
     /**
      * @brief Read COLMAP point cloud (binary format)
@@ -80,11 +131,13 @@ namespace lfs::io {
      */
     Result<LoadOutcome<PointCloud>> read_colmap_point_cloud(
         const std::filesystem::path& filepath,
-        const LoadOptions& options = {});
+        const LoadOptions& options = {},
+        ColmapPointCloudRecords* point_records = nullptr);
 
     Result<LoadOutcome<ColmapPointCloudLoadStats>> read_colmap_point_cloud_with_stats(
         const std::filesystem::path& filepath,
-        const LoadOptions& options = {});
+        const LoadOptions& options = {},
+        ColmapPointCloudRecords* point_records = nullptr);
 
     /**
      * @brief Read COLMAP cameras and images from text files
