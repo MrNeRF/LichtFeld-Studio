@@ -10,7 +10,7 @@
         <div id="training-section" class="hidden" data-class-hidden="!show_training">
             <span class="separator section-sep">|</span>
             <div id="progress-group" class="status-item">
-                <div id="progress-container" data-class-minecraft="progress_minecraft">
+                <div id="progress-container" data-class-miner="progress_miner">
                     <div id="progress-wall"></div>
                     <div id="progress-fill" data-style-width="progress_width"></div>
                     <div id="progress-debris"></div>
@@ -25,7 +25,7 @@
                     <img class="progress-figure smoke" src="../icon/mining/miner-smoke-4.png" data-style-left="progress_width" data-class-hidden="!miner_smoke_4"/>
                     <img class="progress-figure smoke" src="../icon/mining/miner-smoke-5.png" data-style-left="progress_width" data-class-hidden="!miner_smoke_5"/>
                     <img class="progress-figure smoke" src="../icon/mining/miner-smoke-6.png" data-style-left="progress_width" data-class-hidden="!miner_smoke_6"/>
-                    <span id="progress-text" data-class-progress-text--minecraft="progress_minecraft" data-style-left="progress_text_left">{{ progress_text }}</span>
+                    <span id="progress-text" data-class-progress-text--miner="progress_miner" data-style-left="progress_text_left">{{ progress_text }}</span>
                 </div>
             </div>
             <div id="step-metric" class="status-item">

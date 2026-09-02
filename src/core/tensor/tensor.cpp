@@ -26,6 +26,8 @@
 #include <iomanip>
 #include <numeric>
 #include <print>
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
 #include <utility>
 
 // SIMD intrinsics for CPU optimization
@@ -39,6 +41,25 @@
 #endif
 
 namespace lfs::core {
+
+    void prefault_pageable_host_memory(void* data, const size_t bytes) {
+        constexpr size_t page_bytes = 4096;
+        constexpr size_t min_prefault_bytes = 64ULL * 1024ULL * 1024ULL;
+        if (data == nullptr || bytes < min_prefault_bytes) {
+            return;
+        }
+
+        const size_t page_count = (bytes - 1) / page_bytes + 1;
+        auto* const pages = static_cast<volatile unsigned char*>(data);
+        tbb::parallel_for(
+            tbb::blocked_range<size_t>(0, page_count, 4096),
+            [pages, bytes](const tbb::blocked_range<size_t>& range) {
+                for (size_t page = range.begin(); page != range.end(); ++page) {
+                    const size_t offset = std::min(page * size_t{4096}, bytes - 1);
+                    pages[offset] = 0;
+                }
+            });
+    }
 
     std::atomic<size_t> Tensor::next_id_{1};
 
@@ -947,6 +968,10 @@ namespace lfs::core {
         PinnedMemoryAllocator::instance().empty_cache();
     }
 
+    void Tensor::trim_memory_pool_if_reserved_unused_exceeds(const size_t threshold_bytes) {
+        CudaMemoryPool::instance().trim_cached_memory_if_reserved_unused_exceeds(threshold_bytes);
+    }
+
     void Tensor::trim_device_memory_pool() {
         CudaMemoryPool::instance().trim_cached_memory();
     }
@@ -1629,6 +1654,49 @@ namespace lfs::core {
         return t;
     }
 
+    Tensor Tensor::to_pageable_host(const cudaStream_t stream) const {
+        materialize_if_deferred();
+        LFS_ASSERT_MSG(is_valid(), "pageable host transfer requires a valid tensor");
+
+        const Tensor source = is_contiguous_ ? *this : contiguous();
+        Tensor result = empty_pageable_host(source.shape_, source.dtype_);
+        if (source.numel() == 0) {
+            return result;
+        }
+
+        {
+            LOG_TIMER_DEBUG("Tensor: pageable host prefault");
+            prefault_pageable_host_memory(result.data_, result.bytes());
+        }
+
+        if (source.device_ == Device::CPU) {
+            std::memcpy(result.data_, source.data_ptr(), source.bytes());
+            return result;
+        }
+
+        const cudaStream_t transfer_stream = stream
+                                                 ? prepare_inputs_for_stream({&source}, stream)
+                                                 : prepare_inputs_for_stream({&source});
+        LFS_CUDA_CHECK_MSG_STREAM_ARGS(
+            cudaMemcpyAsync(result.data_, source.data_ptr(), source.bytes(),
+                            cudaMemcpyDeviceToHost, transfer_stream),
+            transfer_stream,
+            reinterpret_cast<uintptr_t>(result.data_),
+            reinterpret_cast<uintptr_t>(source.data_ptr()),
+            source.bytes(),
+            "while copying tensor '{}' shape={} dtype={} to pageable CPU",
+            tensor_debug_name(*this), source.shape_.str(), dtype_name(source.dtype_));
+        LFS_CUDA_CHECK_MSG_STREAM_ARGS(
+            cudaStreamSynchronize(transfer_stream),
+            transfer_stream,
+            reinterpret_cast<uintptr_t>(result.data_),
+            reinterpret_cast<uintptr_t>(source.data_ptr()),
+            source.bytes(),
+            "while completing copy of tensor '{}' shape={} dtype={} to pageable CPU",
+            tensor_debug_name(*this), source.shape_.str(), dtype_name(source.dtype_));
+        return result;
+    }
+
     // ============= Type Conversion =============
     Tensor Tensor::to(DataType dtype) const {
         LFS_CUDA_BREADCRUMB_STREAM("tensor.dtype_convert", stream());
@@ -1765,6 +1833,10 @@ namespace lfs::core {
         CONVERT_DTYPE_CUDA(uint8_t, float, DataType::UInt8, DataType::Float32)
         CONVERT_DTYPE_CUDA(int, uint8_t, DataType::Int32, DataType::UInt8)
         CONVERT_DTYPE_CUDA(uint8_t, int, DataType::UInt8, DataType::Int32)
+
+        // UInt32 conversions (used by compact identity/payload scratch).
+        CONVERT_DTYPE_CUDA(uint32_t, float, DataType::UInt32, DataType::Float32)
+        CONVERT_DTYPE_CUDA(float, uint32_t, DataType::Float32, DataType::UInt32)
 
         // Bool -> UInt8: Bool storage is already normalized to 0 or 1.
         if (dtype_ == DataType::Bool && dtype == DataType::UInt8) {
@@ -2876,6 +2948,16 @@ namespace lfs::core {
             value = static_cast<float>(temp);
             break;
         }
+        case DataType::UInt32: {
+            uint32_t temp;
+            if (device_ == Device::CUDA) {
+                LFS_CUDA_CHECK(cudaMemcpy(&temp, raw_ptr, sizeof(uint32_t), cudaMemcpyDeviceToHost));
+            } else {
+                temp = *static_cast<const uint32_t*>(raw_ptr);
+            }
+            value = static_cast<float>(temp);
+            break;
+        }
         case DataType::Bool: {
             unsigned char temp;
             if (device_ == Device::CUDA) {
@@ -2972,6 +3054,11 @@ namespace lfs::core {
 
         // Handle UInt8 dtype by converting to float
         if (dtype_ == DataType::UInt8) {
+            auto float_tensor = to(DataType::Float32);
+            return float_tensor.to_vector();
+        }
+
+        if (dtype_ == DataType::UInt32) {
             auto float_tensor = to(DataType::Float32);
             return float_tensor.to_vector();
         }

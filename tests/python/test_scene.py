@@ -48,7 +48,8 @@ class TestSplatDataAfterLoad:
     @pytest.mark.slow
     def test_splat_data_sh_degree(self, loaded_splat):
         """Test SplatData has SH degree set."""
-        assert loaded_splat.sh_degree >= 0
+        assert loaded_splat.active_sh_degree >= 0
+        assert loaded_splat.active_sh_degree <= loaded_splat.max_sh_degree
 
     @pytest.mark.slow
     def test_splat_data_means_shape(self, loaded_splat, numpy):
@@ -61,15 +62,14 @@ class TestSplatDataAfterLoad:
     @pytest.mark.slow
     def test_splat_data_opacities_shape(self, loaded_splat, numpy):
         """Test opacities tensor has correct shape."""
-        opacities = loaded_splat.get_opacities()
-        assert opacities.ndim == 2
+        opacities = loaded_splat.get_opacity()
+        assert opacities.ndim == 1
         assert opacities.shape[0] == loaded_splat.num_points
-        assert opacities.shape[1] == 1
 
     @pytest.mark.slow
     def test_splat_data_scalings_shape(self, loaded_splat, numpy):
         """Test scalings tensor has correct shape."""
-        scalings = loaded_splat.get_scalings()
+        scalings = loaded_splat.get_scaling()
         assert scalings.ndim == 2
         assert scalings.shape[0] == loaded_splat.num_points
         assert scalings.shape[1] == 3
@@ -77,7 +77,7 @@ class TestSplatDataAfterLoad:
     @pytest.mark.slow
     def test_splat_data_rotations_shape(self, loaded_splat, numpy):
         """Test rotations tensor has correct shape."""
-        rotations = loaded_splat.get_rotations()
+        rotations = loaded_splat.get_rotation()
         assert rotations.ndim == 2
         assert rotations.shape[0] == loaded_splat.num_points
         assert rotations.shape[1] == 4  # quaternion
@@ -85,10 +85,11 @@ class TestSplatDataAfterLoad:
     @pytest.mark.slow
     def test_splat_data_features_dc(self, loaded_splat, numpy):
         """Test features_dc tensor has correct shape."""
-        features_dc = loaded_splat.get_features_dc()
+        features_dc = loaded_splat.get_shs()
         assert features_dc.ndim == 3
         assert features_dc.shape[0] == loaded_splat.num_points
         # DC is (N, 1, 3) typically
+        assert features_dc.shape[1] >= 1
         assert features_dc.shape[2] == 3
 
     @pytest.mark.slow
@@ -181,7 +182,7 @@ class TestPointCloudAccess:
     @pytest.mark.slow
     def test_point_cloud_opacities_in_range(self, point_cloud, numpy):
         """Test opacities are in valid range after activation."""
-        opacities = point_cloud.get_opacities()
+        opacities = point_cloud.get_opacity()
         arr = opacities.cpu().numpy()
         # After sigmoid, should be in (0, 1)
         assert numpy.all(arr >= 0.0)

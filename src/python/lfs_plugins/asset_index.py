@@ -178,7 +178,7 @@ def resolve_default_asset_directory() -> Path:
     try:
         import lichtfeld as lf
 
-        getter = getattr(getattr(lf, "ui", None), "get_asset_manager_directory", None)
+        getter = getattr(getattr(lf, "ui", None), "get_project_location", None)
         if callable(getter):
             resolved = str(getter() or "").strip()
             if resolved:
@@ -186,7 +186,7 @@ def resolve_default_asset_directory() -> Path:
     except Exception:
         pass
 
-    return Path.home() / ".lichtfeld" / "assets"
+    return Path.home() / ".lichtfeld" / "projects"
 
 
 def is_supported_asset_path(path: str) -> bool:

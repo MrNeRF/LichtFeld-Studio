@@ -52,7 +52,7 @@ namespace lfs::core::nn::models {
         // device copies is enough and dtype-correct.
         void recapture(Tensor& slot, const Tensor& src) {
             if (!slot.is_valid() || slot.dtype() != src.dtype() || slot.device() != src.device() ||
-                slot.numel() != src.numel()) {
+                slot.shape() != src.shape()) {
                 slot = src.clone();
                 return;
             }

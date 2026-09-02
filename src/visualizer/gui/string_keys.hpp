@@ -509,17 +509,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* DISCARD = "exit_popup.discard";
     } // namespace ExitPopup
 
-    namespace LoadDatasetPopup {
-        inline constexpr const char* TITLE = "load_dataset_popup.title";
-        inline constexpr const char* CONFIGURE_PATHS = "load_dataset_popup.configure_paths";
-        inline constexpr const char* IMAGES_DIR = "load_dataset_popup.images_dir";
-        inline constexpr const char* SPARSE_DIR = "load_dataset_popup.sparse_dir";
-        inline constexpr const char* MASKS_DIR = "load_dataset_popup.masks_dir";
-        inline constexpr const char* OUTPUT_DIR = "load_dataset_popup.output_dir";
-        inline constexpr const char* INIT_FILE = "load_dataset_popup.init_file";
-        inline constexpr const char* HELP_TEXT = "load_dataset_popup.help_text";
-    } // namespace LoadDatasetPopup
-
     namespace Notification {
         inline constexpr const char* DROPPED_NOT_RECOGNIZED = "notification.dropped_not_recognized";
         inline constexpr const char* DIRECTORY = "notification.directory";

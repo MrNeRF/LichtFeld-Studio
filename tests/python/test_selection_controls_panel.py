@@ -237,6 +237,11 @@ class _DocumentStub:
         self.scale = _ElementStub()
         self.offset_x = _ElementStub()
         self.offset_y = _ElementStub()
+        self.near_slider = _ElementStub()
+        self.far_slider = _ElementStub()
+        self.scale_slider = _ElementStub()
+        self.offset_x_slider = _ElementStub()
+        self.offset_y_slider = _ElementStub()
         self._by_id = {
             "selection-block": self.wrap,
             "selection-depth-near": self.near,
@@ -244,6 +249,11 @@ class _DocumentStub:
             "selection-depth-scale": self.scale,
             "selection-depth-offset-x": self.offset_x,
             "selection-depth-offset-y": self.offset_y,
+            "selection-depth-near-slider": self.near_slider,
+            "selection-depth-far-slider": self.far_slider,
+            "selection-depth-scale-slider": self.scale_slider,
+            "selection-depth-offset-x-slider": self.offset_x_slider,
+            "selection-depth-offset-y-slider": self.offset_y_slider,
         }
 
     def get_element_by_id(self, element_id):
@@ -459,6 +469,59 @@ def test_d9_ratio_change_rebases_to_100_percent(selection_controls_module):
     assert panel._ref_scale_x == pytest.approx(0.70)
     assert panel._ref_scale_y == pytest.approx(0.35)
 
+
+
+def test_selection_depth_user_edit_mark_expires(selection_controls_module, monkeypatch):
+    module, state = selection_controls_module
+    panel = module.SelectionControlsController()
+    model = _DataModelStub()
+
+    panel.bind_model(model)
+    panel.update(_DocumentStub())
+    panel._depth_echo_holdoff = 1
+    panel._mark_depth_user_edit("near")
+    marked_at = module.time.monotonic()
+    monkeypatch.setattr(
+        module.time,
+        "monotonic",
+        lambda: marked_at + module._DEPTH_USER_EDIT_MARK_TTL + 0.01,
+    )
+
+    model.bound_binds["selection_depth_near_value"][1]("1.5")
+
+    assert state.depth_calls == []
+    assert "near" not in panel._depth_user_edit_pending
+
+
+def test_selection_depth_slider_press_passes_through_echo_holdoff(selection_controls_module):
+    """A pressed slider applies during the echo holdoff; an unmarked replay does not.
+
+    The user-edit mark (#1927) and the per-slider entry points (#1932) meet
+    here: an external change arms the holdoff, the replayed position is dropped,
+    and the position from a slider the user pressed goes through.
+    """
+    module, state = selection_controls_module
+    panel = module.SelectionControlsController()
+    model = _DataModelStub()
+    doc = _DocumentStub()
+
+    state.depth_enabled = True
+    panel.bind_model(model)
+    panel.mount(doc)
+    for _ in range(4):
+        panel.update(doc)
+    state.depth_calls.clear()
+
+    state.depth_near = 1.0
+    panel.update(doc)
+    assert panel._depth_echo_holdoff > 0
+
+    model.bound_binds["selection_depth_near_value"][1]("0.5")
+    assert state.depth_calls == []
+
+    doc.near_slider.emit("mousedown")
+    model.bound_binds["selection_depth_near_value"][1]("1.5")
+    assert state.depth_calls[-1][1] == pytest.approx(1.5)
 
 
 def test_selection_depth_text_fields_commit_like_panel_inputs(selection_controls_module):

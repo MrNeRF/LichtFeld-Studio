@@ -667,6 +667,7 @@
                 <div class="viewport-transform-axis viewport-selection-depth-axis depth-axis-near" data-tooltip="tooltip.selection_depth_near">
                     <span class="viewport-transform-axis-label">{{ui_near_label}}</span>
                     <input type="range"
+                           id="selection-depth-near-slider"
                            class="setting-slider viewport-selection-slider"
                            min="0"
                            max="1000"
@@ -684,6 +685,7 @@
                 <div class="viewport-transform-axis viewport-selection-depth-axis depth-axis-far" data-tooltip="tooltip.selection_depth_far">
                     <span class="viewport-transform-axis-label">{{ui_far_label}}</span>
                     <input type="range"
+                           id="selection-depth-far-slider"
                            class="setting-slider viewport-selection-slider"
                            min="0"
                            max="1000"
@@ -703,6 +705,7 @@
                 <div class="viewport-transform-axis viewport-selection-depth-axis depth-axis-size" data-tooltip="tooltip.selection_depth_size">
                     <span class="viewport-transform-axis-label">{{ui_size_label}}</span>
                     <input type="range"
+                           id="selection-depth-scale-slider"
                            class="setting-slider viewport-selection-slider"
                            min="5"
                            max="100"
@@ -720,6 +723,7 @@
                 <div class="viewport-transform-axis viewport-selection-depth-axis depth-axis-x" data-tooltip="tooltip.selection_depth_offset_x">
                     <span class="viewport-transform-axis-label">{{ui_offset_x_label}}</span>
                     <input type="range"
+                           id="selection-depth-offset-x-slider"
                            class="setting-slider viewport-selection-slider"
                            min="-100"
                            max="100"
@@ -737,6 +741,7 @@
                 <div class="viewport-transform-axis viewport-selection-depth-axis depth-axis-y" data-tooltip="tooltip.selection_depth_offset_y">
                     <span class="viewport-transform-axis-label">{{ui_offset_y_label}}</span>
                     <input type="range"
+                           id="selection-depth-offset-y-slider"
                            class="setting-slider viewport-selection-slider"
                            min="-100"
                            max="100"

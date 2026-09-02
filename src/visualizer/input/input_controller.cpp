@@ -2567,8 +2567,8 @@ namespace lfs::vis {
         }
 
         if (dataset_path) {
-            LOG_INFO("Showing dataset load popup for: {}", lfs::core::path_to_utf8(*dataset_path));
-            cmd::ShowDatasetLoadPopup{.dataset_path = *dataset_path}.emit();
+            LOG_INFO("Showing New Project dialog for: {}", lfs::core::path_to_utf8(*dataset_path));
+            cmd::ShowNewProjectDialog{.source_path = *dataset_path}.emit();
         }
 
         if (environment_map_path) {

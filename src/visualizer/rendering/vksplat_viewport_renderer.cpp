@@ -22,6 +22,7 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rasterizer/vulkan/src/indirect_layout.h"
 #include "rendering/rasterizer/vulkan/src/viewport_scratch_bucket.h"
+#include "rendering/rasterizer/vulkan/src/visible_mask.h"
 #include "rendering/vulkan_wait.hpp"
 #include "viewport/vksplat_compose.comp.spv.h"
 #include "vksplat_input_packer.hpp"
@@ -222,6 +223,11 @@ namespace lfs::vis {
                     }
                     frame_id_ = *frame_id;
                     frame_active_ = true;
+                    // The guard claims the same offset-zero epoch as FastGS.
+                    // The arena assertion covers the existing CUDA-event or
+                    // imported Vulkan-timeline handoff before Vulkan records
+                    // any reads from the shared block.
+                    arena_->assert_frame_handoff(frame_id_);
                     arena_->set_rendering_active(false);
                     render_pending_ = false;
                 } catch (...) {
@@ -3328,24 +3334,31 @@ namespace lfs::vis {
         const std::size_t per_visible = macro_chain ? visible_capacity : num_splats;
         const std::size_t cumsum_elements = std::max(per_visible, alloc_tiles);
 
+        if (macro_chain) {
+            add_count(num_splats, sizeof(std::int32_t)); // survivors
+        }
         if (!macro_chain) {
             add_count(num_splats, sizeof(std::uint32_t)); // primitive_depth_keys
             add_count(num_splats, sizeof(std::int32_t));  // tiles_touched
         }
         add_count(per_visible, sizeof(std::int64_t)); // rect_tile_space
-        if (!macro_chain) {
-            add_count(num_splats, sizeof(std::int32_t)); // radii
-        }
         add_count(2 * per_visible, sizeof(float));    // xy_vs
         add_count(per_visible, sizeof(float));        // depths
         add_count(4 * per_visible, sizeof(float));    // inv_cov_vs_opacity
         add_count(3 * per_visible, sizeof(float));    // rgb
         add_count(per_visible, sizeof(std::int32_t)); // overlay_flags
+        if (macro_chain) {
+            add_count(per_visible, sizeof(std::int32_t)); // orig_ids
+        }
         add_count(per_visible, sizeof(std::int32_t)); // primitive_sort_indices
         add_count(per_visible, sizeof(std::int32_t)); // tiles_touched_depth_ordered
         if (!macro_chain) {
-            add_count(num_splats, sizeof(std::int32_t)); // visible_flags
-            add_count(num_splats, sizeof(std::int32_t)); // visible_prefix
+            add_count(lfs::rendering::vulkan::visible_mask::maskWordCount(num_splats),
+                      sizeof(std::int32_t)); // packed visible mask
+            add_count(lfs::rendering::vulkan::visible_mask::workgroupCount(num_splats),
+                      sizeof(std::int32_t)); // visible block counts
+            add_count(lfs::rendering::vulkan::visible_mask::workgroupCount(num_splats),
+                      sizeof(std::int32_t)); // scanned visible block counts
         }
         add_count(2, sizeof(std::uint32_t));                                                                          // visible_count
         add_count(indirect::VisibleSortDispatch::kLayout.word_count, sizeof(std::uint32_t));                          // visible_sort_dispatch_args
@@ -3383,6 +3396,11 @@ namespace lfs::vis {
             return std::unexpected("VkSplat shared scratch requires CUDA/Vulkan external-memory interop");
         }
 
+        // This is the viewer's next use of the shared block (including the
+        // training-start prime), so a prior idle boundary no longer permits the
+        // trainer to trim below the viewer's tracked high-water.
+        shared_scratch_.viewer_idle_reclaim_eligible.store(false, std::memory_order_release);
+
         // 12.5% headroom on the first allocation; 50% when growing an existing
         // block so the lowered floor cannot cause per-frame regrow churn while
         // instance demand ramps with N.
@@ -3398,10 +3416,17 @@ namespace lfs::vis {
                                                cudaGetErrorString(err)));
         }
 
-        constexpr VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                             VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                                             VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+        VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                   VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                   VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                                   VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+        // wave_predicates remains a private tiny buffer because conditional
+        // rendering has a distinct usage bit. Include that bit on the shared
+        // parent when the device supports the extension, so any future shared
+        // predicate view would retain identical Vulkan usage semantics.
+        if (renderer_.supportsConditionalRendering()) {
+            usage |= VK_BUFFER_USAGE_CONDITIONAL_RENDERING_BIT_EXT;
+        }
 
         // The per-region rows are published by bindSharedScratchBuffers (the single
         // source of truth for the breakdown); here we only refresh the capacity gauge.
@@ -3418,13 +3443,56 @@ namespace lfs::vis {
         // the render thread in reimportSharedScratchIfGrown.
         const auto make_grow_fn = [this](std::shared_ptr<lfs::core::ExportableBlock> block) {
             return [this, block = std::move(block)](std::size_t need) -> std::size_t {
-                const std::size_t want =
-                    need > (std::numeric_limits<std::size_t>::max() / 2) ? need : need + need / 2;
-                auto grew = lfs::core::growExportableDeviceBlock(block, want);
+                const std::size_t exact_need = alignUp(need, kSharedScratchPageBytes);
+                auto grew = lfs::core::growExportableDeviceBlock(block, exact_need);
                 if (!grew) {
-                    return std::size_t{0};
+                    LOG_ERROR("VkSplat shared scratch grow to {} MiB failed: {}",
+                              exact_need >> 20, grew.error());
                 }
                 return block->committedPrefixBytes();
+            };
+        };
+
+        // Boundary trim runs after the arena has waited on the last Vulkan
+        // release timeline. Drop the current import before closing the export
+        // handles; otherwise NVIDIA may observe a live VkDeviceMemory import
+        // while cuMemUnmap/cuMemRelease tears down a chunk.
+        const auto make_shrink_fn = [this](std::shared_ptr<lfs::core::ExportableBlock> block) {
+            return [this, block = std::move(block)](std::size_t target) -> std::size_t {
+                if (!prepareSharedScratchForArenaShrink(block)) {
+                    return 0;
+                }
+                auto shrunk = lfs::core::shrinkExportableDeviceBlock(block, target);
+                if (!shrunk) {
+                    LOG_WARN("VkSplat shared scratch shrink failed: {}", shrunk.error());
+                    return 0;
+                }
+                shared_scratch_.bytes = block->committedPrefixBytes();
+                ++shared_scratch_.generation;
+                auto& profiler = lfs::diagnostics::VramProfiler::instance();
+                profiler.setGauge("vram.audit.shared_scratch.capacity",
+                                  static_cast<double>(shared_scratch_.bytes));
+                profiler.setSharedScratchBytes(shared_scratch_.bytes);
+                return shared_scratch_.bytes;
+            };
+        };
+        const auto make_minimum_size_fn = [this]() -> std::size_t {
+            if (shared_scratch_.viewer_idle_reclaim_eligible.load(std::memory_order_acquire)) {
+                return 0;
+            }
+            return shared_scratch_.viewer_high_water_bytes.load(std::memory_order_acquire);
+        };
+
+        const auto make_external_backing = [&](const std::shared_ptr<lfs::core::ExportableBlock>& block) {
+            return lfs::core::RasterizerMemoryArena::ExternalBacking{
+                .device_ptr = block->device_ptr,
+                .size = block->committedPrefixBytes(),
+                .device = device,
+                .owner = std::shared_ptr<void>(block),
+                .label = "vksplat.shared_scratch",
+                .grow = make_grow_fn(block),
+                .shrink = make_shrink_fn(block),
+                .minimum_size = make_minimum_size_fn,
             };
         };
 
@@ -3432,14 +3500,7 @@ namespace lfs::vis {
             if (!shared_scratch_.block) {
                 return false;
             }
-            lfs::core::RasterizerMemoryArena::ExternalBacking backing{
-                .device_ptr = shared_scratch_.block->device_ptr,
-                .size = shared_scratch_.block->committedPrefixBytes(),
-                .device = device,
-                .owner = std::shared_ptr<void>(shared_scratch_.block),
-                .label = "vksplat.shared_scratch",
-                .grow = make_grow_fn(shared_scratch_.block),
-            };
+            auto backing = make_external_backing(shared_scratch_.block);
             return lfs::core::GlobalArenaManager::instance().try_install_external_backing(std::move(backing));
         };
 
@@ -3505,7 +3566,13 @@ namespace lfs::vis {
                 ++shared_scratch_.generation;
                 return true;
             };
-            if (!lfs::core::GlobalArenaManager::instance().grow_external_backing(device_ptr, target_bytes, commit)) {
+            const std::size_t exact_required_bytes = alignUp(required_bytes, kSharedScratchPageBytes);
+            bool grew = lfs::core::GlobalArenaManager::instance().grow_external_backing(
+                device_ptr, exact_required_bytes, commit);
+            if (!grew) {
+                LOG_ERROR("VkSplat shared scratch grow to {} MiB failed: {}",
+                          exact_required_bytes >> 20,
+                          commit_error.empty() ? "unknown error" : commit_error);
                 return std::unexpected(commit_error.empty()
                                            ? std::string("VkSplat shared scratch training rasterizer arena is busy")
                                            : std::format("VkSplat shared scratch grow failed: {}", commit_error));
@@ -3548,14 +3615,7 @@ namespace lfs::vis {
                                                context.lastError()));
         }
 
-        lfs::core::RasterizerMemoryArena::ExternalBacking backing{
-            .device_ptr = (*block_result)->device_ptr,
-            .size = (*block_result)->committedPrefixBytes(),
-            .device = device,
-            .owner = std::shared_ptr<void>(*block_result),
-            .label = "vksplat.shared_scratch",
-            .grow = make_grow_fn(*block_result),
-        };
+        auto backing = make_external_backing(*block_result);
         if (!lfs::core::GlobalArenaManager::instance().try_install_external_backing(std::move(backing))) {
             context.destroyExternalBuffer(imported);
             return std::unexpected("VkSplat shared scratch training rasterizer arena is busy");
@@ -3586,10 +3646,13 @@ namespace lfs::vis {
         if (!shared_scratch_.block) {
             return {};
         }
-        constexpr VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                             VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                                             VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+        VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                   VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                   VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                                   VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+        if (renderer_.supportsConditionalRendering()) {
+            usage |= VK_BUFFER_USAGE_CONDITIONAL_RENDERING_BIT_EXT;
+        }
         if (shared_scratch_.imported_buffer.buffer == VK_NULL_HANDLE) {
             VulkanContext::ExternalBuffer imported{};
             if (!context.importExportableBlock(*shared_scratch_.block,
@@ -3717,24 +3780,31 @@ namespace lfs::vis {
         // cursor so every region lands at the estimated offset.
         const std::size_t per_visible = macro_chain ? visible_capacity : num_splats;
         const std::size_t cumsum_elements = std::max(per_visible, alloc_tiles);
+        if (macro_chain) {
+            bind_count(buffers_.survivors, num_splats);
+        }
         if (!macro_chain) {
             bind_count(buffers_.primitive_depth_keys, num_splats);
             bind_count(buffers_.tiles_touched, num_splats);
         }
         bind_count(buffers_.rect_tile_space, per_visible);
-        if (!macro_chain) {
-            bind_count(buffers_.radii, num_splats);
-        }
         bind_count(buffers_.xy_vs, 2 * per_visible);
         bind_count(buffers_.depths, per_visible);
         bind_count(buffers_.inv_cov_vs_opacity, 4 * per_visible);
         bind_count(buffers_.rgb, 3 * per_visible);
         bind_count(buffers_.overlay_flags, per_visible);
+        if (macro_chain) {
+            bind_count(buffers_.orig_ids, per_visible);
+        }
         bind_count(buffers_.primitive_sort_indices, per_visible);
         bind_count(buffers_.tiles_touched_depth_ordered, per_visible);
         if (!macro_chain) {
-            bind_count(buffers_.visible_flags, num_splats);
-            bind_count(buffers_.visible_prefix, num_splats);
+            bind_count(buffers_.visible_flags,
+                       lfs::rendering::vulkan::visible_mask::maskWordCount(num_splats));
+            bind_count(buffers_.visible_block_counts,
+                       lfs::rendering::vulkan::visible_mask::workgroupCount(num_splats));
+            bind_count(buffers_.visible_prefix,
+                       lfs::rendering::vulkan::visible_mask::workgroupCount(num_splats));
         }
         bind_count(buffers_.visible_count, 2);
         bind_count(buffers_.visible_sort_dispatch_args,
@@ -3769,6 +3839,23 @@ namespace lfs::vis {
         bind_count(buffers_._sorting_histogram, 8 * 256);
         bind_count(buffers_._sorting_histogram_cumsum,
                    _CEIL_DIV(sort_region_elems, std::size_t{512 * 8}) * 256);
+
+        // The viewer is the first occupant of the shared block in this epoch.
+        // Its high-water starts at the same byte zero where a FastGS frame
+        // starts; it must never be appended after the arena's high-water.
+        std::size_t viewer_high_water =
+            shared_scratch_.viewer_high_water_bytes.load(std::memory_order_relaxed);
+        while (viewer_high_water < cursor &&
+               !shared_scratch_.viewer_high_water_bytes.compare_exchange_weak(
+                   viewer_high_water, cursor,
+                   std::memory_order_release,
+                   std::memory_order_relaxed)) {
+        }
+        viewer_high_water =
+            shared_scratch_.viewer_high_water_bytes.load(std::memory_order_acquire);
+        LFS_DEBUG_ASSERT_MSG(
+            viewer_high_water <= shared_scratch_.bytes,
+            "viewer shared-scratch high-water exceeds the committed shared block");
 
         // Attribute the committed arena exactly: each region's span comes straight from
         // the bind cursor, and reserve_unbound is the committed-but-unbound remainder.
@@ -3814,7 +3901,6 @@ namespace lfs::vis {
 #define RELEASE_PRIVATE_SCRATCH(name) release(buffers_.name)
         RELEASE_PRIVATE_SCRATCH(tiles_touched);
         RELEASE_PRIVATE_SCRATCH(rect_tile_space);
-        RELEASE_PRIVATE_SCRATCH(radii);
         RELEASE_PRIVATE_SCRATCH(xy_vs);
         RELEASE_PRIVATE_SCRATCH(depths);
         RELEASE_PRIVATE_SCRATCH(inv_cov_vs_opacity);
@@ -3824,6 +3910,7 @@ namespace lfs::vis {
         RELEASE_PRIVATE_SCRATCH(primitive_sort_indices);
         RELEASE_PRIVATE_SCRATCH(tiles_touched_depth_ordered);
         RELEASE_PRIVATE_SCRATCH(visible_flags);
+        RELEASE_PRIVATE_SCRATCH(visible_block_counts);
         RELEASE_PRIVATE_SCRATCH(visible_prefix);
         RELEASE_PRIVATE_SCRATCH(visible_count);
         RELEASE_PRIVATE_SCRATCH(visible_sort_dispatch_args);
@@ -3848,6 +3935,17 @@ namespace lfs::vis {
         RELEASE_PRIVATE_SCRATCH(_cumsum_blockSums2);
         RELEASE_PRIVATE_SCRATCH(_sorting_histogram);
         RELEASE_PRIVATE_SCRATCH(_sorting_histogram_cumsum);
+        RELEASE_PRIVATE_SCRATCH(survivors);
+        RELEASE_PRIVATE_SCRATCH(survivor_state);
+        RELEASE_PRIVATE_SCRATCH(visible_emit_count);
+        RELEASE_PRIVATE_SCRATCH(orig_ids);
+        RELEASE_PRIVATE_SCRATCH(cumsum_counts);
+        RELEASE_PRIVATE_SCRATCH(visible_dispatch);
+        RELEASE_PRIVATE_SCRATCH(macro_partials);
+        RELEASE_PRIVATE_SCRATCH(macro_active_mask);
+        RELEASE_PRIVATE_SCRATCH(macro_wave_args);
+        RELEASE_PRIVATE_SCRATCH(depth_wave_dispatch);
+        RELEASE_PRIVATE_SCRATCH(wave_predicates);
 #undef RELEASE_PRIVATE_SCRATCH
 
         if (released_bytes != 0) {
@@ -3909,7 +4007,6 @@ namespace lfs::vis {
 #define DETACH_SHARED(name) detach(buffers_.name.deviceBuffer)
         DETACH_SHARED(tiles_touched);
         DETACH_SHARED(rect_tile_space);
-        DETACH_SHARED(radii);
         DETACH_SHARED(xy_vs);
         DETACH_SHARED(depths);
         DETACH_SHARED(inv_cov_vs_opacity);
@@ -3919,6 +4016,7 @@ namespace lfs::vis {
         DETACH_SHARED(primitive_sort_indices);
         DETACH_SHARED(tiles_touched_depth_ordered);
         DETACH_SHARED(visible_flags);
+        DETACH_SHARED(visible_block_counts);
         DETACH_SHARED(visible_prefix);
         DETACH_SHARED(visible_count);
         DETACH_SHARED(visible_sort_dispatch_args);
@@ -3943,10 +4041,53 @@ namespace lfs::vis {
         DETACH_SHARED(_cumsum_blockSums2);
         DETACH_SHARED(_sorting_histogram);
         DETACH_SHARED(_sorting_histogram_cumsum);
+        DETACH_SHARED(survivors);
+        DETACH_SHARED(orig_ids);
 #undef DETACH_SHARED
 
         buffers_.num_indices = 0;
         buffers_.is_unsorted_1 = true;
+    }
+
+    void VksplatViewportRenderer::releaseScratchOnIdle(const bool release_shared,
+                                                       const bool allow_shared_reclaim) {
+        std::lock_guard<std::mutex> readback_lock(readback_mutex_);
+        if (context_ == nullptr) {
+            return;
+        }
+
+        releasePrivateScratchBuffers();
+        if (release_shared) {
+            shared_scratch_.viewer_idle_reclaim_eligible.store(false, std::memory_order_release);
+            releaseSharedScratchArena();
+        } else if (allow_shared_reclaim) {
+            shared_scratch_.viewer_idle_reclaim_eligible.store(true, std::memory_order_release);
+        }
+        drainRetiredScratchBuffers(false);
+    }
+
+    bool VksplatViewportRenderer::prepareSharedScratchForArenaShrink(
+        const std::shared_ptr<lfs::core::ExportableBlock>& block) {
+        std::lock_guard<std::mutex> readback_lock(readback_mutex_);
+        if (!shared_scratch_.block || shared_scratch_.block != block) {
+            return false;
+        }
+
+        // The arena has already waited on the external release semaphore. Keep
+        // this independent timeline check as a fail-closed guard for callers
+        // that reach the callback through a future boundary path.
+        if (!renderTimelineValueRetired(last_submitted_render_value_)) {
+            return false;
+        }
+
+        detachSharedScratchBuffers();
+        if (shared_scratch_.imported_buffer.buffer != VK_NULL_HANDLE) {
+            if (context_ == nullptr) {
+                return false;
+            }
+            context_->destroyExternalBuffer(shared_scratch_.imported_buffer);
+        }
+        return true;
     }
 
     void VksplatViewportRenderer::releaseSharedScratchImportOnly() {
@@ -3961,7 +4102,13 @@ namespace lfs::vis {
             profiler.setGauge("vram.audit.shared_scratch.vksplat_view_bytes", 0.0);
             profiler.setSharedScratchBytes(0);
         }
-        shared_scratch_ = {};
+        shared_scratch_.block.reset();
+        shared_scratch_.imported_buffer = {};
+        shared_scratch_.bytes = 0;
+        shared_scratch_.viewer_high_water_bytes.store(0, std::memory_order_release);
+        shared_scratch_.viewer_idle_reclaim_eligible.store(false, std::memory_order_release);
+        shared_scratch_.generation = 0;
+        shared_scratch_.installed_in_training_arena = false;
     }
 
     void VksplatViewportRenderer::releaseSharedScratchArena() {

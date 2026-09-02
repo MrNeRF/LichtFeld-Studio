@@ -66,6 +66,8 @@ namespace fast_lfs::rasterization::kernels::forward {
         const uint sh_value_bits, // 0=fp32, 16+bounds=q16, 16+null bounds=IEEE f16
         const float4* __restrict__ w2c,
         const float3* __restrict__ cam_position,
+        const uint* __restrict__ primitive_indices,
+        uint* __restrict__ primitive_visible_mask,
         uint* __restrict__ primitive_depth_keys,
         float* __restrict__ primitive_depths,
         std::uint64_t* __restrict__ primitive_n_touched_tiles,
@@ -74,6 +76,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         float4* __restrict__ primitive_conic_opacity,
         float4* __restrict__ primitive_color,
         float3* __restrict__ primitive_normals,
+        const uint n_work_items,
         const uint n_primitives,
         const uint grid_width,
         const uint grid_height,
@@ -96,15 +99,20 @@ namespace fast_lfs::rasterization::kernels::forward {
         float* __restrict__ max_screen_share) {
         (void)w;
         (void)h;
-        auto primitive_idx = cg::this_grid().thread_rank();
-        bool active = true;
-        if (primitive_idx >= n_primitives) {
+        auto work_idx = cg::this_grid().thread_rank();
+        bool active = work_idx < n_work_items;
+        if (!active) {
+            work_idx = n_work_items - 1;
+        }
+        const uint primitive_idx = primitive_indices != nullptr
+                                       ? primitive_indices[work_idx]
+                                       : work_idx;
+        if (!active) {
             active = false;
-            primitive_idx = n_primitives - 1;
         }
 
-        if (active)
-            primitive_n_touched_tiles[primitive_idx] = 0;
+        if (active && primitive_n_touched_tiles != nullptr)
+            primitive_n_touched_tiles[work_idx] = 0;
 
         // load 3d mean
         const float3 mean3d = means[primitive_idx];
@@ -248,8 +256,15 @@ namespace fast_lfs::rasterization::kernels::forward {
         }
 
         // store results
-        primitive_n_touched_tiles[primitive_idx] = n_touched_tiles;
-        primitive_screen_bounds[primitive_idx] = make_ushort4(
+        if (primitive_visible_mask != nullptr) {
+            atomicOr(&primitive_visible_mask[primitive_idx >> 5],
+                     1u << (primitive_idx & 31u));
+        }
+        if (primitive_n_touched_tiles != nullptr)
+            primitive_n_touched_tiles[work_idx] = n_touched_tiles;
+        if (primitive_screen_bounds == nullptr)
+            return;
+        primitive_screen_bounds[work_idx] = make_ushort4(
             static_cast<ushort>(screen_bounds.x),
             static_cast<ushort>(screen_bounds.y),
             static_cast<ushort>(screen_bounds.z),
@@ -272,17 +287,17 @@ namespace fast_lfs::rasterization::kernels::forward {
             static_cast<ushort>(min(px_max, 65535)),
             static_cast<ushort>(min(py_min, 65535)),
             static_cast<ushort>(min(py_max, 65535)));
-        primitive_mean2d[primitive_idx] = packed;
-        primitive_conic_opacity[primitive_idx] = make_float4(conic, output_opacity);
+        primitive_mean2d[work_idx] = packed;
+        primitive_conic_opacity[work_idx] = make_float4(conic, output_opacity);
         // Pad float3 color → float4 for 128-bit loads (w unused).
         const float3 sh_color = convert_sh_to_color(
             sh_coefficients_0, sh_coefficients_rest,
             mean3d, cam_position[0],
             primitive_idx, active_sh_bases, sh_layout_slots,
             sh_value_bounds, sh_value_n_cells, sh_value_bits);
-        primitive_color[primitive_idx] = make_float4(sh_color, 0.0f);
-        primitive_depth_keys[primitive_idx] = quantize_depth_key(depth, depth_bits);
-        primitive_depths[primitive_idx] = depth;
+        primitive_color[work_idx] = make_float4(sh_color, 0.0f);
+        primitive_depth_keys[work_idx] = quantize_depth_key(depth, depth_bits);
+        primitive_depths[work_idx] = depth;
 
         // Camera-space unit normal: rotation column of the smallest axis, oriented toward the camera.
         if (primitive_normals != nullptr) {
@@ -295,7 +310,7 @@ namespace fast_lfs::rasterization::kernels::forward {
             const float3 normal_world = dot(axis, view_dir) > 0.0f
                                             ? make_float3(-axis.x, -axis.y, -axis.z)
                                             : axis;
-            primitive_normals[primitive_idx] = make_float3(
+            primitive_normals[work_idx] = make_float3(
                 w2c_r1.x * normal_world.x + w2c_r1.y * normal_world.y + w2c_r1.z * normal_world.z,
                 w2c_r2.x * normal_world.x + w2c_r2.y * normal_world.y + w2c_r2.z * normal_world.z,
                 w2c_r3.x * normal_world.x + w2c_r3.y * normal_world.y + w2c_r3.z * normal_world.z);
@@ -416,31 +431,33 @@ namespace fast_lfs::rasterization::kernels::forward {
         const ushort4* __restrict__ primitive_screen_bounds,
         const PackedMeanBBox* __restrict__ primitive_mean2d,
         const float4* __restrict__ primitive_conic_opacity,
+        const uint* __restrict__ visible_primitive_indices,
         InstanceKey* __restrict__ instance_keys,
         uint* __restrict__ instance_primitive_indices,
         FastGSForwardStatus* __restrict__ status,
         const uint grid_width,
         const uint depth_bits,
-        const uint n_primitives,
+        const uint n_visible,
         const uint max_instances) {
         uint idx = cg::this_grid().thread_rank();
 
-        bool active = true;
-        if (idx >= n_primitives) {
+        bool active = idx < n_visible;
+        if (!active) {
             active = false;
-            idx = n_primitives - 1;
+            idx = n_visible - 1;
         }
 
-        const uint primitive_idx = idx;
-        const uint n_touched_tiles = active ? static_cast<uint>(primitive_n_touched_tiles[primitive_idx]) : 0;
+        const uint work_idx = idx;
+        const uint primitive_idx = visible_primitive_indices[work_idx];
+        const uint n_touched_tiles = active ? static_cast<uint>(primitive_n_touched_tiles[work_idx]) : 0;
         active = active && n_touched_tiles > 0;
 
         if (__ballot_sync(0xffffffffu, active) == 0)
             return;
 
-        const ushort4 screen_bounds = active ? primitive_screen_bounds[primitive_idx] : make_ushort4(0, 0, 0, 0);
+        const ushort4 screen_bounds = active ? primitive_screen_bounds[work_idx] : make_ushort4(0, 0, 0, 0);
         const uint4 diagnostic_bounds = make_uint4(screen_bounds.x, screen_bounds.y, screen_bounds.z, screen_bounds.w);
-        const uint depth_key = active ? primitive_depth_keys[primitive_idx] : 0;
+        const uint depth_key = active ? primitive_depth_keys[work_idx] : 0;
         const uint write_offset_end_raw = active ? static_cast<uint>(primitive_offsets[idx]) : 0;
         // clamp to sort-buffer capacity; flag overflow for host re-run.
         if (active && write_offset_end_raw > max_instances) {
@@ -457,13 +474,13 @@ namespace fast_lfs::rasterization::kernels::forward {
         const uint write_offset_end =
             write_offset_end_raw > max_instances ? max_instances : write_offset_end_raw;
 
-        const float2 mean2d_shifted = active ? primitive_mean2d[primitive_idx].mean2d - 0.5f : make_float2(0.0f, 0.0f);
-        const float4 conic_opacity_loaded = active ? primitive_conic_opacity[primitive_idx] : make_float4(0.0f, 0.0f, 0.0f, config::min_alpha_threshold);
+        const float2 mean2d_shifted = active ? primitive_mean2d[work_idx].mean2d - 0.5f : make_float2(0.0f, 0.0f);
+        const float4 conic_opacity_loaded = active ? primitive_conic_opacity[work_idx] : make_float4(0.0f, 0.0f, 0.0f, config::min_alpha_threshold);
         const float3 conic = make_float3(conic_opacity_loaded);
         const float power_threshold_precomputed = logf(conic_opacity_loaded.w * config::min_alpha_threshold_rcp);
         const float radius_sq = 2.0f * power_threshold_precomputed;
 
-        uint current_write_offset = idx == 0 ? 0 : static_cast<uint>(primitive_offsets[idx - 1]);
+        uint current_write_offset = work_idx == 0 ? 0 : static_cast<uint>(primitive_offsets[work_idx - 1]);
         if (current_write_offset > max_instances) {
             current_write_offset = max_instances;
         }
@@ -572,6 +589,7 @@ namespace fast_lfs::rasterization::kernels::forward {
     __global__ void __launch_bounds__(config::block_size_blend_forward) blend_cu(
         const uint2* __restrict__ tile_instance_ranges,
         const uint* __restrict__ instance_primitive_indices,
+        const uint* __restrict__ primitive_work_indices,
         const PackedMeanBBox* __restrict__ primitive_mean2d,
         const float4* __restrict__ primitive_conic_opacity,
         const float4* __restrict__ primitive_color,
@@ -682,10 +700,11 @@ namespace fast_lfs::rasterization::kernels::forward {
                 const int fetch_idx = static_cast<int>(tile_range.x) + batch_base + static_cast<int>(thread_rank);
                 if (fetch_idx < static_cast<int>(tile_range.y)) {
                     const uint primitive_idx = instance_primitive_indices[fetch_idx];
-                    const PackedMeanBBox geom = primitive_mean2d[primitive_idx];
+                    const uint work_idx = primitive_work_indices[primitive_idx];
+                    const PackedMeanBBox geom = primitive_mean2d[work_idx];
                     collected_mean2d[thread_rank] = geom.mean2d;
                     s_bbox[thread_rank] = geom.pixel_bbox;
-                    float4 conic_opacity = primitive_conic_opacity[primitive_idx];
+                    float4 conic_opacity = primitive_conic_opacity[work_idx];
                     // Fold 0.5 into the diagonal of the staged conic so the per-pixel
                     // quadric is cxx*dx^2 + cxy*dx*dy + czz*dy^2. The stored primitive
                     // conic is left unscaled for backward. conic.y is already the 1.0
@@ -694,16 +713,16 @@ namespace fast_lfs::rasterization::kernels::forward {
                     conic_opacity.x *= 0.5f;
                     conic_opacity.z *= 0.5f;
                     collected_conic_opacity[thread_rank] = conic_opacity;
-                    const float4 raw_c = primitive_color[primitive_idx];
+                    const float4 raw_c = primitive_color[work_idx];
                     const float3 clamped = fminf(fmaxf(make_float3(raw_c), 0.0f), config::max_blend_color);
                     // log(opacity*255): skip __expf when sigma/2 is already past the
                     // alpha=1/255 contour. Dead .w slot; pairs that pass still run the
                     // exact opacity*exp test.
                     collected_color[thread_rank] = make_float4(
                         clamped, logf(conic_opacity.w * config::min_alpha_threshold_rcp));
-                    collected_depth[thread_rank] = primitive_depths[primitive_idx];
+                    collected_depth[thread_rank] = primitive_depths[work_idx];
                     if constexpr (kRenderNormal) {
-                        collected_normal[thread_rank] = primitive_normals[primitive_idx];
+                        collected_normal[thread_rank] = primitive_normals[work_idx];
                     }
                 }
             }

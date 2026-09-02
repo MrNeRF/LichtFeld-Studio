@@ -184,7 +184,7 @@ namespace lfs::vis::gui {
                                      const bool past,
                                      const bool hovered,
                                      const bool preview,
-                                     const bool minecraft) {
+                                     const bool miner) {
             const float left_pct = std::clamp(
                 100.0f * static_cast<float>(step) / static_cast<float>(total_iterations),
                 0.5f,
@@ -198,7 +198,7 @@ namespace lfs::vis::gui {
             if (preview)
                 classes += " is-preview";
 
-            if (minecraft) {
+            if (miner) {
                 markers += std::format(
                     "<img class=\"{}\" src=\"../icon/mining/{}\" style=\"left:{:.3f}%;\"/>",
                     classes,
@@ -216,7 +216,7 @@ namespace lfs::vis::gui {
                                             const int total_iterations,
                                             const int current_iteration,
                                             const ProgressMarkerRenderState& state,
-                                            const bool minecraft) {
+                                            const bool miner) {
             if (total_iterations <= 0)
                 return {};
 
@@ -237,7 +237,7 @@ namespace lfs::vis::gui {
                                         save_step <= static_cast<size_t>(std::max(0, current_iteration)),
                                         !state.dragging && save_step == state.hover_step,
                                         false,
-                                        minecraft);
+                                        miner);
             }
 
             if (state.dragging && state.preview_step > 0 &&
@@ -248,7 +248,7 @@ namespace lfs::vis::gui {
                                         false,
                                         true,
                                         true,
-                                        minecraft);
+                                        miner);
             }
             return markers;
         }
@@ -393,7 +393,7 @@ namespace lfs::vis::gui {
         ctor.Bind("mode_text", &model_.mode_text);
         ctor.Bind("mode_color", &model_.mode_color);
         ctor.Bind("show_training", &model_.show_training);
-        ctor.Bind("progress_minecraft", &model_.progress_minecraft);
+        ctor.Bind("progress_miner", &model_.progress_miner);
         ctor.Bind("miner_raised", &model_.miner_raised);
         ctor.Bind("miner_step_a", &model_.miner_step_a);
         ctor.Bind("miner_strike", &model_.miner_strike);
@@ -1317,23 +1317,23 @@ namespace lfs::vis::gui {
         if (progress_style_checked_at_ == std::chrono::steady_clock::time_point{} ||
             now - progress_style_checked_at_ >= std::chrono::seconds(1)) {
             progress_style_checked_at_ = now;
-            progress_minecraft_pref_ = loadProgressBarStylePreference() == "minecraft";
+            progress_miner_pref_ = loadProgressBarStylePreference() == "miner";
         }
-        setModelBool("progress_minecraft", model_.progress_minecraft, progress_minecraft_pref_);
+        setModelBool("progress_miner", model_.progress_miner, progress_miner_pref_);
         const bool running = training_state == TrainingState::Running;
         const auto animation_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
         const auto swing_phase_ms = animation_ms % 550;
         const bool strike_phase = running && swing_phase_ms >= 350;
         const int walk_phase = static_cast<int>((animation_ms / 275) % 4);
-        const bool minecraft_running = progress_minecraft_pref_ && show_training && running;
+        const bool miner_running = progress_miner_pref_ && show_training && running;
         setModelBool("miner_raised", model_.miner_raised,
-                     minecraft_running && !strike_phase && walk_phase != 0 && walk_phase != 2);
+                     miner_running && !strike_phase && walk_phase != 0 && walk_phase != 2);
         setModelBool("miner_step_a", model_.miner_step_a,
-                     minecraft_running && !strike_phase && walk_phase == 0);
-        setModelBool("miner_strike", model_.miner_strike, minecraft_running && strike_phase);
+                     miner_running && !strike_phase && walk_phase == 0);
+        setModelBool("miner_strike", model_.miner_strike, miner_running && strike_phase);
         setModelBool("miner_step_b", model_.miner_step_b,
-                     minecraft_running && !strike_phase && walk_phase == 2);
+                     miner_running && !strike_phase && walk_phase == 2);
         setModelString("step_label", model_.step_label, LOC(lichtfeld::Strings::Status::STEP));
         setModelString("loss_label", model_.loss_label, LOC(lichtfeld::Strings::Status::LOSS));
         setModelString("gaussians_label", model_.gaussians_label,
@@ -1374,14 +1374,14 @@ namespace lfs::vis::gui {
                         text_width_dp = measured_width_dp;
                 }
             }
-            const float text_left_dp = progress_minecraft_pref_
+            const float text_left_dp = progress_miner_pref_
                                            ? mining::miningProgressTextLeftDp(progress * bar_dp, bar_dp,
                                                                               text_width_dp)
                                            : 0.0f;
             setModelString("progress_text_left", model_.progress_text_left,
                            std::format("{:.2f}dp", text_left_dp));
 
-            if (progress_minecraft_pref_) {
+            if (progress_miner_pref_) {
                 updateMiningScene(progress, now, training_state == TrainingState::Paused);
             } else {
                 setProgressWallRml("");
@@ -1396,7 +1396,7 @@ namespace lfs::vis::gui {
                 .hover_step = save_step_interaction_.hover_step,
             };
             setProgressMarkersRml(buildProgressMarkersRml(tm->getSaveSteps(), total, cur, marker_state,
-                                                          progress_minecraft_pref_));
+                                                          progress_miner_pref_));
             setModelString("step_value", model_.step_value, std::format("{}/{}", cur, total));
             setModelString("loss_value", model_.loss_value, std::format("{:.4f}", loss));
             setModelString("gaussians_value", model_.gaussians_value,
@@ -1434,22 +1434,22 @@ namespace lfs::vis::gui {
             setModelString("eta_value", model_.eta_value, "");
         }
 
-        const bool minecraft_smoke = progress_minecraft_pref_ && show_training &&
-                                     training_state == TrainingState::Paused &&
-                                     mining_scene_.pause_started !=
-                                         std::chrono::steady_clock::time_point{};
-        const int smoke_frame = minecraft_smoke
+        const bool miner_smoke = progress_miner_pref_ && show_training &&
+                                 training_state == TrainingState::Paused &&
+                                 mining_scene_.pause_started !=
+                                     std::chrono::steady_clock::time_point{};
+        const int smoke_frame = miner_smoke
                                     ? mining::miningSmokeSpriteIndex(static_cast<int>(
                                           std::chrono::duration_cast<std::chrono::milliseconds>(
                                               now - mining_scene_.pause_started)
                                               .count()))
                                     : 0;
-        setModelBool("miner_smoke_1", model_.miner_smoke_1, minecraft_smoke && smoke_frame == 0);
-        setModelBool("miner_smoke_2", model_.miner_smoke_2, minecraft_smoke && smoke_frame == 1);
-        setModelBool("miner_smoke_3", model_.miner_smoke_3, minecraft_smoke && smoke_frame == 2);
-        setModelBool("miner_smoke_4", model_.miner_smoke_4, minecraft_smoke && smoke_frame == 3);
-        setModelBool("miner_smoke_5", model_.miner_smoke_5, minecraft_smoke && smoke_frame == 4);
-        setModelBool("miner_smoke_6", model_.miner_smoke_6, minecraft_smoke && smoke_frame == 5);
+        setModelBool("miner_smoke_1", model_.miner_smoke_1, miner_smoke && smoke_frame == 0);
+        setModelBool("miner_smoke_2", model_.miner_smoke_2, miner_smoke && smoke_frame == 1);
+        setModelBool("miner_smoke_3", model_.miner_smoke_3, miner_smoke && smoke_frame == 2);
+        setModelBool("miner_smoke_4", model_.miner_smoke_4, miner_smoke && smoke_frame == 3);
+        setModelBool("miner_smoke_5", model_.miner_smoke_5, miner_smoke && smoke_frame == 4);
+        setModelBool("miner_smoke_6", model_.miner_smoke_6, miner_smoke && smoke_frame == 5);
 
         // Splat section (non-training)
         bool show_splats = !show_training && content_type != SceneManager::ContentType::Empty;
@@ -1626,12 +1626,12 @@ namespace lfs::vis::gui {
             (model_.show_gpu_model ? uint32_t{1} << 7 : 0) |
             (model_.account_show_tier ? uint32_t{1} << 8 : 0);
 
-        const bool minecraft_visible = progress_minecraft_pref_ && show_training;
+        const bool miner_visible = progress_miner_pref_ && show_training;
         animation_active_ = wasd_visible || zoom_visible || status_msg.visible ||
-                            minecraft_visible;
-        next_refresh_at_ = now + (minecraft_visible && training_state == TrainingState::Running
+                            miner_visible;
+        next_refresh_at_ = now + (miner_visible && training_state == TrainingState::Running
                                       ? kBusyRefreshInterval
-                                  : minecraft_visible ? kMiningRefreshInterval
+                                  : miner_visible     ? kMiningRefreshInterval
                                   : animation_active_ ? kAnimatedRefreshInterval
                                   : ctx.is_training   ? kBusyRefreshInterval
                                                       : kIdleRefreshInterval);

@@ -865,6 +865,11 @@ namespace lfs::core {
         _undistort_precomputed = true;
     }
 
+    void Camera::adopt_undistortion(const UndistortParams& params) noexcept {
+        _undistort_params = params;
+        _undistort_precomputed = true;
+    }
+
     void Camera::prepare_undistortion(float blank_pixels) {
         if (_undistort_prepared)
             return;

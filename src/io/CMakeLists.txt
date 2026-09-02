@@ -187,6 +187,48 @@ target_compile_options(lfs_video PRIVATE
 )
 
 # Main IO library
+add_library(lfs_tinyusdz STATIC
+        ${CMAKE_SOURCE_DIR}/external/tinyusdz/src/ascii-parser-basetype.cc
+        ${CMAKE_SOURCE_DIR}/external/tinyusdz/src/ascii-parser-timesamples-array.cc
+        ${CMAKE_SOURCE_DIR}/external/tinyusdz/src/ascii-parser-timesamples.cc
+        ${CMAKE_SOURCE_DIR}/external/tinyusdz/src/ascii-parser.cc
+        ${CMAKE_SOURCE_DIR}/external/tinyusdz/src/asset-resolution.cc
+        ${CMAKE_SOURCE_DIR}/external/tinyusdz/src/crate-format.cc
+        ${CMAKE_SOURCE_DIR}/external/tinyusdz/src/crate-reader.cc
+        ${CMAKE_SOURCE_DIR}/external/tinyusdz/src/io-util.cc
+        ${CMAKE_SOURCE_DIR}/external/tinyusdz/src/linear-algebra.cc
+        ${CMAKE_SOURCE_DIR}/external/tinyusdz/src/lz4-compression.cc
+        ${CMAKE_SOURCE_DIR}/external/tinyusdz/src/lz4/lz4.c
+        ${CMAKE_SOURCE_DIR}/external/tinyusdz/src/path-util.cc
+        ${CMAKE_SOURCE_DIR}/external/tinyusdz/src/pprinter.cc
+        ${CMAKE_SOURCE_DIR}/external/tinyusdz/src/prim-reconstruct.cc
+        ${CMAKE_SOURCE_DIR}/external/tinyusdz/src/prim-types.cc
+        ${CMAKE_SOURCE_DIR}/external/tinyusdz/src/stage.cc
+        ${CMAKE_SOURCE_DIR}/external/tinyusdz/src/str-util.cc
+        ${CMAKE_SOURCE_DIR}/external/tinyusdz/src/tiny-format.cc
+        ${CMAKE_SOURCE_DIR}/external/tinyusdz/src/usda-reader.cc
+        ${CMAKE_SOURCE_DIR}/external/tinyusdz/src/value-pprint.cc
+        ${CMAKE_SOURCE_DIR}/external/tinyusdz/src/value-types.cc
+        ${CMAKE_SOURCE_DIR}/external/tinyusdz/src/xform.cc
+        ${CMAKE_SOURCE_DIR}/external/tinyusdz/src/integerCoding.cpp
+)
+target_include_directories(lfs_tinyusdz SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/external/tinyusdz/src)
+target_compile_definitions(lfs_tinyusdz PRIVATE
+        TINYUSDZ_NO_BUILTIN_IMAGE_LOADER
+        nsel_CONFIG_SELECT_EXPECTED=1
+)
+set_target_properties(lfs_tinyusdz PROPERTIES
+        CXX_STANDARD 14
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+        POSITION_INDEPENDENT_CODE ON
+)
+if(MSVC)
+    target_compile_options(lfs_tinyusdz PRIVATE /EHs-c- /bigobj)
+else()
+    target_compile_options(lfs_tinyusdz PRIVATE -fno-exceptions)
+endif()
+
 add_library(lfs_io STATIC
         # Implementation file only (header is in include/io/)
         loader.cpp
@@ -216,6 +258,16 @@ add_library(lfs_io STATIC
         formats/spz.cpp
         formats/usd.hpp
         formats/usd.cpp
+        formats/usd_flat/crate.hpp
+        formats/usd_flat/crate.cpp
+        formats/usd_flat/flat_stage.hpp
+        formats/usd_flat/half.hpp
+        formats/usd_flat/usda_read.hpp
+        formats/usd_flat/usda_read.cpp
+        formats/usd_flat/usda_write.hpp
+        formats/usd_flat/usda_write.cpp
+        formats/usd_flat/usdz.hpp
+        formats/usd_flat/usdz.cpp
         formats/nurec_usdz.hpp
         formats/nurec_usdz.cpp
 
@@ -347,10 +399,11 @@ target_link_libraries(lfs_io
         lfs_io_rad_quant_cuda  # RAD encode quantization (bit-exact, no fast math)
         lfs_core_cuda          # Core CUDA utilities (lanczos_resize for nvcodec)
         assimp::assimp         # Multi-format mesh import
-        usdVol                 # OpenUSD Gaussian ParticleField import
+        lfs_tinyusdz           # USDA parser for flat Gaussian ParticleField interchange
         OpenMeshCore
         spz_lib                # Niantic SPZ compressed format
 )
+target_compile_definitions(lfs_io PRIVATE nsel_CONFIG_SELECT_EXPECTED=1)
 
 # Link nvImageCodec if available
 if(TARGET nvimgcodec)

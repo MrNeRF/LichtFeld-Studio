@@ -494,42 +494,22 @@ find_package(glm REQUIRED)
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SetupNativeFileDialog.cmake")
 find_package(nlohmann_json REQUIRED)
 find_package(args REQUIRED)
+find_package(fmt CONFIG REQUIRED)
+find_package(JPEG REQUIRED)
+find_package(PNG REQUIRED)
+find_package(TIFF REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(Freetype REQUIRED)
 find_package(WebP REQUIRED)
+find_package(tinyexr CONFIG REQUIRED)
 find_package(LibArchive REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 find_package(libdeflate CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
-find_package(OpenImageIO REQUIRED)
 find_package(OpenSSL REQUIRED)
-find_package(pxr CONFIG REQUIRED)
 find_package(assimp REQUIRED)
 find_package(RmlUi CONFIG REQUIRED)
-
-# OpenImageIO's static vcpkg target exposes fmt::fmt-header-only through
-# OpenImageIO_Util. That definition is needed by TUs which include OIIO, but it
-# otherwise makes every source in a consumer instantiate fmt. Preserve OIIO's
-# own public compile interface while making the static archive closure link-only;
-# each of our five OIIO source files opts into FMT_HEADER_ONLY explicitly.
-add_library(lfs_oiio INTERFACE)
-target_link_libraries(lfs_oiio INTERFACE "$<LINK_ONLY:OpenImageIO::OpenImageIO>")
-get_target_property(_lfs_oiio_includes OpenImageIO::OpenImageIO INTERFACE_INCLUDE_DIRECTORIES)
-if(_lfs_oiio_includes)
-    target_include_directories(lfs_oiio SYSTEM INTERFACE ${_lfs_oiio_includes})
-endif()
-get_target_property(_lfs_oiio_definitions OpenImageIO::OpenImageIO INTERFACE_COMPILE_DEFINITIONS)
-if(_lfs_oiio_definitions)
-    target_compile_definitions(lfs_oiio INTERFACE ${_lfs_oiio_definitions})
-endif()
-get_target_property(_lfs_oiio_features OpenImageIO::OpenImageIO INTERFACE_COMPILE_FEATURES)
-if(_lfs_oiio_features)
-    target_compile_features(lfs_oiio INTERFACE ${_lfs_oiio_features})
-endif()
-unset(_lfs_oiio_includes)
-unset(_lfs_oiio_definitions)
-unset(_lfs_oiio_features)
 
 # Vulkan-native depth: glm::perspective/ortho/frustum must emit clip-space z in
 # [0, 1], not OpenGL's [-1, 1]. Keeps gl_FragDepth, the grid pass, the depth-
@@ -1060,57 +1040,6 @@ add_custom_target(copy_viewer_resource_files
 )
 add_dependencies(${PROJECT_NAME} copy_viewer_resource_files)
 
-# OpenUSD runtime resources (schema/file-format plugin metadata).
-# On Windows: copy to <exe>/usd/ so that relative LibraryPaths resolve to the
-# DLL copies already loaded from the exe directory.
-# On Linux: copy to <exe>/../lib/usd/ (conventional layout).
-set(_USD_PLUGIN_SOURCE_DIR "")
-foreach(_candidate
-    "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib/usd"
-    "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin/usd"
-    "${CMAKE_BINARY_DIR}/src/python/usd")
-    # Require an actual plugin sub-directory (not just the root index).
-    if(NOT _USD_PLUGIN_SOURCE_DIR AND EXISTS "${_candidate}/ar/resources/plugInfo.json")
-        set(_USD_PLUGIN_SOURCE_DIR "${_candidate}")
-    endif()
-endforeach()
-
-set(_USD_ROOT_INDEX "")
-foreach(_candidate
-    "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib/usd/plugInfo.json"
-    "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin/usd/plugInfo.json"
-    "${CMAKE_BINARY_DIR}/src/python/usd/plugInfo.json")
-    if(NOT _USD_ROOT_INDEX AND EXISTS "${_candidate}")
-        set(_USD_ROOT_INDEX "${_candidate}")
-    endif()
-endforeach()
-
-if(WIN32)
-    set(_USD_PLUGIN_DEST "$<TARGET_FILE_DIR:${PROJECT_NAME}>/usd")
-else()
-    set(_USD_PLUGIN_DEST "$<TARGET_FILE_DIR:${PROJECT_NAME}>/../lib/usd")
-endif()
-
-if(EXISTS "${_USD_PLUGIN_SOURCE_DIR}")
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${_USD_PLUGIN_DEST}"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
-            "${_USD_PLUGIN_SOURCE_DIR}"
-            "${_USD_PLUGIN_DEST}"
-        COMMENT "Copying OpenUSD plugin resources (per-module)"
-    )
-    message(STATUS "Post-build: OpenUSD plugin resources will be copied from ${_USD_PLUGIN_SOURCE_DIR}")
-endif()
-
-if(EXISTS "${_USD_ROOT_INDEX}")
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${_USD_ROOT_INDEX}"
-            "${_USD_PLUGIN_DEST}/plugInfo.json"
-        COMMENT "Copying OpenUSD root plugin index"
-    )
-endif()
-
 message(STATUS "Post-build: Resources will be copied to \${BUILD_DIR}/resources/")
 
 # Per-config output directory variants for the exe: multi-config only.
@@ -1269,7 +1198,6 @@ message(STATUS "  LibArchive Found: ${LibArchive_FOUND}")
 message(STATUS "  Build Type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "  C++ Standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "  CUDA Standard: ${CMAKE_CUDA_STANDARD}")
-message(STATUS "  OpenImageIO Found: ${OpenImageIO_FOUND}")
 message(STATUS "  Tests: ${BUILD_TESTS}")
 message(STATUS "  Temporal CPU Tests: ${BUILD_TEMPORAL_CPU_TESTS}")
 message(STATUS "  Unicode Test Only: ${BUILD_UNICODE_TEST_ONLY}")
@@ -1344,23 +1272,6 @@ install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/volinga-logo-dark.p
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/rmlui/resources/" DESTINATION "${INSTALL_RESOURCE_DIR}/assets/rmlui")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locales" DESTINATION "${INSTALL_RESOURCE_DIR}")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/viewer" DESTINATION "${INSTALL_RESOURCE_DIR}")
-
-# OpenUSD plugin resources (schema definitions + plugInfo.json files)
-# On Windows configure_usd_plugins() looks for <exe_dir>/usd → install next to the exe (bin/usd).
-# On Linux it looks for <exe_dir>/../lib/usd → install in lib/usd (unchanged).
-if(WIN32)
-    set(_USD_INSTALL_DEST "${CMAKE_INSTALL_BINDIR}/usd")
-else()
-    set(_USD_INSTALL_DEST "${CMAKE_INSTALL_LIBDIR}/usd")
-endif()
-if(EXISTS "${_USD_PLUGIN_SOURCE_DIR}")
-    install(DIRECTORY "${_USD_PLUGIN_SOURCE_DIR}/" DESTINATION "${_USD_INSTALL_DEST}"
-            PATTERN "__pycache__" EXCLUDE
-            PATTERN "*.pyc" EXCLUDE)
-endif()
-if(EXISTS "${_USD_ROOT_INDEX}")
-    install(FILES "${_USD_ROOT_INDEX}" DESTINATION "${_USD_INSTALL_DEST}")
-endif()
 
 # Plugin development documentation
 set(DOC_INSTALL_DIR "${CMAKE_INSTALL_DATADIR}/doc/LichtFeld-Studio")

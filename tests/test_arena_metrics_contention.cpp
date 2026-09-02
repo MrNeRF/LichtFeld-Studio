@@ -13,10 +13,14 @@
 #include <cuda_runtime.h>
 #include <future>
 #include <gtest/gtest.h>
+#include <mutex>
 #include <shared_mutex>
+#include <string>
 #include <thread>
+#include <vector>
 
 #include "core/cuda/memory_arena.hpp"
+#include "core/logger.hpp"
 
 using lfs::core::RasterizerMemoryArena;
 
@@ -70,6 +74,7 @@ TEST_F(ArenaMetricsContentionTest, TrainerMetricsOppositeOrderNoDeadlock) {
     RasterizerMemoryArena arena;
     std::shared_mutex render_mutex;
     std::atomic<bool> trainer_done{false};
+    std::atomic<bool> metrics_started{false};
     std::atomic<int> metrics_attempts{0};
     std::atomic<int> metrics_acquired{0};
 
@@ -77,6 +82,9 @@ TEST_F(ArenaMetricsContentionTest, TrainerMetricsOppositeOrderNoDeadlock) {
         // Trainer: frame-then-lock, exclusive on "refine" iterations.
         std::thread trainer([&] {
             cudaSetDevice(0);
+            while (!metrics_started.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
             for (int i = 1; i <= 400; ++i) {
                 const uint64_t frame = arena.begin_frame(nullptr, false);
                 std::optional<std::unique_lock<std::shared_mutex>> excl;
@@ -91,6 +99,7 @@ TEST_F(ArenaMetricsContentionTest, TrainerMetricsOppositeOrderNoDeadlock) {
         // Metrics: lock-then-(bounded)-frame, the opposite order.
         std::thread metrics([&] {
             cudaSetDevice(0);
+            metrics_started.store(true, std::memory_order_release);
             while (!trainer_done.load(std::memory_order_acquire)) {
                 std::shared_lock<std::shared_mutex> shared(render_mutex);
                 const RasterizerMemoryArena::ScopedBeginFrameTimeout timeout(20);
@@ -180,6 +189,151 @@ TEST_F(ArenaMetricsContentionTest, ExternalGrowWaitsForPendingRender) {
     EXPECT_EQ(arena.get_statistics().capacity, physical_bytes);
 
     arena.end_frame(frame, nullptr, /*from_rendering=*/false);
+}
+
+TEST_F(ArenaMetricsContentionTest, ExternalGrowFailureRetainsCommittedCapacity) {
+    constexpr size_t MiB = 1024 * 1024;
+    constexpr size_t physical_bytes = 4 * MiB;
+    constexpr size_t initial_committed_bytes = 1 * MiB;
+
+    void* device_ptr = nullptr;
+    ASSERT_EQ(cudaMalloc(&device_ptr, physical_bytes), cudaSuccess);
+    auto owner = std::shared_ptr<void>(device_ptr, [](void* ptr) {
+        EXPECT_EQ(cudaFree(ptr), cudaSuccess);
+    });
+
+    RasterizerMemoryArena::Config config;
+    config.max_physical = physical_bytes;
+    config.enable_vmm = false;
+    config.granularity = MiB;
+    RasterizerMemoryArena arena(config);
+    std::atomic<int> grow_calls{0};
+    std::atomic<size_t> requested_bytes{0};
+    RasterizerMemoryArena::ExternalBacking backing{
+        .device_ptr = device_ptr,
+        .size = initial_committed_bytes,
+        .device = 0,
+        .owner = owner,
+        .label = "test.external.failure",
+        .grow = [&](const size_t requested) {
+            grow_calls.fetch_add(1, std::memory_order_relaxed);
+            requested_bytes.store(requested, std::memory_order_release);
+            return size_t{0};
+        },
+    };
+    ASSERT_TRUE(arena.install_external_backing(std::move(backing)));
+
+    std::mutex log_mutex;
+    std::vector<std::string> error_logs;
+    const auto log_handler = lfs::core::Logger::get().add_log_handler(
+        [&](const lfs::core::LogLevel level, const lfs::core::SourceSite&, const std::string_view message) {
+            if (level == lfs::core::LogLevel::Error) {
+                std::scoped_lock lock(log_mutex);
+                error_logs.emplace_back(message);
+            }
+        });
+
+    const uint64_t frame = arena.begin_frame(nullptr, false);
+    auto allocate = arena.get_allocator(frame, "arena.failure.identity");
+    EXPECT_EQ(allocate(2 * MiB), nullptr);
+    EXPECT_EQ(grow_calls.load(std::memory_order_relaxed), 1);
+    EXPECT_EQ(requested_bytes.load(std::memory_order_acquire), 2 * MiB);
+    EXPECT_EQ(arena.get_statistics().capacity, initial_committed_bytes);
+    arena.end_frame(frame, nullptr, false);
+    lfs::core::Logger::get().remove_log_handler(log_handler);
+
+    std::string joined_logs;
+    for (const auto& message : error_logs) {
+        joined_logs += message;
+        joined_logs += '\n';
+    }
+    EXPECT_NE(joined_logs.find("test.external.failure"), std::string::npos);
+    EXPECT_NE(joined_logs.find("arena.failure.identity"), std::string::npos);
+    EXPECT_NE(joined_logs.find("capacity=1 MiB"), std::string::npos);
+    EXPECT_NE(joined_logs.find("Arena VRAM failure snapshot"), std::string::npos);
+    EXPECT_NE(joined_logs.find("cuda_free="), std::string::npos);
+}
+
+TEST_F(ArenaMetricsContentionTest, ExternalGrowCommitsExactAlignedNeed) {
+    constexpr size_t MiB = 1024 * 1024;
+    constexpr size_t initial_committed_bytes = 1 * MiB;
+    constexpr size_t aligned_need = 2 * MiB;
+
+    void* device_ptr = nullptr;
+    ASSERT_EQ(cudaMalloc(&device_ptr, 4 * MiB), cudaSuccess);
+    auto owner = std::shared_ptr<void>(device_ptr, [](void* ptr) {
+        EXPECT_EQ(cudaFree(ptr), cudaSuccess);
+    });
+
+    RasterizerMemoryArena::Config config;
+    config.max_physical = 4 * MiB;
+    config.enable_vmm = false;
+    config.granularity = MiB;
+    RasterizerMemoryArena arena(config);
+    RasterizerMemoryArena::ExternalBacking backing{
+        .device_ptr = device_ptr,
+        .size = initial_committed_bytes,
+        .device = 0,
+        .owner = owner,
+        .label = "test.external.exact_policy",
+    };
+    ASSERT_TRUE(arena.install_external_backing(std::move(backing)));
+
+    std::vector<size_t> requests;
+    const bool grew = arena.grow_external_backing(
+        device_ptr, aligned_need,
+        [&](const size_t requested) {
+            requests.push_back(requested);
+            return requested <= aligned_need;
+        });
+    ASSERT_TRUE(grew);
+    ASSERT_EQ(requests.size(), 1u);
+    EXPECT_EQ(requests[0], aligned_need);
+    EXPECT_EQ(arena.get_statistics().capacity, aligned_need);
+}
+
+TEST_F(ArenaMetricsContentionTest, FullResetRetainsExternalBackingAndCapacity) {
+    constexpr size_t MiB = 1024 * 1024;
+    constexpr size_t physical_bytes = 8 * MiB;
+    constexpr size_t initial_committed_bytes = 1 * MiB;
+
+    void* device_ptr = nullptr;
+    ASSERT_EQ(cudaMalloc(&device_ptr, physical_bytes), cudaSuccess);
+    auto owner = std::shared_ptr<void>(device_ptr, [](void* ptr) {
+        EXPECT_EQ(cudaFree(ptr), cudaSuccess);
+    });
+
+    RasterizerMemoryArena::Config config;
+    config.max_physical = physical_bytes;
+    config.enable_vmm = false;
+    config.granularity = MiB;
+    RasterizerMemoryArena arena(config);
+    RasterizerMemoryArena::ExternalBacking backing{
+        .device_ptr = device_ptr,
+        .size = initial_committed_bytes,
+        .device = 0,
+        .owner = owner,
+        .label = "test.external.reset",
+        .grow = [physical_bytes](const size_t requested) {
+            return requested <= physical_bytes ? physical_bytes : size_t{0};
+        },
+    };
+    ASSERT_TRUE(arena.install_external_backing(std::move(backing)));
+
+    const uint64_t frame = arena.begin_frame(nullptr, false);
+    auto allocate = arena.get_allocator(frame);
+    ASSERT_NE(allocate(2 * MiB), nullptr);
+    arena.end_frame(frame, nullptr, false);
+    ASSERT_EQ(arena.get_statistics().capacity, physical_bytes);
+
+    arena.full_reset();
+    EXPECT_TRUE(arena.using_external_backing());
+    EXPECT_EQ(arena.get_statistics().capacity, physical_bytes);
+
+    const uint64_t post_reset_frame = arena.begin_frame(nullptr, false);
+    auto post_reset_allocate = arena.get_allocator(post_reset_frame);
+    EXPECT_NE(post_reset_allocate(3 * MiB), nullptr);
+    arena.end_frame(post_reset_frame, nullptr, false);
 }
 
 TEST_F(ArenaMetricsContentionTest, FullResetDecommitsVmmHighWater) {

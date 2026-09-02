@@ -240,6 +240,7 @@ target_include_directories(lfs_visualizer
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/external
         ${CMAKE_SOURCE_DIR}/external/httplib
 )
 
@@ -267,7 +268,7 @@ target_link_libraries(lfs_visualizer
         Freetype::Freetype
         nfd::nfd
         vterm
-        lfs_oiio
+        fmt::fmt-header-only
 )
 
 set_property(SOURCE

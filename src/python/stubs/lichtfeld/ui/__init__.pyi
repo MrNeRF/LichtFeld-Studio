@@ -236,10 +236,10 @@ def set_scene_graph_selection_markers(enabled: bool) -> None:
     """Show or hide Scene Graph selection markers"""
 
 def get_progress_bar_style() -> str:
-    """Return the status bar progress style (classic or minecraft)"""
+    """Return the status bar progress style (classic or miner)"""
 
 def set_progress_bar_style(style: str) -> None:
-    """Set the status bar progress style (classic or minecraft)"""
+    """Set the status bar progress style (classic or miner)"""
 
 class PanelSpace(enum.Enum):
     SIDE_PANEL = 0
@@ -2086,8 +2086,8 @@ def register_popup_draw_callback(callback: object) -> None:
 def unregister_popup_draw_callback(callback: object) -> None:
     """Unregister a legacy popup draw callback"""
 
-def on_show_dataset_load_popup(callback: object) -> None:
-    """Register callback for ShowDatasetLoadPopup event"""
+def on_show_new_project_dialog(callback: object) -> None:
+    """Register callback for ShowNewProjectDialog event"""
 
 def on_show_resume_checkpoint_popup(callback: object) -> None:
     """Register callback for ShowResumeCheckpointPopup event"""
@@ -2621,50 +2621,28 @@ def get_mcp_preferences() -> dict:
 def set_mcp_preferences(enabled: bool, expose_network: bool, port: int, request_logging: bool = False) -> bool:
     """Persist and immediately apply MCP HTTP server preferences"""
 
-def get_working_directory() -> str:
+def get_project_location() -> str:
+    """Get the effective project location."""
+
+def get_project_location_preference() -> str:
+    """Get the raw project location preference."""
+
+def get_default_project_location() -> str:
+    """Get the default project location."""
+
+def set_project_location(path: str) -> str:
     """
-    Get the effective working folder (absolute). Empty preference uses the default root.
+    Set the project location. Returns an empty string on success, or a user-facing error.
     """
 
-def get_working_directory_preference() -> str:
-    """
-    Get the raw working folder preference. Empty string means the default root.
-    """
+def clear_project_location() -> None:
+    """Clear the project location preference so the default is used."""
 
-def get_default_working_directory() -> str:
-    """Get the default working folder (UserPaths root)."""
+def get_embed_dataset_by_default() -> bool:
+    """Get whether new projects copy datasets into the project by default."""
 
-def get_temp_project_directory() -> str:
-    """
-    Get the temp project directory for the next untitled session (<working folder>/tmp).
-    """
-
-def set_working_directory(path: str) -> str:
-    """
-    Set the working folder. Returns an empty string on success, or a user-facing error.
-    """
-
-def clear_working_directory() -> None:
-    """Clear the working folder preference so the default root is used."""
-
-def get_asset_manager_directory() -> str:
-    """Get the effective Asset Manager folder (absolute)."""
-
-def get_asset_manager_directory_preference() -> str:
-    """
-    Get the raw Asset Manager folder preference. Empty means the default folder.
-    """
-
-def get_default_asset_manager_directory() -> str:
-    """Get the default Asset Manager folder under the LichtFeld user root."""
-
-def set_asset_manager_directory(path: str) -> str:
-    """
-    Set the Asset Manager folder. Returns empty on success or a user-facing error.
-    """
-
-def clear_asset_manager_directory() -> None:
-    """Clear the Asset Manager folder preference so the default is used."""
+def set_embed_dataset_by_default(enabled: bool) -> bool:
+    """Set whether new projects copy datasets into the project by default."""
 
 def get_mcp_status() -> dict:
     """Get current MCP HTTP server runtime status"""

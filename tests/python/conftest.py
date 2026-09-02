@@ -3,6 +3,7 @@
 """Pytest configuration and fixtures for lichtfeld module tests."""
 
 import hashlib
+import logging
 import os
 import sys
 import tempfile
@@ -122,7 +123,21 @@ def isolate_lichtfeld_module_overrides():
         return any(name == prefix or name.startswith(f"{prefix}.") for prefix in prefixes)
 
     before = {name: module for name, module in sys.modules.items() if is_managed(name)}
+    manager_before = sys.modules.get("lfs_plugins.manager")
+    manager_lf_before = getattr(manager_before, "_lf", None)
+    plugin_loggers = (
+        logging.getLogger("lfs_plugins"),
+        logging.getLogger("lfs_plugins.manager"),
+    )
+    handlers_before = {
+        logger: tuple(logger.handlers) for logger in plugin_loggers
+    }
     yield
+
+    for logger in plugin_loggers:
+        logger.handlers[:] = handlers_before[logger]
+    if manager_before is not None:
+        manager_before._lf = manager_lf_before
 
     extras = {
         name: sys.modules[name]

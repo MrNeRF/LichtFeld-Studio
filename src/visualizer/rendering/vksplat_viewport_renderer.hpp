@@ -174,6 +174,10 @@ namespace lfs::vis {
             std::size_t num_splats,
             glm::ivec2 viewport_size);
 
+        // Release viewer-owned scratch after an idle boundary. Shared training
+        // scratch is released only when the caller explicitly permits it.
+        void releaseScratchOnIdle(bool release_shared, bool allow_shared_reclaim = false);
+
         // Invoked with the completion value immediately after each live-model
         // submit, BEFORE the shared arena frame is released — the trainer's
         // borrow wait must cover the in-flight Vulkan batch before the trainer
@@ -464,6 +468,10 @@ namespace lfs::vis {
         void detachSharedScratchBuffers();
         void releaseSharedScratchImportOnly();
         void releaseSharedScratchArena();
+        // Called by the training arena after its CUDA/Vulkan release timeline
+        // has drained, before exportable VMM chunks are unmapped.
+        bool prepareSharedScratchForArenaShrink(
+            const std::shared_ptr<lfs::core::ExportableBlock>& block);
         // evict=true: pool entries destroy on drain instead of free-list reuse.
         void releaseOutputSlot(OutputSlot output_slot, bool evict = false);
         // Queues a no-longer-current shared-scratch import for destruction once
@@ -682,6 +690,12 @@ namespace lfs::vis {
             std::shared_ptr<lfs::core::ExportableBlock> block;
             VulkanContext::ExternalBuffer imported_buffer{};
             std::size_t bytes = 0;
+            // Viewer high-water is measured from offset zero. The trainer arena
+            // deliberately reuses that same prefix during its exclusive epoch.
+            std::atomic<std::size_t> viewer_high_water_bytes{0};
+            // Set by the existing idle-release boundary. While set, the trainer
+            // may reclaim the viewer-only prefix; the next viewer ensure clears it.
+            std::atomic<bool> viewer_idle_reclaim_eligible{false};
             std::uint64_t generation = 0;
             bool installed_in_training_arena = false;
         };

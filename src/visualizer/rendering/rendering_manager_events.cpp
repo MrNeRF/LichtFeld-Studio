@@ -237,6 +237,10 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleTrainingCompleted() {
+        // TrainingCompleted is delivered from the training side. Defer Vulkan
+        // destruction to renderVulkanFrame, which runs on the Vulkan thread and
+        // also has the final trainer/viewer completion ordering in hand.
+        vksplat_terminal_release_pending_.store(true, std::memory_order_release);
         markDirty(DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::OVERLAY);
     }
 

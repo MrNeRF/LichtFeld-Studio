@@ -79,7 +79,6 @@
 #include "window/vulkan_context.hpp"
 #include "window/window_manager.hpp"
 #include "window/window_state_utils.hpp"
-#include <OpenImageIO/imageio.h>
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
@@ -1881,7 +1880,7 @@ namespace lfs::vis::gui {
                 int channels = 0;
             };
 
-            // Thumbnail decode is OIIO read + CPU downscale; ~17-25 ms per
+            // Thumbnail decode + CPU downscale; ~17-25 ms per
             // image at typical full-res. With only 2 workers a 50-image
             // dataset took ~600 ms of single-threaded decode dominating
             // viewport_pass_prepare_record. Bumped to 8 — modern desktop
@@ -3102,68 +3101,22 @@ namespace lfs::vis::gui {
         SDL_Cursor* loadColorCursorFromAsset(const std::string& asset_name, int hot_x, int hot_y) {
             try {
                 const auto path = lfs::vis::getAssetPath(asset_name);
-                const std::string path_utf8 = lfs::core::path_to_utf8(path);
-                std::unique_ptr<OIIO::ImageInput> in(OIIO::ImageInput::open(path_utf8));
-                if (!in)
+                auto [rgba_pixels, width, height, channels] = lfs::core::load_image_with_alpha(path);
+                if (!rgba_pixels || width <= 0 || height <= 0 || channels != 4) {
+                    lfs::core::free_image(rgba_pixels);
                     return nullptr;
-
-                const OIIO::ImageSpec& spec = in->spec();
-                const int width = spec.width;
-                const int height = spec.height;
-                const int channels = spec.nchannels;
-                if (width <= 0 || height <= 0 || channels <= 0) {
-                    in->close();
-                    return nullptr;
-                }
-
-                const int read_channels = std::clamp(channels, 1, 4);
-                std::vector<unsigned char> source_pixels(static_cast<size_t>(width) * height * read_channels);
-                if (!in->read_image(0, 0, 0, read_channels, OIIO::TypeDesc::UINT8, source_pixels.data())) {
-                    in->close();
-                    return nullptr;
-                }
-                in->close();
-
-                std::vector<unsigned char> rgba_pixels(static_cast<size_t>(width) * height * 4, 0);
-                for (int i = 0; i < width * height; ++i) {
-                    const size_t src = static_cast<size_t>(i) * read_channels;
-                    const size_t dst = static_cast<size_t>(i) * 4;
-                    switch (read_channels) {
-                    case 1:
-                        rgba_pixels[dst + 0] = source_pixels[src + 0];
-                        rgba_pixels[dst + 1] = source_pixels[src + 0];
-                        rgba_pixels[dst + 2] = source_pixels[src + 0];
-                        rgba_pixels[dst + 3] = 255;
-                        break;
-                    case 2:
-                        rgba_pixels[dst + 0] = source_pixels[src + 0];
-                        rgba_pixels[dst + 1] = source_pixels[src + 0];
-                        rgba_pixels[dst + 2] = source_pixels[src + 0];
-                        rgba_pixels[dst + 3] = source_pixels[src + 1];
-                        break;
-                    case 3:
-                        rgba_pixels[dst + 0] = source_pixels[src + 0];
-                        rgba_pixels[dst + 1] = source_pixels[src + 1];
-                        rgba_pixels[dst + 2] = source_pixels[src + 2];
-                        rgba_pixels[dst + 3] = 255;
-                        break;
-                    default:
-                        rgba_pixels[dst + 0] = source_pixels[src + 0];
-                        rgba_pixels[dst + 1] = source_pixels[src + 1];
-                        rgba_pixels[dst + 2] = source_pixels[src + 2];
-                        rgba_pixels[dst + 3] = source_pixels[src + 3];
-                        break;
-                    }
                 }
 
                 SDL_Surface* surface = SDL_CreateSurfaceFrom(width, height, SDL_PIXELFORMAT_RGBA32,
-                                                             rgba_pixels.data(), width * 4);
+                                                             rgba_pixels, width * 4);
                 if (!surface) {
+                    lfs::core::free_image(rgba_pixels);
                     return nullptr;
                 }
 
                 SDL_Cursor* cursor = SDL_CreateColorCursor(surface, hot_x, hot_y);
                 SDL_DestroySurface(surface);
+                lfs::core::free_image(rgba_pixels);
                 return cursor;
             } catch (const std::exception& e) {
                 LOG_WARN("Could not load cursor asset '{}': {}", asset_name, e.what());

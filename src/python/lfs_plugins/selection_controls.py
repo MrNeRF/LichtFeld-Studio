@@ -3,6 +3,7 @@
 """Selection controls controller for the viewport selection overlay."""
 
 import math
+import time
 
 import lichtfeld as lf
 
@@ -29,6 +30,7 @@ _DEPTH_MAX = 1000.0
 _DEPTH_GAP = 0.01
 _DEPTH_SLIDER_HALF_WINDOW = 20.0
 _DEPTH_SLIDER_MIN_SPAN = 1.0
+_DEPTH_USER_EDIT_MARK_TTL = 0.75
 _DEFAULT_DEPTH_NEAR = 0.0
 _DEFAULT_DEPTH_FAR = 6.0
 _DEFAULT_FRUSTUM_HALF_WIDTH = 1.35
@@ -178,6 +180,7 @@ class SelectionControlsController:
         self._last_state_key = None
         self._last_state_items = None
         self._depth_echo_holdoff = 0
+        self._depth_user_edit_pending = {}
         self._depth_text_bufs = {
             "selection_depth_near_str": None,
             "selection_depth_far_str": None,
@@ -296,6 +299,21 @@ class SelectionControlsController:
         self._mount_depth_text_input(doc, "selection-depth-scale", "selection_depth_scale_str")
         self._mount_depth_text_input(doc, "selection-depth-offset-x", "selection_depth_offset_x_str")
         self._mount_depth_text_input(doc, "selection-depth-offset-y", "selection_depth_offset_y_str")
+        for element_id, key in (
+            ("selection-depth-near-slider", "near"),
+            ("selection-depth-far-slider", "far"),
+            ("selection-depth-scale-slider", "scale"),
+            ("selection-depth-offset-x-slider", "offset_x"),
+            ("selection-depth-offset-y-slider", "offset_y"),
+        ):
+            slider = doc.get_element_by_id(element_id)
+            if slider is not None:
+                slider.add_event_listener(
+                    "mousedown", lambda _event, k=key: self._mark_depth_user_edit(k)
+                )
+                slider.add_event_listener(
+                    "focus", lambda _event, k=key: self._mark_depth_user_edit(k)
+                )
 
     def update(self, doc):
         dirty = False
@@ -349,6 +367,7 @@ class SelectionControlsController:
         self._last_state_key = None
         self._last_state_items = None
         self._depth_echo_holdoff = 0
+        self._depth_user_edit_pending.clear()
         self._editing_depth_text.clear()
         self._escape_revert.clear()
 
@@ -635,33 +654,47 @@ class SelectionControlsController:
 
     # Range-input entry points. RmlUi replays a slider's pre-update position into
     # its setter when the bound attributes change in the same frame, so these
-    # drop the value while the echo holdoff is armed. They are bound in
-    # bind_model; the text-commit path calls the cores above directly.
+    # drop the value while the echo holdoff is armed unless the user just pressed
+    # that slider (_mark_depth_user_edit). They are bound in bind_model; the
+    # text-commit path calls the cores above directly.
 
     def _set_depth_near_from_slider(self, value):
-        if self._depth_echo_holdoff > 0:
+        if not self._depth_setter_allowed("near"):
             return
         self._set_depth_near(value)
 
     def _set_depth_far_from_slider(self, value):
-        if self._depth_echo_holdoff > 0:
+        if not self._depth_setter_allowed("far"):
             return
         self._set_depth_far(value)
 
     def _set_depth_scale_percent_from_slider(self, value):
-        if self._depth_echo_holdoff > 0:
+        if not self._depth_setter_allowed("scale"):
             return
         self._set_depth_scale_percent(value)
 
     def _set_depth_offset_x_percent_from_slider(self, value):
-        if self._depth_echo_holdoff > 0:
+        if not self._depth_setter_allowed("offset_x"):
             return
         self._set_depth_offset_x_percent(value)
 
     def _set_depth_offset_y_percent_from_slider(self, value):
-        if self._depth_echo_holdoff > 0:
+        if not self._depth_setter_allowed("offset_y"):
             return
         self._set_depth_offset_y_percent(value)
+
+    def _mark_depth_user_edit(self, key):
+        self._depth_user_edit_pending[key] = time.monotonic()
+
+    def _depth_setter_allowed(self, key):
+        if not self._visible or self._last_state_key is None:
+            return False
+        marked_at = self._depth_user_edit_pending.pop(key, None)
+        user_edit = (
+            marked_at is not None
+            and time.monotonic() - marked_at <= _DEPTH_USER_EDIT_MARK_TTL
+        )
+        return self._depth_echo_holdoff == 0 or user_edit
 
     def _apply_depth_range(self, enabled, near, far):
         self._apply_depth_window(enabled, near, far, self._window_scale, self._offset_x, self._offset_y, self._window_scale_y)
@@ -831,6 +864,7 @@ class SelectionControlsController:
 
         action = str(args[0])
         if action == "toggle_depth":
+            self._depth_echo_holdoff = 0
             self._refresh_depth_state()
             self._apply_depth_range(not self._depth_enabled, self._depth_near, self._depth_far)
         elif action == "cycle_viz":

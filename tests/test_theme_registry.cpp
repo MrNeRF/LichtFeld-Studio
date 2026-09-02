@@ -344,8 +344,8 @@ TEST(ThemePreferencesContract, McpPreferencesRoundTripAndValidateInput) {
     std::filesystem::remove_all(root, error);
 }
 
-TEST(ThemePreferencesContract, WorkingDirectoryRoundTripAndRejectsUnwritable) {
-    const auto root = std::filesystem::temp_directory_path() / "lfs_working_directory_preferences";
+TEST(ThemePreferencesContract, ProjectLocationRoundTripAndRejectsUnwritable) {
+    const auto root = std::filesystem::temp_directory_path() / "lfs_project_location_preferences";
     std::error_code error;
     std::filesystem::remove_all(root, error);
     const ScopedLfsHome home(root);
@@ -353,25 +353,22 @@ TEST(ThemePreferencesContract, WorkingDirectoryRoundTripAndRejectsUnwritable) {
     ASSERT_TRUE(paths.has_value()) << lfs::format_for_developer(paths.error());
     ASSERT_TRUE(paths->ensureDirectories().has_value());
 
-    EXPECT_TRUE(lfs::vis::workingDirectoryPreferenceRaw().empty());
+    EXPECT_TRUE(lfs::vis::projectLocationPreferenceRaw().empty());
     EXPECT_EQ(
-        lfs::vis::loadWorkingDirectoryPreference().lexically_normal(),
-        paths->rootDir().lexically_normal());
+        lfs::vis::loadProjectLocationPreference().lexically_normal(),
+        (paths->rootDir() / "projects").lexically_normal());
     EXPECT_EQ(
-        lfs::vis::defaultWorkingDirectory().lexically_normal(),
-        paths->rootDir().lexically_normal());
-    EXPECT_EQ(
-        lfs::vis::tempProjectDirectoryPreference().lexically_normal(),
-        (paths->rootDir() / "tmp").lexically_normal());
+        lfs::vis::defaultProjectLocation().lexically_normal(),
+        (paths->rootDir() / "projects").lexically_normal());
 
     const auto custom = root / "custom-working";
-    auto set = lfs::vis::setWorkingDirectoryPreference(custom);
+    auto set = lfs::vis::setProjectLocationPreference(custom);
     ASSERT_TRUE(set) << lfs::format_for_developer(set.error());
     EXPECT_EQ(
-        lfs::vis::workingDirectoryPreferenceRaw().lexically_normal(),
+        lfs::vis::projectLocationPreferenceRaw().lexically_normal(),
         custom.lexically_normal());
     EXPECT_EQ(
-        lfs::vis::loadWorkingDirectoryPreference().lexically_normal(),
+        lfs::vis::loadProjectLocationPreference().lexically_normal(),
         custom.lexically_normal());
     EXPECT_TRUE(std::filesystem::is_directory(custom));
 
@@ -379,21 +376,21 @@ TEST(ThemePreferencesContract, WorkingDirectoryRoundTripAndRejectsUnwritable) {
     {
         std::ofstream(as_file) << "file";
     }
-    const auto before = lfs::vis::workingDirectoryPreferenceRaw();
-    auto rejected = lfs::vis::setWorkingDirectoryPreference(as_file);
+    const auto before = lfs::vis::projectLocationPreferenceRaw();
+    auto rejected = lfs::vis::setProjectLocationPreference(as_file);
     ASSERT_FALSE(rejected);
     EXPECT_EQ(
-        lfs::vis::workingDirectoryPreferenceRaw().lexically_normal(),
+        lfs::vis::projectLocationPreferenceRaw().lexically_normal(),
         before.lexically_normal());
 
-    lfs::vis::clearWorkingDirectoryPreference();
-    EXPECT_TRUE(lfs::vis::workingDirectoryPreferenceRaw().empty());
+    lfs::vis::clearProjectLocationPreference();
+    EXPECT_TRUE(lfs::vis::projectLocationPreferenceRaw().empty());
     std::filesystem::remove_all(root, error);
 }
 
-TEST(ThemePreferencesContract, AssetManagerDirectoryRoundTripAndDefaultsUnderLfsHome) {
+TEST(ThemePreferencesContract, ProjectLocationRoundTripAndDefaultsUnderLfsHome) {
     const auto root =
-        std::filesystem::temp_directory_path() / "lfs_asset_manager_directory_preferences";
+        std::filesystem::temp_directory_path() / "lfs_project_location_defaults";
     std::error_code error;
     std::filesystem::remove_all(root, error);
     const ScopedLfsHome home(root);
@@ -401,42 +398,42 @@ TEST(ThemePreferencesContract, AssetManagerDirectoryRoundTripAndDefaultsUnderLfs
     ASSERT_TRUE(paths.has_value()) << lfs::format_for_developer(paths.error());
     ASSERT_TRUE(paths->ensureDirectories().has_value());
 
-    EXPECT_TRUE(lfs::vis::assetManagerDirectoryPreferenceRaw().empty());
+    EXPECT_TRUE(lfs::vis::projectLocationPreferenceRaw().empty());
     EXPECT_EQ(
-        lfs::vis::defaultAssetManagerDirectory().lexically_normal(),
-        (paths->rootDir() / "assets").lexically_normal());
+        lfs::vis::defaultProjectLocation().lexically_normal(),
+        (paths->rootDir() / "projects").lexically_normal());
     EXPECT_EQ(
-        lfs::vis::loadAssetManagerDirectoryPreference().lexically_normal(),
-        (paths->rootDir() / "assets").lexically_normal());
+        lfs::vis::loadProjectLocationPreference().lexically_normal(),
+        (paths->rootDir() / "projects").lexically_normal());
 
-    const auto custom = root / "custom-assets";
-    auto set = lfs::vis::setAssetManagerDirectoryPreference(custom);
+    const auto custom = root / "custom-projects";
+    auto set = lfs::vis::setProjectLocationPreference(custom);
     ASSERT_TRUE(set) << lfs::format_for_developer(set.error());
     EXPECT_TRUE(std::filesystem::is_directory(custom));
     EXPECT_EQ(
-        lfs::vis::assetManagerDirectoryPreferenceRaw().lexically_normal(),
+        lfs::vis::projectLocationPreferenceRaw().lexically_normal(),
         custom.lexically_normal());
     EXPECT_EQ(
-        lfs::vis::loadAssetManagerDirectoryPreference().lexically_normal(),
+        lfs::vis::loadProjectLocationPreference().lexically_normal(),
         custom.lexically_normal());
 
-    const auto as_file = root / "not-an-asset-directory";
+    const auto as_file = root / "not-a-project-directory";
     std::ofstream(as_file) << "file";
-    const auto before = lfs::vis::assetManagerDirectoryPreferenceRaw();
-    const auto rejected = lfs::vis::setAssetManagerDirectoryPreference(as_file);
+    const auto before = lfs::vis::projectLocationPreferenceRaw();
+    const auto rejected = lfs::vis::setProjectLocationPreference(as_file);
     ASSERT_FALSE(rejected);
     EXPECT_EQ(
-        lfs::vis::assetManagerDirectoryPreferenceRaw().lexically_normal(),
+        lfs::vis::projectLocationPreferenceRaw().lexically_normal(),
         before.lexically_normal());
 
-    lfs::vis::clearAssetManagerDirectoryPreference();
-    EXPECT_TRUE(lfs::vis::assetManagerDirectoryPreferenceRaw().empty());
+    lfs::vis::clearProjectLocationPreference();
+    EXPECT_TRUE(lfs::vis::projectLocationPreferenceRaw().empty());
     std::filesystem::remove_all(root, error);
 }
 
-TEST(ThemePreferencesContract, WorkingDirectoryRejectsRelativeAndExpandsHome) {
+TEST(ThemePreferencesContract, ProjectLocationRejectsRelativeAndExpandsHome) {
     const auto root =
-        std::filesystem::temp_directory_path() / "lfs_working_directory_absolute";
+        std::filesystem::temp_directory_path() / "lfs_project_location_absolute";
     std::error_code error;
     std::filesystem::remove_all(root, error);
     const ScopedLfsHome lfs_home(root);
@@ -452,35 +449,35 @@ TEST(ThemePreferencesContract, WorkingDirectoryRejectsRelativeAndExpandsHome) {
     const auto relative = std::filesystem::path("lfs_wd_rel_must_not_exist");
     const auto cwd_target = std::filesystem::current_path() / relative;
     std::filesystem::remove_all(cwd_target, error);
-    const auto rejected = lfs::vis::setWorkingDirectoryPreference(relative);
+    const auto rejected = lfs::vis::setProjectLocationPreference(relative);
     ASSERT_FALSE(rejected);
     EXPECT_EQ(rejected.error().code(), lfs::ErrorCode::InvalidArgument);
     EXPECT_EQ(
         rejected.error().user_message(),
-        "The working folder path must be absolute.");
-    EXPECT_TRUE(lfs::vis::workingDirectoryPreferenceRaw().empty());
+        "The project location path must be absolute.");
+    EXPECT_TRUE(lfs::vis::projectLocationPreferenceRaw().empty());
     EXPECT_FALSE(std::filesystem::exists(cwd_target));
     EXPECT_FALSE(std::filesystem::exists(fake_home / relative));
 
-    const auto tilde = std::filesystem::path("~") / "custom-working";
-    const auto expanded = (fake_home / "custom-working").lexically_normal();
-    const auto set = lfs::vis::setWorkingDirectoryPreference(tilde);
+    const auto tilde = std::filesystem::path("~") / "custom-projects";
+    const auto expanded = (fake_home / "custom-projects").lexically_normal();
+    const auto set = lfs::vis::setProjectLocationPreference(tilde);
     ASSERT_TRUE(set) << lfs::format_for_developer(set.error());
     EXPECT_TRUE(std::filesystem::is_directory(expanded));
     EXPECT_EQ(
-        lfs::vis::workingDirectoryPreferenceRaw().lexically_normal(),
+        lfs::vis::projectLocationPreferenceRaw().lexically_normal(),
         expanded);
     EXPECT_EQ(
-        lfs::vis::loadWorkingDirectoryPreference().lexically_normal(),
+        lfs::vis::loadProjectLocationPreference().lexically_normal(),
         expanded);
 
-    lfs::vis::clearWorkingDirectoryPreference();
+    lfs::vis::clearProjectLocationPreference();
     std::filesystem::remove_all(root, error);
 }
 
-TEST(ThemePreferencesContract, AssetManagerDirectoryRejectsRelativeAndExpandsHome) {
+TEST(ThemePreferencesContract, ProjectLocationRejectsRelativeAndExpandsHomeAgain) {
     const auto root =
-        std::filesystem::temp_directory_path() / "lfs_asset_manager_directory_absolute";
+        std::filesystem::temp_directory_path() / "lfs_project_location_absolute_again";
     std::error_code error;
     std::filesystem::remove_all(root, error);
     const ScopedLfsHome lfs_home(root);
@@ -496,29 +493,29 @@ TEST(ThemePreferencesContract, AssetManagerDirectoryRejectsRelativeAndExpandsHom
     const auto relative = std::filesystem::path("lfs_am_rel_must_not_exist");
     const auto cwd_target = std::filesystem::current_path() / relative;
     std::filesystem::remove_all(cwd_target, error);
-    const auto rejected = lfs::vis::setAssetManagerDirectoryPreference(relative);
+    const auto rejected = lfs::vis::setProjectLocationPreference(relative);
     ASSERT_FALSE(rejected);
     EXPECT_EQ(rejected.error().code(), lfs::ErrorCode::InvalidArgument);
     EXPECT_EQ(
         rejected.error().user_message(),
-        "The Asset Manager folder path must be absolute.");
-    EXPECT_TRUE(lfs::vis::assetManagerDirectoryPreferenceRaw().empty());
+        "The project location path must be absolute.");
+    EXPECT_TRUE(lfs::vis::projectLocationPreferenceRaw().empty());
     EXPECT_FALSE(std::filesystem::exists(cwd_target));
     EXPECT_FALSE(std::filesystem::exists(fake_home / relative));
 
-    const auto tilde = std::filesystem::path("~") / "custom-assets";
-    const auto expanded = (fake_home / "custom-assets").lexically_normal();
-    const auto set = lfs::vis::setAssetManagerDirectoryPreference(tilde);
+    const auto tilde = std::filesystem::path("~") / "custom-projects";
+    const auto expanded = (fake_home / "custom-projects").lexically_normal();
+    const auto set = lfs::vis::setProjectLocationPreference(tilde);
     ASSERT_TRUE(set) << lfs::format_for_developer(set.error());
     EXPECT_TRUE(std::filesystem::is_directory(expanded));
     EXPECT_EQ(
-        lfs::vis::assetManagerDirectoryPreferenceRaw().lexically_normal(),
+        lfs::vis::projectLocationPreferenceRaw().lexically_normal(),
         expanded);
     EXPECT_EQ(
-        lfs::vis::loadAssetManagerDirectoryPreference().lexically_normal(),
+        lfs::vis::loadProjectLocationPreference().lexically_normal(),
         expanded);
 
-    lfs::vis::clearAssetManagerDirectoryPreference();
+    lfs::vis::clearProjectLocationPreference();
     std::filesystem::remove_all(root, error);
 }
 

@@ -261,6 +261,48 @@ TEST(DensifyEvents4x, GumbelScratchDenseMatchesAllocatingPath) {
     }
 }
 
+TEST(DensifyEvents4x, GumbelUInt32PayloadsAreBoundedAndUnique) {
+    constexpr size_t n = 257;
+    constexpr size_t k = 31;
+    std::vector<float> weights(n, 1.0f);
+    weights.back() = 1.0e30f;
+    auto w = Tensor::from_vector(weights, TensorShape({n}), Device::CUDA);
+    auto selected = Tensor::empty({k}, Device::CUDA, DataType::Int64);
+    GumbelTopKScratch scratch;
+    scratch.ensure_n(n, Device::CUDA);
+    ASSERT_EQ(scratch.indices.dtype(), DataType::UInt32);
+    ASSERT_EQ(scratch.indices_sorted.dtype(), DataType::UInt32);
+
+    mrnf_strategy::launch_gumbel_topk(
+        w.ptr<float>(), n, k, 0x12345678ULL, selected.ptr<int64_t>(), nullptr, false, &scratch, n);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    const auto values = selected.cpu().to_vector_int64();
+    ASSERT_EQ(values.size(), k);
+    EXPECT_NE(std::find(values.begin(), values.end(), static_cast<int64_t>(n - 1)), values.end());
+    for (size_t i = 0; i < values.size(); ++i) {
+        ASSERT_GE(values[i], 0);
+        ASSERT_LT(values[i], static_cast<int64_t>(n));
+        for (size_t j = 0; j < i; ++j) {
+            EXPECT_NE(values[i], values[j]) << "duplicate at " << i;
+        }
+    }
+}
+
+TEST(DensifyEvents4x, TopologyScratchReleaseDropsAllResidentBytes) {
+    GumbelTopKScratch gumbel;
+    PositiveMedianScratch median;
+    gumbel.ensure_n(128, Device::CUDA);
+    median.ensure_n(128, Device::CUDA);
+    EXPECT_GT(gumbel.resident_bytes(), 0u);
+    EXPECT_GT(median.resident_bytes(), 0u);
+    gumbel.release();
+    median.release();
+    EXPECT_EQ(gumbel.resident_bytes(), 0u);
+    EXPECT_EQ(median.resident_bytes(), 0u);
+    EXPECT_FALSE(gumbel.indices.is_valid());
+    EXPECT_FALSE(median.selected.is_valid());
+}
+
 TEST(DensifyEvents4x, DensifyChildWorkspaceGrowsOnly) {
     DensifyChildWorkspace ws;
     ws.ensure(100, 0, false, false, Device::CUDA);

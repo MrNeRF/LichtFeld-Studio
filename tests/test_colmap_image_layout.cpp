@@ -1,11 +1,10 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/image_io.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/formats/colmap.hpp"
 #include "io/loaders/colmap_loader.hpp"
-
-#include <OpenImageIO/imageio.h>
 
 #include <atomic>
 #include <cuda_runtime.h>
@@ -179,16 +178,12 @@ namespace {
 
     BicyclePixels read_bicycle_pixels() {
         const fs::path source = fs::path(PROJECT_ROOT_PATH) / "data/bicycle/images_4/_DSC8679.JPG";
-        std::unique_ptr<OIIO::ImageInput> input(OIIO::ImageInput::open(source.string()));
-        if (!input) {
-            throw std::runtime_error("Failed to open bicycle source image");
-        }
-        const OIIO::ImageSpec spec = input->spec();
-        BicyclePixels pixels{spec.width, spec.height,
-                             std::vector<unsigned char>(static_cast<size_t>(spec.width) * spec.height * 3)};
-        if (!input->read_image(0, 0, 0, 3, OIIO::TypeDesc::UINT8, pixels.rgb.data())) {
+        auto [data, width, height, channels] = lfs::core::load_image(source);
+        if (!data || width <= 0 || height <= 0 || channels != 3)
             throw std::runtime_error("Failed to read bicycle source image");
-        }
+        BicyclePixels pixels{width, height,
+                             std::vector<unsigned char>(data, data + static_cast<size_t>(width) * height * 3)};
+        lfs::core::free_image(data);
         return pixels;
     }
 
@@ -209,16 +204,8 @@ namespace {
                 pixels[dst + 2] = source.rgb[src + 2];
             }
         }
-        std::unique_ptr<OIIO::ImageOutput> output(OIIO::ImageOutput::create(path.string()));
-        if (!output) {
-            throw std::runtime_error("Failed to create derived image");
-        }
-        OIIO::ImageSpec spec(width, height, 3, OIIO::TypeDesc::UINT8);
-        if (!output->open(path.string(), spec) ||
-            !output->write_image(OIIO::TypeDesc::UINT8, pixels.data())) {
+        if (!lfs::core::save_png(path, pixels.data(), width, height, 3, 8, 6))
             throw std::runtime_error("Failed to write derived image");
-        }
-        output->close();
     }
 
     void write_derived_depth(const fs::path& path,
@@ -238,16 +225,8 @@ namespace {
                 depth[static_cast<size_t>(y) * width + x] = static_cast<uint16_t>((luma >> 8u) * 257u);
             }
         }
-        std::unique_ptr<OIIO::ImageOutput> output(OIIO::ImageOutput::create(path.string()));
-        if (!output) {
-            throw std::runtime_error("Failed to create derived depth");
-        }
-        OIIO::ImageSpec spec(width, height, 1, OIIO::TypeDesc::UINT16);
-        if (!output->open(path.string(), spec) ||
-            !output->write_image(OIIO::TypeDesc::UINT16, depth.data())) {
+        if (!lfs::core::save_png(path, depth.data(), width, height, 1, 16, 6))
             throw std::runtime_error("Failed to write derived depth");
-        }
-        output->close();
     }
 
 } // namespace

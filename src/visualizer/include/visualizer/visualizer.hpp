@@ -6,6 +6,7 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "io/project_chapters.hpp"
 
 #include <cstdint>
 #include <expected>
@@ -99,6 +100,7 @@ namespace lfs::vis {
     struct LFS_VIS_API ProjectMenuInfo {
         bool reopen_last_project = true;
         bool auto_save_on_close = false;
+        bool embed_dataset_by_default = false;
         std::uint64_t autosave_interval_seconds = 5 * 60;
         std::vector<ProjectRecentInfo> recent_projects;
     };
@@ -114,6 +116,7 @@ namespace lfs::vis {
     struct LFS_VIS_API ProjectInfo {
         std::optional<std::filesystem::path> path;
         std::string project_uuid;
+        std::string license_identifier;
         std::uint64_t generation = 0;
         bool dirty = false;
         bool session_dirty = false;
@@ -123,6 +126,10 @@ namespace lfs::vis {
         bool contains_embedded_secrets = false;
         bool reopen_last_project = true;
         bool auto_save_on_close = false;
+        bool embed_dataset_by_default = false;
+        bool dataset_external_available = false;
+        bool embedded_dataset_complete = false;
+        std::uint64_t embedded_dataset_entries = 0;
         std::uint64_t autosave_interval_seconds =
             5 * 60;
         std::uint64_t autosave_dirty_epoch_threshold =
@@ -199,6 +206,11 @@ namespace lfs::vis {
         virtual lfs::Result<void>
         projectSaveAs(const std::filesystem::path& path,
                       bool regenerate_preview = true) = 0;
+        virtual lfs::Result<void>
+        projectCreateAt(
+            const std::filesystem::path& path,
+            ProjectSwitchDisposition disposition =
+                ProjectSwitchDisposition::RequireClean) = 0;
         virtual lfs::Result<ProjectOpenOutcome>
         projectOpen(
             const std::filesystem::path& path,
@@ -206,12 +218,22 @@ namespace lfs::vis {
                 ProjectSwitchDisposition::RequireClean) = 0;
         virtual lfs::Result<void>
         projectCompact() = 0;
+        virtual lfs::Result<void>
+        projectEmbedDataset() {
+            return {};
+        }
         virtual lfs::Result<bool>
         projectIsDirty() = 0;
         virtual lfs::Result<bool>
         projectHasPath() = 0;
         virtual lfs::Result<ProjectInfo>
         projectGetInfo() = 0;
+        virtual lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
+        projectGetLicense() = 0;
+        virtual lfs::Result<void>
+        projectSetLicense(const lfs::io::project::ProjectLicense& license) = 0;
+        virtual lfs::Result<void>
+        projectClearLicense() = 0;
         virtual lfs::Result<ProjectWritePoll>
         projectPollWrite() {
             return ProjectWritePoll{};
@@ -233,6 +255,8 @@ namespace lfs::vis {
                     info->reopen_last_project,
                 .auto_save_on_close =
                     info->auto_save_on_close,
+                .embed_dataset_by_default =
+                    info->embed_dataset_by_default,
                 .autosave_interval_seconds =
                     info->autosave_interval_seconds,
                 .recent_projects =

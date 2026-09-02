@@ -1321,6 +1321,10 @@ namespace lfs::training {
             } else {
                 note_slow_path_grow("extend_state_for_new_params(joint)", name);
                 // Re-alloc with growth_factor headroom and restore capacity invariant.
+                // alloc_quantized_state zeros the new packed buffer — copy the live
+                // prefix so existing moments survive (otherwise a 1.5× grow would
+                // reset Adam state).
+                auto old_packed = std::move(state.exp_avg);
                 const size_t prim_cap = compute_new_capacity(
                     static_cast<size_t>(splat_data_.size()),
                     static_cast<size_t>(splat_data_.size()));
@@ -1336,6 +1340,17 @@ namespace lfs::training {
                 }
                 if (state.grad.is_valid())
                     state.grad.reserve(moment_cap);
+                if (old_packed.is_valid() && old_packed.numel() > 0 &&
+                    state.exp_avg.is_valid() && state.exp_avg.numel() > 0) {
+                    const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+                    lfs::core::waitForCUDAStream(stream, old_packed.stream());
+                    lfs::core::waitForCUDAStream(stream, state.exp_avg.stream());
+                    const size_t copy_bytes = std::min(old_packed.bytes(), state.exp_avg.bytes());
+                    LFS_CUDA_CHECK(cudaMemcpyAsync(
+                        state.exp_avg.data_ptr(), old_packed.data_ptr(),
+                        copy_bytes, cudaMemcpyDeviceToDevice, stream));
+                    LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                }
             }
             const size_t prim_n = static_cast<size_t>(splat_data_.size());
             const size_t prim_cap =
@@ -1548,29 +1563,31 @@ namespace lfs::training {
             const size_t old_floats = lfs::core::sh_swizzled_float_count(old_N, layout_rest);
             const size_t new_floats = lfs::core::sh_swizzled_float_count(new_N, layout_rest);
             const size_t growth = new_floats - old_floats;
+            const bool q16_param = splat_data_.shN_value_quantized() &&
+                                   param.dtype() == lfs::core::DataType::Float16;
 
-            // Extend the swizzled param buffer by `growth` zero floats. The new range
-            // [old_floats, new_floats) covers all swizzled slots of primitives in
-            // [old_N, new_N). cuda.direct / q16-expand storage cannot reserve in place —
-            // reallocate with headroom when capacity is short (cross-block densify).
-            if (param.capacity() < new_floats) {
-                const size_t target = std::max(
-                    compute_new_capacity(new_floats, new_floats), new_floats);
-                auto fresh = lfs::core::Tensor::zeros_direct(
-                    lfs::core::TensorShape({old_floats}), target, param.device(),
-                    param.dtype());
-                if (old_floats > 0 && param.is_valid() && param.numel() > 0) {
-                    const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
-                    lfs::core::waitForCUDAStream(stream, param.stream());
-                    const size_t nbytes = old_floats * lfs::core::dtype_size(param.dtype());
-                    LFS_CUDA_CHECK(cudaMemcpyAsync(
-                        fresh.data_ptr(), param.data_ptr(), nbytes,
-                        cudaMemcpyDeviceToDevice, stream));
-                    LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+            if (!q16_param) {
+                // Extend the swizzled fp32 param buffer by `growth` zero floats.
+                // q16 append is handled below (cell counts are not float4 slots).
+                if (param.capacity() < new_floats) {
+                    const size_t target = std::max(
+                        compute_new_capacity(new_floats, new_floats), new_floats);
+                    auto fresh = lfs::core::Tensor::zeros_direct(
+                        lfs::core::TensorShape({old_floats}), target, param.device(),
+                        param.dtype());
+                    if (old_floats > 0 && param.is_valid() && param.numel() > 0) {
+                        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+                        lfs::core::waitForCUDAStream(stream, param.stream());
+                        const size_t nbytes = old_floats * lfs::core::dtype_size(param.dtype());
+                        LFS_CUDA_CHECK(cudaMemcpyAsync(
+                            fresh.data_ptr(), param.data_ptr(), nbytes,
+                            cudaMemcpyDeviceToDevice, stream));
+                        LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                    }
+                    param = std::move(fresh);
                 }
-                param = std::move(fresh);
+                param.append_zeros(growth);
             }
-            param.append_zeros(growth);
 
             const bool indices_are_i64 = indices.dtype() == lfs::core::DataType::Int64;
             lfs::core::Tensor indices_i32;
@@ -1603,11 +1620,22 @@ namespace lfs::training {
                 }
             };
 
-            // Param gather is float/q16 specific. Under q16 densify paths dequant first
-            // (ensure_shN_fp32_for_mutation); still only gather when float storage.
-            if (param.dtype() == lfs::core::DataType::Float32) {
+            // q16: gather-decode sources and encode only the appended 256-splat
+            // blocks. fp32: in-swizzle gather into the grown tail.
+            if (q16_param) {
+                lfs::core::Tensor canonical = lfs::core::Tensor::zeros(
+                    {n_new, static_cast<size_t>(layout_rest), size_t{3}},
+                    param.device());
+                lfs::training::sh_value::gather_shN_to_canonical(
+                    splat_data_, indices, canonical, old_N);
+                lfs::training::sh_value::append_canonical_to_shN(
+                    splat_data_, canonical, old_N);
+            } else if (param.dtype() == lfs::core::DataType::Float32) {
                 gather_new_swizzled_rows(param);
             }
+
+            // q16 grow may replace splat.shN(); re-fetch before using param.
+            auto& param_now = get_param(type);
 
             // Extend the Adam state.
             const auto name = param_name(type);
@@ -1630,7 +1658,7 @@ namespace lfs::training {
                             lfs::core::sh_swizzled_float_count(prim_cap, layout_rest);
                         // Preserve existing packed codes then grow.
                         auto old_packed = std::move(state.exp_avg);
-                        alloc_quantized_state(type, state, param, moment_cap, prim_cap);
+                        alloc_quantized_state(type, state, param_now, moment_cap, prim_cap);
                         if (old_packed.is_valid() && old_packed.numel() > 0 &&
                             state.exp_avg.is_valid()) {
                             const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
@@ -1645,7 +1673,7 @@ namespace lfs::training {
                     }
                     ensure_joint_bounds_capacity(state.joint_bounds, new_N,
                                                  std::max(new_N, state.capacity),
-                                                 param.device(), /*zero_all=*/false);
+                                                 param_now.device(), /*zero_all=*/false);
                     state.size = new_floats;
                     state.capacity = state.exp_avg.is_valid() ? state.exp_avg.capacity() : new_floats;
                     // Zero-encode new prim rows under (possibly non-zero) block bounds.
