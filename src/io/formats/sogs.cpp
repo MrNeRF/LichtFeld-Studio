@@ -38,6 +38,7 @@
 #include <optional>
 #include <string_view>
 #include <tbb/parallel_for.h>
+#include <tbb/task_group.h>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -48,6 +49,7 @@
 namespace lfs::io {
 
     // Import types from lfs::core for convenience
+    using lfs::core::DataType;
     using lfs::core::Device;
     using lfs::core::SplatData;
     using lfs::core::Tensor;
@@ -78,12 +80,19 @@ namespace lfs::io {
         constexpr size_t MAX_CODEBOOK_SIZE = 256;
 
         struct DecodedImage {
-            std::vector<uint8_t> rgba;
+            std::unique_ptr<uint8_t[]> rgba;
+            size_t rgba_size = 0;
             int width = 0;
             int height = 0;
         };
 
+        struct EncodedImage {
+            std::unique_ptr<uint8_t[]> data;
+            size_t size = 0;
+        };
+
         using DecodedImages = std::unordered_map<std::string, DecodedImage>;
+        using EncodedImages = std::unordered_map<std::string, EncodedImage>;
 
         std::expected<size_t, std::string> checked_product(
             const size_t lhs,
@@ -195,13 +204,14 @@ namespace lfs::io {
             }
 
             DecodedImage image{
-                .rgba = std::vector<uint8_t>(*decoded_bytes),
+                .rgba = std::make_unique_for_overwrite<uint8_t[]>(*decoded_bytes),
+                .rgba_size = *decoded_bytes,
                 .width = width,
                 .height = height};
             if (!WebPDecodeRGBAInto(data,
                                     size,
-                                    image.rgba.data(),
-                                    image.rgba.size(),
+                                    image.rgba.get(),
+                                    image.rgba_size,
                                     width * 4)) {
                 return std::unexpected("Failed to decode WebP image");
             }
@@ -524,7 +534,7 @@ namespace lfs::io {
                 return std::unexpected(pixel_count.error());
             }
             const auto byte_count = checked_product(*pixel_count, 4, "decoded texture");
-            if (!byte_count || image.rgba.size() != *byte_count) {
+            if (!byte_count || image.rgba_size != *byte_count) {
                 return std::unexpected(std::format(
                     "SOG texture '{}' has an invalid decoded byte count", name));
             }
@@ -601,6 +611,85 @@ namespace lfs::io {
             return {};
         }
 
+        Result<DecodedImages> decode_sog_images(
+            const SogMetadata& meta,
+            const EncodedImages& encoded_images) {
+            const std::array<std::string_view, 7> image_names{
+                "means_l.webp",
+                "means_u.webp",
+                "quats.webp",
+                "scales.webp",
+                "sh0.webp",
+                "shN_centroids.webp",
+                "shN_labels.webp"};
+            const size_t image_count = meta.shN.has_value() ? image_names.size() : 5;
+            const bool debug_logging_enabled =
+                lfs::core::Logger::get().is_enabled(lfs::core::LogLevel::Debug);
+            std::array<std::optional<DecodedImage>, 7> decoded;
+            std::array<std::string, 7> errors;
+            std::array<double, 7> timings{};
+
+            {
+                LOG_TIMER_DEBUG("SOG load: webp decode");
+                tbb::task_group tasks;
+                for (size_t i = 0; i < image_count; ++i) {
+                    tasks.run([&, i] {
+                        const auto started = std::chrono::steady_clock::now();
+                        const std::string filename(image_names[i]);
+                        const auto it = encoded_images.find(filename);
+                        if (it == encoded_images.end()) {
+                            errors[i] = std::format("Missing SOG texture '{}'", filename);
+                        } else {
+                            auto result = decode_webp(it->second.data.get(), it->second.size);
+                            if (!result) {
+                                errors[i] = std::format(
+                                    "Failed to decode '{}': {}", filename, result.error());
+                            } else {
+                                decoded[i] = std::move(*result);
+                            }
+                        }
+                        timings[i] = std::chrono::duration<double, std::milli>(
+                                         std::chrono::steady_clock::now() - started)
+                                         .count();
+                    });
+                }
+                tasks.wait();
+
+                for (size_t i = 0; i < image_count; ++i) {
+                    if (!errors[i].empty()) {
+                        return make_error(ErrorCode::DECODING_FAILED, errors[i]);
+                    }
+                }
+            }
+
+            if (debug_logging_enabled) {
+                std::string timing_fields;
+                for (size_t i = 0; i < image_count; ++i) {
+                    if (!timing_fields.empty()) {
+                        timing_fields += ' ';
+                    }
+                    timing_fields += std::format(
+                        "{}={:.3f}ms", image_names[i], timings[i]);
+                }
+                LOG_DEBUG("SOG load WebP timings: {}", timing_fields);
+            }
+
+            size_t total_decoded_bytes = 0;
+            DecodedImages images;
+            images.reserve(image_count);
+            for (size_t i = 0; i < image_count; ++i) {
+                const auto& image = *decoded[i];
+                if (total_decoded_bytes > MAX_TOTAL_DECODED_BYTES - image.rgba_size) {
+                    return make_error(ErrorCode::RESOURCE_EXHAUSTED, std::format(
+                                                                         "Decoded SOG textures exceed the {} byte total limit",
+                                                                         MAX_TOTAL_DECODED_BYTES));
+                }
+                total_decoded_bytes += image.rgba_size;
+                images.emplace(std::string(image_names[i]), std::move(*decoded[i]));
+            }
+            return images;
+        }
+
         std::expected<SplatData, std::string> reconstruct_splat_data(
             const SogMetadata& meta,
             const DecodedImages& images) {
@@ -615,258 +704,272 @@ namespace lfs::io {
 
             LOG_DEBUG("Reconstructing {} splats from {}x{} textures", num_splats, width, height);
 
-            // Create host buffers
-            const size_t splat_count = static_cast<size_t>(num_splats);
-            std::vector<float> host_means(splat_count * 3);
-            std::vector<float> host_scales(splat_count * 3);
-            std::vector<float> host_rotations(splat_count * 4);
-            std::vector<float> host_opacity(splat_count);
+            Tensor host_means;
+            Tensor host_scales;
+            Tensor host_rotations;
+            Tensor host_opacity;
+            Tensor host_sh0;
+            Tensor host_shN;
+            int sh0_dim1 = 1;
+            int sh0_dim2 = 3;
+            int shN_dim1 = 0;
+            int shN_dim2 = 3;
 
-            // Determine SH dimensions
-            int sh0_dim1 = 1, sh0_dim2 = 3;
-            int shN_dim1 = 0, shN_dim2 = 3;
-
-            if (meta.shN.has_value()) {
-                const auto& sh_meta = meta.shN.value();
-                shN_dim1 = SH_COEFFS[sh_meta.bands];
-            }
-
-            std::vector<float> host_sh0(splat_count * sh0_dim1 * sh0_dim2);
-            std::vector<float> host_shN(splat_count * shN_dim1 * shN_dim2);
-
-            // 1. Decode positions from means_l and means_u
             {
-                auto it_l = images.find("means_l.webp");
-                auto it_u = images.find("means_u.webp");
+                LOG_TIMER_DEBUG("SOG load: dequant");
 
-                if (it_l == images.end() || it_u == images.end()) {
-                    return std::unexpected("Missing position textures");
+                // Create pageable host tensors. They are filled directly by the dequantizer
+                // and uploaded once below; this avoids the pinned host allocator for SH3.
+                const size_t splat_count = static_cast<size_t>(num_splats);
+                host_means = Tensor::empty_pageable_host({splat_count, 3}, DataType::Float32);
+                host_scales = Tensor::empty_pageable_host({splat_count, 3}, DataType::Float32);
+                host_rotations = Tensor::empty_pageable_host({splat_count, 4}, DataType::Float32);
+                host_opacity = Tensor::empty_pageable_host({splat_count, 1}, DataType::Float32);
+
+                if (meta.shN.has_value()) {
+                    const auto& sh_meta = meta.shN.value();
+                    shN_dim1 = SH_COEFFS[sh_meta.bands];
                 }
 
-                const auto& means_l = it_l->second.rgba;
-                const auto& means_u = it_u->second.rgba;
+                host_sh0 = Tensor::empty_pageable_host(
+                    {splat_count, static_cast<size_t>(sh0_dim1), static_cast<size_t>(sh0_dim2)},
+                    DataType::Float32);
+                host_shN = Tensor::empty_pageable_host(
+                    {splat_count, static_cast<size_t>(shN_dim1), static_cast<size_t>(shN_dim2)},
+                    DataType::Float32);
 
-                for (int i = 0; i < num_splats; ++i) {
-                    int ti = identity_layout(i, width) * 4;
+                auto* means_ptr = host_means.ptr<float>();
+                auto* scales_ptr = host_scales.ptr<float>();
+                auto* rotations_ptr = host_rotations.ptr<float>();
+                auto* opacity_ptr = host_opacity.ptr<float>();
+                auto* sh0_ptr = host_sh0.ptr<float>();
+                auto* shN_ptr = host_shN.ptr<float>();
 
-                    // Reconstruct 16-bit values
-                    uint16_t x16 = means_l[ti + 0] | (means_u[ti + 0] << 8);
-                    uint16_t y16 = means_l[ti + 1] | (means_u[ti + 1] << 8);
-                    uint16_t z16 = means_l[ti + 2] | (means_u[ti + 2] << 8);
+                // 1. Decode positions from means_l and means_u
+                {
+                    auto it_l = images.find("means_l.webp");
+                    auto it_u = images.find("means_u.webp");
 
-                    // Normalize and inverse transform
-                    float x_norm = x16 / 65535.0f;
-                    float y_norm = y16 / 65535.0f;
-                    float z_norm = z16 / 65535.0f;
-
-                    float x_log = x_norm * (meta.means_maxs[0] - meta.means_mins[0]) + meta.means_mins[0];
-                    float y_log = y_norm * (meta.means_maxs[1] - meta.means_mins[1]) + meta.means_mins[1];
-                    float z_log = z_norm * (meta.means_maxs[2] - meta.means_mins[2]) + meta.means_mins[2];
-
-                    host_means[i * 3 + 0] = inverse_log_transform(x_log);
-                    host_means[i * 3 + 1] = inverse_log_transform(y_log);
-                    host_means[i * 3 + 2] = inverse_log_transform(z_log);
-                }
-            }
-
-            // 2. Decode quaternions
-            {
-                auto it = images.find("quats.webp");
-                if (it == images.end()) {
-                    return std::unexpected("Missing quaternion texture");
-                }
-
-                const auto& quats = it->second.rgba;
-
-                for (int i = 0; i < num_splats; ++i) {
-                    int ti = identity_layout(i, width) * 4;
-
-                    auto quat = unpack_quaternion(
-                        quats[ti + 0],
-                        quats[ti + 1],
-                        quats[ti + 2],
-                        quats[ti + 3]);
-
-                    // unpack_quaternion returns [x, y, z, w]
-                    // Store as [w, x, y, z] for SplatData format
-                    host_rotations[i * 4 + 0] = quat[3]; // w
-                    host_rotations[i * 4 + 1] = quat[0]; // x
-                    host_rotations[i * 4 + 2] = quat[1]; // y
-                    host_rotations[i * 4 + 3] = quat[2]; // z
-                }
-            }
-
-            // 3. Decode scales
-            {
-                auto it = images.find("scales.webp");
-                if (it == images.end()) {
-                    return std::unexpected("Missing scales texture");
-                }
-
-                const auto& scales_img = it->second.rgba;
-
-                for (int i = 0; i < num_splats; ++i) {
-                    int ti = identity_layout(i, width) * 4;
-
-                    // Get indices and validate
-                    uint8_t idx0 = scales_img[ti + 0];
-                    uint8_t idx1 = scales_img[ti + 1];
-                    uint8_t idx2 = scales_img[ti + 2];
-
-                    // Ensure indices are within codebook bounds
-                    if (idx0 >= meta.scales_codebook.size() ||
-                        idx1 >= meta.scales_codebook.size() ||
-                        idx2 >= meta.scales_codebook.size()) {
-                        LOG_ERROR("Scale codebook index out of bounds: {}, {}, {} (codebook size: {})",
-                                  idx0, idx1, idx2, meta.scales_codebook.size());
-                        return std::unexpected("Invalid scale codebook index");
+                    if (it_l == images.end() || it_u == images.end()) {
+                        return std::unexpected("Missing position textures");
                     }
 
-                    // Look up from codebook (already in log space)
-                    host_scales[i * 3 + 0] = meta.scales_codebook[idx0];
-                    host_scales[i * 3 + 1] = meta.scales_codebook[idx1];
-                    host_scales[i * 3 + 2] = meta.scales_codebook[idx2];
-                }
-            }
+                    const auto& means_l = it_l->second.rgba;
+                    const auto& means_u = it_u->second.rgba;
 
-            // 4. Decode colors and opacity
-            {
-                auto it = images.find("sh0.webp");
-                if (it == images.end()) {
-                    return std::unexpected("Missing color texture");
-                }
-
-                const auto& sh0_img = it->second.rgba;
-
-                for (int i = 0; i < num_splats; ++i) {
-                    int ti = identity_layout(i, width) * 4;
-
-                    // Get indices and validate
-                    uint8_t idx0 = sh0_img[ti + 0];
-                    uint8_t idx1 = sh0_img[ti + 1];
-                    uint8_t idx2 = sh0_img[ti + 2];
-
-                    // Ensure indices are within codebook bounds
-                    if (idx0 >= meta.sh0_codebook.size() ||
-                        idx1 >= meta.sh0_codebook.size() ||
-                        idx2 >= meta.sh0_codebook.size()) {
-                        LOG_ERROR("Color codebook index out of bounds: {}, {}, {} (codebook size: {})",
-                                  idx0, idx1, idx2, meta.sh0_codebook.size());
-                        return std::unexpected("Invalid color codebook index");
-                    }
-
-                    // Look up colors from codebook
-                    host_sh0[i * sh0_dim1 * sh0_dim2 + 0] = meta.sh0_codebook[idx0];
-                    host_sh0[i * sh0_dim1 * sh0_dim2 + 1] = meta.sh0_codebook[idx1];
-                    host_sh0[i * sh0_dim1 * sh0_dim2 + 2] = meta.sh0_codebook[idx2];
-
-                    // Decode opacity (inverse sigmoid)
-                    // Alpha=1 encodes opacity=0 (prevents WebP discarding RGB)
-                    const uint8_t alpha = sh0_img[ti + 3];
-                    float opacity_norm = (alpha <= 1) ? 1e-5f : alpha / 255.0f;
-                    opacity_norm = std::clamp(opacity_norm, 1e-5f, 1.0f - 1e-5f);
-                    host_opacity[i] = std::log(opacity_norm / (1.0f - opacity_norm));
-                }
-            }
-
-            // 5. Decode spherical harmonics if present
-            if (meta.shN.has_value() && shN_dim1 > 0) {
-                const auto& sh_meta = meta.shN.value();
-
-                auto it_centroids = images.find("shN_centroids.webp");
-                auto it_labels = images.find("shN_labels.webp");
-
-                if (it_centroids != images.end() && it_labels != images.end()) {
-                    const auto& centroids_img = it_centroids->second.rgba;
-                    const auto& labels_img = it_labels->second.rgba;
-
-                    // Determine SH configuration
-                    const int num_coeffs = SH_COEFFS[sh_meta.bands];
-                    const int palette_size = sh_meta.palette_size;
-
-                    LOG_DEBUG("Decoding SH: degree={}, coeffs={}, palette_size={}",
-                              sh_meta.bands, num_coeffs, palette_size);
-
-                    // Decode centroids from texture
-                    std::vector<float> centroids(
-                        static_cast<size_t>(palette_size) * num_coeffs * 3);
-                    for (int i = 0; i < palette_size; ++i) {
-                        for (int j = 0; j < num_coeffs; ++j) {
-                            int pixel_idx = i * num_coeffs + j;
-
-                            // Decode from codebook
-                            for (int c = 0; c < 3; ++c) {
-                                uint8_t idx = centroids_img[pixel_idx * 4 + c];
-
-                                // Validate index
-                                if (idx >= sh_meta.codebook.size()) {
-                                    LOG_ERROR("SH codebook index out of bounds: {} (codebook size: {})",
-                                              idx, sh_meta.codebook.size());
-                                    return std::unexpected("Invalid SH codebook index");
-                                }
-
-                                // Band-major ordering
-                                int coeff_idx = j + c * num_coeffs;
-                                centroids[(static_cast<size_t>(i) * num_coeffs * 3) + coeff_idx] =
-                                    sh_meta.codebook[idx];
-                            }
-                        }
-                    }
-
-                    // Apply labels
-                    for (int i = 0; i < num_splats; ++i) {
+                    tbb::parallel_for(size_t{0}, splat_count, [&](const size_t index) {
+                        const int i = static_cast<int>(index);
                         int ti = identity_layout(i, width) * 4;
 
-                        // Reconstruct label from 16-bit value
-                        int label = labels_img[ti + 0] | (labels_img[ti + 1] << 8);
+                        // Reconstruct 16-bit values
+                        uint16_t x16 = means_l[ti + 0] | (means_u[ti + 0] << 8);
+                        uint16_t y16 = means_l[ti + 1] | (means_u[ti + 1] << 8);
+                        uint16_t z16 = means_l[ti + 2] | (means_u[ti + 2] << 8);
 
-                        if (label < palette_size) {
-                            // Unpack in band-major order
-                            for (int c = 0; c < 3; ++c) {
-                                for (int j = 0; j < num_coeffs; ++j) {
-                                    host_shN[i * shN_dim1 * shN_dim2 + j * shN_dim2 + c] =
-                                        centroids[(static_cast<size_t>(label) * num_coeffs * 3) +
-                                                  j + c * num_coeffs];
+                        // Normalize and inverse transform
+                        float x_norm = x16 / 65535.0f;
+                        float y_norm = y16 / 65535.0f;
+                        float z_norm = z16 / 65535.0f;
+
+                        float x_log = x_norm * (meta.means_maxs[0] - meta.means_mins[0]) + meta.means_mins[0];
+                        float y_log = y_norm * (meta.means_maxs[1] - meta.means_mins[1]) + meta.means_mins[1];
+                        float z_log = z_norm * (meta.means_maxs[2] - meta.means_mins[2]) + meta.means_mins[2];
+
+                        means_ptr[i * 3 + 0] = inverse_log_transform(x_log);
+                        means_ptr[i * 3 + 1] = inverse_log_transform(y_log);
+                        means_ptr[i * 3 + 2] = inverse_log_transform(z_log);
+                    });
+                }
+
+                // 2. Decode quaternions
+                {
+                    auto it = images.find("quats.webp");
+                    if (it == images.end()) {
+                        return std::unexpected("Missing quaternion texture");
+                    }
+
+                    const auto& quats = it->second.rgba;
+
+                    tbb::parallel_for(size_t{0}, splat_count, [&](const size_t index) {
+                        const int i = static_cast<int>(index);
+                        int ti = identity_layout(i, width) * 4;
+
+                        auto quat = unpack_quaternion(
+                            quats[ti + 0],
+                            quats[ti + 1],
+                            quats[ti + 2],
+                            quats[ti + 3]);
+
+                        // unpack_quaternion returns [x, y, z, w]
+                        // Store as [w, x, y, z] for SplatData format
+                        rotations_ptr[i * 4 + 0] = quat[3]; // w
+                        rotations_ptr[i * 4 + 1] = quat[0]; // x
+                        rotations_ptr[i * 4 + 2] = quat[1]; // y
+                        rotations_ptr[i * 4 + 3] = quat[2]; // z
+                    });
+                }
+
+                // 3. Decode scales
+                {
+                    auto it = images.find("scales.webp");
+                    if (it == images.end()) {
+                        return std::unexpected("Missing scales texture");
+                    }
+
+                    const auto& scales_img = it->second.rgba;
+
+                    tbb::parallel_for(size_t{0}, splat_count, [&](const size_t index) {
+                        const int i = static_cast<int>(index);
+                        int ti = identity_layout(i, width) * 4;
+
+                        // Get indices and validate
+                        uint8_t idx0 = scales_img[ti + 0];
+                        uint8_t idx1 = scales_img[ti + 1];
+                        uint8_t idx2 = scales_img[ti + 2];
+
+                        // Look up from codebook (already in log space)
+                        scales_ptr[i * 3 + 0] = meta.scales_codebook[idx0];
+                        scales_ptr[i * 3 + 1] = meta.scales_codebook[idx1];
+                        scales_ptr[i * 3 + 2] = meta.scales_codebook[idx2];
+                    });
+                }
+
+                // 4. Decode colors and opacity
+                {
+                    auto it = images.find("sh0.webp");
+                    if (it == images.end()) {
+                        return std::unexpected("Missing color texture");
+                    }
+
+                    const auto& sh0_img = it->second.rgba;
+
+                    tbb::parallel_for(size_t{0}, splat_count, [&](const size_t index) {
+                        const int i = static_cast<int>(index);
+                        int ti = identity_layout(i, width) * 4;
+
+                        // Get indices and validate
+                        uint8_t idx0 = sh0_img[ti + 0];
+                        uint8_t idx1 = sh0_img[ti + 1];
+                        uint8_t idx2 = sh0_img[ti + 2];
+
+                        // Look up colors from codebook
+                        sh0_ptr[i * sh0_dim1 * sh0_dim2 + 0] = meta.sh0_codebook[idx0];
+                        sh0_ptr[i * sh0_dim1 * sh0_dim2 + 1] = meta.sh0_codebook[idx1];
+                        sh0_ptr[i * sh0_dim1 * sh0_dim2 + 2] = meta.sh0_codebook[idx2];
+
+                        // Decode opacity (inverse sigmoid)
+                        // Alpha=1 encodes opacity=0 (prevents WebP discarding RGB)
+                        const uint8_t alpha = sh0_img[ti + 3];
+                        float opacity_norm = (alpha <= 1) ? 1e-5f : alpha / 255.0f;
+                        opacity_norm = std::clamp(opacity_norm, 1e-5f, 1.0f - 1e-5f);
+                        opacity_ptr[i] = std::log(opacity_norm / (1.0f - opacity_norm));
+                    });
+                }
+
+                // 5. Decode spherical harmonics if present
+                if (meta.shN.has_value() && shN_dim1 > 0) {
+                    const auto& sh_meta = meta.shN.value();
+
+                    auto it_centroids = images.find("shN_centroids.webp");
+                    auto it_labels = images.find("shN_labels.webp");
+
+                    if (it_centroids != images.end() && it_labels != images.end()) {
+                        const auto& centroids_img = it_centroids->second.rgba;
+                        const auto& labels_img = it_labels->second.rgba;
+
+                        // Determine SH configuration
+                        const int num_coeffs = SH_COEFFS[sh_meta.bands];
+                        const int palette_size = sh_meta.palette_size;
+
+                        LOG_DEBUG("Decoding SH: degree={}, coeffs={}, palette_size={}",
+                                  sh_meta.bands, num_coeffs, palette_size);
+
+                        // Decode centroids from texture
+                        auto centroids = std::make_unique_for_overwrite<float[]>(
+                            static_cast<size_t>(palette_size) * num_coeffs * 3);
+                        for (int i = 0; i < palette_size; ++i) {
+                            for (int j = 0; j < num_coeffs; ++j) {
+                                int pixel_idx = i * num_coeffs + j;
+
+                                // Decode from codebook
+                                for (int c = 0; c < 3; ++c) {
+                                    uint8_t idx = centroids_img[pixel_idx * 4 + c];
+
+                                    // Validate index
+                                    if (idx >= sh_meta.codebook.size()) {
+                                        LOG_ERROR("SH codebook index out of bounds: {} (codebook size: {})",
+                                                  idx, sh_meta.codebook.size());
+                                        return std::unexpected("Invalid SH codebook index");
+                                    }
+
+                                    // Band-major ordering
+                                    int coeff_idx = j + c * num_coeffs;
+                                    centroids[(static_cast<size_t>(i) * num_coeffs * 3) + coeff_idx] =
+                                        sh_meta.codebook[idx];
                                 }
                             }
                         }
+
+                        // Apply labels
+                        tbb::parallel_for(size_t{0}, splat_count, [&](const size_t index) {
+                            const int i = static_cast<int>(index);
+                            int ti = identity_layout(i, width) * 4;
+
+                            // Reconstruct label from 16-bit value
+                            int label = labels_img[ti + 0] | (labels_img[ti + 1] << 8);
+
+                            if (label < palette_size) {
+                                // Unpack in band-major order
+                                for (int c = 0; c < 3; ++c) {
+                                    for (int j = 0; j < num_coeffs; ++j) {
+                                        shN_ptr[i * shN_dim1 * shN_dim2 + j * shN_dim2 + c] =
+                                            centroids[(static_cast<size_t>(label) * num_coeffs * 3) +
+                                                      j + c * num_coeffs];
+                                    }
+                                }
+                            }
+                        });
                     }
                 }
             }
 
-            // Create Tensors directly from host vectors (uploads to CUDA)
-            const size_t N = num_splats;
-
-            Tensor means = Tensor::from_vector(host_means, {N, 3}, Device::CUDA);
-            Tensor scales = Tensor::from_vector(host_scales, {N, 3}, Device::CUDA);
-            Tensor rotations = Tensor::from_vector(host_rotations, {N, 4}, Device::CUDA);
-            Tensor opacity = Tensor::from_vector(host_opacity, {N, 1}, Device::CUDA);
-            Tensor sh0 = Tensor::from_vector(host_sh0, {N, static_cast<size_t>(sh0_dim1), static_cast<size_t>(sh0_dim2)}, Device::CUDA);
-
+            Tensor means;
+            Tensor scales;
+            Tensor rotations;
+            Tensor opacity;
+            Tensor sh0;
             Tensor shN;
-            if (shN_dim1 > 0) {
-                shN = Tensor::from_vector(host_shN, {N, static_cast<size_t>(shN_dim1), static_cast<size_t>(shN_dim2)}, Device::CUDA);
-            } else {
-                shN = Tensor::zeros({N, 0, 3}, Device::CUDA);
+
+            {
+                LOG_TIMER_DEBUG("SOG load: upload");
+                means = host_means.cuda();
+                scales = host_scales.cuda();
+                rotations = host_rotations.cuda();
+                opacity = host_opacity.cuda();
+                sh0 = host_sh0.cuda();
+                shN = host_shN.cuda();
             }
 
             // Calculate SH degree
             int sh_degree = meta.shN.has_value() ? meta.shN->bands : 0;
 
-            // Create SplatData
-            SplatData splat_data(
-                sh_degree,
-                std::move(means),
-                std::move(sh0),
-                std::move(shN),
-                std::move(scales),
-                std::move(rotations),
-                std::move(opacity),
-                1.0f); // scene_scale
+            std::optional<SplatData> splat_data;
+            {
+                LOG_TIMER_DEBUG("SOG load: splat build");
+                splat_data.emplace(
+                    sh_degree,
+                    std::move(means),
+                    std::move(sh0),
+                    std::move(shN),
+                    std::move(scales),
+                    std::move(rotations),
+                    std::move(opacity),
+                    1.0f); // scene_scale
+            }
 
             LOG_INFO("Successfully reconstructed {} splats", num_splats);
 
-            return splat_data;
+            return std::move(*splat_data);
         }
 
         std::expected<SplatData, std::string> read_sog_bundle(
@@ -874,178 +977,185 @@ namespace lfs::io {
 
             LOG_INFO("Reading SOG bundle: {}", lfs::core::path_to_utf8(path));
 
-            std::error_code file_error;
-            const uintmax_t archive_size = std::filesystem::file_size(path, file_error);
-            if (file_error) {
-                return std::unexpected(std::format(
-                    "Failed to inspect SOG archive: {}", file_error.message()));
-            }
-            if (archive_size > MAX_ARCHIVE_BYTES) {
-                return std::unexpected(std::format(
-                    "SOG archive exceeds the {} byte limit", MAX_ARCHIVE_BYTES));
-            }
-
-            struct ArchiveReadDeleter {
-                void operator()(struct archive* value) const {
-                    if (value) {
-                        archive_read_free(value);
-                    }
-                }
-            };
-            std::unique_ptr<struct archive, ArchiveReadDeleter> archive_reader(
-                archive_read_new());
-            if (!archive_reader) {
-                return std::unexpected("Failed to allocate SOG archive reader");
-            }
-            struct archive* const a = archive_reader.get();
-            if (archive_read_support_format_zip(a) != ARCHIVE_OK ||
-                archive_read_support_filter_all(a) != ARCHIVE_OK) {
-                const char* detail = archive_error_string(a);
-                return std::unexpected(std::format(
-                    "Failed to configure SOG archive reader: {}",
-                    detail ? detail : "unknown error"));
-            }
-
-            // Use wide-character API on Windows for proper Unicode path handling
-            int result;
-#ifdef _WIN32
-            result = archive_read_open_filename_w(a, path.wstring().c_str(), 10240);
-#else
-            result = archive_read_open_filename(a, path.c_str(), 10240);
-#endif
-            if (result != ARCHIVE_OK) {
-                const char* detail = archive_error_string(a);
-                return std::unexpected(std::format("Failed to open archive: {}",
-                                                   detail ? detail : "unknown error"));
-            }
-
-            struct archive_entry* entry;
             std::string metadata_json;
-            DecodedImages images;
+            EncodedImages encoded_images;
             std::unordered_set<std::string> seen_entries;
-            size_t entry_count = 0;
-            size_t total_entry_bytes = 0;
-            size_t total_decoded_bytes = 0;
+            {
+                LOG_TIMER_DEBUG("SOG load: archive read");
 
-            const auto is_sog_entry = [](const std::string_view filename) {
-                return filename == "meta.json" || filename == "means_l.webp" ||
-                       filename == "means_u.webp" || filename == "scales.webp" ||
-                       filename == "quats.webp" || filename == "sh0.webp" ||
-                       filename == "shN_centroids.webp" || filename == "shN_labels.webp";
-            };
+                std::error_code file_error;
+                const uintmax_t archive_size = std::filesystem::file_size(path, file_error);
+                if (file_error) {
+                    return std::unexpected(std::format(
+                        "Failed to inspect SOG archive: {}", file_error.message()));
+                }
+                if (archive_size > MAX_ARCHIVE_BYTES ||
+                    archive_size > std::numeric_limits<size_t>::max()) {
+                    return std::unexpected(std::format(
+                        "SOG archive exceeds the {} byte limit", MAX_ARCHIVE_BYTES));
+                }
 
-            // Read all files from archive
-            int header_result = ARCHIVE_OK;
-            while ((header_result = archive_read_next_header(a, &entry)) == ARCHIVE_OK) {
-                if (++entry_count > MAX_ARCHIVE_ENTRIES) {
-                    return std::unexpected(std::format(
-                        "SOG archive contains more than {} entries", MAX_ARCHIVE_ENTRIES));
+                std::ifstream archive_file;
+                if (!lfs::core::open_file_for_read(path, std::ios::binary, archive_file)) {
+                    return std::unexpected("Failed to open SOG archive");
                 }
-                const char* const pathname = archive_entry_pathname(entry);
-                if (!pathname) {
-                    return std::unexpected("SOG archive entry has no valid pathname");
+                auto archive_data = std::make_unique_for_overwrite<uint8_t[]>(
+                    static_cast<size_t>(archive_size));
+                if (!archive_file.read(
+                        reinterpret_cast<char*>(archive_data.get()),
+                        static_cast<std::streamsize>(archive_size))) {
+                    return std::unexpected("Failed to read complete SOG archive");
                 }
-                const std::string filename(pathname);
 
-                if (!archive_entry_size_is_set(entry)) {
-                    return std::unexpected(std::format(
-                        "SOG archive entry '{}' has no declared size", filename));
+                struct ArchiveReadDeleter {
+                    void operator()(struct archive* value) const {
+                        if (value) {
+                            archive_read_free(value);
+                        }
+                    }
+                };
+                std::unique_ptr<struct archive, ArchiveReadDeleter> archive_reader(
+                    archive_read_new());
+                if (!archive_reader) {
+                    return std::unexpected("Failed to allocate SOG archive reader");
                 }
-                const la_int64_t signed_size = archive_entry_size(entry);
-                if (signed_size < 0) {
+                struct archive* const a = archive_reader.get();
+                if (archive_read_support_format_zip(a) != ARCHIVE_OK ||
+                    archive_read_support_filter_all(a) != ARCHIVE_OK) {
+                    const char* detail = archive_error_string(a);
                     return std::unexpected(std::format(
-                        "SOG archive entry '{}' has a negative size", filename));
+                        "Failed to configure SOG archive reader: {}",
+                        detail ? detail : "unknown error"));
                 }
-                const size_t size = static_cast<size_t>(signed_size);
-                if (size > MAX_ENCODED_IMAGE_BYTES) {
-                    return std::unexpected(std::format(
-                        "SOG archive entry '{}' exceeds the {} byte limit",
-                        filename,
-                        MAX_ENCODED_IMAGE_BYTES));
-                }
-                if (total_entry_bytes > MAX_ARCHIVE_BYTES - size) {
-                    return std::unexpected(std::format(
-                        "SOG archive entries exceed the {} byte total limit",
-                        MAX_ARCHIVE_BYTES));
-                }
-                total_entry_bytes += size;
 
-                if (!is_sog_entry(filename)) {
-                    if (archive_read_data_skip(a) != ARCHIVE_OK) {
-                        const char* detail = archive_error_string(a);
+                const int result = archive_read_open_memory(
+                    a, archive_data.get(), static_cast<size_t>(archive_size));
+                if (result != ARCHIVE_OK) {
+                    const char* detail = archive_error_string(a);
+                    return std::unexpected(std::format(
+                        "Failed to open archive: {}",
+                        detail ? detail : "unknown error"));
+                }
+
+                struct archive_entry* entry;
+                size_t entry_count = 0;
+                size_t total_entry_bytes = 0;
+                int header_result = ARCHIVE_OK;
+                while ((header_result = archive_read_next_header(a, &entry)) == ARCHIVE_OK) {
+                    if (++entry_count > MAX_ARCHIVE_ENTRIES) {
                         return std::unexpected(std::format(
-                            "Failed to skip SOG archive entry '{}': {}",
+                            "SOG archive contains more than {} entries", MAX_ARCHIVE_ENTRIES));
+                    }
+                    const char* const pathname = archive_entry_pathname(entry);
+                    if (!pathname) {
+                        return std::unexpected("SOG archive entry has no valid pathname");
+                    }
+                    const std::string filename(pathname);
+
+                    if (!archive_entry_size_is_set(entry)) {
+                        return std::unexpected(std::format(
+                            "SOG archive entry '{}' has no declared size", filename));
+                    }
+                    const la_int64_t signed_size = archive_entry_size(entry);
+                    if (signed_size < 0 ||
+                        static_cast<uint64_t>(signed_size) > std::numeric_limits<size_t>::max()) {
+                        return std::unexpected(std::format(
+                            "SOG archive entry '{}' has an invalid size", filename));
+                    }
+                    const size_t size = static_cast<size_t>(signed_size);
+                    if (size > MAX_ENCODED_IMAGE_BYTES) {
+                        return std::unexpected(std::format(
+                            "SOG archive entry '{}' exceeds the {} byte limit",
                             filename,
-                            detail ? detail : "unknown error"));
+                            MAX_ENCODED_IMAGE_BYTES));
                     }
-                    continue;
+                    if (total_entry_bytes > MAX_ARCHIVE_BYTES - size) {
+                        return std::unexpected(std::format(
+                            "SOG archive entries exceed the {} byte limit",
+                            MAX_ARCHIVE_BYTES));
+                    }
+                    total_entry_bytes += size;
+
+                    const bool is_metadata = filename == "meta.json";
+                    const bool is_image = filename == "means_l.webp" ||
+                                          filename == "means_u.webp" ||
+                                          filename == "scales.webp" ||
+                                          filename == "quats.webp" ||
+                                          filename == "sh0.webp" ||
+                                          filename == "shN_centroids.webp" ||
+                                          filename == "shN_labels.webp";
+                    if (!is_metadata && !is_image) {
+                        if (archive_read_data_skip(a) != ARCHIVE_OK) {
+                            const char* detail = archive_error_string(a);
+                            return std::unexpected(std::format(
+                                "Failed to skip SOG archive entry '{}': {}",
+                                filename,
+                                detail ? detail : "unknown error"));
+                        }
+                        continue;
+                    }
+                    if (!seen_entries.emplace(filename).second) {
+                        return std::unexpected(std::format(
+                            "SOG archive contains duplicate entry '{}'", filename));
+                    }
+                    if (is_metadata && size > MAX_METADATA_BYTES) {
+                        return std::unexpected(std::format(
+                            "SOG metadata exceeds the {} byte limit", MAX_METADATA_BYTES));
+                    }
+
+                    LOG_DEBUG("Reading {} ({} bytes)", filename, size);
+                    auto data = std::make_unique_for_overwrite<uint8_t[]>(size);
+                    size_t offset = 0;
+                    while (offset < size) {
+                        const ssize_t bytes_read = archive_read_data(
+                            a, data.get() + offset, size - offset);
+                        if (bytes_read <= 0) {
+                            const char* detail = archive_error_string(a);
+                            return std::unexpected(std::format(
+                                "Failed to read '{}' from SOG archive: {}",
+                                filename,
+                                detail ? detail : "truncated entry"));
+                        }
+                        offset += static_cast<size_t>(bytes_read);
+                    }
+
+                    if (is_metadata) {
+                        metadata_json.assign(reinterpret_cast<const char*>(data.get()), size);
+                    } else {
+                        encoded_images.emplace(
+                            filename, EncodedImage{std::move(data), size});
+                    }
                 }
-                if (!seen_entries.emplace(filename).second) {
+                if (header_result != ARCHIVE_EOF) {
+                    const char* detail = archive_error_string(a);
                     return std::unexpected(std::format(
-                        "SOG archive contains duplicate entry '{}'", filename));
+                        "Failed while reading SOG archive headers: {}",
+                        detail ? detail : "unknown error"));
                 }
-                if (filename == "meta.json" && size > MAX_METADATA_BYTES) {
-                    return std::unexpected(std::format(
-                        "SOG metadata exceeds the {} byte limit", MAX_METADATA_BYTES));
-                }
-
-                LOG_DEBUG("Reading {} ({} bytes)", filename, size);
-
-                std::vector<uint8_t> data(size);
-                size_t offset = 0;
-                while (offset < size) {
-                    const ssize_t bytes_read = archive_read_data(
-                        a, data.data() + offset, size - offset);
-                    if (bytes_read <= 0) {
-                        const char* detail = archive_error_string(a);
-                        return std::unexpected(std::format(
-                            "Failed to read '{}' from SOG archive: {}",
-                            filename,
-                            detail ? detail : "truncated entry"));
-                    }
-                    offset += static_cast<size_t>(bytes_read);
-                }
-
-                if (filename == "meta.json") {
-                    metadata_json = std::string(data.begin(), data.end());
-                } else {
-                    auto decoded = decode_webp(data.data(), data.size());
-                    if (!decoded) {
-                        return std::unexpected(std::format(
-                            "Failed to decode '{}': {}", filename, decoded.error()));
-                    }
-                    if (total_decoded_bytes >
-                        MAX_TOTAL_DECODED_BYTES - decoded->rgba.size()) {
-                        return std::unexpected(std::format(
-                            "Decoded SOG textures exceed the {} byte total limit",
-                            MAX_TOTAL_DECODED_BYTES));
-                    }
-                    total_decoded_bytes += decoded->rgba.size();
-                    images.emplace(filename, std::move(*decoded));
-                }
-            }
-            if (header_result != ARCHIVE_EOF) {
-                const char* detail = archive_error_string(a);
-                return std::unexpected(std::format(
-                    "Failed while reading SOG archive headers: {}",
-                    detail ? detail : "unknown error"));
             }
 
             if (metadata_json.empty()) {
                 return std::unexpected("Missing meta.json in archive");
             }
 
-            // Parse metadata
-            auto meta_result = parse_metadata(metadata_json);
-            if (!meta_result) {
-                return std::unexpected(meta_result.error());
-            }
-            if (auto validation = validate_metadata(*meta_result); !validation) {
-                return std::unexpected(validation.error());
+            SogMetadata meta;
+            {
+                LOG_TIMER_DEBUG("SOG load: meta");
+                auto meta_result = parse_metadata(metadata_json);
+                if (!meta_result) {
+                    return std::unexpected(meta_result.error());
+                }
+                if (auto validation = validate_metadata(*meta_result); !validation) {
+                    return std::unexpected(validation.error());
+                }
+                meta = std::move(*meta_result);
             }
 
-            // Reconstruct SplatData
-            return reconstruct_splat_data(meta_result.value(), images);
+            auto images = decode_sog_images(meta, encoded_images);
+            if (!images) {
+                return std::unexpected(images.error().message);
+            }
+            return reconstruct_splat_data(meta, *images);
         }
 
         std::expected<SplatData, std::string> read_sog_directory(
@@ -1080,22 +1190,25 @@ namespace lfs::io {
                 return std::unexpected("Failed to read complete meta.json");
             }
 
-            auto meta_result = parse_metadata(metadata_json);
-            if (!meta_result) {
-                return std::unexpected(meta_result.error());
-            }
-            if (auto validation = validate_metadata(*meta_result); !validation) {
-                return std::unexpected(validation.error());
+            SogMetadata meta;
+            {
+                LOG_TIMER_DEBUG("SOG load: meta");
+                auto meta_result = parse_metadata(metadata_json);
+                if (!meta_result) {
+                    return std::unexpected(meta_result.error());
+                }
+                if (auto validation = validate_metadata(*meta_result); !validation) {
+                    return std::unexpected(validation.error());
+                }
+                meta = std::move(*meta_result);
             }
 
-            auto& meta = meta_result.value();
-            DecodedImages images;
-            size_t total_decoded_bytes = 0;
+            EncodedImages encoded_images;
 
             // Helper to read and decode WebP files
             auto read_webp = [&](const std::string& filename)
                 -> std::expected<void, std::string> {
-                if (images.contains(filename)) {
+                if (encoded_images.contains(filename)) {
                     return std::unexpected(std::format(
                         "SOG metadata references duplicate texture '{}'", filename));
                 }
@@ -1125,27 +1238,19 @@ namespace lfs::io {
                         "Failed to open SOG texture '{}'", filename));
                 }
 
-                std::vector<uint8_t> data(static_cast<size_t>(image_size));
-                if (!file.read(reinterpret_cast<char*>(data.data()),
-                               static_cast<std::streamsize>(data.size()))) {
+                const size_t size = static_cast<size_t>(image_size);
+                auto data = std::make_unique_for_overwrite<uint8_t[]>(size);
+                if (!file.read(reinterpret_cast<char*>(data.get()),
+                               static_cast<std::streamsize>(size))) {
                     return std::unexpected(std::format(
                         "Failed to read complete SOG texture '{}'", filename));
                 }
 
-                // Decode WebP
-                auto decoded = decode_webp(data.data(), data.size());
-                if (!decoded) {
-                    return std::unexpected(std::format(
-                        "Failed to decode '{}': {}", filename, decoded.error()));
-                }
-                if (total_decoded_bytes >
-                    MAX_TOTAL_DECODED_BYTES - decoded->rgba.size()) {
-                    return std::unexpected(std::format(
-                        "Decoded SOG textures exceed the {} byte total limit",
-                        MAX_TOTAL_DECODED_BYTES));
-                }
-                total_decoded_bytes += decoded->rgba.size();
-                images.emplace(filename, std::move(*decoded));
+                encoded_images.emplace(
+                    filename,
+                    EncodedImage{
+                        std::move(data),
+                        size});
                 return {};
             };
 
@@ -1175,8 +1280,11 @@ namespace lfs::io {
                 }
             }
 
-            // Reconstruct SplatData
-            return reconstruct_splat_data(meta, images);
+            auto images = decode_sog_images(meta, encoded_images);
+            if (!images) {
+                return std::unexpected(images.error().message);
+            }
+            return reconstruct_splat_data(meta, *images);
         }
 
     } // anonymous namespace
