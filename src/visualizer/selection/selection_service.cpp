@@ -1055,6 +1055,12 @@ namespace lfs::vis {
 
     } // namespace
 
+    SelectionService::PendingSelectionCounts::PendingSelectionCounts() = default;
+    SelectionService::PendingSelectionCounts::~PendingSelectionCounts() = default;
+    SelectionService::PendingSelectionCounts::PendingSelectionCounts(PendingSelectionCounts&&) noexcept = default;
+    SelectionService::PendingSelectionCounts&
+    SelectionService::PendingSelectionCounts::operator=(PendingSelectionCounts&&) noexcept = default;
+
     SelectionService::SelectionService(SceneManager* scene_manager, RenderingManager* rendering_manager)
         : scene_manager_(scene_manager),
           rendering_manager_(rendering_manager) {
