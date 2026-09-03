@@ -116,6 +116,7 @@ class PluginMarketplacePanel(Panel):
         self._last_lang = ""
         self._last_grid_signature: Optional[Tuple] = None
         self._last_catalog_status_signature: Optional[Tuple[str, str]] = None
+        self._pending_scroll_restore = None
         self._escape_revert = w.EscapeRevertController()
         self._reactive_unsubscribers = []
         self._model_update_scheduled = False
@@ -201,6 +202,7 @@ class PluginMarketplacePanel(Panel):
         self._last_grid_signature = None
         self._last_catalog_status_signature = None
         self._stable_layout_width = None
+        self._pending_scroll_restore = None
         self._escape_revert.clear()
 
         formats_header = doc.get_element_by_id("formats-header")
@@ -257,6 +259,7 @@ class PluginMarketplacePanel(Panel):
         self._confirm_is_open = False
         self._confirm_restore_manual_focus = False
         self._manual_url_focused = False
+        self._pending_scroll_restore = None
         self._doc = None
         self._handle = None
         if doc:
@@ -343,6 +346,7 @@ class PluginMarketplacePanel(Panel):
         from .manager import PluginManager
 
         mgr = PluginManager.instance()
+        self._restore_pending_scroll(doc)
         # Dirty-driven updates are event-driven, so this guard handles a sort
         # change that arrives while the initial catalog fetch is in flight
         # without reintroducing an idle polling loop.
@@ -355,7 +359,9 @@ class PluginMarketplacePanel(Panel):
             self._last_card_phases.clear()
 
         entries_raw, is_loading, registry_loaded = self._catalog.snapshot()
-        self._update_catalog_status(doc, len(entries_raw), is_loading, registry_loaded)
+        self._update_catalog_status(
+            doc, len(entries_raw), is_loading, registry_loaded, entries_raw
+        )
         self._sync_view_mode_controls(doc)
 
         snapshot_key = (tuple(entries_raw), is_loading, registry_loaded)
@@ -465,7 +471,7 @@ class PluginMarketplacePanel(Panel):
 
         metrics = []
         if not is_local_only:
-            if entry.stars > 0:
+            if entry.stars is not None:
                 metrics.append(f"{tr('plugin_marketplace.stars')}: {entry.stars}")
             if entry.downloads > 0:
                 metrics.append(f"{tr('plugin_marketplace.downloads')}: {entry.downloads}")
@@ -632,12 +638,8 @@ class PluginMarketplacePanel(Panel):
 
     def _restore_panel_chrome(self, doc, chrome) -> None:
         scroll_top, manual_value, was_manual_focused, overlay_hidden = chrome
-        main_area = doc.get_element_by_id("main-area")
-        if main_area is not None and scroll_top is not None:
-            try:
-                main_area.scroll_top = scroll_top
-            except (AttributeError, TypeError, ValueError):
-                pass
+        if scroll_top is not None:
+            self._defer_scroll_restore(doc, scroll_top)
 
         manual_input = doc.get_element_by_id("manual-url-input")
         if manual_input is not None:
@@ -651,6 +653,65 @@ class PluginMarketplacePanel(Panel):
         overlay = doc.get_element_by_id("confirm-overlay")
         if overlay is not None and overlay_hidden is not None:
             overlay.set_class("hidden", bool(overlay_hidden))
+
+    @staticmethod
+    def _scroll_height(element):
+        try:
+            return float(element.scroll_height)
+        except (AttributeError, TypeError, ValueError):
+            return None
+
+    def _defer_scroll_restore(self, doc, scroll_top: float) -> None:
+        main_area = doc.get_element_by_id("main-area")
+        if main_area is None:
+            return
+        height = self._scroll_height(main_area)
+        if height is None:
+            # Lightweight hosts without layout metrics retain the historical
+            # synchronous behavior; real RML elements expose scroll_height.
+            try:
+                main_area.scroll_top = scroll_top
+            except (AttributeError, TypeError, ValueError):
+                pass
+            return
+        self._pending_scroll_restore = (doc, float(scroll_top), height)
+        self._schedule_model_update()
+
+    def _restore_pending_scroll(self, doc) -> None:
+        pending = self._pending_scroll_restore
+        if pending is None:
+            return
+        pending_doc, scroll_top, previous_height = pending
+        if pending_doc is not doc:
+            self._pending_scroll_restore = None
+            return
+
+        main_area = doc.get_element_by_id("main-area")
+        if main_area is None:
+            self._pending_scroll_restore = None
+            return
+        height = self._scroll_height(main_area)
+        if height is None:
+            self._pending_scroll_restore = None
+            try:
+                main_area.scroll_top = scroll_top
+            except (AttributeError, TypeError, ValueError):
+                pass
+            return
+
+        # A newly assigned grid can report its old height for one update. Wait
+        # until the reported content height stops changing, then restore the
+        # exact captured position after RML has performed its clamp.
+        if (abs(height - previous_height) > 0.01
+                or (scroll_top > 0.0 and height <= 0.0)):
+            self._pending_scroll_restore = (doc, scroll_top, height)
+            self._schedule_model_update()
+            return
+        self._pending_scroll_restore = None
+        try:
+            main_area.scroll_top = scroll_top
+        except (AttributeError, TypeError, ValueError):
+            pass
 
     def _grid_viewport_width(self, doc, grid_el) -> int:
         # The grid and the manual-install section are siblings in #main-area;
@@ -1083,7 +1144,10 @@ class PluginMarketplacePanel(Panel):
             if self._handle:
                 self._handle.dirty("manual_url")
 
-    def _update_catalog_status(self, doc, entry_count: int, is_loading: bool, registry_loaded: bool):
+    def _update_catalog_status(
+        self, doc, entry_count: int, is_loading: bool, registry_loaded: bool,
+        entries=None,
+    ):
         status_el = doc.get_element_by_id("catalog-status")
         if not status_el:
             return
@@ -1096,6 +1160,16 @@ class PluginMarketplacePanel(Panel):
             tone = "status-success" if entry_count > 0 else "status-info"
         else:
             text = localized_count("plugin_marketplace.registry_unavailable", entry_count)
+            tone = "status-warning"
+
+        popularity_unavailable = any(
+            getattr(entry, "github_enrichment_failed", False)
+            for entry in (entries or ())
+        )
+        if popularity_unavailable:
+            text = (
+                f"{text} {lf.ui.tr('plugin_marketplace.popularity_unavailable')}"
+            )
             tone = "status-warning"
 
         signature = (text, tone)
@@ -1569,7 +1643,8 @@ class PluginMarketplacePanel(Panel):
 
     def _sort_entries(self, entries: List[MarketplacePluginEntry]) -> List[MarketplacePluginEntry]:
         def popularity(e):
-            return (e.stars + e.downloads, e.name.lower())
+            stars = e.stars if e.stars is not None else 0
+            return (stars + e.downloads, e.name.lower())
 
         if self._sort_idx == 1:
             return sorted(entries, key=popularity)

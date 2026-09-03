@@ -1974,7 +1974,8 @@
     "registry_loaded.other": "Rejestr załadowany: {count} wtyczek w katalogu marketplace.",
     "registry_unavailable.one": "Rejestr niedostępny: wyświetlono {count} zastępczą wtyczkę.",
     "registry_unavailable.few": "Rejestr niedostępny: wyświetlono {count} zastępcze wtyczki.",
-    "registry_unavailable.other": "Rejestr niedostępny: wyświetlono {count} zastępczych wtyczek."
+    "registry_unavailable.other": "Rejestr niedostępny: wyświetlono {count} zastępczych wtyczek.",
+    "popularity_unavailable": "Dane popularności niedostępne."
   },
   "sequencer": {
     "edit_focal_length": "Edytuj ogniskową...",

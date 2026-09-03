@@ -1974,7 +1974,8 @@
     "registry_loaded.other": "Registre chargé : {count} plugins dans le catalogue du marketplace.",
     "registry_unavailable.one": "Registre indisponible : affichage de {count} plugin de secours.",
     "registry_unavailable.few": "Registre indisponible : affichage de {count} plugins de secours.",
-    "registry_unavailable.other": "Registre indisponible : affichage de {count} plugins de secours."
+    "registry_unavailable.other": "Registre indisponible : affichage de {count} plugins de secours.",
+    "popularity_unavailable": "Données de popularité indisponibles."
   },
   "sequencer": {
     "edit_focal_length": "Modifier la longueur focale...",

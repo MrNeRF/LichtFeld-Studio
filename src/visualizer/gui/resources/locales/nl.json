@@ -1974,7 +1974,8 @@
     "registry_loaded.other": "Register geladen: {count} plugins in de marketplacecatalogus.",
     "registry_unavailable.one": "Register niet beschikbaar: {count} fallbackplugin wordt weergegeven.",
     "registry_unavailable.few": "Register niet beschikbaar: {count} fallbackplugins worden weergegeven.",
-    "registry_unavailable.other": "Register niet beschikbaar: {count} fallbackplugins worden weergegeven."
+    "registry_unavailable.other": "Register niet beschikbaar: {count} fallbackplugins worden weergegeven.",
+    "popularity_unavailable": "Populariteitsgegevens niet beschikbaar."
   },
   "sequencer": {
     "edit_focal_length": "Brandpuntsafstand bewerken...",

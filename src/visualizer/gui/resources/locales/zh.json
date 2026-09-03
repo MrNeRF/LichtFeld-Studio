@@ -1974,7 +1974,8 @@
     "registry_loaded.other": "注册表已加载：市场目录中有 {count} 个插件。",
     "registry_unavailable.one": "注册表不可用：正在显示 {count} 个备用插件。",
     "registry_unavailable.few": "注册表不可用：正在显示 {count} 个备用插件。",
-    "registry_unavailable.other": "注册表不可用：正在显示 {count} 个备用插件。"
+    "registry_unavailable.other": "注册表不可用：正在显示 {count} 个备用插件。",
+    "popularity_unavailable": "无法获取人气数据。"
   },
   "sequencer": {
     "edit_focal_length": "编辑焦距...",

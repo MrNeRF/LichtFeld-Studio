@@ -1974,7 +1974,8 @@
     "registry_loaded.other": "Registry geladen: {count} Plugins im Marketplace-Katalog.",
     "registry_unavailable.one": "Registry nicht verfügbar: {count} Fallback-Plugin wird angezeigt.",
     "registry_unavailable.few": "Registry nicht verfügbar: {count} Fallback-Plugins werden angezeigt.",
-    "registry_unavailable.other": "Registry nicht verfügbar: {count} Fallback-Plugins werden angezeigt."
+    "registry_unavailable.other": "Registry nicht verfügbar: {count} Fallback-Plugins werden angezeigt.",
+    "popularity_unavailable": "Beliebtheitsdaten nicht verfügbar."
   },
   "sequencer": {
     "edit_focal_length": "Brennweite bearbeiten...",

@@ -3,6 +3,7 @@
 """Regression tests for plugin marketplace feedback rendering."""
 
 from importlib import import_module
+import json
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 import threading
@@ -300,6 +301,140 @@ def test_plugin_marketplace_cache_ttl_and_retry_backoff(plugin_marketplace_modul
     assert not marketplace.PluginMarketplaceCatalog._cache_can_serve(failed, 130.0, True)
 
 
+def test_plugin_marketplace_merges_registry_metadata_with_github_enrichment(
+    plugin_marketplace_module,
+):
+    module, _state = plugin_marketplace_module
+    marketplace = __import__("lfs_plugins.marketplace", fromlist=["_merge_entries"])
+    registry_entry = module.MarketplacePluginEntry(
+        source_url="https://github.com/owner/repo",
+        github_url="https://github.com/owner/repo",
+        owner="owner",
+        repo="repo",
+        name="Registry Name",
+        description="Registry description",
+        downloads=12,
+        registry_id="community:repo",
+        version="1.2.3",
+    )
+    enriched_entry = module.MarketplacePluginEntry(
+        source_url="https://github.com/owner/repo",
+        github_url="https://github.com/owner/repo",
+        owner="owner",
+        repo="repo",
+        name="GitHub Name",
+        description="GitHub description",
+        stars=48,
+        language="Python",
+        topics=("lichtfeld", "plugin"),
+    )
+
+    merged = marketplace._merge_entries([registry_entry], [enriched_entry])
+
+    assert len(merged) == 1
+    assert merged[0].registry_id == "community:repo"
+    assert merged[0].version == "1.2.3"
+    assert merged[0].name == "Registry Name"
+    assert merged[0].description == "Registry description"
+    assert merged[0].stars == 48
+    assert merged[0].language == "Python"
+    assert merged[0].topics == ("lichtfeld", "plugin")
+    assert merged[0].downloads == 12
+
+
+def test_plugin_marketplace_rate_limited_enrichment_is_unknown_and_visible(
+    plugin_marketplace_module,
+    monkeypatch,
+):
+    module, state = plugin_marketplace_module
+    marketplace = __import__("lfs_plugins.marketplace", fromlist=["_resolve_github_entry"])
+    monkeypatch.setattr(
+        module.lf.ui, "get_current_language", lambda: "en", raising=False
+    )
+
+    def rate_limited(_request, *, timeout):
+        assert timeout == marketplace.GITHUB_TIMEOUT_SEC
+        raise OSError("rate limited")
+
+    monkeypatch.setattr(marketplace, "urlopen", rate_limited)
+    entry = marketplace._resolve_github_entry(
+        "https://github.com/owner/repo", "owner", "repo"
+    )
+
+    assert entry.stars is None
+    assert entry.github_enrichment_failed is True
+
+    state.translations["plugin_marketplace.popularity_unavailable"] = (
+        "Popularity data unavailable."
+    )
+    panel = module.PluginMarketplacePanel()
+    panel._sort_idx = 0
+    known_entry = module.MarketplacePluginEntry(
+        source_url="https://github.com/owner/known",
+        github_url="https://github.com/owner/known",
+        owner="owner",
+        repo="known",
+        name="Known",
+        description="",
+        stars=3,
+    )
+    assert panel._sort_entries([entry, known_entry]) == [known_entry, entry]
+
+    status = _ElementStub()
+    panel._update_catalog_status(
+        _DocStub({"catalog-status": status}), 1, False, True, [entry]
+    )
+
+    assert "Popularity data unavailable." in status.text
+
+
+def test_plugin_marketplace_enriches_registry_github_urls_with_bounded_resolver(
+    plugin_marketplace_module,
+    monkeypatch,
+):
+    module, _state = plugin_marketplace_module
+    marketplace = __import__("lfs_plugins.marketplace", fromlist=["_resolve_github_entries"])
+    requests = []
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps({
+                "name": "repo",
+                "stargazers_count": 19,
+                "language": "Python",
+                "topics": ["plugin"],
+            }).encode("utf-8")
+
+    def fake_urlopen(request, *, timeout):
+        assert timeout == marketplace.GITHUB_TIMEOUT_SEC
+        requests.append(request.full_url)
+        return _Response()
+
+    monkeypatch.setattr(marketplace, "urlopen", fake_urlopen)
+    registry_entry = module.MarketplacePluginEntry(
+        source_url="https://github.com/owner/repo",
+        github_url="https://github.com/owner/repo",
+        owner="owner",
+        repo="repo",
+        name="Registry Name",
+        description="Registry description",
+        registry_id="community:repo",
+    )
+
+    enriched = marketplace._resolve_github_entries([registry_entry])
+    merged = marketplace._merge_entries([registry_entry], enriched)
+
+    assert requests == ["https://api.github.com/repos/owner/repo"]
+    assert merged[0].registry_id == "community:repo"
+    assert merged[0].stars == 19
+
+
 def test_plugin_marketplace_lifecycle_callback_invalidates_discovery_cache(
     plugin_marketplace_module,
 ):
@@ -540,6 +675,30 @@ def test_plugin_marketplace_full_grid_rebuild_preserves_panel_chrome(plugin_mark
     assert panel._manual_url == "owner/repo"
     assert manual.focus_count == 1
     assert overlay.classes["hidden"] is False
+
+
+def test_plugin_marketplace_grid_rebuild_restores_scroll_after_layout(
+    plugin_marketplace_module,
+):
+    module, _state = plugin_marketplace_module
+    panel = module.PluginMarketplacePanel()
+    main = _ElementStub()
+    main.scroll_top = 843.0
+    main.scroll_height = 2400.0
+    main.client_height = 500.0
+
+    class _ReflowGrid(_ElementStub):
+        def set_inner_rml(self, value):
+            super().set_inner_rml(value)
+            # Simulate RML clamping against the not-yet-final grid height.
+            main.scroll_top = 523.0
+
+    doc = _DocStub({"main-area": main, "card-grid": _ReflowGrid()})
+    panel._render_entry_layout(doc, [{"card_id": "sample-card"}], force=True)
+
+    assert main.scroll_top == 523.0
+    panel._restore_pending_scroll(doc)
+    assert main.scroll_top == 843.0
 
 
 def test_plugin_marketplace_renders_git_checkbox_when_available(plugin_marketplace_module):

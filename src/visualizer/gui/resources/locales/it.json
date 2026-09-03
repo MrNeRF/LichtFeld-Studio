@@ -1974,7 +1974,8 @@
     "registry_loaded.other": "Registro caricato: {count} plugin nel catalogo del marketplace.",
     "registry_unavailable.one": "Registro non disponibile: visualizzazione di {count} plugin di fallback.",
     "registry_unavailable.few": "Registro non disponibile: visualizzazione di {count} plugin di fallback.",
-    "registry_unavailable.other": "Registro non disponibile: visualizzazione di {count} plugin di fallback."
+    "registry_unavailable.other": "Registro non disponibile: visualizzazione di {count} plugin di fallback.",
+    "popularity_unavailable": "Dati sulla popolarità non disponibili."
   },
   "sequencer": {
     "edit_focal_length": "Modifica lunghezza focale...",
