@@ -232,11 +232,16 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 # MSVC 14.44 ICEs (C1001 in msc1.cpp:1589) on the sequencer panel TUs under
 # /std:c++latest in both Debug (/Od /RTC1) and Release (/O2 /Ob2). Pin them to
 # /std:c++23 (not "latest") and add /bigobj for the heavy tensor + RmlUI + fmt instantiations.
+# The project lifecycle TU exceeds the COFF section limit in Debug and needs /bigobj.
 if(MSVC)
     set_source_files_properties(
             ${CMAKE_CURRENT_SOURCE_DIR}/sequencer/rml_sequencer_panel.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/sequencer/rml_sequencer_panel_timeline.cpp
             PROPERTIES COMPILE_OPTIONS "/std:c++23;/bigobj"
+    )
+    set_source_files_properties(
+            ${CMAKE_CURRENT_SOURCE_DIR}/project/project_lifecycle.cpp
+            PROPERTIES COMPILE_OPTIONS "/bigobj"
     )
 endif()
 
