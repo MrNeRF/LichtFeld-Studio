@@ -41,6 +41,7 @@
 #include "io/video/video_encoder.hpp"
 #include "mcp/mcp_http_server.hpp"
 #include "mcp/mcp_tools.hpp"
+#include "preprocessing/preprocess.hpp"
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "sequencer/timeline.hpp"
@@ -114,6 +115,30 @@ namespace lfs::app {
                 .detail = std::move(detail),
                 .detection = source,
             });
+        }
+
+        void prepare_lpips_weights(
+            lfs::training::Trainer& trainer,
+            const lfs::core::param::TrainingParameters& params,
+            const bool allow_download) {
+            if (!params.optimization.enable_eval)
+                return;
+            const char* env_path = std::getenv("LFS_LPIPS_WEIGHTS");
+            if (env_path && env_path[0])
+                return;
+            if (auto result = lfs::preprocessing::ensure_lpips_weights(allow_download); result)
+                trainer.set_lpips_weights_path(std::move(*result));
+        }
+
+        [[nodiscard]] lfs::vis::TrainerManager::EvaluationWeightsPreparer
+        make_lpips_weights_preparer(const bool allow_download) {
+            return [allow_download](const bool) -> std::optional<std::filesystem::path> {
+                if (const char* env_path = std::getenv("LFS_LPIPS_WEIGHTS"); env_path && env_path[0])
+                    return std::nullopt;
+                if (auto result = lfs::preprocessing::ensure_lpips_weights(allow_download); result)
+                    return std::move(*result);
+                return std::nullopt;
+            };
         }
 
         std::expected<core::param::TrainingParameters, std::string> loadCheckpointParams(const core::param::TrainingParameters& params, core::Scene& scene) {
@@ -476,6 +501,8 @@ namespace lfs::app {
                 }
 
                 auto manager = std::make_shared<vis::TrainerManager>();
+                manager->set_evaluation_weights_preparer(
+                    make_lpips_weights_preparer(!params->no_download));
                 {
                     const auto& effective_params =
                         checkpoint_params
@@ -736,6 +763,7 @@ namespace lfs::app {
                     }
                     auto trainer =
                         std::move(installed->trainer);
+                    prepare_lpips_weights(*trainer, project->params, !params->no_download);
                     training::grant_headless_project_saves(
                         *trainer, project->params,
                         headless_project_save_destination(
@@ -803,6 +831,7 @@ namespace lfs::app {
                         return 1;
                     }
                     LOG_INFO("Resumed from iteration {}", *ckpt_result);
+                    prepare_lpips_weights(*trainer, *ckpt_params_result, !params->no_download);
 
                     core::Tensor::trim_memory_pool();
 
@@ -847,6 +876,7 @@ namespace lfs::app {
                         LOG_ERROR("Failed to initialize trainer: {}", result.error());
                         return 1;
                     }
+                    prepare_lpips_weights(*trainer, *params, !params->no_download);
                     training::grant_headless_project_saves(
                         *trainer, *params);
 
@@ -1274,6 +1304,8 @@ namespace lfs::app {
             });
 
             viewer->setParameters(*params);
+            viewer->set_evaluation_weights_preparer(
+                make_lpips_weights_preparer(!params->no_download));
 
             for (const auto& vp : params->view_paths) {
                 if (!std::filesystem::exists(vp)) {

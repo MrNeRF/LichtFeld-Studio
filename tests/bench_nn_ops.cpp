@@ -1,14 +1,22 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/image_io.hpp"
 #include "core/nn.hpp"
+#include "core/nn/nn_nvtx.hpp"
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <filesystem>
 #include <functional>
+#include <numeric>
 #include <string>
 #include <vector>
 
@@ -70,6 +78,90 @@ namespace {
             return t.to(lfs::core::DataType::Float16);
         }
         return t;
+    }
+
+    std::pair<lfs::core::Tensor, lfs::core::Tensor> load_lpips_bench_pair() {
+        namespace fs = std::filesystem;
+        const fs::path path = std::getenv("LFS_LPIPS_BENCH_PNG")
+                                  ? fs::path(std::getenv("LFS_LPIPS_BENCH_PNG"))
+                                  : fs::path(PROJECT_ROOT_PATH) /
+                                        ".codex_tmp/lpips_native/runs/xcheck_withlpips_r2_nomempool/"
+                                        "eval_step_30001/0.png";
+        auto [data, width, height, channels] = lfs::core::load_image(path);
+        if (!data || channels != 3 || width < 2 * 1237 + 4 || height != 822) {
+            throw std::runtime_error("LPIPS benchmark PNG is missing or has unexpected dimensions: " +
+                                     path.string());
+        }
+        constexpr int image_width = 1237;
+        constexpr int separator = 4;
+        std::vector<float> left(3 * static_cast<std::size_t>(height) * image_width);
+        std::vector<float> right(left.size());
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < image_width; ++x) {
+                const auto pixel = static_cast<std::size_t>(y) * width + x;
+                const auto right_pixel = static_cast<std::size_t>(y) * width + image_width + separator + x;
+                for (int c = 0; c < 3; ++c) {
+                    left[static_cast<std::size_t>(c) * height * image_width +
+                         static_cast<std::size_t>(y) * image_width + x] =
+                        static_cast<float>(data[3 * pixel + c]) / 255.0f;
+                    right[static_cast<std::size_t>(c) * height * image_width +
+                          static_cast<std::size_t>(y) * image_width + x] =
+                        static_cast<float>(data[3 * right_pixel + c]) / 255.0f;
+                }
+            }
+        }
+        lfs::core::free_image(data);
+        const lfs::core::TensorShape shape({1, 3, static_cast<std::size_t>(height), image_width});
+        return {lfs::core::Tensor::from_vector(left, shape, lfs::core::Device::CUDA),
+                lfs::core::Tensor::from_vector(right, shape, lfs::core::Device::CUDA)};
+    }
+
+    struct Distribution {
+        double median = 0.0;
+        double p90 = 0.0;
+    };
+
+    Distribution timed_lpips(lfs::core::nn::models::Lpips& model,
+                             const lfs::core::Tensor& pred,
+                             const lfs::core::Tensor& target) {
+        const bool profile = std::getenv("LFS_NN_BENCH_PROFILE") != nullptr;
+        const int warmups = profile ? 0 : 20;
+        const int iterations = profile ? 1 : 100;
+        for (int i = 0; i < warmups; ++i) {
+            const auto value = model.forward(pred, target);
+            if (!value) {
+                throw std::runtime_error(std::string(value.error().detail()));
+            }
+        }
+        cudaDeviceSynchronize();
+        std::vector<cudaEvent_t> starts(iterations), stops(iterations);
+        for (int i = 0; i < iterations; ++i) {
+            cudaEventCreate(&starts[i]);
+            cudaEventCreate(&stops[i]);
+            cudaEventRecord(starts[i]);
+            {
+                lfs::core::nn::NvtxRange range("benchmark/lpips_forward");
+                const auto value = model.forward(pred, target);
+                if (!value) {
+                    throw std::runtime_error(std::string(value.error().detail()));
+                }
+            }
+            cudaEventRecord(stops[i]);
+        }
+        cudaEventSynchronize(stops.back());
+        std::vector<float> samples;
+        samples.reserve(starts.size());
+        for (int i = 0; i < iterations; ++i) {
+            float ms = 0.0f;
+            cudaEventElapsedTime(&ms, starts[i], stops[i]);
+            samples.push_back(ms);
+            cudaEventDestroy(starts[i]);
+            cudaEventDestroy(stops[i]);
+        }
+        std::sort(samples.begin(), samples.end());
+        if (profile)
+            return {samples.front(), samples.front()};
+        return {samples[49], samples[89]};
     }
 
 } // namespace
@@ -191,4 +283,53 @@ TEST(NnBench, DISABLED_ReportTable) {
     };
     bench_resize(lfs::core::DataType::Float32);
     bench_resize(lfs::core::DataType::Float16);
+}
+
+TEST(NnBench, DISABLED_LpipsFullResolution) {
+    if (!benches_enabled() && testing::GTEST_FLAG(also_run_disabled_tests) == false) {
+        GTEST_SKIP();
+    }
+    const auto weights = std::getenv("LFS_LPIPS_WEIGHTS")
+                             ? std::filesystem::path(std::getenv("LFS_LPIPS_WEIGHTS"))
+                             : std::filesystem::path(std::getenv("HOME")) /
+                                   ".lichtfeld/onnx/lpips-vgg16-v0.1.lfw";
+    auto pair = load_lpips_bench_pair();
+    const char* const only_dtype = std::getenv("LFS_NN_BENCH_DTYPE");
+    for (const auto dtype : {lfs::core::DataType::Float32, lfs::core::DataType::Float16}) {
+        const char* const label = dtype == lfs::core::DataType::Float32 ? "fp32" : "fp16";
+        if (only_dtype != nullptr && std::strcmp(only_dtype, label) != 0) {
+            continue;
+        }
+        auto loaded = lfs::core::nn::models::Lpips::load(weights, lfs::core::Device::CUDA, dtype);
+        ASSERT_TRUE(loaded.has_value()) << loaded.error().detail();
+        auto model = std::move(*loaded);
+        const auto result = timed_lpips(model, pair.first, pair.second);
+        std::printf("LPIPS_BENCH native_%s median_ms=%.6f p90_ms=%.6f arena_bytes=%zu workspace_bytes=%zu\n",
+                    label, result.median, result.p90, model.arena_bytes(), model.workspace_bytes());
+        model.release_activations();
+    }
+}
+
+TEST(NnBench, DISABLED_LpipsConv64FullResolution) {
+    if (!benches_enabled() && testing::GTEST_FLAG(also_run_disabled_tests) == false) {
+        GTEST_SKIP();
+    }
+    const bool fp32 = std::getenv("LFS_NN_BENCH_FP32") != nullptr;
+    const auto dtype = fp32 ? lfs::core::DataType::Float32 : lfs::core::DataType::Float16;
+    auto input = randn({1, 64, 822, 1237}, dtype);
+    auto weight = randn({64, 64, 3, 3}, dtype);
+    lfs::core::nn::Conv2dParams params;
+    params.pad_h = 1;
+    params.pad_w = 1;
+    for (int i = 0; i < 20; ++i) {
+        auto output = lfs::core::nn::conv2d(input, weight, nullptr, params);
+        (void)output;
+    }
+    cudaDeviceSynchronize();
+    for (int i = 0; i < 5; ++i) {
+        lfs::core::nn::NvtxRange range("benchmark/lpips_conv64");
+        auto output = lfs::core::nn::conv2d(input, weight, nullptr, params);
+        (void)output;
+    }
+    cudaDeviceSynchronize();
 }

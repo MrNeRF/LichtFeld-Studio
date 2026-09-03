@@ -21,9 +21,9 @@ run_child() {
 }
 
 SCENE_DIR="data"
-RESULT_DIR="results/mrnf"
+RESULT_DIR="${RESULT_DIR:-results/mrnf}"
 STRATEGY_NAME="MRNF"
-SCENE_LIST="garden bicycle stump bonsai counter kitchen room" # treehill flowers
+SCENE_LIST="${SCENE_LIST:-garden bicycle stump bonsai counter kitchen room}" # treehill flowers
 
 # Check if results directory exists and prompt for deletion
 if [ -d "$RESULT_DIR" ]; then
@@ -39,6 +39,7 @@ if [ -d "$RESULT_DIR" ]; then
     echo
 fi
 
+if [ "${SUMMARY_ONLY:-0}" != "1" ]; then
 for SCENE in $SCENE_LIST;
 do
     # Determine data factor based on scene type
@@ -71,6 +72,7 @@ do
     echo "Completed $SCENE (training: ${scene_elapsed}s)"
     echo
 done
+fi
 
 # Function to format numbers to specified decimal places
 format_number() {
@@ -106,12 +108,14 @@ echo
 echo "================================================================================"
 echo "QUALITY METRICS SUMMARY $STRATEGY_NAME"
 echo "================================================================================"
-printf "%-10s %-10s %-10s %-10s %-12s %-15s\n" "scene" "iteration" "psnr" "ssim" "time" "num_gaussians"
+printf "%-10s %-10s %-10s %-10s %-10s %-12s %-15s\n" "scene" "iteration" "psnr" "ssim" "lpips" "time" "num_gaussians"
 echo "--------------------------------------------------------------------------------"
 
 # Collect and format results for each scene
 total_psnr=0
 total_ssim=0
+total_lpips=0
+lpips_count=0
 total_gaussians=0
 total_time=0
 valid_scenes=0
@@ -123,8 +127,8 @@ do
         # Get the last line of metrics (final iteration)
         final_metrics=$(tail -n 1 "$csv_file")
 
-        # Parse CSV values (format: iteration,psnr,ssim,time_per_image,num_gaussians)
-        IFS=',' read -r iteration psnr ssim time_per_image num_gaussians <<< "$final_metrics"
+        # Parse CSV values (format: iteration,psnr,ssim,lpips,time_per_image,num_gaussians)
+        IFS=',' read -r iteration psnr ssim lpips time_per_image num_gaussians _metrics_tail <<< "$final_metrics"
 
         # Read training wall-clock time for this scene
         time_file="$RESULT_DIR/$SCENE/training_time_seconds.txt"
@@ -137,15 +141,17 @@ do
         # Format the numbers
         psnr_fmt=$(format_number $psnr 4)
         ssim_fmt=$(format_number $ssim 6)
+        if [ -n "$lpips" ]; then lpips_fmt=$(format_number "$lpips" 6); else lpips_fmt="n/a"; fi
         gaussians_fmt=$(format_with_commas $num_gaussians)
         time_fmt=$(format_duration "$scene_time")
 
         # Print formatted row
-        printf "%-10s %-10s %-10s %-10s %-12s %-15s\n" \
+        printf "%-10s %-10s %-10s %-10s %-10s %-12s %-15s\n" \
             "$SCENE" \
             "$iteration" \
             "$psnr_fmt" \
             "$ssim_fmt" \
+            "$lpips_fmt" \
             "$time_fmt" \
             "$gaussians_fmt"
 
@@ -154,6 +160,10 @@ do
         # Accumulate for mean calculation
         total_psnr=$(echo "$total_psnr + $psnr" | bc -l)
         total_ssim=$(echo "$total_ssim + $ssim" | bc -l)
+        if [ -n "$lpips" ]; then
+            total_lpips=$(echo "$total_lpips + $lpips" | bc -l)
+            lpips_count=$((lpips_count + 1))
+        fi
         total_gaussians=$((total_gaussians + num_gaussians))
         total_time=$(echo "$total_time + $scene_time" | bc -l)
         valid_scenes=$((valid_scenes + 1))
@@ -164,6 +174,12 @@ done
 if [ $valid_scenes -gt 0 ]; then
     mean_psnr=$(echo "$total_psnr / $valid_scenes" | bc -l)
     mean_ssim=$(echo "$total_ssim / $valid_scenes" | bc -l)
+    if [ "$lpips_count" -gt 0 ]; then
+        mean_lpips=$(echo "$total_lpips / $lpips_count" | bc -l)
+        mean_lpips_fmt=$(format_number "$mean_lpips" 6)
+    else
+        mean_lpips_fmt="n/a"
+    fi
     mean_gaussians=$((total_gaussians / valid_scenes))
     mean_time=$(echo "$total_time / $valid_scenes" | bc -l)
 
@@ -173,11 +189,12 @@ if [ $valid_scenes -gt 0 ]; then
     mean_time_fmt=$(format_duration "$mean_time")
 
     echo "================================================================================"
-    printf "%-10s %-10s %-10s %-10s %-12s %-15s\n" \
+    printf "%-10s %-10s %-10s %-10s %-10s %-12s %-15s\n" \
         "mean" \
         "30000" \
         "$mean_psnr_fmt" \
         "$mean_ssim_fmt" \
+        "$mean_lpips_fmt" \
         "$mean_time_fmt" \
         "$mean_gaussians_fmt"
 fi

@@ -296,6 +296,9 @@ namespace lfs::python {
             else if (field == "eval_ssim")
                 store.eval_ssim.set(value.is_none() ? std::optional<float>{}
                                                     : std::optional<float>{nb::cast<float>(value)});
+            else if (field == "eval_lpips")
+                store.eval_lpips.set(value.is_none() ? std::optional<float>{}
+                                                     : std::optional<float>{nb::cast<float>(value)});
             else if (field == "scene_generation")
                 store.scene_generation.set(nb::cast<std::uint64_t>(value));
             else if (field == "selection_generation")
@@ -358,6 +361,8 @@ namespace lfs::python {
                 return nb::cast(store.eval_psnr.get());
             if (field == "eval_ssim")
                 return nb::cast(store.eval_ssim.get());
+            if (field == "eval_lpips")
+                return nb::cast(store.eval_lpips.get());
             if (field == "scene_generation")
                 return nb::cast(store.scene_generation.get());
             if (field == "selection_generation")
@@ -419,6 +424,8 @@ namespace lfs::python {
                 return subscribe_observable(store.eval_psnr, std::move(callback));
             if (field == "eval_ssim")
                 return subscribe_observable(store.eval_ssim, std::move(callback));
+            if (field == "eval_lpips")
+                return subscribe_observable(store.eval_lpips, std::move(callback));
             if (field == "scene_generation")
                 return subscribe_observable(store.scene_generation, std::move(callback));
             if (field == "selection_generation")

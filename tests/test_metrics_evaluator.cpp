@@ -32,6 +32,7 @@ using lfs::core::Tensor;
 using lfs::training::CameraDataset;
 using lfs::training::DatasetConfig;
 using lfs::training::EvalMetrics;
+using lfs::training::image_for_metrics_and_save;
 using lfs::training::mean_normal_angle_deg;
 using lfs::training::median_depth_absrel;
 using lfs::training::MetricsEvaluator;
@@ -175,7 +176,7 @@ namespace {
 
 TEST(EvalMetricsCsv, HeaderAppendsGeometryColumnsWithoutRenamingExisting) {
     EXPECT_EQ(EvalMetrics::to_csv_header(),
-              "iteration,psnr,ssim,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b");
+              "iteration,psnr,ssim,lpips,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b");
 
     EvalMetrics missing;
     missing.iteration = 200;
@@ -183,7 +184,7 @@ TEST(EvalMetricsCsv, HeaderAppendsGeometryColumnsWithoutRenamingExisting) {
     missing.ssim = 0.5f;
     missing.elapsed_time = 0.01f;
     missing.num_gaussians = 10;
-    EXPECT_EQ(missing.to_csv_row(), "200,1.000000,0.500000,0.010000,10,,,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000");
+    EXPECT_EQ(missing.to_csv_row(), "200,1.000000,0.500000,,0.010000,10,,,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000");
 
     EvalMetrics present = missing;
     present.normal_angle_deg = 12.5f;
@@ -191,7 +192,28 @@ TEST(EvalMetricsCsv, HeaderAppendsGeometryColumnsWithoutRenamingExisting) {
     present.bias_r = 0.001f;
     present.bias_g = -0.002f;
     present.bias_b = 0.003f;
-    EXPECT_EQ(present.to_csv_row(), "200,1.000000,0.500000,0.010000,10,12.500000,0.250000,0.001000,-0.002000,0.003000,0.000000,0.000000,0.000000");
+    EXPECT_EQ(present.to_csv_row(), "200,1.000000,0.500000,,0.010000,10,12.500000,0.250000,0.001000,-0.002000,0.003000,0.000000,0.000000,0.000000");
+}
+
+TEST(EvalMetricsImage, QuantizesWithImageSaverRounding) {
+    const std::vector<float> values{
+        0.4999f / 255.0f,
+        0.5001f / 255.0f,
+        127.4999f / 255.0f,
+        127.5001f / 255.0f,
+        -0.1f,
+        1.1f};
+    const auto input = Tensor::from_blob(
+                           const_cast<float*>(values.data()), {values.size()}, Device::CPU,
+                           DataType::Float32)
+                           .clone();
+    const auto quantized = image_for_metrics_and_save(input).to_vector();
+    ASSERT_EQ(quantized.size(), values.size());
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        const auto expected = static_cast<float>(std::lround(std::clamp(values[i], 0.0f, 1.0f) * 255.0f)) /
+                              255.0f;
+        EXPECT_FLOAT_EQ(quantized[i], expected) << "index " << i;
+    }
 }
 
 TEST(GeomMetricHelpers, MatchingNormalsYieldZeroAngle) {
@@ -284,7 +306,7 @@ TEST(MetricsEvaluatorGeom, MatchingRenderedAndPriorNormalIsNearZero) {
     ASSERT_TRUE(metrics.normal_angle_deg.has_value());
     EXPECT_NEAR(*metrics.normal_angle_deg, 0.0f, 2.0f);
     EXPECT_EQ(EvalMetrics::to_csv_header(),
-              "iteration,psnr,ssim,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b");
+              "iteration,psnr,ssim,lpips,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b");
 
     std::filesystem::remove_all(tmp);
 }

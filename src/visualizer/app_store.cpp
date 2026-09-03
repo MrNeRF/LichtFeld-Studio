@@ -16,6 +16,7 @@ namespace lfs::vis {
           trainer_loaded(store_, Field::TrainerLoaded, "trainer_loaded", false),
           eval_psnr(store_, Field::EvalPsnr, "eval_psnr", std::optional<float>{}),
           eval_ssim(store_, Field::EvalSsim, "eval_ssim", std::optional<float>{}),
+          eval_lpips(store_, Field::EvalLpips, "eval_lpips", std::optional<float>{}),
           scene_generation(store_, Field::SceneGeneration, "scene_generation", 0),
           selection_generation(store_, Field::SelectionGeneration, "selection_generation", 0),
           fps(store_, Field::Fps, "fps", 0.0f),

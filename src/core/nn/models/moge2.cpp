@@ -8,6 +8,7 @@
 #include "core/source_site.hpp"
 #include "internal/cuda_stream_context.hpp"
 #include "internal/memory_pool.hpp"
+#include "nn_kernels.hpp"
 #include "nn_nvtx.hpp"
 
 #include <algorithm>
@@ -193,6 +194,20 @@ namespace lfs::core::nn::models {
             model.weights_["encoder.image_std"] =
                 model.weights_["encoder.image_std"].to(DataType::Float32).contiguous();
         }
+        if (dtype == DataType::Float16 && kernels::conv3x3_mma_available()) {
+            for (const auto& [name, tensor] : model.weights_) {
+                if (tensor.ndim() != 4 || tensor.shape()[2] != 3 || tensor.shape()[3] != 3 ||
+                    tensor.shape()[1] % 8 != 0) {
+                    continue;
+                }
+                auto taps = Tensor::empty(
+                    shape_of({9, tensor.shape()[0], tensor.shape()[1]}), device, dtype);
+                kernels::conv3x3_weight_taps(tensor.data_ptr(), taps.data_ptr(),
+                                             static_cast<int>(tensor.shape()[0]),
+                                             static_cast<int>(tensor.shape()[1]), taps.stream());
+                model.weight_taps_.emplace(name, std::move(taps));
+            }
+        }
         const std::array<const char*, 8> required = {
             "encoder.image_mean",
             "encoder.image_std",
@@ -262,9 +277,11 @@ namespace lfs::core::nn::models {
         p.pad_w = 1;
         p.pad_mode = ConvPadMode::Replicate;
         const auto& ww = w(weight);
-        const auto bytes = conv2d_workspace_bytes(x.shape(), ww.shape(), p, x.dtype());
+        const auto tap_it = weight_taps_.find(std::string(weight));
+        const Tensor* taps = tap_it == weight_taps_.end() ? nullptr : &tap_it->second;
+        const auto bytes = taps != nullptr ? 0 : conv2d_workspace_bytes(x.shape(), ww.shape(), p, x.dtype());
         Tensor ws = ensure_workspace(bytes, x);
-        return conv2d(x, ww, &w(bias), p, &ws);
+        return conv2d(x, ww, &w(bias), p, &ws, taps);
     }
 
     Tensor Moge2::conv_transpose2x(const Tensor& x, std::string_view weight,
@@ -435,6 +452,12 @@ namespace lfs::core::nn::models {
             }
         } arena_closer{arena_, mempool_trimmed_};
         StageProfile profile(fwd_stream);
+        const auto capture_tap = [&](Tensor& destination, const Tensor& source) {
+            const Tensor materialized = source.contiguous();
+            ActivationArena::bind(nullptr);
+            destination = materialized.to(DataType::Float32);
+            ActivationArena::bind(&arena_);
+        };
 
         Tensor img;
         {
@@ -450,7 +473,6 @@ namespace lfs::core::nn::models {
             img = img.sub(mean).div(stdv);
             img = as_compute(std::move(img), compute_);
         }
-
         Tensor tokens;
         {
             NvtxRange nvtx("moge2/patch_embed");
@@ -469,9 +491,7 @@ namespace lfs::core::nn::models {
                          .contiguous();
         }
         if (taps) {
-            ActivationArena::bind(nullptr);
-            taps->patch_embed = tokens.to(DataType::Float32);
-            ActivationArena::bind(&arena_);
+            capture_tap(taps->patch_embed, tokens);
         }
 
         Tensor x;
@@ -488,7 +508,6 @@ namespace lfs::core::nn::models {
             auto pe = interpolate_pos_embed(batch, token_h, token_w, compute_, img.stream());
             x = x.add(pe);
         }
-
         std::array<Tensor, 12> block_out{};
         for (int i = 0; i < kBlocks; ++i) {
             char mark_name[16];
@@ -497,12 +516,9 @@ namespace lfs::core::nn::models {
             x = vit_block(x, i);
             block_out[static_cast<std::size_t>(i)] = x;
             if (taps) {
-                ActivationArena::bind(nullptr);
-                taps->blocks[static_cast<std::size_t>(i)] = x.to(DataType::Float32);
-                ActivationArena::bind(&arena_);
+                capture_tap(taps->blocks[static_cast<std::size_t>(i)], x);
             }
         }
-
         Tensor feat;
         Tensor cls_tok;
         {
@@ -533,9 +549,7 @@ namespace lfs::core::nn::models {
                                     "encoder.output_projections.1.bias"));
         }
         if (taps) {
-            ActivationArena::bind(nullptr);
-            taps->encoder_feat = feat.to(DataType::Float32);
-            ActivationArena::bind(&arena_);
+            capture_tap(taps->encoder_feat, feat);
         }
         block_out = {};
         {
@@ -587,9 +601,7 @@ namespace lfs::core::nn::models {
                 }
                 neck_out[static_cast<std::size_t>(i)] = neck_x;
                 if (taps) {
-                    ActivationArena::bind(nullptr);
-                    taps->neck[static_cast<std::size_t>(i)] = neck_x.to(DataType::Float32);
-                    ActivationArena::bind(&arena_);
+                    capture_tap(taps->neck[static_cast<std::size_t>(i)], neck_x);
                 }
                 if (i < 3) {
                     neck_x = conv_transpose2x(neck_x,
@@ -605,7 +617,6 @@ namespace lfs::core::nn::models {
                 }
             }
         }
-
         const std::size_t after_neck = arena_.mark();
         int persist_i = 0;
         auto persist_and_rewind = [&](Tensor t) {
@@ -617,7 +628,7 @@ namespace lfs::core::nn::models {
             return slot;
         };
 
-        auto run_head = [&](const char* prefix, int out_ch, Tensor* tap) {
+        auto run_head = [&](const char* prefix, int out_ch) {
             Tensor hx;
             for (int i = 0; i < 5; ++i) {
                 auto fin = conv1x1(neck_out[static_cast<std::size_t>(i)],
@@ -648,11 +659,6 @@ namespace lfs::core::nn::models {
             hx = conv1x1(hx, std::format("{}.output_blocks.4.weight", prefix),
                          std::format("{}.output_blocks.4.bias", prefix));
             (void)out_ch;
-            if (tap) {
-                ActivationArena::bind(nullptr);
-                *tap = hx.to(DataType::Float32);
-                ActivationArena::bind(&arena_);
-            }
             return hx;
         };
 
@@ -662,20 +668,26 @@ namespace lfs::core::nn::models {
         {
             NvtxRange nvtx("moge2/points_head");
             profile.mark("points_head");
-            points_nchw = persist_and_rewind(
-                run_head("points_head", 3, taps ? &taps->points_head : nullptr));
+            points_nchw = persist_and_rewind(run_head("points_head", 3));
+            if (taps) {
+                capture_tap(taps->points_head, points_nchw);
+            }
         }
         {
             NvtxRange nvtx("moge2/normal_head");
             profile.mark("normal_head");
-            normal_nchw = persist_and_rewind(
-                run_head("normal_head", 3, taps ? &taps->normal_head : nullptr));
+            normal_nchw = persist_and_rewind(run_head("normal_head", 3));
+            if (taps) {
+                capture_tap(taps->normal_head, normal_nchw);
+            }
         }
         {
             NvtxRange nvtx("moge2/mask_head");
             profile.mark("mask_head");
-            mask_nchw = persist_and_rewind(
-                run_head("mask_head", 1, taps ? &taps->mask_head : nullptr));
+            mask_nchw = persist_and_rewind(run_head("mask_head", 1));
+            if (taps) {
+                capture_tap(taps->mask_head, mask_nchw);
+            }
         }
 
         Tensor points;
@@ -720,7 +732,6 @@ namespace lfs::core::nn::models {
             }
             scale = scale.exp();
         }
-
         profile.mark("end");
         profile.dump();
         if (profile.enabled()) {
