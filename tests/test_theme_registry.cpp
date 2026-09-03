@@ -118,7 +118,7 @@ namespace {
 
 } // namespace
 
-TEST(ThemeRegistry, ManifestOwnsCatalogMetadata) {
+TEST(ThemeRegistry, VersionTwoManifestOwnsThemeFamilies) {
     const auto manifest_path = lfs::vis::getAssetPath("themes/manifest.json");
 
     std::ifstream manifest_file;
@@ -127,9 +127,9 @@ TEST(ThemeRegistry, ManifestOwnsCatalogMetadata) {
     nlohmann::json manifest;
     manifest_file >> manifest;
 
-    ASSERT_EQ(manifest.value("schema_version", 0), 1);
-    ASSERT_TRUE(manifest.contains("themes"));
-    ASSERT_TRUE(manifest["themes"].is_array());
+    ASSERT_EQ(manifest.value("schema_version", 0), 2);
+    ASSERT_TRUE(manifest.contains("families"));
+    ASSERT_TRUE(manifest["families"].is_array());
 
     const auto infos = themePresetInfos();
     std::map<std::string, lfs::vis::ThemePresetInfo> info_by_id;
@@ -137,38 +137,75 @@ TEST(ThemeRegistry, ManifestOwnsCatalogMetadata) {
         info_by_id.emplace(info.id, info);
     }
 
-    ASSERT_EQ(info_by_id.size(), manifest["themes"].size());
+    std::size_t variant_count = 0;
+    for (const auto& family_entry : manifest["families"]) {
+        ASSERT_TRUE(family_entry.is_object());
+        ASSERT_TRUE(family_entry.contains("file"));
+        ASSERT_TRUE(family_entry.contains("order"));
 
-    for (const auto& entry : manifest["themes"]) {
-        ASSERT_TRUE(entry.is_object());
-        ASSERT_TRUE(entry.contains("id"));
-        ASSERT_TRUE(entry.contains("file"));
-        ASSERT_TRUE(entry.contains("fallback"));
-        ASSERT_TRUE(entry.contains("label_key"));
-        ASSERT_TRUE(entry.contains("mode"));
-        ASSERT_TRUE(entry.contains("order"));
-
-        const std::string id = entry["id"].get<std::string>();
-        ASSERT_TRUE(info_by_id.contains(id)) << id;
-
-        const auto& info = info_by_id.at(id);
-        EXPECT_EQ(info.label_key, entry["label_key"].get<std::string>()) << id;
-        EXPECT_EQ(info.mode, entry["mode"].get<std::string>()) << id;
-        EXPECT_EQ(info.order, entry["order"].get<int>()) << id;
-
-        const std::string theme_file = entry["file"].get<std::string>();
-        const auto theme_path = lfs::vis::getAssetPath("themes/" + theme_file);
+        const std::string family_file = family_entry["file"].get<std::string>();
+        const auto theme_path = lfs::vis::getAssetPath("themes/" + family_file);
 
         std::ifstream theme_stream;
-        ASSERT_TRUE(lfs::core::open_file_for_read(theme_path, theme_stream)) << theme_file;
+        ASSERT_TRUE(lfs::core::open_file_for_read(theme_path, theme_stream)) << family_file;
 
-        nlohmann::json theme;
-        theme_stream >> theme;
-        EXPECT_FALSE(theme.contains("id")) << theme_file;
-        EXPECT_FALSE(theme.contains("label_key")) << theme_file;
-        EXPECT_FALSE(theme.contains("mode")) << theme_file;
-        EXPECT_FALSE(theme.contains("order")) << theme_file;
+        nlohmann::json family;
+        theme_stream >> family;
+        ASSERT_EQ(family.value("schema_version", 0), 2) << family_file;
+        ASSERT_TRUE(family.contains("id")) << family_file;
+        ASSERT_TRUE(family.contains("name")) << family_file;
+        ASSERT_TRUE(family.contains("variants")) << family_file;
+        ASSERT_TRUE(family["variants"].is_object()) << family_file;
+        EXPECT_FALSE(family.contains("fonts")) << family_file;
+        if (const auto shared = family.find("shared"); shared != family.end())
+            EXPECT_TRUE(shared->is_object()) << family_file;
+
+        const std::string family_id = family["id"].get<std::string>();
+        const std::string family_name = family["name"].get<std::string>();
+        const int family_order = family_entry["order"].get<int>();
+        for (const std::string mode : {"dark", "light"}) {
+            const auto variant = family["variants"].find(mode);
+            if (variant == family["variants"].end())
+                continue;
+
+            ASSERT_TRUE(variant->is_object()) << family_file << ':' << mode;
+            ASSERT_TRUE(variant->contains("id")) << family_file << ':' << mode;
+            ASSERT_TRUE(variant->contains("name")) << family_file << ':' << mode;
+            ASSERT_TRUE(variant->contains("label_key")) << family_file << ':' << mode;
+            ASSERT_TRUE(variant->contains("fallback")) << family_file << ':' << mode;
+            if (variant->contains("fonts"))
+                EXPECT_TRUE((*variant)["fonts"].is_object()) << family_file << ':' << mode;
+            if (const auto gradients = variant->find("gradients"); gradients != variant->end()) {
+                ASSERT_TRUE(gradients->is_object()) << family_file << ':' << mode;
+                for (const auto& [name, gradient] : gradients->items()) {
+                    if (name.starts_with('_'))
+                        continue;
+                    ASSERT_TRUE(gradient.is_object()) << family_file << ':' << mode << ':' << name;
+                    ASSERT_TRUE(gradient.contains("start")) << name;
+                    ASSERT_TRUE(gradient.contains("end")) << name;
+                    EXPECT_TRUE(gradient["start"].is_array()) << name;
+                    EXPECT_EQ(gradient["start"].size(), 4u) << name;
+                    EXPECT_TRUE(gradient["end"].is_array()) << name;
+                    EXPECT_EQ(gradient["end"].size(), 4u) << name;
+                }
+            }
+
+            const std::string id = (*variant)["id"].get<std::string>();
+            ASSERT_TRUE(info_by_id.contains(id)) << id;
+            const auto& info = info_by_id.at(id);
+            EXPECT_EQ(info.label_key, (*variant)["label_key"].get<std::string>()) << id;
+            EXPECT_EQ(info.mode, mode) << id;
+            EXPECT_EQ(info.family_id, family_id) << id;
+            EXPECT_EQ(info.family_name, family_name) << id;
+            EXPECT_EQ(info.variant_name, (*variant)["name"].get<std::string>()) << id;
+            EXPECT_EQ(
+                info.order,
+                family_order + variant->value("order", mode == "light" ? 1 : 0))
+                << id;
+            ++variant_count;
+        }
     }
+    EXPECT_EQ(variant_count, info_by_id.size());
 }
 
 TEST(ResourcePath, MemoizedResolutionMatchesUncachedResolution) {
@@ -224,7 +261,7 @@ TEST(Localization, IndexMatchesLocaleLanguageNames) {
 TEST(ThemeRegistry, CatalogIsStableAndSelfDescribing) {
     const auto infos = themePresetInfos();
 
-    ASSERT_EQ(infos.size(), 6u);
+    ASSERT_EQ(infos.size(), 8u);
 
     int previous_order = 0;
     std::set<std::string> ids;
@@ -233,6 +270,9 @@ TEST(ThemeRegistry, CatalogIsStableAndSelfDescribing) {
         EXPECT_FALSE(info.name.empty()) << info.id;
         EXPECT_FALSE(info.label_key.empty()) << info.id;
         EXPECT_TRUE(info.mode == "dark" || info.mode == "light") << info.id;
+        EXPECT_FALSE(info.family_id.empty()) << info.id;
+        EXPECT_FALSE(info.family_name.empty()) << info.id;
+        EXPECT_FALSE(info.variant_name.empty()) << info.id;
         EXPECT_GT(info.order, previous_order) << info.id;
         EXPECT_TRUE(ids.insert(info.id).second) << info.id;
         previous_order = info.order;
@@ -240,6 +280,8 @@ TEST(ThemeRegistry, CatalogIsStableAndSelfDescribing) {
 
     EXPECT_TRUE(ids.contains("dark"));
     EXPECT_TRUE(ids.contains("light"));
+    EXPECT_TRUE(ids.contains("signal_night"));
+    EXPECT_TRUE(ids.contains("signal_day"));
     EXPECT_TRUE(ids.contains("gruvbox"));
     EXPECT_TRUE(ids.contains("catppuccin_mocha"));
     EXPECT_TRUE(ids.contains("catppuccin_latte"));
@@ -251,15 +293,108 @@ TEST(ThemeRegistry, CurrentThemeUsesStablePresetId) {
 
     ASSERT_TRUE(lfs::vis::setThemeByName("Catppuccin Mocha"));
     EXPECT_EQ(lfs::vis::currentThemeId(), "catppuccin_mocha");
-    EXPECT_EQ(lfs::vis::theme().name, "Catppuccin Mocha");
+    EXPECT_EQ(lfs::vis::theme().name, "Mocha");
 
     ASSERT_TRUE(lfs::vis::setThemeByName("catppuccin-latte"));
     EXPECT_EQ(lfs::vis::currentThemeId(), "catppuccin_latte");
-    EXPECT_EQ(lfs::vis::theme().name, "Catppuccin Latte");
+    EXPECT_EQ(lfs::vis::theme().name, "Latte");
 
     if (!original_theme.empty()) {
         EXPECT_TRUE(lfs::vis::setThemeByName(original_theme));
     }
+}
+
+TEST(ThemeRegistry, OptionalGradientsLoadAndLegacyThemesKeepDerivedFallbacks) {
+    const std::string original_theme = lfs::vis::currentThemeId();
+
+    ASSERT_TRUE(lfs::vis::setThemeByName("dark"));
+    EXPECT_FALSE(lfs::vis::theme().gradients.window_title.has_value());
+    EXPECT_FALSE(lfs::vis::theme().gradients.progress.has_value());
+
+    ASSERT_TRUE(lfs::vis::setThemeByName("signal_night"));
+    ASSERT_TRUE(lfs::vis::theme().gradients.window_body.has_value());
+    ASSERT_TRUE(lfs::vis::theme().gradients.panel_body.has_value());
+    ASSERT_TRUE(lfs::vis::theme().gradients.window_title.has_value());
+    ASSERT_TRUE(lfs::vis::theme().gradients.section_header.has_value());
+    ASSERT_TRUE(lfs::vis::theme().gradients.section_header_hover.has_value());
+    ASSERT_TRUE(lfs::vis::theme().gradients.progress.has_value());
+    ASSERT_TRUE(lfs::vis::theme().gradients.scrubber_track.has_value());
+    ASSERT_TRUE(lfs::vis::theme().gradients.scrubber_fill.has_value());
+    ASSERT_TRUE(lfs::vis::theme().gradients.histogram_header.has_value());
+    ASSERT_TRUE(lfs::vis::theme().gradients.histogram_fill.has_value());
+    ASSERT_TRUE(lfs::vis::theme().gradients.histogram_selection.has_value());
+    EXPECT_FLOAT_EQ(lfs::vis::theme().gradients.progress->start.x, 0.220f);
+    EXPECT_FLOAT_EQ(lfs::vis::theme().gradients.progress->end.z, 1.0f);
+
+    if (!original_theme.empty())
+        EXPECT_TRUE(lfs::vis::setThemeByName(original_theme));
+}
+
+TEST(ThemeRegistry, InvalidOptionalGradientDoesNotRejectTheme) {
+    const auto path =
+        std::filesystem::temp_directory_path() / "lfs_invalid_optional_gradient.json";
+    {
+        std::ofstream file(path);
+        file << R"({
+            "name": "Invalid Gradient Theme",
+            "palette": {"primary": [0.1, 0.2, 0.3, 1.0]},
+            "gradients": {"progress": {"start": [2.0, 0.0, 0.0, 1.0], "end": [0.0, 1.0]}}
+        })";
+    }
+
+    lfs::vis::Theme loaded = lfs::vis::darkTheme();
+    ASSERT_TRUE(lfs::vis::loadTheme(loaded, lfs::core::path_to_utf8(path)));
+    EXPECT_FLOAT_EQ(loaded.palette.primary.x, 0.1f);
+    EXPECT_FALSE(loaded.gradients.progress.has_value());
+
+    std::error_code error;
+    std::filesystem::remove(path, error);
+}
+
+TEST(ThemeRegistry, OptionalGradientsRoundTripThroughLegacyThemeSave) {
+    const auto path =
+        std::filesystem::temp_directory_path() / "lfs_optional_gradient_roundtrip.json";
+
+    lfs::vis::Theme source = lfs::vis::darkTheme();
+    source.gradients.progress = lfs::vis::ThemeGradient{
+        {0.1f, 0.2f, 0.3f, 0.4f},
+        {0.5f, 0.6f, 0.7f, 0.8f}};
+    ASSERT_TRUE(lfs::vis::saveTheme(source, lfs::core::path_to_utf8(path)));
+
+    lfs::vis::Theme loaded = lfs::vis::darkTheme();
+    ASSERT_TRUE(lfs::vis::loadTheme(loaded, lfs::core::path_to_utf8(path)));
+    ASSERT_TRUE(loaded.gradients.progress.has_value());
+    EXPECT_FLOAT_EQ(loaded.gradients.progress->start.w, 0.4f);
+    EXPECT_FLOAT_EQ(loaded.gradients.progress->end.z, 0.7f);
+
+    std::error_code error;
+    std::filesystem::remove(path, error);
+}
+
+TEST(ThemeRegistry, LegacyStandaloneThemeJsonRemainsLoadable) {
+    const auto path =
+        std::filesystem::temp_directory_path() / "lfs_legacy_theme_v1.json";
+    {
+        std::ofstream file(path);
+        file << R"({
+            "name": "Legacy Theme",
+            "palette": {"primary": [0.1, 0.2, 0.3, 1.0]},
+            "fonts": {"large_size": 19.0},
+            "button": {"tint_normal": 0.42}
+        })";
+    }
+
+    lfs::vis::Theme loaded = lfs::vis::darkTheme();
+    ASSERT_TRUE(lfs::vis::loadTheme(loaded, lfs::core::path_to_utf8(path)));
+    EXPECT_EQ(loaded.name, "Legacy Theme");
+    EXPECT_FLOAT_EQ(loaded.palette.primary.x, 0.1f);
+    EXPECT_FLOAT_EQ(loaded.palette.primary.y, 0.2f);
+    EXPECT_FLOAT_EQ(loaded.palette.primary.z, 0.3f);
+    EXPECT_FLOAT_EQ(loaded.fonts.large_size, 19.0f);
+    EXPECT_FLOAT_EQ(loaded.button.tint_normal, 0.42f);
+
+    std::error_code error;
+    std::filesystem::remove(path, error);
 }
 
 TEST(ThemePreferencesContract, InvalidValuesFallBackToBuiltInDefaults) {
@@ -271,11 +406,69 @@ TEST(ThemePreferencesContract, InvalidValuesFallBackToBuiltInDefaults) {
     ASSERT_TRUE(paths.has_value()) << lfs::format_for_developer(paths.error());
     ASSERT_TRUE(paths->ensureDirectories().has_value());
     std::ofstream(paths->preferencesFile())
-        << R"({"theme":"not-a-theme","ui_scale":999,"language":42})";
+        << R"({"theme":"not-a-theme","ui_scale":999,"language":42,"viewport_toolbar_position":"side","viewport_toolbar_free_y":"middle"})";
 
     EXPECT_EQ(lfs::vis::loadThemePreferenceName(), "dark");
     EXPECT_FLOAT_EQ(lfs::vis::loadUiScalePreference(), 0.0f);
     EXPECT_TRUE(lfs::vis::loadLanguagePreference().empty());
+    EXPECT_EQ(lfs::vis::loadViewportToolbarPositionPreference(), "centered");
+    EXPECT_FLOAT_EQ(lfs::vis::loadViewportToolbarFreeYPreference(), 0.5f);
+    std::filesystem::remove_all(root, error);
+}
+
+TEST(ThemePreferencesContract, ViewportToolbarPositionRoundTripsAndClampsFreeOffset) {
+    const auto root =
+        std::filesystem::temp_directory_path() / "lfs_viewport_toolbar_preferences";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+
+    lfs::vis::saveViewportToolbarPositionPreference("free");
+    lfs::vis::saveViewportToolbarFreeYPreference(1.5f);
+    EXPECT_EQ(lfs::vis::loadViewportToolbarPositionPreference(), "free");
+    EXPECT_FLOAT_EQ(lfs::vis::loadViewportToolbarFreeYPreference(), 1.0f);
+
+    lfs::vis::saveViewportToolbarPositionPreference("invalid");
+    lfs::vis::saveViewportToolbarFreeYPreference(-0.25f);
+    EXPECT_EQ(lfs::vis::loadViewportToolbarPositionPreference(), "centered");
+    EXPECT_FLOAT_EQ(lfs::vis::loadViewportToolbarFreeYPreference(), 0.0f);
+
+    std::filesystem::remove_all(root, error);
+}
+
+TEST(ThemePreferencesContract, FamilyAutoSelectionResolvesWithoutLosingFamily) {
+    const auto root = std::filesystem::temp_directory_path() / "lfs_theme_preferences_family_auto";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << lfs::format_for_developer(paths.error());
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+    std::ofstream(paths->preferencesFile()) << R"({"theme":"catppuccin:auto"})";
+
+    const std::string resolved = lfs::vis::loadThemePreferenceName();
+    EXPECT_TRUE(resolved == "catppuccin_mocha" || resolved == "catppuccin_latte");
+    EXPECT_EQ(lfs::vis::currentThemeFamilyId(), "catppuccin");
+    EXPECT_EQ(lfs::vis::currentThemeSelectionMode(),
+              lfs::vis::supportsSystemThemePreference() ? "auto" : "dark");
+
+    std::filesystem::remove_all(root, error);
+}
+
+TEST(ThemePreferencesContract, LegacyCatppuccinAliasStillSelectsMocha) {
+    const auto root = std::filesystem::temp_directory_path() / "lfs_theme_preferences_legacy_catppuccin";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths.has_value()) << lfs::format_for_developer(paths.error());
+    ASSERT_TRUE(paths->ensureDirectories().has_value());
+    std::ofstream(paths->preferencesFile()) << R"({"theme":"catppuccin"})";
+
+    EXPECT_EQ(lfs::vis::loadThemePreferenceName(), "catppuccin_mocha");
+    EXPECT_EQ(lfs::vis::currentThemeFamilyId(), "catppuccin");
+    EXPECT_EQ(lfs::vis::currentThemeSelectionMode(), "dark");
+
     std::filesystem::remove_all(root, error);
 }
 
@@ -582,6 +775,9 @@ TEST(ThemePreferencesContract, SafeModeNeitherReadsNorWritesPreferences) {
         EXPECT_FLOAT_EQ(lfs::vis::loadUiScalePreference(), 0.0f);
         EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "native");
         EXPECT_EQ(lfs::vis::loadSceneUpscalerPresetPreference("native"), "native");
+        EXPECT_EQ(lfs::vis::loadViewportChromeStylePreference(), "translucent");
+        EXPECT_EQ(lfs::vis::loadViewportToolbarPositionPreference(), "centered");
+        EXPECT_FLOAT_EQ(lfs::vis::loadViewportToolbarFreeYPreference(), 0.5f);
         EXPECT_TRUE(lfs::vis::loadLanguagePreference().empty());
         const auto mcp = lfs::vis::loadMcpPreferences();
         EXPECT_TRUE(mcp.enabled);
@@ -591,6 +787,9 @@ TEST(ThemePreferencesContract, SafeModeNeitherReadsNorWritesPreferences) {
         lfs::vis::saveThemePreferenceName("gruvbox");
         lfs::vis::saveUiScalePreference(2.0f);
         lfs::vis::saveSceneUpscalerPreference("spatial", "performance");
+        lfs::vis::saveViewportChromeStylePreference("frosted");
+        lfs::vis::saveViewportToolbarPositionPreference("free");
+        lfs::vis::saveViewportToolbarFreeYPreference(0.75f);
         lfs::vis::saveLanguagePreference("fr");
         lfs::vis::saveMcpPreferences({
             .enabled = true,

@@ -45,6 +45,14 @@ namespace lfs::vis {
             return style == "classic" || style == "miner";
         }
 
+        [[nodiscard]] bool knownViewportChromeStyle(std::string_view style) {
+            return style == "solid" || style == "translucent" || style == "frosted";
+        }
+
+        [[nodiscard]] bool knownViewportToolbarPosition(std::string_view position) {
+            return position == "top" || position == "centered" || position == "free";
+        }
+
         constexpr float kDefaultZoomSpeed = 11.0f;
         constexpr float kDefaultNavigationSpeed = 8.0f;
         constexpr float kMinNavigationSpeed = 1.0f;
@@ -531,6 +539,54 @@ namespace lfs::vis {
         const std::string style = it->get<std::string>();
         return knownProgressBarStyle(style) ? style : "classic";
     }
+    void UserPreferences::setViewportChromeStyle(const std::string_view value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["viewport_chrome_style"] =
+            knownViewportChromeStyle(value) ? std::string(value) : "translucent";
+        impl_->saveLocked();
+    }
+    std::string UserPreferences::viewportChromeStyle() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("viewport_chrome_style");
+        if (it == impl_->values.end() || !it->is_string())
+            return "translucent";
+        const std::string style = it->get<std::string>();
+        return knownViewportChromeStyle(style) ? style : "translucent";
+    }
+    void UserPreferences::setViewportToolbarPosition(const std::string_view value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["viewport_toolbar_position"] =
+            knownViewportToolbarPosition(value) ? std::string(value) : "centered";
+        impl_->saveLocked();
+    }
+    std::string UserPreferences::viewportToolbarPosition() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("viewport_toolbar_position");
+        if (it == impl_->values.end() || !it->is_string())
+            return "centered";
+        const std::string position = it->get<std::string>();
+        return knownViewportToolbarPosition(position) ? position : "centered";
+    }
+    void UserPreferences::setViewportToolbarFreeY(const float value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["viewport_toolbar_free_y"] =
+            std::clamp(std::isfinite(value) ? value : 0.5f, 0.0f, 1.0f);
+        impl_->saveLocked();
+    }
+    float UserPreferences::viewportToolbarFreeY() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("viewport_toolbar_free_y");
+        if (it == impl_->values.end() || !it->is_number())
+            return 0.5f;
+        const float value = it->get<float>();
+        return std::clamp(std::isfinite(value) ? value : 0.5f, 0.0f, 1.0f);
+    }
 
     void UserPreferences::setMcp(const McpPreferenceState& state) {
         std::scoped_lock lock(impl_->mutex);
@@ -646,6 +702,24 @@ namespace lfs::vis {
     }
     std::string loadProgressBarStylePreference() {
         return UserPreferences::instance().progressBarStyle();
+    }
+    void saveViewportChromeStylePreference(const std::string_view style) {
+        UserPreferences::instance().setViewportChromeStyle(style);
+    }
+    std::string loadViewportChromeStylePreference() {
+        return UserPreferences::instance().viewportChromeStyle();
+    }
+    void saveViewportToolbarPositionPreference(const std::string_view position) {
+        UserPreferences::instance().setViewportToolbarPosition(position);
+    }
+    std::string loadViewportToolbarPositionPreference() {
+        return UserPreferences::instance().viewportToolbarPosition();
+    }
+    void saveViewportToolbarFreeYPreference(const float value) {
+        UserPreferences::instance().setViewportToolbarFreeY(value);
+    }
+    float loadViewportToolbarFreeYPreference() {
+        return UserPreferences::instance().viewportToolbarFreeY();
     }
     void saveMcpPreferences(const McpPreferenceState& state) { UserPreferences::instance().setMcp(state); }
     McpPreferenceState loadMcpPreferences() { return UserPreferences::instance().mcp(); }

@@ -59,6 +59,10 @@ def preferences_panel_module(monkeypatch):
             scene_upscaler_preset="native",
         ),
         scene_reconstruction_presets={"native": "native", "spatial": "quality"},
+        viewport_chrome_style="translucent",
+        set_viewport_chrome_style_calls=[],
+        viewport_toolbar_position="centered",
+        set_viewport_toolbar_position_calls=[],
         zoom_speed=11.0,
         navigation_speed=8.0,
         project_location="",
@@ -98,6 +102,14 @@ def preferences_panel_module(monkeypatch):
     def reset_scene_reconstruction_preferences():
         state.scene_reconstruction_presets = {"native": "native", "spatial": "quality"}
 
+    def set_viewport_chrome_style(style):
+        state.viewport_chrome_style = str(style)
+        state.set_viewport_chrome_style_calls.append(str(style))
+
+    def set_viewport_toolbar_position(position):
+        state.viewport_toolbar_position = str(position)
+        state.set_viewport_toolbar_position_calls.append(str(position))
+
     def set_speed(name, value):
         setattr(state, name, max(1.0, min(100.0, float(value))))
 
@@ -109,6 +121,8 @@ def preferences_panel_module(monkeypatch):
         get_current_language=lambda: state.language,
         set_language=lambda language: state.set_language_calls.append(language),
         get_theme=lambda: "dark",
+        get_theme_family=lambda: "lichtfeld",
+        get_theme_mode=lambda: "dark",
         get_ui_scale_preference=lambda: 0.0,
         set_ui_scale=lambda *_a, **_k: None,
         get_mcp_preferences=lambda: dict(state.mcp_preferences),
@@ -170,6 +184,10 @@ def preferences_panel_module(monkeypatch):
         reset_scene_reconstruction_preferences=reset_scene_reconstruction_preferences,
         get_progress_bar_style=lambda: "classic",
         set_progress_bar_style=lambda *_a, **_k: None,
+        get_viewport_chrome_style=lambda: state.viewport_chrome_style,
+        set_viewport_chrome_style=set_viewport_chrome_style,
+        get_viewport_toolbar_position=lambda: state.viewport_toolbar_position,
+        set_viewport_toolbar_position=set_viewport_toolbar_position,
         get_zoom_speed_preference=lambda: state.zoom_speed,
         set_zoom_speed_preference=lambda value: set_speed("zoom_speed", value),
         get_navigation_speed_preference=lambda: state.navigation_speed,
@@ -338,6 +356,32 @@ def test_language_selection_does_not_reload_active_language(preferences_panel_mo
     panel._set_language_index("1")
 
     assert state.set_language_calls == []
+
+
+def test_viewport_chrome_selection_uses_global_style_preference(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+
+    assert panel._viewport_chrome_index() == "1"
+    panel._set_viewport_chrome_index("2")
+
+    assert state.viewport_chrome_style == "frosted"
+    assert state.set_viewport_chrome_style_calls == ["frosted"]
+    assert panel._viewport_chrome_index() == "2"
+
+
+def test_viewport_toolbar_position_uses_global_preference(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+
+    assert panel._viewport_toolbar_position_index() == "1"
+    panel._set_viewport_toolbar_position_index("2")
+
+    assert state.viewport_toolbar_position == "free"
+    assert state.set_viewport_toolbar_position_calls == ["free"]
+    assert panel._viewport_toolbar_position_index() == "2"
 
 
 def test_navigation_speed_preferences_round_trip_and_clamp(preferences_panel_module):

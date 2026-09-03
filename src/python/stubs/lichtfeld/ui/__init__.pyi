@@ -241,6 +241,18 @@ def get_progress_bar_style() -> str:
 def set_progress_bar_style(style: str) -> None:
     """Set the status bar progress style (classic or miner)"""
 
+def get_viewport_chrome_style() -> str:
+    """Return the viewport controls style (solid, translucent, or frosted)"""
+
+def set_viewport_chrome_style(style: str) -> None:
+    """Set the viewport controls style (solid, translucent, or frosted)"""
+
+def get_viewport_toolbar_position() -> str:
+    """Return the viewport toolbar position (top, centered, or free)"""
+
+def set_viewport_toolbar_position(position: str) -> None:
+    """Set the viewport toolbar position (top, centered, or free)"""
+
 class PanelSpace(enum.Enum):
     SIDE_PANEL = 0
 
@@ -2602,6 +2614,20 @@ def set_theme(name: str) -> None:
 
 def get_theme() -> str:
     """Get current stable theme id"""
+
+def set_theme_family(family_id: str, mode: str) -> bool:
+    """Select a theme family using dark, light, or automatic system mode"""
+
+def get_theme_family() -> str:
+    """Get the selected theme family id"""
+
+def get_theme_mode() -> str:
+    """Get the selected family mode: dark, light, or auto"""
+
+def supports_system_theme() -> bool:
+    """
+    Return whether automatic OS light/dark detection is available in this session
+    """
 
 def themes() -> list:
     """Get available theme presets with stable ids and UI metadata"""

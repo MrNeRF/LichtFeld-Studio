@@ -86,10 +86,7 @@ namespace lfs::vis {
         }
         void applySplitterCursorOverride() const;
 
-        void toggleIndependentSplitView() {
-            lfs::core::events::cmd::ToggleIndependentSplitView{.viewport = &viewport_}.emit();
-            focusSplitPanel(SplitViewPanelId::Left);
-        }
+        void toggleIndependentSplitView();
 
         // Set special input modes
         void setPointCloudMode(bool enabled) {

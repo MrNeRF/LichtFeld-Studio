@@ -440,6 +440,7 @@ namespace lfs::vis {
             RmlBottomDock rml_bottom_dock_;
             RmlViewportOverlay rml_viewport_overlay_;
             RmlMenuBar rml_menu_bar_;
+            bool menu_pointer_capture_active_ = false;
             RmlStatusBar rml_status_bar_;
             std::unique_ptr<GlobalContextMenu> global_context_menu_;
             bool deferred_startup_work_pending_ = false;
