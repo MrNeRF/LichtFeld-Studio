@@ -514,7 +514,8 @@ def test_scene_tree_multi_selection_actions_are_fixed_below_the_scroll_view():
     spacer_pos = scene_rml.index('class="selection-action-spacer"')
     training_pos = scene_rml.index('id="selection-training"')
     visibility_pos = scene_rml.index('id="selection-visibility"')
-    assert count_pos < clear_pos < spacer_pos < training_pos < visibility_pos
+    delete_pos = scene_rml.index('id="selection-delete"')
+    assert count_pos < clear_pos < spacer_pos < training_pos < visibility_pos < delete_pos
     action_rule = _rule_body(scene_rcss, ".selection-action-bar")
     assert "flex-shrink: 0;" in action_rule
     assert "height: 27dp;" in action_rule
