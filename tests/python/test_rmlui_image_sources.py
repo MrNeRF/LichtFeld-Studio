@@ -197,6 +197,23 @@ def test_image_preview_uses_dirty_update_policy(panel_modules):
     assert image_preview.ImagePreviewPanel.update_policy == "dirty"
 
 
+def test_about_panel_is_dirty_driven_without_idle_redraw(panel_modules):
+    _image_preview, _getting_started = panel_modules
+    about = import_module("lfs_plugins.about_panel")
+    source = (
+        Path(__file__).parent.parent.parent
+        / "src"
+        / "python"
+        / "lfs_plugins"
+        / "about_panel.py"
+    ).read_text(encoding="utf-8")
+
+    assert about.AboutPanel.update_policy == "dirty"
+    assert "on_update" not in about.AboutPanel.__dict__
+    assert "def on_update" not in source
+    assert "request_redraw" not in source
+
+
 def test_image_preview_dirty_request_schedules_update(panel_modules):
     image_preview, _ = panel_modules
     panel = image_preview.ImagePreviewPanel()

@@ -149,10 +149,9 @@ def test_plugin_marketplace_syncs_feedback_nodes(plugin_marketplace_module):
     assert doc.get_element_by_id("feedback-card-error").classes["hidden"] is True
 
 
-def test_plugin_marketplace_uses_interval_update_policy(plugin_marketplace_module):
+def test_plugin_marketplace_uses_dirty_update_policy(plugin_marketplace_module):
     module, _state = plugin_marketplace_module
-    assert module.PluginMarketplacePanel.update_policy == "interval"
-    assert module.PluginMarketplacePanel.update_interval_ms == 250
+    assert module.PluginMarketplacePanel.update_policy == "dirty"
 
 
 def test_plugin_marketplace_converts_grid_width_from_pixels_to_dp(plugin_marketplace_module):
@@ -208,6 +207,117 @@ def test_plugin_marketplace_requests_update_on_language_generation(plugin_market
     assert panel._handle.request_update_count == 1
 
     panel._unsubscribe_reactive_state()
+
+
+def test_plugin_marketplace_coalesces_catalogue_update_requests(
+    plugin_marketplace_module,
+    monkeypatch,
+):
+    module, _state = plugin_marketplace_module
+    callbacks = []
+    monkeypatch.setattr(
+        module.lf.ui,
+        "schedule_on_ui_thread",
+        callbacks.append,
+        raising=False,
+    )
+
+    panel = module.PluginMarketplacePanel()
+    panel._handle = _HandleStub()
+
+    panel._schedule_model_update()
+    panel._schedule_model_update()
+
+    assert len(callbacks) == 1
+    assert panel._handle.request_update_count == 0
+
+    callbacks[0]()
+
+    assert panel._handle.request_update_count == 1
+
+
+def test_plugin_marketplace_cache_ttl_and_retry_backoff(plugin_marketplace_module):
+    module, _state = plugin_marketplace_module
+    marketplace = __import__("lfs_plugins.marketplace", fromlist=["_CatalogCache"])
+    entry = module.MarketplacePluginEntry(
+        source_url="https://github.com/owner/repo",
+        github_url="https://github.com/owner/repo",
+        owner="owner",
+        repo="repo",
+        name="Sample Plugin",
+        description="",
+    )
+
+    cached = marketplace._CatalogCache(
+        entries=(entry,),
+        registry_loaded=True,
+        github_enriched=False,
+        stored_at=100.0,
+    )
+    assert marketplace.PluginMarketplaceCatalog._cache_can_serve(cached, 100.0, False)
+    assert not marketplace.PluginMarketplaceCatalog._cache_can_serve(
+        cached, 100.0, True
+    )
+    assert not marketplace.PluginMarketplaceCatalog._cache_can_serve(
+        cached, 100.0 + marketplace.CATALOG_CACHE_TTL_SEC, False
+    )
+
+    failed = marketplace._CatalogCache(
+        entries=(entry,),
+        registry_loaded=False,
+        github_enriched=False,
+        stored_at=100.0,
+        next_retry_at=130.0,
+        failure_count=1,
+    )
+    assert marketplace.PluginMarketplaceCatalog._cache_can_serve(failed, 129.9, True)
+    assert not marketplace.PluginMarketplaceCatalog._cache_can_serve(failed, 130.0, True)
+
+
+def test_plugin_marketplace_refresh_is_cached_across_catalog_instances(
+    plugin_marketplace_module,
+    monkeypatch,
+):
+    _module, _state = plugin_marketplace_module
+    marketplace = __import__(
+        "lfs_plugins.marketplace", fromlist=["PluginMarketplaceCatalog"]
+    )
+    calls = []
+
+    class _ManagerStub:
+        @classmethod
+        def instance(cls):
+            return cls()
+
+        def search(self, _query):
+            calls.append("search")
+            return []
+
+    manager_module = ModuleType("lfs_plugins.manager")
+    manager_module.PluginManager = _ManagerStub
+    monkeypatch.setitem(sys.modules, "lfs_plugins.manager", manager_module)
+    monkeypatch.setattr(marketplace, "_build_curated_fallback", lambda: [])
+    monkeypatch.setattr(marketplace, "_catalog_cache", None)
+    monkeypatch.setattr(marketplace, "_catalog_refresh_inflight", False)
+    monkeypatch.setattr(marketplace._log, "disabled", True)
+
+    class _ImmediateThread:
+        def __init__(self, target, daemon=False):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    monkeypatch.setattr(marketplace.threading, "Thread", _ImmediateThread)
+
+    first = marketplace.PluginMarketplaceCatalog()
+    first.refresh_async()
+    second = marketplace.PluginMarketplaceCatalog()
+    second.refresh_async()
+
+    assert calls == ["search"]
+    assert first.snapshot()[2] is True
+    assert second.snapshot()[2] is True
 
 
 def test_plugin_marketplace_manual_success_clears_url(plugin_marketplace_module):
