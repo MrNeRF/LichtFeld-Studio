@@ -229,6 +229,12 @@ namespace lfs::core {
         // capacity hook, LOD tree, frozen ranges, and layout generation.
         [[nodiscard]] SplatData clone() const;
 
+        // Deep-copy tensor state onto an already-created CUDA stream. Device
+        // copies remain ordered on `stream`; callers synchronize before using
+        // the returned snapshot from another thread. CPU tensors are copied
+        // synchronously because they do not participate in CUDA transfers.
+        [[nodiscard]] SplatData clone_async(cudaStream_t stream) const;
+
         // ========== Computed getters ==========
         Tensor get_means() const;
         Tensor get_opacity() const;  // Returns sigmoid(opacity_raw)

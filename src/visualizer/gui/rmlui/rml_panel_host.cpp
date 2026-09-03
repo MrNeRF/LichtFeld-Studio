@@ -243,6 +243,7 @@ namespace lfs::vis::gui {
             // Sibling theme files are optional; missing ones should not produce startup noise.
         }
 
+        LOG_TIMER_THRESHOLD(context_name_ + ".rml_theme_apply", 2.0);
         rml_theme::applyTheme(document_, base_rcss_, panel_theme);
         content_dirty_ = true;
         direct_cache_dirty_ = true;
@@ -326,6 +327,7 @@ namespace lfs::vis::gui {
             const auto full_path = requested_path.is_absolute()
                                        ? requested_path
                                        : lfs::vis::getAssetPath(rml_path_);
+            LOG_TIMER_THRESHOLD(context_name_ + ".rml_document_load", 2.0);
             document_ = rml_documents::loadDocument(rml_context_, full_path);
             if (document_) {
                 syncThemeProperties();

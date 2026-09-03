@@ -33,6 +33,7 @@ namespace lfs::vis::gui {
 
         void draw(const PanelDrawContext& ctx) override;
         bool poll(const PanelDrawContext& ctx) override;
+        void on_visibility_changed(bool visible) override;
         void preload(const PanelDrawContext& ctx) override;
         PanelRenderCapabilities renderCapabilities() const override {
             return {.direct = true};

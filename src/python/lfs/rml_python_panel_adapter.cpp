@@ -172,6 +172,7 @@ namespace lfs::vis::gui {
         assert(rml_ctx);
         try {
             auto py_ctx = lfs::python::PyRmlContext(rml_ctx);
+            LOG_TIMER_THRESHOLD(context_name_ + ".on_bind_model", 2.0);
             panel_instance_.attr("on_bind_model")(py_ctx);
             setLifecycleState(LifecycleState::ModelBound);
         } catch (const std::exception& e) {
@@ -205,6 +206,7 @@ namespace lfs::vis::gui {
         lfs::python::RmlDocumentRegistry::instance().register_document(context_name_, doc);
         try {
             auto py_doc = lfs::python::PyRmlDocument(doc);
+            LOG_TIMER_THRESHOLD(context_name_ + ".on_mount", 2.0);
             panel_instance_.attr("on_mount")(py_doc);
             content_dirty_ = true;
             setLifecycleState(LifecycleState::Mounted);
@@ -574,6 +576,11 @@ namespace lfs::vis::gui {
             LOG_ERROR("Panel poll error: {}", e.what());
             return false;
         }
+    }
+
+    void RmlPythonPanelAdapter::on_visibility_changed(const bool visible) {
+        if (visible)
+            content_dirty_ = true;
     }
 
     void RmlPythonPanelAdapter::preload(const PanelDrawContext& ctx) {

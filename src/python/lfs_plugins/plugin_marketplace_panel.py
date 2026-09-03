@@ -172,6 +172,7 @@ class PluginMarketplacePanel(Panel):
             self._sort_idx = idx
             self._entries_dirty = True
             self._needs_resort = True
+            self._ensure_loaded()
             self._request_model_update()
 
     # ── Lifecycle ─────────────────────────────────────────────
@@ -217,6 +218,7 @@ class PluginMarketplacePanel(Panel):
             )
         self._sync_view_mode_controls(doc)
         self._subscribe_reactive_state()
+        self._ensure_loaded()
         self._request_model_update()
 
     def on_unmount(self, doc):
@@ -309,6 +311,9 @@ class PluginMarketplacePanel(Panel):
         from .manager import PluginManager
 
         mgr = PluginManager.instance()
+        # Dirty-driven updates are event-driven, so this guard handles a sort
+        # change that arrives while the initial catalog fetch is in flight
+        # without reintroducing an idle polling loop.
         self._ensure_loaded()
 
         current_lang = lf.ui.get_current_language()

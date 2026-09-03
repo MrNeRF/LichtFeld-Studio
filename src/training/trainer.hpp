@@ -266,6 +266,7 @@ namespace lfs::training {
         float get_current_loss() const { return current_loss_.load(); }
         bool fillCameraLossColors(const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
                                   std::vector<std::array<float, 3>>& colors) const;
+        [[nodiscard]] std::uint64_t cameraLossColorGeneration() const;
 
         // just for viewer to get model
         const IStrategy& get_strategy() const { return *strategy_; }
@@ -686,6 +687,7 @@ namespace lfs::training {
             lfs::core::Tensor ema_loss_stage_cpu;
             std::vector<std::array<float, 3>> published_colors;
             std::vector<uint8_t> published_valid;
+            std::uint64_t published_generation = 0;
             mutable std::shared_mutex snapshot_mutex;
             cudaStream_t copy_stream = nullptr;
             cudaEvent_t ready_event = nullptr;

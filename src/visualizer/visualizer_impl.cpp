@@ -18,6 +18,7 @@
 #include "core/path_utils.hpp"
 #include "core/services.hpp"
 #include "gui/error_event_bridge.hpp"
+#include "gui/native_panels.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/panels/tools_panel.hpp"
 #include "gui/panels/windows_console_utils.hpp"
@@ -522,8 +523,12 @@ namespace lfs::vis {
                 return gm ? gm->panelLayout().isShowSequencer() : false;
             },
             [](bool visible) {
-                if (auto* gm = python::get_gui_manager())
+                if (auto* gm = python::get_gui_manager()) {
                     gm->panelLayout().setShowSequencer(visible);
+                    if (visible)
+                        gm->panelLayout().setBottomDockActiveTab(std::string(
+                            gui::native_panels::SEQUENCER_PANEL_ID));
+                }
             });
         callback_cleanup_.add([] { python::set_sequencer_callbacks(nullptr, nullptr); });
 
@@ -3645,6 +3650,22 @@ namespace lfs::vis {
 
         wakeMainLoop();
 
+        return true;
+    }
+
+    bool VisualizerImpl::pumpPostedWorkForProjectWrite() {
+        if (!isOnViewerThread()) {
+            return false;
+        }
+        std::vector<WorkItem> work;
+        {
+            std::lock_guard lock(work_queue_mutex_);
+            work.swap(work_queue_);
+        }
+        if (work.empty()) {
+            return false;
+        }
+        runPostedWork(work, "viewer.project_wait", viewer_thread_id_);
         return true;
     }
 

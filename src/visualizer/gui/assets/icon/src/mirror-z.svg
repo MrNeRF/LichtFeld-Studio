@@ -4,11 +4,15 @@
   height="24"
   viewBox="0 0 24 24"
   fill="none"
-  stroke="#ffffff"
+  stroke="currentColor"
   stroke-width="2"
   stroke-linecap="round"
   stroke-linejoin="round"
 >
-  <path d="M9 14 4 9l5-5" />
-  <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11" />
+  <path d="m3 7 5 5-5 5V7" />
+  <path d="m21 7-5 5 5 5V7" />
+  <path d="M12 20v2" />
+  <path d="M12 14v2" />
+  <path d="M12 8v2" />
+  <path d="M12 2v2" />
 </svg>

@@ -181,6 +181,16 @@ namespace lfs::vis::gui {
             VkBuffer staging_buffer = VK_NULL_HANDLE;
             VmaAllocation staging_allocation = VK_NULL_HANDLE;
         };
+        struct RgbaRegion {
+            const std::uint8_t* pixels = nullptr;
+            std::size_t size = 0;
+            int texture_width = 0;
+            int texture_height = 0;
+            int x = 0;
+            int y = 0;
+            int width = 0;
+            int height = 0;
+        };
         // Bounded ring of in-flight uploads. Uploads to the same image serialize on the graphics
         // queue (no semaphores), so a depth > 1 only defers staging-buffer reclamation; it does not
         // race the GPU. The main thread blocks only when the ring is full.
@@ -503,22 +513,6 @@ namespace lfs::vis::gui {
                 return false;
             }
             return true;
-        }
-
-        [[nodiscard]] bool writeAllocation(const VmaAllocation allocation,
-                                           const void* const source,
-                                           const VkDeviceSize size) const {
-            if (allocation == VK_NULL_HANDLE || !source || size == 0) {
-                return false;
-            }
-            void* mapped = nullptr;
-            if (vmaMapMemory(allocator, allocation, &mapped) != VK_SUCCESS || !mapped) {
-                return false;
-            }
-            std::memcpy(mapped, source, static_cast<std::size_t>(size));
-            const VkResult flush_result = vmaFlushAllocation(allocator, allocation, 0, size);
-            vmaUnmapMemory(allocator, allocation);
-            return flush_result == VK_SUCCESS;
         }
 
         [[nodiscard]] VkCommandBuffer beginSingleTimeCommands() const {
@@ -872,21 +866,25 @@ namespace lfs::vis::gui {
             return true;
         }
 
-        [[nodiscard]] bool uploadRgbaRegion(const std::uint8_t* const rgba,
-                                            const std::size_t rgba_size,
-                                            const int texture_width,
-                                            const int texture_height,
-                                            const int offset_x,
-                                            const int offset_y,
-                                            const int region_width,
-                                            const int region_height) {
-            if (!rgba || rgba_size == 0 || texture_width <= 0 || texture_height <= 0 ||
-                offset_x < 0 || offset_y < 0 || region_width <= 0 || region_height <= 0 ||
-                offset_x + region_width > texture_width ||
-                offset_y + region_height > texture_height ||
-                rgba_size != static_cast<std::size_t>(region_width) *
-                                 static_cast<std::size_t>(region_height) * 4u) {
+        [[nodiscard]] bool uploadRgbaRegions(const std::span<const RgbaRegion> regions) {
+            if (regions.empty())
                 return false;
+
+            const int texture_width = regions.front().texture_width;
+            const int texture_height = regions.front().texture_height;
+            std::size_t total_size = 0;
+            for (const RgbaRegion& region : regions) {
+                if (!region.pixels || region.size == 0 || region.texture_width != texture_width ||
+                    region.texture_height != texture_height || texture_width <= 0 || texture_height <= 0 ||
+                    region.x < 0 || region.y < 0 || region.width <= 0 || region.height <= 0 ||
+                    region.x + region.width > texture_width ||
+                    region.y + region.height > texture_height ||
+                    region.size != static_cast<std::size_t>(region.width) *
+                                       static_cast<std::size_t>(region.height) * 4u ||
+                    total_size > std::numeric_limits<std::size_t>::max() - region.size) {
+                    return false;
+                }
+                total_size += region.size;
             }
             VulkanContext* const ctx = getVulkanUiTextureContext();
             if (!ctx || !init(*ctx)) {
@@ -902,7 +900,7 @@ namespace lfs::vis::gui {
                 return false;
             }
 
-            const VkDeviceSize upload_size = static_cast<VkDeviceSize>(rgba_size);
+            const VkDeviceSize upload_size = static_cast<VkDeviceSize>(total_size);
             VkBuffer staging_buffer = VK_NULL_HANDLE;
             VmaAllocation staging_allocation = VK_NULL_HANDLE;
             if (!createBuffer(upload_size,
@@ -912,8 +910,35 @@ namespace lfs::vis::gui {
                 return false;
             }
 
-            if (!writeAllocation(staging_allocation, rgba, upload_size)) {
+            void* mapped = nullptr;
+            if (vmaMapMemory(allocator, staging_allocation, &mapped) != VK_SUCCESS || !mapped) {
                 LOG_ERROR("Failed to map Vulkan UI texture staging memory");
+                vmaDestroyBuffer(allocator, staging_buffer, staging_allocation);
+                return false;
+            }
+            std::vector<VkBufferImageCopy> copy_regions;
+            copy_regions.reserve(regions.size());
+            VkDeviceSize buffer_offset = 0;
+            for (const RgbaRegion& region : regions) {
+                std::memcpy(static_cast<std::uint8_t*>(mapped) + buffer_offset,
+                            region.pixels,
+                            region.size);
+                VkBufferImageCopy& copy = copy_regions.emplace_back();
+                copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                copy.imageSubresource.mipLevel = 0;
+                copy.imageSubresource.baseArrayLayer = 0;
+                copy.imageSubresource.layerCount = 1;
+                copy.bufferOffset = buffer_offset;
+                copy.imageOffset = {region.x, region.y, 0};
+                copy.imageExtent = {static_cast<std::uint32_t>(region.width),
+                                    static_cast<std::uint32_t>(region.height),
+                                    1};
+                buffer_offset += static_cast<VkDeviceSize>(region.size);
+            }
+            const VkResult flush_result = vmaFlushAllocation(allocator, staging_allocation, 0, upload_size);
+            vmaUnmapMemory(allocator, staging_allocation);
+            if (flush_result != VK_SUCCESS) {
+                LOG_ERROR("Failed to flush Vulkan UI texture staging memory");
                 vmaDestroyBuffer(allocator, staging_buffer, staging_allocation);
                 return false;
             }
@@ -926,21 +951,12 @@ namespace lfs::vis::gui {
 
             transitionImageLayout(command_buffer, image_layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
-            VkBufferImageCopy copy_region{};
-            copy_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            copy_region.imageSubresource.mipLevel = 0;
-            copy_region.imageSubresource.baseArrayLayer = 0;
-            copy_region.imageSubresource.layerCount = 1;
-            copy_region.imageOffset = {offset_x, offset_y, 0};
-            copy_region.imageExtent = {static_cast<std::uint32_t>(region_width),
-                                       static_cast<std::uint32_t>(region_height),
-                                       1};
             vkCmdCopyBufferToImage(command_buffer,
                                    staging_buffer,
                                    image,
                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                   1,
-                                   &copy_region);
+                                   static_cast<std::uint32_t>(copy_regions.size()),
+                                   copy_regions.data());
 
             transitionImageLayout(command_buffer,
                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -984,6 +1000,27 @@ namespace lfs::vis::gui {
             return true;
         }
 
+        [[nodiscard]] bool uploadRgbaRegion(const std::uint8_t* const rgba,
+                                            const std::size_t rgba_size,
+                                            const int texture_width,
+                                            const int texture_height,
+                                            const int offset_x,
+                                            const int offset_y,
+                                            const int region_width,
+                                            const int region_height) {
+            const RgbaRegion region{
+                .pixels = rgba,
+                .size = rgba_size,
+                .texture_width = texture_width,
+                .texture_height = texture_height,
+                .x = offset_x,
+                .y = offset_y,
+                .width = region_width,
+                .height = region_height,
+            };
+            return uploadRgbaRegions(std::span<const RgbaRegion>(&region, 1));
+        }
+
         [[nodiscard]] bool uploadRgba(const std::vector<std::uint8_t>& rgba,
                                       const int new_width,
                                       const int new_height) {
@@ -991,7 +1028,40 @@ namespace lfs::vis::gui {
                                     0, 0, new_width, new_height);
         }
 
-        [[nodiscard]] bool uploadRegion(const std::uint8_t* pixels,
+        [[nodiscard]] bool uploadRegions(const std::span<const VulkanUiTexture::Region> regions) {
+            if (regions.empty())
+                return false;
+
+            std::vector<std::vector<std::uint8_t>> rgba_regions;
+            rgba_regions.reserve(regions.size());
+            std::vector<RgbaRegion> upload_regions;
+            upload_regions.reserve(regions.size());
+            for (const VulkanUiTexture::Region& region : regions) {
+                if (!region.pixels || region.width <= 0 || region.height <= 0 ||
+                    region.channels <= 0 || region.channels > 4) {
+                    return false;
+                }
+                rgba_regions.push_back(toRgba(region.pixels,
+                                              region.width,
+                                              region.height,
+                                              region.channels));
+                if (rgba_regions.back().empty())
+                    return false;
+                upload_regions.push_back({
+                    .pixels = rgba_regions.back().data(),
+                    .size = rgba_regions.back().size(),
+                    .texture_width = region.texture_width,
+                    .texture_height = region.texture_height,
+                    .x = region.x,
+                    .y = region.y,
+                    .width = region.width,
+                    .height = region.height,
+                });
+            }
+            return uploadRgbaRegions(upload_regions);
+        }
+
+        [[nodiscard]] bool uploadRegion(const std::uint8_t* const pixels,
                                         const int texture_width,
                                         const int texture_height,
                                         const int x,
@@ -999,16 +1069,17 @@ namespace lfs::vis::gui {
                                         const int region_width,
                                         const int region_height,
                                         const int channels) {
-            if (!pixels || region_width <= 0 || region_height <= 0 || channels <= 0 || channels > 4) {
-                return false;
-            }
-            const std::vector<std::uint8_t> rgba = toRgba(pixels, region_width, region_height, channels);
-            return uploadRgbaRegion(rgba.data(), rgba.size(), texture_width,
-                                    texture_height,
-                                    x,
-                                    y,
-                                    region_width,
-                                    region_height);
+            const VulkanUiTexture::Region region{
+                .pixels = pixels,
+                .texture_width = texture_width,
+                .texture_height = texture_height,
+                .x = x,
+                .y = y,
+                .width = region_width,
+                .height = region_height,
+                .channels = channels,
+            };
+            return uploadRegions(std::span<const VulkanUiTexture::Region>(&region, 1));
         }
 
         [[nodiscard]] bool upload(const std::uint8_t* pixels,
@@ -1161,6 +1232,13 @@ namespace lfs::vis::gui {
             impl_ = new Impl();
         }
         return impl_->uploadRegion(pixels, texture_width, texture_height, x, y, width, height, channels);
+    }
+
+    bool VulkanUiTexture::uploadRegions(const std::span<const Region> regions) {
+        if (!impl_) {
+            impl_ = new Impl();
+        }
+        return impl_->uploadRegions(regions);
     }
 
     bool VulkanUiTexture::upload(const lfs::core::Tensor& image,

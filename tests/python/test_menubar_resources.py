@@ -275,7 +275,7 @@ def test_scene_tree_aligns_hierarchy_and_keeps_row_actions_trailing():
         'training_toggle_icon->SetAttribute("data-action", "toggle-training")'
     )
     delete = scene_graph_cpp.index('trash_icon->SetAttribute("data-action", "delete")')
-    assert checkbox < expand < name < visibility < training_toggle < delete
+    assert checkbox < expand < name < training_toggle < visibility < delete
     assert 'actions->SetClass("row-actions", true)' in scene_graph_cpp
     assert scene_graph_cpp.count('SetClass("row-action-slot", true)') == 3
     row_actions_rule = _rule_body(scene_rcss, ".row-actions")
@@ -512,8 +512,10 @@ def test_scene_tree_multi_selection_actions_are_fixed_below_the_scroll_view():
     count_pos = scene_rml.index('id="selection-action-count"')
     clear_pos = scene_rml.index('id="selection-clear"')
     spacer_pos = scene_rml.index('class="selection-action-spacer"')
+    training_pos = scene_rml.index('id="selection-training"')
     visibility_pos = scene_rml.index('id="selection-visibility"')
-    assert count_pos < clear_pos < spacer_pos < visibility_pos
+    delete_pos = scene_rml.index('id="selection-delete"')
+    assert count_pos < clear_pos < spacer_pos < training_pos < visibility_pos < delete_pos
     action_rule = _rule_body(scene_rcss, ".selection-action-bar")
     assert "flex-shrink: 0;" in action_rule
     assert "height: 27dp;" in action_rule

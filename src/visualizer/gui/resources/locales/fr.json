@@ -74,12 +74,12 @@
     "title": "Démarrage",
     "description": "Apprenez à préparer les datasets et à démarrer avec LichtFeld Studio :",
     "wiki_section": "WIKI & FAQ",
+    "video_overview": "Tout ce que LichtFeld Studio peut faire aujourd'hui",
     "video_automotive": "3dgs for automotive marketing",
     "video_intro": "Entraînement sur Images Équirectangulaires 360",
     "video_latest": "LichtFeld v0.3.0 Aperçu des Fonctionnalités",
     "video_reality_scan": "Dataset Reality Scan",
     "video_colmap": "Tutoriel COLMAP",
-    "video_lichtfeld": "Tutoriel LichtFeld",
     "video_masks": "Tutoriel Masques"
   },
   "about": {
