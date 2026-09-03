@@ -16,7 +16,7 @@ responsibility of the normal build and test jobs.
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 import json
@@ -507,6 +507,29 @@ def select_compile_commands(
     return selected
 
 
+def _display_source_path(root: Path, source: Path) -> str:
+    try:
+        return source.relative_to(root).as_posix()
+    except ValueError:
+        return source.as_posix()
+
+
+def _print_selected_compile_commands(
+    root: Path, commands: Sequence[CompileCommand]
+) -> None:
+    source_counts = Counter(
+        _display_source_path(root, command.file) for command in commands
+    )
+    print(
+        "MSVC preflight: selected "
+        f"{len(source_counts)} source file(s) for {len(commands)} compile command(s):"
+    )
+    for source in sorted(source_counts, key=lambda path: (path.lower(), path)):
+        count = source_counts[source]
+        duplicate_note = f" ({count} compile commands)" if count > 1 else ""
+        print(f"  - {source}{duplicate_note}")
+
+
 def _is_msvc_command(command: CompileCommand) -> bool:
     lowered = command.command.lower()
     return (
@@ -680,8 +703,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if arguments.dry_run:
-        for command in selected:
-            print(command.file.as_posix())
+        _print_selected_compile_commands(root, selected)
         return 0
     if arguments.max_commands and len(selected) > arguments.max_commands:
         print(
@@ -697,7 +719,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     unsupported = [command for command in selected if not _is_msvc_command(command)]
     for command in unsupported:
         print(
-            f"warning: skipping non-MSVC compile command for {command.file.as_posix()}",
+            "warning: skipping non-MSVC compile command for "
+            f"{_display_source_path(root, command.file)}",
             file=sys.stderr,
         )
     supported = [command for command in selected if _is_msvc_command(command)]
@@ -705,12 +728,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("error: no selected compile command invokes MSVC cl.exe", file=sys.stderr)
         return 2
 
+    _print_selected_compile_commands(root, supported)
     failures = run_msvc_syntax_checks(supported, arguments.jobs)
     if failures:
         print("MSVC configured preflight failed:", file=sys.stderr)
         for command, returncode, output in failures:
             print(
-                f"\n--- {command.file.as_posix()} (exit {returncode}) ---",
+                "\n--- "
+                f"{_display_source_path(root, command.file)} (exit {returncode}) ---",
                 file=sys.stderr,
             )
             if output:

@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from contextlib import redirect_stdout
+from io import StringIO
 import json
 from pathlib import Path
 import tempfile
@@ -264,6 +266,31 @@ class WindowsBuildPreflightTests(unittest.TestCase):
             self.root, commands, {cmake.resolve()}, False
         )
         self.assertEqual([], selected)
+
+    def test_selected_command_report_is_relative_sorted_and_counts_duplicates(
+        self,
+    ) -> None:
+        alpha = self.write("src/visualizer/alpha.cpp", "void alpha() {}\n")
+        beta = self.write("src/visualizer/beta.cpp", "void beta() {}\n")
+        commands = [
+            preflight.CompileCommand(beta.resolve(), self.root, "cl.exe /c beta.cpp"),
+            preflight.CompileCommand(alpha.resolve(), self.root, "cl.exe /c alpha.cpp"),
+            preflight.CompileCommand(beta.resolve(), self.root, "cl.exe /c beta.cpp"),
+        ]
+        output = StringIO()
+
+        with redirect_stdout(output):
+            preflight._print_selected_compile_commands(self.root, commands)
+
+        self.assertEqual(
+            [
+                "MSVC preflight: selected 2 source file(s) for 3 compile command(s):",
+                "  - src/visualizer/alpha.cpp",
+                "  - src/visualizer/beta.cpp (2 compile commands)",
+            ],
+            output.getvalue().splitlines(),
+        )
+        self.assertNotIn(self.root.as_posix(), output.getvalue())
 
 
 if __name__ == "__main__":

@@ -62,6 +62,13 @@ normal full build remains authoritative. This prevents the preflight from
 adding an almost complete second compilation pass. Runs are unlimited by
 default.
 
+Before invoking MSVC, the configured pass lists every selected source using a
+repository-relative path. The headline count refers to compile-database
+commands; if the same source has more than one entry, the source list groups it
+once and annotates the number of commands. This makes unexpectedly broad
+selection visible without printing compiler command lines or machine-specific
+paths.
+
 Use the portable build directory to check portable compile definitions:
 
 ```powershell
