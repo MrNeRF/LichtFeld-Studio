@@ -69,6 +69,47 @@ namespace {
         float height_ = 0.0f;
     };
 
+    class PollGatedUpdatePanel final : public lfs::vis::gui::IPanel {
+    public:
+        void draw(const lfs::vis::gui::PanelDrawContext&) override {}
+
+        lfs::vis::gui::PanelRenderCapabilities renderCapabilities() const override {
+            return {.direct = true};
+        }
+
+        lfs::vis::gui::PanelDirectRenderResult renderDirect(
+            const lfs::vis::gui::PanelDirectRenderRequest& request,
+            const lfs::vis::gui::PanelDrawContext&) override {
+            if (request.mode == lfs::vis::gui::PanelDirectRenderMode::Draw)
+                pending_update = false;
+            return {.handled = true, .height = 24.0f};
+        }
+
+        bool poll(const lfs::vis::gui::PanelDrawContext&) override {
+            ++poll_count;
+            return poll_result;
+        }
+
+        void setPollVisibility(const bool visible) override {
+            poll_visible = visible;
+        }
+
+        bool isVisibleForAnimation() const override {
+            return poll_visible;
+        }
+
+        bool needsAnimationFrame() const override {
+            return pending_update;
+        }
+
+        void setPollResult(const bool result) { poll_result = result; }
+
+        bool poll_result = false;
+        bool poll_visible = true;
+        bool pending_update = true;
+        int poll_count = 0;
+    };
+
     class PanelLayoutRenderDemandTest : public ::testing::Test {
     protected:
         void SetUp() override {
@@ -424,4 +465,50 @@ TEST_F(PanelLayoutRenderDemandTest, SetPanelSpaceFloatingMasksSameFrame) {
 
     const float left_x = s.work_pos.x + 8.0f;
     EXPECT_FALSE(PanelRegistry::instance().isPositionOverFloatingPanel(left_x, band_y));
+}
+
+TEST_F(PanelLayoutRenderDemandTest,
+       PollHiddenPendingUpdateDoesNotDemandAnimationUntilVisible) {
+    using namespace lfs::vis::gui;
+
+    auto panel = std::make_shared<PollGatedUpdatePanel>();
+    PanelInfo info;
+    info.id = "test.poll_gated_update";
+    info.label = info.id;
+    info.space = PanelSpace::MainPanelTab;
+    info.is_native = false;
+    info.panel = panel;
+    ASSERT_TRUE(PanelRegistry::instance().register_panel(std::move(info)));
+
+    PanelDrawContext ctx;
+    const PanelRenderOptions preload{
+        .target = PanelRenderTarget::for_panel("test.poll_gated_update"),
+        .mode = PanelRenderMode::DirectPreload,
+        .width = 320.0f,
+        .height = 200.0f,
+    };
+    const PanelAnimationVisibility visibility{
+        .active_main_tab = "test.poll_gated_update",
+    };
+
+    PanelRegistry::instance().render_panels(preload, ctx);
+    EXPECT_FALSE(panel->poll_visible);
+    EXPECT_FALSE(PanelRegistry::instance().needsAnimationFrameForVisiblePanels(visibility));
+    EXPECT_TRUE(panel->pending_update);
+
+    panel->setPollResult(true);
+    PanelRegistry::instance().invalidate_poll_cache();
+    PanelRegistry::instance().render_panels(preload, ctx);
+    EXPECT_TRUE(panel->poll_visible);
+    EXPECT_TRUE(PanelRegistry::instance().needsAnimationFrameForVisiblePanels(visibility));
+
+    PanelRegistry::instance().render_panels({
+                                                .target = preload.target,
+                                                .mode = PanelRenderMode::Direct,
+                                                .width = preload.width,
+                                                .height = preload.height,
+                                            },
+                                            ctx);
+    EXPECT_FALSE(panel->pending_update);
+    EXPECT_FALSE(PanelRegistry::instance().needsAnimationFrameForVisiblePanels(visibility));
 }

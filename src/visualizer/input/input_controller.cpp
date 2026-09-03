@@ -547,6 +547,19 @@ namespace lfs::vis {
         }
     }
 
+    void InputController::applyNavigationSpeedPreferences(const float zoom_speed,
+                                                          const float navigation_speed) {
+        viewport_.camera.setZoomSpeed(zoom_speed);
+        viewport_.camera.setWasdSpeed(navigation_speed);
+        if (viewer_) {
+            if (auto* const rendering = viewer_->getRenderingManager()) {
+                auto& secondary = rendering->projectSecondaryViewport();
+                secondary.camera.setZoomSpeed(zoom_speed);
+                secondary.camera.setWasdSpeed(navigation_speed);
+            }
+        }
+    }
+
     void InputController::onWindowFocusLost() {
         if (current_cursor_ != CursorType::Default) {
             SDL_SetCursor(SDL_GetDefaultCursor());
@@ -1791,6 +1804,16 @@ namespace lfs::vis {
             case input::Action::TOGGLE_SCENE_SELECTION_TRAINING:
                 if (gui)
                     (void)gui->toggleSceneSelectionTrainingIfFocused();
+                return;
+
+            case input::Action::GROUP_SELECTED_SCENE_NODES:
+                if (gui)
+                    (void)gui->groupSelectedSceneNodesIfFocused();
+                return;
+
+            case input::Action::UNGROUP_SELECTED_SCENE_NODE:
+                if (gui)
+                    (void)gui->ungroupSelectedSceneNodeIfFocused();
                 return;
 
             case input::Action::TOGGLE_MCP_SERVER:

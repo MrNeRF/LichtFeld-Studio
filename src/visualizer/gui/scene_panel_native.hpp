@@ -12,6 +12,7 @@
 
 #include <RmlUi/Core/EventListener.h>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -31,6 +32,7 @@ namespace lfs::vis::gui {
     class NativeScenePanel : public IPanel {
     public:
         explicit NativeScenePanel(RmlUIManager* manager);
+        ~NativeScenePanel() override;
 
         void draw(const PanelDrawContext& ctx) override;
         void preload(const PanelDrawContext& ctx) override;
@@ -39,7 +41,7 @@ namespace lfs::vis::gui {
         }
         PanelDirectRenderResult renderDirect(const PanelDirectRenderRequest& request,
                                              const PanelDrawContext& ctx) override;
-        bool needsAnimationFrame() const override { return host_.needsAnimationFrame(); }
+        bool needsAnimationFrame() const override;
         std::optional<double> nextScheduledAnimationDelay() const override {
             return host_.nextScheduledUpdateDelay();
         }
@@ -54,6 +56,8 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool selectAllIfFocused();
         [[nodiscard]] bool toggleSelectionVisibilityIfFocused();
         [[nodiscard]] bool toggleSelectionTrainingIfFocused();
+        [[nodiscard]] bool groupSelectedNodesIfFocused();
+        [[nodiscard]] bool ungroupSelectedNodeIfFocused();
         [[nodiscard]] bool requestDeleteSelectionIfAvailable();
         [[nodiscard]] std::unordered_set<int> visibleCameraUids() const;
 
@@ -198,6 +202,10 @@ namespace lfs::vis::gui {
         FeedbackTone logging_feedback_tone_ = FeedbackTone::Info;
         bool logging_feedback_dirty_ = false;
         bool syncing_logging_selection_ = false;
+        std::deque<Rml::Element*> logging_rows_;
+
+        bool rebuildLoggingRows(const std::vector<lfs::core::LogEntrySnapshot>& entries);
+        bool appendLoggingRows(const std::vector<lfs::core::LogEntrySnapshot>& entries);
     };
 
 } // namespace lfs::vis::gui

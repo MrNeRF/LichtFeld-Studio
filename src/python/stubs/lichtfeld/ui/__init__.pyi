@@ -416,6 +416,9 @@ def set_bottom_dock_active_tab(panel_id: str) -> None:
 def get_panel(panel_id: str) -> PanelInfo | None:
     """Get typed panel info by id (None if not found)"""
 
+def get_panel_object(panel_id: str) -> object | None:
+    """Get the Python object for a retained Python panel, or None if unavailable"""
+
 def set_panel_label(panel_id: str, label: str) -> bool:
     """Set the display label for a panel"""
 
@@ -2609,6 +2612,18 @@ def get_ui_scale() -> float:
 
 def get_ui_scale_preference() -> float:
     """Get saved UI scale preference (0.0 = auto)"""
+
+def set_zoom_speed_preference(speed: float) -> None:
+    """Set the default camera zoom speed (1-100)"""
+
+def get_zoom_speed_preference() -> float:
+    """Get the default camera zoom speed"""
+
+def set_navigation_speed_preference(speed: float) -> None:
+    """Set the default WASD navigation speed (1-100)"""
+
+def get_navigation_speed_preference() -> float:
+    """Get the default WASD navigation speed"""
 
 def get_scene_reconstruction_options() -> list:
     """Get registered scene reconstruction backends and their presets"""

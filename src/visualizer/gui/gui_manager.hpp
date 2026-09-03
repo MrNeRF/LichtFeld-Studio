@@ -183,6 +183,8 @@ namespace lfs::vis {
             [[nodiscard]] bool selectAllSceneNodesIfFocused();
             [[nodiscard]] bool toggleSceneSelectionVisibilityIfFocused();
             [[nodiscard]] bool toggleSceneSelectionTrainingIfFocused();
+            [[nodiscard]] bool groupSelectedSceneNodesIfFocused();
+            [[nodiscard]] bool ungroupSelectedSceneNodeIfFocused();
             [[nodiscard]] bool requestDeleteSceneSelectionIfAvailable();
             [[nodiscard]] SceneTreeSessionChrome captureSceneTreeChrome(
                 const lfs::core::Scene& scene) const;
@@ -397,6 +399,7 @@ namespace lfs::vis {
             bool fullscreen_toggle_pending_ = false;
             bool fullscreen_target_state_ = false;
             bool interactive_transition_resume_training_ = false;
+            bool interactive_transition_pause_pending_ = false;
             std::optional<AppStore::GTMetricsOverlayConfig> published_gt_metrics_overlay_config_;
             bool menu_labels_synced_ = false;
             std::uint64_t synced_menu_entries_version_ = 0;

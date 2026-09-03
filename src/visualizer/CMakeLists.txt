@@ -211,7 +211,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 # MSVC 14.44 ICEs (C1001 in msc1.cpp:1589) on the sequencer panel TUs under
 # /std:c++latest in both Debug (/Od /RTC1) and Release (/O2 /Ob2). Pin them to
 # /std:c++23 (not "latest") and add /bigobj for the heavy tensor + RmlUI + fmt instantiations.
-# The project lifecycle TU exceeds the COFF section limit in Debug and needs /bigobj.
+# The project lifecycle and GUI manager TUs exceed the COFF section limit in Debug and need /bigobj.
 if(MSVC)
     set_source_files_properties(
             ${CMAKE_CURRENT_SOURCE_DIR}/sequencer/rml_sequencer_panel.cpp
@@ -220,6 +220,7 @@ if(MSVC)
     )
     set_source_files_properties(
             ${CMAKE_CURRENT_SOURCE_DIR}/project/project_lifecycle.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/gui/gui_manager.cpp
             PROPERTIES COMPILE_OPTIONS "/bigobj"
     )
 endif()
@@ -498,15 +499,25 @@ endforeach ()
 # Copy RmlUI resources (re-copy on every build so edits are picked up)
 file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui")
 file(GLOB RMLUI_RESOURCE_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/gui/rmlui/resources/*")
+set(RMLUI_ASSET_FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/gui/assets/rmlui/soft_shadow.png"
+)
 foreach (RMLUI_FILE ${RMLUI_RESOURCE_FILES})
     get_filename_component(RMLUI_NAME ${RMLUI_FILE} NAME)
     configure_file(${RMLUI_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui/${RMLUI_NAME}" COPYONLY)
+endforeach ()
+foreach (RMLUI_ASSET_FILE ${RMLUI_ASSET_FILES})
+    if (EXISTS ${RMLUI_ASSET_FILE} AND NOT IS_DIRECTORY ${RMLUI_ASSET_FILE})
+        get_filename_component(RMLUI_ASSET_NAME ${RMLUI_ASSET_FILE} NAME)
+        configure_file(${RMLUI_ASSET_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui/${RMLUI_ASSET_NAME}" COPYONLY)
+    endif ()
 endforeach ()
 add_custom_target(copy_rmlui_resources ALL
     COMMAND ${CMAKE_COMMAND} -E rm -rf "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${RMLUI_RESOURCE_FILES}
+        ${RMLUI_ASSET_FILES}
         "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui/"
     COMMENT "Syncing RmlUI resources"
 )

@@ -548,8 +548,11 @@ apply_registered_chrome:
 
     bool PanelRegistry::check_poll(const PanelSnapshot& snap, const PanelDrawContext& ctx) {
         assert(snap.panel);
-        if (snap.is_native)
-            return snap.panel->poll(ctx);
+        if (snap.is_native) {
+            const bool result = snap.panel->poll(ctx);
+            snap.panel->setPollVisibility(result);
+            return result;
+        }
 
         const uint64_t gen = ctx.scene_generation;
         const bool has_sel = ctx.has_selection;
@@ -567,12 +570,15 @@ apply_registered_chrome:
                     valid &= (e.has_selection == has_sel);
                 if ((snap.poll_dependencies & PollDependency::TRAINING) != PollDependency::NONE)
                     valid &= (e.is_training == training);
-                if (valid)
+                if (valid) {
+                    snap.panel->setPollVisibility(e.result);
                     return e.result;
+                }
             }
         }
 
         const bool result = snap.panel->poll(ctx);
+        snap.panel->setPollVisibility(result);
 
         {
             std::lock_guard poll_lock(poll_mutex_);
@@ -1432,6 +1438,15 @@ apply_registered_chrome:
         return std::nullopt;
     }
 
+    std::shared_ptr<IPanel> PanelRegistry::get_panel_instance(const std::string& id) const {
+        std::lock_guard lock(mutex_);
+        for (const auto& panel : panels_) {
+            if (panel.id == id)
+                return panel.panel;
+        }
+        return nullptr;
+    }
+
     std::vector<PanelProjectState>
     PanelRegistry::capture_project_state() const {
         std::lock_guard lock(mutex_);
@@ -1870,6 +1885,9 @@ apply_registered_chrome:
         // Must stay in lockstep: a mismatch causes either pinned frames or stalled wakes.
         [[nodiscard]] bool isPanelVisibleForAnimation(
             const PanelInfo& p, const PanelAnimationVisibility& visibility) {
+            if (!p.panel->isVisibleForAnimation())
+                return false;
+
             if (!p.parent_id.empty()) {
                 return visibility.right_panel_visible &&
                        std::string_view(p.parent_id) == visibility.active_main_tab;

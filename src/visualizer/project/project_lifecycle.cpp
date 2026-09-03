@@ -3398,14 +3398,55 @@ namespace lfs::vis::project {
         if (!trainer) {
             return {};
         }
-        for (;;) {
-            trainer->join_finished_project_writer();
-            if (!trainer->get_project_snapshot_metrics()
-                     .writer_in_flight) {
-                return {};
-            }
-            std::this_thread::sleep_for(
-                std::chrono::milliseconds(5));
+        trainer->join_finished_project_writer();
+        if (trainer->get_project_snapshot_metrics().writer_in_flight) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "The project save is waiting for the training snapshot.",
+                "The trainer project writer is still in flight",
+                "project.training_snapshot");
+        }
+        return {};
+    }
+
+    bool ProjectLifecycle::queueExplicitSaveIfTrainerWriterInFlight(
+        const bool regenerate_preview) {
+        auto* const trainer = viewer_.getTrainer();
+        if (!trainer) {
+            return false;
+        }
+        trainer->join_finished_project_writer();
+        if (!trainer->get_project_snapshot_metrics().writer_in_flight) {
+            return false;
+        }
+        if (!pending_explicit_save_regenerate_preview_) {
+            pending_explicit_save_regenerate_preview_ = regenerate_preview;
+            LOG_INFO("Project save queued until the training snapshot writer finishes");
+        } else {
+            LOG_DEBUG("Ignoring duplicate project save while a training snapshot save is queued");
+        }
+        return true;
+    }
+
+    void ProjectLifecycle::processPendingExplicitSave() {
+        if (!pending_explicit_save_regenerate_preview_ ||
+            viewer_.jobs().anyRunning(JobType::ProjectWrite)) {
+            return;
+        }
+        auto* const trainer = viewer_.getTrainer();
+        if (!trainer) {
+            pending_explicit_save_regenerate_preview_.reset();
+            return;
+        }
+        trainer->join_finished_project_writer();
+        if (trainer->get_project_snapshot_metrics().writer_in_flight) {
+            return;
+        }
+
+        const bool regenerate_preview = *pending_explicit_save_regenerate_preview_;
+        pending_explicit_save_regenerate_preview_.reset();
+        if (auto saved = save(regenerate_preview); !saved) {
+            LOG_ERROR("Queued project save failed: {}", developerError(saved.error()));
         }
     }
 
@@ -5533,6 +5574,7 @@ namespace lfs::vis::project {
     void ProjectLifecycle::updateMaintenance() {
         applyStartupRecoveryScan();
         settleProjectWrite();
+        processPendingExplicitSave();
         if (!viewer_.jobs().anyRunning(
                 JobType::ProjectWrite)) {
             if (auto adopted =
@@ -6883,14 +6925,8 @@ namespace lfs::vis::project {
                 "Only one project save may run at a time",
                 "project.save");
         }
-        if (auto waited =
-                waitOutBackgroundAutosaveForExplicitSave();
-            !waited) {
-            return waited;
-        }
-        if (auto rebased = rebaseOntoCurrentMasterHead();
-            !rebased) {
-            return rebased;
+        if (pending_explicit_save_regenerate_preview_) {
+            return {};
         }
         if (!document_ ||
             !document_->source_path() ||
@@ -6900,6 +6936,21 @@ namespace lfs::vis::project {
                 "This project has no path; use Save As.",
                 "An untitled project cannot be appended in place",
                 "project.path");
+        }
+        if (queueExplicitSaveIfTrainerWriterInFlight(regenerate_preview)) {
+            return {};
+        }
+        if (auto waited =
+                waitOutBackgroundAutosaveForExplicitSave();
+            !waited) {
+            return waited;
+        }
+        if (auto rebased = rebaseOntoCurrentMasterHead();
+            !rebased) {
+            if (queueExplicitSaveIfTrainerWriterInFlight(regenerate_preview)) {
+                return {};
+            }
+            return rebased;
         }
         if (auto* trainer = viewer_.getTrainer();
             trainer &&
@@ -8589,6 +8640,10 @@ namespace lfs::vis::project {
             break;
         }
 
+        if (pending_explicit_save_regenerate_preview_) {
+            return CloseSaveStatus::Saving;
+        }
+
         if (!hasDirtyProject()) {
             // Window-close X / File-Exit of a clean session: Skip any
             // unanswered recovery offer and drop the untitled scratch.
@@ -8826,6 +8881,7 @@ namespace lfs::vis::project {
     ProjectWritePoll ProjectLifecycle::pollWrite() {
         settleProjectWrite();
         ProjectWritePoll poll;
+        poll.running = pending_explicit_save_regenerate_preview_.has_value();
         if (project_write_job_) {
             const auto job = viewer_.jobs().peek(
                 *project_write_job_);
@@ -8867,18 +8923,21 @@ namespace lfs::vis::project {
             close_save_state_.load(
                 std::memory_order_acquire) ==
             CloseSaveState::Saving;
-        if (close_save_running || project_write_job_) {
+        if (close_save_running || project_write_job_ ||
+            pending_explicit_save_regenerate_preview_) {
             auto result =
                 cached_project_info_
                     .value_or(ProjectInfo{});
-            const auto job =
-                viewer_.jobs().peek(
-                    *project_write_job_);
+            const auto job = project_write_job_
+                                 ? viewer_.jobs().peek(*project_write_job_)
+                                 : std::nullopt;
             result.project_write_running =
                 true;
-            result.project_write_stage =
-                job ? job->stage
-                    : std::string{};
+            result.project_write_stage = job
+                                             ? job->stage
+                                             : (pending_explicit_save_regenerate_preview_
+                                                    ? "Waiting for training snapshot"
+                                                    : std::string{});
             result.project_write_progress =
                 job ? job->progress : 0.0F;
             result.project_write_error =

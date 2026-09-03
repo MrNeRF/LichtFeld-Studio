@@ -145,6 +145,7 @@ namespace lfs::vis::op {
         lfs::core::DataType dtype = lfs::core::DataType::UInt8;
         bool before_present = false;
         bool after_present = false;
+        std::optional<size_t> max_index;
 
         [[nodiscard]] bool hasChanges() const {
             switch (mode) {
@@ -192,6 +193,9 @@ namespace lfs::vis::op {
                                                    const std::vector<glm::mat4>& transforms);
         void captureTopology();
         void captureAfter();
+        void captureAfterSelection(std::shared_ptr<lfs::core::Tensor> mask,
+                                   lfs::core::Scene::SelectionStateMetadata metadata);
+        void completePendingSelectionCounts();
 
         void undo() override;
         void redo() override;
@@ -229,7 +233,7 @@ namespace lfs::vis::op {
         SceneTopologyProof expected_topology_;
 
         void captureDeletedMasks(std::unordered_map<lfs::core::Uuid, TensorPresenceSnapshot>& target);
-        void compactSelection();
+        void compactSelection(const std::shared_ptr<lfs::core::Tensor>& after_mask = nullptr);
         void compactTopology();
         void applySelection(bool undo_direction);
         void applyTopology(bool undo_direction);
@@ -313,6 +317,7 @@ namespace lfs::vis::op {
         lfs::core::Tensor before_rows_;
         lfs::core::Tensor after_rows_;
         lfs::core::Device preferred_device_ = lfs::core::Device::CUDA;
+        std::optional<size_t> max_index_;
         std::optional<SceneTopologyProof> expected_topology_;
     };
 

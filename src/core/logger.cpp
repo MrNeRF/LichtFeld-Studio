@@ -10,11 +10,15 @@
 #include <deque>
 #include <filesystem>
 #include <format>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <regex>
 #include <vector>
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <unistd.h>
@@ -353,6 +357,28 @@ namespace lfs::core {
                 return {entries_.begin(), entries_.end()};
             }
 
+            [[nodiscard]] std::vector<LogEntrySnapshot>
+            entries_since(const uint64_t generation, const size_t max_count) const {
+                if (max_count == 0)
+                    return {};
+
+                std::lock_guard lock(entries_mutex_);
+                auto first = entries_.begin();
+                while (first != entries_.end() && first->sequence <= generation)
+                    ++first;
+                if (first == entries_.end())
+                    return {};
+
+                const auto available = static_cast<size_t>(std::distance(first, entries_.end()));
+                if (available > max_count)
+                    first = std::prev(entries_.end(), static_cast<std::ptrdiff_t>(max_count));
+
+                std::vector<LogEntrySnapshot> result;
+                result.reserve(std::min(available, max_count));
+                result.insert(result.end(), first, entries_.end());
+                return result;
+            }
+
             [[nodiscard]] std::string text() const {
                 std::lock_guard lock(entries_mutex_);
                 std::string output;
@@ -390,8 +416,8 @@ namespace lfs::core {
                 std::lock_guard lock(entries_mutex_);
                 if (entries_.size() >= max_entries_)
                     entries_.pop_front();
+                entry.sequence = generation_.fetch_add(1, std::memory_order_relaxed) + 1;
                 entries_.push_back(std::move(entry));
-                generation_.fetch_add(1, std::memory_order_relaxed);
             }
 
             void flush_() override {}
@@ -671,24 +697,50 @@ namespace lfs::core {
     }
 
     size_t Logger::buffered_log_count() const {
-        std::lock_guard lock(impl_->mutex);
-        return impl_->memory_sink ? impl_->memory_sink->entry_count() : 0;
+        std::shared_ptr<MemorySink> memory_sink;
+        {
+            std::lock_guard lock(impl_->mutex);
+            memory_sink = impl_->memory_sink;
+        }
+        return memory_sink ? memory_sink->entry_count() : 0;
     }
 
     uint64_t Logger::buffered_log_generation() const {
-        std::lock_guard lock(impl_->mutex);
-        return impl_->memory_sink ? impl_->memory_sink->generation() : 0;
+        std::shared_ptr<MemorySink> memory_sink;
+        {
+            std::lock_guard lock(impl_->mutex);
+            memory_sink = impl_->memory_sink;
+        }
+        return memory_sink ? memory_sink->generation() : 0;
     }
 
     std::vector<LogEntrySnapshot> Logger::buffered_logs() const {
-        std::lock_guard lock(impl_->mutex);
-        return impl_->memory_sink ? impl_->memory_sink->entries()
-                                  : std::vector<LogEntrySnapshot>{};
+        std::shared_ptr<MemorySink> memory_sink;
+        {
+            std::lock_guard lock(impl_->mutex);
+            memory_sink = impl_->memory_sink;
+        }
+        return memory_sink ? memory_sink->entries() : std::vector<LogEntrySnapshot>{};
+    }
+
+    std::vector<LogEntrySnapshot>
+    Logger::buffered_logs_since(const uint64_t generation, const size_t max_count) const {
+        std::shared_ptr<MemorySink> memory_sink;
+        {
+            std::lock_guard lock(impl_->mutex);
+            memory_sink = impl_->memory_sink;
+        }
+        return memory_sink ? memory_sink->entries_since(generation, max_count)
+                           : std::vector<LogEntrySnapshot>{};
     }
 
     std::string Logger::buffered_logs_as_text() const {
-        std::lock_guard lock(impl_->mutex);
-        return impl_->memory_sink ? impl_->memory_sink->text() : std::string{};
+        std::shared_ptr<MemorySink> memory_sink;
+        {
+            std::lock_guard lock(impl_->mutex);
+            memory_sink = impl_->memory_sink;
+        }
+        return memory_sink ? memory_sink->text() : std::string{};
     }
 
     ScopedTimer::ScopedTimer(const std::string_view name, const LogLevel level,
