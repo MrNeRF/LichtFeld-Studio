@@ -24,6 +24,7 @@ namespace lfs::vis::gui::panels {
         int custom_height = 1080;
         int framerate = 30;
         int quality = 18;
+        lfs::io::video::VideoReconstructionSelection reconstruction{};
 
         [[nodiscard]] int outputWidth() const {
             if (preset == lfs::io::video::VideoPreset::CUSTOM)

@@ -907,6 +907,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* VIDEO_GUI_MANAGER_UNAVAILABLE = "runtime.video_gui_manager_unavailable";
         inline constexpr const char* VIDEO_NO_KEYFRAMES = "runtime.video_no_keyframes";
         inline constexpr const char* VIDEO_RENDERING_ENGINE_UNAVAILABLE = "runtime.video_rendering_engine_unavailable";
+        inline constexpr const char* VIDEO_RECONSTRUCTION_SELECTION_UNAVAILABLE = "runtime.video_reconstruction_selection_unavailable";
         inline constexpr const char* VIDEO_SPLAT_PREPARATION_FAILED = "runtime.video_splat_preparation_failed";
         inline constexpr const char* VIDEO_NO_RENDERABLE_CONTENT = "runtime.video_no_renderable_content";
         inline constexpr const char* RENDERED_POINT_CLOUD_INVALID = "runtime.rendered_point_cloud_invalid";

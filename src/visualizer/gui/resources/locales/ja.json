@@ -2385,6 +2385,7 @@
     "video_gui_manager_unavailable": "GUI マネージャーを利用できません",
     "video_no_keyframes": "エクスポートするキーフレームがありません",
     "video_rendering_engine_unavailable": "レンダリングエンジンを利用できません",
+    "video_reconstruction_selection_unavailable": "動画再構成の選択 {}/{} は使用できません。エクスポートは開始されませんでした",
     "video_splat_preparation_failed": "動画エクスポート用のスプラットテンソルを準備できませんでした: ",
     "video_no_renderable_content": "エクスポート可能なレンダリング内容がありません",
     "rendered_point_cloud_invalid": "レンダリングされた点群フレームが無効です",

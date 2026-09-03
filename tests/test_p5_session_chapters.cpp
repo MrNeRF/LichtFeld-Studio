@@ -2319,6 +2319,12 @@ namespace {
         seq["preferences"]["custom_height"] = 720;
         seq["preferences"]["framerate"] = 48;
         seq["preferences"]["quality"] = 22;
+        seq["preferences"]["reconstruction"] = {
+            {"version", 1},
+            {"backend_id", "com.example.reconstruction"},
+            {"preset_id", "quality"},
+            {"fallback", "native"},
+        };
         seq["view"] = {
             {"zoom", 2.5f},
             {"pan", 1.25f},
@@ -2337,11 +2343,55 @@ namespace {
         EXPECT_EQ(ui.custom_height, 720);
         EXPECT_EQ(ui.framerate, 48);
         EXPECT_EQ(ui.quality, 22);
+        EXPECT_EQ(ui.reconstruction.backend_id, "com.example.reconstruction");
+        EXPECT_EQ(ui.reconstruction.preset_id, "quality");
+        EXPECT_EQ(
+            ui.reconstruction.fallback,
+            lfs::io::video::VideoReconstructionFallback::Native);
         EXPECT_NEAR(viewer.getGuiManager()->sequencerUI().timelineZoom(), 2.5f, 1e-4f);
         EXPECT_NEAR(viewer.getGuiManager()->sequencerUI().timelinePan(), 1.25f, 1e-4f);
         if (const auto* rendering = viewer.getRenderingManager()) {
             EXPECT_EQ(ui.equirectangular, rendering->getSettings().equirectangular);
         }
+    }
+
+    TEST(P5SessionChapterTest, LegacySequencerPrefsResetVideoReconstructionToNative) {
+        lfs::vis::ViewerOptions options;
+        options.show_startup_overlay = false;
+        lfs::vis::VisualizerImpl viewer(options);
+        ASSERT_NE(viewer.getGuiManager(), nullptr);
+
+        auto& ui = viewer.getGuiManager()->getSequencerUIState();
+        ui.reconstruction = {
+            .backend_id = "com.example.previous",
+            .preset_id = "quality",
+            .fallback = lfs::io::video::VideoReconstructionFallback::Native,
+        };
+
+        auto prepared = require_result(
+            prepareGuiSessionRestore(make_populated_session_chapters()));
+        std::vector<CameraBookmarkProjectState> bookmarks;
+        applyGuiSession(viewer, prepared, bookmarks);
+
+        EXPECT_EQ(ui.reconstruction, lfs::io::video::VideoReconstructionSelection{});
+    }
+
+    TEST(P5SessionChapterTest, InvalidVideoReconstructionSelectionFailsBeforeApply) {
+        auto session = make_populated_session_chapters();
+        auto seq = json_root(session.sequencer.dom());
+        seq["preferences"]["reconstruction"] = {
+            {"version", 2},
+            {"backend_id", "native"},
+            {"preset_id", "native"},
+            {"fallback", "abort"},
+        };
+        session.sequencer = require_result(
+            SequencerSessionChapter::parse(seq.dump()));
+
+        const auto prepared = prepareGuiSessionRestore(std::move(session));
+
+        ASSERT_FALSE(prepared);
+        EXPECT_EQ(prepared.error().code(), lfs::ErrorCode::DataLoss);
     }
 
     TEST(P5SessionChapterTest, SnapshotAbsolutizesRelativeDatasetPath) {

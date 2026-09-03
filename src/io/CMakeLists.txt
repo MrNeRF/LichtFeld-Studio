@@ -122,8 +122,10 @@ add_library(lfs_video STATIC
         include/io/video/video_encoder_interface.hpp
         include/io/video/video_export_options.hpp
         include/io/video/video_extensions.hpp
+        include/io/video/video_reconstruction.hpp
         video/video_encoder.hpp
         video/video_encoder.cpp
+        video/video_reconstruction.cpp
         video/color_convert.cuh
         video/color_convert.cu
         video_frame_extractor.hpp
@@ -154,6 +156,7 @@ target_link_libraries(lfs_video
         PRIVATE
         PkgConfig::FFMPEG
         spdlog::spdlog
+        nlohmann_json::nlohmann_json
         CUDA::cudart
 )
 

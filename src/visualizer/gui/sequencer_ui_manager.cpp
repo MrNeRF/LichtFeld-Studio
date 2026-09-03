@@ -1354,7 +1354,12 @@ namespace lfs::vis::gui {
                 .width = ui_state_.outputWidth(),
                 .height = ui_state_.outputHeight(),
                 .framerate = ui_state_.framerate,
-                .crf = ui_state_.quality}
+                .crf = ui_state_.quality,
+                .reconstruction_backend_id = ui_state_.reconstruction.backend_id,
+                .reconstruction_preset_id = ui_state_.reconstruction.preset_id,
+                .reconstruction_fallback = std::string(
+                    lfs::io::video::videoReconstructionFallbackId(
+                        ui_state_.reconstruction.fallback))}
                 .emit();
         }
 

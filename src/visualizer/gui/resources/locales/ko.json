@@ -2385,6 +2385,7 @@
     "video_gui_manager_unavailable": "GUI 관리자를 사용할 수 없습니다",
     "video_no_keyframes": "내보낼 키프레임이 없습니다",
     "video_rendering_engine_unavailable": "렌더링 엔진을 사용할 수 없습니다",
+    "video_reconstruction_selection_unavailable": "비디오 재구성 선택 {}/{}을(를) 사용할 수 없어 내보내기를 시작하지 않았습니다",
     "video_splat_preparation_failed": "비디오 내보내기를 위한 스플랫 텐서를 준비하지 못했습니다: ",
     "video_no_renderable_content": "내보낼 렌더링 가능 콘텐츠가 없습니다",
     "rendered_point_cloud_invalid": "렌더링된 포인트 클라우드 프레임이 올바르지 않습니다",

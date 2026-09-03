@@ -2385,6 +2385,7 @@
     "video_gui_manager_unavailable": "Le gestionnaire d’interface est indisponible",
     "video_no_keyframes": "Aucune image clé à exporter",
     "video_rendering_engine_unavailable": "Le moteur de rendu est indisponible",
+    "video_reconstruction_selection_unavailable": "La sélection de reconstruction vidéo {}/{} ne peut pas être utilisée ; l’exportation n’a pas démarré",
     "video_splat_preparation_failed": "Impossible de préparer les tenseurs splat pour l'exportation vidéo : ",
     "video_no_renderable_content": "Aucun contenu rendu ne peut être exporté",
     "rendered_point_cloud_invalid": "L’image rendue du nuage de points n’est pas valide",

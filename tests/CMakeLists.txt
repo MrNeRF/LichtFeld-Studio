@@ -424,6 +424,7 @@ set(TEST_FILES
     test_mcp_sequencer_tools.cpp
     test_tcp_publisher.cpp
     test_view_info_json.cpp
+    test_video_reconstruction.cpp
     test_video_export_utils.cpp
     test_video_frame_extractor_naming.cpp
     test_video_hdr_logic.cpp

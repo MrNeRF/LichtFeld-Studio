@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/provenance.hpp"
+#include "io/video/video_reconstruction.hpp"
 
 #include <climits>
 #include <cstddef>
@@ -69,6 +70,7 @@ namespace lfs::io::video {
         int framerate = 30;
         int crf = 18;
         std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
+        VideoReconstructionSelection reconstruction{};
     };
 
     [[nodiscard]] inline std::expected<void, std::string> validateVideoEncodingOptions(

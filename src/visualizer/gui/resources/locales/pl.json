@@ -2385,6 +2385,7 @@
     "video_gui_manager_unavailable": "Menedżer GUI jest niedostępny",
     "video_no_keyframes": "Brak klatek kluczowych do wyeksportowania",
     "video_rendering_engine_unavailable": "Silnik renderowania jest niedostępny",
+    "video_reconstruction_selection_unavailable": "Nie można użyć wyboru rekonstrukcji wideo {}/{}; eksport nie został uruchomiony",
     "video_splat_preparation_failed": "Nie udało się przygotować tensorów splat do eksportu wideo: ",
     "video_no_renderable_content": "Brak renderowalnej zawartości do wyeksportowania",
     "rendered_point_cloud_invalid": "Wyrenderowana klatka chmury punktów jest nieprawidłowa",

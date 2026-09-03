@@ -2385,6 +2385,7 @@
     "video_gui_manager_unavailable": "GUI-Verwaltung ist nicht verfügbar",
     "video_no_keyframes": "Keine Keyframes zum Exportieren",
     "video_rendering_engine_unavailable": "Rendering-Engine ist nicht verfügbar",
+    "video_reconstruction_selection_unavailable": "Die Videorekonstruktionsauswahl {}/{} kann nicht verwendet werden; der Export wurde nicht gestartet",
     "video_splat_preparation_failed": "Splat-Tensoren für den Videoexport konnten nicht vorbereitet werden: ",
     "video_no_renderable_content": "Kein renderbarer Inhalt zum Exportieren",
     "rendered_point_cloud_invalid": "Gerendertes Punktwolken-Frame ist ungültig",

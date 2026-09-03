@@ -1366,6 +1366,28 @@ namespace lfs::vis::project {
                     "SEQR playhead or playback speed is invalid",
                     "SEQR");
             }
+
+            if (const auto preferences = find_required_object(root, "preferences");
+                preferences != root.end()) {
+                const auto reconstruction = preferences->find("reconstruction");
+                if (reconstruction != preferences->end()) {
+                    if (!reconstruction->is_object()) {
+                        return fail<void>(
+                            lfs::ErrorCode::DataLoss,
+                            "SEQR video reconstruction selection must be an object",
+                            "SEQR.preferences.reconstruction");
+                    }
+                    if (const auto selection =
+                            lfs::io::video::deserializeVideoReconstructionSelection(
+                                reconstruction->dump());
+                        !selection) {
+                        return fail<void>(
+                            lfs::ErrorCode::DataLoss,
+                            selection.error().message,
+                            "SEQR.preferences.reconstruction");
+                    }
+                }
+            }
             return {};
         }
 
@@ -1762,6 +1784,43 @@ namespace lfs::vis::project {
                 optional_field("custom_height", &Preferences::custom_height),
                 optional_field("framerate", &Preferences::framerate),
                 optional_field("quality", &Preferences::quality),
+                custom_field<Preferences>(
+                    "reconstruction",
+                    [](const Preferences& prefs) {
+                        return Json{
+                            {"version", lfs::io::video::VIDEO_RECONSTRUCTION_SELECTION_VERSION},
+                            {"backend_id", prefs.reconstruction.backend_id},
+                            {"preset_id", prefs.reconstruction.preset_id},
+                            {"fallback", lfs::io::video::videoReconstructionFallbackId(
+                                             prefs.reconstruction.fallback)},
+                        };
+                    },
+                    [](const Json& json,
+                       Preferences& prefs,
+                       const std::string_view prefix,
+                       const std::string_view field) {
+                        const auto found = json.find(std::string(field));
+                        if (found == json.end()) {
+                            prefs.reconstruction = {};
+                            return lfs::Result<void>{};
+                        }
+                        if (!found->is_object()) {
+                            return fail<void>(
+                                lfs::ErrorCode::DataLoss,
+                                "Video reconstruction selection must be an object",
+                                std::string(prefix) + "." + std::string(field));
+                        }
+                        auto selection =
+                            lfs::io::video::deserializeVideoReconstructionSelection(found->dump());
+                        if (!selection) {
+                            return fail<void>(
+                                lfs::ErrorCode::DataLoss,
+                                selection.error().message,
+                                std::string(prefix) + "." + std::string(field));
+                        }
+                        prefs.reconstruction = std::move(*selection);
+                        return lfs::Result<void>{};
+                    }),
             };
             return fields;
         }

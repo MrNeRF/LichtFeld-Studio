@@ -2385,6 +2385,7 @@
     "video_gui_manager_unavailable": "El gestor de GUI no está disponible",
     "video_no_keyframes": "No hay fotogramas clave para exportar",
     "video_rendering_engine_unavailable": "El motor de renderizado no está disponible",
+    "video_reconstruction_selection_unavailable": "No se puede usar la selección de reconstrucción de vídeo {}/{}; la exportación no se inició",
     "video_splat_preparation_failed": "No se pudieron preparar los tensores splat para la exportación de vídeo: ",
     "video_no_renderable_content": "No hay contenido renderizable para exportar",
     "rendered_point_cloud_invalid": "El fotograma de la nube de puntos renderizado no es válido",

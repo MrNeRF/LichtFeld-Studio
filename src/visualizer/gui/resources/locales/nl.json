@@ -2385,6 +2385,7 @@
     "video_gui_manager_unavailable": "GUI-beheerder is niet beschikbaar",
     "video_no_keyframes": "Geen keyframes om te exporteren",
     "video_rendering_engine_unavailable": "Renderingengine is niet beschikbaar",
+    "video_reconstruction_selection_unavailable": "Videoreconstructieselectie {}/{} kan niet worden gebruikt; de export is niet gestart",
     "video_splat_preparation_failed": "Splat-tensors voor video-export voorbereiden is mislukt: ",
     "video_no_renderable_content": "Geen renderbare inhoud om te exporteren",
     "rendered_point_cloud_invalid": "Gerenderd puntwolkframe is ongeldig",

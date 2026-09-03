@@ -2385,6 +2385,7 @@
     "video_gui_manager_unavailable": "GUI 管理器不可用",
     "video_no_keyframes": "没有可导出的关键帧",
     "video_rendering_engine_unavailable": "渲染引擎不可用",
+    "video_reconstruction_selection_unavailable": "无法使用视频重建选项 {}/{}；导出未启动",
     "video_splat_preparation_failed": "无法为视频导出准备 splat 张量：",
     "video_no_renderable_content": "没有可导出的可渲染内容",
     "rendered_point_cloud_invalid": "渲染的点云帧无效",
