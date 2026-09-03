@@ -527,6 +527,26 @@ def test_keymap_builds_binding_rows_with_capture_state(keymap_bindings_module):
     assert pan_row["button_class"] == "btn--primary"
 
 
+def test_keymap_ensure_rows_does_not_rebuild_on_first_update(keymap_bindings_module):
+    prefs, _state = keymap_bindings_module
+    _panel, model = _bind_panel(prefs)
+    section = _panel._keymap
+    binding_rows_calls = []
+    original_update_record_list = model.handle.update_record_list
+
+    def update_record_list(name, rows):
+        if name == "binding_rows":
+            binding_rows_calls.append(rows)
+        original_update_record_list(name, rows)
+
+    model.handle.update_record_list = update_record_list
+
+    section.ensure_binding_rows()
+    section.on_update(_DocStub())
+
+    assert len(binding_rows_calls) == 1
+
+
 def test_keymap_marks_conflicting_binding_rows(keymap_bindings_module):
     prefs, state = keymap_bindings_module
     panel, _model = _bind_panel(prefs)
@@ -553,6 +573,7 @@ def test_keymap_capture_conflict_prompts_to_replace(keymap_bindings_module):
     panel, _model = _bind_panel(prefs)
     section = panel._keymap
     doc = _DocStub(with_conflict_overlay=True)
+    section.ensure_binding_rows()
 
     old_trigger = {"type": "drag", "button": 2, "modifiers": 0}
     state.triggers[(prefs.lf.keymap.ToolMode.GLOBAL, prefs.lf.keymap.Action.CAMERA_ORBIT)] = old_trigger
@@ -616,6 +637,7 @@ def test_keymap_language_change_rebuilds_and_dirties_all(keymap_bindings_module)
     prefs, state = keymap_bindings_module
     panel, _model = _bind_panel(prefs)
     section = panel._keymap
+    section.ensure_binding_rows()
     section._last_profiles = list(state.profiles)
     section._last_lang = "en"
     section._last_current_profile = "Default"

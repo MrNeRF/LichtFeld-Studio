@@ -1592,6 +1592,7 @@ apply_registered_chrome:
 
     void PanelRegistry::set_panel_enabled(const std::string& id, bool enabled) {
         bool changed = false;
+        std::shared_ptr<IPanel> panel_to_notify;
         {
             std::lock_guard lock(mutex_);
             for (auto& p : panels_) {
@@ -1605,6 +1606,7 @@ apply_registered_chrome:
                         break;
 
                     p.enabled = enabled;
+                    panel_to_notify = p.panel;
                     if (enabled && p.space == PanelSpace::Floating) {
                         auto& interaction = ensure_floating_interaction_locked(p);
                         if (const auto requested =
@@ -1648,6 +1650,8 @@ apply_registered_chrome:
 
         if (changed)
             lfs::vis::publish_viewport_toolbar_generation();
+        if (panel_to_notify)
+            panel_to_notify->on_visibility_changed(enabled);
     }
 
     bool PanelRegistry::bring_panel_to_front(const std::string& id) {
@@ -1668,6 +1672,25 @@ apply_registered_chrome:
                 return p.enabled;
         }
         return false;
+    }
+
+    void PanelRegistry::preload_panel(const std::string& id) {
+        std::shared_ptr<IPanel> panel;
+        {
+            std::lock_guard lock(mutex_);
+            const auto found = std::find_if(
+                panels_.begin(), panels_.end(),
+                [&id](const PanelInfo& info) { return info.id == id; });
+            if (found == panels_.end() || found->error_disabled)
+                return;
+            panel = found->panel;
+        }
+
+        if (!panel)
+            return;
+
+        const auto ctx = cachedLayoutDrawContext();
+        panel->preload(ctx);
     }
 
     bool PanelRegistry::apply_floating_resize_cursor() const {

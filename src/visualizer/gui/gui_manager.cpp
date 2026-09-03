@@ -5267,6 +5267,10 @@ namespace lfs::vis::gui {
             if (rml_modal_overlay_)
                 rml_modal_overlay_->preload();
             warmupNativeFileDialogBackend();
+            {
+                LOG_TIMER_THRESHOLD("gui_render.panel_setup.preferences_preload", 2.0);
+                PanelRegistry::instance().preload_panel("lfs.preferences");
+            }
         }
 
         std::optional<::lfs::core::ScopedTimer> cpu_ui_before_vulkan_timer;
