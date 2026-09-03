@@ -13,8 +13,8 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
-#include <optional>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -407,8 +407,33 @@ namespace lfs::core {
         struct LFS_CORE_API TrainingParameters {
             using ResolvedMethodOptionValue =
                 std::variant<bool, std::int64_t, double, std::string>;
-            using ResolvedMethodOptions =
-                std::map<std::string, ResolvedMethodOptionValue>;
+
+            class ResolvedMethodOptions : public std::map<std::string, ResolvedMethodOptionValue> {
+                using Base = std::map<std::string, ResolvedMethodOptionValue>;
+
+            public:
+                using Base::Base;
+                using Base::operator=;
+
+                ResolvedMethodOptions() = default;
+                ResolvedMethodOptions(const ResolvedMethodOptions&) = default;
+                // MSVC's std::map move constructor is not noexcept, even for its default allocator.
+                ResolvedMethodOptions(ResolvedMethodOptions&& other) noexcept
+                    : Base(std::move(other)) {}
+                ResolvedMethodOptions& operator=(const ResolvedMethodOptions&) = default;
+                ResolvedMethodOptions& operator=(ResolvedMethodOptions&& other) noexcept {
+                    Base::operator=(std::move(other));
+                    return *this;
+                }
+
+                void swap(ResolvedMethodOptions& other) noexcept {
+                    Base::swap(other);
+                }
+
+                friend void swap(ResolvedMethodOptions& left, ResolvedMethodOptions& right) noexcept {
+                    left.swap(right);
+                }
+            };
 
             std::string method = "3dgs";
             std::vector<std::pair<std::string, std::string>> method_opts;
