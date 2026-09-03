@@ -147,6 +147,11 @@ namespace lfs::vis::gui {
         constexpr auto kInteractiveIdleToggleMinInterval = std::chrono::milliseconds(750);
         constexpr auto kInteractiveTrainingToggleMinInterval = std::chrono::milliseconds(3000);
 
+        void setCursorIfChanged(SDL_Cursor* const cursor) {
+            if (SDL_GetCursor() != cursor)
+                SDL_SetCursor(cursor);
+        }
+
         [[nodiscard]] std::string formatLodCount(const std::size_t value) {
             constexpr double kThousand = 1'000.0;
             constexpr double kMillion = 1'000'000.0;
@@ -3968,9 +3973,7 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::destroyCustomCursors() {
-        if (pipette_cursor_ || last_selection_cursor_ || selection_ring_cursor_ ||
-            selection_ring_cursor_pending_destroy_)
-            SDL_SetCursor(SDL_GetDefaultCursor());
+        setCursorIfChanged(SDL_GetDefaultCursor());
         last_selection_cursor_ = nullptr;
         if (pipette_cursor_) {
             SDL_DestroyCursor(pipette_cursor_);
@@ -3988,15 +3991,14 @@ namespace lfs::vis::gui {
             SDL_DestroyCursor(selection_intersect_cursor_);
             selection_intersect_cursor_ = nullptr;
         }
-        if (selection_ring_cursor_) {
-            SDL_DestroyCursor(selection_ring_cursor_);
-            selection_ring_cursor_ = nullptr;
-        }
-        if (selection_ring_cursor_pending_destroy_ &&
-            selection_ring_cursor_pending_destroy_ != selection_ring_cursor_) {
-            SDL_DestroyCursor(selection_ring_cursor_pending_destroy_);
-        }
+        SDL_Cursor* const ring_cursor = selection_ring_cursor_;
+        SDL_Cursor* const pending_ring_cursor = selection_ring_cursor_pending_destroy_;
+        selection_ring_cursor_ = nullptr;
         selection_ring_cursor_pending_destroy_ = nullptr;
+        if (ring_cursor)
+            SDL_DestroyCursor(ring_cursor);
+        if (pending_ring_cursor && pending_ring_cursor != ring_cursor)
+            SDL_DestroyCursor(pending_ring_cursor);
         selection_ring_cursor_key_ = {};
         selection_ring_cursor_attempted_ = false;
         selection_ring_theme_signature_valid_ = false;
@@ -4241,16 +4243,12 @@ namespace lfs::vis::gui {
                                       ? viewer_->getWindowManager()->frameInput().serial
                                       : 0;
         if (selection_ring_cursor_cache_.valid &&
-            selection_ring_cursor_cache_.frame_serial == frame_serial &&
-            selection_ring_cursor_cache_.mouse_x == mouse_x &&
-            selection_ring_cursor_cache_.mouse_y == mouse_y) {
+            selection_ring_cursor_cache_.frame_serial == frame_serial) {
             return selection_ring_cursor_cache_.parameters;
         }
 
         selection_ring_cursor_cache_.valid = true;
         selection_ring_cursor_cache_.frame_serial = frame_serial;
-        selection_ring_cursor_cache_.mouse_x = mouse_x;
-        selection_ring_cursor_cache_.mouse_y = mouse_y;
         selection_ring_cursor_cache_.parameters =
             computeSelectionRingCursorParameters(mouse_x, mouse_y);
         return selection_ring_cursor_cache_.parameters;
@@ -4266,8 +4264,11 @@ namespace lfs::vis::gui {
                selectionRingCursorParameters(mouse_x, mouse_y).has_value();
     }
 
-    bool GuiManager::selectionRingCursorWillBeActive(const float mouse_x, const float mouse_y) const {
-        return selection_ring_cursor_ && selectionRingCursorParameters(mouse_x, mouse_y).has_value();
+    bool GuiManager::isHardwareSelectionRingActive() const {
+        if (!selection_ring_cursor_ || !viewer_ || !viewer_->getWindowManager())
+            return false;
+        const auto& input = viewer_->getWindowManager()->frameInput();
+        return selectionRingCursorParameters(input.mouse_x, input.mouse_y).has_value();
     }
 
     void GuiManager::prepareSelectionRingCursor(const float mouse_x, const float mouse_y) {
@@ -4321,10 +4322,13 @@ namespace lfs::vis::gui {
         SDL_Cursor* const cursor = createColorCursorFromAsset(asset, image.hotspot, image.hotspot);
         if (!cursor) {
             if (selection_ring_cursor_ == SDL_GetCursor())
-                SDL_SetCursor(SDL_GetDefaultCursor());
-            if (selection_ring_cursor_)
-                SDL_DestroyCursor(selection_ring_cursor_);
+                setCursorIfChanged(SDL_GetDefaultCursor());
+            SDL_Cursor* const failed_cursor = selection_ring_cursor_;
             selection_ring_cursor_ = nullptr;
+            if (failed_cursor == selection_ring_cursor_pending_destroy_)
+                selection_ring_cursor_pending_destroy_ = nullptr;
+            if (failed_cursor && failed_cursor != selection_ring_cursor_pending_destroy_)
+                SDL_DestroyCursor(failed_cursor);
             last_selection_cursor_ = nullptr;
             return;
         }
@@ -4336,12 +4340,13 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::applyRmlCursorRequest(const RmlCursorRequest req) {
+        SDL_Cursor* cursor = nullptr;
         if (req != RmlCursorRequest::Pipette && pipette_cursor_)
-            SDL_SetCursor(SDL_GetDefaultCursor());
+            cursor = SDL_GetDefaultCursor();
 
         switch (req) {
         case RmlCursorRequest::Arrow:
-            SDL_SetCursor(SDL_GetDefaultCursor());
+            cursor = SDL_GetDefaultCursor();
             break;
         case RmlCursorRequest::TextInput:
         case RmlCursorRequest::Hand:
@@ -4351,15 +4356,16 @@ namespace lfs::vis::gui {
         case RmlCursorRequest::ResizeNESW:
         case RmlCursorRequest::ResizeAll:
         case RmlCursorRequest::NotAllowed:
-            if (SDL_Cursor* cursor = systemCursorForRequest(req))
-                SDL_SetCursor(cursor);
+            cursor = systemCursorForRequest(req);
             break;
         case RmlCursorRequest::Pipette:
-            SDL_SetCursor(pipette_cursor_ ? pipette_cursor_ : SDL_GetDefaultCursor());
+            cursor = pipette_cursor_ ? pipette_cursor_ : SDL_GetDefaultCursor();
             break;
         case RmlCursorRequest::None:
             break;
         }
+        if (cursor)
+            setCursorIfChanged(cursor);
     }
 
     void GuiManager::initMenuBar() {
@@ -6667,13 +6673,13 @@ namespace lfs::vis::gui {
             case CursorRequest::ResizeEW: {
                 static SDL_Cursor* const cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
                 if (cursor)
-                    SDL_SetCursor(cursor);
+                    setCursorIfChanged(cursor);
                 break;
             }
             case CursorRequest::ResizeNS: {
                 static SDL_Cursor* const cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NS_RESIZE);
                 if (cursor)
-                    SDL_SetCursor(cursor);
+                    setCursorIfChanged(cursor);
                 break;
             }
             default: break;
@@ -6978,6 +6984,7 @@ namespace lfs::vis::gui {
             }
         };
 
+        prepareSelectionRingCursor(sdl_input.mouse_x, sdl_input.mouse_y);
         if (overlay_renderer && needs_screen_overlay_frame) {
             const python::ScopedOverlayDrawContext overlay_context(
                 {.renderer = overlay_renderer});
@@ -7072,7 +7079,6 @@ namespace lfs::vis::gui {
             LOG_TIMER_THRESHOLD("gui_render.rml_modal_processInput", 0.25);
             rml_modal_overlay_->processInput(raw_panel_input);
         }
-        prepareSelectionRingCursor(sdl_input.mouse_x, sdl_input.mouse_y);
         const bool window_resize_active =
             viewer_ &&
             viewer_->getWindowManager() &&
@@ -7154,7 +7160,7 @@ namespace lfs::vis::gui {
                         last_selection_cursor_ = nullptr;
                     } else if (wanted_selection_cursor != last_selection_cursor_ ||
                                (wanted_selection_cursor && wanted_selection_cursor != SDL_GetCursor())) {
-                        SDL_SetCursor(wanted_selection_cursor ? wanted_selection_cursor : SDL_GetDefaultCursor());
+                        setCursorIfChanged(wanted_selection_cursor ? wanted_selection_cursor : SDL_GetDefaultCursor());
                         last_selection_cursor_ = wanted_selection_cursor;
                     }
                 }
@@ -7511,9 +7517,7 @@ namespace lfs::vis::gui {
                 return true;
             };
 
-            const bool hardware_selection_ring =
-                rm && s_frame_input &&
-                selectionRingCursorActive(s_frame_input->mouse_x, s_frame_input->mouse_y);
+            const bool hardware_selection_ring = isHardwareSelectionRingActive();
             if (rm && rm->isCursorPreviewActive() && !hardware_selection_ring) {
                 const auto& t = theme();
                 float bx, by, br;

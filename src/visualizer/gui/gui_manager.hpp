@@ -205,7 +205,7 @@ namespace lfs::vis {
             bool isCapturingInput() const;
             bool isModalWindowOpen() const;
             [[nodiscard]] bool selectionRingCursorActive(float mouse_x, float mouse_y) const;
-            [[nodiscard]] bool selectionRingCursorWillBeActive(float mouse_x, float mouse_y) const;
+            [[nodiscard]] bool isHardwareSelectionRingActive() const;
             [[nodiscard]] bool passiveMouseMoveNeedsRender(float mouse_x, float mouse_y) const;
             [[nodiscard]] std::optional<double> secondsUntilTooltipReveal() const;
             [[nodiscard]] bool isStartupVisible() const { return startup_overlay_.isVisible(); }
@@ -302,8 +302,6 @@ namespace lfs::vis {
             struct SelectionRingCursorCache {
                 bool valid = false;
                 std::uint64_t frame_serial = 0;
-                float mouse_x = 0.0f;
-                float mouse_y = 0.0f;
                 std::optional<SelectionRingCursorParameters> parameters;
             };
             struct DevResourceScanResult {

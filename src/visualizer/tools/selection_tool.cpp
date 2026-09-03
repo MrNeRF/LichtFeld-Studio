@@ -336,7 +336,7 @@ namespace lfs::vis::tools {
 
         const bool hardware_ring_active =
             tool_context_->getGuiManager() &&
-            tool_context_->getGuiManager()->selectionRingCursorWillBeActive(mouse_x, mouse_y);
+            tool_context_->getGuiManager()->isHardwareSelectionRingActive();
         if (mode_name && !hardware_ring_active) {
             char label_buf[32];
             std::snprintf(label_buf, sizeof(label_buf), "%s%s", mode_name, op_suffix);
