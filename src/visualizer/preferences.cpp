@@ -45,6 +45,17 @@ namespace lfs::vis {
             return style == "classic" || style == "miner";
         }
 
+        constexpr float kDefaultZoomSpeed = 11.0f;
+        constexpr float kDefaultNavigationSpeed = 8.0f;
+        constexpr float kMinNavigationSpeed = 1.0f;
+        constexpr float kMaxNavigationSpeed = 100.0f;
+
+        [[nodiscard]] float clampNavigationSpeed(const float value, const float fallback) {
+            return std::isfinite(value)
+                       ? std::clamp(value, kMinNavigationSpeed, kMaxNavigationSpeed)
+                       : fallback;
+        }
+
         [[nodiscard]] lfs::Error preferencePathError(
             const lfs::ErrorCode code,
             std::string user_message,
@@ -388,6 +399,34 @@ namespace lfs::vis {
         }
         return 0.0f;
     }
+    void UserPreferences::setZoomSpeed(const float value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["zoom_speed"] = clampNavigationSpeed(value, kDefaultZoomSpeed);
+        impl_->saveLocked();
+    }
+    float UserPreferences::zoomSpeed() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("zoom_speed");
+        if (it != impl_->values.end() && it->is_number())
+            return clampNavigationSpeed(it->get<float>(), kDefaultZoomSpeed);
+        return kDefaultZoomSpeed;
+    }
+    void UserPreferences::setNavigationSpeed(const float value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["navigation_speed"] = clampNavigationSpeed(value, kDefaultNavigationSpeed);
+        impl_->saveLocked();
+    }
+    float UserPreferences::navigationSpeed() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("navigation_speed");
+        if (it != impl_->values.end() && it->is_number())
+            return clampNavigationSpeed(it->get<float>(), kDefaultNavigationSpeed);
+        return kDefaultNavigationSpeed;
+    }
     void UserPreferences::setLanguage(const std::string& value) {
         if (value.empty())
             return;
@@ -586,6 +625,10 @@ namespace lfs::vis {
     void clearLanguagePreference() { UserPreferences::instance().clearLanguage(); }
     void saveCameraNavigationPreference(const std::string& value) { UserPreferences::instance().setCameraNavigation(value); }
     std::string loadCameraNavigationPreference() { return UserPreferences::instance().cameraNavigation(); }
+    void saveZoomSpeedPreference(const float speed) { UserPreferences::instance().setZoomSpeed(speed); }
+    float loadZoomSpeedPreference() { return UserPreferences::instance().zoomSpeed(); }
+    void saveNavigationSpeedPreference(const float speed) { UserPreferences::instance().setNavigationSpeed(speed); }
+    float loadNavigationSpeedPreference() { return UserPreferences::instance().navigationSpeed(); }
     void setRememberCameraNavigationPreference(const bool enabled) { UserPreferences::instance().setRememberCameraNavigation(enabled); }
     bool rememberCameraNavigationPreference() { return UserPreferences::instance().rememberCameraNavigation(); }
     void saveCameraViewSnapPreference(const bool enabled) { UserPreferences::instance().setCameraViewSnap(enabled); }

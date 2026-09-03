@@ -22,6 +22,7 @@
 #include "gui/utils/file_association.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 #include "gui/vulkan_ui_texture.hpp"
+#include "input/input_controller.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
 #include "mcp/mcp_http_server.hpp"
@@ -4983,6 +4984,42 @@ namespace lfs::python {
             "get_ui_scale_preference",
             []() -> float { return vis::loadUiScalePreference(); },
             "Get saved UI scale preference (0.0 = auto)");
+
+        m.def(
+            "set_zoom_speed_preference",
+            [](const float speed) {
+                vis::saveZoomSpeedPreference(speed);
+                const float zoom_speed = vis::loadZoomSpeedPreference();
+                const float navigation_speed = vis::loadNavigationSpeedPreference();
+                invoke_on_viewer([zoom_speed, navigation_speed] {
+                    if (auto* const controller = vis::InputController::instance())
+                        controller->applyNavigationSpeedPreferences(zoom_speed, navigation_speed);
+                });
+            },
+            nb::arg("speed"), "Set the default camera zoom speed (1-100)");
+
+        m.def(
+            "get_zoom_speed_preference",
+            []() -> float { return vis::loadZoomSpeedPreference(); },
+            "Get the default camera zoom speed");
+
+        m.def(
+            "set_navigation_speed_preference",
+            [](const float speed) {
+                vis::saveNavigationSpeedPreference(speed);
+                const float zoom_speed = vis::loadZoomSpeedPreference();
+                const float navigation_speed = vis::loadNavigationSpeedPreference();
+                invoke_on_viewer([zoom_speed, navigation_speed] {
+                    if (auto* const controller = vis::InputController::instance())
+                        controller->applyNavigationSpeedPreferences(zoom_speed, navigation_speed);
+                });
+            },
+            nb::arg("speed"), "Set the default WASD navigation speed (1-100)");
+
+        m.def(
+            "get_navigation_speed_preference",
+            []() -> float { return vis::loadNavigationSpeedPreference(); },
+            "Get the default WASD navigation speed");
 
         m.def(
             "get_scene_reconstruction_options",

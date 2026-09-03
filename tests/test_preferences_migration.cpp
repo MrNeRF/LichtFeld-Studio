@@ -202,3 +202,27 @@ TEST(PreferencesMigration, InvalidProjectLocationIsRejectedWithoutPersisting) {
     EXPECT_FALSE(lfs::vis::setProjectLocationPreference(file));
     EXPECT_EQ(readPreferences(*paths), before);
 }
+
+TEST(PreferencesMigration, CameraSpeedPreferencesPersistAndClamp) {
+    const auto home = makeHome("lfs_preferences_camera_speed");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    EXPECT_FLOAT_EQ(preferences.zoomSpeed(), 11.0f);
+    EXPECT_FLOAT_EQ(preferences.navigationSpeed(), 8.0f);
+
+    preferences.setZoomSpeed(42.0f);
+    preferences.setNavigationSpeed(73.0f);
+    EXPECT_FLOAT_EQ(preferences.zoomSpeed(), 42.0f);
+    EXPECT_FLOAT_EQ(preferences.navigationSpeed(), 73.0f);
+    EXPECT_FLOAT_EQ(readPreferences(*paths).at("zoom_speed"), 42.0f);
+    EXPECT_FLOAT_EQ(readPreferences(*paths).at("navigation_speed"), 73.0f);
+
+    preferences.setZoomSpeed(0.0f);
+    preferences.setNavigationSpeed(101.0f);
+    EXPECT_FLOAT_EQ(preferences.zoomSpeed(), 1.0f);
+    EXPECT_FLOAT_EQ(preferences.navigationSpeed(), 100.0f);
+}
