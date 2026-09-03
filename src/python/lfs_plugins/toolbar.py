@@ -257,6 +257,7 @@ class _GizmoToolbarController:
     _CROP_OBJECT_SHAPES = ("box", "ellipsoid")
     _CROP_TRANSFORM_GIZMOS = ("translate", "rotate", "scale")
     _SELECTION_VOLUME_MODES = {"box", "sphere"}
+    _CAMERA_UNSUPPORTED_SELECTION_MODES = {"centers", "rings", "color", "box", "sphere"}
 
     def __init__(self):
         self.reset()
@@ -446,21 +447,41 @@ class _GizmoToolbarController:
             return [], []
 
         enabled = tool_def.can_activate(context)
-        active_submode = _native_store_value("active_submode", _MISSING)
-        if active_submode is _MISSING:
-            get_active_submode = getattr(lf.ui, "get_active_submode", None)
-            active_submode = get_active_submode() if callable(get_active_submode) else ""
-        active_submode = active_submode or ""
-        if active_tool_id == "builtin.select" and not active_submode:
-            active_submode = tool_def.submodes[0].id
-            set_selection_mode = getattr(lf.ui, "set_selection_mode", None)
-            if callable(set_selection_mode):
-                set_selection_mode(active_submode)
         get_selection_domain = getattr(lf.ui, "get_selection_domain", None)
         try:
             selection_domain = get_selection_domain() if callable(get_selection_domain) else ""
         except Exception:
             selection_domain = ""
+
+        active_submode = _native_store_value("active_submode", _MISSING)
+        if active_submode is _MISSING:
+            get_active_submode = getattr(lf.ui, "get_active_submode", None)
+            active_submode = get_active_submode() if callable(get_active_submode) else ""
+        active_submode = active_submode or ""
+
+        if selection_domain == "cameras":
+            fallback_submode = next(
+                (
+                    mode.id
+                    for mode in tool_def.submodes
+                    if mode.id not in self._CAMERA_UNSUPPORTED_SELECTION_MODES
+                ),
+                "",
+            )
+        else:
+            fallback_submode = tool_def.submodes[0].id
+
+        if active_tool_id == "builtin.select" and (
+            not active_submode
+            or (
+                selection_domain == "cameras"
+                and active_submode in self._CAMERA_UNSUPPORTED_SELECTION_MODES
+            )
+        ):
+            active_submode = fallback_submode
+            set_selection_mode = getattr(lf.ui, "set_selection_mode", None)
+            if active_submode and callable(set_selection_mode):
+                set_selection_mode(active_submode)
 
         mode_buttons = []
         for mode in tool_def.submodes:
@@ -469,7 +490,7 @@ class _GizmoToolbarController:
             if selection_domain == "pointcloud" and mode.id == "rings":
                 mode_enabled = False
                 tooltip_key = "toolbar.ring_selection_pointcloud_unavailable"
-            if selection_domain == "cameras" and mode.id in {"rings", "color", "box", "sphere"}:
+            if selection_domain == "cameras" and mode.id in self._CAMERA_UNSUPPORTED_SELECTION_MODES:
                 mode_enabled = False
                 tooltip_key = "toolbar.submode_camera_unavailable"
             selected = active_tool_id == "builtin.select" and active_submode == mode.id

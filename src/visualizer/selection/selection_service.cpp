@@ -1807,7 +1807,7 @@ namespace lfs::vis {
             return {false, 0, "Ring selection is not supported for point clouds yet"};
         }
         if (domain == SelectionDomain::Cameras) {
-            return {false, 0, "Selection is not supported for cameras yet"};
+            return {false, 0, "Ring selection is not supported for cameras yet"};
         }
 
         const auto filters = defaultFilterState();
@@ -1911,7 +1911,7 @@ namespace lfs::vis {
             return commitPointSelection(mask, mode, filters, "selection.by_color", true);
         }
         if (domain == SelectionDomain::Cameras) {
-            return {false, 0, "Selection is not supported for cameras yet"};
+            return {false, 0, "Color selection is not supported for cameras yet"};
         }
 
         const auto hovered_id = resolveCommandHoveredGaussianId(x, y, camera_index, filters);
