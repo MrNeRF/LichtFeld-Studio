@@ -1355,6 +1355,16 @@ apply_registered_chrome:
         return false;
     }
 
+    void PanelRegistry::cancel_floating_interactions() {
+        std::lock_guard lock(mutex_);
+        for (auto& [id, interaction] : floating_interactions_) {
+            interaction.dragging = false;
+            interaction.resizing = false;
+            interaction.resize_direction_x = 0;
+            interaction.resize_direction_y = 0;
+        }
+    }
+
     bool PanelRegistry::has_panels(PanelSpace space) const {
         std::lock_guard lock(mutex_);
         for (const auto& p : panels_) {

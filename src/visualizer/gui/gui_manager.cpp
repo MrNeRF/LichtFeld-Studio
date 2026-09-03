@@ -5952,6 +5952,8 @@ namespace lfs::vis::gui {
                 (window_flags & SDL_WINDOW_INPUT_FOCUS) == 0) {
                 rmlui_manager_.cancelDragPayload();
             }
+            if (escape_pressed)
+                PanelRegistry::instance().cancel_floating_interactions();
             if (escape_pressed) {
                 auto* console_state = panels::PythonConsoleState::tryGetInstance();
                 auto* editor = console_state ? console_state->getEditor() : nullptr;

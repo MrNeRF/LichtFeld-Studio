@@ -400,6 +400,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] uint64_t registration_revision() const;
         [[nodiscard]] uint64_t visibility_revision() const;
         [[nodiscard]] bool has_active_floating_drag() const;
+        void cancel_floating_interactions();
         bool isPositionOverFloatingPanel(double x, double y) const;
         void set_panel_enabled(const std::string& id, bool enabled);
         bool bring_panel_to_front(const std::string& id);
