@@ -1,0 +1,23 @@
+name: Windows Build Preflight
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-contracts:
+    name: source-contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Test the preflight checker
+        run: python3 -m unittest tests/python/test_windows_build_preflight.py
+
+      - name: Check Windows source contracts
+        run: python3 tools/windows_build_preflight.py --source-only

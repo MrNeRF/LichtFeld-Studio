@@ -138,3 +138,8 @@ Tests remain opt-in, keeping test-only package restore and target generation
 out of the normal application loop without changing any shipped feature. The
 canonical [source build guide](../../building_and_distribution.md#tests)
 documents the test build targets, CTest tiers, and required real-data layout.
+
+Before a complete MSVC build, use the
+[Windows build preflight](windows-build-preflight) to check Windows-specific
+source contracts and replay affected configured C/C++ translation units without
+code generation or linking.
