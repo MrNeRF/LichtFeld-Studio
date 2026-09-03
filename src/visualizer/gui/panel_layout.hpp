@@ -154,14 +154,16 @@ namespace lfs::vis::gui {
         float bottomDockTopY() const { return bottom_dock_top_y_; }
         const std::vector<PanelSummary>& bottomDockTabs() const { return bottom_dock_tabs_; }
         const std::string& getBottomDockActiveTab() const { return bottom_dock_active_tab_id_; }
-        void setBottomDockActiveTab(const std::string& id) { bottom_dock_active_tab_id_ = id; }
+        bool isBottomDockHoveringEdge() const { return bottom_dock_hovering_edge_; }
+        bool isBottomDockResizing() const { return bottom_dock_resizing_; }
+        void setBottomDockActiveTab(const std::string& id);
         bool bottomDockActiveTabChanged() const { return bottom_dock_active_tab_changed_; }
         PanelDrawBounds bottomDockTabBarRect() const { return bottom_dock_tab_bar_rect_; }
         float getLeftDockWidth() const { return left_dock_width_; }
         void setLeftDockWidth(float width);
         bool isLeftDockVisible() const { return left_dock_visible_; }
         bool isShowSequencer() const { return show_sequencer_; }
-        void setShowSequencer(bool v) { show_sequencer_ = v; }
+        void setShowSequencer(bool v);
 
         const std::string& getActiveTab() const { return active_tab_id_; }
         void setActiveTab(const std::string& id) { active_tab_id_ = id; }
@@ -169,6 +171,7 @@ namespace lfs::vis::gui {
                            std::string& focus_panel_name);
 
         static constexpr float SPLITTER_H = 6.0f;
+        static constexpr float DOCK_GRIP_H = 8.0f;
         static constexpr float TAB_BAR_H = 28.0f;
         static constexpr float STATUS_BAR_HEIGHT = 22.0f;
         static constexpr float PANEL_GAP = 2.0f;

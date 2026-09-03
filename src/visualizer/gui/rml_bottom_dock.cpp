@@ -83,6 +83,7 @@ namespace lfs::vis::gui {
             LOG_ERROR("RmlBottomDock: resource not found: {}", e.what());
             return;
         }
+        dock_grip_el_ = document_->GetElementById("dock-grip");
         tab_bar_el_ = document_->GetElementById("tab-bar");
         tab_strip_viewport_el_ = document_->GetElementById("tab-strip-viewport");
         tab_separator_el_ = document_->GetElementById("tab-separator");
@@ -98,6 +99,7 @@ namespace lfs::vis::gui {
             rml_manager_->destroyContext("bottom_dock");
         rml_context_ = nullptr;
         document_ = nullptr;
+        dock_grip_el_ = nullptr;
         tab_bar_el_ = nullptr;
         tab_strip_viewport_el_ = nullptr;
         tab_separator_el_ = nullptr;
@@ -138,6 +140,7 @@ namespace lfs::vis::gui {
             rml_context_->Update();
         }
         document_ = nullptr;
+        dock_grip_el_ = nullptr;
         tab_bar_el_ = nullptr;
         tab_strip_viewport_el_ = nullptr;
         base_rcss_.clear();
@@ -158,9 +161,12 @@ namespace lfs::vis::gui {
             LOG_ERROR("RmlBottomDock: resource not found during reload: {}", e.what());
             return;
         }
+        dock_grip_el_ = document_->GetElementById("dock-grip");
         tab_bar_el_ = document_->GetElementById("tab-bar");
         tab_strip_viewport_el_ = document_->GetElementById("tab-strip-viewport");
         tab_separator_el_ = document_->GetElementById("tab-separator");
+        last_grip_hovered_ = false;
+        last_grip_active_ = false;
         tab_model_.DirtyVariable("tabs");
         tab_model_.DirtyVariable("active_tab");
         tab_model_.DirtyVariable("tabs_overflow");
@@ -276,8 +282,9 @@ namespace lfs::vis::gui {
         prev_mouse_x_ = mx;
         prev_mouse_y_ = my;
         const int mods = sdlModsToRml(input.key_ctrl, input.key_shift, input.key_alt, input.key_super);
-        const float chrome_h = layout.tab_bar_h + layout.separator_h;
-        const bool inside = mx >= 0 && mx < layout.size.x && my >= 0 && my < chrome_h;
+        const float chrome_h = layout.grip_h + layout.tab_bar_h + layout.separator_h;
+        const bool over_grip = mx >= 0 && mx < layout.size.x && my >= 0 && my < layout.grip_h;
+        const bool inside = mx >= 0 && mx < layout.size.x && my >= layout.grip_h && my < chrome_h;
         if (inside) {
             if (moved)
                 rml_context_->ProcessMouseMove(static_cast<int>(mx), static_cast<int>(my), mods);
@@ -316,7 +323,7 @@ namespace lfs::vis::gui {
             blurFocus();
         auto* focused = rml_context_->GetFocusElement();
         wants_keyboard_ = rml_input::hasFocusedKeyboardTarget(focused);
-        wants_input_ = wants_input_ || wants_keyboard_;
+        wants_input_ = wants_input_ || (wants_keyboard_ && !over_grip);
         if (rml_input::wantsTextInput(focused))
             guiFocusState().want_text_input = true;
         if (!moved && !input.mouse_clicked[0] && !input.mouse_released[0] && !input.mouse_wheel &&
@@ -338,17 +345,32 @@ namespace lfs::vis::gui {
                                             static_cast<int>(layout.pos.y - screen_y));
         const bool theme_changed = updateTheme();
         const int w = static_cast<int>(layout.size.x);
-        const int h = static_cast<int>(layout.tab_bar_h + layout.separator_h);
+        const int h = static_cast<int>(layout.grip_h + layout.tab_bar_h + layout.separator_h);
         const bool dims_changed = w != last_fbo_w_ || h != last_fbo_h_;
         const bool tabs_changed = syncTabData(tabs, active_tab);
+        const bool grip_state_changed = layout.grip_hovered != last_grip_hovered_ ||
+                                        layout.grip_active != last_grip_active_;
+        if (grip_state_changed) {
+            if (dock_grip_el_) {
+                dock_grip_el_->SetClass("hover", layout.grip_hovered);
+                dock_grip_el_->SetClass("active", layout.grip_active);
+            }
+            last_grip_hovered_ = layout.grip_hovered;
+            last_grip_active_ = layout.grip_active;
+            render_needed_ = true;
+        }
         const bool needs_render = render_needed_ || input_dirty_ || theme_changed || dims_changed || tabs_changed;
         if (needs_render) {
+            if (dock_grip_el_) {
+                dock_grip_el_->SetProperty("top", "0px");
+                dock_grip_el_->SetProperty("height", std::format("{:.0f}px", layout.grip_h));
+            }
             if (tab_bar_el_) {
-                tab_bar_el_->SetProperty("top", "0px");
+                tab_bar_el_->SetProperty("top", std::format("{:.0f}px", layout.grip_h));
                 tab_bar_el_->SetProperty("height", std::format("{:.0f}px", layout.tab_bar_h));
             }
             if (tab_separator_el_) {
-                tab_separator_el_->SetProperty("top", std::format("{:.0f}px", layout.tab_bar_h));
+                tab_separator_el_->SetProperty("top", std::format("{:.0f}px", layout.grip_h + layout.tab_bar_h));
                 tab_separator_el_->SetProperty("height", std::format("{:.0f}px", layout.separator_h));
             }
             rml_context_->SetDimensions(Rml::Vector2i(w, h));

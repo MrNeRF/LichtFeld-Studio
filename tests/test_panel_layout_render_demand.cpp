@@ -4,6 +4,8 @@
 
 #include <gtest/gtest.h>
 
+#include <python/python_runtime.hpp>
+#include <visualizer/app_store.hpp>
 #include <visualizer/gui/panel_layout.hpp>
 #include <visualizer/gui/panel_registry.hpp>
 
@@ -175,8 +177,14 @@ TEST_F(PanelLayoutRenderDemandTest, BottomDockDrawsOnlyActivePanelAtFullContentH
     EXPECT_EQ(first->draw_count, 1);
     EXPECT_EQ(second->draw_count, 0);
     const auto bar = layout.bottomDockTabBarRect();
+    const float dpi = lfs::python::get_shared_dpi_scale();
+    EXPECT_FLOAT_EQ(bar.y, layout.bottomDockTopY() + PanelLayoutManager::DOCK_GRIP_H * dpi);
     EXPECT_FLOAT_EQ(first->last_draw_y, bar.y + bar.height);
-    EXPECT_FLOAT_EQ(first->last_draw_height, layout.getBottomDockHeight() - bar.height);
+    EXPECT_FLOAT_EQ(first->last_draw_y,
+                    layout.bottomDockTopY() +
+                        (PanelLayoutManager::DOCK_GRIP_H + PanelLayoutManager::TAB_BAR_H + 1.0f) * dpi);
+    EXPECT_FLOAT_EQ(first->last_draw_height,
+                    layout.getBottomDockHeight() - bar.height - PanelLayoutManager::DOCK_GRIP_H * dpi);
 }
 
 TEST_F(PanelLayoutRenderDemandTest, BottomDockEnablingPanelActivatesIt) {
@@ -511,4 +519,26 @@ TEST_F(PanelLayoutRenderDemandTest,
                                             ctx);
     EXPECT_FALSE(panel->pending_update);
     EXPECT_FALSE(PanelRegistry::instance().needsAnimationFrameForVisiblePanels(visibility));
+}
+
+TEST_F(PanelLayoutRenderDemandTest, BottomDockAndSequencerChangesPublishToolbarGeneration) {
+    using namespace lfs::vis::gui;
+
+    PanelLayoutManager layout;
+    auto& generation = lfs::vis::app_store().viewport_toolbar_generation;
+    const auto initial = generation.get();
+
+    layout.setBottomDockActiveTab("test.bottom.first");
+    EXPECT_EQ(generation.get(), initial + 1);
+    layout.setBottomDockActiveTab("test.bottom.first");
+    EXPECT_EQ(generation.get(), initial + 1);
+    layout.setBottomDockActiveTab("test.bottom.second");
+    EXPECT_EQ(generation.get(), initial + 2);
+
+    layout.setShowSequencer(true);
+    EXPECT_EQ(generation.get(), initial + 3);
+    layout.setShowSequencer(true);
+    EXPECT_EQ(generation.get(), initial + 3);
+    layout.setShowSequencer(false);
+    EXPECT_EQ(generation.get(), initial + 4);
 }

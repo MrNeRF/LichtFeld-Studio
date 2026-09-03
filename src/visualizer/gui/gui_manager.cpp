@@ -6513,6 +6513,7 @@ namespace lfs::vis::gui {
         const float bottom_dock_edge_grab_h =
             std::max(PanelLayoutManager::SPLITTER_H * current_ui_scale_,
                      8.0f * current_ui_scale_);
+        const float bottom_dock_grip_h = PanelLayoutManager::DOCK_GRIP_H * current_ui_scale_;
         const bool pointer_over_bottom_dock =
             panel_layout_.isBottomDockVisible() &&
             pointInRect(panel_input.mouse_x, panel_input.mouse_y,
@@ -6523,7 +6524,7 @@ namespace lfs::vis::gui {
             panel_input.mouse_x >= bottom_dock_x &&
             panel_input.mouse_x < bottom_dock_x + bottom_dock_w &&
             panel_input.mouse_y >= bottom_dock_y - bottom_dock_edge_grab_h &&
-            panel_input.mouse_y <= bottom_dock_y + bottom_dock_edge_grab_h;
+            panel_input.mouse_y <= bottom_dock_y + bottom_dock_grip_h + 4.0f * current_ui_scale_;
         const bool pointer_targets_bottom_dock =
             pointer_over_bottom_dock || pointer_over_bottom_dock_edge;
         if (pointer_targets_bottom_dock &&
@@ -6544,6 +6545,7 @@ namespace lfs::vis::gui {
             BottomDockLayout bottom_dock_rml_layout;
             bottom_dock_rml_layout.pos = {bottom_dock_x, bottom_dock_y};
             bottom_dock_rml_layout.size = {bottom_dock_w, bottom_dock_h};
+            bottom_dock_rml_layout.grip_h = bottom_dock_grip_h;
             bottom_dock_rml_layout.tab_bar_h = PanelLayoutManager::TAB_BAR_H * current_ui_scale_;
             bottom_dock_rml_layout.separator_h = current_ui_scale_;
             rml_bottom_dock_.processInput(bottom_dock_rml_layout, panel_input);
@@ -6582,8 +6584,11 @@ namespace lfs::vis::gui {
             BottomDockLayout bottom_dock_rml_layout;
             bottom_dock_rml_layout.pos = {bottom_dock_x, bottom_dock_y};
             bottom_dock_rml_layout.size = {bottom_dock_w, bottom_dock_h};
+            bottom_dock_rml_layout.grip_h = bottom_dock_grip_h;
             bottom_dock_rml_layout.tab_bar_h = PanelLayoutManager::TAB_BAR_H * current_ui_scale_;
             bottom_dock_rml_layout.separator_h = current_ui_scale_;
+            bottom_dock_rml_layout.grip_hovered = panel_layout_.isBottomDockHoveringEdge();
+            bottom_dock_rml_layout.grip_active = panel_layout_.isBottomDockResizing();
             rml_bottom_dock_.render(bottom_dock_rml_layout, bottom_dock_tab_snaps,
                                     panel_layout_.getBottomDockActiveTab(),
                                     panel_input.screen_x, panel_input.screen_y,
