@@ -33,3 +33,13 @@ body {
 #splitter:hover {
     cursor: resize-vertical;
 }
+
+/* The shared panel_tabs stylesheet owns the common geometry. These right-panel
+   overrides preserve the immediate selection feedback required by its cached
+   context and leave the new bottom dock's transition behavior untouched. */
+.tab {
+    box-sizing: border-box;
+    border-width: 1dp;
+    border-bottom-width: 2dp;
+    transition: none;
+}

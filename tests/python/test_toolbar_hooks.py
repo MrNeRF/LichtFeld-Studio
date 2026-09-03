@@ -1561,8 +1561,8 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     gizmo_button_start = rcss.index(".viewport-gizmo-controls .icon-btn {")
     gizmo_button_end = rcss.index(".viewport-gizmo-controls .icon-btn:hover")
     gizmo_button_rcss = rcss[gizmo_button_start:gizmo_button_end]
-    assert "width: 30dp;\n    height: 30dp;\n    min-width: 30dp;\n    min-height: 30dp;" in gizmo_button_rcss
-    assert ".viewport-gizmo-controls .icon-btn img {\n    width: 20dp;\n    height: 20dp;" in rcss
+    assert "width: 27dp;\n    height: 27dp;\n    min-width: 27dp;\n    min-height: 27dp;" in gizmo_button_rcss
+    assert ".viewport-gizmo-controls .icon-btn img {\n    width: 18dp;\n    height: 18dp;" in rcss
     assert "viewport-nav-toolbar" not in rcss
     assert "viewport-nav-row" not in rcss
     assert "viewport-nav-separator" not in rcss
@@ -1590,6 +1590,296 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     panel_start = rml.index('class="viewport-transform-panel viewport-export-panel"')
     panel_end = rml.index('<span id="viewport-export-status"')
     assert "viewport-export-status" not in rml[panel_start:panel_end]
+
+
+def test_viewport_toolbar_uses_theme_glass_without_backdrop_filter():
+    project_root = Path(__file__).parent.parent.parent
+    resources = project_root / "src/visualizer/gui/rmlui/resources"
+    rcss = (resources / "viewport_overlay.rcss").read_text(encoding="utf-8")
+    theme_rcss = (resources / "viewport_overlay.theme.rcss").read_text(
+        encoding="utf-8"
+    )
+    resolver = (
+        project_root / "src/visualizer/gui/rmlui/rml_theme.cpp"
+    ).read_text(encoding="utf-8")
+    viewport_overlay = (
+        project_root / "src/visualizer/gui/rml_viewport_overlay.cpp"
+    ).read_text(encoding="utf-8")
+
+    toolbar_start = rcss.index(".toolbar-vertical {")
+    toolbar_end = rcss.index("\n}", toolbar_start)
+    toolbar_rule = rcss[toolbar_start:toolbar_end]
+    for declaration in (
+        "position: relative;",
+        "width: 38dp;",
+        "height: auto;",
+        "max-height: 90%;",
+        "padding: 5dp 3dp;",
+    ):
+        assert declaration in toolbar_rule
+    assert "bottom:" not in toolbar_rule
+    assert "top:" not in toolbar_rule
+    assert "transform:" not in toolbar_rule
+
+    toolbar_root_start = rcss.index(".panel-toolbar-root {")
+    toolbar_root_end = rcss.index("\n}", toolbar_root_start)
+    toolbar_root_rule = rcss[toolbar_root_start:toolbar_root_end]
+    assert "display: flex;" in toolbar_root_rule
+    assert "align-items: center;" in toolbar_root_rule
+    assert "#secondary-utility-toolbar" not in rcss
+    assert "left: -20dp;" not in rcss
+
+    selection_panel_start = rcss.index("#selection-block .viewport-selection-panel {")
+    selection_panel_end = rcss.index("\n}", selection_panel_start)
+    selection_panel_rule = rcss[selection_panel_start:selection_panel_end]
+    assert "width: 65%;" in selection_panel_rule
+    assert "max-width: 1500dp;" in selection_panel_rule
+    assert "instead of collapsing to the icon row" in selection_panel_rule
+
+    for token in (
+        "viewport.toolbar_glass_decor",
+        "viewport.toolbar_border",
+        "viewport.toolbar_shadow",
+        "viewport.toolbar_text",
+        "viewport.toolbar_selected_decor",
+        "viewport.toolbar_selected_icon",
+        "viewport.gizmo_decor",
+        "viewport.gizmo_hover_decor",
+        "viewport.gizmo_selected_decor",
+        "viewport.gizmo_selected_hover_decor",
+    ):
+        assert f"@{{{token}}}" in theme_rcss
+        assert f'{{"{token}"' in resolver
+
+    centered_toolbar_start = theme_rcss.index(".toolbar-hcenter .toolbar-container {")
+    centered_toolbar_end = theme_rcss.index("\n}", centered_toolbar_start)
+    centered_toolbar_rule = theme_rcss[centered_toolbar_start:centered_toolbar_end]
+    assert "@{viewport.toolbar_glass_decor};" in centered_toolbar_rule
+    assert "border-color: @{viewport.toolbar_border};" in centered_toolbar_rule
+    assert "box-shadow: @{viewport.toolbar_shadow};" in centered_toolbar_rule
+
+    tool_panel_start = theme_rcss.index(".viewport-transform-panel {")
+    tool_panel_end = theme_rcss.index("\n}", tool_panel_start)
+    tool_panel_rule = theme_rcss[tool_panel_start:tool_panel_end]
+    assert "@{viewport.toolbar_glass_decor};" in tool_panel_rule
+    assert "color: @{viewport.toolbar_text};" in tool_panel_rule
+    assert "border-color: @{viewport.toolbar_border};" in tool_panel_rule
+    assert "box-shadow: @{viewport.toolbar_shadow};" in tool_panel_rule
+
+    centered_selected_start = theme_rcss.index(".toolbar-hcenter .icon-btn.selected {")
+    centered_selected_end = theme_rcss.index("\n}", centered_selected_start)
+    centered_selected_rule = theme_rcss[centered_selected_start:centered_selected_end]
+    assert "@{viewport.toolbar_selected_decor};" in centered_selected_rule
+    assert ".toolbar-hcenter .icon-btn.selected img" in theme_rcss
+    assert ".viewport-transform-panel .icon-btn.selected img" in theme_rcss
+
+    assert "backdrop-filter" not in theme_rcss
+    assert "filter:" not in theme_rcss
+    assert "effectiveViewportChromeStyle()" in resolver
+    assert "setFrostedGlassAvailable(rendered)" in viewport_overlay
+    assert "markRenderNeeded(RenderReason::ThemePresentation)" in viewport_overlay
+
+    for unused_token in (
+        "layered_shadow.1",
+        "panel.body_bg",
+        "panel.body_bg_or_transparent",
+    ):
+        assert f'{{"{unused_token}"' not in resolver
+
+
+def test_viewport_toolbar_position_modes_keep_drag_explicit_and_persisted():
+    project_root = Path(__file__).parent.parent.parent
+    resources = project_root / "src/visualizer/gui/rmlui/resources"
+    rml = (resources / "viewport_overlay.rml").read_text(encoding="utf-8")
+    rcss = (resources / "viewport_overlay.rcss").read_text(encoding="utf-8")
+    overlay = (
+        project_root / "src/visualizer/gui/rml_viewport_overlay.cpp"
+    ).read_text(encoding="utf-8")
+    preferences = (project_root / "src/visualizer/preferences.cpp").read_text(
+        encoding="utf-8"
+    )
+
+    assert rml.count('class="toolbar-drag-handle"') == 2
+    assert rml.count('title="@tr:preferences.viewport_toolbar_drag"') == 2
+    assert ".panel-toolbar-root.toolbar-position-top" in rcss
+    assert ".panel-toolbar-root.toolbar-position-free" in rcss
+    assert ".toolbar-position-free .toolbar-drag-handle" in rcss
+    assert "drag: drag;" in rcss
+    assert 'SetClass("toolbar-position-centered"' in overlay
+    assert "toolbarFreeTravel" in overlay
+    assert "saveViewportToolbarFreeYPreference(viewport_toolbar_free_y_)" in overlay
+    assert 'position == "top" || position == "centered" || position == "free"' in preferences
+
+
+def test_python_theme_mutations_are_marshaled_to_viewer_thread():
+    project_root = Path(__file__).parent.parent.parent
+    py_ui = (project_root / "src/python/lfs/py_ui.cpp").read_text(encoding="utf-8")
+    py_ui_theme = (
+        project_root / "src/python/lfs/py_ui_theme.cpp"
+    ).read_text(encoding="utf-8")
+    ui_stub = (
+        project_root / "src/python/stubs/lichtfeld/ui/__init__.pyi"
+    ).read_text(encoding="utf-8")
+
+    for source in (py_ui, py_ui_theme):
+        assert "viewer->isOnViewerThread()" in source
+        assert "nb::gil_scoped_release release;" in source
+        assert "vis::post_work_and_wait(" in source
+
+    for source, binding, helper in (
+        (py_ui, "set_theme", "invoke_on_viewer("),
+        (py_ui, "set_theme_family", "invoke_on_viewer("),
+        (py_ui_theme, "set_viewport_chrome_style", "invoke_on_viewer_thread("),
+        (py_ui_theme, "set_viewport_toolbar_position", "invoke_on_viewer_thread("),
+    ):
+        start = source.index(f'"{binding}",')
+        end = source.index("nb::arg", start)
+        assert helper in source[start:end]
+
+    assert "def get_viewport_chrome_style() -> str:" in ui_stub
+    assert "def set_viewport_chrome_style(style: str) -> None:" in ui_stub
+    assert "def get_viewport_toolbar_position() -> str:" in ui_stub
+    assert "def set_viewport_toolbar_position(position: str) -> None:" in ui_stub
+
+
+def test_empty_viewport_rejects_independent_split_activation_and_hides_orphan_ui():
+    project_root = Path(__file__).parent.parent.parent
+    input_header = (
+        project_root / "src/visualizer/input/input_controller.hpp"
+    ).read_text(encoding="utf-8")
+    input_source = (
+        project_root / "src/visualizer/input/input_controller.cpp"
+    ).read_text(encoding="utf-8")
+    gui_manager = (
+        project_root / "src/visualizer/gui/gui_manager.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert "void toggleIndependentSplitView();" in input_header
+
+    toggle_start = input_source.index(
+        "void InputController::toggleIndependentSplitView()"
+    )
+    toggle_end = input_source.index(
+        "SplitViewPanelId InputController::splitPanelForScreenX", toggle_start
+    )
+    toggle_block = input_source[toggle_start:toggle_end]
+
+    assert "if (!isIndependentSplitViewActive())" in toggle_block
+    assert "services().sceneOrNull()" in toggle_block
+    assert "!scene_manager || scene_manager->isEmpty()" in toggle_block
+    assert "ToggleIndependentSplitView{.viewport = &viewport_}.emit();" in toggle_block
+
+    key_action_start = input_source.index(
+        "case input::Action::TOGGLE_INDEPENDENT_SPLIT_VIEW:"
+    )
+    key_action_end = input_source.index("return;", key_action_start)
+    key_action_block = input_source[key_action_start:key_action_end]
+    assert "toggleIndependentSplitView();" in key_action_block
+    assert "ToggleIndependentSplitView" not in key_action_block
+
+    toolbar_start = gui_manager.index("bool show_secondary_toolbar = false;")
+    toolbar_end = gui_manager.index(
+        "rml_viewport_overlay_.setToolbarPanels(", toolbar_start
+    )
+    toolbar_block = gui_manager[toolbar_start:toolbar_end]
+
+    assert "rendering->isIndependentSplitViewActive() && !editor_ctx.isEmpty()" in toolbar_block
+    assert "show_secondary_toolbar = secondary_panel->valid();" in toolbar_block
+
+    divider_start = gui_manager.index(
+        "RmlViewportOverlay::SplitDividerOverlayState split_divider_state;"
+    )
+    divider_end = gui_manager.index(
+        "rml_viewport_overlay_.setSplitDividerOverlay(split_divider_state);",
+        divider_start,
+    )
+    divider_block = gui_manager[divider_start:divider_end]
+
+    assert (
+        "rendering && rendering->isSplitViewActive() && "
+        "!rendering->isIndependentSplitViewActive())"
+        in divider_block
+    )
+    assert "rendering->getSplitDividerScreenX" in divider_block
+    assert "rendering->getContentBounds" in divider_block
+
+
+def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
+    project_root = Path(__file__).parent.parent.parent
+    resources = project_root / "src/visualizer/gui/rmlui/resources"
+    right_panel_rcss = (resources / "right_panel.rcss").read_text(encoding="utf-8")
+    panel_tabs_theme = (resources / "panel_tabs.theme.rcss").read_text(
+        encoding="utf-8"
+    )
+    right_panel_theme = (resources / "right_panel.theme.rcss").read_text(encoding="utf-8")
+    right_panel_rml = (resources / "right_panel.rml").read_text(encoding="utf-8")
+    right_panel_cpp = (
+        project_root / "src/visualizer/gui/rml_right_panel.cpp"
+    ).read_text(encoding="utf-8")
+    shell_theme = (resources / "shell.theme.rcss").read_text(encoding="utf-8")
+    panel_host_theme = (resources / "panel_host.theme.rcss").read_text(encoding="utf-8")
+    scene_tree_rcss = (resources / "scene_tree.rcss").read_text(encoding="utf-8")
+    scene_tree_theme = (resources / "scene_tree.theme.rcss").read_text(encoding="utf-8")
+    resolver = (
+        project_root / "src/visualizer/gui/rmlui/rml_theme.cpp"
+    ).read_text(encoding="utf-8")
+
+    tab_start = right_panel_rcss.index(".tab {")
+    tab_end = right_panel_rcss.index("\n}", tab_start)
+    tab_rule = right_panel_rcss[tab_start:tab_end]
+    assert "box-sizing: border-box;" in tab_rule
+    assert "border-width: 1dp;" in tab_rule
+    assert "border-bottom-width: 2dp;" in tab_rule
+    assert "transition: none;" in tab_rule
+    assert "0.15s" not in tab_rule
+
+    assert right_panel_rml.index('href="panel_tabs.rcss"') < right_panel_rml.index(
+        'href="right_panel.rcss"'
+    )
+    assert right_panel_cpp.index('loadBaseRCSS("rmlui/panel_tabs.rcss")') < (
+        right_panel_cpp.index('loadBaseRCSS("rmlui/right_panel.rcss")')
+    )
+
+    for token in (
+        "right_panel.tab_border",
+        "right_panel.tab_bottom_border",
+        "right_panel.tab_active_border",
+        "right_panel.tab_active_bottom_border",
+    ):
+        assert f"@{{{token}}}" in right_panel_theme
+        assert f'"{token}"' in resolver
+
+    for shared_token in (
+        "right_panel.tab_active_bg",
+        "right_panel.separator",
+    ):
+        assert f"@{{{shared_token}}}" in panel_tabs_theme
+        assert f'{{"{shared_token}"' in resolver
+
+    hover_start = right_panel_theme.index(".tab:hover {")
+    hover_end = right_panel_theme.index("\n}", hover_start)
+    hover_rule = right_panel_theme[hover_start:hover_end]
+    assert "border-color:" not in hover_rule
+    assert "border-bottom-color:" not in hover_rule
+
+    active_start = right_panel_theme.index(".tab.active {")
+    active_end = right_panel_theme.index("\n}", active_start)
+    active_rule = right_panel_theme[active_start:active_end]
+    assert "border-bottom-color: @{right_panel.tab_active_bottom_border};" in active_rule
+
+    assert "@{panel.body_decor};" in shell_theme
+    assert "@{chrome.right_panel_decor};" in right_panel_theme
+    assert "@{panel.host_body_decor};" in panel_host_theme
+    assert '{"panel.host_body_decor"' in resolver
+
+    scene_body_start = scene_tree_rcss.index("body {")
+    scene_body_end = scene_tree_rcss.index("\n}", scene_body_start)
+    scene_body_rule = scene_tree_rcss[scene_body_start:scene_body_end]
+    assert "box-sizing: border-box;" in scene_body_rule
+    assert "border-width: 1dp;" in scene_body_rule
+    assert "border-radius: 5dp;" in scene_body_rule
+    assert "overflow: hidden;" in scene_body_rule
+    assert "border-color: @{right_panel.border};" in scene_tree_theme
 
 
 def test_gt_compare_modes_show_matching_color_legends():

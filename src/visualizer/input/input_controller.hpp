@@ -88,10 +88,7 @@ namespace lfs::vis {
         void releaseDepthWindowCursor();
         bool applyDepthWindowHoverCursor(double x, double y, bool modifiers_held);
 
-        void toggleIndependentSplitView() {
-            lfs::core::events::cmd::ToggleIndependentSplitView{.viewport = &viewport_}.emit();
-            focusSplitPanel(SplitViewPanelId::Left);
-        }
+        void toggleIndependentSplitView();
 
         // Set special input modes
         void setPointCloudMode(bool enabled) {
