@@ -262,7 +262,9 @@ TEST(ImageIoTest, LoadsEmbeddedExifThumbnailAndReportsFastPath) {
     bool used_exif = false;
     auto [decoded, width, height, channels] =
         lfs::core::load_image_thumbnail(primary_path, thumbnail_width, &used_exif);
-    const auto expected = decode_jpeg_pixels(encoded_thumbnail, width, height);
+    int reference_width = 0;
+    int reference_height = 0;
+    const auto expected = decode_jpeg_pixels(encoded_thumbnail, reference_width, reference_height);
     std::error_code ec;
     std::filesystem::remove(thumbnail_path, ec);
     std::filesystem::remove(primary_path, ec);
@@ -271,6 +273,8 @@ TEST(ImageIoTest, LoadsEmbeddedExifThumbnailAndReportsFastPath) {
     ASSERT_NE(decoded, nullptr);
     ASSERT_EQ(width, thumbnail_width);
     ASSERT_EQ(height, thumbnail_height);
+    ASSERT_EQ(reference_width, thumbnail_width);
+    ASSERT_EQ(reference_height, thumbnail_height);
     ASSERT_EQ(channels, 3);
     EXPECT_TRUE(std::equal(decoded, decoded + expected.size(), expected.begin()));
     lfs::core::free_image(decoded);

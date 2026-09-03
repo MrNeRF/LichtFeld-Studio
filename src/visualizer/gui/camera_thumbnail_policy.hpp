@@ -4,11 +4,27 @@
 
 #pragma once
 
+#include <algorithm>
+#include <cstddef>
+#include <optional>
 #include <span>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace lfs::vis::gui {
+
+    [[nodiscard]] inline std::optional<std::pair<std::size_t, std::size_t>>
+    cameraThumbnailVisibleRowRange(const std::size_t a,
+                                   const std::size_t b,
+                                   const std::size_t row_count) noexcept {
+        const auto [lower, upper] = std::minmax(a, b);
+        const std::size_t start = std::min(lower, row_count);
+        const std::size_t end = std::min(upper, row_count);
+        if (a > b || start >= end)
+            return std::nullopt;
+        return std::pair{start, end};
+    }
 
     // The viewport overlay supplies all cameras under effectively visible
     // camera groups. Selected cameras and overscanned scene-graph rows only

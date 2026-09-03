@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rmlui/elements/scene_graph_element.hpp"
+#include "gui/camera_thumbnail_policy.hpp"
 #include "gui/scene_tree_session.hpp"
 
 #include "core/event_bridge/localization_manager.hpp"
@@ -492,9 +493,13 @@ namespace lfs::vis::gui {
             last_visible_end_ == kUnsetVisibleRange) {
             return result;
         }
-        result.reserve(last_visible_end_ - last_visible_start_);
-        const size_t end = std::min(last_visible_end_, flat_rows_.size());
-        for (size_t i = std::min(last_visible_start_, end); i < end; ++i) {
+        const auto visible_range = cameraThumbnailVisibleRowRange(
+            last_visible_start_, last_visible_end_, flat_rows_.size());
+        if (!visible_range)
+            return result;
+        const auto [start, end] = *visible_range;
+        result.reserve(end - start);
+        for (size_t i = start; i < end; ++i) {
             const auto snapshot_it = node_snapshots_.find(flat_rows_[i].id);
             if (snapshot_it != node_snapshots_.end() &&
                 snapshot_it->second.type == core::NodeType::CAMERA &&
