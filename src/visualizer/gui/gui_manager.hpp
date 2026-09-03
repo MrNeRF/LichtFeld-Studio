@@ -273,6 +273,8 @@ namespace lfs::vis {
             void initCustomCursors();
             void destroyCustomCursors();
             void applyRmlCursorRequest(RmlCursorRequest req);
+            void updateFloatingPanelCursorVisibility();
+            void renderFloatingPanelDragCursor();
             void prepareSelectionRingCursor(float mouse_x, float mouse_y);
 
             struct SelectionRingCursorKey {
@@ -466,6 +468,7 @@ namespace lfs::vis {
             std::vector<uint8_t> selection_intersect_badge_pixels_;
             int selection_badge_width_ = 0;
             int selection_badge_height_ = 0;
+            bool floating_panel_cursor_hidden_ = false;
 
             // Native panel wrapper storage (registered with PanelRegistry)
             std::vector<std::shared_ptr<IPanel>> native_panel_storage_;

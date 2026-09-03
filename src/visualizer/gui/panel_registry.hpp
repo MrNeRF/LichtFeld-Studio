@@ -393,6 +393,7 @@ namespace lfs::vis::gui {
             const std::unordered_map<std::string, std::string>& payloads);
         [[nodiscard]] uint64_t registration_revision() const;
         [[nodiscard]] uint64_t visibility_revision() const;
+        [[nodiscard]] bool has_active_floating_drag() const;
         bool isPositionOverFloatingPanel(double x, double y) const;
         void set_panel_enabled(const std::string& id, bool enabled);
         bool bring_panel_to_front(const std::string& id);
