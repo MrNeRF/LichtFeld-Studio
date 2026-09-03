@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "rendering/rendering_types.hpp"
 #include <cstdint>
 #include <span>
@@ -48,11 +49,11 @@ namespace lfs::vis::gui {
         return 256;
     }
 
-    [[nodiscard]] bool useHardwareSelectionRing(bool preview_active,
-                                                SelectionPreviewMode mode,
-                                                int radius_px);
+    [[nodiscard]] LFS_VIS_API bool useHardwareSelectionRing(bool preview_active,
+                                                            SelectionPreviewMode mode,
+                                                            int radius_px);
 
-    [[nodiscard]] SelectionCursorImage makeSelectionCursorImage(
+    [[nodiscard]] LFS_VIS_API SelectionCursorImage makeSelectionCursorImage(
         int radius_px,
         SelectionCursorColor color,
         std::span<const uint8_t> badge_rgba = {},
