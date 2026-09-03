@@ -21,93 +21,93 @@
                 <span class="toolbar-drag-line"></span>
             </div>
             <div class="rail-columns">
-            <div id="primary-rail-tools" class="rail-group rail-group--tools">
-            <div class="icon-btn"
-                 data-for="button : selection_group_buttons"
-                 data-class-selected="button.selected"
-                 data-attr-id="button.button_id"
-                 data-attr-data-action="button.action_id"
-                 data-attr-data-shortcut="button.shortcut_text"
-                 data-attr-title="button.tooltip_text"
-                 data-attrif-disabled="!button.enabled"
-                 data-class-disabled="!button.enabled"
-                 data-event-click="toolbar_action(button.action, button.value)">
-                <img data-attr-src="button.icon_src" />
-            </div>
-            <div class="icon-btn"
-                 data-for="button : transform_group_buttons"
-                 data-class-selected="button.selected"
-                 data-attr-id="button.button_id"
-                 data-attr-data-action="button.action_id"
-                 data-attr-data-shortcut="button.shortcut_text"
-                 data-attr-title="button.tooltip_text"
-                 data-attrif-disabled="!button.enabled"
-                 data-class-disabled="!button.enabled"
-                 data-event-click="toolbar_action(button.action, button.value)">
-                <img data-attr-src="button.icon_src" />
-            </div>
-            <div class="icon-btn"
-                 data-for="button : mirror_group_buttons"
-                 data-class-selected="button.selected"
-                 data-attr-id="button.button_id"
-                 data-attr-data-action="button.action_id"
-                 data-attr-data-shortcut="button.shortcut_text"
-                 data-attr-title="button.tooltip_text"
-                 data-attrif-disabled="!button.enabled"
-                 data-class-disabled="!button.enabled"
-                 data-event-click="toolbar_action(button.action, button.value)">
-                <img data-attr-src="button.icon_src" />
-            </div>
-            <div class="icon-btn"
-                 data-for="button : crop_group_buttons"
-                 data-class-selected="button.selected"
-                 data-attr-id="button.button_id"
-                 data-attr-data-action="button.action_id"
-                 data-attr-data-shortcut="button.shortcut_text"
-                 data-attr-title="button.tooltip_text"
-                 data-attrif-disabled="!button.enabled"
-                 data-class-disabled="!button.enabled"
-                 data-event-click="toolbar_action(button.action, button.value)">
-                <img data-attr-src="button.icon_src" />
-            </div>
-            <div class="icon-btn"
-                 data-for="button : gizmo_buttons"
-                 data-attr-id="button.button_id"
-                 data-class-selected="button.selected"
-                 data-attr-data-action="button.action_id"
-                 data-attr-data-shortcut="button.shortcut_text"
-                 data-attr-title="button.tooltip_text"
-                 data-attrif-disabled="!button.enabled"
-                 data-class-disabled="!button.enabled"
-                 data-event-click="toolbar_action(button.action, button.value)">
-                <img data-attr-src="button.icon_src" />
-            </div>
-            </div>
-            <div class="toolbar-separator"></div>
-            <div id="primary-rail-panels" class="rail-group rail-group--panels">
-            <div class="icon-btn"
-                 data-for="button : utility_extra_buttons"
-                 data-attr-id="button.button_id"
-                 data-class-selected="button.selected"
-                 data-attr-data-action="button.action_id"
-                 data-attr-title="button.tooltip_text"
-                 data-attrif-disabled="!button.enabled"
-                 data-class-disabled="!button.enabled"
-                 data-event-click="toolbar_action(button.action, button.value)">
-                <img data-attr-src="button.icon_src" />
-            </div>
-            <div class="icon-btn"
-                 data-for="button : utility_bottom_buttons"
-                 data-attr-id="button.button_id"
-                 data-class-selected="button.selected"
-                 data-attr-data-action="button.action_id"
-                 data-attr-title="button.tooltip_text"
-                 data-attrif-disabled="!button.enabled"
-                 data-class-disabled="!button.enabled"
-                 data-event-click="toolbar_action(button.action, button.value)">
-                <img data-attr-src="button.icon_src" />
-            </div>
-            </div>
+                <div id="primary-rail-tools" class="rail-group rail-group--tools">
+                    <div class="icon-btn"
+                         data-for="button : selection_group_buttons"
+                         data-class-selected="button.selected"
+                         data-attr-id="button.button_id"
+                         data-attr-data-action="button.action_id"
+                         data-attr-data-shortcut="button.shortcut_text"
+                         data-attr-title="button.tooltip_text"
+                         data-attrif-disabled="!button.enabled"
+                         data-class-disabled="!button.enabled"
+                         data-event-click="toolbar_action(button.action, button.value)">
+                        <img data-attr-src="button.icon_src" />
+                    </div>
+                    <div class="icon-btn"
+                         data-for="button : transform_group_buttons"
+                         data-class-selected="button.selected"
+                         data-attr-id="button.button_id"
+                         data-attr-data-action="button.action_id"
+                         data-attr-data-shortcut="button.shortcut_text"
+                         data-attr-title="button.tooltip_text"
+                         data-attrif-disabled="!button.enabled"
+                         data-class-disabled="!button.enabled"
+                         data-event-click="toolbar_action(button.action, button.value)">
+                        <img data-attr-src="button.icon_src" />
+                    </div>
+                    <div class="icon-btn"
+                         data-for="button : mirror_group_buttons"
+                         data-class-selected="button.selected"
+                         data-attr-id="button.button_id"
+                         data-attr-data-action="button.action_id"
+                         data-attr-data-shortcut="button.shortcut_text"
+                         data-attr-title="button.tooltip_text"
+                         data-attrif-disabled="!button.enabled"
+                         data-class-disabled="!button.enabled"
+                         data-event-click="toolbar_action(button.action, button.value)">
+                        <img data-attr-src="button.icon_src" />
+                    </div>
+                    <div class="icon-btn"
+                         data-for="button : crop_group_buttons"
+                         data-class-selected="button.selected"
+                         data-attr-id="button.button_id"
+                         data-attr-data-action="button.action_id"
+                         data-attr-data-shortcut="button.shortcut_text"
+                         data-attr-title="button.tooltip_text"
+                         data-attrif-disabled="!button.enabled"
+                         data-class-disabled="!button.enabled"
+                         data-event-click="toolbar_action(button.action, button.value)">
+                        <img data-attr-src="button.icon_src" />
+                    </div>
+                    <div class="icon-btn"
+                         data-for="button : gizmo_buttons"
+                         data-attr-id="button.button_id"
+                         data-class-selected="button.selected"
+                         data-attr-data-action="button.action_id"
+                         data-attr-data-shortcut="button.shortcut_text"
+                         data-attr-title="button.tooltip_text"
+                         data-attrif-disabled="!button.enabled"
+                         data-class-disabled="!button.enabled"
+                         data-event-click="toolbar_action(button.action, button.value)">
+                        <img data-attr-src="button.icon_src" />
+                    </div>
+                </div>
+                <div class="toolbar-separator"></div>
+                <div id="primary-rail-panels" class="rail-group rail-group--panels">
+                    <div class="icon-btn"
+                         data-for="button : utility_extra_buttons"
+                         data-attr-id="button.button_id"
+                         data-class-selected="button.selected"
+                         data-attr-data-action="button.action_id"
+                         data-attr-title="button.tooltip_text"
+                         data-attrif-disabled="!button.enabled"
+                         data-class-disabled="!button.enabled"
+                         data-event-click="toolbar_action(button.action, button.value)">
+                        <img data-attr-src="button.icon_src" />
+                    </div>
+                    <div class="icon-btn"
+                         data-for="button : utility_bottom_buttons"
+                         data-attr-id="button.button_id"
+                         data-class-selected="button.selected"
+                         data-attr-data-action="button.action_id"
+                         data-attr-title="button.tooltip_text"
+                         data-attrif-disabled="!button.enabled"
+                         data-class-disabled="!button.enabled"
+                         data-event-click="toolbar_action(button.action, button.value)">
+                        <img data-attr-src="button.icon_src" />
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -276,93 +276,93 @@
                 <span class="toolbar-drag-line"></span>
             </div>
             <div class="rail-columns">
-            <div id="secondary-rail-tools" class="rail-group rail-group--tools">
-            <div class="icon-btn"
-                 data-for="button : selection_group_buttons"
-                 data-attr-id="button.button_id"
-                 data-class-selected="button.selected"
-                 data-attr-data-action="button.action_id"
-                 data-attr-data-shortcut="button.shortcut_text"
-                 data-attr-title="button.tooltip_text"
-                 data-attrif-disabled="!button.enabled"
-                 data-class-disabled="!button.enabled"
-                 data-event-click="toolbar_action(button.action, button.value)">
-                <img data-attr-src="button.icon_src" />
-            </div>
-            <div class="icon-btn"
-                 data-for="button : transform_group_buttons"
-                 data-attr-id="button.button_id"
-                 data-class-selected="button.selected"
-                 data-attr-data-action="button.action_id"
-                 data-attr-data-shortcut="button.shortcut_text"
-                 data-attr-title="button.tooltip_text"
-                 data-attrif-disabled="!button.enabled"
-                 data-class-disabled="!button.enabled"
-                 data-event-click="toolbar_action(button.action, button.value)">
-                <img data-attr-src="button.icon_src" />
-            </div>
-            <div class="icon-btn"
-                 data-for="button : mirror_group_buttons"
-                 data-attr-id="button.button_id"
-                 data-class-selected="button.selected"
-                 data-attr-data-action="button.action_id"
-                 data-attr-data-shortcut="button.shortcut_text"
-                 data-attr-title="button.tooltip_text"
-                 data-attrif-disabled="!button.enabled"
-                 data-class-disabled="!button.enabled"
-                 data-event-click="toolbar_action(button.action, button.value)">
-                <img data-attr-src="button.icon_src" />
-            </div>
-            <div class="icon-btn"
-                 data-for="button : crop_group_buttons"
-                 data-attr-id="button.button_id"
-                 data-class-selected="button.selected"
-                 data-attr-data-action="button.action_id"
-                 data-attr-data-shortcut="button.shortcut_text"
-                 data-attr-title="button.tooltip_text"
-                 data-attrif-disabled="!button.enabled"
-                 data-class-disabled="!button.enabled"
-                 data-event-click="toolbar_action(button.action, button.value)">
-                <img data-attr-src="button.icon_src" />
-            </div>
-            <div class="icon-btn"
-                 data-for="button : gizmo_buttons"
-                 data-attr-id="button.button_id"
-                 data-class-selected="button.selected"
-                 data-attr-data-action="button.action_id"
-                 data-attr-data-shortcut="button.shortcut_text"
-                 data-attr-title="button.tooltip_text"
-                 data-attrif-disabled="!button.enabled"
-                 data-class-disabled="!button.enabled"
-                 data-event-click="toolbar_action(button.action, button.value)">
-                <img data-attr-src="button.icon_src" />
-            </div>
-            </div>
-            <div class="toolbar-separator"></div>
-            <div id="secondary-rail-panels" class="rail-group rail-group--panels">
-            <div class="icon-btn"
-                 data-for="button : utility_extra_buttons"
-                 data-attr-id="button.button_id"
-                 data-class-selected="button.selected"
-                 data-attr-data-action="button.action_id"
-                 data-attr-title="button.tooltip_text"
-                 data-attrif-disabled="!button.enabled"
-                 data-class-disabled="!button.enabled"
-                 data-event-click="toolbar_action(button.action, button.value)">
-                <img data-attr-src="button.icon_src" />
-            </div>
-            <div class="icon-btn"
-                 data-for="button : utility_bottom_buttons"
-                 data-attr-id="button.button_id"
-                 data-class-selected="button.selected"
-                 data-attr-data-action="button.action_id"
-                 data-attr-title="button.tooltip_text"
-                 data-attrif-disabled="!button.enabled"
-                 data-class-disabled="!button.enabled"
-                 data-event-click="toolbar_action(button.action, button.value)">
-                <img data-attr-src="button.icon_src" />
-            </div>
-            </div>
+                <div id="secondary-rail-tools" class="rail-group rail-group--tools">
+                    <div class="icon-btn"
+                         data-for="button : selection_group_buttons"
+                         data-attr-id="button.button_id"
+                         data-class-selected="button.selected"
+                         data-attr-data-action="button.action_id"
+                         data-attr-data-shortcut="button.shortcut_text"
+                         data-attr-title="button.tooltip_text"
+                         data-attrif-disabled="!button.enabled"
+                         data-class-disabled="!button.enabled"
+                         data-event-click="toolbar_action(button.action, button.value)">
+                        <img data-attr-src="button.icon_src" />
+                    </div>
+                    <div class="icon-btn"
+                         data-for="button : transform_group_buttons"
+                         data-attr-id="button.button_id"
+                         data-class-selected="button.selected"
+                         data-attr-data-action="button.action_id"
+                         data-attr-data-shortcut="button.shortcut_text"
+                         data-attr-title="button.tooltip_text"
+                         data-attrif-disabled="!button.enabled"
+                         data-class-disabled="!button.enabled"
+                         data-event-click="toolbar_action(button.action, button.value)">
+                        <img data-attr-src="button.icon_src" />
+                    </div>
+                    <div class="icon-btn"
+                         data-for="button : mirror_group_buttons"
+                         data-attr-id="button.button_id"
+                         data-class-selected="button.selected"
+                         data-attr-data-action="button.action_id"
+                         data-attr-data-shortcut="button.shortcut_text"
+                         data-attr-title="button.tooltip_text"
+                         data-attrif-disabled="!button.enabled"
+                         data-class-disabled="!button.enabled"
+                         data-event-click="toolbar_action(button.action, button.value)">
+                        <img data-attr-src="button.icon_src" />
+                    </div>
+                    <div class="icon-btn"
+                         data-for="button : crop_group_buttons"
+                         data-attr-id="button.button_id"
+                         data-class-selected="button.selected"
+                         data-attr-data-action="button.action_id"
+                         data-attr-data-shortcut="button.shortcut_text"
+                         data-attr-title="button.tooltip_text"
+                         data-attrif-disabled="!button.enabled"
+                         data-class-disabled="!button.enabled"
+                         data-event-click="toolbar_action(button.action, button.value)">
+                        <img data-attr-src="button.icon_src" />
+                    </div>
+                    <div class="icon-btn"
+                         data-for="button : gizmo_buttons"
+                         data-attr-id="button.button_id"
+                         data-class-selected="button.selected"
+                         data-attr-data-action="button.action_id"
+                         data-attr-data-shortcut="button.shortcut_text"
+                         data-attr-title="button.tooltip_text"
+                         data-attrif-disabled="!button.enabled"
+                         data-class-disabled="!button.enabled"
+                         data-event-click="toolbar_action(button.action, button.value)">
+                        <img data-attr-src="button.icon_src" />
+                    </div>
+                </div>
+                <div class="toolbar-separator"></div>
+                <div id="secondary-rail-panels" class="rail-group rail-group--panels">
+                    <div class="icon-btn"
+                         data-for="button : utility_extra_buttons"
+                         data-attr-id="button.button_id"
+                         data-class-selected="button.selected"
+                         data-attr-data-action="button.action_id"
+                         data-attr-title="button.tooltip_text"
+                         data-attrif-disabled="!button.enabled"
+                         data-class-disabled="!button.enabled"
+                         data-event-click="toolbar_action(button.action, button.value)">
+                        <img data-attr-src="button.icon_src" />
+                    </div>
+                    <div class="icon-btn"
+                         data-for="button : utility_bottom_buttons"
+                         data-attr-id="button.button_id"
+                         data-class-selected="button.selected"
+                         data-attr-data-action="button.action_id"
+                         data-attr-title="button.tooltip_text"
+                         data-attrif-disabled="!button.enabled"
+                         data-class-disabled="!button.enabled"
+                         data-event-click="toolbar_action(button.action, button.value)">
+                        <img data-attr-src="button.icon_src" />
+                    </div>
+                </div>
             </div>
         </div>
 

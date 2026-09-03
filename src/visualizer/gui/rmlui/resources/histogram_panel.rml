@@ -12,9 +12,9 @@
       <span id="histogram-floating-title">{{ panel_label }}</span>
       <div class="histogram-panel-actions histogram-panel-actions--floating">
         <button class="btn btn--secondary histogram-panel-action"
-                data-event-click="toggle_dock_mode()">{{ dock_toggle_label }}</button>
+                data-event-click="toggle_dock_mode()"><span class="btn-label">{{ dock_toggle_label }}</span></button>
         <button class="btn btn--secondary histogram-panel-action"
-                data-event-click="close_panel()">{{ close_label }}</button>
+                data-event-click="close_panel()"><span class="btn-label">{{ close_label }}</span></button>
       </div>
     </div>
     <div id="histogram-hero">
@@ -76,7 +76,7 @@
           <div class="histogram-toolbar-item histogram-toolbar-item--action hidden"
                data-class-hidden="is_floating">
             <button class="btn btn--secondary histogram-panel-action"
-                    data-event-click="toggle_dock_mode()">{{ dock_toggle_label }}</button>
+                    data-event-click="toggle_dock_mode()"><span class="btn-label">{{ dock_toggle_label }}</span></button>
           </div>
         </div>
       </div>
@@ -185,7 +185,7 @@
           <input id="range-max-input" type="text" class="number-input range-input" data-value="range_max_str" />
           <button class="btn btn--secondary range-reset"
                   data-event-click="reset_range()"
-                  data-attrif-disabled="!has_custom_range">{{ reset_range_label }}</button>
+                  data-attrif-disabled="!has_custom_range"><span class="btn-label">{{ reset_range_label }}</span></button>
         </div>
 
         <div id="histogram-chart">
@@ -242,7 +242,7 @@
             <input id="compare-range-y-max-input" type="text" class="number-input range-input" data-value="compare_y_range_max_str" />
             <button class="btn btn--secondary range-reset"
                     data-event-click="reset_compare_range()"
-                    data-attrif-disabled="!compare_has_custom_range">{{ reset_range_label }}</button>
+                    data-attrif-disabled="!compare_has_custom_range"><span class="btn-label">{{ reset_range_label }}</span></button>
           </div>
 
           <div id="compare-chart-shell">
@@ -314,10 +314,10 @@
       <div class="footer-text-actions">
         <button class="btn btn--secondary footer-text-action"
                 data-event-click="clear_mark()"
-                data-attrif-disabled="!clear_enabled">{{ clear_label }}</button>
+                data-attrif-disabled="!clear_enabled"><span class="btn-label">{{ clear_label }}</span></button>
         <button class="btn btn--error footer-text-action"
                 data-event-click="delete_marked()"
-                data-attrif-disabled="!delete_enabled">{{ delete_label }}</button>
+                data-attrif-disabled="!delete_enabled"><span class="btn-label">{{ delete_label }}</span></button>
       </div>
     </div>
   </div>
