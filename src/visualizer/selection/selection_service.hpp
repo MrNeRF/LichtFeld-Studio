@@ -161,6 +161,11 @@ namespace lfs::vis {
 
     private:
         struct PendingSelectionCounts {
+            PendingSelectionCounts();
+            ~PendingSelectionCounts();
+            PendingSelectionCounts(PendingSelectionCounts&&) noexcept;
+            PendingSelectionCounts& operator=(PendingSelectionCounts&&) noexcept;
+
             std::shared_ptr<core::Tensor> mask;
             std::unique_ptr<op::SceneSnapshot> undo_entry;
             core::Tensor scratch;
