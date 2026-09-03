@@ -32,6 +32,7 @@ namespace lfs::vis::gui {
     class NativeScenePanel : public IPanel {
     public:
         explicit NativeScenePanel(RmlUIManager* manager);
+        ~NativeScenePanel() override;
 
         void draw(const PanelDrawContext& ctx) override;
         void preload(const PanelDrawContext& ctx) override;
