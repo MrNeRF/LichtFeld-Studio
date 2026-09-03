@@ -442,6 +442,10 @@ namespace lfs::core {
             // train() is allowed to start.
             std::optional<std::filesystem::path> resume_project = std::nullopt;
 
+            // Untrained .licht passed to --data-path. Its REFS dataset folder,
+            // or the embedded dataset copy, becomes the training data source.
+            std::optional<std::filesystem::path> dataset_project = std::nullopt;
+
             // Headless/integration-test trigger for the production training
             // snapshot path. Empty unless the user passed --save-project-path;
             // the trainer then falls back to the bound project destination.

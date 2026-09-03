@@ -26,6 +26,7 @@
 #include "core/user_paths.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "io/cache_image_loader.hpp"
+#include "io/embedded_dataset.hpp"
 #include "io/project_document.hpp"
 #include "io/project_recovery.hpp"
 #include "tcp/include/tcp_publisher.hpp"
@@ -114,6 +115,113 @@ namespace lfs::app {
                 .detail = std::move(detail),
                 .detection = source,
             });
+        }
+
+        // --data-path may name an untrained .licht. Resolve its dataset, the
+        // external folder recorded in REFS or else the embedded copy extracted
+        // to the per-user cache, and continue as a plain dataset-folder run.
+        [[nodiscard]] lfs::Result<void> adoptDatasetProject(
+            core::param::TrainingParameters& params) {
+            const auto path = *params.dataset_project;
+            auto document = io::project::ProjectDocument::open(
+                path,
+                io::project::ProjectDocumentOpenOptions{
+                    .reader = {},
+                    .geometry = {},
+                    .defer_geometry_payloads = true,
+                });
+            if (!document) {
+                return lfs::Status::failure(
+                    std::move(document).error().with_context(
+                        "open training project",
+                        LFS_SOURCE_SITE_CURRENT()));
+            }
+
+            auto checkpoint_uuid = document->bound_checkpoint_uuid();
+            if (!checkpoint_uuid) {
+                return lfs::Status::failure(
+                    std::move(checkpoint_uuid).error());
+            }
+            // Check whether there's a checkpoint, hence being trained before.
+            if (*checkpoint_uuid) {
+                return lfs::Status::failure(training_project_error(
+                    lfs::ErrorCode::FailedPrecondition,
+                    "The project already has a training checkpoint; pass it "
+                    "to --resume to continue training",
+                    LFS_SOURCE_SITE_CURRENT()));
+            }
+
+            auto snapshot = document->parameters().snapshot();
+            if (!snapshot) {
+                return lfs::Status::failure(
+                    std::move(snapshot).error().with_context(
+                        "read training project parameters",
+                        LFS_SOURCE_SITE_CURRENT()));
+            }
+
+            // Prefer the original dataset folder recorded in REFS when it is
+            // still reachable, so nothing has to be unpacked.
+            std::optional<std::filesystem::path> dataset_root;
+            std::string images_folder = snapshot->dataset.images;
+            if (const auto dataset_ref =
+                    document->project().dataset_reference();
+                dataset_ref && *dataset_ref) {
+                auto external = io::project::resolve_path_reference(
+                    document->references(), path.parent_path(),
+                    **dataset_ref);
+                if (external && std::filesystem::is_directory(*external)) {
+                    dataset_root = std::move(*external);
+                }
+            }
+            // Otherwise unpack the embedded DSRC chunks into the per-user cache.
+            // Files already present with a matching hash are reused.
+            if (!dataset_root) {
+                auto cache_dir =
+                    io::project::embedded_dataset_cache_dir(*document);
+                if (!cache_dir) {
+                    return lfs::Status::failure(
+                        std::move(cache_dir).error());
+                }
+                auto extracted = io::project::extract_embedded_dataset(
+                    *document, *cache_dir);
+                if (!extracted) {
+                    return lfs::Status::failure(
+                        std::move(extracted).error());
+                }
+                if (*extracted) {
+                    dataset_root = std::move(**extracted);
+                    // The manifest records which images folder was embedded.
+                    if (const auto manifest =
+                            document->parameters().embedded_dataset();
+                        manifest && *manifest) {
+                        images_folder = (*manifest)->images_folder;
+                    }
+                }
+            }
+            if (!dataset_root) {
+                return lfs::Status::failure(training_project_error(
+                    lfs::ErrorCode::NotFound,
+                    "The project's dataset is neither reachable nor embedded",
+                    LFS_SOURCE_SITE_CURRENT()));
+            }
+
+            // Adopt the stored dataset options; machine-specific paths and
+            // loading resources stay with the command line.
+            auto dataset = std::move(snapshot->dataset);
+            dataset.data_path = std::move(*dataset_root);
+            dataset.images = std::move(images_folder);
+            dataset.output_path = params.dataset.output_path;
+            dataset.output_path_explicit = params.dataset.output_path_explicit;
+            dataset.output_name = params.dataset.output_name;
+            dataset.loading_params = params.dataset.loading_params;
+            params.dataset = std::move(dataset);
+            // From here on this is an ordinary --data-path run.
+            params.dataset_project.reset();
+            LOG_INFO(
+                "Training from project {}; dataset resolved to {}",
+                core::path_to_utf8(path),
+                core::path_to_utf8(params.dataset.data_path));
+            return {};
         }
 
         std::expected<core::param::TrainingParameters, std::string> loadCheckpointParams(const core::param::TrainingParameters& params, core::Scene& scene) {
@@ -291,7 +399,8 @@ namespace lfs::app {
             if (!*checkpoint_uuid) {
                 return training_project_error(
                     lfs::ErrorCode::FailedPrecondition,
-                    "Training project has no SCNG-bound CKPT instance",
+                    "Training project has no checkpoint to resume; pass an "
+                    "untrained project to --data-path instead",
                     LFS_SOURCE_SITE_CURRENT());
             }
             const auto bound_checkpoint_uuid = **checkpoint_uuid;
@@ -1428,6 +1537,18 @@ namespace lfs::app {
                 core::teardown_gpu_before_exit();
             }
             return result;
+        }
+
+        if (params->dataset_project) {
+            if (!params->optimization.headless) {
+                LOG_ERROR("--data-path project.licht requires --headless; use -v to open a project");
+                return 1;
+            }
+            if (const auto adopted = adoptDatasetProject(*params); !adopted) {
+                LOG_ERROR("Failed to load training project: {}",
+                          lfs::format_for_developer(adopted.error()));
+                return 1;
+            }
         }
 
         if (params->optimization.headless && params->server.tcp_connection) {

@@ -487,7 +487,7 @@ namespace {
             // =============================================================================
             ::args::Group paths_sep(parser, " ");
             ::args::Group paths_group(parser, "TRAINING PATHS:");
-            ::args::ValueFlag<std::string> data_path(paths_group, "data_path", "Path to training data", {'d', "data-path"});
+            ::args::ValueFlag<std::string> data_path(paths_group, "data_path", "Path to training data: a dataset folder or an untrained .licht project", {'d', "data-path"});
             ::args::ValueFlag<std::string> output_path(paths_group, "output_path", "Directory for project.licht and --export files", {'o', "output-path"});
             ::args::ValueFlag<std::string> output_name(paths_group, "output_name", "Output filename (replaces default splat_ITER.ply stem)", {"output-name"});
             ::args::ValueFlag<std::string> config_file(paths_group, "config_file", "LichtFeldStudio config file (json)", {"config"});
@@ -996,6 +996,23 @@ namespace {
             if (has_data_path && has_output_path) {
                 params.dataset.data_path = lfs::core::utf8_to_path(::args::get(data_path));
                 params.dataset.output_path = lfs::core::utf8_to_path(::args::get(output_path));
+
+                // An untrained .licht is a dataset source.
+                auto data_extension = params.dataset.data_path.extension().string();
+                std::ranges::transform(
+                    data_extension, data_extension.begin(),
+                    [](const unsigned char character) {
+                        return static_cast<char>(std::tolower(character));
+                    });
+                if (data_extension == ".licht") {
+                    if (!lfs::io::project::isPublishedLichtPath(params.dataset.data_path)) {
+                        return std::unexpected(
+                            lfs::io::project::unpublishedLichtUserMessage(
+                                params.dataset.data_path));
+                    }
+                    params.dataset_project = std::move(params.dataset.data_path);
+                    params.dataset.data_path.clear();
+                }
 
                 // Create output directory
                 std::error_code ec;
