@@ -1650,8 +1650,20 @@ apply_registered_chrome:
 
         if (changed)
             lfs::vis::publish_viewport_toolbar_generation();
-        if (panel_to_notify)
-            panel_to_notify->on_visibility_changed(enabled);
+        if (panel_to_notify) {
+            try {
+                panel_to_notify->on_visibility_changed(enabled);
+            } catch (const std::exception& e) {
+                LOG_ERROR("Panel '{}' visibility change error: {}", id, e.what());
+                std::lock_guard lock(mutex_);
+                for (auto& panel : panels_) {
+                    if (panel.id == id) {
+                        panel.error_disabled = true;
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     bool PanelRegistry::bring_panel_to_front(const std::string& id) {
@@ -1690,7 +1702,18 @@ apply_registered_chrome:
             return;
 
         const auto ctx = cachedLayoutDrawContext();
-        panel->preload(ctx);
+        try {
+            panel->preload(ctx);
+        } catch (const std::exception& e) {
+            LOG_ERROR("Panel '{}' preload error: {}", id, e.what());
+            std::lock_guard lock(mutex_);
+            for (auto& panel_info : panels_) {
+                if (panel_info.id == id) {
+                    panel_info.error_disabled = true;
+                    break;
+                }
+            }
+        }
     }
 
     bool PanelRegistry::apply_floating_resize_cursor() const {
