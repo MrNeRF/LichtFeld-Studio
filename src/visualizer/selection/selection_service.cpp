@@ -2044,6 +2044,27 @@ namespace lfs::vis {
         rendering_manager_->markDirty(DirtyFlag::SELECTION);
     }
 
+    void SelectionService::updatePassiveBrushHoverPreview(const glm::vec2 cursor_pos,
+                                                          const float brush_radius,
+                                                          const SelectionMode mode) {
+        if (!scene_manager_ || !rendering_manager_ || interactive_selection_.active)
+            return;
+
+        const auto context = resolveViewerViewportContext(cursor_pos);
+        if (!context || !context->valid()) {
+            rendering_manager_->clearCursorPreviewState();
+            return;
+        }
+
+        const auto render_cursor = screenToRender(cursor_pos, context->info);
+        const float render_radius = brush_radius *
+                                    (static_cast<float>(context->info.render_width) /
+                                     context->info.width);
+        rendering_manager_->setCursorPreviewState(
+            true, render_cursor.x, render_cursor.y, render_radius,
+            mode != SelectionMode::Remove, nullptr, false, 0.0f, context->panel, -1, false);
+    }
+
     void SelectionService::refreshInteractivePreview() {
         auto& session = interactive_selection_;
         if (!session.active || !rendering_manager_) {

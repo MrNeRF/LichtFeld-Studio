@@ -109,6 +109,20 @@ namespace lfs::vis::tools {
         if (auto* const sm = ctx.getSceneManager()) {
             if (auto* const service = sm->getSelectionService()) {
                 auto* const rm = ctx.getRenderingManager();
+                const bool passive_hover =
+                    mouse_buttons == 0 &&
+                    !gui::guiFocusState().want_capture_mouse &&
+                    pointInViewportBounds(ctx.getViewportBounds(), last_mouse_pos_);
+                if (rm && rm->getSelectionPreviewMode() == lfs::vis::SelectionPreviewMode::Centers) {
+                    if (passive_hover) {
+                        const SDL_Keymod kmods = SDL_GetModState();
+                        service->updatePassiveBrushHoverPreview(
+                            last_mouse_pos_, brush_radius_, selectionModeFromModifiers(kmods));
+                    } else if (rm->isCursorPreviewActive()) {
+                        rm->clearCursorPreviewState();
+                    }
+                    return;
+                }
                 const bool passive_ring_mode =
                     rm &&
                     rm->getSelectionPreviewMode() == lfs::vis::SelectionPreviewMode::Rings &&

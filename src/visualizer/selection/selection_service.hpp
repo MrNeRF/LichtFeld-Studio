@@ -143,6 +143,8 @@ namespace lfs::vis {
         }
         void updatePassiveRingHoverPreview(glm::vec2 cursor_pos, SelectionMode mode,
                                            SelectionFilterState filters = {});
+        void updatePassiveBrushHoverPreview(glm::vec2 cursor_pos, float brush_radius,
+                                            SelectionMode mode);
         void setInteractiveSelectionMode(SelectionMode mode) { interactive_selection_.mode = mode; }
         void setTestingScreenPositions(std::shared_ptr<core::Tensor> screen_positions);
         void setTestingScreenPositionsForCamera(int camera_index, std::shared_ptr<core::Tensor> screen_positions);
