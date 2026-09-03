@@ -183,7 +183,7 @@ TEST_F(PanelLayoutRenderDemandTest, PollFalsePanelIsNotVisibleAndPollFlipDoesNot
 
     auto first = registerPanel("test.bottom.poll.first", PanelSpace::BottomDock, 20.0f);
     auto hidden = registerPanel("test.bottom.poll.hidden", PanelSpace::BottomDock, 20.0f,
-                                0, 0.0f, 0.0f, true, false, true);
+                                0, 0.0f, 0.0f, true, false, false);
     PanelLayoutManager layout;
     UIContext ui;
     PanelDrawContext draw_ctx{.ui = &ui};

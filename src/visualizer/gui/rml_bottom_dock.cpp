@@ -273,8 +273,8 @@ namespace lfs::vis::gui {
         const float mx = input.mouse_x - layout.pos.x;
         const float my = input.mouse_y - layout.pos.y;
         const bool moved = mx != prev_mouse_x_ || my != prev_mouse_y_;
-        prev_mouse_x_ = input.mouse_x;
-        prev_mouse_y_ = input.mouse_y;
+        prev_mouse_x_ = mx;
+        prev_mouse_y_ = my;
         const int mods = sdlModsToRml(input.key_ctrl, input.key_shift, input.key_alt, input.key_super);
         const float chrome_h = layout.tab_bar_h + layout.separator_h;
         const bool inside = mx >= 0 && mx < layout.size.x && my >= 0 && my < chrome_h;
