@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "gui/camera_thumbnail_batch.hpp"
 #include "gui/camera_thumbnail_policy.hpp"
 #include "gui/frustum_overlay_key.hpp"
 
@@ -81,4 +82,32 @@ TEST(FrustumOverlayInputKeyTest, RebuildsIffAKeyComponentChanged) {
     check([](auto& key) { ++key.training_loss_color_generation; });
     check([](auto& key) { ++key.thumbnail_atlas_generation; });
     check([](auto& key) { ++key.overlay_settings_hash; });
+}
+
+TEST(CameraThumbnailBatchTest, GroupsPagesWithinByteBudgetAndAdvancesGenerationPerBatch) {
+    const std::vector<lfs::vis::gui::CameraThumbnailUploadCandidate> candidates = {
+        {.page_index = 0, .byte_size = 2},
+        {.page_index = 1, .byte_size = 2},
+        {.page_index = 0, .byte_size = 2},
+        {.page_index = 1, .byte_size = 2},
+    };
+
+    const auto batches = lfs::vis::gui::batchCameraThumbnailUploads(candidates, 6);
+
+    ASSERT_EQ(batches.size(), 2);
+    EXPECT_EQ(batches[0].page_index, 0);
+    EXPECT_EQ(batches[0].candidate_indices, (std::vector<std::size_t>{0, 2}));
+    EXPECT_EQ(batches[0].byte_size, 4);
+    EXPECT_EQ(batches[1].page_index, 1);
+    EXPECT_EQ(batches[1].candidate_indices, (std::vector<std::size_t>{1}));
+    EXPECT_EQ(batches[1].byte_size, 2);
+
+    std::size_t uploaded_bytes = 0;
+    std::size_t atlas_generation = 11;
+    for (const auto& batch : batches) {
+        uploaded_bytes += batch.byte_size;
+        ++atlas_generation;
+    }
+    EXPECT_LE(uploaded_bytes, 6);
+    EXPECT_EQ(atlas_generation, 13);
 }

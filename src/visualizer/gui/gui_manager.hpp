@@ -108,10 +108,13 @@ namespace lfs::vis {
             void updateInteractiveTransitions();
             [[nodiscard]] bool isInteractiveTransitionSettling() const;
             void syncVisiblePanelsBeforeSceneRender();
-            // Called by camera-thumbnail workers and after a partial upload
-            // batch. It schedules one coalesced overlay refresh; only workers
-            // wake the GUI for the first pending batch.
+            // Called by camera-thumbnail workers. It schedules one coalesced
+            // overlay refresh; only workers wake the GUI for the first pending
+            // batch.
             void notifyCameraThumbnailReady(bool defer = false);
+            // Called after a bounded main-thread upload batch. The next frame
+            // is requested immediately while decoded thumbnails remain ready.
+            void notifyCameraThumbnailBatchReady();
             void setRmlResizeDeferring(bool defer) { rmlui_manager_.setResizeDeferring(defer); }
             void ensureCjkFontsLoaded() { rmlui_manager_.ensureCjkFontsLoaded(); }
 
