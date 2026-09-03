@@ -84,13 +84,7 @@ namespace lfs::vis {
         void suppressCompletionNotification() { suppress_completion_notification_.store(true, std::memory_order_relaxed); }
 
         // Temporary pause for short synchronization-sensitive operations; does not change UI state.
-        struct TemporaryPauseResult {
-            bool synchronized = false;
-            bool resume_required = false;
-        };
-
         void pauseTrainingTemporary();
-        [[nodiscard]] TemporaryPauseResult pauseTrainingTemporaryAndWait(std::chrono::milliseconds timeout);
         void resumeTrainingTemporary();
 
         // State machine access

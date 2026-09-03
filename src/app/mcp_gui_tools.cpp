@@ -405,17 +405,16 @@ namespace lfs::app {
 
         json selection_state_json(core::Scene& scene, const int max_indices = 100000) {
             auto mask = scene.getSelectionMask();
-            if (!mask)
-                return json{{"selected_count", 0}, {"indices", json::array()}, {"truncated", false}};
+            const int64_t count = static_cast<int64_t>(scene.selectedCount());
+            if (!mask || max_indices == 0)
+                return json{{"selected_count", count}, {"indices", json::array()}, {"truncated", count > 0}};
 
             auto mask_vec = mask->to_vector_uint8();
 
-            int64_t count = 0;
             std::vector<int64_t> indices;
             for (size_t i = 0; i < mask_vec.size(); ++i) {
                 if (mask_vec[i] == 0)
                     continue;
-                ++count;
                 if (static_cast<int>(indices.size()) < max_indices)
                     indices.push_back(static_cast<int64_t>(i));
             }
@@ -477,11 +476,9 @@ namespace lfs::app {
             return vis::cap::decomposeTransform(matrix);
         }
 
-        int64_t selected_gaussian_count(const core::Scene& scene) {
-            const auto mask = scene.getSelectionMask();
-            if (!mask || !mask->is_valid())
-                return 0;
-            return static_cast<int64_t>(mask->count_nonzero());
+        int64_t selected_gaussian_count(vis::SceneManager& scene_manager) {
+            scene_manager.completePendingSelectionCounts();
+            return static_cast<int64_t>(scene_manager.getScene().selectedCount());
         }
 
         json node_summary_json(const core::Scene& scene, const core::SceneNode& node) {
@@ -589,14 +586,14 @@ namespace lfs::app {
             };
         }
 
-        json selection_result_json(const vis::SceneManager& scene_manager, const vis::SelectionResult& result) {
+        json selection_result_json(vis::SceneManager& scene_manager, const vis::SelectionResult& result) {
             if (!result.success)
                 return json{{"error", result.error}};
 
             return json{
                 {"success", true},
                 {"affected_count", static_cast<int64_t>(result.affected_count)},
-                {"selected_count", selected_gaussian_count(scene_manager.getScene())},
+                {"selected_count", selected_gaussian_count(scene_manager)},
             };
         }
 
@@ -2574,7 +2571,7 @@ namespace lfs::app {
                 .description = "Get the current interactive viewport camera state",
                 .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
             [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, []() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
                     const auto info = vis::get_current_view_info();
                     if (!info)
                         return json{{"error", "Viewport camera bridge is not available"}};
@@ -2634,7 +2631,7 @@ namespace lfs::app {
                 .description = "Reset the interactive viewport camera to its saved home position",
                 .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
             [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, []() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
                     core::events::cmd::ResetCamera{}.emit();
                     const auto info = vis::get_current_view_info();
                     if (!info)
@@ -2717,7 +2714,7 @@ namespace lfs::app {
                 .description = "Inspect the shared undo/redo history state",
                 .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
             [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, []() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
                     return history_json();
                 });
             });
@@ -2728,7 +2725,7 @@ namespace lfs::app {
                 .description = "List the full undo and redo stacks for the shared history service",
                 .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
             [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, []() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
                     auto payload = history_json();
                     payload["performed"] = "list";
                     return payload;
@@ -2795,7 +2792,9 @@ namespace lfs::app {
                 .input_schema = {.type = "object", .properties = json::object(), .required = {}},
                 .metadata = {.category = "history", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread"}},
             [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, []() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
+                    if (auto* const scene_manager = viewer_impl->getSceneManager())
+                        scene_manager->completePendingSelectionCounts();
                     const auto result = vis::op::undoHistory().undo();
                     auto payload = history_json();
                     append_history_result(payload, result);
@@ -2811,7 +2810,9 @@ namespace lfs::app {
                 .input_schema = {.type = "object", .properties = json::object(), .required = {}},
                 .metadata = {.category = "history", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread"}},
             [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, []() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
+                    if (auto* const scene_manager = viewer_impl->getSceneManager())
+                        scene_manager->completePendingSelectionCounts();
                     const auto result = vis::op::undoHistory().redo();
                     auto payload = history_json();
                     append_history_result(payload, result);
@@ -2834,7 +2835,9 @@ namespace lfs::app {
             [viewer_impl](const json& args) -> json {
                 const auto stack = args.value("stack", std::string{});
                 const auto count = static_cast<size_t>(std::max<int64_t>(1, args.value("count", 1)));
-                return post_and_wait(viewer_impl, [stack, count]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, stack, count]() -> json {
+                    if (auto* const scene_manager = viewer_impl->getSceneManager())
+                        scene_manager->completePendingSelectionCounts();
                     vis::op::HistoryResult result;
                     if (stack == "undo") {
                         result = vis::op::undoHistory().undoMultiple(count);
@@ -3850,6 +3853,8 @@ namespace lfs::app {
                 const int max_indices = args.value("max_indices", 100000);
 
                 return post_and_wait(viewer, [viewer, max_indices]() -> json {
+                    if (auto* const scene_manager = viewer->getSceneManager())
+                        scene_manager->completePendingSelectionCounts();
                     const auto selection = vis::cap::getSelectionSnapshot(viewer->getScene(), max_indices);
                     return json{
                         {"success", true},
@@ -5406,6 +5411,8 @@ namespace lfs::app {
             [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
                 return post_and_wait(viewer, [viewer, uri]() -> std::expected<std::vector<McpResourceContent>, std::string> {
                     json payload;
+                    if (auto* const scene_manager = viewer->getSceneManager())
+                        scene_manager->completePendingSelectionCounts();
                     auto& scene = viewer->getScene();
                     payload["count"] = scene.getTotalGaussianCount();
 
@@ -5429,6 +5436,8 @@ namespace lfs::app {
                 .mime_type = "application/json"},
             [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
                 return post_and_wait(viewer, [viewer, uri]() -> std::expected<std::vector<McpResourceContent>, std::string> {
+                    if (auto* const scene_manager = viewer->getSceneManager())
+                        scene_manager->completePendingSelectionCounts();
                     auto payload = selection_state_json(viewer->getScene());
                     payload["success"] = true;
                     return single_json_resource(uri, std::move(payload));

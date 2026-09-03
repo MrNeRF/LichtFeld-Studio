@@ -578,6 +578,8 @@
     "add_group": "添加组",
     "add_group_ellipsis": "添加组...",
     "new_group_name": "新建组",
+    "group_selected": "Group Selected",
+    "ungroup": "Ungroup",
     "export": "导出...",
     "delete": "删除",
     "rename": "重命名",

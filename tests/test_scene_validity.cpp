@@ -1764,6 +1764,21 @@ namespace lfs::python {
         EXPECT_EQ(roots[2], b);
     }
 
+    TEST_F(SceneValidityTest, MoveRootToEndWithTrailingGroup) {
+        const auto first = dummy_scene_.addSplat("First", make_test_splat(1));
+        const auto moved = dummy_scene_.addSplat("Moved", make_test_splat(1));
+        const auto group = dummy_scene_.addGroup("Group");
+        ASSERT_NE(first, core::NULL_NODE);
+        ASSERT_NE(moved, core::NULL_NODE);
+        ASSERT_NE(group, core::NULL_NODE);
+
+        ASSERT_TRUE(dummy_scene_.moveNode(moved, core::NULL_NODE, -1));
+
+        const auto roots = dummy_scene_.getRootNodes();
+        ASSERT_EQ(roots.size(), 3u);
+        EXPECT_EQ(roots.back(), moved);
+    }
+
     TEST_F(SceneValidityTest, MoveNodeRejectsCycleIntoOwnDescendant) {
         const auto parent = dummy_scene_.addGroup("Parent");
         const auto child = dummy_scene_.addGroup("Child", parent);

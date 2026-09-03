@@ -578,6 +578,8 @@
     "add_group": "그룹 추가",
     "add_group_ellipsis": "그룹 추가...",
     "new_group_name": "새 그룹",
+    "group_selected": "Group Selected",
+    "ungroup": "Ungroup",
     "export": "내보내기...",
     "delete": "삭제",
     "rename": "이름 변경",

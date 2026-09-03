@@ -2435,6 +2435,11 @@ namespace lfs::core {
             return comparison_op_with_promotion(other, ops::logical_xor_op{});
         }
 
+        // Keep non-zero values in this mask (selection groups) while clearing
+        // entries whose corresponding live-mask value is zero. This is an
+        // in-place CUDA operation and deliberately does not allocate a result.
+        Tensor& and_live_(const Tensor& live_mask);
+
         // ============= REDUCE OPERATIONS =============
         Tensor sum() const {
             return sum(std::span<const int>{}, false);

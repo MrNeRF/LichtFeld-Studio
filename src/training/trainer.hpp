@@ -59,6 +59,8 @@ namespace lfs::vis {
     class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
     class VisualizerImplResetTest_SaveWhilePausedNoWorkerTrainerCompletes_Test;
     class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
+    class VisualizerImplResetTest_SaveWhileTrainerWriterInFlightQueuesUntilCompletion_Test;
+    class VisualizerImplResetTest_TemporaryPauseRequestIsObservedAtNextSafePoint_Test;
     class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
     class VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
     class VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
@@ -439,6 +441,8 @@ namespace lfs::training {
         friend class lfs::vis::VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveWhilePausedNoWorkerTrainerCompletes_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SaveWhileTrainerWriterInFlightQueuesUntilCompletion_Test;
+        friend class lfs::vis::VisualizerImplResetTest_TemporaryPauseRequestIsObservedAtNextSafePoint_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
         friend class lfs::vis::VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;

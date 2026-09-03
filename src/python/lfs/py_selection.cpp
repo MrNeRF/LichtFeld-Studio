@@ -623,16 +623,19 @@ namespace lfs::python {
                     return;
 
                 // Read the reference gaussian's SH0 coefficients from GPU
-                auto sh0_cpu = sh0.cpu();
-                const float* sh0_data = sh0_cpu.ptr<float>();
+                const auto sh0_row = sh0.slice(0, static_cast<size_t>(gaussian_index),
+                                               static_cast<size_t>(gaussian_index) + 1)
+                                         .cpu()
+                                         .contiguous();
+                const float* sh0_data = sh0_row.ptr<float>();
                 if (!sh0_data)
                     return;
 
                 // Decode SH DC to RGB: color = clamp(0.5 + sh_val * SH_C0, 0, 1)
                 constexpr float SH_C0 = 0.28209479177387814f;
-                const float ref_r = std::clamp(0.5f + sh0_data[gaussian_index * 3] * SH_C0, 0.0f, 1.0f);
-                const float ref_g = std::clamp(0.5f + sh0_data[gaussian_index * 3 + 1] * SH_C0, 0.0f, 1.0f);
-                const float ref_b = std::clamp(0.5f + sh0_data[gaussian_index * 3 + 2] * SH_C0, 0.0f, 1.0f);
+                const float ref_r = std::clamp(0.5f + sh0_data[0] * SH_C0, 0.0f, 1.0f);
+                const float ref_g = std::clamp(0.5f + sh0_data[1] * SH_C0, 0.0f, 1.0f);
+                const float ref_b = std::clamp(0.5f + sh0_data[2] * SH_C0, 0.0f, 1.0f);
 
                 const auto group_id = scene.getActiveSelectionGroup();
                 auto mask = core::cuda::select_by_color(sh0, ref_r, ref_g, ref_b,

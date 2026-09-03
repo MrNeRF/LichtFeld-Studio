@@ -578,6 +578,8 @@
     "add_group": "Añadir Grupo",
     "add_group_ellipsis": "Añadir Grupo...",
     "new_group_name": "Nuevo grupo",
+    "group_selected": "Group Selected",
+    "ungroup": "Ungroup",
     "export": "Exportar...",
     "delete": "Eliminar",
     "rename": "Renombrar",

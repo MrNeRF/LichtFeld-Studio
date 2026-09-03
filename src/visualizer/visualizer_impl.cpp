@@ -2918,6 +2918,9 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::undo() {
+        if (scene_manager_) {
+            scene_manager_->completePendingSelectionCounts();
+        }
         op::undoHistory().undo();
         if (rendering_manager_) {
             rendering_manager_->markDirty(DirtyFlag::ALL);
@@ -2925,6 +2928,9 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::redo() {
+        if (scene_manager_) {
+            scene_manager_->completePendingSelectionCounts();
+        }
         op::undoHistory().redo();
         if (rendering_manager_) {
             rendering_manager_->markDirty(DirtyFlag::ALL);

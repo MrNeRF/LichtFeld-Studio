@@ -346,33 +346,21 @@ namespace lfs::vis::gui {
                    input->has_text_editing;
         }
 
-        [[nodiscard]] std::string loggingRowsHtml(const std::vector<core::LogEntrySnapshot>& entries) {
-            const size_t rendered_entry_count = std::min(entries.size(), MAX_RENDERED_LOG_ENTRIES);
-            std::string html;
-            html.reserve(rendered_entry_count * 256);
-
-            size_t rendered = 0;
-            for (auto it = entries.rbegin(); it != entries.rend() && rendered < rendered_entry_count;
-                 ++it, ++rendered) {
-                const auto& entry = *it;
-                const std::string timestamp = formatLogTimestamp(entry.timestamp);
-                const std::string source = entry.line > 0
-                                               ? std::format("{}:{}",
-                                                             entry.file.empty() ? std::string("runtime")
-                                                                                : entry.file,
-                                                             entry.line)
-                                               : (entry.file.empty() ? std::string("runtime")
-                                                                     : entry.file);
-                html += std::format(
-                    R"(<div class="log-entry log-entry--{}"><div class="log-entry__header"><span class="log-entry__level">{}</span><span class="log-entry__meta text-muted">{} · {}</span></div><div class="log-entry__message text-default">{}</div></div>)",
-                    logLevelCssSuffix(entry.level),
-                    Rml::StringUtilities::EncodeRml(std::string(logLevelLabel(entry.level))),
-                    Rml::StringUtilities::EncodeRml(timestamp),
-                    Rml::StringUtilities::EncodeRml(source),
-                    Rml::StringUtilities::EncodeRml(entry.message));
-            }
-
-            return html;
+        [[nodiscard]] std::string loggingRowInnerRml(const core::LogEntrySnapshot& entry) {
+            const std::string timestamp = formatLogTimestamp(entry.timestamp);
+            const std::string source = entry.line > 0
+                                           ? std::format("{}:{}",
+                                                         entry.file.empty() ? std::string("runtime")
+                                                                            : entry.file,
+                                                         entry.line)
+                                           : (entry.file.empty() ? std::string("runtime")
+                                                                 : entry.file);
+            return std::format(
+                R"(<div class="log-entry__header"><span class="log-entry__level">{}</span><span class="log-entry__meta text-muted">{} · {}</span></div><div class="log-entry__message text-default">{}</div>)",
+                Rml::StringUtilities::EncodeRml(std::string(logLevelLabel(entry.level))),
+                Rml::StringUtilities::EncodeRml(timestamp),
+                Rml::StringUtilities::EncodeRml(source),
+                Rml::StringUtilities::EncodeRml(entry.message));
         }
 
     } // namespace
@@ -385,12 +373,20 @@ namespace lfs::vis::gui {
         last_log_generation_ = std::numeric_limits<uint64_t>::max();
     }
 
+    bool NativeScenePanel::needsAnimationFrame() const {
+        return host_.needsAnimationFrame() ||
+               (tree_el_ && tree_el_->needsAnimationFrame());
+    }
+
     void NativeScenePanel::EventListener::ProcessEvent(Rml::Event& event) {
         if (owner)
             owner->handleEvent(event);
     }
 
     void NativeScenePanel::clearElementCache() {
+        logging_rows_.clear();
+        if (manager_)
+            manager_->setActiveSceneGraphElement(nullptr);
         tree_el_ = nullptr;
         scene_tab_el_ = nullptr;
         history_tab_el_ = nullptr;
@@ -540,6 +536,9 @@ namespace lfs::vis::gui {
         if (tree_el_)
             tree_el_->setPanelScreenOffset(x, y);
 
+        if (tree_el_ && tree_el_->needsAnimationFrame())
+            host_.markContentDirty();
+
         if (last_prepare_frame_ != ctx.frame_serial)
             syncPanel(ctx);
 
@@ -599,6 +598,8 @@ namespace lfs::vis::gui {
         filter_input_revert_.clear();
         clearElementCache();
         tree_el_ = dynamic_cast<SceneGraphElement*>(document_->GetElementById("tree-container"));
+        if (manager_)
+            manager_->setActiveSceneGraphElement(tree_el_);
         scene_tab_el_ = document_->GetElementById("scene-tab");
         history_tab_el_ = document_->GetElementById("history-tab");
         logging_tab_el_ = document_->GetElementById("logging-tab");
@@ -863,19 +864,29 @@ namespace lfs::vis::gui {
             return false;
         }
 
-        last_log_generation_ = generation;
+        const bool level_changed = level != last_log_level_;
+        const bool generation_regressed = generation < last_log_generation_;
+        const bool rebuild = last_log_generation_ == std::numeric_limits<uint64_t>::max() ||
+                             level_changed || generation_regressed;
         last_log_level_ = level;
         logging_feedback_dirty_ = false;
 
-        const auto entries = logger.buffered_logs();
-        const bool has_entries = !entries.empty();
-        const size_t displayed_entry_count = std::min(entries.size(), MAX_RENDERED_LOG_ENTRIES);
+        bool rows_changed = false;
+        if (rebuild) {
+            rows_changed = rebuildLoggingRows(logger.buffered_logs());
+        } else if (generation != last_log_generation_) {
+            rows_changed = appendLoggingRows(
+                logger.buffered_logs_since(last_log_generation_, MAX_RENDERED_LOG_ENTRIES));
+        }
+        last_log_generation_ = logger.buffered_log_generation();
+        const size_t entry_count = logger.buffered_log_count();
+        const bool has_entries = entry_count != 0;
+        const size_t displayed_entry_count = std::min(entry_count, MAX_RENDERED_LOG_ENTRIES);
         const int desired_selection = logLevelSelectionIndex(level);
 
-        bool changed = false;
+        bool changed = rows_changed;
         changed |= setCachedText(logging_summary_value_el_,
-                                 formatLoggingSummary(entries.size(), displayed_entry_count, level));
-        changed |= setCachedInnerRml(logging_list_el_, loggingRowsHtml(entries));
+                                 formatLoggingSummary(entry_count, displayed_entry_count, level));
         changed |= setCachedProperty(logging_empty_el_, "display", has_entries ? "none" : "block");
         changed |= setCachedProperty(logging_list_el_, "display", has_entries ? "flex" : "none");
         changed |= setCachedText(logging_feedback_el_, logging_feedback_text_);
@@ -899,6 +910,60 @@ namespace lfs::vis::gui {
         }
 
         return changed;
+    }
+
+    bool NativeScenePanel::rebuildLoggingRows(
+        const std::vector<core::LogEntrySnapshot>& entries) {
+        if (!logging_list_el_)
+            return false;
+
+        while (auto* const child = logging_list_el_->GetFirstChild())
+            logging_list_el_->RemoveChild(child);
+        logging_rows_.clear();
+
+        auto* const document = logging_list_el_->GetOwnerDocument();
+        if (!document)
+            return false;
+
+        const size_t first = entries.size() > MAX_RENDERED_LOG_ENTRIES
+                                 ? entries.size() - MAX_RENDERED_LOG_ENTRIES
+                                 : 0;
+        for (auto it = entries.end(); it != entries.begin() + static_cast<std::ptrdiff_t>(first);) {
+            --it;
+            auto row = document->CreateElement("div");
+            row->SetAttribute("class",
+                              std::format("log-entry log-entry--{}", logLevelCssSuffix(it->level)));
+            row->SetInnerRML(loggingRowInnerRml(*it));
+            logging_rows_.push_back(logging_list_el_->AppendChild(std::move(row)));
+        }
+        return true;
+    }
+
+    bool NativeScenePanel::appendLoggingRows(
+        const std::vector<core::LogEntrySnapshot>& entries) {
+        if (!logging_list_el_ || entries.empty())
+            return false;
+
+        auto* const document = logging_list_el_->GetOwnerDocument();
+        if (!document)
+            return false;
+
+        for (const auto& entry : entries) {
+            auto row = document->CreateElement("div");
+            row->SetAttribute("class",
+                              std::format("log-entry log-entry--{}", logLevelCssSuffix(entry.level)));
+            row->SetInnerRML(loggingRowInnerRml(entry));
+            auto* const raw = logging_list_el_->InsertBefore(std::move(row),
+                                                             logging_list_el_->GetFirstChild());
+            if (raw)
+                logging_rows_.push_front(raw);
+        }
+
+        while (logging_rows_.size() > MAX_RENDERED_LOG_ENTRIES) {
+            logging_list_el_->RemoveChild(logging_rows_.back());
+            logging_rows_.pop_back();
+        }
+        return true;
     }
 
     bool NativeScenePanel::syncLocale() {
@@ -992,7 +1057,7 @@ namespace lfs::vis::gui {
             return false;
 
         bool changed = false;
-        changed |= setCachedText(summary_model_chip_el_, pluralize(tree_el_->rootCount(), "model"));
+        changed |= setCachedText(summary_model_chip_el_, pluralize(tree_el_->modelCount(), "model"));
         changed |= setCachedText(summary_node_chip_el_, pluralize(tree_el_->nodeCount(), "node"));
 
         const bool show_filter = !tree_el_->filterText().empty();
@@ -1309,6 +1374,22 @@ namespace lfs::vis::gui {
 
     bool NativeScenePanel::toggleSelectionTrainingIfFocused() {
         return active_tab_ == Tab::Scene && tree_el_ && tree_el_->toggleSelectedTrainingIfFocused();
+    }
+
+    bool NativeScenePanel::groupSelectedNodesIfFocused() {
+        if (active_tab_ != Tab::Scene || !tree_el_ ||
+            !tree_el_->IsPseudoClassSet("focus") || tree_el_->selectedCount() < 2)
+            return false;
+        (void)tree_el_->executeContextMenuAction("scene_panel:group_selected");
+        return true;
+    }
+
+    bool NativeScenePanel::ungroupSelectedNodeIfFocused() {
+        if (active_tab_ != Tab::Scene || !tree_el_ ||
+            !tree_el_->IsPseudoClassSet("focus") || tree_el_->selectedCount() != 1)
+            return false;
+        (void)tree_el_->executeContextMenuAction("scene_panel:ungroup_selected");
+        return true;
     }
 
     bool NativeScenePanel::requestDeleteSelectionIfAvailable() {
