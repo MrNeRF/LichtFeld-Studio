@@ -193,6 +193,7 @@ TEST_F(PanelLayoutRenderDemandTest, PollFalsePanelIsNotVisibleAndPollFlipDoesNot
     ASSERT_EQ(layout.bottomDockTabs().size(), 1);
     EXPECT_EQ(layout.getBottomDockActiveTab(), "test.bottom.poll.first");
     hidden->setPollResult(true);
+    ++draw_ctx.scene_generation;
     layout.renderBottomDock(draw_ctx, true, false, input, screen());
 
     ASSERT_EQ(layout.bottomDockTabs().size(), 2);
