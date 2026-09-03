@@ -260,21 +260,12 @@ body {
     align-items: center;
     justify-content: flex-end;
     box-sizing: border-box;
-    decorator: vertical-gradient(#3a3c52 #2c2d3e);
-    background-color: #313244;
     border-width: 1dp;
-    border-color: #45475a;
     border-radius: 6dp;
     font-family: "JetBrains Mono";
     font-size: 12dp;
     cursor: ew-resize;
     transition: border-color 0.12s quadratic-out, background-color 0.12s quadratic-out;
-}
-
-#quality-scrub:hover,
-#quality-scrub.is-dragging,
-#quality-scrub.is-editing {
-    border-color: #89b4fa;
 }
 
 #quality-scrub.is-editing {
@@ -287,8 +278,6 @@ body {
     top: 0;
     bottom: 0;
     width: 0%;
-    decorator: horizontal-gradient(rgba(116,168,249,110) rgba(137,180,250,140));
-    background-color: rgba(137, 180, 250, 90);
     border-radius: 5dp;
 }
 
@@ -300,7 +289,6 @@ body {
     text-align: right;
     font-family: "JetBrains Mono";
     font-size: 12dp;
-    color: #cdd6f4;
 }
 
 #quality-display {
@@ -1084,16 +1072,11 @@ body {
     margin-bottom: 2dp;
 }
 
-@media (max-width: 1620dp) {
-    .quality-group,
-    #quality-scrub,
-    .speed-text,
+@media (max-width: 1240dp) {
     .ctx-indicator {
         display: none;
     }
-}
 
-@media (max-width: 1380dp) {
     #btn-camera-path .transport-label,
     #btn-export .transport-label,
     #btn-clear .transport-label {
@@ -1107,25 +1090,22 @@ body {
     }
 }
 
-@media (max-width: 1280dp) {
-    #btn-film-strip,
-    #btn-equirect,
-    #btn-load-sequence {
-        display: none;
-    }
-}
-
 @media (max-width: 1120dp) {
     #btn-camera-path,
-    #btn-speed,
-    #sequence-fps-field,
     #btn-snap,
     #btn-follow,
     #btn-preview,
     #btn-format,
-    #resolution-field,
     #btn-clear,
     .transport-sep {
+        display: none;
+    }
+}
+
+@media (max-width: 1040dp) {
+    #btn-film-strip,
+    #btn-equirect,
+    #btn-load-sequence {
         display: none;
     }
 }

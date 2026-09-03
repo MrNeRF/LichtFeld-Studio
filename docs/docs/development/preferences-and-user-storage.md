@@ -17,6 +17,8 @@ The Preferences panel currently exposes:
 - project location for new projects and the Asset Manager Default folder;
 - application theme and UI scale;
 - status bar progress bar style (`status_bar_progress_style`: `classic` or `miner`);
+- viewport control style (`viewport_chrome_style`: `solid`, `translucent`, or `frosted`);
+- left viewport toolbar position (`viewport_toolbar_position`: `top`, `centered`, or `free`);
 - viewport scene reconstruction backend and backend-specific preset;
 - camera navigation mode and axis/view snap;
 - per-setting remember options;
@@ -65,6 +67,25 @@ UI details that are not project layout, such as HUD state, are written to
 settings, keymaps, and the Asset Manager catalog are published with
 same-directory atomic replacement so an interrupted write cannot expose a
 partially written destination.
+
+Family-aware theme selectors store the `theme` preference as `family_id:mode`,
+where `mode` is `dark`, `light`, or `auto`. Compatibility paths, including the
+legacy `set_theme` API and the Appearance section reset, may instead store a
+stable preset id. Both forms are accepted on read. Theme JSON files themselves
+are packaged application assets: the current user tree has no custom-theme
+install directory, and no preference reset or migration operation should imply
+that one exists.
+
+`viewport_chrome_style` is intentionally separate from the theme manifest. Its
+default is `translucent`; resetting Appearance restores that value. The chosen
+mode controls opacity and optional backdrop processing, while the active theme
+continues to supply palette, gradient, border, icon, and contrast colors.
+
+`viewport_toolbar_position` is also user-global and defaults to `centered`.
+`top` retains a small gap below the top bar. `free` exposes a drag handle and
+stores the chosen vertical position as the normalized `viewport_toolbar_free_y`
+value, so it remains proportional and clamped inside the viewport after window
+or UI-scale changes. Both sides of a split viewport use the same position.
 
 Scene reconstruction preferences are user-global rather than `.licht` project
 state. They affect viewport presentation only and do not alter training or

@@ -15,6 +15,11 @@
 
     <div id="primary-toolbar-root" class="panel-toolbar-root">
         <div id="primary-utility-toolbar" class="toolbar-container toolbar-vertical">
+            <div id="primary-utility-toolbar-handle" class="toolbar-drag-handle"
+                 title="@tr:preferences.viewport_toolbar_drag">
+                <span class="toolbar-drag-line"></span>
+                <span class="toolbar-drag-line"></span>
+            </div>
             <div class="icon-btn"
                  data-for="button : selection_group_buttons"
                  data-class-selected="button.selected"
@@ -259,6 +264,11 @@
 
     <div id="secondary-toolbar-root" class="panel-toolbar-root hidden">
         <div id="secondary-utility-toolbar" class="toolbar-container toolbar-vertical">
+            <div id="secondary-utility-toolbar-handle" class="toolbar-drag-handle"
+                 title="@tr:preferences.viewport_toolbar_drag">
+                <span class="toolbar-drag-line"></span>
+                <span class="toolbar-drag-line"></span>
+            </div>
             <div class="icon-btn"
                  data-for="button : selection_group_buttons"
                  data-attr-id="button.button_id"

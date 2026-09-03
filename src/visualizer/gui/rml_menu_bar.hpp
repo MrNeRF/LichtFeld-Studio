@@ -83,7 +83,7 @@ namespace lfs::vis::gui {
         int callback_index = -1;
     };
 
-    struct MenuDropdownRootView {
+    struct MenuDropdownChildView {
         int index = -1;
         std::string label;
         std::string action;
@@ -99,6 +99,24 @@ namespace lfs::vis::gui {
         bool submenu_open = false;
         int callback_index = -1;
         std::vector<MenuDropdownLeafView> children;
+    };
+
+    struct MenuDropdownRootView {
+        int index = -1;
+        std::string label;
+        std::string action;
+        std::string operator_id;
+        std::string shortcut;
+        std::string checkmark;
+        std::string tooltip;
+        bool enabled = true;
+        bool separator_before = false;
+        bool has_shortcut = false;
+        bool show_checkmark = false;
+        bool has_children = false;
+        bool submenu_open = false;
+        int callback_index = -1;
+        std::vector<MenuDropdownChildView> children;
     };
 
     class RmlMenuBar {
@@ -129,9 +147,10 @@ namespace lfs::vis::gui {
         void closeDropdown();
         void rebuildDropdownDOM();
         void sizeOpenDropdowns();
-        void setOpenSubmenu(int index);
+        void setOpenSubmenu(int root_index, int child_index);
         Rml::Element* dropdownElementAtPoint(float x, float y) const;
         int submenuIndexForElement(Rml::Element* element) const;
+        int childSubmenuIndexForElement(Rml::Element* element) const;
         void rebuildToolbarButtons();
         void dispatchToolbarAction(const std::string& action, const std::string& value);
         Rml::Element* toolbarButtonAtPoint(float x, float y) const;
@@ -181,6 +200,7 @@ namespace lfs::vis::gui {
 
         int open_menu_index_ = -1;
         int open_submenu_index_ = -1;
+        int open_child_submenu_index_ = -1;
         std::string open_menu_idname_;
         bool wants_input_ = false;
         bool render_needed_ = true;

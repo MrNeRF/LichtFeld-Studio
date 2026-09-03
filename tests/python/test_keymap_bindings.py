@@ -274,6 +274,8 @@ def _install_lf_stub(monkeypatch):
         themes=lambda: [],
         get_languages=lambda: [("en", "English")],
         get_theme=lambda: "dark",
+        get_theme_family=lambda: "lichtfeld",
+        get_theme_mode=lambda: "dark",
         get_ui_scale_preference=lambda: 0.0,
         get_zoom_speed_preference=lambda: 0.0,
         set_zoom_speed_preference=lambda _speed: None,
@@ -285,6 +287,10 @@ def _install_lf_stub(monkeypatch):
         set_scene_graph_selection_markers=lambda _enabled: None,
         get_progress_bar_style=lambda: "classic",
         set_progress_bar_style=lambda _style: None,
+        get_viewport_chrome_style=lambda: "translucent",
+        set_viewport_chrome_style=lambda _style: None,
+        get_viewport_toolbar_position=lambda: "centered",
+        set_viewport_toolbar_position=lambda _position: None,
         get_scene_reconstruction_options=lambda: [
             {
                 "id": "native",

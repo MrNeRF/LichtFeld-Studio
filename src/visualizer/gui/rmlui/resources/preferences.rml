@@ -61,14 +61,35 @@
         <div class="section-content" data-if="appearance_expanded">
           <div class="preferences-row">
             <span class="preferences-label">@tr:menu.view.theme</span>
-            <select class="preferences-select" data-value="theme_idx">
-              <option data-for="theme : themes" data-attr-value="theme.index">{{ theme.label }}</option>
+            <select class="preferences-select" data-value="theme_family_idx">
+              <option data-for="family : theme_families" data-attr-value="family.index">{{ family.label }}</option>
             </select>
+          </div>
+          <div class="preferences-row preferences-theme-variant-row" data-if="theme_has_variants">
+            <span class="preferences-label"></span>
+            <div class="preferences-theme-variants">
+              <button data-for="variant : theme_variants"
+                      class="btn preferences-theme-variant"
+                      data-class-active="variant.selected"
+                      data-event-click="set_theme_variant(variant.mode)">{{ variant.label }}</button>
+            </div>
           </div>
           <div class="preferences-row">
             <span class="preferences-label">@tr:preferences.progress_bar_style</span>
             <select class="preferences-select" data-value="progress_bar_idx">
               <option data-for="style : progress_bar_styles" data-attr-value="style.index">{{ style.label }}</option>
+            </select>
+          </div>
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:preferences.viewport_chrome_style</span>
+            <select class="preferences-select" data-value="viewport_chrome_idx">
+              <option data-for="style : viewport_chrome_styles" data-attr-value="style.index">{{ style.label }}</option>
+            </select>
+          </div>
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:preferences.viewport_toolbar_position</span>
+            <select class="preferences-select" data-value="viewport_toolbar_position_idx">
+              <option data-for="position : viewport_toolbar_positions" data-attr-value="position.index">{{ position.label }}</option>
             </select>
           </div>
           <div class="preferences-row">

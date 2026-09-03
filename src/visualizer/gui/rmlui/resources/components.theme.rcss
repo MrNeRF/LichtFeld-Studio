@@ -3,7 +3,7 @@
  * presets and wraps this file in RmlUi theme media blocks. */
 
 #window-frame {
-    background-color: @{window.surface};
+    @{window.body_decor};
     border-color: @{alpha(border,0.4)};
     border-radius: @{num(size.window_rounding)}dp;
     position: relative;
@@ -236,9 +236,11 @@ progress fill {
 }
 
 .section-header {
+    @{components.header_decor};
     color: @{text};
     border-color: @{menu.background};
     padding: @{num(size.frame_padding_y)}dp @{num(size.frame_padding_x)}dp;
+    @{components.header_shape};
 }
 
 .section-header:hover,
@@ -248,12 +250,18 @@ progress fill {
     border-color: @{menu.background};
 }
 
+.section-header:hover,
+.section-header.is-expanded {
+    @{components.header_hover_decor};
+    border-color: @{components.header_state_border};
+}
+
 .section-header.text-accent,
 .section-header.text-accent:hover,
-.section-header.text-accent.is-expanded,
-.section-header .section-arrow.text-accent,
-.section-header:hover .section-arrow.text-accent,
-.section-header.is-expanded .section-arrow.text-accent,
+.section-header.text-accent.is-expanded {
+    color: @{components.header_text};
+}
+
 .text-accent {
     color: @{primary};
 }
