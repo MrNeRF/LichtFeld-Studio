@@ -3427,13 +3427,43 @@ namespace lfs::vis::gui {
             if (!pipette_cursor_)
                 LOG_WARN("Could not create pipette cursor from icon/color-picker.png");
         }
+
+        if (!selection_add_cursor_) {
+            selection_add_cursor_ = loadColorCursorFromAsset("icon/cursor/select-add.png", 2, 2);
+            if (!selection_add_cursor_)
+                LOG_WARN("Could not create selection add cursor from icon/cursor/select-add.png");
+        }
+        if (!selection_remove_cursor_) {
+            selection_remove_cursor_ = loadColorCursorFromAsset("icon/cursor/select-remove.png", 2, 2);
+            if (!selection_remove_cursor_)
+                LOG_WARN("Could not create selection remove cursor from icon/cursor/select-remove.png");
+        }
+        if (!selection_intersect_cursor_) {
+            selection_intersect_cursor_ = loadColorCursorFromAsset("icon/cursor/select-intersect.png", 2, 2);
+            if (!selection_intersect_cursor_)
+                LOG_WARN("Could not create selection intersect cursor from icon/cursor/select-intersect.png");
+        }
     }
 
     void GuiManager::destroyCustomCursors() {
-        if (pipette_cursor_) {
+        if (pipette_cursor_ || last_selection_cursor_)
             SDL_SetCursor(SDL_GetDefaultCursor());
+        last_selection_cursor_ = nullptr;
+        if (pipette_cursor_) {
             SDL_DestroyCursor(pipette_cursor_);
             pipette_cursor_ = nullptr;
+        }
+        if (selection_add_cursor_) {
+            SDL_DestroyCursor(selection_add_cursor_);
+            selection_add_cursor_ = nullptr;
+        }
+        if (selection_remove_cursor_) {
+            SDL_DestroyCursor(selection_remove_cursor_);
+            selection_remove_cursor_ = nullptr;
+        }
+        if (selection_intersect_cursor_) {
+            SDL_DestroyCursor(selection_intersect_cursor_);
+            selection_intersect_cursor_ = nullptr;
         }
     }
 
@@ -6065,15 +6095,78 @@ namespace lfs::vis::gui {
             viewer_->getWindowManager()->manualResizeEdgeMask() != 0;
         if (!window_resize_active) {
             const auto rml_cursor = rmlui_manager_.consumeCursorRequest();
-            if (!has_floating_panels ||
-                !reg.apply_floating_resize_cursor()) {
+            const bool floating_resize_applied =
+                has_floating_panels && reg.apply_floating_resize_cursor();
+            if (!floating_resize_applied) {
+                const auto right_panel_cursor = rml_right_panel_.getCursorRequest();
+                const auto layout_cursor = panel_layout_.getCursorRequest();
                 applyRmlCursorRequest(rml_cursor);
-                apply_cursor(rml_right_panel_.getCursorRequest());
-                apply_cursor(panel_layout_.getCursorRequest());
-                if (auto* input_controller = viewer_->getInputController())
+                apply_cursor(right_panel_cursor);
+                apply_cursor(layout_cursor);
+                auto* const input_controller = viewer_->getInputController();
+                if (input_controller)
                     input_controller->applySplitterCursorOverride();
+
+                const bool gizmo_cursor_applied =
+                    isBoundsGizmoHovered() || isBoundsGizmoActive() ||
+                    isRotationGizmoHovered() || isRotationGizmoActive() ||
+                    isScaleGizmoHovered() || isScaleGizmoActive() ||
+                    isTranslationGizmoHovered() || isTranslationGizmoActive() ||
+                    gizmo_manager_.isPositionInViewportGizmo(sdl_input.mouse_x, sdl_input.mouse_y);
+                const bool higher_priority_cursor_applied =
+                    (rml_cursor != RmlCursorRequest::None &&
+                     rml_cursor != RmlCursorRequest::Arrow) ||
+                    right_panel_cursor != CursorRequest::None ||
+                    layout_cursor != CursorRequest::None ||
+                    gizmo_cursor_applied ||
+                    (input_controller && input_controller->hasViewportCursorOverride());
+                const auto pointer_hit = hitTestPointer(sdl_input.mouse_x, sdl_input.mouse_y);
+
+                std::optional<input::SelectionOp> selection_op;
+                if (input_controller) {
+                    selection_op = input_controller->selectionDragOperation();
+                    if (!selection_op && viewer_->getSelectionTool() &&
+                        viewer_->getSelectionTool()->isEnabled() &&
+                        viewer_->getEditorContext().getActiveTool() == ToolType::Selection) {
+                        selection_op = input::selectionOpForModifiers(
+                            input_controller->getBindings(),
+                            input::ToolMode::SELECTION,
+                            input_controller->currentModifierKeys());
+                    }
+                }
+                // RmlUI can publish a default-arrow request when a viewport
+                // mouse press changes its capture state. Allow the selection
+                // cursor to replace that transient reset while retaining the
+                // normal priority for specialized RmlUI cursors.
+                if (rml_cursor == RmlCursorRequest::Arrow)
+                    last_selection_cursor_ = nullptr;
+                SDL_Cursor* wanted_selection_cursor = nullptr;
+                if (!higher_priority_cursor_applied &&
+                    isPositionInViewport(sdl_input.mouse_x, sdl_input.mouse_y) &&
+                    (!guiFocusState().want_capture_mouse || selection_op.has_value()) &&
+                    !pointer_hit.blocks_pointer && !pointer_hit.blocks_mouse_button &&
+                    (selection_op.has_value() ||
+                     (viewer_->getSelectionTool() && viewer_->getSelectionTool()->isEnabled() &&
+                      viewer_->getEditorContext().getActiveTool() == ToolType::Selection))) {
+                    if (selection_op == input::SelectionOp::Add)
+                        wanted_selection_cursor = selection_add_cursor_;
+                    else if (selection_op == input::SelectionOp::Remove)
+                        wanted_selection_cursor = selection_remove_cursor_;
+                    else if (selection_op == input::SelectionOp::Intersect)
+                        wanted_selection_cursor = selection_intersect_cursor_;
+                }
+                if (higher_priority_cursor_applied) {
+                    last_selection_cursor_ = nullptr;
+                } else if (wanted_selection_cursor != last_selection_cursor_ ||
+                           (wanted_selection_cursor && wanted_selection_cursor != SDL_GetCursor())) {
+                    SDL_SetCursor(wanted_selection_cursor ? wanted_selection_cursor : SDL_GetDefaultCursor());
+                    last_selection_cursor_ = wanted_selection_cursor;
+                }
+            } else {
+                last_selection_cursor_ = nullptr;
             }
         } else if (auto* const wm = viewer_->getWindowManager()) {
+            last_selection_cursor_ = nullptr;
             wm->refreshResizeCursor();
         }
         // Re-sample after every Rml surface has processed input so the next

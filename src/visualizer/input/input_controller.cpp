@@ -553,6 +553,7 @@ namespace lfs::vis {
             current_cursor_ = CursorType::Default;
         }
         held_keys_.clear();
+        selection_drag_op_.reset();
         pending_click_drag_ = {};
         forced_mouse_press_action_ = input::Action::NONE;
         text_input_viewport_click_button_ = -1;
@@ -596,6 +597,16 @@ namespace lfs::vis {
         if (m & SDL_KMOD_ALT)
             mods |= input::KEYMOD_ALT;
         return mods;
+    }
+
+    bool InputController::hasViewportCursorOverride() const {
+        return current_cursor_ == CursorType::Resize;
+    }
+
+    std::optional<input::SelectionOp> InputController::selectionDragOperation() const {
+        if (!selection_drag_op_ || !op::operators().hasModalOperator())
+            return std::nullopt;
+        return selection_drag_op_;
     }
 
     void InputController::refreshSplitDividerCache() const {
@@ -1045,7 +1056,22 @@ namespace lfs::vis {
                         props.set("use_depth_filter", selection_tool_->isDepthFilterEnabled());
 
                         const auto result = op::operators().invoke(op::BuiltinOp::SelectionStroke, &props);
-                        if (result.status == op::OperatorResult::RUNNING_MODAL) {
+                        if (result.status == op::OperatorResult::RUNNING_MODAL ||
+                            op::operators().hasModalOperator()) {
+                            switch (bound_action) {
+                            case input::Action::SELECTION_ADD:
+                                selection_drag_op_ = input::SelectionOp::Add;
+                                break;
+                            case input::Action::SELECTION_REMOVE:
+                                selection_drag_op_ = input::SelectionOp::Remove;
+                                break;
+                            case input::Action::SELECTION_INTERSECT:
+                                selection_drag_op_ = input::SelectionOp::Intersect;
+                                break;
+                            default:
+                                selection_drag_op_.reset();
+                                break;
+                            }
                             // Operator is now modal, don't set drag mode - modal dispatch handles it
                         }
                     } else if (align_tool_ && align_tool_->isEnabled()) {

@@ -424,6 +424,10 @@ namespace lfs::vis {
             std::unique_ptr<lfs::vis::VulkanViewportPass> vulkan_viewport_pass_;
             bool vulkan_gui_ = false;
             SDL_Cursor* pipette_cursor_ = nullptr;
+            SDL_Cursor* selection_add_cursor_ = nullptr;
+            SDL_Cursor* selection_remove_cursor_ = nullptr;
+            SDL_Cursor* selection_intersect_cursor_ = nullptr;
+            SDL_Cursor* last_selection_cursor_ = nullptr;
 
             // Native panel wrapper storage (registered with PanelRegistry)
             std::vector<std::shared_ptr<IPanel>> native_panel_storage_;

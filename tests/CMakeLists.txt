@@ -247,6 +247,7 @@ set(TEST_FILES
     test_device_fault.cpp
     device_fault_cuda_utils.cu
     test_selection_ops.cpp
+    test_selection_cursor.cpp
     test_tensor_basic.cpp
     test_tensor_ops.cpp
     test_tensor_memory.cpp
