@@ -238,6 +238,66 @@ def test_histogram_panel_requests_update_from_reactive_store(histogram_panel_mod
     assert panel._handle.request_update_count == 4
 
 
+def test_histogram_async_result_waits_for_ui_scheduler(histogram_panel_module, monkeypatch):
+    module = histogram_panel_module
+    panel = module.HistogramPanel()
+    panel._handle = _UpdateHandleStub()
+    panel._histogram_compute_token = 7
+    scheduled = []
+    panel._ui_scheduler = scheduled.append
+    monkeypatch.setattr(module.lf, "get_scene_generation", lambda: 3)
+    monkeypatch.setattr(module.RuntimeState, "selection_generation", SimpleNamespace(value=11))
+    cache_key = panel._histogram_cache_key(3, 11)
+
+    panel._schedule_histogram_result(7, cache_key, {"kind": "empty", "scope_active": False})
+
+    assert len(scheduled) == 1
+    assert panel._handle.dirty_all_count == 0
+    scheduled.pop()()
+    assert panel._empty_title == "No visible values"
+    assert panel._handle.dirty_all_count > 0
+
+
+def test_histogram_cache_key_tracks_scene_attribute_bins_and_selection(histogram_panel_module):
+    panel = histogram_panel_module.HistogramPanel()
+    panel._metric_id = "scale_x"
+    panel._histogram_bin_count = 64
+
+    key = panel._histogram_cache_key(19, 23)
+
+    assert key[:4] == (19, "scale_x", 64, 23)
+    panel._histogram_bin_count = 65
+    assert panel._histogram_cache_key(19, 23) != key
+
+
+def test_worker_histogram_matches_numpy_for_random_tensor(histogram_panel_module, lf, numpy):
+    rng = numpy.random.default_rng(42)
+    values = rng.uniform(-2.0, 3.0, size=257).astype(numpy.float32)
+    tensor = lf.Tensor.from_numpy(values)
+
+    class Model:
+        num_points = len(values)
+
+        def get_opacity(self):
+            return tensor
+
+    result = histogram_panel_module.HistogramPanel._compute_histogram_result(
+        SimpleNamespace(get_nodes=lambda: []),
+        Model(),
+        "opacity",
+        32,
+        "",
+        20,
+        20,
+        (None, None),
+        (None, None),
+        set(),
+    )
+
+    assert result["kind"] == "ok"
+    expected, _ = numpy.histogram(values, bins=numpy.asarray(result["primary"]["edges"]))
+    assert result["primary"]["counts"] == expected.tolist()
+
 def test_histogram_metrics_include_positions_volume_anisotropy_and_erank(histogram_panel_module):
     metric_ids = {metric.id for metric in histogram_panel_module.METRICS}
 

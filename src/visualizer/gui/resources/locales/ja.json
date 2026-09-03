@@ -2090,6 +2090,10 @@
         }
       }
     },
+    "computing": {
+      "title": "ヒストグラムを計算中…",
+      "message": "データの準備ができ次第、分布が表示されます。"
+    },
     "delete_failed": {
       "title": "削除に失敗しました",
       "status": "削除に失敗しました: {message}",
@@ -2113,6 +2117,10 @@
       "metric_unavailable": {
         "title": "メトリックを利用できません",
         "message": "選択したメトリックを結合したガウシアンモデルから読み取れませんでした。"
+      },
+      "compute_failed": {
+        "title": "ヒストグラムに失敗しました",
+        "message": "ヒストグラムの計算に失敗しました: {error}"
       },
       "no_visible_values": {
         "title": "表示可能な値がありません",

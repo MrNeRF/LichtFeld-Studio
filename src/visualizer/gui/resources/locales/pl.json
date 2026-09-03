@@ -2090,6 +2090,10 @@
         }
       }
     },
+    "computing": {
+      "title": "Obliczanie histogramu…",
+      "message": "Rozkład pojawi się, gdy tylko dane będą gotowe."
+    },
     "delete_failed": {
       "title": "Usuwanie nie powiodło się",
       "status": "Usuwanie nie powiodło się: {message}",
@@ -2113,6 +2117,10 @@
       "metric_unavailable": {
         "title": "Metryka niedostępna",
         "message": "Nie można odczytać wybranej metryki z połączonego modelu Gaussa."
+      },
+      "compute_failed": {
+        "title": "Histogram nie powiódł się",
+        "message": "Obliczanie histogramu nie powiodło się: {error}"
       },
       "no_visible_values": {
         "title": "Brak widocznych wartości",

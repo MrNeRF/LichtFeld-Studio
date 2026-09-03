@@ -2090,6 +2090,10 @@
         }
       }
     },
+    "computing": {
+      "title": "正在计算直方图…",
+      "message": "数据准备就绪后将显示分布。"
+    },
     "delete_failed": {
       "title": "删除失败",
       "status": "删除失败：{message}",
@@ -2113,6 +2117,10 @@
       "metric_unavailable": {
         "title": "指标不可用",
         "message": "无法从合并的高斯模型中读取所选指标。"
+      },
+      "compute_failed": {
+        "title": "直方图计算失败",
+        "message": "直方图计算失败：{error}"
       },
       "no_visible_values": {
         "title": "无可见值",

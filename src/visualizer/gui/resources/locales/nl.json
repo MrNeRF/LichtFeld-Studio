@@ -2090,6 +2090,10 @@
         }
       }
     },
+    "computing": {
+      "title": "Histogram wordt berekend…",
+      "message": "De verdeling verschijnt zodra de gegevens klaar zijn."
+    },
     "delete_failed": {
       "title": "Verwijderen mislukt",
       "status": "Verwijderen mislukt: {message}",
@@ -2113,6 +2117,10 @@
       "metric_unavailable": {
         "title": "Metriek niet beschikbaar",
         "message": "De geselecteerde metriek kon niet uit het gecombineerde Gaussische model worden gelezen."
+      },
+      "compute_failed": {
+        "title": "Histogram mislukt",
+        "message": "Histogramberekening mislukt: {error}"
       },
       "no_visible_values": {
         "title": "Geen zichtbare waarden",

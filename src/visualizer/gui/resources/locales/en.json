@@ -2090,6 +2090,10 @@
         }
       }
     },
+    "computing": {
+      "title": "Computing histogram…",
+      "message": "The distribution will appear as soon as the data is ready."
+    },
     "delete_failed": {
       "title": "Delete Failed",
       "status": "Delete failed: {message}",
@@ -2113,6 +2117,10 @@
       "metric_unavailable": {
         "title": "Metric unavailable",
         "message": "The selected metric could not be read from the combined Gaussian model."
+      },
+      "compute_failed": {
+        "title": "Histogram failed",
+        "message": "Histogram computation failed: {error}"
       },
       "no_visible_values": {
         "title": "No visible values",

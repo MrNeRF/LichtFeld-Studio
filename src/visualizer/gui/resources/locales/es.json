@@ -2090,6 +2090,10 @@
         }
       }
     },
+    "computing": {
+      "title": "Calculando el histograma…",
+      "message": "La distribución aparecerá en cuanto los datos estén listos."
+    },
     "delete_failed": {
       "title": "Error al eliminar",
       "status": "Error al eliminar: {message}",
@@ -2113,6 +2117,10 @@
       "metric_unavailable": {
         "title": "Métrica no disponible",
         "message": "No se pudo leer la métrica seleccionada del modelo combinado de gaussianas."
+      },
+      "compute_failed": {
+        "title": "Error del histograma",
+        "message": "Error al calcular el histograma: {error}"
       },
       "no_visible_values": {
         "title": "No hay valores visibles",
