@@ -74,12 +74,12 @@
     "title": "Wprowadzenie",
     "description": "Dowiedz się, jak przygotować zbiory danych i rozpocząć pracę z LichtFeld Studio:",
     "wiki_section": "WIKI & FAQ",
+    "video_overview": "Wszystko, co LichtFeld Studio potrafi dziś",
     "video_automotive": "3DGS dla marketingu motoryzacyjnego",
     "video_intro": "Trening na Obrazach Equirectangular 360",
     "video_latest": "LichtFeld v0.3.0 Przegląd Funkcji",
     "video_reality_scan": "Zbiór Danych Reality Scan",
     "video_colmap": "Samouczek COLMAP",
-    "video_lichtfeld": "Samouczek LichtFeld",
     "video_masks": "Samouczek Masek"
   },
   "about": {
