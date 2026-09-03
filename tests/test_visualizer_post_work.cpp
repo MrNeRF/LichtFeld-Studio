@@ -10204,6 +10204,73 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
+           SaveWhileTrainerWriterInFlightQueuesUntilCompletion) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto project_path = temporary_.path / "queued-save.licht";
+        write_empty_project(project_path);
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(viewer.projectOpen(project_path, ProjectSwitchDisposition::DiscardChanges));
+        ASSERT_TRUE(waitForHydrationComplete(viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+
+        auto& scene = viewer.getScene();
+        const auto cameras = scene.addGroup("Train cameras");
+        scene.addCamera("camera.png", cameras, make_project_request_test_camera());
+        viewer.getTrainerManager()->setTrainer(std::make_unique<lfs::training::Trainer>(scene));
+        auto* const trainer = viewer.getTrainer();
+        ASSERT_NE(trainer, nullptr);
+        trainer->project_writer_in_flight_.store(true, std::memory_order_release);
+
+        auto* const lifecycle = viewer.project_lifecycle_.get();
+        ASSERT_NE(lifecycle, nullptr);
+        const auto start = std::chrono::steady_clock::now();
+        ASSERT_TRUE(lifecycle->save(false));
+        EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::milliseconds(100));
+        ASSERT_TRUE(lifecycle->pending_explicit_save_regenerate_preview_);
+        ASSERT_TRUE(lifecycle->save(true));
+        ASSERT_TRUE(lifecycle->pending_explicit_save_regenerate_preview_);
+        EXPECT_FALSE(*lifecycle->pending_explicit_save_regenerate_preview_);
+
+        trainer->project_writer_in_flight_.store(false, std::memory_order_release);
+        lifecycle->updateMaintenance();
+        EXPECT_FALSE(lifecycle->pending_explicit_save_regenerate_preview_);
+        ASSERT_TRUE(lifecycle->project_write_job_);
+        ASSERT_TRUE(waitUntil([&] {
+            const auto poll = lifecycle->pollWrite();
+            return !poll.running;
+        },
+                              std::chrono::seconds(10)));
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           TemporaryPauseRequestIsObservedAtNextSafePoint) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(arm_running_trainer(viewer));
+        auto* const trainer_manager = viewer.getTrainerManager();
+        auto* const trainer = viewer.getTrainer();
+        ASSERT_NE(trainer_manager, nullptr);
+        ASSERT_NE(trainer, nullptr);
+
+        const auto start = std::chrono::steady_clock::now();
+        trainer_manager->pauseTrainingTemporary();
+        EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::milliseconds(100));
+        EXPECT_FALSE(trainer->is_paused());
+
+        trainer->handle_control_requests(0, {});
+        EXPECT_TRUE(trainer->is_paused());
+
+        trainer_manager->resumeTrainingTemporary();
+        trainer->handle_control_requests(0, {});
+        EXPECT_FALSE(trainer->is_paused());
+    }
+
+    TEST_F(VisualizerImplResetTest,
            SaveAsWhilePausedTrainingRoutesThroughLiveTrainer) {
         // The same completion_pending_ inner gate on saveAs rejects
         // Save As during paused training instead of routing through

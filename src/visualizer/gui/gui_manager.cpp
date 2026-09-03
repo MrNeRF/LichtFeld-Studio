@@ -143,7 +143,6 @@ namespace lfs::vis::gui {
 
     namespace {
         const FrameInputBuffer* s_frame_input = nullptr;
-        constexpr auto kInteractiveTrainingPauseWait = std::chrono::milliseconds(300);
         constexpr auto kInteractiveTransitionGuardDuration = std::chrono::milliseconds(1200);
         constexpr auto kInteractiveIdleToggleMinInterval = std::chrono::milliseconds(750);
         constexpr auto kInteractiveTrainingToggleMinInterval = std::chrono::milliseconds(3000);
@@ -4649,6 +4648,7 @@ namespace lfs::vis::gui {
             }
         }
         endInteractiveTransitionGuard();
+        interactive_transition_pause_pending_ = false;
         ui_toggle_pending_ = false;
         fullscreen_toggle_pending_ = false;
         interactive_transition_guard_until_ = {};
@@ -5309,6 +5309,20 @@ namespace lfs::vis::gui {
         }
 
         beginInteractiveTransitionGuard(InteractiveTransitionTrainingPolicy::PauseAndResume);
+        auto* const trainer = viewer_ ? viewer_->getTrainerManager() : nullptr;
+        if (interactive_transition_pause_pending_) {
+            if (!trainer || !trainer->isRunning()) {
+                interactive_transition_pause_pending_ = false;
+            } else if (!trainer->isPaused()) {
+                // The pause request is consumed at the trainer's next safe
+                // point. Leave the transition pending and let a later frame
+                // observe the paused state; never wait on the viewer thread.
+                fullscreen_toggle_pending_ = true;
+                return;
+            } else {
+                interactive_transition_pause_pending_ = false;
+            }
+        }
         if (!drainVulkanFramesForInteractiveTransition(*wm, "fullscreen")) {
             fullscreen_toggle_pending_ = true;
             fullscreen_toggle_next_allowed_at_ = now + kInteractiveTrainingToggleMinInterval;
@@ -5323,7 +5337,6 @@ namespace lfs::vis::gui {
             return;
         }
 
-        auto* const trainer = viewer_ ? viewer_->getTrainerManager() : nullptr;
         const bool training_active = trainer && trainer->isRunning();
         wm->setFullscreen(fullscreen_target_state_);
 
@@ -5354,15 +5367,23 @@ namespace lfs::vis::gui {
             return;
         }
 
-        const auto pause_result = trainer->pauseTrainingTemporaryAndWait(kInteractiveTrainingPauseWait);
-        interactive_transition_resume_training_ = pause_result.resume_required;
-        if (!pause_result.synchronized) {
-            LOG_WARN("Vulkan UI transition proceeding without a synchronized training pause");
-        }
+        interactive_transition_resume_training_ = true;
+        interactive_transition_pause_pending_ = !trainer->isPaused();
+        trainer->pauseTrainingTemporary();
+        LOG_DEBUG("Training pause requested asynchronously for interactive transition: paused={}",
+                  !interactive_transition_pause_pending_);
     }
 
     void GuiManager::updateInteractiveTransitionGuard() {
         const auto now = std::chrono::steady_clock::now();
+        if (interactive_transition_pause_pending_) {
+            auto* const trainer = viewer_ ? viewer_->getTrainerManager() : nullptr;
+            if (trainer && trainer->isRunning() && !trainer->isPaused()) {
+                interactive_transition_guard_until_ = now + kInteractiveTransitionGuardDuration;
+                return;
+            }
+            interactive_transition_pause_pending_ = false;
+        }
         if (now < interactive_transition_guard_until_) {
             return;
         }
@@ -5392,7 +5413,7 @@ namespace lfs::vis::gui {
 
         interactive_transition_resume_training_ = false;
         auto* const trainer = viewer_ ? viewer_->getTrainerManager() : nullptr;
-        if (trainer && trainer->isRunning()) {
+        if (trainer) {
             trainer->resumeTrainingTemporary();
             LOG_TRACE("Training resumed after Vulkan UI transition guard");
         }

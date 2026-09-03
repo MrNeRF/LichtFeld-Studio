@@ -12,6 +12,7 @@
 
 #include <RmlUi/Core/EventListener.h>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -198,6 +199,10 @@ namespace lfs::vis::gui {
         FeedbackTone logging_feedback_tone_ = FeedbackTone::Info;
         bool logging_feedback_dirty_ = false;
         bool syncing_logging_selection_ = false;
+        std::deque<Rml::Element*> logging_rows_;
+
+        bool rebuildLoggingRows(const std::vector<lfs::core::LogEntrySnapshot>& entries);
+        bool appendLoggingRows(const std::vector<lfs::core::LogEntrySnapshot>& entries);
     };
 
 } // namespace lfs::vis::gui
