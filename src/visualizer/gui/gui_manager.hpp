@@ -182,6 +182,8 @@ namespace lfs::vis {
             [[nodiscard]] bool selectAllSceneNodesIfFocused();
             [[nodiscard]] bool toggleSceneSelectionVisibilityIfFocused();
             [[nodiscard]] bool toggleSceneSelectionTrainingIfFocused();
+            [[nodiscard]] bool groupSelectedSceneNodesIfFocused();
+            [[nodiscard]] bool ungroupSelectedSceneNodeIfFocused();
             [[nodiscard]] bool requestDeleteSceneSelectionIfAvailable();
             [[nodiscard]] SceneTreeSessionChrome captureSceneTreeChrome(
                 const lfs::core::Scene& scene) const;

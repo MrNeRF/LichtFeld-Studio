@@ -1793,6 +1793,16 @@ namespace lfs::vis {
                     (void)gui->toggleSceneSelectionTrainingIfFocused();
                 return;
 
+            case input::Action::GROUP_SELECTED_SCENE_NODES:
+                if (gui)
+                    (void)gui->groupSelectedSceneNodesIfFocused();
+                return;
+
+            case input::Action::UNGROUP_SELECTED_SCENE_NODE:
+                if (gui)
+                    (void)gui->ungroupSelectedSceneNodeIfFocused();
+                return;
+
             case input::Action::TOGGLE_MCP_SERVER:
                 toggleMcpRuntimeEnabled();
                 return;

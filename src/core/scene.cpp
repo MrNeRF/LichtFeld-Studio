@@ -4771,10 +4771,13 @@ namespace lfs::core {
             }
         }
 
-        int final_idx = index < 0 ? static_cast<int>(root_storage.size()) : index;
-        if (was_root && current_root_index < static_cast<size_t>(final_idx))
-            --final_idx;
-        final_idx = std::clamp(final_idx, 0, static_cast<int>(root_storage.size()));
+        int final_idx = static_cast<int>(root_storage.size());
+        if (index >= 0) {
+            final_idx = index;
+            if (was_root && current_root_index < static_cast<size_t>(final_idx))
+                --final_idx;
+            final_idx = std::clamp(final_idx, 0, static_cast<int>(root_storage.size()));
+        }
         if (was_root && static_cast<size_t>(final_idx) == current_root_index)
             return false;
 

@@ -3868,6 +3868,14 @@ namespace lfs::vis::gui {
         return native_scene_panel_ && native_scene_panel_->toggleSelectionTrainingIfFocused();
     }
 
+    bool GuiManager::groupSelectedSceneNodesIfFocused() {
+        return native_scene_panel_ && native_scene_panel_->groupSelectedNodesIfFocused();
+    }
+
+    bool GuiManager::ungroupSelectedSceneNodeIfFocused() {
+        return native_scene_panel_ && native_scene_panel_->ungroupSelectedNodeIfFocused();
+    }
+
     bool GuiManager::requestDeleteSceneSelectionIfAvailable() {
         return native_scene_panel_ && native_scene_panel_->requestDeleteSelectionIfAvailable();
     }
