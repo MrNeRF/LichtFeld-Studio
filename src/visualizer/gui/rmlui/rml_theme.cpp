@@ -561,11 +561,11 @@ namespace lfs::vis::gui::rml_theme {
                                                      colorToRml(t.gradients.window_body->end), surface)
                                                : std::format("background-color: {}", window_surface);
             const auto panel_body_decor = t.gradients.panel_body
-                                               ? std::format(
-                                                     "decorator: vertical-gradient({} {}); background-color: {}",
-                                                     colorToRml(t.gradients.panel_body->start),
-                                                     colorToRml(t.gradients.panel_body->end), surface)
-                                               : std::format("background-color: {}", surface);
+                                              ? std::format(
+                                                    "decorator: vertical-gradient({} {}); background-color: {}",
+                                                    colorToRml(t.gradients.panel_body->start),
+                                                    colorToRml(t.gradients.panel_body->end), surface)
+                                              : std::format("background-color: {}", surface);
             const bool enhanced_panel_chrome = t.gradients.panel_body.has_value();
             const auto panel_host_body_decor = enhanced_panel_chrome
                                                    ? "decorator: none; background-color: transparent"
@@ -629,7 +629,7 @@ namespace lfs::vis::gui::rml_theme {
                                                          colorToRml(progress_gradient.start),
                                                          colorToRml(progress_gradient.end));
             const auto translucent_vertical_decor = [](const ThemeGradient& gradient,
-                                                        const float alpha) {
+                                                       const float alpha) {
                 return std::format(
                     "decorator: vertical-gradient({} {}); background-color: transparent",
                     colorToRmlAlpha(gradient.start, alpha),

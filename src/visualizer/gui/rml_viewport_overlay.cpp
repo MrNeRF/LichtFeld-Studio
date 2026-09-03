@@ -1075,9 +1075,9 @@ namespace lfs::vis::gui {
             const bool event_inside = event_x >= 0.0f && event_x < vp_size_.x &&
                                       event_y >= 0.0f && event_y < vp_size_.y;
             const auto* const event_element = event_inside
-                                                    ? rml_context_->GetElementAtPoint(
-                                                          Rml::Vector2f(event_x, event_y))
-                                                    : nullptr;
+                                                  ? rml_context_->GetElementAtPoint(
+                                                        Rml::Vector2f(event_x, event_y))
+                                                  : nullptr;
             if (!vram_drag_capture && !toolbar_drag_capture &&
                 viewportOverlayHoverRoot(event_element) == nullptr)
                 continue;
