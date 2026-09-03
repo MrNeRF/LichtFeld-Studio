@@ -1177,7 +1177,7 @@ class _UtilityToolbarController:
                 "util-viewport-export",
                 "toggle_viewport_export",
                 "",
-                _icon_src("sequencer/export"),
+                _icon_src("viewport-export"),
                 tooltip_key="toolbar.viewport_export",
                 tooltip_text="Viewport Export",
                 selected=self._is_viewport_export_visible(),

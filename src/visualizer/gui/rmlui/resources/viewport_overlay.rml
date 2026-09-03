@@ -639,7 +639,7 @@
                             data-attr-title="selection_invert_label"
                             data-attrif-disabled="!selection_has_scene"
                             data-event-click="selection_action('invert')">
-                        <img src="../icon/contrast.png" />
+                        <img src="../icon/select-invert.png" />
                     </button>
                     <button class="icon-btn viewport-transform-action"
                             data-tooltip="tooltip.selection_select_all"
@@ -647,7 +647,7 @@
                             data-attr-title="selection_select_all_label"
                             data-attrif-disabled="!selection_has_scene"
                             data-event-click="selection_action('select_all')">
-                        <img src="../icon/selection.png" />
+                        <img src="../icon/select-all.png" />
                     </button>
                     <button class="icon-btn viewport-transform-action"
                             data-tooltip="tooltip.selection_unselect"
@@ -655,7 +655,7 @@
                             data-attr-title="selection_unselect_label"
                             data-attrif-disabled="!selection_has_selection"
                             data-event-click="selection_action('unselect')">
-                        <img src="../icon/scene/x.png" />
+                        <img src="../icon/deselect.png" />
                     </button>
                 </div>
             </div>
