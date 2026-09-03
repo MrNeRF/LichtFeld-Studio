@@ -722,14 +722,6 @@ namespace lfs::vis::gui {
             actions->SetClass("row-actions", true);
             auto* actions_el = slot.content->AppendChild(std::move(actions));
 
-            auto visibility_slot = doc->CreateElement("span");
-            visibility_slot->SetClass("row-action-slot", true);
-            auto* visibility_slot_el = actions_el->AppendChild(std::move(visibility_slot));
-            auto vis_icon = doc->CreateElement("img");
-            vis_icon->SetClass("row-icon", true);
-            vis_icon->SetAttribute("data-action", "toggle-vis");
-            slot.vis_icon = visibility_slot_el->AppendChild(std::move(vis_icon));
-
             auto training_slot = doc->CreateElement("span");
             training_slot->SetClass("row-action-slot", true);
             training_slot->SetClass("training-action-slot", true);
@@ -744,6 +736,14 @@ namespace lfs::vis::gui {
             auto mixed_mark = doc->CreateElement("span");
             mixed_mark->SetClass("training-mixed-mark", true);
             slot.training_mixed_mark = training_slot_el->AppendChild(std::move(mixed_mark));
+
+            auto visibility_slot = doc->CreateElement("span");
+            visibility_slot->SetClass("row-action-slot", true);
+            auto* visibility_slot_el = actions_el->AppendChild(std::move(visibility_slot));
+            auto vis_icon = doc->CreateElement("img");
+            vis_icon->SetClass("row-icon", true);
+            vis_icon->SetAttribute("data-action", "toggle-vis");
+            slot.vis_icon = visibility_slot_el->AppendChild(std::move(vis_icon));
 
             auto delete_slot = doc->CreateElement("span");
             delete_slot->SetClass("row-action-slot", true);
