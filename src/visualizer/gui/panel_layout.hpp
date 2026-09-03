@@ -154,14 +154,14 @@ namespace lfs::vis::gui {
         float bottomDockTopY() const { return bottom_dock_top_y_; }
         const std::vector<PanelSummary>& bottomDockTabs() const { return bottom_dock_tabs_; }
         const std::string& getBottomDockActiveTab() const { return bottom_dock_active_tab_id_; }
-        void setBottomDockActiveTab(const std::string& id) { bottom_dock_active_tab_id_ = id; }
+        void setBottomDockActiveTab(const std::string& id);
         bool bottomDockActiveTabChanged() const { return bottom_dock_active_tab_changed_; }
         PanelDrawBounds bottomDockTabBarRect() const { return bottom_dock_tab_bar_rect_; }
         float getLeftDockWidth() const { return left_dock_width_; }
         void setLeftDockWidth(float width);
         bool isLeftDockVisible() const { return left_dock_visible_; }
         bool isShowSequencer() const { return show_sequencer_; }
-        void setShowSequencer(bool v) { show_sequencer_ = v; }
+        void setShowSequencer(bool v);
 
         const std::string& getActiveTab() const { return active_tab_id_; }
         void setActiveTab(const std::string& id) { active_tab_id_ = id; }

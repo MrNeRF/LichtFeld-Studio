@@ -128,6 +128,7 @@ namespace lfs::vis::gui {
         void markDocumentSyncDirty();
         bool syncBuiltinDocument(bool force);
         bool updateToolbarRoots();
+        bool updateToolbarRailLayout();
         bool applyToolbarPosition();
         void attachToolbarDragListeners();
         void resetToolbarDragListeners();
@@ -189,6 +190,8 @@ namespace lfs::vis::gui {
         float applied_secondary_toolbar_x_ = 0.0f;
         float applied_secondary_toolbar_width_ = -1.0f;
         bool toolbar_roots_dirty_ = true;
+        bool toolbar_rail_layout_dirty_ = true;
+        float last_toolbar_dpi_ = 0.0f;
         bool toolbar_position_preference_dirty_ = true;
         std::string viewport_toolbar_position_ = "centered";
         std::string applied_viewport_toolbar_position_;

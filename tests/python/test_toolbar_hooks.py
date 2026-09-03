@@ -1591,8 +1591,8 @@ def test_viewport_toolbar_uses_theme_glass_without_backdrop_filter():
         "position: relative;",
         "width: 38dp;",
         "height: auto;",
-        "max-height: 90%;",
         "padding: 5dp 3dp;",
+        "overflow: hidden;",
     ):
         assert declaration in toolbar_rule
     assert "bottom:" not in toolbar_rule

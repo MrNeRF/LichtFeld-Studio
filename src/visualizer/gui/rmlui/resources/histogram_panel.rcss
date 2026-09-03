@@ -82,6 +82,9 @@
 }
 
 .histogram-panel-action {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     min-width: 64dp;
 }
 
@@ -491,6 +494,9 @@
 }
 
 .range-reset {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     min-width: 56dp;
     margin-left: 4dp;
 }
@@ -798,6 +804,9 @@
 }
 
 .histogram-history-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     width: 30dp;
     height: 30dp;
     min-width: 30dp;
@@ -809,7 +818,7 @@
     display: block;
     width: 16dp;
     height: 16dp;
-    margin: 6dp auto 0;
+    margin: 0;
     image-color: rgba(236, 241, 255, 235);
 }
 
@@ -818,6 +827,9 @@
 }
 
 .footer-text-action {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     min-width: 78dp;
 }
 

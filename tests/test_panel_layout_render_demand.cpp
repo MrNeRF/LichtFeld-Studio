@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <visualizer/app_store.hpp>
 #include <visualizer/gui/panel_layout.hpp>
 #include <visualizer/gui/panel_registry.hpp>
 
@@ -511,4 +512,26 @@ TEST_F(PanelLayoutRenderDemandTest,
                                             ctx);
     EXPECT_FALSE(panel->pending_update);
     EXPECT_FALSE(PanelRegistry::instance().needsAnimationFrameForVisiblePanels(visibility));
+}
+
+TEST_F(PanelLayoutRenderDemandTest, BottomDockAndSequencerChangesPublishToolbarGeneration) {
+    using namespace lfs::vis::gui;
+
+    PanelLayoutManager layout;
+    auto& generation = lfs::vis::app_store().viewport_toolbar_generation;
+    const auto initial = generation.get();
+
+    layout.setBottomDockActiveTab("test.bottom.first");
+    EXPECT_EQ(generation.get(), initial + 1);
+    layout.setBottomDockActiveTab("test.bottom.first");
+    EXPECT_EQ(generation.get(), initial + 1);
+    layout.setBottomDockActiveTab("test.bottom.second");
+    EXPECT_EQ(generation.get(), initial + 2);
+
+    layout.setShowSequencer(true);
+    EXPECT_EQ(generation.get(), initial + 3);
+    layout.setShowSequencer(true);
+    EXPECT_EQ(generation.get(), initial + 3);
+    layout.setShowSequencer(false);
+    EXPECT_EQ(generation.get(), initial + 4);
 }

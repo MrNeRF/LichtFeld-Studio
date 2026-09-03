@@ -7,6 +7,7 @@
 #include "gui/panels/python_console_panel.hpp"
 #include "gui/rml_viewport_overlay.hpp"
 #include "python/python_runtime.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer_impl.hpp"
 #include <algorithm>
 #include <cmath>
@@ -30,6 +31,20 @@ namespace lfs::vis::gui {
 
     PanelLayoutManager::PanelLayoutManager() = default;
 
+    void PanelLayoutManager::setBottomDockActiveTab(const std::string& id) {
+        if (bottom_dock_active_tab_id_ == id)
+            return;
+        bottom_dock_active_tab_id_ = id;
+        lfs::vis::publish_viewport_toolbar_generation();
+    }
+
+    void PanelLayoutManager::setShowSequencer(const bool visible) {
+        if (show_sequencer_ == visible)
+            return;
+        show_sequencer_ = visible;
+        lfs::vis::publish_viewport_toolbar_generation();
+    }
+
     void PanelLayoutManager::loadState() {
         // Legacy layout.json remains an import-only first-run reader. Project
         // panel geometry is authoritative in GUIL (right_panel_width,
@@ -38,7 +53,7 @@ namespace lfs::vis::gui {
         // layout.json so a later GUIL restore cannot fight stale user prefs.
         LayoutState state;
         state.load();
-        show_sequencer_ = false;
+        setShowSequencer(false);
         previous_bottom_docked_ids_.clear();
         bottom_dock_sync_seeded_ = false;
     }
@@ -74,9 +89,9 @@ namespace lfs::vis::gui {
         if (std::isfinite(state.left_dock_width) &&
             state.left_dock_width > 0.0f)
             left_dock_width_ = state.left_dock_width;
-        show_sequencer_ = state.show_sequencer;
+        setShowSequencer(state.show_sequencer);
         active_tab_id_ = state.active_tab_id;
-        bottom_dock_active_tab_id_ = state.bottom_dock_active_tab_id;
+        setBottomDockActiveTab(state.bottom_dock_active_tab_id);
         previous_bottom_docked_ids_.clear();
         bottom_dock_sync_seeded_ = false;
         tab_scroll_offset_ = std::isfinite(state.tab_scroll_offset)
@@ -546,7 +561,7 @@ namespace lfs::vis::gui {
         if (bottom_dock_sync_seeded_) {
             for (const auto& tab : docked_tabs) {
                 if (!previous_bottom_docked_ids_.contains(tab.id)) {
-                    bottom_dock_active_tab_id_ = tab.id;
+                    setBottomDockActiveTab(tab.id);
                     bottom_dock_active_tab_changed_ = true;
                 }
             }
@@ -564,7 +579,7 @@ namespace lfs::vis::gui {
                                                 ? std::string{}
                                                 : bottom_dock_tabs_.front().id;
             bottom_dock_active_tab_changed_ = bottom_dock_active_tab_id_ != next_active;
-            bottom_dock_active_tab_id_ = next_active;
+            setBottomDockActiveTab(next_active);
         }
         if (bottom_dock_tabs_.empty()) {
             bottom_dock_hovering_edge_ = false;

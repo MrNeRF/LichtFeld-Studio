@@ -20,6 +20,8 @@
                 <span class="toolbar-drag-line"></span>
                 <span class="toolbar-drag-line"></span>
             </div>
+            <div class="rail-columns">
+            <div id="primary-rail-tools" class="rail-group rail-group--tools">
             <div class="icon-btn"
                  data-for="button : selection_group_buttons"
                  data-class-selected="button.selected"
@@ -80,7 +82,9 @@
                  data-event-click="toolbar_action(button.action, button.value)">
                 <img data-attr-src="button.icon_src" />
             </div>
+            </div>
             <div class="toolbar-separator"></div>
+            <div id="primary-rail-panels" class="rail-group rail-group--panels">
             <div class="icon-btn"
                  data-for="button : utility_extra_buttons"
                  data-attr-id="button.button_id"
@@ -102,6 +106,8 @@
                  data-class-disabled="!button.enabled"
                  data-event-click="toolbar_action(button.action, button.value)">
                 <img data-attr-src="button.icon_src" />
+            </div>
+            </div>
             </div>
         </div>
 
@@ -269,6 +275,8 @@
                 <span class="toolbar-drag-line"></span>
                 <span class="toolbar-drag-line"></span>
             </div>
+            <div class="rail-columns">
+            <div id="secondary-rail-tools" class="rail-group rail-group--tools">
             <div class="icon-btn"
                  data-for="button : selection_group_buttons"
                  data-attr-id="button.button_id"
@@ -329,7 +337,9 @@
                  data-event-click="toolbar_action(button.action, button.value)">
                 <img data-attr-src="button.icon_src" />
             </div>
+            </div>
             <div class="toolbar-separator"></div>
+            <div id="secondary-rail-panels" class="rail-group rail-group--panels">
             <div class="icon-btn"
                  data-for="button : utility_extra_buttons"
                  data-attr-id="button.button_id"
@@ -351,6 +361,8 @@
                  data-class-disabled="!button.enabled"
                  data-event-click="toolbar_action(button.action, button.value)">
                 <img data-attr-src="button.icon_src" />
+            </div>
+            </div>
             </div>
         </div>
 
