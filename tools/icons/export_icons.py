@@ -15,6 +15,7 @@ rasterizes at the fixed 40x40 target size, and strips PNG metadata.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -28,18 +29,21 @@ SIZE = 40
 
 def render_svg(source: Path) -> bytes:
     svg = source.read_text(encoding="utf-8").replace("currentColor", "#FFFFFF")
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".svg", encoding="utf-8") as transformed, tempfile.NamedTemporaryFile(
-        suffix=".png"
-    ) as rendered_file:
-        transformed.write(svg)
-        transformed.flush()
+    magick = shutil.which("magick") or shutil.which("convert")
+    if magick is None:
+        raise RuntimeError("ImageMagick executable not found (tried 'magick' and 'convert')")
+
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        transformed_path = Path(temporary_directory) / "transformed.svg"
+        rendered_path = Path(temporary_directory) / "rendered.png"
+        transformed_path.write_text(svg, encoding="utf-8")
         subprocess.run(
-            ["rsvg-convert", "-w", str(SIZE), "-h", str(SIZE), "-o", rendered_file.name, transformed.name],
+            ["rsvg-convert", "-w", str(SIZE), "-h", str(SIZE), "-o", str(rendered_path), str(transformed_path)],
             check=True,
         )
-        rendered = Path(rendered_file.name).read_bytes()
+        rendered = rendered_path.read_bytes()
     normalized = subprocess.run(
-        ["convert", "png:-", "-strip", "-depth", "8", "PNG32:-"],
+        [magick, "png:-", "-strip", "-depth", "8", "PNG32:-"],
         input=rendered,
         stdout=subprocess.PIPE,
         check=True,
