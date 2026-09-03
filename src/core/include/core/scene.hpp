@@ -553,6 +553,8 @@ namespace lfs::core {
         [[nodiscard]] std::shared_ptr<lfs::core::Camera> getCameraByUid(int uid);
         [[nodiscard]] std::shared_ptr<const lfs::core::Camera> getCameraByUid(int uid) const;
         [[nodiscard]] std::vector<std::shared_ptr<lfs::core::Camera>> getAllCameras() const;
+        [[nodiscard]] const std::vector<std::shared_ptr<lfs::core::Camera>>&
+        getAllCamerasCached() const;
         [[nodiscard]] std::uint64_t cameraListGeneration() const noexcept {
             return camera_list_generation_;
         }
@@ -602,6 +604,8 @@ namespace lfs::core {
 
         std::vector<const SceneNode*> getVisibleNodes() const;
         [[nodiscard]] std::vector<std::shared_ptr<const lfs::core::Camera>> getVisibleCameras() const;
+        [[nodiscard]] const std::vector<std::shared_ptr<const lfs::core::Camera>>&
+        getVisibleCamerasCached() const;
         [[nodiscard]] std::vector<glm::mat4> getVisibleCameraSceneTransforms() const;
         [[nodiscard]] std::optional<glm::mat4> getCameraSceneTransformByUid(int uid) const;
 
@@ -703,6 +707,14 @@ namespace lfs::core {
 
         mutable std::vector<glm::mat4> cached_transforms_;
         mutable std::atomic<bool> transform_cache_valid_{false};
+        mutable std::vector<std::shared_ptr<const lfs::core::Camera>> cached_visible_cameras_;
+        mutable uint64_t cached_visible_cameras_render_generation_ = 0;
+        mutable uint64_t cached_visible_cameras_camera_list_generation_ = 0;
+        mutable bool cached_visible_cameras_valid_ = false;
+        mutable std::vector<std::shared_ptr<lfs::core::Camera>> cached_all_cameras_;
+        mutable uint64_t cached_all_cameras_render_generation_ = 0;
+        mutable uint64_t cached_all_cameras_camera_list_generation_ = 0;
+        mutable bool cached_all_cameras_valid_ = false;
         mutable bool consolidated_ = false;
         mutable std::vector<ConsolidatedNodeSlot> consolidated_node_slots_;
         mutable uint64_t consolidated_generation_ = 0;

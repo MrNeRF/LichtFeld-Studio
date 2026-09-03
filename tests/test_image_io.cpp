@@ -84,6 +84,55 @@ namespace {
         return data;
     }
 
+    std::vector<std::uint8_t> add_exif_thumbnail(std::vector<std::uint8_t> primary,
+                                                 const std::vector<std::uint8_t>& thumbnail) {
+        std::vector<std::uint8_t> tiff = {'I', 'I', 42, 0, 8, 0, 0, 0};
+        append_u16(tiff, 0);
+        append_u32(tiff, 8 + 2 + 4);
+
+        const auto thumbnail_offset = static_cast<std::uint32_t>(tiff.size() + 2 + 12 * 2 + 4);
+        append_u16(tiff, 2);
+        append_tiff_tag(tiff, 0x0201, 4, 1, thumbnail_offset);
+        append_tiff_tag(tiff, 0x0202, 4, 1, static_cast<std::uint32_t>(thumbnail.size()));
+        append_u32(tiff, 0);
+        tiff.insert(tiff.end(), thumbnail.begin(), thumbnail.end());
+
+        std::vector<std::uint8_t> app1 = {'E', 'x', 'i', 'f', 0, 0};
+        app1.insert(app1.end(), tiff.begin(), tiff.end());
+        EXPECT_LE(app1.size() + 2, 65535u);
+        std::vector<std::uint8_t> result = {0xff, 0xd8, 0xff, 0xe1};
+        result.push_back(static_cast<std::uint8_t>((app1.size() + 2) >> 8));
+        result.push_back(static_cast<std::uint8_t>(app1.size() + 2));
+        result.insert(result.end(), app1.begin(), app1.end());
+        result.insert(result.end(), primary.begin() + 2, primary.end());
+        return result;
+    }
+
+    std::filesystem::path write_jpeg_for_test(const std::string_view name,
+                                              const int width,
+                                              const int height,
+                                              std::vector<std::uint8_t>& pixels) {
+        const auto path = std::filesystem::temp_directory_path() / name;
+        EXPECT_TRUE(lfs::core::save_img_data(
+            path, std::make_tuple(pixels.data(), width, height, 3)));
+        return path;
+    }
+
+    std::vector<std::uint8_t> decode_jpeg_pixels(const std::vector<std::uint8_t>& encoded,
+                                                 int& width,
+                                                 int& height) {
+        auto [decoded, decoded_width, decoded_height, channels] =
+            lfs::core::load_image_from_memory(encoded.data(), encoded.size());
+        EXPECT_NE(decoded, nullptr);
+        EXPECT_EQ(channels, 3);
+        width = decoded_width;
+        height = decoded_height;
+        std::vector<std::uint8_t> pixels(
+            decoded, decoded + static_cast<std::size_t>(width) * height * channels);
+        lfs::core::free_image(decoded);
+        return pixels;
+    }
+
 } // namespace
 
 TEST(ImageIoTest, ConvertsSixteenBitPngMemoryToUint8) {
@@ -181,6 +230,67 @@ TEST(ImageIoTest, LoadsJpegThumbnailWithDctScaling) {
     ASSERT_NE(decoded, nullptr);
     EXPECT_EQ(decoded_width, 128);
     EXPECT_EQ(decoded_height, 64);
+    EXPECT_EQ(channels, 3);
+    lfs::core::free_image(decoded);
+}
+
+TEST(ImageIoTest, LoadsEmbeddedExifThumbnailAndReportsFastPath) {
+    constexpr int thumbnail_width = 16;
+    constexpr int thumbnail_height = 12;
+    constexpr int primary_width = 32;
+    constexpr int primary_height = 24;
+    std::vector<std::uint8_t> thumbnail_pixels(
+        static_cast<std::size_t>(thumbnail_width) * thumbnail_height * 3, 37);
+    std::vector<std::uint8_t> primary_pixels(
+        static_cast<std::size_t>(primary_width) * primary_height * 3, 211);
+    const auto thumbnail_path = write_jpeg_for_test("lfs_image_io_embedded_thumb.jpg",
+                                                    thumbnail_width,
+                                                    thumbnail_height,
+                                                    thumbnail_pixels);
+    const auto primary_path = write_jpeg_for_test("lfs_image_io_embedded_primary.jpg",
+                                                  primary_width,
+                                                  primary_height,
+                                                  primary_pixels);
+    const auto encoded_thumbnail = read_file(thumbnail_path);
+    const auto encoded_primary = add_exif_thumbnail(read_file(primary_path), encoded_thumbnail);
+    {
+        std::ofstream file(primary_path, std::ios::binary | std::ios::trunc);
+        file.write(reinterpret_cast<const char*>(encoded_primary.data()),
+                   static_cast<std::streamsize>(encoded_primary.size()));
+    }
+
+    bool used_exif = false;
+    auto [decoded, width, height, channels] =
+        lfs::core::load_image_thumbnail(primary_path, thumbnail_width, &used_exif);
+    const auto expected = decode_jpeg_pixels(encoded_thumbnail, width, height);
+    std::error_code ec;
+    std::filesystem::remove(thumbnail_path, ec);
+    std::filesystem::remove(primary_path, ec);
+
+    ASSERT_TRUE(used_exif);
+    ASSERT_NE(decoded, nullptr);
+    ASSERT_EQ(width, thumbnail_width);
+    ASSERT_EQ(height, thumbnail_height);
+    ASSERT_EQ(channels, 3);
+    EXPECT_TRUE(std::equal(decoded, decoded + expected.size(), expected.begin()));
+    lfs::core::free_image(decoded);
+}
+
+TEST(ImageIoTest, ExifThumbnailWithoutExifUsesDecodeFallback) {
+    constexpr int width = 32;
+    constexpr int height = 16;
+    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) * height * 3, 91);
+    const auto path = write_jpeg_for_test("lfs_image_io_no_exif.jpg", width, height, pixels);
+    bool used_exif = true;
+    auto [decoded, decoded_width, decoded_height, channels] =
+        lfs::core::load_image_thumbnail(path, 8, &used_exif);
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+
+    ASSERT_FALSE(used_exif);
+    ASSERT_NE(decoded, nullptr);
+    EXPECT_EQ(decoded_width, 8);
+    EXPECT_EQ(decoded_height, 4);
     EXPECT_EQ(channels, 3);
     lfs::core::free_image(decoded);
 }
