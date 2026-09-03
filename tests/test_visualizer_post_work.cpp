@@ -1892,6 +1892,31 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
+           ModalOverlayQueuedRequestDoesNotAnimateActiveModal) {
+        VisualizerImpl viewer(projectOptions());
+        auto* const gui = viewer.getGuiManager();
+        ASSERT_NE(gui, nullptr);
+        auto* const overlay = gui->modalOverlay();
+        ASSERT_NE(overlay, nullptr);
+
+        lfs::core::ModalRequest queued;
+        queued.title = "Queued";
+        queued.buttons = {{"OK", "primary"}};
+        overlay->enqueue(std::move(queued));
+
+        // Model the state after the first request has been shown. The second
+        // request must wait for input instead of driving a continuous loop.
+        overlay->active_.emplace();
+        EXPECT_FALSE(overlay->needsAnimationFrame());
+        EXPECT_TRUE(overlay->animationDemandDescription().empty());
+
+        overlay->active_.reset();
+        EXPECT_TRUE(overlay->needsAnimationFrame());
+        EXPECT_NE(overlay->animationDemandDescription().find("pending_request=true"),
+                  std::string::npos);
+    }
+
+    TEST_F(VisualizerImplResetTest,
            RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt) {
         const auto& temporary = temporary_.path;
         const auto project_path =
