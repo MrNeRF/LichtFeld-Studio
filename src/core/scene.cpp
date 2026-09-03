@@ -32,6 +32,67 @@
 
 namespace lfs::core {
 
+    struct CombinedModelBuildLifetimeRegistry {
+        void retain(const SplatData* model) {
+            std::lock_guard<std::mutex> lock(mutex);
+            ++in_flight_models[model];
+            retired_release_enabled = false;
+        }
+
+        void release(const SplatData* model) {
+            std::vector<std::unique_ptr<SplatData>> retired;
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                const auto it = in_flight_models.find(model);
+                assert(it != in_flight_models.end());
+                if (it != in_flight_models.end()) {
+                    if (--it->second == 0) {
+                        in_flight_models.erase(it);
+                    }
+                }
+                releaseRetiredIfIdleLocked(retired);
+            }
+            retired.clear();
+        }
+
+        [[nodiscard]] std::unique_ptr<SplatData> retire(
+            std::unique_ptr<SplatData> model) {
+            if (!model) {
+                return model;
+            }
+
+            std::lock_guard<std::mutex> lock(mutex);
+            if (!in_flight_models.contains(model.get())) {
+                return model;
+            }
+            retired_models.push_back(std::move(model));
+            return nullptr;
+        }
+
+        void releaseRetiredAfterJoin() {
+            std::vector<std::unique_ptr<SplatData>> retired;
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                retired_release_enabled = true;
+                releaseRetiredIfIdleLocked(retired);
+            }
+            retired.clear();
+        }
+
+    private:
+        void releaseRetiredIfIdleLocked(
+            std::vector<std::unique_ptr<SplatData>>& retired) {
+            if (retired_release_enabled && in_flight_models.empty()) {
+                retired.swap(retired_models);
+            }
+        }
+
+        std::mutex mutex;
+        std::unordered_map<const SplatData*, size_t> in_flight_models;
+        std::vector<std::unique_ptr<SplatData>> retired_models;
+        bool retired_release_enabled = false;
+    };
+
     std::string makeUniqueNodeName(const std::unordered_set<std::string>& existing_names,
                                    const std::string_view base_name) {
         std::string unique_name(base_name);
@@ -161,7 +222,9 @@ namespace lfs::core {
         });
     }
 
-    Scene::Scene() {
+    Scene::Scene()
+        : combined_model_lifetime_(
+              std::make_shared<CombinedModelBuildLifetimeRegistry>()) {
         addSelectionGroup("Group 1", glm::vec3(0.0f));
     }
 
@@ -173,10 +236,20 @@ namespace lfs::core {
             combined_model_build_thread_->join();
         }
         pollCombinedModelBuild();
+        if (combined_model_lifetime_) {
+            for (auto& node : nodes_) {
+                if (node && node->model) {
+                    (void)retireCombinedModelIfInFlight(std::move(node->model));
+                }
+            }
+            combined_model_lifetime_->releaseRetiredAfterJoin();
+        }
     }
 
     Scene::Scene(RestoreStageTag, Scene& target) noexcept
-        : restore_target_(&target),
+        : combined_model_lifetime_(
+              std::make_shared<CombinedModelBuildLifetimeRegistry>()),
+          restore_target_(&target),
           restore_staging_(true) {}
 
     void Scene::notifyMutation(MutationType type) {
@@ -420,7 +493,10 @@ namespace lfs::core {
             }
 
             if (node->model) {
-                detached.push_back(std::move(node->model));
+                if (auto model = retireCombinedModelIfInFlight(
+                        std::move(node->model))) {
+                    detached.push_back(std::move(model));
+                }
             }
 
             if (!keep_children) {
@@ -476,6 +552,11 @@ namespace lfs::core {
             return;
         const size_t removed_index = idx_it->second;
         node = nodes_[removed_index].get();
+
+        // A worker may still be reading this model through a captured alias.
+        // Keep it owned by the Scene until pollCombinedModelBuild() has joined
+        // the worker and drained its input aliases.
+        (void)retireCombinedModelIfInFlight(std::move(node->model));
 
         const std::string name_copy = node->name;
         const Uuid uuid_copy = node->uuid;
@@ -562,7 +643,11 @@ namespace lfs::core {
                       name,
                       node->gaussian_count.load(std::memory_order_acquire),
                       gaussian_count);
+            auto previous = retireCombinedModelIfInFlight(std::move(node->model));
             node->model = std::move(model);
+            // `previous` is empty when it was parked for an in-flight worker;
+            // otherwise its normal scope lifetime releases it here.
+            previous.reset();
             node->gaussian_count.store(gaussian_count, std::memory_order_release);
             node->centroid = centroid;
             node->payload_hydration = PayloadHydrationState::Loaded;
@@ -582,7 +667,7 @@ namespace lfs::core {
 
         const size_t gaussian_count = model ? static_cast<size_t>(model->size()) : 0;
         const glm::vec3 centroid = model ? computeCentroid(model.get()) : node->centroid;
-        auto previous = std::move(node->model);
+        auto previous = retireCombinedModelIfInFlight(std::move(node->model));
         node->model = std::move(model);
         node->gaussian_count.store(gaussian_count, std::memory_order_release);
         node->centroid = centroid;
@@ -657,6 +742,11 @@ namespace lfs::core {
     void Scene::clear() {
         Transaction txn(*this);
 
+        for (auto& node : nodes_) {
+            if (node && node->model) {
+                (void)retireCombinedModelIfInFlight(std::move(node->model));
+            }
+        }
         nodes_.clear();
         id_to_index_.clear();
         name_to_id_.clear();
@@ -787,8 +877,7 @@ namespace lfs::core {
                                          ? static_cast<size_t>(node->model->size())
                                          : node->gaussian_count.load(std::memory_order_acquire);
             if (node->model) {
-                build.inputs.push_back({std::shared_ptr<const lfs::core::SplatData>(
-                                            node->model.get(), [](const lfs::core::SplatData*) {}),
+                build.inputs.push_back({borrowCombinedModel(node->model.get()),
                                         isNodeEffectivelyVisible(node->id),
                                         selection_offset});
             }
@@ -800,6 +889,29 @@ namespace lfs::core {
             build.allocator = combined_model_allocator_;
         }
         return build;
+    }
+
+    std::shared_ptr<const lfs::core::SplatData> Scene::borrowCombinedModel(
+        const lfs::core::SplatData* model) const {
+        assert(model);
+        const auto registry = combined_model_lifetime_;
+        registry->retain(model);
+        try {
+            return std::shared_ptr<const lfs::core::SplatData>(
+                model,
+                [registry](const lfs::core::SplatData* input) {
+                    registry->release(input);
+                });
+        } catch (...) {
+            registry->release(model);
+            throw;
+        }
+    }
+
+    std::unique_ptr<lfs::core::SplatData>
+    Scene::retireCombinedModelIfInFlight(
+        std::unique_ptr<lfs::core::SplatData> model) const {
+        return combined_model_lifetime_->retire(std::move(model));
     }
 
     Scene::CombinedModelBuild Scene::buildCombinedModelCache(
@@ -1042,7 +1154,14 @@ namespace lfs::core {
     }
 
     void Scene::pollCombinedModelBuild() const {
-        if (!combined_model_build_thread_ || combined_model_build_running_.load(std::memory_order_acquire)) {
+        if (!combined_model_lifetime_) {
+            return;
+        }
+        if (!combined_model_build_thread_) {
+            combined_model_lifetime_->releaseRetiredAfterJoin();
+            return;
+        }
+        if (combined_model_build_running_.load(std::memory_order_acquire)) {
             return;
         }
 
@@ -1056,24 +1175,29 @@ namespace lfs::core {
             combined_model_build_thread_->join();
         }
         combined_model_build_thread_.reset();
-        if (completed) {
-            if (completed->ready_event) {
-                const auto status = cudaEventSynchronize(
-                    reinterpret_cast<cudaEvent_t>(completed->ready_event.get()));
-                if (status != cudaSuccess) {
-                    LOG_ERROR("Combined model worker result dropped: event wait failed: {} ({})",
-                              cudaGetErrorName(status), cudaGetErrorString(status));
-                    return;
+        {
+            if (completed) {
+                if (completed->ready_event) {
+                    const auto status = cudaEventSynchronize(
+                        reinterpret_cast<cudaEvent_t>(completed->ready_event.get()));
+                    if (status != cudaSuccess) {
+                        LOG_ERROR("Combined model worker result dropped: event wait failed: {} ({})",
+                                  cudaGetErrorName(status), cudaGetErrorString(status));
+                    } else if (!completed->model) {
+                        LOG_ERROR("Combined model worker result dropped: no model was produced");
+                    } else if (!installCombinedModelCache(std::move(*completed))) {
+                        LOG_DEBUG("Combined model worker result dropped: cache generation is stale");
+                    }
+                } else if (!completed->model) {
+                    LOG_ERROR("Combined model worker result dropped: no model was produced");
+                } else if (!installCombinedModelCache(std::move(*completed))) {
+                    LOG_DEBUG("Combined model worker result dropped: cache generation is stale");
                 }
             }
-            if (!completed->model) {
-                LOG_ERROR("Combined model worker result dropped: no model was produced");
-                return;
-            }
-            if (!installCombinedModelCache(std::move(*completed))) {
-                LOG_DEBUG("Combined model worker result dropped: cache generation is stale");
-            }
         }
+        // The scope above destroys the completed build, releasing its input
+        // aliases. Only now may models parked by a mutation be destroyed.
+        combined_model_lifetime_->releaseRetiredAfterJoin();
     }
 
     void Scene::requestCombinedModelBuild(bool include_hidden_splats) const {
@@ -1180,7 +1304,7 @@ namespace lfs::core {
                 consolidated_node_slots_.push_back({.id = node->id,
                                                     .gaussian_count = gaussian_count});
                 consolidated_gaussians += gaussian_count;
-                node->model.reset();
+                (void)retireCombinedModelIfInFlight(std::move(node->model));
                 ++consolidated;
             }
         }
@@ -2210,8 +2334,7 @@ namespace lfs::core {
                                          ? static_cast<size_t>(node->model->size())
                                          : node->gaussian_count.load(std::memory_order_acquire);
             if (node->model) {
-                inputs.push_back({std::shared_ptr<const SplatData>(
-                                      node->model.get(), [](const SplatData*) {}),
+                inputs.push_back({borrowCombinedModel(node->model.get()),
                                   include_hidden_splats || isNodeEffectivelyVisible(node->id),
                                   selection_offset});
             }
@@ -3577,6 +3700,11 @@ namespace lfs::core {
         assert(!restore_staging_);
         assert(transaction_depth_ == 0);
 
+        // The restore swaps the entire node graph. Join the worker before the
+        // old graph moves into the returned Scene, so a later destruction of
+        // that graph cannot race reads from the target's captured inputs.
+        pollCombinedModelBuild();
+
         nodes_.swap(staged->nodes_);
         id_to_index_.swap(staged->id_to_index_);
         name_to_id_.swap(staged->name_to_id_);
@@ -3665,6 +3793,8 @@ namespace lfs::core {
                 has_payload = static_cast<bool>(
                     staged_node->model);
                 if (has_payload) {
+                    (void)retireCombinedModelIfInFlight(
+                        std::move(live->model));
                     live->model =
                         std::move(staged_node->model);
                     live->gaussian_count.store(

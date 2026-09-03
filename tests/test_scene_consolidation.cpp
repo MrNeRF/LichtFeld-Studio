@@ -342,6 +342,113 @@ TEST_F(SceneConsolidationExtractTest, SceneDestructionJoinsCombinedModelWorker) 
     releaser.join();
 }
 
+TEST_F(SceneConsolidationExtractTest, RemovingNodeRetiresModelUntilWorkerPoll) {
+    Scene scene;
+    const auto removed_id = scene.addSplat("removed", std::make_unique<SplatData>(bike_.clone()));
+    const auto remaining_id = scene.addSplat("remaining", std::make_unique<SplatData>(bike_.clone()));
+    ASSERT_NE(removed_id, lfs::core::NULL_NODE);
+    ASSERT_NE(remaining_id, lfs::core::NULL_NODE);
+
+    std::mutex gate_mutex;
+    std::condition_variable gate_changed;
+    bool allocator_entered = false;
+    bool release_allocator = false;
+    scene.setCombinedModelAllocator(
+        [&](lfs::core::TensorShape shape,
+            size_t,
+            lfs::core::DataType dtype,
+            std::string_view) {
+            std::unique_lock lock(gate_mutex);
+            allocator_entered = true;
+            gate_changed.notify_all();
+            gate_changed.wait(lock, [&] { return release_allocator; });
+            return Tensor::empty(std::move(shape), Device::CUDA, dtype);
+        });
+
+    scene.requestCombinedModelBuild(true);
+    {
+        std::unique_lock lock(gate_mutex);
+        gate_changed.wait(lock, [&] { return allocator_entered; });
+    }
+
+    const auto* removed_node = scene.getNodeById(removed_id);
+    ASSERT_NE(removed_node, nullptr);
+    ASSERT_NE(removed_node->model, nullptr);
+    const auto* retired_model = removed_node->model.get();
+    const size_t retired_size = retired_model->size();
+    scene.removeNodeById(removed_id);
+    EXPECT_EQ(scene.getNodeById(removed_id), nullptr);
+    // The pointer is no longer in a SceneNode, but the in-flight registry still
+    // owns it while the held worker can read it.
+    EXPECT_EQ(retired_model->size(), retired_size);
+
+    {
+        std::lock_guard lock(gate_mutex);
+        release_allocator = true;
+    }
+    gate_changed.notify_all();
+
+    const auto* remaining = scene.getNodeById(remaining_id);
+    ASSERT_NE(remaining, nullptr);
+    ASSERT_NE(remaining->model, nullptr);
+    EXPECT_EQ(scene.getCombinedModel(), remaining->model.get());
+}
+
+TEST_F(SceneConsolidationExtractTest, ReplacingNodeModelRetiresPreviousUntilWorkerPoll) {
+    Scene scene;
+    const auto first_id = scene.addSplat("first", std::make_unique<SplatData>(bike_.clone()));
+    const auto second_id = scene.addSplat("second", std::make_unique<SplatData>(bike_.clone()));
+    ASSERT_NE(first_id, lfs::core::NULL_NODE);
+    ASSERT_NE(second_id, lfs::core::NULL_NODE);
+
+    std::mutex gate_mutex;
+    std::condition_variable gate_changed;
+    bool allocator_entered = false;
+    bool release_allocator = false;
+    scene.setCombinedModelAllocator(
+        [&](lfs::core::TensorShape shape,
+            size_t,
+            lfs::core::DataType dtype,
+            std::string_view) {
+            std::unique_lock lock(gate_mutex);
+            allocator_entered = true;
+            gate_changed.notify_all();
+            gate_changed.wait(lock, [&] { return release_allocator; });
+            return Tensor::empty(std::move(shape), Device::CUDA, dtype);
+        });
+
+    scene.requestCombinedModelBuild(true);
+    {
+        std::unique_lock lock(gate_mutex);
+        gate_changed.wait(lock, [&] { return allocator_entered; });
+    }
+
+    const auto* first_node = scene.getNodeById(first_id);
+    ASSERT_NE(first_node, nullptr);
+    ASSERT_NE(first_node->model, nullptr);
+    const auto* previous_model = first_node->model.get();
+    const size_t previous_size = previous_model->size();
+    scene.replaceNodeModel("first", std::make_unique<SplatData>(bike_.clone()));
+    const auto* replaced = scene.getNodeById(first_id);
+    ASSERT_NE(replaced, nullptr);
+    ASSERT_NE(replaced->model, nullptr);
+    EXPECT_NE(replaced->model.get(), previous_model);
+    EXPECT_EQ(previous_model->size(), previous_size);
+
+    {
+        std::lock_guard lock(gate_mutex);
+        release_allocator = true;
+    }
+    gate_changed.notify_all();
+
+    // Leave one node so the post-poll cache rebuild is synchronous and avoids
+    // starting another worker while checking that the stale result was
+    // rejected.
+    scene.removeNodeById(second_id);
+    EXPECT_EQ(scene.getCombinedModel(), replaced->model.get());
+    EXPECT_FALSE(scene.combinedModelBuildPending());
+}
+
 TEST_F(SceneConsolidationExtractTest, StaleWorkerGenerationCannotReplaceNewestCache) {
     Scene scene;
     const auto first_id = scene.addSplat("first", std::make_unique<SplatData>(bike_.clone()));

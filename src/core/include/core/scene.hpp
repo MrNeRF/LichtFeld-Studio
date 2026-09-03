@@ -111,6 +111,7 @@ namespace lfs::core {
     };
 
     class Scene;
+    struct CombinedModelBuildLifetimeRegistry;
 
     // Project payload hydration is tracked at the chapter/node boundary. A
     // geometry node may exist in the interactive scene shell before its heavy
@@ -693,6 +694,8 @@ namespace lfs::core {
         mutable std::optional<CombinedModelBuild> completed_combined_model_build_;
         mutable std::mutex combined_model_build_mutex_;
         mutable std::atomic<bool> combined_model_build_running_{false};
+        mutable std::shared_ptr<CombinedModelBuildLifetimeRegistry>
+            combined_model_lifetime_;
 
         /// Points at Trainer::render_mutex_ while a trainer owns this scene.
         /// Null when idle / headless without a live GUI trainer.
@@ -737,6 +740,11 @@ namespace lfs::core {
         void rebuildModelCacheIfNeeded(bool include_hidden_splats) const;
         void pollCombinedModelBuild() const;
         void requestCombinedModelBuildIfNeeded(bool include_hidden_splats = false) const;
+        [[nodiscard]] std::shared_ptr<const lfs::core::SplatData>
+        borrowCombinedModel(const lfs::core::SplatData* model) const;
+        [[nodiscard]] std::unique_ptr<lfs::core::SplatData>
+        retireCombinedModelIfInFlight(
+            std::unique_ptr<lfs::core::SplatData> model) const;
         void rebuildTransformCacheIfNeeded() const;
         void updateWorldTransform(const SceneNode& node) const;
         void removeNodeInternal(NodeId id, bool keep_children);
