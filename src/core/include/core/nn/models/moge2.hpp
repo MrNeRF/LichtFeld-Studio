@@ -82,6 +82,7 @@ namespace lfs::core::nn::models {
         Tensor ensure_workspace(std::size_t bytes, const Tensor& like);
 
         std::unordered_map<std::string, Tensor> weights_;
+        std::unordered_map<std::string, Tensor> weight_taps_;
         Tensor workspace_;
         Tensor feat_hold_;
         Tensor cls_hold_;

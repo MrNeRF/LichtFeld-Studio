@@ -5,6 +5,8 @@ set(LFS_NN_CUDA_SOURCES
     gemm.cu
     attention.cu
     conv.cu
+    conv3x3_mma.cu
+    lpips_kernels.cu
     elementwise.cu
 )
 

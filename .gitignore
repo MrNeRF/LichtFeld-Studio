@@ -26,6 +26,9 @@ tests/data/param_json_golden/*
 !tests/data/nn/
 tests/data/nn/*
 !tests/data/nn/moge2_ref_fixture.json
+!tests/data/nn/lpips_ref_fixture.json
+!tests/data/nn/lpips_crop_a.png
+!tests/data/nn/lpips_crop_b.png
 *.pt
 *.py
 !scripts/lichtfeld_mcp_bridge.py
@@ -38,9 +41,13 @@ tests/data/nn/*
 !tests/python/**/*.py
 !docs/plugins/examples/**/*.py
 !tools/*.py
+!tools/nn_export/
+!tools/nn_export/export_lpips_weights.py
 .venv/
 *.png
 !src/**/assets/**/*.png
+!tests/data/nn/lpips_crop_a.png
+!tests/data/nn/lpips_crop_b.png
 *.sqlite
 test.py
 *.nsys-rep

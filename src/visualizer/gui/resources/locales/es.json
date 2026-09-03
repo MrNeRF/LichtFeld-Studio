@@ -729,6 +729,7 @@
     "eta": "Tiempo Restante",
     "psnr": "PSNR",
     "ssim": "SSIM",
+    "lpips": "LPIPS",
     "unknown": "Desconocido",
     "dataset_no_trainer": "Dataset (Sin Entrenador)",
     "dataset_ready": "Dataset (Listo)",

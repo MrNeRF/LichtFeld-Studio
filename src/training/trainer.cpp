@@ -3137,6 +3137,8 @@ namespace lfs::training {
 
             // Initialize the evaluator - it handles all metrics internally
             evaluator_ = std::make_unique<lfs::training::MetricsEvaluator>(params_);
+            if (lpips_weights_path_)
+                evaluator_->set_lpips_weights_path(*lpips_weights_path_);
             if (params_.optimization.ppisp_active() && ppisp_ && ppisp_->isFinalized()) {
                 evaluator_->set_appearance([this](const lfs::core::Tensor& rgb, const lfs::core::Camera& cam) {
                     return applyPPISPForEval(rgb, cam);
@@ -3600,6 +3602,12 @@ namespace lfs::training {
             pending_params_.reset();
         }
         apply_param_side_effects(params, bg_image_path_changed);
+    }
+
+    void Trainer::set_lpips_weights_path(std::filesystem::path path) {
+        lpips_weights_path_ = std::move(path);
+        if (evaluator_)
+            evaluator_->set_lpips_weights_path(*lpips_weights_path_);
     }
 
     void Trainer::apply_pending_params_at_safe_point() {
@@ -8672,6 +8680,23 @@ namespace lfs::training {
                 }
 
                 ++iter;
+            }
+
+            // A resume at the terminal iteration starts at max+1, so there is no
+            // training step in which to service an evaluation scheduled at max.
+            if (iter > get_total_iterations() &&
+                evaluator_->is_enabled() &&
+                evaluator_->should_evaluate(current_iteration_.load())) {
+                const int eval_iteration = current_iteration_.load();
+                evaluator_->print_evaluation_header(eval_iteration);
+                eval_ppisp_applied_.store(0);
+                eval_ppisp_exif_.store(0);
+                auto metrics = evaluator_->evaluate(eval_iteration,
+                                                    strategy_->get_model(),
+                                                    val_dataset_,
+                                                    background_);
+                LOG_INFO("{}", metrics.to_string());
+                photometric_loss_.arena().shrink_to_required();
             }
 
             clearActiveImageLoader();

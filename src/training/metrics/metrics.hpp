@@ -5,6 +5,7 @@
 #pragma once
 
 #include "../dataset.hpp"
+#include "core/nn/models/lpips.hpp"
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -47,10 +48,10 @@ namespace lfs::training {
         bool apply_valid_padding_;
     };
 
-    // Evaluation result structure (no LPIPS)
     struct EvalMetrics {
         float psnr = 0.0f;
         float ssim = 0.0f;
+        std::optional<float> lpips;
         float elapsed_time = 0.0f;
         int num_gaussians = 0;
         int iteration = 0;
@@ -71,8 +72,11 @@ namespace lfs::training {
             std::stringstream ss;
             ss << std::fixed << std::setprecision(4);
             ss << "PSNR: " << psnr
-               << ", SSIM: " << ssim
-               << ", Time: " << elapsed_time << "s/image"
+               << ", SSIM: " << ssim;
+            if (lpips && std::isfinite(*lpips)) {
+                ss << ", LPIPS: " << *lpips;
+            }
+            ss << ", Time: " << elapsed_time << "s/image"
                << ", #GS: " << num_gaussians
                << ", bias=(" << bias_r << "," << bias_g << "," << bias_b << ")"
                << ", bias_corr=(" << bias_corr_r << "," << bias_corr_g << "," << bias_corr_b << ")";
@@ -86,7 +90,7 @@ namespace lfs::training {
         }
 
         static std::string to_csv_header() {
-            return "iteration,psnr,ssim,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b";
+            return "iteration,psnr,ssim,lpips,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b";
         }
 
         [[nodiscard]] std::string to_csv_row() const {
@@ -94,7 +98,11 @@ namespace lfs::training {
             ss << iteration << ","
                << std::fixed << std::setprecision(6)
                << psnr << ","
-               << ssim << ","
+               << ssim << ",";
+            if (lpips && std::isfinite(*lpips)) {
+                ss << *lpips;
+            }
+            ss << ","
                << elapsed_time << ","
                << num_gaussians << ",";
             if (normal_angle_deg && std::isfinite(*normal_angle_deg)) {
@@ -109,6 +117,8 @@ namespace lfs::training {
             return ss.str();
         }
     };
+
+    [[nodiscard]] lfs::core::Tensor image_for_metrics_and_save(const lfs::core::Tensor& image);
 
     [[nodiscard]] std::optional<float> mean_normal_angle_deg(
         const lfs::core::Tensor& rendered_normal,
@@ -152,6 +162,11 @@ namespace lfs::training {
         void set_appearance(AppearanceFn fn) { appearance_ = std::move(fn); }
         [[nodiscard]] bool has_appearance() const { return static_cast<bool>(appearance_); }
 
+        void set_lpips_weights_path(std::filesystem::path path) {
+            _lpips_weights_path = std::move(path);
+            _lpips_load_attempted = false;
+        }
+
         void set_normal_prior_decode(const lfs::core::Camera::NormalPriorDecode& decode) {
             _normal_prior_decode = decode;
         }
@@ -188,6 +203,9 @@ namespace lfs::training {
         // Metrics
         std::unique_ptr<PSNR> _psnr_metric;
         std::unique_ptr<SSIM> _ssim_metric;
+        std::optional<lfs::core::nn::models::Lpips> _lpips_metric;
+        std::optional<std::filesystem::path> _lpips_weights_path;
+        bool _lpips_load_attempted = false;
         std::unique_ptr<MetricsReporter> _reporter;
         AppearanceFn appearance_;
 
