@@ -14,7 +14,6 @@ from .layouts.menus import (
     menu_toggle,
     register_menu,
 )
-from .import_panels import open_new_project_panel, open_resume_checkpoint_panel
 from .training_confirm import _project_has_path, confirm_discard_work_then
 
 __lfs_menu_classes__ = ["FileMenu"]
@@ -57,6 +56,8 @@ def _run_import(path: str, callback) -> bool:
 
 
 def _open_dataset_import_checked(path: str) -> None:
+    from .import_panels import open_new_project_panel
+
     if not lf.is_dataset_path(path):
         raise _ImportRejected(
             "dataset format was not recognized",
@@ -67,6 +68,8 @@ def _open_dataset_import_checked(path: str) -> None:
 
 
 def _open_checkpoint_import_checked(path: str) -> None:
+    from .import_panels import open_resume_checkpoint_panel
+
     if not lf.read_checkpoint_header(path):
         raise _ImportRejected(
             "checkpoint format was not recognized",
@@ -183,6 +186,8 @@ class NewProjectOperator(Operator):
     description = "Create a new project"
 
     def execute(self, context) -> set:
+        from .import_panels import open_new_project_panel
+
         open_new_project_panel("")
         return {"FINISHED"}
 
@@ -482,10 +487,14 @@ def _show_load_file_confirmation(paths, is_dataset: bool, replace: bool) -> None
 
 
 def _on_show_new_project_dialog(path: str):
+    from .import_panels import open_new_project_panel
+
     open_new_project_panel(path)
 
 
 def _on_show_resume_checkpoint_popup(path: str):
+    from .import_panels import open_resume_checkpoint_panel
+
     open_resume_checkpoint_panel(path)
 
 

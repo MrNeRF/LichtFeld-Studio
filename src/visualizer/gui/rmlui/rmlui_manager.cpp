@@ -110,6 +110,8 @@ namespace lfs::vis::gui {
     }
 
     void RmlUIManager::cancelDragPayload() {
+        if (active_scene_graph_element_)
+            active_scene_graph_element_->cancelDrag();
         std::scoped_lock lock(drag_payload_mutex_);
         drag_payload_.reset();
     }

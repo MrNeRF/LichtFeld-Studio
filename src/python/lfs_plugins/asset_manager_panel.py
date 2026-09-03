@@ -24,6 +24,7 @@ from .asset_watch import (
 from .localization import localized_count
 from .rml_keys import KI_DELETE, KI_DOWN, KI_LEFT, KI_RETURN, KI_RIGHT, KI_UP
 from .types import Panel
+from .panels import panel_class
 from .ui import RuntimeState
 
 _log = logging.getLogger(__name__)
@@ -74,21 +75,11 @@ __lfs_panel_classes__ = ["AssetManagerPanel"]
 __lfs_panel_ids__ = ["lfs.asset_manager"]
 
 
+@panel_class("asset_manager")
 class AssetManagerPanel(Panel):
     """Dockable `.licht` project catalog."""
 
     SORT_MODES = ("name", "size")
-    id = "lfs.asset_manager"
-    label = "Asset Manager"
-    space = lf.ui.PanelSpace.LEFT_DOCK
-    order = 20
-    template = "rmlui/asset_manager.rml"
-    height_mode = lf.ui.PanelHeightMode.FILL
-    size = (980, 620)
-    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    update_policy = "interval"
-    update_interval_ms = 250
-
     STORAGE_PATH: Optional[Path] = None
 
     def __init__(self):
@@ -149,7 +140,12 @@ class AssetManagerPanel(Panel):
         self._scan_stopped_visible = False
         self._published_scan_active = False
         self._published_scan_status = ""
+        # Keep direct programmatic refreshes usable before the first DOM mount;
+        # on_unmount flips this false and mount generations guard callbacks.
         self._panel_mounted = True
+        self._mount_generation = 0
+        self._backend_load_active = False
+        self._ui_poll_timer: Optional[threading.Timer] = None
         self._catalog_load_failed = False
         self._drag_payload_token: Optional[int] = None
         self._last_project_write_generation: Optional[int] = None
@@ -200,6 +196,58 @@ class AssetManagerPanel(Panel):
             self._log_error("Failed to initialize Asset Manager: %s", exc)
             self._catalog_load_failed = True
             return False
+
+    def _start_backend_initialization(self) -> None:
+        if self._backend_load_active or not BACKEND_AVAILABLE:
+            if not BACKEND_AVAILABLE:
+                self._catalog_load_failed = True
+            return
+        self._backend_load_active = True
+        generation = self._mount_generation
+
+        def worker() -> None:
+            index = None
+            storage_path = None
+            default_path = ""
+            loaded = False
+            try:
+                storage_path = resolve_asset_manager_storage_path()
+                storage_path.mkdir(parents=True, exist_ok=True)
+                index = AssetIndex()
+                loaded = index.load()
+                default_path = str(resolve_default_asset_directory())
+            except Exception as exc:
+                self._log_error("Failed to initialize Asset Manager: %s", exc)
+
+            def complete() -> None:
+                if generation != self._mount_generation or not self._panel_mounted:
+                    self._backend_load_active = False
+                    return
+                self._backend_load_active = False
+                self._catalog_load_failed = not loaded
+                if index is not None:
+                    self._asset_index = index
+                    self.STORAGE_PATH = storage_path
+                    self.__class__.STORAGE_PATH = storage_path
+                    self._last_default_folder_path = default_path
+                    self._catalog_epoch_seen = self._catalog_epoch()
+                    self._repair_selection()
+                    self._refresh_records(assets=True, folders=True)
+                    if self._handle:
+                        self._handle.dirty_all()
+                    self._start_catalog_verify()
+                    self._scan_asset_folders()
+                self._request_model_update()
+
+            scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
+            if callable(scheduler):
+                scheduler(complete)
+            else:
+                complete()
+
+        threading.Thread(
+            target=worker, daemon=True, name="AssetManagerCatalogLoad"
+        ).start()
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("asset_manager")
@@ -422,6 +470,14 @@ class AssetManagerPanel(Panel):
         assets = getattr(self._asset_index, "assets", {}) if self._asset_index else {}
         return assets if isinstance(assets, dict) else {}
 
+    def _asset_dict(self, asset_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        if not asset_id or not self._asset_index:
+            return None
+        getter = getattr(self._asset_index, "get_asset_dict", None)
+        if callable(getter):
+            return getter(asset_id)
+        return self._asset_index_assets().get(asset_id)
+
     def _asset_index_folders(self) -> Dict[str, Dict[str, Any]]:
         folders = getattr(self._asset_index, "folders", {}) if self._asset_index else {}
         return folders if isinstance(folders, dict) else {}
@@ -577,10 +633,22 @@ class AssetManagerPanel(Panel):
         }
 
     def _release_obsolete_thumbnail_sources(self) -> None:
-        live_ids = set(self._asset_index_assets())
+        ids = getattr(self._asset_index, "iter_project_ids", None)
+        live_ids = set(ids() if callable(ids) else self._asset_index_assets())
         stale_ids = set(self._thumbnail_sources_by_asset).difference(live_ids)
         release_texture = getattr(lf.ui, "release_rml_texture", None)
         for asset_id in stale_ids:
+            source = self._thumbnail_sources_by_asset.pop(asset_id)
+            if callable(release_texture):
+                release_texture(source)
+
+    def _release_thumbnails_outside_window(self) -> None:
+        visible = {
+            str(asset.get("id") or asset.get("project_uuid") or "")
+            for asset in self._window_assets(self._filtered_assets())
+        }
+        release_texture = getattr(lf.ui, "release_rml_texture", None)
+        for asset_id in set(self._thumbnail_sources_by_asset).difference(visible):
             source = self._thumbnail_sources_by_asset.pop(asset_id)
             if callable(release_texture):
                 release_texture(source)
@@ -673,6 +741,10 @@ class AssetManagerPanel(Panel):
 
     def get_all_assets_count(self) -> int:
         query = self._search_query.strip().casefold()
+        if not query:
+            count = getattr(self._asset_index, "count", None)
+            if callable(count):
+                return int(count())
         return sum(
             self._asset_matches_query(asset, query)
             for asset in self._asset_index_assets().values()
@@ -729,7 +801,7 @@ class AssetManagerPanel(Panel):
 
     def _get_selected_asset(self) -> Optional[Dict[str, Any]]:
         asset_id = self.get_selected_asset_id()
-        return self._asset_index_assets().get(asset_id) if asset_id else None
+        return self._asset_dict(asset_id)
 
     def get_selected_asset_name(self) -> str:
         asset = self._get_selected_asset()
@@ -969,7 +1041,7 @@ class AssetManagerPanel(Panel):
         asset_id = self._resolve_event_value(args, _ev, "data-asset-id") or self.get_selected_asset_id()
         if not asset_id or not self._asset_index:
             return
-        asset = self._asset_index_assets().get(asset_id)
+        asset = self._asset_dict(asset_id)
         candidate = str((asset or {}).get("relocation_candidate") or "")
         if not candidate:
             return
@@ -990,7 +1062,7 @@ class AssetManagerPanel(Panel):
         project = self._asset_index.verify_asset(asset_id)
         if project is None:
             return
-        asset = project.to_dict() if hasattr(project, "to_dict") else self._asset_index_assets().get(asset_id, {})
+        asset = project.to_dict() if hasattr(project, "to_dict") else (self._asset_dict(asset_id) or {})
         if not self._project_available(asset):
             self.refresh_catalog(scan_folders=False)
             return
@@ -1067,7 +1139,7 @@ class AssetManagerPanel(Panel):
             self.on_remove_asset(None, None, [asset_id])
 
     def _show_asset_context_menu(self, asset_id: str) -> bool:
-        asset = self._asset_index_assets().get(asset_id)
+        asset = self._asset_dict(asset_id)
         return bool(asset) and self._show_shared_context_menu(
             self._asset_context_menu_items(asset),
             lambda action: self._handle_asset_context_action(action, asset_id),
@@ -1075,7 +1147,7 @@ class AssetManagerPanel(Panel):
 
     def on_rename_asset(self, _handle, _ev, args):
         asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
-        asset = self._asset_index_assets().get(asset_id)
+        asset = self._asset_dict(asset_id)
         if not asset or not self._asset_index:
             return
         current_name = str(asset.get("name") or Path(str(asset.get("path") or "")).stem)
@@ -1095,7 +1167,7 @@ class AssetManagerPanel(Panel):
 
     def on_show_in_folder(self, _handle, _ev, args):
         asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
-        asset = self._asset_index_assets().get(asset_id)
+        asset = self._asset_dict(asset_id)
         if asset:
             reveal = getattr(lf.ui, "reveal_in_file_manager", None)
             if callable(reveal):
@@ -1259,6 +1331,7 @@ class AssetManagerPanel(Panel):
                     scan_folder_id,
                     scan_directory,
                     progress,
+                    self._mount_generation,
                 ),
                 daemon=True,
                 name="AssetManagerFolderScan",
@@ -1274,6 +1347,7 @@ class AssetManagerPanel(Panel):
         folder_id: Optional[str],
         directory: Optional[str],
         progress: AssetFolderScanProgress,
+        generation: int,
     ) -> None:
         global _folder_scan_completed_in_process
         try:
@@ -1311,7 +1385,7 @@ class AssetManagerPanel(Panel):
                 _folder_scan_completed_in_process = True
             scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
             if callable(scheduler):
-                scheduler(self._complete_folder_scan)
+                scheduler(lambda: self._complete_folder_scan(generation))
 
     def _finish_folder_scan(self) -> None:
         with self._folder_scan_lock:
@@ -1322,7 +1396,9 @@ class AssetManagerPanel(Panel):
             return
         self.refresh_catalog(scan_folders=False)
 
-    def _complete_folder_scan(self) -> None:
+    def _complete_folder_scan(self, generation: Optional[int] = None) -> None:
+        if generation is not None and generation != self._mount_generation:
+            return
         self._finish_folder_scan()
         with self._folder_scan_lock:
             rerun = self._folder_scan_rerun_pending
@@ -1371,18 +1447,27 @@ class AssetManagerPanel(Panel):
             self._catalog_verify_refresh_pending = False
             cancel_event = threading.Event()
             self._catalog_verify_cancel = cancel_event
+            visible_ids = [
+                str(asset.get("id") or asset.get("project_uuid") or "")
+                for asset in self._window_assets(self._filtered_assets())
+            ]
             thread = threading.Thread(
                 target=self._catalog_verify_worker,
-                args=(self._asset_index, cancel_event),
+                args=(self._asset_index, cancel_event, visible_ids, self._mount_generation),
                 daemon=True,
                 name="AssetManagerCatalogVerify",
             )
             self._catalog_verify_thread = thread
         thread.start()
 
-    def _catalog_verify_worker(self, index: Any, cancel_event: threading.Event) -> None:
+    def _catalog_verify_worker(
+        self, index: Any, cancel_event: threading.Event,
+        visible_ids: List[str], generation: int,
+    ) -> None:
         try:
-            verified = verify_catalog_projects(index, cancel_event)
+            verified = verify_catalog_projects(
+                index, cancel_event, visible_asset_ids=visible_ids
+            )
             _log.info("Asset catalog verify: verified=%d cancelled=%s", verified, cancel_event.is_set())
         except Exception:
             _log.exception("Asset Manager catalog verify failed")
@@ -1394,9 +1479,11 @@ class AssetManagerPanel(Panel):
                     self._catalog_verify_thread = None
             scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
             if callable(scheduler):
-                scheduler(self._complete_catalog_verify)
+                scheduler(lambda: self._complete_catalog_verify(generation))
 
-    def _complete_catalog_verify(self) -> None:
+    def _complete_catalog_verify(self, generation: Optional[int] = None) -> None:
+        if generation is not None and generation != self._mount_generation:
+            return
         with self._folder_scan_lock:
             if not self._catalog_verify_refresh_pending:
                 return
@@ -1456,7 +1543,9 @@ class AssetManagerPanel(Panel):
             self._handle.dirty("all_assets_count")
         if assets:
             self._release_obsolete_thumbnail_sources()
-            self._handle.update_record_list("assets", self.get_filtered_assets())
+            rows = self.get_filtered_assets()
+            self._release_thumbnails_outside_window()
+            self._handle.update_record_list("assets", rows)
             self._handle.dirty("assets")
             for field in (
                 "asset_results_summary",
@@ -1658,7 +1747,7 @@ class AssetManagerPanel(Panel):
         asset = (
             project.to_dict()
             if project is not None and hasattr(project, "to_dict")
-            else self._asset_index_assets().get(asset_id, {})
+            else (self._asset_dict(asset_id) or {})
         )
         if not self._project_available(asset):
             self.refresh_catalog(scan_folders=False)
@@ -1994,10 +2083,11 @@ class AssetManagerPanel(Panel):
     def on_mount(self, doc):
         super().on_mount(doc)
         self._panel_mounted = True
+        self._mount_generation += 1
+        self._schedule_slow_poll(self._mount_generation)
         self._doc = doc
         if self._asset_index is None:
-            if not self._initialize_backend():
-                self._log_warn("Asset Manager catalog could not be loaded")
+            self._start_backend_initialization()
         self._repair_selection()
         self._bind_dom_event_listeners(doc)
         self._subscribe_reactive_state()
@@ -2008,21 +2098,15 @@ class AssetManagerPanel(Panel):
             self._handle.dirty_all()
         self._catalog_epoch_seen = self._catalog_epoch()
         self._refresh_after_project_write()
-        self._start_catalog_verify()
-        if not _folder_scan_completed_in_process:
+        if self._asset_index is not None:
+            self._start_catalog_verify()
+        if self._asset_index is not None and not _folder_scan_completed_in_process:
             self._scan_asset_folders()
 
     def on_update(self, doc):
-        changed = self._sync_default_folder_path()
-        changed = self._refresh_after_project_write() or changed
+        changed = False
         if self._sync_panel_space_state():
             self._dirty_fields("is_floating")
-            changed = True
-        if self._folder_scan_refresh_pending:
-            self._complete_folder_scan()
-            changed = True
-        if self._catalog_verify_refresh_pending:
-            self._complete_catalog_verify()
             changed = True
         if self._publish_catalog_if_changed():
             changed = True
@@ -2034,27 +2118,43 @@ class AssetManagerPanel(Panel):
             changed = True
         return changed
 
+    def _schedule_slow_poll(self, generation: int) -> None:
+        def dispatch() -> None:
+            scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
+
+            def tick() -> None:
+                if generation != self._mount_generation or not self._panel_mounted:
+                    return
+                changed = self._sync_default_folder_path()
+                changed = self._refresh_after_project_write() or changed
+                if changed:
+                    self._request_model_update()
+                self._schedule_slow_poll(generation)
+
+            if callable(scheduler):
+                scheduler(tick)
+
+        timer = threading.Timer(1.0, dispatch)
+        timer.daemon = True
+        self._ui_poll_timer = timer
+        timer.start()
+
     def on_unmount(self, doc):
         with self._folder_scan_lock:
             self._panel_mounted = False
+            self._mount_generation += 1
             self._folder_scan_rerun_pending = False
             self._folder_scan_rerun_target = None
             cancel = self._folder_scan_cancel
-            thread = self._folder_scan_thread
             verify_cancel = self._catalog_verify_cancel
-            verify_thread = self._catalog_verify_thread
+            poll_timer = self._ui_poll_timer
+            self._ui_poll_timer = None
         if cancel is not None:
             cancel.set()
         if verify_cancel is not None:
             verify_cancel.set()
-        if thread is not None and thread.ident is not None:
-            thread.join(timeout=2.0)
-            if thread.is_alive():
-                self._log_warn("Asset Manager folder scan did not finish before unmount")
-        if verify_thread is not None and verify_thread.ident is not None:
-            verify_thread.join(timeout=2.0)
-            if verify_thread.is_alive():
-                self._log_warn("Asset Manager catalog verify did not finish before unmount")
+        if poll_timer is not None:
+            poll_timer.cancel()
         if self._drag_payload_token is not None:
             cancel_drag = getattr(lf.ui, "cancel_drag_payload", None)
             if callable(cancel_drag):

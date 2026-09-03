@@ -203,6 +203,9 @@ namespace lfs::vis {
             std::size_t additional_block_bytes = 0,
             std::size_t additional_allocation_bytes = 0) const;
         [[nodiscard]] VkPipelineCache pipelineCache() const { return pipeline_cache_; }
+        // Persist the live cache without destroying it. Calls are serialized
+        // with shutdown and other cache serialization calls.
+        void flushPipelineCache();
         [[nodiscard]] VkFormat swapchainFormat() const { return swapchain_format_; }
         [[nodiscard]] VkFormat depthStencilFormat() const { return depth_stencil_format_; }
         [[nodiscard]] VkImageAspectFlags depthStencilAspectMask() const;
@@ -433,6 +436,7 @@ namespace lfs::vis {
         void destroyDebugMessenger();
         void destroyAllocator();
         void saveAndDestroyPipelineCache();
+        void savePipelineCacheLocked();
         void destroySwapchain();
         [[nodiscard]] bool waitForFrameFences();
 
@@ -468,6 +472,7 @@ namespace lfs::vis {
         VkDevice device_ = VK_NULL_HANDLE;
         VmaAllocator allocator_ = VK_NULL_HANDLE;
         VkPipelineCache pipeline_cache_ = VK_NULL_HANDLE;
+        std::mutex pipeline_cache_mutex_;
         VkQueue graphics_queue_ = VK_NULL_HANDLE;
         VkQueue present_queue_ = VK_NULL_HANDLE;
         uint32_t graphics_queue_family_ = 0;

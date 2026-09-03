@@ -21,8 +21,6 @@ import tempfile
 import threading
 import time
 from typing import Optional, Callable, Tuple
-from urllib.parse import quote, urlparse
-import urllib.request
 import zipfile
 
 logger = logging.getLogger(__name__)
@@ -42,6 +40,17 @@ HTTP_USER_AGENT = "LichtFeld-PluginInstaller/1.0"
 PROCESS_POLL_SECONDS = 0.05
 PROCESS_TERMINATE_GRACE_SECONDS = 0.5
 PROCESS_OUTPUT_TAIL_LINES = 100
+
+
+def __getattr__(name):
+    """Keep the historical lazy ``installer.urllib`` patch surface."""
+    if name == "urllib":
+        import urllib
+        import urllib.error
+        import urllib.request
+
+        return urllib
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _localized_progress(key: str, fallback: str, **values: object) -> str:
@@ -284,6 +293,8 @@ def github_repo_url(owner: str, repo: str) -> str:
 
 def github_archive_url(owner: str, repo: str, ref: Optional[str] = None) -> str:
     """Return the GitHub API tarball URL for a repo/ref."""
+    from urllib.parse import quote
+
     base = f"{GITHUB_API_URL}/{owner}/{repo}/tarball"
     if ref:
         return f"{base}/{quote(ref, safe='')}"
@@ -297,6 +308,9 @@ def _download_url_to_temp(
     headers: Optional[dict] = None,
 ) -> Path:
     """Download a URL to a temporary file and return its path."""
+    from urllib.parse import quote, urlparse
+    import urllib.request
+
     req_headers = {"User-Agent": HTTP_USER_AGENT}
     if headers:
         req_headers.update(headers)
@@ -943,6 +957,8 @@ def parse_github_url(url: str) -> Tuple[str, str, Optional[str]]:
         - github:owner/repo@branch
         - owner/repo (assumes GitHub)
     """
+    from urllib.parse import urlparse
+
     url = url.strip()
     branch = None
 

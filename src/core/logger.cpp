@@ -10,6 +10,7 @@
 #include <deque>
 #include <filesystem>
 #include <format>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <regex>
@@ -353,6 +354,28 @@ namespace lfs::core {
                 return {entries_.begin(), entries_.end()};
             }
 
+            [[nodiscard]] std::vector<LogEntrySnapshot>
+            entries_since(const uint64_t generation, const size_t max_count) const {
+                if (max_count == 0)
+                    return {};
+
+                std::lock_guard lock(entries_mutex_);
+                auto first = entries_.begin();
+                while (first != entries_.end() && first->sequence <= generation)
+                    ++first;
+                if (first == entries_.end())
+                    return {};
+
+                const auto available = static_cast<size_t>(std::distance(first, entries_.end()));
+                if (available > max_count)
+                    first = std::prev(entries_.end(), static_cast<std::ptrdiff_t>(max_count));
+
+                std::vector<LogEntrySnapshot> result;
+                result.reserve(std::min(available, max_count));
+                result.insert(result.end(), first, entries_.end());
+                return result;
+            }
+
             [[nodiscard]] std::string text() const {
                 std::lock_guard lock(entries_mutex_);
                 std::string output;
@@ -390,8 +413,8 @@ namespace lfs::core {
                 std::lock_guard lock(entries_mutex_);
                 if (entries_.size() >= max_entries_)
                     entries_.pop_front();
+                entry.sequence = generation_.fetch_add(1, std::memory_order_relaxed) + 1;
                 entries_.push_back(std::move(entry));
-                generation_.fetch_add(1, std::memory_order_relaxed);
             }
 
             void flush_() override {}
@@ -671,48 +694,87 @@ namespace lfs::core {
     }
 
     size_t Logger::buffered_log_count() const {
-        std::lock_guard lock(impl_->mutex);
-        return impl_->memory_sink ? impl_->memory_sink->entry_count() : 0;
+        std::shared_ptr<MemorySink> memory_sink;
+        {
+            std::lock_guard lock(impl_->mutex);
+            memory_sink = impl_->memory_sink;
+        }
+        return memory_sink ? memory_sink->entry_count() : 0;
     }
 
     uint64_t Logger::buffered_log_generation() const {
-        std::lock_guard lock(impl_->mutex);
-        return impl_->memory_sink ? impl_->memory_sink->generation() : 0;
+        std::shared_ptr<MemorySink> memory_sink;
+        {
+            std::lock_guard lock(impl_->mutex);
+            memory_sink = impl_->memory_sink;
+        }
+        return memory_sink ? memory_sink->generation() : 0;
     }
 
     std::vector<LogEntrySnapshot> Logger::buffered_logs() const {
-        std::lock_guard lock(impl_->mutex);
-        return impl_->memory_sink ? impl_->memory_sink->entries()
-                                  : std::vector<LogEntrySnapshot>{};
+        std::shared_ptr<MemorySink> memory_sink;
+        {
+            std::lock_guard lock(impl_->mutex);
+            memory_sink = impl_->memory_sink;
+        }
+        return memory_sink ? memory_sink->entries() : std::vector<LogEntrySnapshot>{};
+    }
+
+    std::vector<LogEntrySnapshot>
+    Logger::buffered_logs_since(const uint64_t generation, const size_t max_count) const {
+        std::shared_ptr<MemorySink> memory_sink;
+        {
+            std::lock_guard lock(impl_->mutex);
+            memory_sink = impl_->memory_sink;
+        }
+        return memory_sink ? memory_sink->entries_since(generation, max_count)
+                           : std::vector<LogEntrySnapshot>{};
     }
 
     std::string Logger::buffered_logs_as_text() const {
-        std::lock_guard lock(impl_->mutex);
-        return impl_->memory_sink ? impl_->memory_sink->text() : std::string{};
+        std::shared_ptr<MemorySink> memory_sink;
+        {
+            std::lock_guard lock(impl_->mutex);
+            memory_sink = impl_->memory_sink;
+        }
+        return memory_sink ? memory_sink->text() : std::string{};
     }
 
-    ScopedTimer::ScopedTimer(std::string name, const LogLevel level, const SourceSite loc)
-        : start_(std::chrono::high_resolution_clock::now()),
-          name_(std::move(name)),
-          level_(level),
+    ScopedTimer::ScopedTimer(const std::string_view name, const LogLevel level,
+                             const SourceSite loc)
+        : level_(level),
           loc_(loc) {
+        const bool log_enabled = Logger::get().is_enabled(level_);
         try {
             diagnostics_scope_active_ = lfs::diagnostics::VramProfiler::instance().enabled();
-            if (diagnostics_scope_active_) {
-                lfs::diagnostics::VramProfiler::instance().pushTimerScope(name_);
-            }
         } catch (...) {
             diagnostics_scope_active_ = false;
         }
+
+        disabled_ = !log_enabled && !diagnostics_scope_active_;
+        if (disabled_)
+            return;
+
+        start_ = std::chrono::high_resolution_clock::now();
+        name_ = name;
+        if (diagnostics_scope_active_) {
+            try {
+                lfs::diagnostics::VramProfiler::instance().pushTimerScope(name_);
+            } catch (...) {
+                diagnostics_scope_active_ = false;
+            }
+        }
     }
 
-    ScopedTimer::ScopedTimer(std::string name, const double min_log_ms,
+    ScopedTimer::ScopedTimer(const std::string_view name, const double min_log_ms,
                              const LogLevel level, const SourceSite loc)
-        : ScopedTimer(std::move(name), level, loc) {
+        : ScopedTimer(name, level, loc) {
         min_log_ms_ = min_log_ms;
     }
 
     ScopedTimer::~ScopedTimer() {
+        if (disabled_)
+            return;
         const auto duration = std::chrono::high_resolution_clock::now() - start_;
         const auto ms = std::chrono::duration<double, std::milli>(duration).count();
         if (diagnostics_scope_active_) {
@@ -723,7 +785,8 @@ namespace lfs::core {
         }
         if (ms < min_log_ms_)
             return;
-        Logger::get().log(level_, loc_, std::format("{} took {:.2f}ms", name_, ms));
+        if (Logger::get().is_enabled(level_))
+            Logger::get().log(level_, loc_, std::format("{} took {:.2f}ms", name_, ms));
     }
 
 } // namespace lfs::core

@@ -130,7 +130,7 @@ METRICS = (
 
 METRIC_BY_ID = {metric.id: metric for metric in METRICS}
 
-_ACTIVE_TRAINING_STATES = {"running", "paused", "stopping"}
+_ACTIVE_TRAINING_STATES = {"starting", "running", "paused", "stopping"}
 
 
 def histogram_mode_available(context=None) -> bool:

@@ -74,12 +74,12 @@
     "title": "Démarrage",
     "description": "Apprenez à préparer les datasets et à démarrer avec LichtFeld Studio :",
     "wiki_section": "WIKI & FAQ",
+    "video_overview": "Tout ce que LichtFeld Studio peut faire aujourd'hui",
     "video_automotive": "3dgs for automotive marketing",
     "video_intro": "Entraînement sur Images Équirectangulaires 360",
     "video_latest": "LichtFeld v0.3.0 Aperçu des Fonctionnalités",
     "video_reality_scan": "Dataset Reality Scan",
     "video_colmap": "Tutoriel COLMAP",
-    "video_lichtfeld": "Tutoriel LichtFeld",
     "video_masks": "Tutoriel Masques"
   },
   "about": {
@@ -578,6 +578,8 @@
     "add_group": "Ajouter un Groupe",
     "add_group_ellipsis": "Ajouter un Groupe...",
     "new_group_name": "Nouveau groupe",
+    "group_selected": "Group Selected",
+    "ungroup": "Ungroup",
     "export": "Exporter...",
     "delete": "Supprimer",
     "rename": "Renommer",
@@ -2104,6 +2106,10 @@
         }
       }
     },
+    "computing": {
+      "title": "Calcul de l'histogramme…",
+      "message": "La distribution apparaîtra dès que les données seront prêtes."
+    },
     "delete_failed": {
       "title": "Échec de la suppression",
       "status": "Échec de la suppression : {message}",
@@ -2127,6 +2133,10 @@
       "metric_unavailable": {
         "title": "Métrique indisponible",
         "message": "La métrique sélectionnée n'a pas pu être lue depuis le modèle de gaussiennes combiné."
+      },
+      "compute_failed": {
+        "title": "Échec de l'histogramme",
+        "message": "Échec du calcul de l'histogramme : {error}"
       },
       "no_visible_values": {
         "title": "Aucune valeur visible",

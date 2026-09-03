@@ -422,7 +422,7 @@ def test_operator_property_registration_preserves_localization_keys():
 def test_cached_python_panels_request_a_frame_on_language_change():
     source = (ROOT / "src" / "python" / "lfs" / "rml_python_panel_adapter.cpp").read_text(encoding="utf-8")
     needs_frame = source[source.index("bool RmlPythonPanelAdapter::needsAnimationFrame() const"):]
-    assert "current_language != last_language_" in needs_frame
+    assert "getCurrentLanguageGeneration()" in needs_frame
     assert "return true;" in needs_frame.split("if (!dirty_driven_updates_)", 1)[0]
 
 

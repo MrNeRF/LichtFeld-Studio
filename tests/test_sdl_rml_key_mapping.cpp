@@ -114,6 +114,53 @@ namespace {
         EXPECT_FALSE(buffer.mouse_moved);
     }
 
+    TEST(FrameInputBufferTest, PreservesOrderedMouseButtonsAndHorizontalWheel) {
+        lfs::vis::FrameInputBuffer buffer;
+        buffer.beginFrame();
+
+        SDL_Event first_down{};
+        first_down.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        first_down.button.windowID = 11;
+        first_down.button.button = SDL_BUTTON_LEFT;
+        first_down.button.x = 10.0f;
+        first_down.button.y = 20.0f;
+        first_down.button.timestamp = 100;
+        first_down.button.clicks = 1;
+        buffer.processEvent(first_down, 11);
+
+        SDL_Event first_up = first_down;
+        first_up.type = SDL_EVENT_MOUSE_BUTTON_UP;
+        first_up.button.timestamp = 101;
+        buffer.processEvent(first_up, 11);
+
+        SDL_Event second_down = first_down;
+        second_down.button.x = 30.0f;
+        second_down.button.y = 40.0f;
+        second_down.button.timestamp = 102;
+        second_down.button.clicks = 2;
+        buffer.processEvent(second_down, 11);
+
+        SDL_Event wheel{};
+        wheel.type = SDL_EVENT_MOUSE_WHEEL;
+        wheel.wheel.windowID = 11;
+        wheel.wheel.x = 2.0f;
+        wheel.wheel.y = -3.0f;
+        buffer.processEvent(wheel, 11);
+
+        ASSERT_EQ(buffer.mouse_button_events.size(), 3u);
+        EXPECT_TRUE(buffer.mouse_button_events[0].down);
+        EXPECT_FALSE(buffer.mouse_button_events[1].down);
+        EXPECT_TRUE(buffer.mouse_button_events[2].down);
+        EXPECT_FLOAT_EQ(buffer.mouse_button_events[0].x, 10.0f);
+        EXPECT_FLOAT_EQ(buffer.mouse_button_events[2].x, 30.0f);
+        EXPECT_EQ(buffer.mouse_button_events[0].timestamp, 100u);
+        EXPECT_EQ(buffer.mouse_button_events[2].clicks, 2u);
+        EXPECT_FLOAT_EQ(buffer.mouse_wheel, -3.0f);
+        EXPECT_FLOAT_EQ(buffer.mouse_wheel_x, 2.0f);
+        EXPECT_TRUE(buffer.mouse_clicked[0]);
+        EXPECT_TRUE(buffer.mouse_released[0]);
+    }
+
     TEST(FrameInputBufferTest, TracksMouseWindowAndWakeEventsForRenderDemand) {
         lfs::vis::FrameInputBuffer buffer;
         buffer.beginFrame();

@@ -8,10 +8,12 @@
 #include "gui/layout_state.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/ui_context.hpp"
+#include "input/frame_input_buffer.hpp"
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace lfs::vis::gui {
@@ -42,6 +44,8 @@ namespace lfs::vis::gui {
         int screen_w = 0;
         int screen_h = 0;
         float mouse_wheel = 0;
+        float mouse_wheel_x = 0;
+        std::vector<FrameMouseButtonEvent> mouse_button_events;
         bool key_ctrl = false;
         bool key_shift = false;
         bool key_alt = false;
@@ -79,6 +83,7 @@ namespace lfs::vis::gui {
         float left_dock_width = 320.0f;
         bool show_sequencer = false;
         std::string active_tab_id;
+        std::string bottom_dock_active_tab_id;
         float tab_scroll_offset = 0.0f;
     };
 
@@ -147,6 +152,11 @@ namespace lfs::vis::gui {
         float getBottomDockHeight() const { return bottom_dock_height_; }
         bool isBottomDockVisible() const { return bottom_dock_visible_; }
         float bottomDockTopY() const { return bottom_dock_top_y_; }
+        const std::vector<PanelSummary>& bottomDockTabs() const { return bottom_dock_tabs_; }
+        const std::string& getBottomDockActiveTab() const { return bottom_dock_active_tab_id_; }
+        void setBottomDockActiveTab(const std::string& id) { bottom_dock_active_tab_id_ = id; }
+        bool bottomDockActiveTabChanged() const { return bottom_dock_active_tab_changed_; }
+        PanelDrawBounds bottomDockTabBarRect() const { return bottom_dock_tab_bar_rect_; }
         float getLeftDockWidth() const { return left_dock_width_; }
         void setLeftDockWidth(float width);
         bool isLeftDockVisible() const { return left_dock_visible_; }
@@ -202,6 +212,12 @@ namespace lfs::vis::gui {
 
         bool show_sequencer_ = false;
         std::string active_tab_id_;
+        std::string bottom_dock_active_tab_id_;
+        std::vector<PanelSummary> bottom_dock_tabs_;
+        std::unordered_set<std::string> previous_bottom_docked_ids_;
+        bool bottom_dock_sync_seeded_ = false;
+        bool bottom_dock_active_tab_changed_ = false;
+        PanelDrawBounds bottom_dock_tab_bar_rect_;
 
         float tab_scroll_offset_ = 0.0f;
         float tab_content_total_h_ = 0.0f;

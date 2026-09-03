@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Image preview panel using RmlUI floating window."""
 
+import os
 import time
 from math import gcd
 from pathlib import Path
@@ -11,6 +12,7 @@ from urllib.parse import quote
 import lichtfeld as lf
 from . import rml_widgets as w
 from .types import Panel
+from .panels import panel_class
 from .ui import RuntimeState
 from .rml_keys import (
     KI_1, KI_ADD, KI_C, KI_DOWN, KI_END, KI_ESCAPE, KI_F, KI_HOME, KI_I,
@@ -43,15 +45,8 @@ def _encode_rml_path(path: Path | str) -> str:
     return quote(str(path), safe=_RML_PATH_SAFE_CHARS)
 
 
+@panel_class("image_preview")
 class ImagePreviewPanel(Panel):
-    id = "lfs.image_preview"
-    label = "Image Preview"
-    space = lf.ui.PanelSpace.FLOATING
-    order = 98
-    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    template = "rmlui/image_preview.rml"
-    size = (900, 600)
-    update_policy = "dirty"
 
     def __init__(self):
         global _instance, _pending_open
@@ -93,6 +88,9 @@ class ImagePreviewPanel(Panel):
         self._scroll_start_time = 0.0
 
         self._image_info_cache: dict[str, tuple[int, int, int]] = {}
+        self._path_stat_cache: dict[str, tuple[bool, int, int]] = {}
+        self._filmstrip_top_spacer = 0.0
+        self._filmstrip_bottom_spacer = 0.0
         self._last_training_params: tuple[int, int, bool] = (1, 0, False)
         self._decorator_cache: dict[str, str] = {}
         self._reactive_unsubscribers = []
@@ -169,6 +167,8 @@ class ImagePreviewPanel(Panel):
 
         model.bind_func("panel_label", lambda: self._get_title())
         model.bind_record_list("thumbs")
+        model.bind_func("filmstrip_top_spacer_height", lambda: f"{self._filmstrip_top_spacer:.1f}dp")
+        model.bind_func("filmstrip_bottom_spacer_height", lambda: f"{self._filmstrip_bottom_spacer:.1f}dp")
         self._handle = model.get_handle()
 
     def on_mount(self, doc):
@@ -295,8 +295,15 @@ class ImagePreviewPanel(Panel):
         if not image_paths:
             return
 
-        self._image_paths = [p.resolve() for p in image_paths]
-        self._mask_paths = [p.resolve() if p else None for p in mask_paths] if mask_paths else [None] * len(image_paths)
+        self._image_paths = [Path(p) for p in image_paths]
+        self._mask_paths = [Path(p) if p else None for p in mask_paths] if mask_paths else [None] * len(image_paths)
+        self._path_stat_cache = {}
+        for path in self._image_paths + [p for p in self._mask_paths if p is not None]:
+            try:
+                stat = os.stat(path)
+                self._path_stat_cache[str(path)] = (True, int(stat.st_mtime_ns), int(stat.st_size))
+            except OSError:
+                self._path_stat_cache[str(path)] = (False, 0, 0)
         self._camera_uids = camera_uids if camera_uids is not None else [-1] * len(image_paths)
         self._current_index = min(start_index, len(image_paths) - 1)
         self._last_training_params = self._get_training_params()
@@ -407,7 +414,7 @@ class ImagePreviewPanel(Panel):
         if self._current_index >= len(self._mask_paths):
             return False
         mask_path = self._mask_paths[self._current_index]
-        return mask_path is not None and mask_path.exists()
+        return mask_path is not None and self._path_stat_cache.get(str(mask_path), (False, 0, 0))[0]
 
     def _close_panel(self):
         lf.ui.set_panel_enabled("lfs.image_preview", False)
@@ -769,13 +776,13 @@ class ImagePreviewPanel(Panel):
         lo = max(0, self._current_index - half)
         hi = min(n, self._current_index + half)
 
+        self._filmstrip_top_spacer = lo * 46.0
+        self._filmstrip_bottom_spacer = max(0, n - hi) * 46.0
         records = []
-        for i, path in enumerate(self._image_paths):
-            if lo <= i < hi:
-                uid = self._camera_uids[i] if i < len(self._camera_uids) else -1
-                dec = f"image({self._make_preview_url(path, uid, THUMB_MAX_PX)})"
-            else:
-                dec = "none"
+        for i in range(lo, hi):
+            path = self._image_paths[i]
+            uid = self._camera_uids[i] if i < len(self._camera_uids) else -1
+            dec = f"image({self._make_preview_url(path, uid, THUMB_MAX_PX)})"
             records.append({
                 "index": i,
                 "label": f"{i + 1:02d}",
@@ -783,14 +790,17 @@ class ImagePreviewPanel(Panel):
                 "decorator": dec,
             })
         self._handle.update_record_list("thumbs", records)
+        self._handle.dirty("filmstrip_top_spacer_height")
+        self._handle.dirty("filmstrip_bottom_spacer_height")
 
         self._scroll_filmstrip_smooth(filmstrip, self._current_index)
 
     def _scroll_filmstrip_smooth(self, filmstrip, index: int):
         children = filmstrip.children()
-        if index < 0 or index >= len(children):
+        child_index = index - max(0, self._current_index - FILMSTRIP_WINDOW // 2) + 1
+        if child_index < 1 or child_index >= len(children) - 1:
             return
-        el = children[index]
+        el = children[child_index]
         item_top = el.offset_top
         item_bot = item_top + el.offset_height
         view_h = filmstrip.client_height
@@ -1217,8 +1227,9 @@ def open_camera_preview_by_uid(cam_uid: int):
     scene = lf.get_scene()
     if not scene:
         return
+    nodes = scene.get_nodes()
     target = None
-    for node in scene.get_nodes():
+    for node in nodes:
         if node.type == lf.scene.NodeType.CAMERA and node.camera_uid == cam_uid:
             target = node
             break
@@ -1226,14 +1237,16 @@ def open_camera_preview_by_uid(cam_uid: int):
         return
 
     parent = scene.get_node_by_id(target.parent_id) if target.parent_id >= 0 else None
-    child_ids = parent.children if parent else [n.id for n in scene.get_nodes() if n.type == lf.scene.NodeType.CAMERA]
+    child_ids = parent.children if parent else [n.id for n in nodes if n.type == lf.scene.NodeType.CAMERA]
+
+    nodes_by_id = {node.id: node for node in nodes}
 
     image_paths = []
     mask_paths = []
     camera_uids = []
     start_index = 0
     for cid in child_ids:
-        child = scene.get_node_by_id(cid)
+        child = nodes_by_id.get(cid)
         if not child or child.type != lf.scene.NodeType.CAMERA or not child.image_path:
             continue
         if child.id == target.id:

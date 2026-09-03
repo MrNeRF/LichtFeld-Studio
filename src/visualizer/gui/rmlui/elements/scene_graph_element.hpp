@@ -8,6 +8,7 @@
 #include <RmlUi/Core/EventListener.h>
 #include <core/scene.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -45,10 +46,17 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool selectionMarkersVisible() const { return selection_markers_visible_; }
         [[nodiscard]] bool syncFromScene(const PanelDrawContext& ctx);
         [[nodiscard]] bool executeContextMenuAction(std::string_view action);
+        [[nodiscard]] bool needsAnimationFrame() const {
+            return (drag_source_id_ != core::NULL_NODE &&
+                    auto_expand_deadline_ != std::chrono::steady_clock::time_point{}) ||
+                   !just_moved_ids_.empty();
+        }
 
         [[nodiscard]] size_t rootCount() const { return root_count_; }
+        [[nodiscard]] size_t modelCount() const { return model_count_; }
         [[nodiscard]] size_t nodeCount() const { return node_snapshots_.size(); }
         [[nodiscard]] size_t selectedCount() const { return selected_ids_.size(); }
+        [[nodiscard]] std::unordered_set<int> visibleCameraUids() const;
         [[nodiscard]] SelectionActionState selectionActionState() const;
         void setSelectedVisibility(bool visible);
         void setSelectedTrainingEnabled(bool enabled);
@@ -60,6 +68,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] const std::string& filterText() const { return filter_text_; }
         [[nodiscard]] bool hasNodes() const { return scene_has_nodes_; }
         [[nodiscard]] bool modelsCollapsed() const { return false; }
+        void cancelDrag();
         void setModelsCollapsed(bool collapsed);
         [[nodiscard]] const std::unordered_set<core::NodeId>& collapsedIds() const {
             return collapsed_ids_;
@@ -112,6 +121,7 @@ namespace lfs::vis::gui {
             bool delete_enabled = false;
             bool can_rename = false;
             bool rename_enabled = false;
+            int camera_uid = -1;
             std::optional<std::string> camera_loss_icon_color;
         };
 
@@ -209,13 +219,18 @@ namespace lfs::vis::gui {
         core::NodeId nodeIdFromTarget(Rml::Element* target) const;
         void toggleExpand(core::NodeId node_id);
         void toggleModelsSection();
-        void updateDropTarget(RowSlot* hovered_slot, core::NodeId hovered_id, float mouse_y);
+        void updateDropTarget(RowSlot* hovered_slot, core::NodeId hovered_id, float mouse_y,
+                              bool allow_empty_root_end);
         void clearDropState();
         void commitDrop();
         void showDragGhost(core::NodeId node_id, float mouse_x, float mouse_y);
         void moveDragGhost(float mouse_x, float mouse_y);
         void hideDragGhost();
         void handleDragEvent(Rml::Event& event);
+        void updateDragAutoScroll(float mouse_y);
+        void updateDragAutoExpand(core::NodeId hovered_id);
+        [[nodiscard]] std::vector<core::NodeId> draggedNodeIds() const;
+        [[nodiscard]] std::vector<core::NodeId> selectedDraggableNodeIds() const;
         [[nodiscard]] bool isValidDropContainer(core::NodeId container_id) const;
         [[nodiscard]] int siblingIndexOf(core::NodeId node_id) const;
         void showContextMenu(core::NodeId node_id, float mouse_x, float mouse_y);
@@ -226,6 +241,8 @@ namespace lfs::vis::gui {
         void toggleChildrenTraining(core::NodeId group_id, bool enabled);
         void toggleSelectedTraining(bool enabled);
         void executeAction(const std::string& action);
+        void groupSelectedNodes();
+        void ungroupSelectedNode();
 
         Rml::Element* content_el_ = nullptr;
         Rml::Element* header_el_ = nullptr;
@@ -254,17 +271,33 @@ namespace lfs::vis::gui {
         DragListener drag_listener_;
         core::NodeId context_menu_node_id_ = core::NULL_NODE;
         core::NodeId drag_source_id_ = core::NULL_NODE;
+        std::vector<core::NodeId> drag_node_ids_;
         core::NodeId drop_into_group_id_ = core::NULL_NODE;
         core::NodeId drop_parent_id_ = core::NULL_NODE;
         int drop_index_ = -1;
         bool drop_valid_ = false;
         Rml::Element* insertion_line_ = nullptr;
+        Rml::Element* insertion_line_dot_ = nullptr;
         Rml::Element* drag_ghost_ = nullptr;
+        Rml::Element* drag_ghost_icon_ = nullptr;
+        Rml::Element* drag_ghost_name_ = nullptr;
+        Rml::Element* drag_ghost_badge_ = nullptr;
+        core::NodeId auto_expanded_group_id_ = core::NULL_NODE;
+        core::NodeId auto_expand_hovered_group_id_ = core::NULL_NODE;
+        core::NodeId dropped_into_auto_expanded_group_id_ = core::NULL_NODE;
+        std::chrono::steady_clock::time_point auto_expand_deadline_{};
+        std::chrono::steady_clock::time_point last_drag_scroll_time_{};
+        bool ghost_fade_pending_ = false;
+        bool drag_cancelled_ = false;
+        core::NodeId drag_hovered_id_ = core::NULL_NODE;
+        std::unordered_set<core::NodeId> just_moved_ids_;
+        std::chrono::steady_clock::time_point just_moved_deadline_{};
         bool models_collapsed_ = false;
         bool session_collapse_pending_ = false;
         std::unordered_set<std::string> session_collapsed_uuids_;
         bool scene_has_nodes_ = false;
         size_t root_count_ = 0;
+        size_t model_count_ = 0;
         bool invert_masks_ = false;
         bool dom_dirty_ = true;
         bool tree_rebuild_needed_ = true;

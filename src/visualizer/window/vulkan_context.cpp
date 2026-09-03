@@ -3561,8 +3561,8 @@ namespace lfs::vis {
         // exporter's handle. A stale handle must assert instead of being hidden
         // by the VUID-01742 suppression below.
         {
-            struct stat st_src {};
-            struct stat st_dup {};
+            struct stat st_src{};
+            struct stat st_dup{};
             const int st_src_rc = ::fstat(handle, &st_src);
             const int st_dup_rc = ::fstat(dup_fd, &st_dup);
             int kcmp_rc = 0;
@@ -5030,7 +5030,7 @@ namespace lfs::vis {
         return true;
     }
 
-    void VulkanContext::saveAndDestroyPipelineCache() {
+    void VulkanContext::savePipelineCacheLocked() {
         if (device_ == VK_NULL_HANDLE || pipeline_cache_ == VK_NULL_HANDLE) {
             return;
         }
@@ -5048,23 +5048,51 @@ namespace lfs::vis {
                     std::filesystem::create_directories(path->parent_path(), ec);
                 }
                 if (path && !ec) {
+                    const auto temporary = *path;
+                    const auto temporary_string = lfs::core::path_to_utf8(temporary) + ".tmp";
+                    const auto temporary_path = lfs::core::utf8_to_path(temporary_string);
                     std::ofstream file;
-                    if (lfs::core::open_file_for_write(*path,
+                    if (lfs::core::open_file_for_write(temporary_path,
                                                        std::ios::binary | std::ios::trunc,
                                                        file)) {
                         file.write(cache_data.data(), static_cast<std::streamsize>(cache_data.size()));
+                        file.close();
                         if (file) {
-                            LOG_INFO("Saved Vulkan pipeline cache: {} ({} bytes)",
-                                     lfs::core::path_to_utf8(*path),
-                                     cache_data.size());
+                            std::error_code rename_ec;
+                            std::filesystem::rename(temporary_path, *path, rename_ec);
+                            if (rename_ec) {
+                                // Windows does not replace an existing file
+                                // with rename(). The fallback still ensures
+                                // readers never see a partially written cache.
+                                std::filesystem::remove(*path, rename_ec);
+                                rename_ec.clear();
+                                std::filesystem::rename(temporary_path, *path, rename_ec);
+                            }
+                            if (!rename_ec) {
+                                LOG_INFO("Saved Vulkan pipeline cache: {} ({} bytes)",
+                                         lfs::core::path_to_utf8(*path),
+                                         cache_data.size());
+                            }
                         }
                     }
                 }
             }
         }
+    }
 
-        vkDestroyPipelineCache(device_, pipeline_cache_, nullptr);
-        pipeline_cache_ = VK_NULL_HANDLE;
+    void VulkanContext::flushPipelineCache() {
+        const std::lock_guard lock(pipeline_cache_mutex_);
+        savePipelineCacheLocked();
+    }
+
+    void VulkanContext::saveAndDestroyPipelineCache() {
+        const std::lock_guard lock(pipeline_cache_mutex_);
+        savePipelineCacheLocked();
+
+        if (device_ != VK_NULL_HANDLE && pipeline_cache_ != VK_NULL_HANDLE) {
+            vkDestroyPipelineCache(device_, pipeline_cache_, nullptr);
+            pipeline_cache_ = VK_NULL_HANDLE;
+        }
     }
 
     void VulkanContext::destroyAllocator() {

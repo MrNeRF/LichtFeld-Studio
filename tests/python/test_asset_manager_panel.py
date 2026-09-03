@@ -333,8 +333,8 @@ def _scan_result(**overrides):
 
 def test_panel_contract_polls_preference_and_remains_left_dock(panel_module):
     panel_type = panel_module.AssetManagerPanel
-    assert panel_type.update_policy == "interval"
-    assert panel_type.update_interval_ms == 250
+    assert panel_type.update_policy == "dirty"
+    assert panel_type.update_interval_ms == 100
     assert panel_type.space == panel_module.lf.ui.PanelSpace.LEFT_DOCK
     assert panel_type.order == 20
 
@@ -350,7 +350,7 @@ def test_rml_and_panel_have_no_scene_or_disk_thumbnail_model():
     assert "scene-asset" not in rcss
     assert "absolute_path" not in source
     assert "fingerprint" not in source
-    assert "thumbnails" not in source
+    assert 'bind_record_list("thumbnails")' not in source
     assert "LICHT" not in rml
     assert "asset-col-type" not in rml
     assert "asset-pill-licht" not in rcss
@@ -1148,15 +1148,57 @@ def test_catalog_notice_for_failed_load_and_on_mount_warning(panel_module, monke
     assert panel.get_catalog_notice() == "asset_manager.status.load_failed"
     assert panel.get_has_catalog_notice() is True
 
-    warnings = []
-    monkeypatch.setattr(panel, "_initialize_backend", lambda: False)
     monkeypatch.setattr(
-        panel, "_log_warn", lambda msg, *args: warnings.append(msg % args if args else msg)
+        panel,
+        "_start_backend_initialization",
+        lambda: setattr(panel, "_catalog_load_failed", True),
     )
     monkeypatch.setattr(panel, "_bind_dom_event_listeners", lambda _doc: None)
     monkeypatch.setattr(panel, "_scan_asset_folders", lambda **_kwargs: None)
     panel.on_mount(_Document())
-    assert warnings
+    assert panel.get_has_catalog_notice()
+    panel.on_unmount(_Document())
+
+
+def test_backend_initialization_completes_without_ui_scheduler(panel_module, monkeypatch, tmp_path):
+    loaded = threading.Event()
+
+    class _LoadedIndex:
+        load_issues = []
+
+        def load(self):
+            loaded.set()
+            return True
+
+    monkeypatch.setattr(panel_module, "AssetIndex", _LoadedIndex)
+    monkeypatch.setattr(
+        panel_module,
+        "resolve_asset_manager_storage_path",
+        lambda: tmp_path / "catalog",
+    )
+    monkeypatch.setattr(
+        panel_module,
+        "resolve_default_asset_directory",
+        lambda: tmp_path / "assets",
+    )
+    monkeypatch.setattr(panel_module, "BACKEND_AVAILABLE", True)
+    monkeypatch.delattr(panel_module.lf.ui, "schedule_on_ui_thread", raising=False)
+
+    panel = panel_module.AssetManagerPanel()
+    monkeypatch.setattr(panel, "_repair_selection", lambda: None)
+    monkeypatch.setattr(panel, "_refresh_records", lambda **_kwargs: None)
+    monkeypatch.setattr(panel, "_start_catalog_verify", lambda: None)
+    monkeypatch.setattr(panel, "_scan_asset_folders", lambda: None)
+    updates = []
+    monkeypatch.setattr(panel, "_request_model_update", lambda: updates.append(True))
+
+    panel._start_backend_initialization()
+
+    assert loaded.wait(timeout=2.0)
+    assert _wait_until(lambda: not panel._backend_load_active)
+    assert isinstance(panel._asset_index, _LoadedIndex)
+    assert panel._catalog_load_failed is False
+    assert updates == [True]
 
 
 def test_unmount_cancels_running_folder_scan(panel_module, monkeypatch):
@@ -1182,8 +1224,25 @@ def test_unmount_cancels_running_folder_scan(panel_module, monkeypatch):
 
     assert cancel is not None and cancel.is_set()
     assert observed["event"] is cancel
+    assert thread is not None
+    thread.join(timeout=2.0)
     assert observed.get("waited") is True
-    assert thread is not None and not thread.is_alive()
+    assert not thread.is_alive()
+
+
+def test_unmount_does_not_join_scan_worker(panel_module):
+    class NoJoin:
+        ident = 1
+        def join(self, *args, **kwargs):
+            raise AssertionError("unmount must not join workers")
+
+        def is_alive(self):
+            return True
+
+    panel = panel_module.AssetManagerPanel()
+    panel._folder_scan_thread = NoJoin()
+    panel._folder_scan_cancel = threading.Event()
+    panel.on_unmount(_Document())
 
 
 def test_refresh_during_scan_schedules_exactly_one_rerun(panel_module, monkeypatch):
@@ -1584,6 +1643,16 @@ def test_on_mount_shows_cached_rows_without_inspecting(
         return inspections[Path(path).name]
 
     monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(inspect))
+    verify_done = threading.Event()
+    original_verify_catalog = panel_module.verify_catalog_projects
+
+    def verify_catalog(*args, **kwargs):
+        try:
+            return original_verify_catalog(*args, **kwargs)
+        finally:
+            verify_done.set()
+
+    monkeypatch.setattr(panel_module, "verify_catalog_projects", verify_catalog)
     library_path = tmp_path / "library.json"
     library_path.write_text(
         json.dumps(
@@ -1629,9 +1698,8 @@ def test_on_mount_shows_cached_rows_without_inspecting(
         "load_ms": load_ms,
         "mount_to_refresh_ms": mount_to_refresh_ms,
     }
-    assert _wait_until(
-        lambda: {project.status for project in index.list_projects()} == {"AVAILABLE"}
-    )
+    assert verify_done.wait(timeout=2.0)
+    assert {project.status for project in index.list_projects()} == {"AVAILABLE"}
     panel.on_update(_Document())
     assert {row["status"] for row in panel._handle.records["assets"]} <= {
         "AVAILABLE",

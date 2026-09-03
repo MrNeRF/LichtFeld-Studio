@@ -302,6 +302,7 @@ set(TEST_FILES
     test_device_fault.cpp
     device_fault_cuda_utils.cu
     test_selection_ops.cpp
+    test_selection_cursor.cpp
     test_tensor_basic.cpp
     test_tensor_ops.cpp
     test_tensor_memory.cpp
@@ -530,6 +531,7 @@ set(TEST_FILES
     test_metrics_evaluator_appearance.cpp
     test_export_env_composite.cpp
     test_image_io.cpp
+    test_camera_thumbnail_policy.cpp
     test_undistort.cpp
     test_viewport_region_utils.cpp
     test_viewport_interop_decision.cpp
@@ -544,6 +546,7 @@ set(TEST_FILES
     test_colmap_binary_parallel_parse.cpp
     test_splat_simplify.cpp
     test_rml_text_input_handler.cpp
+    test_scene_graph_dnd.cpp
     test_rml_im_mode_layout.cpp
     test_rml_python_listener_lifetime.cpp
     test_status_bar_fit.cpp

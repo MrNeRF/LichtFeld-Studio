@@ -15,7 +15,6 @@
 #include "core/user_paths.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "git_version.h"
-#include "gui/gpu_memory_query.hpp"
 #include "lfs_core_abi_stamp.h"
 #include "preprocessing/preprocess.hpp"
 #include "python/plugin_runner.hpp"
@@ -23,17 +22,10 @@
 
 #include <cstdlib>
 #include <cuda_runtime.h>
-#include <curand.h>
 #include <filesystem>
 #include <print>
 
 namespace {
-    // Per-process GPU memory query. NVML on Linux / DXGI on Windows. Returns 0 if the
-    // query fails or no GPU activity is yet attributed to this PID.
-    std::size_t process_used_now() {
-        return lfs::vis::gui::queryGpuMemory().process_used;
-    }
-
     // Apply CUDA driver-level VRAM-reduction knobs BEFORE the primary context exists.
     // Setting these after cudaFree(nullptr) is too late — the driver has already
     // committed defaults (1 KiB/thread stack reserve × SMs × max-threads = ~192 MiB on
@@ -85,9 +77,6 @@ namespace {
     void analyzeCudaContextDistribution() {
         auto& p = lfs::diagnostics::VramProfiler::instance();
 
-        // Phase 0: pre-context. Should be 0 — no CUDA calls have run.
-        const std::size_t before_context = process_used_now();
-
         // Phase 1: primary context creation. cudaFree(nullptr) is a documented idiom that
         // forces the primary context to exist on device 0.
         cudaFree(nullptr);
@@ -98,10 +87,6 @@ namespace {
         // accepts the request post-context but applies it on the *next* launch — well
         // before any real kernel runs.
         cudaDeviceSetLimit(cudaLimitStackSize, 256);
-        const std::size_t after_context = process_used_now();
-        const std::size_t primary_context =
-            after_context > before_context ? after_context - before_context : after_context;
-        p.recordCudaPhaseBytes("primary_context", primary_context);
 
         // Phase 2: default cudaMallocAsync pool. Query its initial backing reservation.
         std::size_t pool_reserved = 0;
@@ -140,25 +125,8 @@ namespace {
         p.recordCudaPhaseBytes("stack_reserve", stack_total);
         p.recordCudaPhaseBytes("malloc_heap", malloc_heap);
 
-        // Phase 4: libcurand context. Create + destroy a generator so the library code
-        // is loaded into the process; the residual delta is the library overhead.
-        const std::size_t before_curand = process_used_now();
-        curandGenerator_t gen = nullptr;
-        if (curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT) == CURAND_STATUS_SUCCESS) {
-            curandDestroyGenerator(gen);
-        }
-        const std::size_t after_curand = process_used_now();
-        const std::size_t curand_load =
-            after_curand > before_curand ? after_curand - before_curand : 0;
-        p.recordCudaPhaseBytes("curand_load", curand_load);
-
-        // The per-PID baseline = current NVML reading. Used as the breakdown's anchor
-        // so cuda.context.residual = baseline − Σphases.
-        p.setCudaContextBaselineBytes(process_used_now());
-
-        // Device-wide (cudaMemGetInfo) baseline captured at the same point, so the
-        // later kernel-warmup delta is measured against a matching metric instead of
-        // the NVML per-PID anchor.
+        // Device-wide baseline is cheap and does not load NVML. The per-process
+        // measurements and libcurand probe are completed by the warmup worker.
         p.captureCudaDeviceBaseline();
     }
 

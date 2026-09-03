@@ -4,22 +4,15 @@
 
 import lichtfeld as lf
 from .types import Panel
+from .panels import panel_class
 
 __lfs_panel_classes__ = ["AboutPanel"]
 __lfs_panel_ids__ = ["lfs.about"]
 
 
+@panel_class("about")
 class AboutPanel(Panel):
     """Floating panel displaying application information."""
-
-    id = "lfs.about"
-    label = "About"
-    space = lf.ui.PanelSpace.FLOATING
-    order = 100
-    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    template = "rmlui/about.rml"
-    height_mode = lf.ui.PanelHeightMode.CONTENT
-    size = (400, 0)
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("about")

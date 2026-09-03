@@ -335,7 +335,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -958,6 +958,7 @@ NB_MODULE(lichtfeld, m) {
             switch (tm->getState()) {
             case lfs::vis::TrainingState::Idle: return "idle";
             case lfs::vis::TrainingState::Ready: return "ready";
+            case lfs::vis::TrainingState::Starting: return "starting";
             case lfs::vis::TrainingState::Running: return "running";
             case lfs::vis::TrainingState::Paused: return "paused";
             case lfs::vis::TrainingState::Stopping: return "stopping";
@@ -1010,13 +1011,20 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "start_training", []() {
             nb::gil_scoped_release release;
+            auto* const trainer_manager = lfs::python::get_trainer_manager();
             emit_project_cmd_marshaled(
                 "python.start_training", [] {
                     lfs::core::events::cmd::StartTraining{}
                         .emit();
                 });
+            if (trainer_manager) {
+                if (auto initialized = trainer_manager->waitForInitialization();
+                    !initialized) {
+                    throw std::runtime_error(lfs::format_for_developer(initialized.error()));
+                }
+            }
         },
-        "Start training with current parameters");
+        "Start training with current parameters; waits for off-thread initialization");
     m.def(
         "training_start_overwrite_conflict",
         []() -> std::optional<int> {
@@ -1131,7 +1139,7 @@ NB_MODULE(lichtfeld, m) {
             return trainer_manager &&
                    trainer_manager->isTrainingActive();
         },
-        "Whether training is running or paused");
+        "Whether training is starting, running, or paused");
     m.def(
         "new_project", [](const bool discard_changes, const bool stop_training) {
             nb::gil_scoped_release release;
@@ -1516,6 +1524,7 @@ NB_MODULE(lichtfeld, m) {
             if (master_path.empty()) {
                 return "none";
             }
+            nb::gil_scoped_release release;
             auto inspection =
                 lfs::io::project::
                     inspect_autosave_recovery(
@@ -3308,11 +3317,19 @@ Example:
 
     m.def(
         "detect_dataset_info",
-        [](const std::string& path) { return lfs::io::detect_dataset_info(python_utf8_path(path)); },
+        [](const std::string& path) {
+            const auto native_path = python_utf8_path(path);
+            nb::gil_scoped_release release;
+            return lfs::io::detect_dataset_info(native_path);
+        },
         nb::arg("path"), "Detect dataset information from a directory path");
     m.def(
         "is_dataset_path",
-        [](const std::string& path) { return lfs::io::Loader::isDatasetPath(python_utf8_path(path)); },
+        [](const std::string& path) {
+            const auto native_path = python_utf8_path(path);
+            nb::gil_scoped_release release;
+            return lfs::io::Loader::isDatasetPath(native_path);
+        },
         nb::arg("path"), "Check whether a path can be treated as a dataset source");
 
     nb::class_<lfs::core::CheckpointHeader>(m, "CheckpointHeader", "Information from a checkpoint file header")

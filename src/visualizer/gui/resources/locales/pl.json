@@ -74,12 +74,12 @@
     "title": "Wprowadzenie",
     "description": "Dowiedz się, jak przygotować zbiory danych i rozpocząć pracę z LichtFeld Studio:",
     "wiki_section": "WIKI & FAQ",
+    "video_overview": "Wszystko, co LichtFeld Studio potrafi dziś",
     "video_automotive": "3DGS dla marketingu motoryzacyjnego",
     "video_intro": "Trening na Obrazach Equirectangular 360",
     "video_latest": "LichtFeld v0.3.0 Przegląd Funkcji",
     "video_reality_scan": "Zbiór Danych Reality Scan",
     "video_colmap": "Samouczek COLMAP",
-    "video_lichtfeld": "Samouczek LichtFeld",
     "video_masks": "Samouczek Masek"
   },
   "about": {
@@ -578,6 +578,8 @@
     "add_group": "Dodaj Grupę",
     "add_group_ellipsis": "Dodaj Grupę...",
     "new_group_name": "Nowa grupa",
+    "group_selected": "Group Selected",
+    "ungroup": "Ungroup",
     "export": "Eksportuj...",
     "delete": "Usuń",
     "rename": "Zmień Nazwę",
@@ -2104,6 +2106,10 @@
         }
       }
     },
+    "computing": {
+      "title": "Obliczanie histogramu…",
+      "message": "Rozkład pojawi się, gdy tylko dane będą gotowe."
+    },
     "delete_failed": {
       "title": "Usuwanie nie powiodło się",
       "status": "Usuwanie nie powiodło się: {message}",
@@ -2127,6 +2133,10 @@
       "metric_unavailable": {
         "title": "Metryka niedostępna",
         "message": "Nie można odczytać wybranej metryki z połączonego modelu Gaussa."
+      },
+      "compute_failed": {
+        "title": "Histogram nie powiódł się",
+        "message": "Obliczanie histogramu nie powiodło się: {error}"
       },
       "no_visible_values": {
         "title": "Brak widocznych wartości",

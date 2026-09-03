@@ -23,10 +23,12 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace lfs::vis {
     class VisualizerImpl;
+    class VisualizerImplResetTest_AsyncCaptureKeepsNewerSceneDirty_Test;
     class VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
     class VisualizerImplResetTest_AutosaveSkipsWhileManualProjectWriteJobIsRunning_Test;
     class VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
@@ -66,6 +68,7 @@ namespace lfs::vis {
     class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
     class VisualizerImplResetTest_SaveWhilePausedNoWorkerTrainerCompletes_Test;
     class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
+    class VisualizerImplResetTest_SaveWhileTrainerWriterInFlightQueuesUntilCompletion_Test;
     class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
     class VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
     class VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
@@ -312,6 +315,7 @@ namespace lfs::vis::project {
 
     private:
         friend class lfs::vis::VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
+        friend class lfs::vis::VisualizerImplResetTest_AsyncCaptureKeepsNewerSceneDirty_Test;
         friend class lfs::vis::VisualizerImplResetTest_AutosaveSkipsWhileManualProjectWriteJobIsRunning_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
         friend class lfs::vis::VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
@@ -350,6 +354,7 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveWhilePausedNoWorkerTrainerCompletes_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SaveWhileTrainerWriterInFlightQueuesUntilCompletion_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
         friend class lfs::vis::VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
@@ -427,6 +432,7 @@ namespace lfs::vis::project {
 
         enum class ProjectWritePurpose {
             None,
+            GeometryCapture,
             Autosave,
             ExplicitSave,
             SaveAs,
@@ -454,6 +460,19 @@ namespace lfs::vis::project {
             Default,
             Autosave,
             LightTrainingAutosave,
+        };
+
+        struct PendingSplatCapture {
+            lfs::core::Uuid uuid;
+            std::uint64_t scene_serial = 0;
+            std::unique_ptr<lfs::io::project::AsyncSplatCapture>
+                capture;
+        };
+
+        struct CompletedSplatCapture {
+            lfs::core::Uuid uuid;
+            std::uint64_t scene_serial = 0;
+            lfs::io::project::SplatChapterPayload payload;
         };
 
         void offerStartupCrashRecovery();
@@ -498,6 +517,9 @@ namespace lfs::vis::project {
         synchronizeDocumentFromViewer();
         [[nodiscard]] lfs::Result<void>
         synchronizeDocumentFromViewer(DocumentSyncMode mode);
+        [[nodiscard]] lfs::Result<void>
+        startAsyncSplatCaptures(std::vector<PendingSplatCapture> captures,
+                                std::uint64_t scene_serial);
         [[nodiscard]] lfs::Result<void>
         openMaster(
             const std::filesystem::path& path,
@@ -555,6 +577,9 @@ namespace lfs::vis::project {
         waitOutBackgroundAutosaveForExplicitSave();
         [[nodiscard]] lfs::Result<void>
         waitOutTrainerPublishForExplicitSave();
+        [[nodiscard]] bool
+        queueExplicitSaveIfTrainerWriterInFlight(bool regenerate_preview);
+        void processPendingExplicitSave();
         [[nodiscard]] lfs::Result<void>
         ensureDocumentMatchesBoundMaster();
         [[nodiscard]] lfs::Result<void>
@@ -692,6 +717,11 @@ namespace lfs::vis::project {
             project_write_purpose_ =
                 ProjectWritePurpose::None;
         std::jthread project_write_thread_;
+        std::mutex pending_splat_capture_mutex_;
+        std::vector<CompletedSplatCapture>
+            completed_splat_captures_;
+        std::unordered_map<lfs::core::Uuid, std::uint64_t>
+            captured_splat_serials_;
         std::uint64_t
             project_write_dirty_epoch_ = 0;
         std::uint64_t
@@ -766,6 +796,7 @@ namespace lfs::vis::project {
         std::vector<std::jthread> hydration_threads_;
         std::atomic<CloseSaveState>
             close_save_state_{CloseSaveState::Idle};
+        std::optional<bool> pending_explicit_save_regenerate_preview_;
         mutable std::mutex close_save_mutex_;
         std::string close_save_error_;
         std::string hydration_error_;

@@ -74,12 +74,12 @@
     "title": "Inizia",
     "description": "Impara a preparare i dataset e iniziare con LichtFeld Studio:",
     "wiki_section": "WIKI & FAQ",
+    "video_overview": "Tutto ciò che LichtFeld Studio può fare oggi",
     "video_automotive": "3dgs for automotive marketing",
     "video_intro": "Training su Immagini Equirettangolari 360",
     "video_latest": "LichtFeld v0.3.0 Panoramica Funzionalità",
     "video_reality_scan": "Dataset Reality Scan",
     "video_colmap": "Tutorial COLMAP",
-    "video_lichtfeld": "Tutorial LichtFeld",
     "video_masks": "Tutorial Maschere"
   },
   "about": {
@@ -578,6 +578,8 @@
     "add_group": "Aggiungi Gruppo",
     "add_group_ellipsis": "Aggiungi Gruppo...",
     "new_group_name": "Nuovo gruppo",
+    "group_selected": "Group Selected",
+    "ungroup": "Ungroup",
     "export": "Esporta...",
     "delete": "Elimina",
     "rename": "Rinomina",
@@ -2104,6 +2106,10 @@
         }
       }
     },
+    "computing": {
+      "title": "Calcolo dell'istogramma…",
+      "message": "La distribuzione apparirà non appena i dati saranno pronti."
+    },
     "delete_failed": {
       "title": "Eliminazione non riuscita",
       "status": "Eliminazione non riuscita: {message}",
@@ -2127,6 +2133,10 @@
       "metric_unavailable": {
         "title": "Metrica non disponibile",
         "message": "Non è stato possibile leggere la metrica selezionata dal modello combinato di Gaussiane."
+      },
+      "compute_failed": {
+        "title": "Istogramma non riuscito",
+        "message": "Calcolo dell'istogramma non riuscito: {error}"
       },
       "no_visible_values": {
         "title": "Nessun valore visibile",

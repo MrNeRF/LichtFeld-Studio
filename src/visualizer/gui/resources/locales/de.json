@@ -74,12 +74,12 @@
     "title": "Erste Schritte",
     "description": "Erfahren Sie, wie Sie Datensätze vorbereiten und mit LichtFeld Studio beginnen:",
     "wiki_section": "WIKI & FAQ",
+    "video_overview": "Alles, was LichtFeld Studio heute kann",
     "video_automotive": "3dgs for automotive marketing",
     "video_intro": "Training mit 360° Equirectangular-Bildern",
     "video_latest": "LichtFeld v0.3.0 Funktionsübersicht",
     "video_reality_scan": "Reality Scan Datensatz",
     "video_colmap": "COLMAP Tutorial",
-    "video_lichtfeld": "LichtFeld Tutorial",
     "video_masks": "Masken Tutorial"
   },
   "about": {
@@ -578,6 +578,8 @@
     "add_group": "Gruppe hinzufügen",
     "add_group_ellipsis": "Gruppe hinzufügen...",
     "new_group_name": "Neue Gruppe",
+    "group_selected": "Group Selected",
+    "ungroup": "Ungroup",
     "export": "Exportieren...",
     "delete": "Löschen",
     "rename": "Umbenennen",
@@ -2104,6 +2106,10 @@
         }
       }
     },
+    "computing": {
+      "title": "Histogramm wird berechnet…",
+      "message": "Die Verteilung wird angezeigt, sobald die Daten bereit sind."
+    },
     "delete_failed": {
       "title": "Löschen fehlgeschlagen",
       "status": "Löschen fehlgeschlagen: {message}",
@@ -2127,6 +2133,10 @@
       "metric_unavailable": {
         "title": "Metrik nicht verfügbar",
         "message": "Die ausgewählte Metrik konnte nicht aus dem kombinierten Gauß-Modell gelesen werden."
+      },
+      "compute_failed": {
+        "title": "Histogramm fehlgeschlagen",
+        "message": "Histogrammberechnung fehlgeschlagen: {error}"
       },
       "no_visible_values": {
         "title": "Keine sichtbaren Werte",
