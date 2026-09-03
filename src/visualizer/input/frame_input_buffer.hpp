@@ -9,6 +9,7 @@
 #include <SDL3/SDL_mouse.h>
 #include <SDL3/SDL_video.h>
 #include <cassert>
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -49,6 +50,7 @@ namespace lfs::vis {
         SDL_Keymod key_mods = SDL_KMOD_NONE;
         int window_w = 0;
         int window_h = 0;
+        std::chrono::steady_clock::time_point poll_time{};
 
         void beginFrame() {
             ++serial;
@@ -136,6 +138,7 @@ namespace lfs::vis {
 
         void finalize(SDL_Window* window) {
             assert(window);
+            poll_time = std::chrono::steady_clock::now();
             const SDL_MouseButtonFlags buttons = SDL_GetMouseState(&mouse_x, &mouse_y);
             mouse_down[0] = (buttons & SDL_BUTTON_LMASK) != 0;
             mouse_down[1] = (buttons & SDL_BUTTON_RMASK) != 0;
