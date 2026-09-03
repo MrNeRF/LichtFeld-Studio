@@ -244,6 +244,7 @@ namespace lfs::vis {
                 std::vector<SplatLoadRequest> requests;
                 size_t loaded_count = 0;
                 size_t failed_count = 0;
+                bool consolidation_pending = false;
                 std::optional<std::jthread> thread;
             };
             SplatLoadState splat_load_state_;
