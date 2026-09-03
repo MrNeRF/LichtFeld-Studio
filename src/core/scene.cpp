@@ -2144,14 +2144,29 @@ namespace lfs::core {
     }
 
     std::vector<std::shared_ptr<const lfs::core::Camera>> Scene::getVisibleCameras() const {
-        std::vector<std::shared_ptr<const lfs::core::Camera>> result;
+        return getVisibleCamerasCached();
+    }
+
+    const std::vector<std::shared_ptr<const lfs::core::Camera>>&
+    Scene::getVisibleCamerasCached() const {
+        if (cached_visible_cameras_valid_ &&
+            cached_visible_cameras_render_generation_ == render_generation_ &&
+            cached_visible_cameras_camera_list_generation_ == camera_list_generation_) {
+            return cached_visible_cameras_;
+        }
+
+        cached_visible_cameras_.clear();
+        cached_visible_cameras_.reserve(nodes_.size());
         for (const auto& node : nodes_) {
             if (node->type == NodeType::CAMERA && node->camera &&
                 isNodeEffectivelyVisible(node->id)) {
-                result.push_back(node->camera);
+                cached_visible_cameras_.push_back(node->camera);
             }
         }
-        return result;
+        cached_visible_cameras_render_generation_ = render_generation_;
+        cached_visible_cameras_camera_list_generation_ = camera_list_generation_;
+        cached_visible_cameras_valid_ = true;
+        return cached_visible_cameras_;
     }
 
     std::vector<glm::mat4> Scene::getVisibleCameraSceneTransforms() const {
@@ -5256,13 +5271,27 @@ namespace lfs::core {
     }
 
     std::vector<std::shared_ptr<lfs::core::Camera>> Scene::getAllCameras() const {
-        std::vector<std::shared_ptr<lfs::core::Camera>> result;
-        for (const auto& node : nodes_) {
-            if (node->type == NodeType::CAMERA && node->camera) {
-                result.push_back(node->camera);
-            }
+        return getAllCamerasCached();
+    }
+
+    const std::vector<std::shared_ptr<lfs::core::Camera>>&
+    Scene::getAllCamerasCached() const {
+        if (cached_all_cameras_valid_ &&
+            cached_all_cameras_render_generation_ == render_generation_ &&
+            cached_all_cameras_camera_list_generation_ == camera_list_generation_) {
+            return cached_all_cameras_;
         }
-        return result;
+
+        cached_all_cameras_.clear();
+        cached_all_cameras_.reserve(nodes_.size());
+        for (const auto& node : nodes_) {
+            if (node->type == NodeType::CAMERA && node->camera)
+                cached_all_cameras_.push_back(node->camera);
+        }
+        cached_all_cameras_render_generation_ = render_generation_;
+        cached_all_cameras_camera_list_generation_ = camera_list_generation_;
+        cached_all_cameras_valid_ = true;
+        return cached_all_cameras_;
     }
 
     std::vector<std::shared_ptr<lfs::core::Camera>> Scene::getActiveCameras() const {

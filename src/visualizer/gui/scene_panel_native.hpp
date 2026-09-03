@@ -15,6 +15,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 
 namespace Rml {
     class Element;
@@ -54,6 +55,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool toggleSelectionVisibilityIfFocused();
         [[nodiscard]] bool toggleSelectionTrainingIfFocused();
         [[nodiscard]] bool requestDeleteSelectionIfAvailable();
+        [[nodiscard]] std::unordered_set<int> visibleCameraUids() const;
 
     private:
         struct EventListener : Rml::EventListener {

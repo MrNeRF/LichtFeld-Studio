@@ -38,6 +38,8 @@ namespace lfs::core::image_codecs {
         void* data = nullptr;
         DecodeAllocator allocate = nullptr;
         void* user = nullptr;
+        // JPEG decoders may use DCT scaling before writing to the target. Other
+        // codecs leave this at zero and the image I/O layer resamples afterward.
         int max_width = 0;
     };
 

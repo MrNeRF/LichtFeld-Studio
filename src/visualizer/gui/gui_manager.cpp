@@ -14,6 +14,7 @@
 #include "core/path_utils.hpp"
 #include "diagnostics/vram_ledger_model.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "gui/camera_thumbnail_policy.hpp"
 #include "preferences.hpp"
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -81,6 +82,7 @@
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <cctype>
 #include <chrono>
@@ -104,6 +106,10 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+
+#if defined(__linux__)
+#include <sys/resource.h>
+#endif
 
 namespace lfs::vis::gui {
 
@@ -1632,12 +1638,55 @@ namespace lfs::vis::gui {
                 ++frame_counter_;
             }
 
+            void beginDataset(const void* scene_identity, const std::uint64_t camera_generation) {
+                std::lock_guard lock(mutex_);
+                if (dataset_scene_identity_ == scene_identity &&
+                    dataset_camera_generation_ == camera_generation) {
+                    return;
+                }
+                clearLocked();
+                dataset_scene_identity_ = scene_identity;
+                dataset_camera_generation_ = camera_generation;
+            }
+
             void clear() {
                 std::lock_guard lock(mutex_);
+                clearLocked();
+                dataset_scene_identity_ = nullptr;
+                dataset_camera_generation_ = 0;
+            }
+
+            void maybeLogDecodeSummary() {
+                std::uint64_t exif_count = 0;
+                std::uint64_t decoded_count = 0;
+                {
+                    std::lock_guard lock(mutex_);
+                    if (summary_logged_ || decoded_count_ == 0 || !load_queue_.empty() ||
+                        !ready_queue_.empty()) {
+                        return;
+                    }
+                    for (const auto& [_, entry] : entries_) {
+                        if (entry.state == State::Queued || entry.state == State::Loading ||
+                            entry.state == State::UploadReady) {
+                            return;
+                        }
+                    }
+                    summary_logged_ = true;
+                    exif_count = exif_count_;
+                    decoded_count = decoded_count_;
+                }
+                LOG_DEBUG("Camera thumbnail decode summary: {} from EXIF thumbnails, {} from image decode",
+                          exif_count, decoded_count - exif_count);
+            }
+
+            void clearLocked() {
                 load_queue_.clear();
                 ready_queue_.clear();
                 entries_.clear();
                 pages_.clear();
+                exif_count_ = 0;
+                decoded_count_ = 0;
+                summary_logged_ = false;
                 cv_.notify_all();
             }
 
@@ -1676,15 +1725,6 @@ namespace lfs::vis::gui {
                     }
                 }
 
-                std::error_code ec;
-                if (!std::filesystem::is_regular_file(path, ec)) {
-                    const bool path_is_missing =
-                        !ec || ec == std::errc::no_such_file_or_directory ||
-                        ec == std::errc::not_a_directory;
-                    markFailed(uid, path_key, path_is_missing ? kMissingRetryFrames : kDecodeRetryFrames);
-                    return false;
-                }
-
                 std::lock_guard lock(mutex_);
                 Entry& entry = entries_[uid];
                 if (entry.path_key != path_key) {
@@ -1700,15 +1740,35 @@ namespace lfs::vis::gui {
                     return false;
                 }
                 entry.state = State::Queued;
-                entry.generation += 1;
-                load_queue_.push_back(Task{
+                // Keep generations unique even if pruneTo erases an entry and
+                // the same UID re-enters the visible window before its old
+                // worker finishes.
+                entry.generation = ++generation_serial_;
+                const Task task{
                     .uid = uid,
                     .path = path,
                     .path_key = path_key,
                     .generation = entry.generation,
-                });
+                };
+                load_queue_.push_back(task);
                 cv_.notify_one();
                 return true;
+            }
+
+            void reprioritize(const std::vector<int>& ordered_uids) {
+                std::lock_guard lock(mutex_);
+                std::unordered_map<int, size_t> rank;
+                rank.reserve(ordered_uids.size());
+                for (size_t index = 0; index < ordered_uids.size(); ++index)
+                    rank.emplace(ordered_uids[index], index);
+                std::stable_sort(load_queue_.begin(), load_queue_.end(), [&](const Task& lhs, const Task& rhs) {
+                    const auto lhs_rank = rank.find(lhs.uid);
+                    const auto rhs_rank = rank.find(rhs.uid);
+                    const size_t lhs_value = lhs_rank == rank.end() ? ordered_uids.size() : lhs_rank->second;
+                    const size_t rhs_value = rhs_rank == rank.end() ? ordered_uids.size() : rhs_rank->second;
+                    return lhs_value < rhs_value;
+                });
+                cv_.notify_all();
             }
 
             std::optional<ThumbnailPlacement> placement(const int uid) {
@@ -1803,6 +1863,11 @@ namespace lfs::vis::gui {
                 return progressed;
             }
 
+            bool hasReadyUploads() const {
+                std::lock_guard lock(mutex_);
+                return !ready_queue_.empty();
+            }
+
             bool hasPendingWork() const {
                 std::lock_guard lock(mutex_);
                 if (!load_queue_.empty() || !ready_queue_.empty()) {
@@ -1877,16 +1942,14 @@ namespace lfs::vis::gui {
                 int width = 0;
                 int height = 0;
                 int channels = 0;
+                bool used_exif = false;
             };
 
-            // Thumbnail decode + CPU downscale; ~17-25 ms per
-            // image at typical full-res. With only 2 workers a 50-image
-            // dataset took ~600 ms of single-threaded decode dominating
-            // viewport_pass_prepare_record. Bumped to 8 — modern desktop
-            // CPUs idle most of these cores during dataset load anyway.
-            static constexpr size_t kWorkerCount = 8;
+            static size_t workerCount() {
+                const size_t hardware = std::thread::hardware_concurrency();
+                return std::clamp(hardware / 4u, size_t{1}, size_t{4});
+            }
             static constexpr uint64_t kDecodeRetryFrames = 180;
-            static constexpr uint64_t kMissingRetryFrames = 1800;
             static constexpr uint64_t kUploadRetryFrames = 60;
             static constexpr size_t kMaxPendingUploads = 32;
             static constexpr int kAtlasSlotsPerAxis = 8;
@@ -1898,7 +1961,7 @@ namespace lfs::vis::gui {
                     return;
                 }
                 workers_started_ = true;
-                for (size_t i = 0; i < kWorkerCount; ++i) {
+                for (size_t i = 0; i < workerCount(); ++i) {
                     std::thread([this] {
                         workerLoop();
                     }).detach();
@@ -2035,7 +2098,22 @@ namespace lfs::vis::gui {
                 return true;
             }
 
+            [[nodiscard]] bool taskIsStaleLocked(const Task& task) const {
+                const auto it = entries_.find(task.uid);
+                return it == entries_.end() ||
+                       it->second.path_key != task.path_key ||
+                       it->second.generation != task.generation;
+            }
+
+            static void lowerThreadPriority() noexcept {
+#if defined(__linux__)
+                // Linux applies this to the calling thread when the id is 0.
+                (void)setpriority(PRIO_PROCESS, 0, 10);
+#endif
+            }
+
             void workerLoop() {
+                lowerThreadPriority();
                 while (true) {
                     Task task;
                     if (!claimTask(task)) {
@@ -2048,8 +2126,9 @@ namespace lfs::vis::gui {
                     decoded.generation = task.generation;
 
                     try {
+                        bool used_exif = false;
                         auto [raw_pixels, width, height, channels] =
-                            lfs::core::load_image(task.path, -1, kThumbnailSize);
+                            lfs::core::load_image_thumbnail(task.path, kThumbnailSize, &used_exif);
                         std::unique_ptr<unsigned char, decltype(&lfs::core::free_image)> pixels(
                             raw_pixels, &lfs::core::free_image);
                         if (!pixels || width <= 0 || height <= 0 || channels <= 0) {
@@ -2063,19 +2142,24 @@ namespace lfs::vis::gui {
                         decoded.width = kThumbnailSize;
                         decoded.height = kThumbnailSize;
                         decoded.channels = 3;
+                        decoded.used_exif = used_exif;
 
                         std::unique_lock lock(mutex_);
                         cv_.wait(lock, [&] {
-                            return ready_queue_.size() < kMaxPendingUploads;
+                            return ready_queue_.size() < kMaxPendingUploads ||
+                                   taskIsStaleLocked(task);
                         });
-                        const auto it = entries_.find(task.uid);
-                        if (it == entries_.end() ||
-                            it->second.path_key != task.path_key ||
-                            it->second.generation != task.generation) {
+                        if (taskIsStaleLocked(task)) {
                             continue;
                         }
+                        const auto it = entries_.find(task.uid);
                         it->second.state = State::UploadReady;
+                        ++decoded_count_;
+                        if (decoded.used_exif)
+                            ++exif_count_;
                         ready_queue_.push_back(std::move(decoded));
+                        if (auto* const gui = services().guiOrNull())
+                            gui->notifyCameraThumbnailReady();
                     } catch (const std::exception& e) {
                         std::lock_guard lock(mutex_);
                         const auto it = entries_.find(task.uid);
@@ -2097,6 +2181,12 @@ namespace lfs::vis::gui {
             std::unordered_map<int, Entry> entries_;
             std::vector<AtlasPage> pages_;
             uint64_t frame_counter_ = 0;
+            uint64_t generation_serial_ = 0;
+            const void* dataset_scene_identity_ = nullptr;
+            std::uint64_t dataset_camera_generation_ = 0;
+            std::uint64_t exif_count_ = 0;
+            std::uint64_t decoded_count_ = 0;
+            bool summary_logged_ = false;
             bool workers_started_ = false;
         };
 
@@ -2263,6 +2353,60 @@ namespace lfs::vis::gui {
             return visualizer_camera_to_world * fov_scale;
         }
 
+        struct CachedCameraFrustum {
+            std::optional<glm::mat4> visualizer_camera_to_world;
+            std::optional<glm::mat4> model;
+        };
+
+        class CameraFrustumCache {
+        public:
+            void begin(const lfs::core::Scene& scene, const std::uint64_t scene_generation,
+                       const float frustum_scale) {
+                if (scene_ == &scene && scene_generation_ == scene_generation &&
+                    scale_ == frustum_scale) {
+                    return;
+                }
+                scene_ = &scene;
+                scene_generation_ = scene_generation;
+                scale_ = frustum_scale;
+                entries_.clear();
+            }
+
+            [[nodiscard]] bool contains(const int uid) const {
+                return entries_.contains(uid);
+            }
+
+            [[nodiscard]] const CachedCameraFrustum& getOrBuild(
+                const lfs::core::Camera& camera,
+                const glm::mat4& scene_transform) {
+                const auto [it, inserted] = entries_.try_emplace(camera.uid());
+                if (inserted) {
+                    it->second.visualizer_camera_to_world =
+                        cameraVisualizerTransform(camera, scene_transform);
+                    if (it->second.visualizer_camera_to_world) {
+                        it->second.model = cameraFrustumModelMatrix(
+                            camera, *it->second.visualizer_camera_to_world, scale_);
+                    }
+                }
+                return it->second;
+            }
+
+        private:
+            const lfs::core::Scene* scene_ = nullptr;
+            std::uint64_t scene_generation_ = 0;
+            float scale_ = 0.0f;
+            std::unordered_map<int, CachedCameraFrustum> entries_;
+        };
+
+        CameraFrustumCache& cameraFrustumCache() {
+            // Scene::renderGeneration() increments for node transforms and
+            // visibility mutations, which are the invalidation signal used by
+            // the scene's transform/selection caches. Camera calibration is
+            // immutable for the lifetime of a scene camera.
+            static auto* const cache = new CameraFrustumCache();
+            return *cache;
+        }
+
         void appendEquirectangularCameraFrustum(VulkanViewportPassParams& params,
                                                 const VulkanGuidePanelTarget& panel,
                                                 const RenderSettings& settings,
@@ -2327,35 +2471,75 @@ namespace lfs::vis::gui {
                 return;
             }
 
-            const auto cameras = scene_manager.getScene().getVisibleCameras();
-            if (cameras.empty()) {
-                cameraThumbnailCache().clear();
-                return;
+            const auto& all_cameras = scene_manager.getScene().getAllCamerasCached();
+            std::unordered_set<int> scene_camera_uids;
+            scene_camera_uids.reserve(all_cameras.size());
+            for (const auto& camera : all_cameras) {
+                if (camera && camera->uid() >= 0)
+                    scene_camera_uids.insert(camera->uid());
             }
-
-            const std::vector<glm::mat4> scene_transforms =
-                resolveCameraSceneTransforms(scene_manager, scene_state, cameras.size());
+            const auto& cameras = scene_manager.getScene().getVisibleCamerasCached();
+            auto& frustum_cache = cameraFrustumCache();
+            frustum_cache.begin(scene_manager.getScene(),
+                                scene_manager.getScene().renderGeneration(),
+                                settings.camera_frustum_scale);
             const auto disabled_uids = scene_manager.getScene().getTrainingDisabledCameraUids();
             const int hovered_camera_id = rendering_manager.getHoveredCameraId();
             auto& thumbnail_cache = cameraThumbnailCache();
             thumbnail_cache.beginFrame();
+            thumbnail_cache.beginDataset(&scene_manager.getScene(),
+                                         scene_manager.getScene().cameraListGeneration());
 
             std::unordered_set<int> emphasized_uids;
-            std::unordered_set<int> active_camera_uids;
-            active_camera_uids.reserve(cameras.size());
             for (const auto& name : scene_manager.getSelectedNodeNames()) {
                 const auto* node = scene_manager.getScene().getNode(name);
                 if (node && node->type == lfs::core::NodeType::CAMERA && node->camera_uid >= 0) {
                     emphasized_uids.insert(node->camera_uid);
                 }
             }
-            for (const auto& camera : cameras) {
-                if (camera && camera->uid() >= 0) {
-                    active_camera_uids.insert(camera->uid());
+            const auto visible_camera_uids = services().guiOrNull()
+                                                 ? services().guiOrNull()->visibleCameraUids()
+                                                 : std::unordered_set<int>{};
+            const std::vector<int> visible_camera_uid_list(visible_camera_uids.begin(),
+                                                           visible_camera_uids.end());
+            const std::vector<int> selected_camera_uid_list(emphasized_uids.begin(),
+                                                            emphasized_uids.end());
+            const bool frustum_cache_complete = [&] {
+                for (const auto& camera : cameras) {
+                    if (camera && !frustum_cache.contains(camera->uid()))
+                        return false;
                 }
+                return true;
+            }();
+            const std::vector<glm::mat4> scene_transforms = frustum_cache_complete
+                                                                ? std::vector<glm::mat4>{}
+                                                                : resolveCameraSceneTransforms(scene_manager, scene_state, cameras.size());
+            std::vector<int> all_camera_uid_list;
+            all_camera_uid_list.reserve(cameras.size());
+            std::unordered_map<int, std::shared_ptr<const lfs::core::Camera>> cameras_by_uid;
+            cameras_by_uid.reserve(cameras.size());
+            for (const auto& camera : cameras) {
+                if (!camera || camera->uid() < 0)
+                    continue;
+                all_camera_uid_list.push_back(camera->uid());
+                cameras_by_uid.emplace(camera->uid(), camera);
             }
-            thumbnail_cache.pruneTo(active_camera_uids);
+            const auto thumbnail_order = cameraThumbnailRequestOrder(
+                all_camera_uid_list, visible_camera_uid_list, selected_camera_uid_list);
+            thumbnail_cache.pruneTo(scene_camera_uids);
+            for (const int uid : thumbnail_order) {
+                const auto camera_it = cameras_by_uid.find(uid);
+                if (camera_it != cameras_by_uid.end() && camera_it->second->has_image())
+                    thumbnail_cache.request(*camera_it->second);
+            }
+            thumbnail_cache.reprioritize(thumbnail_order);
             thumbnail_cache.processReadyUploads(4);
+
+            if (cameras.empty()) {
+                if (scene_camera_uids.empty())
+                    thumbnail_cache.clear();
+                return;
+            }
 
             std::vector<glm::vec3> per_camera_colors;
             if (const auto* trainer_manager = scene_manager.getTrainerManager()) {
@@ -2419,8 +2603,6 @@ namespace lfs::vis::gui {
                 return renderToPanelScreen(panel, glm::vec2(panel_cx + view.x * panel_fx / depth,
                                                             panel_cy - view.y * panel_fy / depth));
             };
-            size_t background_thumbnail_requests = 0;
-            constexpr size_t kBackgroundThumbnailRequestsPerFrame = 16;
             const std::uint32_t frustum_first_instance =
                 static_cast<std::uint32_t>(params.frustum_instances.size());
             params.frustum_instances.reserve(params.frustum_instances.size() + cameras.size());
@@ -2430,15 +2612,17 @@ namespace lfs::vis::gui {
                     continue;
                 }
 
-                const auto visualizer_camera_to_world =
-                    cameraVisualizerTransform(*camera, scene_transforms[i]);
-                if (!visualizer_camera_to_world) {
+                const glm::mat4 scene_transform = scene_transforms.empty()
+                                                      ? glm::mat4(1.0f)
+                                                      : scene_transforms[i];
+                const auto& cached_frustum = frustum_cache.getOrBuild(*camera, scene_transform);
+                if (!cached_frustum.visualizer_camera_to_world || !cached_frustum.model) {
                     continue;
                 }
 
                 const bool disabled = disabled_uids.count(camera->uid()) > 0;
                 const float alpha = cameraFrustumVisibilityAlpha(
-                    glm::vec3((*visualizer_camera_to_world)[3]),
+                    glm::vec3((*cached_frustum.visualizer_camera_to_world)[3]),
                     view_position,
                     settings.camera_frustum_scale,
                     disabled);
@@ -2458,12 +2642,7 @@ namespace lfs::vis::gui {
                     continue;
                 }
 
-                const auto model = cameraFrustumModelMatrix(*camera,
-                                                            *visualizer_camera_to_world,
-                                                            settings.camera_frustum_scale);
-                if (!model) {
-                    continue;
-                }
+                const auto& model = cached_frustum.model;
 
                 if (camera->camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR) {
                     appendEquirectangularCameraFrustum(params, panel, settings, *model, color);
@@ -2490,15 +2669,6 @@ namespace lfs::vis::gui {
                         corner_depths[corner] = settings.equirectangular ? glm::length(view) : -view.z;
                     }
                     quad_visible = quad_visible && projectedQuadVisible(screen_points, panel);
-                    if (camera->has_image()) {
-                        if (quad_visible) {
-                            thumbnail_cache.request(*camera);
-                        } else if (background_thumbnail_requests < kBackgroundThumbnailRequestsPerFrame &&
-                                   thumbnail_cache.request(*camera)) {
-                            ++background_thumbnail_requests;
-                        }
-                    }
-
                     const auto placement = thumbnail_cache.placement(camera->uid());
                     if (placement && quad_visible) {
                         const float opacity = std::clamp(color.a * 0.8f, 0.0f, 0.8f);
@@ -2540,9 +2710,11 @@ namespace lfs::vis::gui {
                 });
             }
 
-            if (thumbnail_cache.hasPendingWork()) {
-                rendering_manager.markDirty(DirtyFlag::OVERLAY);
+            if (thumbnail_cache.hasReadyUploads()) {
+                if (auto* const gui = services().guiOrNull())
+                    gui->notifyCameraThumbnailReady(true);
             }
+            thumbnail_cache.maybeLogDecodeSummary();
         }
 
         void appendProjectedEllipsoid(VulkanViewportPassParams& params,
@@ -3147,6 +3319,61 @@ namespace lfs::vis::gui {
         const std::string_view tab) {
         if (native_scene_panel_)
             native_scene_panel_->setProjectActiveTab(tab);
+    }
+
+    std::unordered_set<int> GuiManager::visibleCameraUids() const {
+        return native_scene_panel_ ? native_scene_panel_->visibleCameraUids()
+                                   : std::unordered_set<int>{};
+    }
+
+    void GuiManager::notifyCameraThumbnailReady(const bool defer) {
+        const auto now = std::chrono::steady_clock::now();
+        const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                now.time_since_epoch())
+                                .count();
+        constexpr std::int64_t kRefreshIntervalNs = 100000000LL;
+        const auto last_refresh_ns = camera_thumbnail_last_refresh_ns_.load(std::memory_order_acquire);
+        const auto paced_ns = std::max(now_ns, last_refresh_ns + kRefreshIntervalNs);
+        const auto requested_ns = defer ? std::max(paced_ns, now_ns + kRefreshIntervalNs) : paced_ns;
+        const bool was_pending = camera_thumbnail_refresh_pending_.exchange(true, std::memory_order_acq_rel);
+
+        auto due_ns = camera_thumbnail_refresh_due_ns_.load(std::memory_order_acquire);
+        while (due_ns < requested_ns) {
+            if (camera_thumbnail_refresh_due_ns_.compare_exchange_weak(
+                    due_ns, requested_ns, std::memory_order_acq_rel))
+                break;
+        }
+
+        // The first completion wakes a sleeping event loop. Once a refresh is
+        // pending, the loop already has either a current frame or a timer for
+        // the next 100 ms deadline; waking once per decoded JPEG defeats the
+        // coalescing and produces a frame per completion.
+        if (!defer && !was_pending && viewer_ && viewer_->getWindowManager())
+            viewer_->getWindowManager()->wakeEventLoop();
+    }
+
+    bool GuiManager::cameraThumbnailRefreshDue(
+        const std::chrono::steady_clock::time_point now) const {
+        if (!camera_thumbnail_refresh_pending_.load(std::memory_order_acquire))
+            return false;
+        const auto due_ns = camera_thumbnail_refresh_due_ns_.load(std::memory_order_acquire);
+        const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                now.time_since_epoch())
+                                .count();
+        return due_ns == 0 || now_ns >= due_ns;
+    }
+
+    bool GuiManager::consumeCameraThumbnailRefresh() {
+        if (!cameraThumbnailRefreshDue(std::chrono::steady_clock::now()))
+            return false;
+        const bool consumed = camera_thumbnail_refresh_pending_.exchange(false, std::memory_order_acq_rel);
+        if (consumed) {
+            const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                    std::chrono::steady_clock::now().time_since_epoch())
+                                    .count();
+            camera_thumbnail_last_refresh_ns_.store(now_ns, std::memory_order_release);
+        }
+        return consumed;
     }
 
     bool GuiManager::selectAllSceneNodesIfFocused() {
@@ -4652,6 +4879,7 @@ namespace lfs::vis::gui {
 
     void GuiManager::render() {
         auto* window_manager = viewer_ ? viewer_->getWindowManager() : nullptr;
+
         auto* vulkan_context = (vulkan_gui_ && window_manager) ? window_manager->getVulkanContext() : nullptr;
         if (vulkan_gui_ && !vulkan_context) {
             updateInteractiveTransitionGuard();
@@ -5962,6 +6190,9 @@ namespace lfs::vis::gui {
                         }
                     }
                 }
+                // Mark the due refresh consumed before buildVulkanViewportParams
+                // can re-arm the timer for a partial upload batch.
+                static_cast<void>(consumeCameraThumbnailRefresh());
                 VulkanViewportPassParams viewport_params{};
                 {
                     LOG_TIMER_THRESHOLD("gui_render.buildVulkanViewportParams", 0.25);
@@ -7031,6 +7262,11 @@ namespace lfs::vis::gui {
 
     bool GuiManager::needsAnimationFrame() const {
         const auto now = std::chrono::steady_clock::now();
+        if (cameraThumbnailRefreshDue(now)) {
+            if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr)
+                rendering->markDirty(DirtyFlag::OVERLAY);
+            return true;
+        }
         const bool ui_toggle_due =
             ui_toggle_pending_ && now >= ui_toggle_next_allowed_at_;
         const bool fullscreen_toggle_due =
@@ -7091,6 +7327,7 @@ namespace lfs::vis::gui {
         };
 
         add(ui_toggle_pending_ && now >= ui_toggle_next_allowed_at_, "ui_toggle");
+        add(cameraThumbnailRefreshDue(now), "camera_thumbnails");
         add(fullscreen_toggle_pending_ && now >= fullscreen_toggle_next_allowed_at_,
             "fullscreen_toggle");
         add(interactive_transition_resume_training_ || now < interactive_transition_guard_until_,
@@ -7197,6 +7434,18 @@ namespace lfs::vis::gui {
                     std::chrono::duration<double>(next_vram_hud_publish_ - now).count();
                 if (remaining > 0.0)
                     result = min_delay(result, remaining, "vram_hud");
+            }
+        }
+
+        if (camera_thumbnail_refresh_pending_.load(std::memory_order_acquire)) {
+            const auto due_ns = camera_thumbnail_refresh_due_ns_.load(std::memory_order_acquire);
+            const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                    now.time_since_epoch())
+                                    .count();
+            if (due_ns > now_ns) {
+                result = min_delay(result,
+                                   static_cast<double>(due_ns - now_ns) / 1.0e9,
+                                   "camera_thumbnails");
             }
         }
 

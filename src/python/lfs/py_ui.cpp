@@ -4474,7 +4474,7 @@ namespace lfs::python {
             "load_thumbnail",
             [](const std::string& path, int max_size) -> nb::tuple {
                 try {
-                    auto [data, w, h, channels] = lfs::core::load_image(lfs::core::utf8_to_path(path), -1, max_size);
+                    auto [data, w, h, channels] = lfs::core::load_image_thumbnail(lfs::core::utf8_to_path(path), max_size);
                     if (!data)
                         return nb::make_tuple(0, 0, 0);
 

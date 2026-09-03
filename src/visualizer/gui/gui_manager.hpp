@@ -33,6 +33,7 @@
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -44,6 +45,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -106,6 +108,10 @@ namespace lfs::vis {
             void updateInteractiveTransitions();
             [[nodiscard]] bool isInteractiveTransitionSettling() const;
             void syncVisiblePanelsBeforeSceneRender();
+            // Called by camera-thumbnail workers and after a partial upload
+            // batch. It schedules one coalesced overlay refresh; only workers
+            // wake the GUI for the first pending batch.
+            void notifyCameraThumbnailReady(bool defer = false);
             void setRmlResizeDeferring(bool defer) { rmlui_manager_.setResizeDeferring(defer); }
             void ensureCjkFontsLoaded() { rmlui_manager_.ensureCjkFontsLoaded(); }
 
@@ -167,6 +173,7 @@ namespace lfs::vis {
                 return window_states_;
             }
             [[nodiscard]] std::string scenePanelActiveTab() const;
+            [[nodiscard]] std::unordered_set<int> visibleCameraUids() const;
             void setScenePanelActiveTab(std::string_view tab);
             [[nodiscard]] bool selectAllSceneNodesIfFocused();
             [[nodiscard]] bool toggleSceneSelectionVisibilityIfFocused();
@@ -278,6 +285,9 @@ namespace lfs::vis {
             bool shouldDeferDevResourceHotReload() const;
             bool reloadLocalizationResources();
             void reloadRmlResources();
+            [[nodiscard]] bool cameraThumbnailRefreshDue(
+                std::chrono::steady_clock::time_point now) const;
+            bool consumeCameraThumbnailRefresh();
 
             [[nodiscard]] bool isVramHudOverlayVisible() const;
             [[nodiscard]] bool isVramHudPublishDue(std::chrono::steady_clock::time_point now) const;
@@ -452,6 +462,10 @@ namespace lfs::vis {
             bool dock_resize_interaction_active_ = false;
             std::string last_ui_layout_active_tab_;
             std::uint64_t last_pre_scene_panel_sync_generation_ = 0;
+
+            std::atomic<bool> camera_thumbnail_refresh_pending_{false};
+            std::atomic<std::int64_t> camera_thumbnail_refresh_due_ns_{0};
+            std::atomic<std::int64_t> camera_thumbnail_last_refresh_ns_{0};
 
             struct DevResourceWatchState {
                 bool enabled = false;

@@ -2152,7 +2152,12 @@ namespace lfs::vis {
                       render_size.y);
         }
 
-        if (!vksplat_viewport_resize && frame_dirty == 0 && has_cached_viewport_output) {
+        // Camera thumbnails are uploaded and composited by the GUI viewport
+        // pass. Reuse the cached splat image for an overlay-only refresh; a
+        // thumbnail must never turn a stream-in update into a full splat pass.
+        if (!vksplat_viewport_resize &&
+            (frame_dirty == 0 || frame_dirty == DirtyFlag::OVERLAY) &&
+            has_cached_viewport_output) {
             LOG_PERF("renderVulkanFrame: cache HIT (returning cached image)");
             render_lock.reset();
             return cached_frame_result();
