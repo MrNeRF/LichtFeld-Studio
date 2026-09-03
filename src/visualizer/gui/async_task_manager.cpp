@@ -1148,6 +1148,7 @@ namespace lfs::vis::gui {
             scheduleImportCompletionDismiss();
         publishImportOverlayState();
         splat_load_state_.worker_complete.store(false, std::memory_order_release);
+        viewer_->schedulePendingTrainingAction();
     }
 
     void AsyncTaskManager::setupEvents() {
@@ -1266,6 +1267,7 @@ namespace lfs::vis::gui {
             if (e.success)
                 scheduleImportCompletionDismiss();
             publishImportOverlayState();
+            viewer_->schedulePendingTrainingAction();
         });
 
         cmd::SequencerExportVideo::when([this](const auto& evt) {
@@ -2277,6 +2279,7 @@ namespace lfs::vis::gui {
             import_state_.thread->join();
             import_state_.thread.reset();
         }
+        viewer_->schedulePendingTrainingAction();
     }
 
     void AsyncTaskManager::applyLoadedDataToScene() {

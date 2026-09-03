@@ -60,6 +60,7 @@ namespace lfs::vis {
 
     class LFS_VIS_API VisualizerImpl : public Visualizer {
         friend class gui::GuiManager;
+        friend class gui::AsyncTaskManager;
 
     public:
         explicit VisualizerImpl(const ViewerOptions& options);
