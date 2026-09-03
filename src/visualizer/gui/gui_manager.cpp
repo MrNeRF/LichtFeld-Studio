@@ -3531,11 +3531,16 @@ namespace lfs::vis::gui {
                    y < pos.y + size.y + extra;
         }
 
-        void applyFrameInputCapture(RmlRightPanel* right_panel = nullptr) {
+        void applyFrameInputCapture(RmlRightPanel* right_panel = nullptr,
+                                    RmlBottomDock* bottom_dock = nullptr) {
             const bool panel_hosts_want_keyboard = RmlPanelHost::consumeFrameWantsKeyboard();
             const bool panel_hosts_want_text_input = RmlPanelHost::consumeFrameWantsTextInput();
-            if ((panel_hosts_want_keyboard || panel_hosts_want_text_input) && right_panel)
-                right_panel->blurFocus();
+            if (panel_hosts_want_keyboard || panel_hosts_want_text_input) {
+                if (right_panel)
+                    right_panel->blurFocus();
+                if (bottom_dock)
+                    bottom_dock->blurFocus();
+            }
 
             auto& focus = guiFocusState();
             if (panel_hosts_want_keyboard)
@@ -4153,6 +4158,13 @@ namespace lfs::vis::gui {
         rml_right_panel_.on_resize_end = [this]() {
             viewer_->getRenderingManager()->setViewportResizeActive(false);
         };
+        rml_bottom_dock_.init(&rmlui_manager_);
+        rml_bottom_dock_.on_tab_changed = [this](const std::string& id) {
+            panel_layout_.setBottomDockActiveTab(id);
+        };
+        rml_bottom_dock_.on_tab_closed = [this](const std::string& id) {
+            hideBottomDockPanel(id);
+        };
         rml_viewport_overlay_.init(&rmlui_manager_);
         rml_menu_bar_.init(&rmlui_manager_);
         rml_status_bar_.init(&rmlui_manager_, viewer_->options_.safe_mode,
@@ -4523,6 +4535,7 @@ namespace lfs::vis::gui {
         startup_overlay_.reloadResources();
         rml_shell_frame_.reloadResources();
         rml_right_panel_.reloadResources();
+        rml_bottom_dock_.reloadResources();
         rml_viewport_overlay_.reloadResources();
         rml_menu_bar_.reloadResources();
         rml_status_bar_.reloadResources();
@@ -4638,6 +4651,7 @@ namespace lfs::vis::gui {
         rml_menu_bar_.shutdown();
         rml_viewport_overlay_.shutdown();
         rml_right_panel_.shutdown();
+        rml_bottom_dock_.shutdown();
         rml_shell_frame_.shutdown();
         startup_overlay_.shutdown();
         sequencer_ui_.destroyGraphicsResources();
@@ -4677,6 +4691,21 @@ namespace lfs::vis::gui {
 
     void GuiManager::shutdownVulkanViewportPass() {
         vulkan_viewport_pass_.reset();
+    }
+
+    void GuiManager::hideBottomDockPanel(const std::string& id) {
+        if (id.empty())
+            return;
+        if (id == native_panels::SEQUENCER_PANEL_ID) {
+            panel_layout_.setShowSequencer(false);
+            sequencer_ui_.setSequencerEnabled(false);
+        } else {
+            PanelRegistry::instance().set_panel_enabled(id, false);
+        }
+        if (panel_layout_.getBottomDockActiveTab() == id)
+            panel_layout_.setBottomDockActiveTab({});
+        if (focus_panel_name_ == id)
+            focus_panel_name_.clear();
     }
 
     void GuiManager::registerNativePanels() {
@@ -4738,7 +4767,7 @@ namespace lfs::vis::gui {
                   make_panel(EllipsoidGizmoPanel(&gizmo_manager_)),
                   PanelSpace::ViewportOverlay, 302);
 
-        reg_panel("native.sequencer", "Sequencer",
+        reg_panel(std::string(native_panels::SEQUENCER_PANEL_ID), "Sequencer",
                   make_panel(SequencerPanel(&sequencer_ui_, &panel_layout_)),
                   PanelSpace::BottomDock, 500,
                   static_cast<uint32_t>(PanelOption::FLOAT_IN_VIEWPORT),
@@ -5770,11 +5799,14 @@ namespace lfs::vis::gui {
             std::abs(panel_layout_.getBottomDockHeight() - last_ui_layout_bottom_dock_h_) > 0.5f ||
             std::abs(panel_layout_.getLeftDockWidth() - last_ui_layout_left_dock_w_) > 0.5f ||
             show_main_panel_ != last_ui_layout_show_main_panel_ ||
+            panel_layout_.isShowSequencer() != last_ui_layout_show_sequencer_ ||
             ui_hidden_ != last_ui_layout_ui_hidden_ ||
             python_console_visible != last_ui_layout_python_console_visible_ ||
             panel_layout_.isBottomDockVisible() != last_ui_layout_bottom_dock_visible_ ||
             panel_layout_.isLeftDockVisible() != last_ui_layout_left_dock_visible_ ||
-            panel_layout_.getActiveTab() != last_ui_layout_active_tab_;
+            panel_layout_.getActiveTab() != last_ui_layout_active_tab_ ||
+            panel_layout_.getBottomDockActiveTab() != last_ui_layout_bottom_dock_active_tab_ ||
+            reg.visibility_revision() != last_ui_layout_panel_visibility_revision_;
 
         if (ui_layout_changed) {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.layout_state_update", 0.25);
@@ -5793,11 +5825,14 @@ namespace lfs::vis::gui {
             last_ui_layout_bottom_dock_h_ = panel_layout_.getBottomDockHeight();
             last_ui_layout_left_dock_w_ = panel_layout_.getLeftDockWidth();
             last_ui_layout_show_main_panel_ = show_main_panel_;
+            last_ui_layout_show_sequencer_ = panel_layout_.isShowSequencer();
             last_ui_layout_ui_hidden_ = ui_hidden_;
             last_ui_layout_python_console_visible_ = python_console_visible;
             last_ui_layout_bottom_dock_visible_ = panel_layout_.isBottomDockVisible();
             last_ui_layout_left_dock_visible_ = panel_layout_.isLeftDockVisible();
             last_ui_layout_active_tab_ = panel_layout_.getActiveTab();
+            last_ui_layout_bottom_dock_active_tab_ = panel_layout_.getBottomDockActiveTab();
+            last_ui_layout_panel_visibility_revision_ = reg.visibility_revision();
         }
 
         bool right_panel_requires_live_layout = false;
@@ -6016,16 +6051,56 @@ namespace lfs::vis::gui {
         const bool bottom_dock_input_activity =
             bottom_dock_pointer_activity ||
             hasKeyboardActivity(sdl_input);
+        const auto bottom_dock_active_before_input = panel_layout_.getBottomDockActiveTab();
+        rml_bottom_dock_.setVisible(panel_layout_.isBottomDockVisible());
+        if (panel_layout_.isBottomDockVisible()) {
+            BottomDockLayout bottom_dock_rml_layout;
+            bottom_dock_rml_layout.pos = {bottom_dock_x, bottom_dock_y};
+            bottom_dock_rml_layout.size = {bottom_dock_w, bottom_dock_h};
+            bottom_dock_rml_layout.tab_bar_h = PanelLayoutManager::TAB_BAR_H * current_ui_scale_;
+            bottom_dock_rml_layout.separator_h = current_ui_scale_;
+            rml_bottom_dock_.processInput(bottom_dock_rml_layout, panel_input);
+            if (rml_bottom_dock_.wantsInput())
+                guiFocusState().want_capture_mouse = true;
+            if (rml_bottom_dock_.wantsKeyboard())
+                guiFocusState().want_capture_keyboard = true;
+        }
+        const bool bottom_dock_active_tab_changed =
+            bottom_dock_active_before_input != panel_layout_.getBottomDockActiveTab();
         const bool bottom_dock_requires_live_layout =
             ui_layout_changed || panel_layout_resize_active ||
             bottom_dock_registry_needs_animation || sequencer_ui_.needsAnimationFrame() ||
-            bottom_dock_input_activity;
+            bottom_dock_input_activity || rml_bottom_dock_.needsAnimationFrame() ||
+            bottom_dock_active_tab_changed;
         if (block_underlay_input || !bottom_dock_requires_live_layout) {
             panel_layout_.renderBottomDockCached(draw_ctx, show_main_panel_, ui_hidden_,
                                                  panel_input, screen);
         } else {
             panel_layout_.renderBottomDock(draw_ctx, show_main_panel_, ui_hidden_,
                                            panel_input, screen);
+        }
+        rml_bottom_dock_.setVisible(panel_layout_.isBottomDockVisible());
+        std::vector<TabSnapshot> bottom_dock_tab_snaps;
+        const auto& bottom_dock_tabs = panel_layout_.bottomDockTabs();
+        bottom_dock_tab_snaps.reserve(bottom_dock_tabs.size());
+        for (const auto& tab : bottom_dock_tabs) {
+            bottom_dock_tab_snaps.push_back({
+                .id = tab.id,
+                .label = tab.label,
+                .dom_id = makeRmlTabDomId(tab.id),
+                .closeable = true,
+            });
+        }
+        if (panel_layout_.isBottomDockVisible()) {
+            BottomDockLayout bottom_dock_rml_layout;
+            bottom_dock_rml_layout.pos = {bottom_dock_x, bottom_dock_y};
+            bottom_dock_rml_layout.size = {bottom_dock_w, bottom_dock_h};
+            bottom_dock_rml_layout.tab_bar_h = PanelLayoutManager::TAB_BAR_H * current_ui_scale_;
+            bottom_dock_rml_layout.separator_h = current_ui_scale_;
+            rml_bottom_dock_.render(bottom_dock_rml_layout, bottom_dock_tab_snaps,
+                                    panel_layout_.getBottomDockActiveTab(),
+                                    panel_input.screen_x, panel_input.screen_y,
+                                    panel_input.screen_w, panel_input.screen_h);
         }
         if (!hasMouseButtonDown(sdl_input))
             bottom_dock_pointer_live_capture_ = false;
@@ -6127,7 +6202,7 @@ namespace lfs::vis::gui {
             }
         }
 
-        applyFrameInputCapture(&rml_right_panel_);
+        applyFrameInputCapture(&rml_right_panel_, &rml_bottom_dock_);
 
         auto apply_cursor = [](CursorRequest req) {
             switch (req) {
@@ -6474,7 +6549,7 @@ namespace lfs::vis::gui {
         // so resolve a second time to consume a drag ending in this frame.
         resolve_project_asset_drag();
 
-        applyFrameInputCapture(&rml_right_panel_);
+        applyFrameInputCapture(&rml_right_panel_, &rml_bottom_dock_);
 
         if (!ui_hidden_) {
             LOG_TIMER_THRESHOLD("gui_render.status_bar_and_StatusBar", 0.10);
@@ -6549,6 +6624,7 @@ namespace lfs::vis::gui {
                 !reg.apply_floating_resize_cursor()) {
                 applyRmlCursorRequest(rml_cursor);
                 apply_cursor(rml_right_panel_.getCursorRequest());
+                apply_cursor(rml_bottom_dock_.getCursorRequest());
                 apply_cursor(panel_layout_.getCursorRequest());
                 if (auto* input_controller = viewer_->getInputController())
                     input_controller->applySplitterCursorOverride();
@@ -7779,6 +7855,8 @@ namespace lfs::vis::gui {
             return true;
         if (rml_right_panel_.needsAnimationFrame())
             return true;
+        if (rml_bottom_dock_.needsAnimationFrame())
+            return true;
         if (rml_status_bar_.animationFrameDue(now))
             return true;
         if (!python::is_plugin_preload_running() &&
@@ -7835,6 +7913,12 @@ namespace lfs::vis::gui {
             if (!result.empty())
                 result += ',';
             result += right_panel_demand;
+        }
+        if (const auto bottom_dock_demand = rml_bottom_dock_.animationDemandDescription();
+            !bottom_dock_demand.empty()) {
+            if (!result.empty())
+                result += ',';
+            result += bottom_dock_demand;
         }
         add(rml_status_bar_.animationFrameDue(now), "status_bar");
 

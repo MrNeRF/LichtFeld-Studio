@@ -17,6 +17,7 @@ def _install_stub_modules(monkeypatch):
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
+        PanelSpace=SimpleNamespace(FLOATING="FLOATING", BOTTOM_DOCK="BOTTOM_DOCK"),
         add_hook=lambda panel, section, callback, position="append": hook_calls.append(
             (panel, section, callback, position)
         ),
@@ -25,6 +26,12 @@ def _install_stub_modules(monkeypatch):
         ),
         get_active_tool=lambda: "",
         get_active_submode=lambda: "",
+        get_panel=lambda _panel_id: SimpleNamespace(space="BOTTOM_DOCK"),
+        get_bottom_dock_active_tab=lambda: "",
+        set_bottom_dock_active_tab=lambda _panel_id: None,
+        set_sequencer_visible=lambda _visible: None,
+        is_sequencer_visible=lambda: False,
+        set_panel_enabled=lambda _panel_id, _enabled: None,
         rml=SimpleNamespace(get_document=lambda _name: None),
     )
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
@@ -304,6 +311,54 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "viewport_export_custom_height_str" in model.bound_binds
     assert "viewport_export_can_export" in model.bound_funcs
     assert "viewport_export_action" in model.bound_events
+
+
+def test_bottom_dock_toolbar_selection_and_dispatch_rules(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    spaces = {
+        module._SEQUENCER_PANEL_ID: lf_stub.ui.PanelSpace.BOTTOM_DOCK,
+        module._HISTOGRAM_PANEL_ID: lf_stub.ui.PanelSpace.BOTTOM_DOCK,
+    }
+    visible = {module._SEQUENCER_PANEL_ID: False, module._HISTOGRAM_PANEL_ID: False}
+    active = [""]
+    monkeypatch.setattr(
+        lf_stub.ui,
+        "get_panel",
+        lambda panel_id: SimpleNamespace(space=spaces[panel_id]),
+        raising=False,
+    )
+    monkeypatch.setattr(lf_stub.ui, "get_bottom_dock_active_tab", lambda: active[0], raising=False)
+
+    assert not module._bottom_dock_panel_selected(module._HISTOGRAM_PANEL_ID, False)
+    visible[module._HISTOGRAM_PANEL_ID] = True
+    assert not module._bottom_dock_panel_selected(module._HISTOGRAM_PANEL_ID, True)
+    active[0] = module._HISTOGRAM_PANEL_ID
+    assert module._bottom_dock_panel_selected(module._HISTOGRAM_PANEL_ID, True)
+
+    calls = []
+    set_visible = lambda value: calls.append(("visible", value))
+    set_active = lambda panel_id: (calls.append(("active", panel_id)), active.__setitem__(0, panel_id))
+    monkeypatch.setattr(lf_stub.ui, "set_bottom_dock_active_tab", set_active, raising=False)
+
+    active[0] = ""
+    module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, False, set_visible)
+    assert calls[-2:] == [("visible", True), ("active", module._HISTOGRAM_PANEL_ID)]
+
+    calls.clear()
+    active[0] = module._SEQUENCER_PANEL_ID
+    module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
+    assert calls == [("active", module._HISTOGRAM_PANEL_ID)]
+
+    calls.clear()
+    active[0] = module._HISTOGRAM_PANEL_ID
+    module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
+    assert calls == [("visible", False)]
+
+    spaces[module._HISTOGRAM_PANEL_ID] = lf_stub.ui.PanelSpace.FLOATING
+    calls.clear()
+    module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
+    assert calls == [("visible", False)]
 
 
 def test_toolbar_attach_handle_marks_model_dirty(toolbar_module):

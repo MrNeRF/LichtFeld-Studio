@@ -29,6 +29,8 @@ _OVERLAY_DOC_KEY_ATTR = "data-viewport-toolbar-doc-key"
 _toolbar_controller = None
 _MISSING = object()
 _CROP_ROI_DEFAULT = 0.1
+_SEQUENCER_PANEL_ID = "native.sequencer"
+_HISTOGRAM_PANEL_ID = "lfs.histogram"
 
 
 def __lfs_after_reload__(runtime):
@@ -139,6 +141,50 @@ def _panel_enabled(panel_id):
     except Exception:
         pass
     return False
+
+
+def _bottom_dock_panel_space(panel_id):
+    try:
+        import lichtfeld as lf
+
+        getter = getattr(getattr(lf, "ui", None), "get_panel", None)
+        info = getter(panel_id) if callable(getter) else None
+        return getattr(info, "space", None)
+    except Exception:
+        return None
+
+
+def _bottom_dock_panel_selected(panel_id, visible):
+    if not visible:
+        return False
+    try:
+        import lichtfeld as lf
+
+        panel_space = getattr(lf.ui, "PanelSpace", None)
+        floating = getattr(panel_space, "FLOATING", None)
+        active_getter = getattr(lf.ui, "get_bottom_dock_active_tab", None)
+        active = active_getter() if callable(active_getter) else ""
+        return _bottom_dock_panel_space(panel_id) == floating or panel_id == active
+    except Exception:
+        return False
+
+
+def _toggle_bottom_dock_panel(panel_id, visible, set_visible):
+    import lichtfeld as lf
+
+    active_getter = getattr(lf.ui, "get_bottom_dock_active_tab", None)
+    set_active = getattr(lf.ui, "set_bottom_dock_active_tab", None)
+    floating = getattr(getattr(lf.ui, "PanelSpace", None), "FLOATING", None)
+    active = active_getter() if callable(active_getter) else ""
+    if not visible:
+        set_visible(True)
+        if callable(set_active):
+            set_active(panel_id)
+    elif _bottom_dock_panel_space(panel_id) != floating and active != panel_id:
+        if callable(set_active):
+            set_active(panel_id)
+    else:
+        set_visible(False)
 
 
 def _crop_roi_param_state():
@@ -1217,7 +1263,7 @@ class _UtilityToolbarController:
                     _icon_src("video"),
                     tooltip_key="toolbar.sequencer",
                     tooltip_text="Sequencer",
-                    selected=seq_visible,
+                    selected=_bottom_dock_panel_selected(_SEQUENCER_PANEL_ID, seq_visible),
                     enabled=seq_enabled,
                 )
             )
@@ -1227,11 +1273,13 @@ class _UtilityToolbarController:
                 _button_record(
                     "util-histogram",
                     "toggle_panel",
-                    "lfs.histogram",
+                    _HISTOGRAM_PANEL_ID,
                     _icon_src("histogram.png"),
                     tooltip_key="toolbar.histogram",
                     tooltip_text="Histogram",
-                    selected=_panel_enabled("lfs.histogram"),
+                    selected=_bottom_dock_panel_selected(
+                        _HISTOGRAM_PANEL_ID, _panel_enabled(_HISTOGRAM_PANEL_ID)
+                    ),
                 )
             )
 
@@ -1257,13 +1305,24 @@ class _UtilityToolbarController:
         if action == "toggle_sequencer":
             if RuntimeState.trainer_state.value in _TOOLBAR_HIDDEN_STATES:
                 return
-            lf.ui.set_sequencer_visible(not lf.ui.is_sequencer_visible())
+            _toggle_bottom_dock_panel(
+                _SEQUENCER_PANEL_ID,
+                lf.ui.is_sequencer_visible(),
+                lf.ui.set_sequencer_visible,
+            )
             return
         if action == "toggle_panel":
             if value == "lfs.histogram" and not histogram_mode_available(lf.ui.context()):
                 lf.ui.set_panel_enabled(value, False)
                 return
-            lf.ui.set_panel_enabled(value, not _panel_enabled(value))
+            if value == _HISTOGRAM_PANEL_ID:
+                _toggle_bottom_dock_panel(
+                    value,
+                    _panel_enabled(value),
+                    lambda visible: lf.ui.set_panel_enabled(value, visible),
+                )
+            else:
+                lf.ui.set_panel_enabled(value, not _panel_enabled(value))
             return
 
 
@@ -1762,11 +1821,14 @@ class _ViewportToolbarController:
             str(call("orbit", lf.get_camera_navigation_mode)).lower() if hasattr(lf, "get_camera_navigation_mode") else "orbit",
             self._viewport_export_controls.visible,
             bool(call(False, getattr(lf.ui, "is_sequencer_visible", None))),
+            _bottom_dock_panel_space(_SEQUENCER_PANEL_ID),
+            call("", getattr(lf.ui, "get_bottom_dock_active_tab", None)),
             bool(histogram_mode_available(ui_context)) if ui_context is not None else False,
             preferences_enabled,
             asset_manager_enabled,
             plugin_marketplace_enabled,
             bool(call(False, getattr(lf.ui, "is_panel_enabled", None), "lfs.histogram")),
+            _bottom_dock_panel_space(_HISTOGRAM_PANEL_ID),
         )
 
     def _on_toolbar_action(self, _handle, _event, args):

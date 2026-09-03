@@ -1579,6 +1579,7 @@ namespace lfs::vis::project {
                     optional_field("bottom_dock_height", &gui::PanelLayoutProjectState::bottom_dock_height),
                     optional_field("left_dock_width", &gui::PanelLayoutProjectState::left_dock_width),
                     optional_field("sequencer_visible", &gui::PanelLayoutProjectState::show_sequencer),
+                    optional_field("bottom_dock_active_tab", &gui::PanelLayoutProjectState::bottom_dock_active_tab_id),
                     optional_field("tab_scroll_offset", &gui::PanelLayoutProjectState::tab_scroll_offset),
                 };
             return fields;

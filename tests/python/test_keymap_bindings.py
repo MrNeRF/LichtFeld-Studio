@@ -115,6 +115,7 @@ def _install_lf_stub(monkeypatch):
         VIEWPORT_OVERLAY="VIEWPORT_OVERLAY",
         MAIN_PANEL_TAB="MAIN_PANEL_TAB",
         SCENE_HEADER="SCENE_HEADER",
+        BOTTOM_DOCK="BOTTOM_DOCK",
         STATUS_BAR="STATUS_BAR",
     )
     panel_height_mode = SimpleNamespace(FILL="fill", CONTENT="content")
@@ -252,6 +253,12 @@ def _install_lf_stub(monkeypatch):
         PanelSpace=panel_space,
         PanelHeightMode=panel_height_mode,
         PanelOption=panel_option,
+        get_panel=lambda _panel_id: SimpleNamespace(space=panel_space.BOTTOM_DOCK),
+        get_bottom_dock_active_tab=lambda: "",
+        set_bottom_dock_active_tab=lambda _panel_id: None,
+        set_sequencer_visible=lambda _visible: None,
+        is_sequencer_visible=lambda: False,
+        set_panel_enabled=lambda _panel_id, _enabled: None,
         tr=tr,
         get_current_language=lambda: state.language[0],
         request_redraw=lambda: None,
