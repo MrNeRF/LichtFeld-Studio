@@ -1335,7 +1335,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert 'data-attr-min="selection_depth_near_slider_min"' in rml
     assert 'data-attr-max="selection_depth_far_slider_max"' in rml
     assert "../icon/depth-map.png" in rml
-    assert "../icon/contrast.png" in rml
+    assert "../icon/select-invert.png" in rml
     assert "../icon/scene/trash.png" in rml
     assert "../icon/scene/x.png" in rml
     assert rml.count('class="crop-roi-popover hidden"') == 2
@@ -1610,7 +1610,7 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     assert preferences["tooltip_text"] == "Preferences"
     assert preferences["selected"] is True
     assert extra_by_id["util-viewport-export"]["action"] == "toggle_viewport_export"
-    assert extra_by_id["util-viewport-export"]["icon_src"] == "../icon/sequencer/export.png"
+    assert extra_by_id["util-viewport-export"]["icon_src"] == "../icon/viewport-export.png"
     assert extra_by_id["util-viewport-export"]["tooltip_text"] == "Export"
     assert extra_by_id["util-viewport-export"]["selected"] is False
     assert extra_by_id["util-asset-manager"]["action"] == "toggle_panel"
