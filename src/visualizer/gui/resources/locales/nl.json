@@ -75,12 +75,12 @@
     "title": "Aan de Slag",
     "description": "Leer hoe je datasets voorbereidt en aan de slag gaat met LichtFeld Studio:",
     "wiki_section": "WIKI & FAQ",
+    "video_overview": "Alles wat LichtFeld Studio vandaag kan doen",
     "video_automotive": "3dgs for automotive marketing",
     "video_intro": "Training op 360 Equirectangulaire Afbeeldingen",
     "video_latest": "LichtFeld v0.3.0 Functie Overzicht",
     "video_reality_scan": "Reality Scan Dataset",
     "video_colmap": "COLMAP Tutorial",
-    "video_lichtfeld": "LichtFeld Tutorial",
     "video_masks": "Maskers Tutorial"
   },
   "about": {
@@ -579,6 +579,8 @@
     "add_group": "Groep Toevoegen",
     "add_group_ellipsis": "Groep Toevoegen...",
     "new_group_name": "Nieuwe groep",
+    "group_selected": "Group Selected",
+    "ungroup": "Ungroup",
     "export": "Exporteren...",
     "delete": "Verwijderen",
     "rename": "Hernoemen",
@@ -2114,6 +2116,10 @@
         }
       }
     },
+    "computing": {
+      "title": "Histogram wordt berekend…",
+      "message": "De verdeling verschijnt zodra de gegevens klaar zijn."
+    },
     "delete_failed": {
       "title": "Verwijderen mislukt",
       "status": "Verwijderen mislukt: {message}",
@@ -2137,6 +2143,10 @@
       "metric_unavailable": {
         "title": "Metriek niet beschikbaar",
         "message": "De geselecteerde metriek kon niet uit het gecombineerde Gaussische model worden gelezen."
+      },
+      "compute_failed": {
+        "title": "Histogram mislukt",
+        "message": "Histogramberekening mislukt: {error}"
       },
       "no_visible_values": {
         "title": "Geen zichtbare waarden",

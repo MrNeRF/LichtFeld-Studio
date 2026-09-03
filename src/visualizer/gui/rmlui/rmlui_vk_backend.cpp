@@ -27,7 +27,6 @@
 #include <format>
 #include <limits>
 #include <optional>
-#include <semaphore>
 #include <stb_image.h>
 #include <string.h>
 #include <string>
@@ -301,7 +300,9 @@ RenderInterface_VK::RenderInterface_VK() : m_is_transform_enabled{false},
     m_rml_transform = Rml::Matrix4f::Identity();
 }
 
-RenderInterface_VK::~RenderInterface_VK() {}
+RenderInterface_VK::~RenderInterface_VK() {
+    StopPreviewWorkerPool();
+}
 
 std::string RenderInterface_VK::MakeExternalTextureSource(VkImageView image_view, VkSampler sampler,
                                                           int width, int height) {
@@ -1110,40 +1111,83 @@ Rml::TextureHandle RenderInterface_VK::LoadAsyncPreviewTexture(Rml::Vector2i& te
     m_async_preview_textures.push_back(state);
 
     try {
-        std::thread([state,
-                     path = request->path,
-                     max_size = request->max_size,
-                     embedded_project_preview = request->embedded_project_preview]() mutable {
-            auto result = DecodePreviewTexture(
-                std::move(path), max_size, embedded_project_preview);
-            {
-                std::lock_guard lock(state->mutex);
-                state->result = std::move(result);
-            }
-            state->ready.store(true, std::memory_order_release);
-            lfs::python::request_redraw();
-        }).detach();
+        EnsurePreviewWorkerPool();
+        EnqueuePreviewWork(preview_work_t{
+            state, request->path, request->max_size, request->embedded_project_preview});
     } catch (const std::exception& e) {
-        LOG_WARN("Failed to start async preview texture worker for '{}': {}", lfs::core::path_to_utf8(request->path), e.what());
+        LOG_WARN("Failed to queue async preview texture worker for '{}': {}",
+                 lfs::core::path_to_utf8(request->path), e.what());
         DropAsyncPreviewTexture(texture);
     }
 
     return handle;
 }
 
+void RenderInterface_VK::EnsurePreviewWorkerPool() {
+    std::lock_guard lock(m_preview_queue_mutex);
+    if (!m_preview_workers.empty())
+        return;
+    m_preview_workers_stopping = false;
+    constexpr std::size_t kWorkerCount = 3;
+    for (std::size_t i = 0; i < kWorkerCount; ++i) {
+        m_preview_workers.emplace_back([this] {
+            for (;;) {
+                preview_work_t work;
+                {
+                    std::unique_lock queue_lock(m_preview_queue_mutex);
+                    m_preview_queue_cv.wait(queue_lock, [this] {
+                        return m_preview_workers_stopping || !m_preview_queue.empty();
+                    });
+                    if (m_preview_workers_stopping && m_preview_queue.empty())
+                        return;
+                    work = std::move(m_preview_queue.front());
+                    m_preview_queue.pop_front();
+                }
+                if (!work.state || work.state->cancelled.load(std::memory_order_acquire))
+                    continue;
+                auto result = DecodePreviewTexture(
+                    std::move(work.path), work.max_size, work.embedded_project_preview);
+                if (work.state->cancelled.load(std::memory_order_acquire))
+                    continue;
+                {
+                    std::lock_guard result_lock(work.state->mutex);
+                    work.state->result = std::move(result);
+                }
+                work.state->ready.store(true, std::memory_order_release);
+                lfs::python::request_redraw();
+            }
+        });
+    }
+}
+
+void RenderInterface_VK::EnqueuePreviewWork(preview_work_t work) {
+    {
+        std::lock_guard lock(m_preview_queue_mutex);
+        if (m_preview_workers_stopping)
+            throw std::runtime_error("preview worker pool is stopping");
+        m_preview_queue.emplace_back(std::move(work));
+    }
+    m_preview_queue_cv.notify_one();
+}
+
+void RenderInterface_VK::StopPreviewWorkerPool() noexcept {
+    {
+        std::lock_guard lock(m_preview_queue_mutex);
+        m_preview_workers_stopping = true;
+        m_preview_queue.clear();
+    }
+    m_preview_queue_cv.notify_all();
+    for (auto& worker : m_preview_workers) {
+        if (worker.joinable())
+            worker.join();
+    }
+    m_preview_workers.clear();
+}
+
 RenderInterface_VK::async_preview_result_t RenderInterface_VK::DecodePreviewTexture(
     std::filesystem::path path,
     const int max_size,
     const bool embedded_project_preview) {
-    static std::counting_semaphore<4> decode_slots(4);
-    struct DecodeSlotGuard {
-        std::counting_semaphore<4>& slots;
-        explicit DecodeSlotGuard(std::counting_semaphore<4>& s) : slots(s) { slots.acquire(); }
-        ~DecodeSlotGuard() { slots.release(); }
-    };
-
-    DecodeSlotGuard guard(decode_slots);
-
     async_preview_result_t result;
     unsigned char* data = nullptr;
     try {
@@ -1171,7 +1215,7 @@ RenderInterface_VK::async_preview_result_t RenderInterface_VK::DecodePreviewText
                 lfs::core::load_image_from_memory(bytes, preview->size());
         } else {
             std::tie(pixels, width, height, channels) =
-                lfs::core::load_image(path, -1, max_size);
+                lfs::core::load_image_thumbnail(path, max_size);
         }
         data = pixels;
         if (pixels && width > 0 && height > 0 && channels > 0) {
@@ -1188,26 +1232,29 @@ RenderInterface_VK::async_preview_result_t RenderInterface_VK::DecodePreviewText
                 static_cast<std::size_t>(output_width) *
                 static_cast<std::size_t>(output_height);
             result.pixels.resize(pixel_count * 4u);
+            const auto sample = [&](const double x, const double y, const int channel) {
+                const double sx = std::clamp(x, 0.0, static_cast<double>(width - 1));
+                const double sy = std::clamp(y, 0.0, static_cast<double>(height - 1));
+                const int x0 = static_cast<int>(sx);
+                const int y0 = static_cast<int>(sy);
+                const int x1 = std::min(width - 1, x0 + 1);
+                const int y1 = std::min(height - 1, y0 + 1);
+                const double fx = sx - x0;
+                const double fy = sy - y0;
+                const auto at = [&](const int px, const int py) {
+                    return static_cast<double>(pixels[(static_cast<std::size_t>(py) * width + px) * channels + channel]);
+                };
+                return (at(x0, y0) * (1.0 - fx) + at(x1, y0) * fx) * (1.0 - fy) +
+                       (at(x0, y1) * (1.0 - fx) + at(x1, y1) * fx) * fy;
+            };
             for (int y = 0; y < output_height; ++y) {
-                const int source_y = std::min(
-                    height - 1,
-                    static_cast<int>((static_cast<std::int64_t>(y) * height) /
-                                     output_height));
                 for (int x = 0; x < output_width; ++x) {
-                    const int source_x = std::min(
-                        width - 1,
-                        static_cast<int>((static_cast<std::int64_t>(x) * width) /
-                                         output_width));
-                    const auto source_index =
-                        (static_cast<std::size_t>(source_y) *
-                             static_cast<std::size_t>(width) +
-                         static_cast<std::size_t>(source_x)) *
-                        static_cast<std::size_t>(channels);
-                    const unsigned char* src = pixels + source_index;
-                    const unsigned char r = src[0];
-                    const unsigned char g = channels > 1 ? src[1] : r;
-                    const unsigned char b = channels > 2 ? src[2] : r;
-                    const unsigned char a = channels > 3 ? src[3] : 255;
+                    const double source_x = (x + 0.5) * width / output_width - 0.5;
+                    const double source_y = (y + 0.5) * height / output_height - 0.5;
+                    const unsigned char r = static_cast<unsigned char>(std::lround(sample(source_x, source_y, 0)));
+                    const unsigned char g = static_cast<unsigned char>(std::lround(sample(source_x, source_y, channels > 1 ? 1 : 0)));
+                    const unsigned char b = static_cast<unsigned char>(std::lround(sample(source_x, source_y, channels > 2 ? 2 : 0)));
+                    const unsigned char a = channels > 3 ? static_cast<unsigned char>(std::lround(sample(source_x, source_y, 3))) : 255;
                     Rml::byte* dst = result.pixels.data() +
                                      (static_cast<std::size_t>(y) *
                                           static_cast<std::size_t>(output_width) +
@@ -1246,6 +1293,7 @@ void RenderInterface_VK::DropAsyncPreviewTexture(texture_data_t* texture) {
     m_async_preview_textures.erase(std::remove_if(m_async_preview_textures.begin(), m_async_preview_textures.end(),
                                                   [texture](const std::shared_ptr<async_preview_state_t>& state) {
                                                       if (state && state->texture == texture) {
+                                                          state->cancelled.store(true, std::memory_order_release);
                                                           state->texture = nullptr;
                                                           return true;
                                                       }
@@ -1975,6 +2023,7 @@ void RenderInterface_VK::ShutdownExternal() {
     if (m_p_device)
         vkDeviceWaitIdle(m_p_device);
 
+    StopPreviewWorkerPool();
     m_async_preview_textures.clear();
     DestroyFrostedGlassBackdrop(false);
     DestroyRenderLayers();

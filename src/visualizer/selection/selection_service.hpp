@@ -4,11 +4,13 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_types.hpp"
 #include <array>
 #include <cstdint>
+#include <cuda_runtime.h>
 #include <expected>
 #include <glm/mat4x4.hpp>
 #include <glm/vec2.hpp>
@@ -26,6 +28,10 @@ namespace lfs::rendering {
 class Viewport;
 
 namespace lfs::vis {
+
+    namespace op {
+        class SceneSnapshot;
+    }
 
     class SceneManager;
     class RenderingManager;
@@ -201,8 +207,34 @@ namespace lfs::vis {
         void setTestingViewport(ViewportInfo viewport);
         void setTestingContainmentIntrinsics(std::optional<rendering::CameraIntrinsics> intrinsics);
         void setTestingHoveredGaussianId(std::optional<int> hovered_gaussian_id);
+        // Applies completed GPU count readbacks without waiting. The scene
+        // manager calls this once per render-state build; selection commands
+        // also poll before starting a new commit.
+        void pollPendingSelectionCounts() const;
+        // MCP and history boundaries use this synchronous variant. The
+        // histogram is only 257 integers; the interactive path remains on the
+        // non-blocking poll above.
+        void completePendingSelectionCounts() const;
 
     private:
+        struct PendingSelectionCounts {
+            std::shared_ptr<core::Tensor> mask;
+            std::unique_ptr<op::SceneSnapshot> undo_entry;
+            core::Tensor scratch;
+            int* host_counts = nullptr;
+            cudaEvent_t ready_event = nullptr;
+            bool pending = false;
+            bool apply_to_scene = true;
+            uint64_t sequence = 0;
+            core::Scene::SelectionStateMetadata after_metadata;
+        };
+
+        bool queueSelectionCounts(const std::shared_ptr<core::Tensor>& mask,
+                                  std::unique_ptr<op::SceneSnapshot>& undo_entry,
+                                  const core::Scene::SelectionStateMetadata& after_metadata) const;
+        void completePendingSelectionCount(PendingSelectionCounts& pending, bool wait) const;
+        bool pollPendingPassiveRingCount() const;
+
         struct ViewerViewportContext {
             SplitViewPanelId panel = SplitViewPanelId::Left;
             ViewportInfo info;
@@ -363,8 +395,10 @@ namespace lfs::vis {
         core::Tensor locked_groups_device_mask_;
         std::array<uint32_t, 8> locked_groups_host_mask_{};
         bool locked_groups_host_mask_valid_ = false;
-        core::Tensor selection_group_counts_scratch_;
-        std::array<core::Tensor, 2> selection_output_buffers_;
+        mutable std::array<PendingSelectionCounts, 2> pending_selection_counts_{};
+        mutable PendingSelectionCounts pending_passive_ring_count_{};
+        mutable uint64_t selection_count_sequence_ = 0;
+        std::array<std::shared_ptr<core::Tensor>, 4> selection_output_buffers_;
         size_t selection_output_buffer_index_ = 0;
         uint64_t interactive_selection_generation_ = 0;
         std::shared_ptr<core::Tensor> testing_screen_positions_;
@@ -372,6 +406,9 @@ namespace lfs::vis {
         std::optional<ViewportInfo> testing_viewport_;
         std::optional<rendering::CameraIntrinsics> testing_containment_intrinsics_;
         std::optional<int> testing_hovered_gaussian_id_;
+        mutable bool passive_ring_preview_key_valid_ = false;
+        mutable std::size_t passive_ring_preview_key_ = 0;
+        mutable bool passive_ring_has_hit_ = false;
         mutable std::array<std::shared_ptr<core::Tensor>, 2> viewport_screen_positions_;
         mutable std::array<ScreenPositionCacheKey, 2> viewport_screen_position_keys_{};
         mutable std::vector<float> polygon_vertex_host_buffer_;

@@ -229,6 +229,12 @@ namespace lfs::core {
         // capacity hook, LOD tree, frozen ranges, and layout generation.
         [[nodiscard]] SplatData clone() const;
 
+        // Deep-copy tensor state onto an already-created CUDA stream. Device
+        // copies remain ordered on `stream`; callers synchronize before using
+        // the returned snapshot from another thread. CPU tensors are copied
+        // synchronously because they do not participate in CUDA transfers.
+        [[nodiscard]] SplatData clone_async(cudaStream_t stream) const;
+
         // ========== Computed getters ==========
         Tensor get_means() const;
         Tensor get_opacity() const;  // Returns sigmoid(opacity_raw)
@@ -307,6 +313,10 @@ namespace lfs::core {
         // Host-side variant for export/checkpoint paths. Copies the resident swizzled buffer
         // to CPU first and unpacks there, avoiding a full canonical SH allocation on CUDA.
         Tensor shN_canonical_cpu() const;
+
+        // Host-side variant for export paths. When resident q16/IEEE-f16 SH is on CUDA,
+        // decode it in bands directly into canonical [N, K, 3] host output memory.
+        Tensor shN_canonical_cpu_gpu_decoded() const;
 
         // Host-side PLY variant. Copies/dequantizes resident SH storage directly into the
         // final [N, 3*K] channel-major PLY rest layout, avoiding canonical unpack + transpose.

@@ -23,8 +23,8 @@ namespace lfs::vis::input {
 
         std::atomic<bool> g_persistence_enabled{true};
 
-        constexpr int PROFILE_VERSION = 27; // Version 27 adds DEPTH_WINDOW_DRAG (window draw drag).
-        constexpr Action LAST_ACTION = Action::DEPTH_WINDOW_DRAG;
+        constexpr int PROFILE_VERSION = 28; // Version 28 combines depth-window and scene-graph actions.
+        constexpr Action LAST_ACTION = Action::UNGROUP_SELECTED_SCENE_NODE;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -546,9 +546,11 @@ namespace lfs::vis::input {
                  (def.action == Action::SELECT_ALL_SCENE_NODES ||
                   def.action == Action::TOGGLE_SCENE_SELECTION_VISIBILITY ||
                   def.action == Action::TOGGLE_SCENE_SELECTION_TRAINING)) ||
-                (version < 26 && def.action == Action::DEPTH_ADJUST_SIZE) ||
-                (version < 27 && depth_window_drag_shift_alt) ||
-                (version < 27 && depth_window_drag_ctrl_shift_alt);
+                (version < 28 &&
+                 (def.action == Action::DEPTH_ADJUST_SIZE ||
+                  def.action == Action::DEPTH_WINDOW_DRAG ||
+                  def.action == Action::GROUP_SELECTED_SCENE_NODES ||
+                  def.action == Action::UNGROUP_SELECTED_SCENE_NODE));
             if (!should_add) {
                 continue;
             }
@@ -1064,6 +1066,10 @@ namespace lfs::vis::input {
              getActionName(Action::TOGGLE_SCENE_SELECTION_VISIBILITY)},
             {KeyTrigger{KEY_T, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::TOGGLE_SCENE_SELECTION_TRAINING,
              getActionName(Action::TOGGLE_SCENE_SELECTION_TRAINING)},
+            {KeyTrigger{KEY_G, MODIFIER_CTRL}, Action::GROUP_SELECTED_SCENE_NODES,
+             getActionName(Action::GROUP_SELECTED_SCENE_NODES)},
+            {KeyTrigger{KEY_G, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::UNGROUP_SELECTED_SCENE_NODE,
+             getActionName(Action::UNGROUP_SELECTED_SCENE_NODE)},
             {KeyTrigger{KEY_M, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::TOGGLE_MCP_SERVER,
              getActionName(Action::TOGGLE_MCP_SERVER)},
             {KeyTrigger{KEY_N, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::TOGGLE_MCP_BINDING,
@@ -1250,6 +1256,8 @@ namespace lfs::vis::input {
         case Action::SELECT_ALL_SCENE_NODES: return "Select All Scene Nodes";
         case Action::TOGGLE_SCENE_SELECTION_VISIBILITY: return "Toggle Scene Selection Visibility";
         case Action::TOGGLE_SCENE_SELECTION_TRAINING: return "Toggle Scene Selection Training";
+        case Action::GROUP_SELECTED_SCENE_NODES: return "Group Selected Scene Nodes";
+        case Action::UNGROUP_SELECTED_SCENE_NODE: return "Ungroup Selected Scene Node";
         default: return "Unknown";
         }
     }
@@ -1341,6 +1349,8 @@ namespace lfs::vis::input {
         case Action::SELECT_ALL_SCENE_NODES: return "select_all_scene_nodes";
         case Action::TOGGLE_SCENE_SELECTION_VISIBILITY: return "toggle_scene_selection_visibility";
         case Action::TOGGLE_SCENE_SELECTION_TRAINING: return "toggle_scene_selection_training";
+        case Action::GROUP_SELECTED_SCENE_NODES: return "group_selected_scene_nodes";
+        case Action::UNGROUP_SELECTED_SCENE_NODE: return "ungroup_selected_scene_node";
         default: return {};
         }
     }
@@ -1562,6 +1572,19 @@ namespace lfs::vis::input {
             result += "Super";
         }
         return result;
+    }
+
+    std::optional<SelectionOp> selectionOpForModifiers(
+        const InputBindings& bindings,
+        const ToolMode mode,
+        const int modifiers,
+        const std::vector<int>& held_keys) {
+        switch (bindings.getActionForDrag(mode, MouseButton::LEFT, modifiers, held_keys)) {
+        case Action::SELECTION_ADD: return SelectionOp::Add;
+        case Action::SELECTION_REMOVE: return SelectionOp::Remove;
+        case Action::SELECTION_INTERSECT: return SelectionOp::Intersect;
+        default: return std::nullopt;
+        }
     }
 
     void InputBindings::startCapture(ToolMode mode, Action action) {
@@ -2035,6 +2058,8 @@ namespace lfs::vis::input {
         case Action::SELECT_ALL_SCENE_NODES:
         case Action::TOGGLE_SCENE_SELECTION_VISIBILITY:
         case Action::TOGGLE_SCENE_SELECTION_TRAINING:
+        case Action::GROUP_SELECTED_SCENE_NODES:
+        case Action::UNGROUP_SELECTED_SCENE_NODE:
             return d_ui_key;
         case Action::HISTOGRAM_ZOOM_MARKED:
             return d_ui_scroll;

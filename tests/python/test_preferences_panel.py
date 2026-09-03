@@ -874,3 +874,46 @@ def test_embed_dataset_default_is_exposed_and_settable(preferences_panel_module)
     panel._set_embed_dataset_by_default(True)
     assert state.embed_dataset_by_default is True
     assert module.lf.ui.get_embed_dataset_by_default() is True
+
+
+def test_preferences_close_retains_the_mounted_document(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+
+    class Document:
+        def get_element_by_id(self, _element_id):
+            return None
+
+    document = Document()
+    panel._rebuild_records = lambda: None
+    panel._load_mcp_preferences = lambda: None
+    panel._consume_section_request = lambda: None
+    panel._refresh_selection = lambda: None
+    panel._state = lambda: None
+    panel._dirty_expanded_sections = lambda: None
+    panel._keymap.on_mount = lambda _doc: None
+    panel.on_mount(document)
+    panel._on_close(None, None, None)
+
+    assert panel.mount_count == 1
+    assert panel._document is document
+    assert state.panel_enabled_calls[-1] == ("lfs.preferences", False)
+
+
+def test_preferences_keymap_rows_are_created_when_expanded(preferences_panel_module):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    records = {}
+    panel._keymap._handle = SimpleNamespace(
+        update_record_list=lambda name, items: records.__setitem__(name, list(items)),
+    )
+    panel._section = "input"
+
+    assert "key_bindings" in panel._expanded_sections
+    assert panel._keymap._rows_built is False
+
+    panel._expanded_sections.discard("key_bindings")
+    panel._on_toggle_section(None, None, ["key_bindings"])
+
+    assert panel._keymap._rows_built is True
+    assert records["binding_rows"]

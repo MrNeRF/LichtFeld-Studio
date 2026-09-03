@@ -39,6 +39,8 @@ namespace lfs::vis::gui {
         LayoutState state;
         state.load();
         show_sequencer_ = false;
+        previous_bottom_docked_ids_.clear();
+        bottom_dock_sync_seeded_ = false;
     }
 
     PanelLayoutProjectState
@@ -51,6 +53,7 @@ namespace lfs::vis::gui {
             .left_dock_width = left_dock_width_,
             .show_sequencer = show_sequencer_,
             .active_tab_id = active_tab_id_,
+            .bottom_dock_active_tab_id = bottom_dock_active_tab_id_,
             .tab_scroll_offset = tab_scroll_offset_,
         };
     }
@@ -73,6 +76,9 @@ namespace lfs::vis::gui {
             left_dock_width_ = state.left_dock_width;
         show_sequencer_ = state.show_sequencer;
         active_tab_id_ = state.active_tab_id;
+        bottom_dock_active_tab_id_ = state.bottom_dock_active_tab_id;
+        previous_bottom_docked_ids_.clear();
+        bottom_dock_sync_seeded_ = false;
         tab_scroll_offset_ = std::isfinite(state.tab_scroll_offset)
                                  ? std::max(0.0f, state.tab_scroll_offset)
                                  : 0.0f;
@@ -150,6 +156,8 @@ namespace lfs::vis::gui {
             for (auto& v : masked.mouse_down)
                 v = false;
             masked.mouse_wheel = 0.0f;
+            masked.mouse_wheel_x = 0.0f;
+            masked.mouse_button_events.clear();
             return masked;
         };
         const PanelInputState masked_panel_input =
@@ -516,12 +524,54 @@ namespace lfs::vis::gui {
                                               const ScreenState& screen) {
         LOG_TIMER("gui_render.panel_layout.renderBottomDock");
         auto& reg = PanelRegistry::instance();
-        if (!show_main_panel || ui_hidden || screen.work_size.x <= 0 || screen.work_size.y <= 0 ||
-            !reg.has_panels(PanelSpace::BottomDock)) {
+        bottom_dock_active_tab_changed_ = false;
+        if (!show_main_panel || ui_hidden || screen.work_size.x <= 0 || screen.work_size.y <= 0) {
             bottom_dock_hovering_edge_ = false;
             bottom_dock_resizing_ = false;
             bottom_dock_visible_ = false;
             bottom_dock_top_y_ = -1.0f;
+            bottom_dock_tab_bar_rect_ = {};
+            prev_mouse_y_ = input.mouse_y;
+            return;
+        }
+
+        const auto docked_tabs = reg.get_panel_summaries_for_space(
+            PanelSpace::BottomDock, draw_ctx, false);
+        bottom_dock_tabs_ = reg.get_panel_summaries_for_space(
+            PanelSpace::BottomDock, draw_ctx, true);
+        std::unordered_set<std::string> docked_ids;
+        docked_ids.reserve(docked_tabs.size());
+        for (const auto& tab : docked_tabs)
+            docked_ids.insert(tab.id);
+        if (bottom_dock_sync_seeded_) {
+            for (const auto& tab : docked_tabs) {
+                if (!previous_bottom_docked_ids_.contains(tab.id)) {
+                    bottom_dock_active_tab_id_ = tab.id;
+                    bottom_dock_active_tab_changed_ = true;
+                }
+            }
+        } else {
+            bottom_dock_sync_seeded_ = true;
+        }
+        previous_bottom_docked_ids_ = std::move(docked_ids);
+
+        const bool active_visible = std::any_of(
+            bottom_dock_tabs_.begin(), bottom_dock_tabs_.end(), [&](const PanelSummary& tab) {
+                return tab.id == bottom_dock_active_tab_id_;
+            });
+        if (!active_visible) {
+            const std::string next_active = bottom_dock_tabs_.empty()
+                                                ? std::string{}
+                                                : bottom_dock_tabs_.front().id;
+            bottom_dock_active_tab_changed_ = bottom_dock_active_tab_id_ != next_active;
+            bottom_dock_active_tab_id_ = next_active;
+        }
+        if (bottom_dock_tabs_.empty()) {
+            bottom_dock_hovering_edge_ = false;
+            bottom_dock_resizing_ = false;
+            bottom_dock_visible_ = false;
+            bottom_dock_top_y_ = -1.0f;
+            bottom_dock_tab_bar_rect_ = {};
             prev_mouse_y_ = input.mouse_y;
             return;
         }
@@ -540,6 +590,7 @@ namespace lfs::vis::gui {
             bottom_dock_resizing_ = false;
             bottom_dock_visible_ = false;
             bottom_dock_top_y_ = -1.0f;
+            bottom_dock_tab_bar_rect_ = {};
             prev_mouse_y_ = input.mouse_y;
             return;
         }
@@ -562,6 +613,8 @@ namespace lfs::vis::gui {
             for (auto& v : masked.mouse_down)
                 v = false;
             masked.mouse_wheel = 0.0f;
+            masked.mouse_wheel_x = 0.0f;
+            masked.mouse_button_events.clear();
             return masked;
         };
 
@@ -599,34 +652,41 @@ namespace lfs::vis::gui {
         panel_h = bottom_dock_height_;
         panel_y = screen.work_pos.y + screen.work_size.y - panel_h;
 
-        float preloaded_h = 0.0f;
+        const float tab_bar_h = TAB_BAR_H * dpi;
+        const float tab_separator_h = dpi;
+        const float content_y = panel_y + tab_bar_h + tab_separator_h;
+        const float content_h = std::max(0.0f, panel_h - tab_bar_h - tab_separator_h);
+        bottom_dock_tab_bar_rect_ = {
+            .x = panel_x,
+            .y = panel_y,
+            .width = panel_w,
+            .height = tab_bar_h + tab_separator_h,
+        };
         {
             LOG_TIMER_THRESHOLD("gui_render.panel_layout.bottom_dock.preload", 0.25);
-            preloaded_h = reg.render_panels({
-                                                .target = PanelRenderTarget::for_space(PanelSpace::BottomDock),
-                                                .mode = PanelRenderMode::DirectPreload,
-                                                .width = panel_w,
-                                                .height = panel_h,
-                                                .clip_y_min = panel_y,
-                                                .clip_y_max = panel_y + panel_h,
-                                                .input = &dock_input,
-                                            },
-                                            draw_ctx);
+            reg.render_panels({
+                                  .target = PanelRenderTarget::for_panel(bottom_dock_active_tab_id_),
+                                  .mode = PanelRenderMode::DirectPreload,
+                                  .width = panel_w,
+                                  .height = content_h,
+                                  .clip_y_min = content_y,
+                                  .clip_y_max = panel_y + panel_h,
+                                  .input = &dock_input,
+                              },
+                              draw_ctx);
         }
-        bottom_dock_visible_ = preloaded_h > 0.0f;
-        bottom_dock_top_y_ = bottom_dock_visible_ ? panel_y : -1.0f;
-        if (!bottom_dock_visible_)
-            return;
+        bottom_dock_visible_ = true;
+        bottom_dock_top_y_ = panel_y;
 
         {
             LOG_TIMER_THRESHOLD("gui_render.panel_layout.bottom_dock.draw", 0.25);
             reg.render_panels({
-                                  .target = PanelRenderTarget::for_space(PanelSpace::BottomDock),
+                                  .target = PanelRenderTarget::for_panel(bottom_dock_active_tab_id_),
                                   .mode = PanelRenderMode::Direct,
                                   .x = panel_x,
-                                  .y = panel_y,
+                                  .y = content_y,
                                   .width = panel_w,
-                                  .height = panel_h,
+                                  .height = content_h,
                                   .input = &dock_input,
                               },
                               draw_ctx);
@@ -641,11 +701,12 @@ namespace lfs::vis::gui {
         LOG_TIMER("gui_render.panel_layout.renderBottomDock.cached");
         auto& reg = PanelRegistry::instance();
         if (!show_main_panel || ui_hidden || screen.work_size.x <= 0 || screen.work_size.y <= 0 ||
-            !reg.has_panels(PanelSpace::BottomDock)) {
+            bottom_dock_tabs_.empty() || bottom_dock_active_tab_id_.empty()) {
             bottom_dock_hovering_edge_ = false;
             bottom_dock_resizing_ = false;
             bottom_dock_visible_ = false;
             bottom_dock_top_y_ = -1.0f;
+            bottom_dock_tab_bar_rect_ = {};
             prev_mouse_y_ = input.mouse_y;
             return;
         }
@@ -664,6 +725,7 @@ namespace lfs::vis::gui {
             bottom_dock_resizing_ = false;
             bottom_dock_visible_ = false;
             bottom_dock_top_y_ = -1.0f;
+            bottom_dock_tab_bar_rect_ = {};
             prev_mouse_y_ = input.mouse_y;
             return;
         }
@@ -677,18 +739,29 @@ namespace lfs::vis::gui {
 
         const float panel_h = bottom_dock_height_;
         const float panel_y = screen.work_pos.y + screen.work_size.y - panel_h;
+        const float tab_bar_h = TAB_BAR_H * dpi;
+        const float tab_separator_h = dpi;
+        const float content_y = panel_y + tab_bar_h + tab_separator_h;
+        const float content_h = std::max(0.0f, panel_h - tab_bar_h - tab_separator_h);
+        bottom_dock_tab_bar_rect_ = {
+            .x = panel_x,
+            .y = panel_y,
+            .width = panel_w,
+            .height = tab_bar_h + tab_separator_h,
+        };
         const float drawn_h = reg.render_panels({
-                                                    .target = PanelRenderTarget::for_space(PanelSpace::BottomDock),
+                                                    .target = PanelRenderTarget::for_panel(bottom_dock_active_tab_id_),
                                                     .mode = PanelRenderMode::DirectCached,
                                                     .x = panel_x,
-                                                    .y = panel_y,
+                                                    .y = content_y,
                                                     .width = panel_w,
-                                                    .height = panel_h,
+                                                    .height = content_h,
                                                     .input = &input,
                                                 },
                                                 draw_ctx);
-        bottom_dock_visible_ = drawn_h > 0.0f;
-        bottom_dock_top_y_ = bottom_dock_visible_ ? panel_y : -1.0f;
+        (void)drawn_h;
+        bottom_dock_visible_ = true;
+        bottom_dock_top_y_ = panel_y;
         prev_mouse_y_ = input.mouse_y;
     }
 
@@ -731,6 +804,8 @@ namespace lfs::vis::gui {
             for (auto& v : masked.mouse_down)
                 v = false;
             masked.mouse_wheel = 0.0f;
+            masked.mouse_wheel_x = 0.0f;
+            masked.mouse_button_events.clear();
             return masked;
         };
 

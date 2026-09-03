@@ -54,6 +54,22 @@
 
 namespace lfs::vis {
     namespace {
+        std::map<std::string, std::string> makeVkSplatSpirvPaths();
+    }
+
+    void preloadVkSplatSpirvFiles() {
+        const auto paths = makeVkSplatSpirvPaths();
+        std::vector<std::string> unique_paths;
+        unique_paths.reserve(paths.size());
+        for (const auto& [unused_name, path] : paths) {
+            (void)unused_name;
+            if (std::find(unique_paths.begin(), unique_paths.end(), path) == unique_paths.end())
+                unique_paths.push_back(path);
+        }
+        preloadSpirvFiles(unique_paths);
+    }
+
+    namespace {
         namespace indirect = lfs::rendering::vulkan::indirect_layout;
 
         using lfs::core::DataType;
@@ -1747,10 +1763,7 @@ namespace lfs::vis {
             uniforms.image_height = static_cast<std::uint32_t>(frame_view.size.y);
             uniforms.grid_width = _CEIL_DIV(uniforms.image_width, TILE_WIDTH);
             uniforms.grid_height = _CEIL_DIV(uniforms.image_height, TILE_HEIGHT);
-            const glm::ivec2 camera_size =
-                frame_view.subregion_full_size.x > 0 && frame_view.subregion_full_size.y > 0
-                    ? frame_view.subregion_full_size
-                    : frame_view.size;
+            const glm::ivec2 camera_size = frame_view.cameraSize();
             uniforms.render_origin_x = static_cast<std::uint32_t>(std::max(frame_view.subregion_origin.x, 0));
             uniforms.render_origin_y = static_cast<std::uint32_t>(std::max(frame_view.subregion_origin.y, 0));
             uniforms.camera_width = static_cast<std::uint32_t>(std::max(camera_size.x, 1));
@@ -1763,29 +1776,11 @@ namespace lfs::vis {
             uniforms.camera_model = packedVksplatCameraModel(frame_view, equirectangular, gut);
             uniforms.mip_filter = mip_filter ? 1u : 0u;
 
-            if (frame_view.orthographic) {
-                const float ortho_scale =
-                    std::isfinite(frame_view.ortho_scale) && frame_view.ortho_scale > 1.0e-5f
-                        ? frame_view.ortho_scale
-                        : lfs::rendering::DEFAULT_ORTHO_SCALE;
-                uniforms.fx = ortho_scale;
-                uniforms.fy = ortho_scale;
-                uniforms.cx = static_cast<float>(camera_size.x) * 0.5f;
-                uniforms.cy = static_cast<float>(camera_size.y) * 0.5f;
-            } else if (frame_view.intrinsics_override) {
-                const auto& intrinsics = *frame_view.intrinsics_override;
-                uniforms.fx = intrinsics.focal_x;
-                uniforms.fy = intrinsics.focal_y;
-                uniforms.cx = intrinsics.center_x;
-                uniforms.cy = intrinsics.center_y;
-            } else {
-                const auto [fx, fy] = lfs::rendering::computePixelFocalLengths(
-                    camera_size, frame_view.focal_length_mm);
-                uniforms.fx = fx;
-                uniforms.fy = fy;
-                uniforms.cx = static_cast<float>(camera_size.x) * 0.5f;
-                uniforms.cy = static_cast<float>(camera_size.y) * 0.5f;
-            }
+            const auto intrinsics = frame_view.getCameraIntrinsics();
+            uniforms.fx = intrinsics.focal_x;
+            uniforms.fy = intrinsics.focal_y;
+            uniforms.cx = intrinsics.center_x;
+            uniforms.cy = intrinsics.center_y;
 
             const glm::mat3 camera_to_world =
                 lfs::rendering::dataCameraToWorldFromVisualizerRotation(frame_view.rotation);
@@ -4289,7 +4284,8 @@ namespace lfs::vis {
         VulkanContext& context,
         const lfs::rendering::ViewportRenderRequest& request,
         const std::size_t num_splats,
-        const std::size_t ring_slot) {
+        const std::size_t ring_slot,
+        const OutputSlot output_slot) {
         if (num_splats == 0) {
             return std::unexpected("VkSplat overlay bindings cannot bind an empty model");
         }
@@ -4498,6 +4494,7 @@ namespace lfs::vis {
             // H2D copy was costing ~6.5 ms/frame.
             const bool node_mask_cache_hit =
                 !slot.node_mask_upload_cpu.empty() &&
+                slot.cached_node_mask_output_slot == output_slot &&
                 slot.cached_emphasized_node_mask == forward_node_mask_source;
             if (!node_mask_cache_hit) {
                 LOG_TIMER("uploadOverlayBindings.prepare_sources.node_mask");
@@ -4505,6 +4502,7 @@ namespace lfs::vis {
                                  forward_node_mask_source,
                                  slot.region_bytes[OverlayNodeMask]);
                 slot.cached_emphasized_node_mask = forward_node_mask_source;
+                slot.cached_node_mask_output_slot = output_slot;
                 slot.node_mask_uploaded = false;
             }
             {
@@ -4744,6 +4742,7 @@ namespace lfs::vis {
                                          context.hasConditionalRendering(),
                                          context.vkCmdBeginConditionalRendering(),
                                          context.vkCmdEndConditionalRendering());
+            context.flushPipelineCache();
             renderer_.assignBufferLabels(buffers_);
             renderer_.setCpuTimerCallback([](const std::string_view name, const double ms) {
                 LOG_PERF("{} took {:.2f}ms", name, ms);
@@ -7579,18 +7578,13 @@ namespace lfs::vis {
                 }
             }
             auto empty_output = Tensor::empty({num_splats}, Device::CUDA, DataType::Bool);
+            empty_output.set_stream(render_stream_);
             if (const cudaError_t status = cudaMemsetAsync(empty_output.ptr<bool>(),
                                                            0,
                                                            num_splats * sizeof(bool),
                                                            render_stream_);
                 status != cudaSuccess) {
                 return std::unexpected(std::format("VkSplat polygon empty-output clear failed: {} ({})",
-                                                   cudaGetErrorName(status),
-                                                   cudaGetErrorString(status)));
-            }
-            if (const cudaError_t status = cudaStreamSynchronize(render_stream_);
-                status != cudaSuccess) {
-                return std::unexpected(std::format("VkSplat polygon empty-output sync failed: {} ({})",
                                                    cudaGetErrorName(status),
                                                    cudaGetErrorString(status)));
             }
@@ -7601,7 +7595,7 @@ namespace lfs::vis {
         }
 
         {
-            LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.ensureInitialized");
+            LOG_TIMER_THRESHOLD("VksplatViewportRenderer::buildSelectionMask.ensure_initialized", 1.0);
             if (auto ok = ensureInitialized(context); !ok) {
                 return std::unexpected(ok.error());
             }
@@ -7610,7 +7604,7 @@ namespace lfs::vis {
 
         std::size_t ring_slot = 0;
         {
-            LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.wait_ring_slot");
+            LOG_TIMER_THRESHOLD("VksplatViewportRenderer::buildSelectionMask.wait_ring_slot", 1.0);
             ring_slot = acquireRingSlot();
             if (auto ok = waitForRingSlot(ring_slot, "selection query"); !ok) {
                 return std::unexpected(legacyErrorString(ok.error()));
@@ -7618,7 +7612,7 @@ namespace lfs::vis {
         }
 
         auto input_binding = [&] {
-            LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.prepareInputs");
+            LOG_TIMER_THRESHOLD("VksplatViewportRenderer::buildSelectionMask.prepare_inputs", 1.0);
             return prepareInputs(context, splat_data, ring_slot, force_input_upload, 0);
         }();
         if (!input_binding) {
@@ -7689,7 +7683,7 @@ namespace lfs::vis {
         const auto previous_region_bytes = slot.region_bytes;
 
         {
-            LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.ensure_query_buffer");
+            LOG_TIMER_THRESHOLD("VksplatViewportRenderer::buildSelectionMask.ensure_query_buffer", 1.0);
             if (query_buffer_reallocated) {
                 LOG_PERF("VksplatViewportRenderer::buildSelectionMask.query_buffer_reallocate "
                          "required={} previous={}",
@@ -7755,6 +7749,10 @@ namespace lfs::vis {
         if (!output_storage) {
             return std::unexpected("VkSplat selection output tensor is not Vulkan external storage");
         }
+        // The external tensor has no home stream by default. Stamp the stream
+        // before dispatch so consumers can bridge from the Vulkan/CUDA query
+        // work without synchronizing this stream on the host.
+        slot.output_tensor.set_stream(render_stream_);
         const auto output_view = makeBorrowedBufferView(output_storage->vkBuffer(),
                                                         output_storage->vkBufferSize(),
                                                         output_storage->bytes(),
@@ -7830,7 +7828,7 @@ namespace lfs::vis {
 
         const cudaStream_t selection_query_stream = render_stream_;
         {
-            LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.upload");
+            LOG_TIMER_THRESHOLD("VksplatViewportRenderer::buildSelectionMask.upload", 1.0);
             if (transform_indices_enabled && !slot.transform_indices_uploaded) {
                 if (auto ok = copyTensorToBlockRegion(slot.block,
                                                       slot.copy_keep_alive,
@@ -8034,15 +8032,15 @@ namespace lfs::vis {
         }
 
         {
-            LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.dispatch.cuda_wait");
+            LOG_TIMER_THRESHOLD("VksplatViewportRenderer::buildSelectionMask.dispatch.cuda_wait", 1.0);
             if (!selection_query_timeline_.cuda_semaphore.cudaWait(selection_query_complete_value,
                                                                    selection_query_stream)) {
                 return std::unexpected(std::format("VkSplat selection query completion wait failed: {}",
                                                    selection_query_timeline_.cuda_semaphore.lastError()));
             }
         }
-        {
-            LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.dispatch.cuda_sync");
+        if (ring_mode) {
+            LOG_TIMER_THRESHOLD("VksplatViewportRenderer::buildSelectionMask.dispatch.cuda_sync", 1.0);
             if (const cudaError_t status = cudaStreamSynchronize(selection_query_stream);
                 status != cudaSuccess) {
                 return std::unexpected(std::format("VkSplat selection query sync failed: {} ({})",
@@ -8052,7 +8050,7 @@ namespace lfs::vis {
         }
 
         if (ring_mode) {
-            LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.ring_pick");
+            LOG_TIMER_THRESHOLD("VksplatViewportRenderer::buildSelectionMask.ring_pick", 1.0);
             std::array<std::uint32_t, 2> ring_pick{kRingPickNoHit, kRingPickNoHit};
             const auto* const ring_pick_src =
                 static_cast<const std::uint8_t*>(exportableDevicePtr(slot.block)) +
@@ -8101,16 +8099,10 @@ namespace lfs::vis {
                     }
                 }
             }
-            if (const cudaError_t status = cudaStreamSynchronize(selection_query_stream);
-                status != cudaSuccess) {
-                return std::unexpected(std::format("VkSplat ring-pick output sync failed: {} ({})",
-                                                   cudaGetErrorName(status),
-                                                   cudaGetErrorString(status)));
-            }
         }
 
         {
-            LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.output_tensor");
+            LOG_TIMER_THRESHOLD("VksplatViewportRenderer::buildSelectionMask.output_tensor", 1.0);
             if (!slot.output_tensor.is_valid() || slot.output_tensor.numel() != num_splats) {
                 return std::unexpected("VkSplat selection output tensor became invalid after dispatch");
             }
@@ -8194,7 +8186,7 @@ namespace lfs::vis {
 
         auto overlay_bindings = [&] {
             LOG_TIMER("vksplat.selection_overlay.uploadOverlayBindings");
-            return uploadOverlayBindings(context, request, num_splats, ring_slot);
+            return uploadOverlayBindings(context, request, num_splats, ring_slot, output_slot);
         }();
         if (!overlay_bindings) {
             return std::unexpected(overlay_bindings.error());
@@ -9045,7 +9037,7 @@ namespace lfs::vis {
         auto overlay_bindings = [&] {
             LOG_TIMER("vksplat.render.uploadOverlayBindings");
             return uploadOverlayBindings(
-                context, request, static_cast<std::size_t>(splat_data.size()), ring_slot);
+                context, request, static_cast<std::size_t>(splat_data.size()), ring_slot, output_slot);
         }();
         if (!overlay_bindings) {
             return std::unexpected(overlay_bindings.error());

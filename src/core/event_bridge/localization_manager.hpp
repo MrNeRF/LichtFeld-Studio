@@ -6,6 +6,8 @@
 #include "event_bridge.hpp"
 
 #include <array>
+#include <atomic>
+#include <cstdint>
 #include <format>
 #include <mutex>
 #include <string>
@@ -34,6 +36,9 @@ namespace lfs::event {
         std::vector<std::string> getAvailableLanguageNames() const;
         bool setLanguage(const std::string& language_code);
         std::string getCurrentLanguage() const;
+        [[nodiscard]] std::uint64_t getCurrentLanguageGeneration() const noexcept {
+            return language_generation_.load(std::memory_order_acquire);
+        }
         std::string getCurrentLanguageName() const;
         bool reload();
 
@@ -61,6 +66,7 @@ namespace lfs::event {
         std::vector<std::string> available_languages_;
         std::unordered_map<std::string, std::string> language_names_;
         mutable std::unordered_map<std::string, std::string> overrides_;
+        std::atomic<std::uint64_t> language_generation_{0};
     };
 
     template <typename... Args>

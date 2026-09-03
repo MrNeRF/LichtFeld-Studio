@@ -6,24 +6,15 @@ import lichtfeld as lf
 
 from .keymap_bindings import KeymapBindingsSection
 from .types import Panel
+from .panels import panel_class
 
 __lfs_panel_classes__ = ["PreferencesPanel"]
 __lfs_panel_ids__ = ["lfs.preferences"]
 
 
+@panel_class("preferences")
 class PreferencesPanel(Panel):
     """Floating home for application-level preferences."""
-
-    id = "lfs.preferences"
-    label = "Preferences"
-    space = lf.ui.PanelSpace.FLOATING
-    order = 100
-    template = "rmlui/preferences.rml"
-    height_mode = lf.ui.PanelHeightMode.FILL
-    size = (780, 440)
-    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    update_policy = "interval"
-    update_interval_ms = 50
 
     SCALE_OPTIONS = (
         (0.0, "menu.view.ui_scale.auto"),
@@ -94,6 +85,12 @@ class PreferencesPanel(Panel):
         self._applied_project_location = ""
         self._document = None
         self._file_associations = []
+        self._mount_count = 0
+
+    @property
+    def mount_count(self):
+        """Number of RML document mounts; closing retains the current mount."""
+        return self._mount_count
 
     def on_bind_model(self, ctx):
         self._read_mcp_preferences()
@@ -218,6 +215,7 @@ class PreferencesPanel(Panel):
                 "click", lambda _ev: self._on_close(None, None, None)
             )
         self._document = doc
+        self._mount_count += 1
         self._expanded_sections = set(self.EXPANDABLE_SECTIONS)
         self._dirty_expanded_sections()
         self._rebuild_records()
@@ -226,6 +224,7 @@ class PreferencesPanel(Panel):
         self._last_state = self._state()
         self._refresh_selection()
         self._keymap.on_mount(doc)
+        self._ensure_keymap_rows_if_visible()
 
     def on_unmount(self, doc):
         self._keymap.on_unmount()
@@ -236,6 +235,7 @@ class PreferencesPanel(Panel):
     def on_update(self, doc):
         self._consume_section_request()
         self._sync_mcp_runtime()
+        self._ensure_keymap_rows_if_visible()
         state = self._state()
         if state != self._last_state:
             self._last_state = state
@@ -244,6 +244,10 @@ class PreferencesPanel(Panel):
             self._dirty_selection()
             self._dirty_mcp()
         self._keymap.on_update(doc)
+
+    def _ensure_keymap_rows_if_visible(self):
+        if self._section == "input" and "key_bindings" in self._expanded_sections:
+            self._keymap.ensure_binding_rows()
 
     def _state(self):
         return (
@@ -1033,10 +1037,14 @@ class PreferencesPanel(Panel):
     def _on_close(self, _handle, _event, _args):
         # The floating-window title bar is cancellation: discard an unconfirmed
         # port draft while preserving settings that were already applied live.
+        mcp_draft_changed = self._mcp_port != str(self._mcp_applied_port)
+        project_draft_changed = self._project_location != self._applied_project_location
         self._mcp_port = str(self._mcp_applied_port)
         self._project_location = self._applied_project_location
-        self._dirty_mcp()
-        self._dirty_project_location()
+        if mcp_draft_changed:
+            self._dirty_mcp()
+        if project_draft_changed:
+            self._dirty_project_location()
         lf.ui.set_panel_enabled(self.id, False)
 
     def _on_accept_and_close(self, _handle, _event, _args):
@@ -1050,6 +1058,7 @@ class PreferencesPanel(Panel):
         if self._section == section:
             return
         self._section = section
+        self._ensure_keymap_rows_if_visible()
         if self._handle:
             for name in (
                 "show_general",
@@ -1076,6 +1085,7 @@ class PreferencesPanel(Panel):
             self._expanded_sections.add(section)
         if self._handle:
             self._handle.dirty(f"{section}_expanded")
+        self._ensure_keymap_rows_if_visible()
 
     def _dirty_expanded_sections(self):
         if not self._handle:

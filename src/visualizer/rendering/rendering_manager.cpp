@@ -187,6 +187,7 @@ namespace lfs::vis {
     }
 
     RenderingManager::~RenderingManager() {
+        event_handlers_ = lfs::event::ScopedHandler{};
         invalidateGTComparisonImageCache();
         gt_comparison_image_worker_.request_stop();
         gt_comparison_image_cv_.notify_all();
@@ -743,11 +744,16 @@ namespace lfs::vis {
     void RenderingManager::advanceSplitOffset() {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         split_view_service_.advanceSplitOffset(settings_);
-        markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::SPLATS);
+        markDirty(DirtyFlag::SPLIT_VIEW);
     }
 
     SplitViewInfo RenderingManager::getSplitViewInfo() const {
         return split_view_service_.getInfo();
+    }
+
+    std::optional<SplitViewInfo> RenderingManager::getSplitViewInfoIfChanged(
+        std::uint64_t& generation) const {
+        return split_view_service_.getInfoIfChanged(generation);
     }
 
     bool RenderingManager::isSplitViewActive() const {
@@ -774,6 +780,16 @@ namespace lfs::vis {
     bool RenderingManager::depthWindowDragPreview() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         return depth_window_drag_preview_;
+    }
+
+    GTComparisonMode RenderingManager::getGTComparisonMode() const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return settings_.gt_comparison_mode;
+    }
+
+    SplitViewMode RenderingManager::getSplitViewMode() const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return settings_.split_view_mode;
     }
 
     bool RenderingManager::isIndependentSplitViewActive() const {
@@ -880,39 +896,67 @@ namespace lfs::vis {
                    ppispOverridesEqual(lhs.settings.ppisp_overrides, rhs.settings.ppisp_overrides);
         };
 
+        std::optional<AppStore::CameraMetrics> cached_app_metrics;
         {
             std::lock_guard<std::mutex> lock(camera_metrics_mutex_);
-
-            const bool missing_metrics = !latest_camera_metrics_.has_value();
-            const bool wrong_camera = latest_camera_metrics_ &&
-                                      latest_camera_metrics_->camera_id != current_camera_id;
-            const bool stale_iteration = latest_camera_metrics_ &&
-                                         latest_camera_metrics_->camera_id == current_camera_id &&
-                                         latest_camera_metrics_->iteration != current_iteration;
-            const bool missing_ssim = include_ssim && latest_camera_metrics_ &&
-                                      latest_camera_metrics_->camera_id == current_camera_id &&
-                                      !latest_camera_metrics_->ssim.has_value();
-            const bool immediate_refresh = missing_metrics || wrong_camera || missing_ssim;
-            const bool refresh_interval_elapsed =
-                last_camera_metrics_refresh_time_.time_since_epoch().count() == 0 ||
-                (now - last_camera_metrics_refresh_time_) >= CAMERA_METRICS_REFRESH_INTERVAL;
-            const bool same_as_pending =
-                pending_camera_metrics_request_ &&
-                request_matches(*pending_camera_metrics_request_, request);
-            const bool same_as_active =
-                active_camera_metrics_request_ &&
-                request_matches(*active_camera_metrics_request_, request);
-
-            if ((immediate_refresh || (stale_iteration && refresh_interval_elapsed)) &&
-                !same_as_pending &&
-                !same_as_active) {
-                request.generation = ++camera_metrics_request_generation_;
-                pending_camera_metrics_request_ = request;
+            const auto cached = std::find_if(
+                camera_metrics_cache_.begin(), camera_metrics_cache_.end(),
+                [&request_matches, &request](const auto& entry) {
+                    return request_matches(entry.request, request);
+                });
+            if (cached != camera_metrics_cache_.end()) {
+                const auto& cached_metrics = cached->metrics;
+                const bool metrics_changed =
+                    !latest_camera_metrics_ ||
+                    latest_camera_metrics_->camera_id != cached_metrics.camera_id ||
+                    latest_camera_metrics_->iteration != cached_metrics.iteration ||
+                    latest_camera_metrics_->psnr != cached_metrics.psnr ||
+                    latest_camera_metrics_->ssim != cached_metrics.ssim ||
+                    latest_camera_metrics_->used_mask != cached_metrics.used_mask;
+                latest_camera_metrics_ = cached->metrics;
+                if (metrics_changed) {
+                    cached_app_metrics = toAppCameraMetrics(cached_metrics);
+                }
                 last_camera_metrics_refresh_time_ = now;
-                should_queue = true;
+                cached->request = request;
+            } else {
+
+                const bool missing_metrics = !latest_camera_metrics_.has_value();
+                const bool wrong_camera = latest_camera_metrics_ &&
+                                          latest_camera_metrics_->camera_id != current_camera_id;
+                const bool stale_iteration = latest_camera_metrics_ &&
+                                             latest_camera_metrics_->camera_id == current_camera_id &&
+                                             latest_camera_metrics_->iteration != current_iteration;
+                const bool missing_ssim = include_ssim && latest_camera_metrics_ &&
+                                          latest_camera_metrics_->camera_id == current_camera_id &&
+                                          !latest_camera_metrics_->ssim.has_value();
+                const bool immediate_refresh = missing_metrics || wrong_camera || missing_ssim;
+                const bool refresh_interval_elapsed =
+                    last_camera_metrics_refresh_time_.time_since_epoch().count() == 0 ||
+                    (now - last_camera_metrics_refresh_time_) >= CAMERA_METRICS_REFRESH_INTERVAL;
+                const bool same_as_pending =
+                    pending_camera_metrics_request_ &&
+                    request_matches(*pending_camera_metrics_request_, request);
+                const bool same_as_active =
+                    active_camera_metrics_request_ &&
+                    request_matches(*active_camera_metrics_request_, request);
+
+                if ((immediate_refresh || (stale_iteration && refresh_interval_elapsed)) &&
+                    !same_as_pending &&
+                    !same_as_active) {
+                    request.generation = ++camera_metrics_request_generation_;
+                    pending_camera_metrics_request_ = request;
+                    last_camera_metrics_refresh_time_ = now;
+                    should_queue = true;
+                }
             }
         }
 
+        if (cached_app_metrics) {
+            app_store().camera_metrics.set(std::move(cached_app_metrics));
+            markDirty(DirtyFlag::OVERLAY);
+            return;
+        }
         if (!should_queue) {
             return;
         }
@@ -955,6 +999,29 @@ namespace lfs::vis {
                 if (request.generation == camera_metrics_request_generation_) {
                     if (metrics) {
                         latest_camera_metrics_ = *metrics;
+                        const auto same_cached_request = [&](const auto& entry) {
+                            return entry.request.trainer_manager == request.trainer_manager &&
+                                   entry.request.camera_id == request.camera_id &&
+                                   entry.request.iteration == request.iteration &&
+                                   entry.request.settings.camera_metrics_mode == request.settings.camera_metrics_mode &&
+                                   entry.request.settings.apply_appearance_correction == request.settings.apply_appearance_correction &&
+                                   entry.request.settings.ppisp_mode == request.settings.ppisp_mode &&
+                                   ppispOverridesEqual(entry.request.settings.ppisp_overrides,
+                                                       request.settings.ppisp_overrides);
+                        };
+                        auto cached = std::find_if(
+                            camera_metrics_cache_.begin(), camera_metrics_cache_.end(),
+                            same_cached_request);
+                        if (cached == camera_metrics_cache_.end()) {
+                            camera_metrics_cache_.push_back(
+                                {.request = request, .metrics = *metrics});
+                        } else {
+                            cached->metrics = *metrics;
+                            cached->request = request;
+                        }
+                        while (camera_metrics_cache_.size() > 4) {
+                            camera_metrics_cache_.pop_front();
+                        }
                         app_metrics = toAppCameraMetrics(*metrics);
                     } else {
                         latest_camera_metrics_.reset();

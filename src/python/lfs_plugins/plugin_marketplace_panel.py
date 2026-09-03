@@ -21,6 +21,7 @@ from .marketplace import (
 from .localization import localized_count
 from .plugin import PluginInfo, PluginState
 from .types import Panel
+from .panels import panel_class
 from .ui import RuntimeState
 
 __lfs_panel_classes__ = ["PluginMarketplacePanel"]
@@ -68,21 +69,9 @@ class CardOpState:
     finished_at: float = 0.0
 
 
+@panel_class("plugin_marketplace")
 class PluginMarketplacePanel(Panel):
     """Floating plugin window for browsing, installing, and managing plugins."""
-
-    id = "lfs.plugin_marketplace"
-    label = "Plugin Marketplace"
-    space = lf.ui.PanelSpace.FLOATING
-    order = 91
-    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    template = "rmlui/plugin_marketplace.rml"
-    height_mode = lf.ui.PanelHeightMode.FILL
-    size = (770, 560)
-    # The card slots depend on the live viewport width, which changes while a
-    # floating window is resized even when the model itself is not dirty.
-    update_policy = "interval"
-    update_interval_ms = 250
 
     def __init__(self):
         self._catalog = PluginMarketplaceCatalog()
@@ -183,6 +172,7 @@ class PluginMarketplacePanel(Panel):
             self._sort_idx = idx
             self._entries_dirty = True
             self._needs_resort = True
+            self._ensure_loaded()
             self._request_model_update()
 
     # ── Lifecycle ─────────────────────────────────────────────
@@ -228,6 +218,7 @@ class PluginMarketplacePanel(Panel):
             )
         self._sync_view_mode_controls(doc)
         self._subscribe_reactive_state()
+        self._ensure_loaded()
         self._request_model_update()
 
     def on_unmount(self, doc):
@@ -320,6 +311,9 @@ class PluginMarketplacePanel(Panel):
         from .manager import PluginManager
 
         mgr = PluginManager.instance()
+        # Dirty-driven updates are event-driven, so this guard handles a sort
+        # change that arrives while the initial catalog fetch is in flight
+        # without reintroducing an idle polling loop.
         self._ensure_loaded()
 
         current_lang = lf.ui.get_current_language()

@@ -423,6 +423,13 @@ scene-graph scrollbarvertical sliderbar {
     border-left-color: rgba(0, 0, 0, 0);
     cursor: pointer;
     overflow: hidden;
+    transition: top 0.15s quadratic-out, background-color 0.12s quadratic-out,
+        border-color 0.12s quadratic-out;
+}
+
+.scene-graph-content.no-anim .tree-row,
+.scene-graph-content.no-anim .tree-insert-line {
+    transition: none;
 }
 
 .tree-row.placeholder {
@@ -462,6 +469,10 @@ scene-graph scrollbarvertical sliderbar {
     opacity: 0.45;
 }
 
+.tree-row.just-moved {
+    background-color: rgba(137, 180, 250, 89);
+}
+
 .tree-drag-ghost {
     display: none;
     position: absolute;
@@ -475,17 +486,49 @@ scene-graph scrollbarvertical sliderbar {
     color: #cdd6f4;
     font-size: 12dp;
     white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 3dp;
+    box-shadow: 0 2dp 8dp rgba(0, 0, 0, 110);
+    transition: opacity 0.09s quadratic-out;
+}
+
+.tree-drag-ghost.invalid {
+    border-color: rgba(243, 139, 168, 255);
+    color: rgba(243, 139, 168, 220);
+    opacity: 0.65;
+}
+
+.tree-drag-ghost .type-icon {
+    flex: none;
+}
+
+.tree-drag-ghost-badge {
+    display: none;
+    color: #89b4fa;
+    font-size: 11dp;
 }
 
 .tree-insert-line {
-    display: none;
     position: absolute;
+    z-index: 10000;
+    left: 4dp;
+    height: 2dp;
     right: 4dp;
-    height: 3dp;
     background-color: #89b4fa;
-    border-radius: 2dp;
-    z-index: 50;
+    border-radius: 1dp;
     pointer-events: none;
+    transition: top 0.08s quadratic-out;
+}
+
+.tree-insert-line-dot {
+    position: absolute;
+    left: -2dp;
+    top: -2dp;
+    width: 6dp;
+    height: 6dp;
+    border-radius: 3dp;
+    background-color: #89b4fa;
 }
 
 .row-content {

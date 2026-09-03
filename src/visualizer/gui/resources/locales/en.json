@@ -75,12 +75,12 @@
     "title": "Getting Started",
     "description": "Learn how to prepare datasets and get started with LichtFeld Studio:",
     "wiki_section": "WIKI & FAQ",
+    "video_overview": "Everything LichtFeld Studio can do today",
     "video_automotive": "3dgs for automotive marketing",
     "video_intro": "Training on 360 Equirectangular Images",
     "video_latest": "LichtFeld v0.3.0 Feature Overview",
     "video_reality_scan": "Reality Scan Dataset",
     "video_colmap": "COLMAP Tutorial",
-    "video_lichtfeld": "LichtFeld Tutorial",
     "video_masks": "Masks Tutorial"
   },
   "about": {
@@ -579,6 +579,8 @@
     "add_group": "Add Group",
     "add_group_ellipsis": "Add Group...",
     "new_group_name": "New Group",
+    "group_selected": "Group Selected",
+    "ungroup": "Ungroup",
     "export": "Export...",
     "delete": "Delete",
     "rename": "Rename",
@@ -2114,6 +2116,10 @@
         }
       }
     },
+    "computing": {
+      "title": "Computing histogram…",
+      "message": "The distribution will appear as soon as the data is ready."
+    },
     "delete_failed": {
       "title": "Delete Failed",
       "status": "Delete failed: {message}",
@@ -2137,6 +2143,10 @@
       "metric_unavailable": {
         "title": "Metric unavailable",
         "message": "The selected metric could not be read from the combined Gaussian model."
+      },
+      "compute_failed": {
+        "title": "Histogram failed",
+        "message": "Histogram computation failed: {error}"
       },
       "no_visible_values": {
         "title": "No visible values",

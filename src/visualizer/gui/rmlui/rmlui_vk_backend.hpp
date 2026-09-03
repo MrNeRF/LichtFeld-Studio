@@ -22,14 +22,18 @@
 #include <vulkan/vulkan.h>
 
 #include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -214,6 +218,14 @@ private:
         std::mutex mutex;
         async_preview_result_t result;
         std::atomic<bool> ready = false;
+        std::atomic<bool> cancelled = false;
+    };
+
+    struct preview_work_t {
+        std::shared_ptr<async_preview_state_t> state;
+        std::filesystem::path path;
+        int max_size = 0;
+        bool embedded_project_preview = false;
     };
 
     struct geometry_handle_t {
@@ -568,6 +580,9 @@ private:
     Rml::TextureHandle LoadAsyncPreviewTexture(Rml::Vector2i& texture_dimensions, const Rml::String& source);
     void ProcessAsyncPreviewUploads();
     void DropAsyncPreviewTexture(texture_data_t* texture);
+    void EnsurePreviewWorkerPool();
+    void StopPreviewWorkerPool() noexcept;
+    void EnqueuePreviewWork(preview_work_t work);
     void QueueTextureForDeferredDeletion(texture_data_t* texture);
     static async_preview_result_t DecodePreviewTexture(std::filesystem::path path,
                                                        int max_size,
@@ -700,6 +715,11 @@ private:
     Rml::Array<Rml::Vector<texture_data_t*>, kSwapchainBackBufferCount> m_pending_for_deletion_textures_by_frames;
     std::unordered_set<texture_data_t*> m_live_textures;
     std::vector<std::shared_ptr<async_preview_state_t>> m_async_preview_textures;
+    std::mutex m_preview_queue_mutex;
+    std::condition_variable m_preview_queue_cv;
+    std::deque<preview_work_t> m_preview_queue;
+    std::vector<std::thread> m_preview_workers;
+    bool m_preview_workers_stopping = false;
     std::atomic<uint64_t> m_preview_texture_generation{0};
     Rml::Vector<render_layer_t> m_render_layers;
     frosted_glass_backdrop_t m_frosted_glass_backdrop;

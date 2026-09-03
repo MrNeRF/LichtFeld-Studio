@@ -14,6 +14,15 @@
 
 namespace lfs::vis {
 
+    struct FrameMouseButtonEvent {
+        uint8_t button = 0;
+        bool down = false;
+        float x = 0.0f;
+        float y = 0.0f;
+        uint64_t timestamp = 0;
+        uint8_t clicks = 0;
+    };
+
     struct FrameInputBuffer {
         float mouse_x = 0;
         float mouse_y = 0;
@@ -21,6 +30,8 @@ namespace lfs::vis {
         bool mouse_clicked[3] = {};
         bool mouse_released[3] = {};
         float mouse_wheel = 0;
+        float mouse_wheel_x = 0;
+        std::vector<FrameMouseButtonEvent> mouse_button_events;
         std::vector<SDL_Scancode> keys_pressed;
         std::vector<SDL_Scancode> keys_repeated;
         std::vector<SDL_Scancode> keys_released;
@@ -42,6 +53,8 @@ namespace lfs::vis {
             mouse_clicked[0] = mouse_clicked[1] = mouse_clicked[2] = false;
             mouse_released[0] = mouse_released[1] = mouse_released[2] = false;
             mouse_wheel = 0;
+            mouse_wheel_x = 0;
+            mouse_button_events.clear();
             keys_pressed.clear();
             keys_repeated.clear();
             keys_released.clear();
@@ -75,6 +88,14 @@ namespace lfs::vis {
             case SDL_EVENT_MOUSE_BUTTON_UP: {
                 const int idx = buttonIndex(event.button.button);
                 if (idx >= 0) {
+                    mouse_button_events.push_back({
+                        .button = static_cast<uint8_t>(idx),
+                        .down = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN,
+                        .x = event.button.x,
+                        .y = event.button.y,
+                        .timestamp = event.button.timestamp,
+                        .clicks = event.button.clicks,
+                    });
                     if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
                         mouse_clicked[idx] = true;
                     else
@@ -84,6 +105,7 @@ namespace lfs::vis {
             }
             case SDL_EVENT_MOUSE_WHEEL:
                 mouse_wheel += event.wheel.y;
+                mouse_wheel_x += event.wheel.x;
                 break;
             case SDL_EVENT_KEY_DOWN:
                 if (event.key.repeat)

@@ -75,12 +75,12 @@
     "title": "はじめに",
     "description": "データセットの準備方法とLichtFeld Studioの使い方を学びましょう:",
     "wiki_section": "Wiki & よくある質問",
+    "video_overview": "LichtFeld Studioで現在できることのすべて",
     "video_automotive": "自動車マーケティング向け 3DGS",
     "video_intro": "360°正距円筒図法画像でのトレーニング",
     "video_latest": "LichtFeld v0.3.0 機能概要",
     "video_reality_scan": "Reality Scanデータセット",
     "video_colmap": "COLMAPチュートリアル",
-    "video_lichtfeld": "LichtFeldチュートリアル",
     "video_masks": "マスクチュートリアル"
   },
   "about": {
@@ -579,6 +579,8 @@
     "add_group": "グループを追加",
     "add_group_ellipsis": "グループを追加...",
     "new_group_name": "新しいグループ",
+    "group_selected": "Group Selected",
+    "ungroup": "Ungroup",
     "export": "エクスポート...",
     "delete": "削除",
     "rename": "名前を変更",
@@ -2114,6 +2116,10 @@
         }
       }
     },
+    "computing": {
+      "title": "ヒストグラムを計算中…",
+      "message": "データの準備ができ次第、分布が表示されます。"
+    },
     "delete_failed": {
       "title": "削除に失敗しました",
       "status": "削除に失敗しました: {message}",
@@ -2137,6 +2143,10 @@
       "metric_unavailable": {
         "title": "メトリックを利用できません",
         "message": "選択したメトリックを結合したガウシアンモデルから読み取れませんでした。"
+      },
+      "compute_failed": {
+        "title": "ヒストグラムに失敗しました",
+        "message": "ヒストグラムの計算に失敗しました: {error}"
       },
       "no_visible_values": {
         "title": "表示可能な値がありません",

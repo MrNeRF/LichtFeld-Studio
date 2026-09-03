@@ -11,7 +11,10 @@
 #include <cctype>
 #include <cmath>
 #include <condition_variable>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -29,6 +32,176 @@ namespace image_codecs = lfs::core::image_codecs;
 namespace {
 
     constexpr int DEFAULT_JPEG_QUALITY = 95;
+    constexpr std::size_t kJpegExifReadLimit = 64u * 1024u;
+
+    struct JpegExifData {
+        std::vector<std::uint8_t> thumbnail;
+    };
+
+    bool read_file_range(const std::filesystem::path& path,
+                         const std::uint64_t offset,
+                         const std::size_t size,
+                         std::vector<std::uint8_t>& data) {
+        std::ifstream file(path, std::ios::binary);
+        if (!file)
+            return false;
+        file.seekg(static_cast<std::streamoff>(offset));
+        if (!file)
+            return false;
+        data.resize(size);
+        if (size != 0 && !file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size)))
+            return false;
+        return true;
+    }
+
+    bool read_file_prefix(const std::filesystem::path& path,
+                          const std::size_t max_size,
+                          std::vector<std::uint8_t>& data) {
+        std::ifstream file(path, std::ios::binary);
+        if (!file)
+            return false;
+        data.resize(max_size);
+        file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(data.size()));
+        data.resize(static_cast<std::size_t>(file.gcount()));
+        return !file.bad();
+    }
+
+    std::optional<JpegExifData> read_jpeg_exif(const std::filesystem::path& path) {
+        std::vector<std::uint8_t> prefix;
+        if (!read_file_prefix(path, kJpegExifReadLimit, prefix) || prefix.size() < 2 ||
+            prefix[0] != 0xff || prefix[1] != 0xd8) {
+            return std::nullopt;
+        }
+
+        for (std::size_t marker_offset = 2; marker_offset + 4 <= prefix.size();) {
+            if (prefix[marker_offset] != 0xff)
+                break;
+            while (marker_offset < prefix.size() && prefix[marker_offset] == 0xff)
+                ++marker_offset;
+            if (marker_offset >= prefix.size())
+                break;
+            const std::uint8_t marker = prefix[marker_offset++];
+            if (marker == 0xda || marker == 0xd9)
+                break;
+            if (marker == 0x01 || (marker >= 0xd0 && marker <= 0xd7))
+                continue;
+            if (marker_offset + 2 > prefix.size())
+                break;
+            const std::size_t segment_length = (static_cast<std::size_t>(prefix[marker_offset]) << 8) |
+                                               prefix[marker_offset + 1];
+            if (segment_length < 2 || marker_offset + segment_length > prefix.size())
+                break;
+
+            const std::size_t segment_data = marker_offset + 2;
+            const std::size_t segment_size = segment_length - 2;
+            if (marker == 0xe1 && segment_size >= 8 &&
+                std::memcmp(prefix.data() + segment_data, "Exif\0\0", 6) == 0) {
+                const std::size_t tiff_offset = segment_data + 6;
+                const std::size_t tiff_size = segment_size - 6;
+                const auto* const tiff = prefix.data() + tiff_offset;
+                const bool little_endian = tiff[0] == 'I' && tiff[1] == 'I';
+                const bool big_endian = tiff[0] == 'M' && tiff[1] == 'M';
+                if (!little_endian && !big_endian)
+                    return JpegExifData{};
+
+                const auto read_u16 = [&](const std::size_t offset) -> std::optional<std::uint16_t> {
+                    if (offset > tiff_size || tiff_size - offset < 2)
+                        return std::nullopt;
+                    if (little_endian)
+                        return static_cast<std::uint16_t>(tiff[offset] | (tiff[offset + 1] << 8));
+                    return static_cast<std::uint16_t>((tiff[offset] << 8) | tiff[offset + 1]);
+                };
+                const auto read_u32 = [&](const std::size_t offset) -> std::optional<std::uint32_t> {
+                    if (offset > tiff_size || tiff_size - offset < 4)
+                        return std::nullopt;
+                    if (little_endian) {
+                        return static_cast<std::uint32_t>(tiff[offset]) |
+                               (static_cast<std::uint32_t>(tiff[offset + 1]) << 8) |
+                               (static_cast<std::uint32_t>(tiff[offset + 2]) << 16) |
+                               (static_cast<std::uint32_t>(tiff[offset + 3]) << 24);
+                    }
+                    return (static_cast<std::uint32_t>(tiff[offset]) << 24) |
+                           (static_cast<std::uint32_t>(tiff[offset + 1]) << 16) |
+                           (static_cast<std::uint32_t>(tiff[offset + 2]) << 8) |
+                           static_cast<std::uint32_t>(tiff[offset + 3]);
+                };
+
+                const auto ifd0_offset = read_u32(4);
+                if (!ifd0_offset || *ifd0_offset > tiff_size || tiff_size - *ifd0_offset < 2)
+                    return JpegExifData{};
+
+                JpegExifData result;
+                std::optional<std::uint32_t> ifd1_offset;
+                const auto parse_ifd = [&](const std::size_t ifd_offset,
+                                           std::optional<std::uint32_t>* const next_ifd) {
+                    const auto count = read_u16(ifd_offset);
+                    if (!count)
+                        return false;
+                    const std::size_t entries_offset = ifd_offset + 2;
+                    const std::size_t entries_size = static_cast<std::size_t>(*count) * 12u;
+                    if (entries_offset > tiff_size || entries_size > tiff_size - entries_offset)
+                        return false;
+                    const auto next_offset = read_u32(entries_offset + entries_size);
+                    if (!next_offset)
+                        return false;
+                    if (next_ifd)
+                        *next_ifd = *next_offset;
+                    return true;
+                };
+
+                if (!parse_ifd(*ifd0_offset, &ifd1_offset) || !ifd1_offset ||
+                    *ifd1_offset == 0 || *ifd1_offset > tiff_size ||
+                    !parse_ifd(*ifd1_offset, nullptr)) {
+                    result.thumbnail.clear();
+                    return result;
+                }
+
+                // Re-read IFD1's two offset tags without retaining pointers into the
+                // temporary prefix. The embedded JPEG offset is relative to TIFF.
+                std::optional<std::uint32_t> jpeg_offset;
+                std::optional<std::uint32_t> jpeg_length;
+                const auto count = read_u16(*ifd1_offset);
+                const std::size_t entries_offset = *ifd1_offset + 2;
+                if (!count || entries_offset > tiff_size ||
+                    static_cast<std::size_t>(*count) * 12u > tiff_size - entries_offset)
+                    return result;
+                for (std::size_t entry = 0; entry < *count; ++entry) {
+                    const std::size_t offset = entries_offset + entry * 12u;
+                    const auto tag = read_u16(offset);
+                    const auto type = read_u16(offset + 2);
+                    const auto value = read_u32(offset + 8);
+                    if (!tag || !type || !value || *type != 4)
+                        continue;
+                    if (*tag == 0x0201)
+                        jpeg_offset = *value;
+                    else if (*tag == 0x0202)
+                        jpeg_length = *value;
+                }
+                if (!jpeg_offset || !jpeg_length || *jpeg_length == 0 ||
+                    *jpeg_offset > tiff_size || *jpeg_length > tiff_size - *jpeg_offset)
+                    return result;
+
+                const std::uint64_t file_offset = static_cast<std::uint64_t>(tiff_offset) + *jpeg_offset;
+                std::vector<std::uint8_t> thumbnail;
+                if (file_offset <= prefix.size() && *jpeg_length <= prefix.size() - file_offset) {
+                    thumbnail.assign(prefix.begin() + static_cast<std::ptrdiff_t>(file_offset),
+                                     prefix.begin() + static_cast<std::ptrdiff_t>(file_offset + *jpeg_length));
+                } else if (*jpeg_length <= kJpegExifReadLimit &&
+                           read_file_range(path, file_offset, *jpeg_length, thumbnail)) {
+                    // A non-conforming writer may place the IFD1 payload after the
+                    // initial 64 KiB. Read only the referenced thumbnail, never the
+                    // multi-megabyte primary JPEG.
+                }
+                if (thumbnail.size() >= 2 && thumbnail[0] == 0xff && thumbnail[1] == 0xd8)
+                    result.thumbnail = std::move(thumbnail);
+                else
+                    result.thumbnail.clear();
+                return result;
+            }
+            marker_offset += segment_length;
+        }
+        return std::nullopt;
+    }
 
     template <typename T>
     T* downscale_resample_nch(const T* src,
@@ -270,22 +443,56 @@ namespace {
 
     template <typename T>
     std::tuple<T*, int, int, int>
-    load_image_t(std::filesystem::path p, int res_div, int max_width) {
+    load_image_t(std::filesystem::path p, int res_div, int max_width,
+                 const bool prefer_embedded_thumbnail = false,
+                 bool* used_embedded_thumbnail = nullptr) {
         LOG_TIMER("load_image total");
+        if (used_embedded_thumbnail)
+            *used_embedded_thumbnail = false;
         const std::string path_utf8 = lfs::core::path_to_utf8(p);
         constexpr auto sample_type = std::is_same_v<T, uint8_t> ? image_codecs::SampleType::UInt8
                                                                 : image_codecs::SampleType::UInt16;
-        image_codecs::DecodeTarget target{3, sample_type, nullptr, allocate_image_buffer, nullptr};
+        image_codecs::DecodeTarget target{3, sample_type, nullptr, allocate_image_buffer, nullptr,
+                                          prefer_embedded_thumbnail ? max_width : 0};
         image_codecs::Probe direct_info;
         std::string error;
         int source_width = 0;
         int source_height = 0;
         T* base = nullptr;
-        if (image_codecs::decode_to_buffer(p, target, direct_info, error)) {
+        std::optional<JpegExifData> exif;
+        if (prefer_embedded_thumbnail && max_width > 0) {
+            auto extension = p.extension().string();
+            std::transform(extension.begin(), extension.end(), extension.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (extension == ".jpg" || extension == ".jpeg")
+                exif = read_jpeg_exif(p);
+        }
+        bool decoded_embedded = false;
+        if (prefer_embedded_thumbnail && exif && !exif->thumbnail.empty()) {
+            image_codecs::DecodeTarget embedded_target = target;
+            embedded_target.data = nullptr;
+            embedded_target.max_width = 0;
+            if (image_codecs::decode_memory_to_buffer(exif->thumbnail.data(),
+                                                      exif->thumbnail.size(),
+                                                      embedded_target,
+                                                      direct_info,
+                                                      error) &&
+                std::max(direct_info.width, direct_info.height) >= max_width) {
+                target.data = embedded_target.data;
+                source_width = direct_info.width;
+                source_height = direct_info.height;
+                base = static_cast<T*>(target.data);
+                decoded_embedded = true;
+            } else if (embedded_target.data) {
+                std::free(embedded_target.data);
+                error.clear();
+            }
+        }
+        if (!decoded_embedded && image_codecs::decode_to_buffer(p, target, direct_info, error)) {
             source_width = direct_info.width;
             source_height = direct_info.height;
             base = static_cast<T*>(target.data);
-        } else {
+        } else if (!decoded_embedded) {
             if (target.data)
                 std::free(target.data);
             image_codecs::Image decoded;
@@ -297,6 +504,9 @@ namespace {
             source_height = decoded.height;
             base = convert_to_rgb<T>(decoded);
         }
+
+        if (used_embedded_thumbnail)
+            *used_embedded_thumbnail = decoded_embedded;
 
         int target_width = source_width;
         int target_height = source_height;
@@ -441,6 +651,13 @@ namespace lfs::core {
     std::tuple<unsigned char*, int, int, int>
     load_image(std::filesystem::path p, int res_div, int max_width) {
         return ::load_image_t<unsigned char>(p, res_div, max_width);
+    }
+
+    std::tuple<unsigned char*, int, int, int>
+    load_image_thumbnail(std::filesystem::path p, const int max_width, bool* used_exif_thumbnail) {
+        if (max_width <= 0)
+            throw std::invalid_argument("load_image_thumbnail: max_width must be positive");
+        return ::load_image_t<unsigned char>(std::move(p), -1, max_width, true, used_exif_thumbnail);
     }
 
     std::tuple<uint16_t*, int, int, int>

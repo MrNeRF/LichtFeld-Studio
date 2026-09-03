@@ -102,6 +102,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/startup_overlay.cpp
         gui/rml_menu_bar.cpp
         gui/rml_right_panel.cpp
+        gui/rml_bottom_dock.cpp
         gui/rml_shell_frame.cpp
         gui/rml_viewport_overlay.cpp
         gui/vram_hud_overlay.cpp
@@ -224,11 +225,17 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 # MSVC 14.44 ICEs (C1001 in msc1.cpp:1589) on the sequencer panel TUs under
 # /std:c++latest in both Debug (/Od /RTC1) and Release (/O2 /Ob2). Pin them to
 # /std:c++23 (not "latest") and add /bigobj for the heavy tensor + RmlUI + fmt instantiations.
+# The project lifecycle and GUI manager TUs exceed the COFF section limit in Debug and need /bigobj.
 if(MSVC)
     set_source_files_properties(
             ${CMAKE_CURRENT_SOURCE_DIR}/sequencer/rml_sequencer_panel.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/sequencer/rml_sequencer_panel_timeline.cpp
             PROPERTIES COMPILE_OPTIONS "/std:c++23;/bigobj"
+    )
+    set_source_files_properties(
+            ${CMAKE_CURRENT_SOURCE_DIR}/project/project_lifecycle.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/gui/gui_manager.cpp
+            PROPERTIES COMPILE_OPTIONS "/bigobj"
     )
 endif()
 
@@ -532,6 +539,8 @@ foreach (LOCALE_FILE ${LOCALE_FILES})
     get_filename_component(LOCALE_NAME ${LOCALE_FILE} NAME)
     configure_file(${LOCALE_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/locales/${LOCALE_NAME}" COPYONLY)
 endforeach ()
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locale_index.json
+        "${VISUALIZER_BUILD_RESOURCE_DIR}/locale_index.json" COPYONLY)
 
 set(LFS_VISUALIZER_DEV_RESOURCE_DEFINITIONS)
 if(LFS_DEV_IMPORT_SOURCE_RESOURCES AND NOT BUILD_PORTABLE)
@@ -610,6 +619,9 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locales/
         DESTINATION share/LichtFeld-Studio/locales
         FILES_MATCHING
         PATTERN "*.json"
+)
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locale_index.json
+        DESTINATION share/LichtFeld-Studio
 )
 
 # Add custom target for resource files (makes them show up in IDEs)

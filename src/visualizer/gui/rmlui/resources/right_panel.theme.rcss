@@ -72,7 +72,6 @@
     color: @{right_panel.tab_nav_disabled};
     opacity: 0.55;
 }
-
 #left-border {
     @{chrome.right_panel_edge_shape};
 }

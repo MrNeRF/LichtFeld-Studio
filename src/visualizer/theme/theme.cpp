@@ -11,7 +11,6 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
-#include <future>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <set>
@@ -57,6 +56,7 @@ namespace lfs::vis {
         std::size_t g_theme_presentation_revision = 0;
 
         void ensureThemesLoaded();
+        const Theme& activeTheme();
         void applyCurrentTheme(const Theme& theme, std::string_view theme_id);
         bool activateThemePreset(std::string_view theme_id);
         bool loadThemeFamilyVariant(Theme& theme,
@@ -66,8 +66,8 @@ namespace lfs::vis {
         void ensureInitialized() {
             if (!g_initialized) {
                 ensureThemesLoaded();
-                g_current_theme = darkTheme();
-                g_current_theme_id = "dark";
+                g_current_theme = activeTheme();
+                g_current_theme_id = loadThemePreferenceName();
                 g_initialized = true;
             }
         }
@@ -550,6 +550,7 @@ namespace lfs::vis {
             ThemePresetInfo info;
             std::filesystem::path path;
             std::filesystem::file_time_type mtime{};
+            bool loaded = false;
         };
 
         std::vector<ThemePresetRecord> g_theme_presets;
@@ -883,8 +884,10 @@ namespace lfs::vis {
                                                     lfs::core::path_to_utf8(preset.path))
                                         : loadThemeFamilyVariant(
                                               preset.theme, preset.path, preset.variant_mode);
-                if (!loaded)
+                if (!loaded) {
+                    preset.loaded = true;
                     return;
+                }
 
                 syncThemePresetName(preset);
                 preset.mtime = std::filesystem::last_write_time(preset.path);
@@ -892,10 +895,11 @@ namespace lfs::vis {
             } catch (...) {
                 preset.path.clear();
             }
+            preset.loaded = true;
         }
 
         bool hotReloadThemePreset(ThemePresetRecord& preset) {
-            if (preset.path.empty() || !std::filesystem::exists(preset.path))
+            if (!preset.loaded || preset.path.empty() || !std::filesystem::exists(preset.path))
                 return false;
 
             const auto mtime = std::filesystem::last_write_time(preset.path);
@@ -921,18 +925,28 @@ namespace lfs::vis {
         void loadThemesFromFiles() {
             g_theme_presets = loadThemeCatalogFromManifest();
 
-            std::vector<std::future<void>> jobs;
-            jobs.reserve(g_theme_presets.size());
-            for (auto& preset : g_theme_presets) {
-                jobs.emplace_back(std::async(std::launch::async, [&preset]() {
-                    loadThemePreset(preset);
-                }));
-            }
-            for (auto& job : jobs) {
-                job.get();
-            }
+            const std::string active_id = normalizeThemeIdImpl(UserPreferences::instance().themeName());
+            auto* active = findThemePreset(active_id);
+            if (!active)
+                active = findThemePreset("dark");
+            if (active)
+                loadThemePreset(*active);
 
             g_themes_loaded = true;
+        }
+
+        void loadAllThemePresets() {
+            ensureThemesLoaded();
+            for (auto& preset : g_theme_presets) {
+                if (!preset.loaded)
+                    loadThemePreset(preset);
+            }
+        }
+
+        void ensureThemePresetLoaded(std::string_view theme_id) {
+            ensureThemesLoaded();
+            if (auto* preset = findThemePreset(theme_id); preset && !preset->loaded)
+                loadThemePreset(*preset);
         }
 
         void ensureThemesLoaded() {
@@ -944,8 +958,19 @@ namespace lfs::vis {
     } // namespace
 
     namespace {
-        const Theme& themePreset(std::string_view theme_id) {
+        const Theme& activeTheme() {
             ensureThemesLoaded();
+            auto* preset = findThemePreset(loadThemePreferenceName());
+            if (preset == nullptr)
+                preset = findThemePreset("dark");
+            if (preset == nullptr)
+                return g_theme_presets.front().theme;
+            ensureThemePresetLoaded(preset->id);
+            return preset->theme;
+        }
+
+        const Theme& themePreset(std::string_view theme_id) {
+            ensureThemePresetLoaded(theme_id);
             const auto* preset = findThemePreset(theme_id);
             return preset ? preset->theme : g_theme_presets.front().theme;
         }
@@ -956,14 +981,14 @@ namespace lfs::vis {
     }
 
     void visitThemePresets(const ThemePresetVisitor& visitor) {
-        ensureThemesLoaded();
+        loadAllThemePresets();
         for (const auto& preset : g_theme_presets) {
             visitor(preset.id, preset.theme);
         }
     }
 
     void visitThemePresetInfos(const ThemePresetInfoVisitor& visitor) {
-        ensureThemesLoaded();
+        loadAllThemePresets();
         for (const auto& preset : g_theme_presets) {
             visitor(preset.info);
         }
@@ -979,7 +1004,7 @@ namespace lfs::vis {
         }
 
         bool activateThemePreset(std::string_view theme_id) {
-            ensureThemesLoaded();
+            ensureThemePresetLoaded(theme_id);
 
             const auto* preset = findThemePreset(theme_id);
             if (!preset)

@@ -7,6 +7,7 @@
 
   <div id="main-area">
     <div id="filmstrip">
+      <div class="filmstrip-virtual-spacer" data-style-height="filmstrip_top_spacer_height"></div>
       <div class="thumb-item"
            data-for="thumb : thumbs"
            data-class-selected="thumb.selected"
@@ -14,6 +15,7 @@
            data-style-decorator="thumb.decorator">
         <span class="thumb-index">{{ thumb.label }}</span>
       </div>
+      <div class="filmstrip-virtual-spacer" data-style-height="filmstrip_bottom_spacer_height"></div>
     </div>
     <div id="image-container">
       <div id="image-viewport">

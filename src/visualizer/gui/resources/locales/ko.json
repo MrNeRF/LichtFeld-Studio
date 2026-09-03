@@ -75,12 +75,12 @@
     "title": "시작하기",
     "description": "데이터셋 준비 방법과 LichtFeld Studio 사용법을 배워보세요:",
     "wiki_section": "위키 & 자주 묻는 질문",
+    "video_overview": "오늘날 LichtFeld Studio로 할 수 있는 모든 것",
     "video_automotive": "자동차 마케팅용 3DGS",
     "video_intro": "360 정방형 이미지 트레이닝",
     "video_latest": "LichtFeld v0.3.0 기능 개요",
     "video_reality_scan": "Reality Scan 데이터셋",
     "video_colmap": "COLMAP 튜토리얼",
-    "video_lichtfeld": "LichtFeld 튜토리얼",
     "video_masks": "마스크 튜토리얼"
   },
   "about": {
@@ -579,6 +579,8 @@
     "add_group": "그룹 추가",
     "add_group_ellipsis": "그룹 추가...",
     "new_group_name": "새 그룹",
+    "group_selected": "Group Selected",
+    "ungroup": "Ungroup",
     "export": "내보내기...",
     "delete": "삭제",
     "rename": "이름 변경",
@@ -2114,6 +2116,10 @@
         }
       }
     },
+    "computing": {
+      "title": "히스토그램 계산 중…",
+      "message": "데이터가 준비되는 즉시 분포가 표시됩니다."
+    },
     "delete_failed": {
       "title": "삭제 실패",
       "status": "삭제 실패: {message}",
@@ -2137,6 +2143,10 @@
       "metric_unavailable": {
         "title": "메트릭을 사용할 수 없습니다",
         "message": "선택한 메트릭을 결합된 가우시안 모델에서 읽을 수 없습니다."
+      },
+      "compute_failed": {
+        "title": "히스토그램 계산 실패",
+        "message": "히스토그램 계산에 실패했습니다: {error}"
       },
       "no_visible_values": {
         "title": "표시 가능한 값이 없습니다",

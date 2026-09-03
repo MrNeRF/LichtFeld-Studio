@@ -17,6 +17,7 @@ def _install_stub_modules(monkeypatch):
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
+        PanelSpace=SimpleNamespace(FLOATING="FLOATING", BOTTOM_DOCK="BOTTOM_DOCK"),
         add_hook=lambda panel, section, callback, position="append": hook_calls.append(
             (panel, section, callback, position)
         ),
@@ -25,6 +26,12 @@ def _install_stub_modules(monkeypatch):
         ),
         get_active_tool=lambda: "",
         get_active_submode=lambda: "",
+        get_panel=lambda _panel_id: SimpleNamespace(space="BOTTOM_DOCK"),
+        get_bottom_dock_active_tab=lambda: "",
+        set_bottom_dock_active_tab=lambda _panel_id: None,
+        set_sequencer_visible=lambda _visible: None,
+        is_sequencer_visible=lambda: False,
+        set_panel_enabled=lambda _panel_id, _enabled: None,
         rml=SimpleNamespace(get_document=lambda _name: None),
     )
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
@@ -307,6 +314,54 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "viewport_export_custom_height_str" in model.bound_binds
     assert "viewport_export_can_export" in model.bound_funcs
     assert "viewport_export_action" in model.bound_events
+
+
+def test_bottom_dock_toolbar_selection_and_dispatch_rules(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    spaces = {
+        module._SEQUENCER_PANEL_ID: lf_stub.ui.PanelSpace.BOTTOM_DOCK,
+        module._HISTOGRAM_PANEL_ID: lf_stub.ui.PanelSpace.BOTTOM_DOCK,
+    }
+    visible = {module._SEQUENCER_PANEL_ID: False, module._HISTOGRAM_PANEL_ID: False}
+    active = [""]
+    monkeypatch.setattr(
+        lf_stub.ui,
+        "get_panel",
+        lambda panel_id: SimpleNamespace(space=spaces[panel_id]),
+        raising=False,
+    )
+    monkeypatch.setattr(lf_stub.ui, "get_bottom_dock_active_tab", lambda: active[0], raising=False)
+
+    assert not module._bottom_dock_panel_selected(module._HISTOGRAM_PANEL_ID, False)
+    visible[module._HISTOGRAM_PANEL_ID] = True
+    assert not module._bottom_dock_panel_selected(module._HISTOGRAM_PANEL_ID, True)
+    active[0] = module._HISTOGRAM_PANEL_ID
+    assert module._bottom_dock_panel_selected(module._HISTOGRAM_PANEL_ID, True)
+
+    calls = []
+    set_visible = lambda value: calls.append(("visible", value))
+    set_active = lambda panel_id: (calls.append(("active", panel_id)), active.__setitem__(0, panel_id))
+    monkeypatch.setattr(lf_stub.ui, "set_bottom_dock_active_tab", set_active, raising=False)
+
+    active[0] = ""
+    module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, False, set_visible)
+    assert calls[-2:] == [("visible", True), ("active", module._HISTOGRAM_PANEL_ID)]
+
+    calls.clear()
+    active[0] = module._SEQUENCER_PANEL_ID
+    module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
+    assert calls == [("active", module._HISTOGRAM_PANEL_ID)]
+
+    calls.clear()
+    active[0] = module._HISTOGRAM_PANEL_ID
+    module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
+    assert calls == [("visible", False)]
+
+    spaces[module._HISTOGRAM_PANEL_ID] = lf_stub.ui.PanelSpace.FLOATING
+    calls.clear()
+    module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
+    assert calls == [("visible", False)]
 
 
 def test_toolbar_attach_handle_marks_model_dirty(toolbar_module):
@@ -1357,7 +1412,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert 'data-attr-min="selection_depth_near_slider_min"' in rml
     assert 'data-attr-max="selection_depth_far_slider_max"' in rml
     assert "../icon/depth-map.png" in rml
-    assert "../icon/contrast.png" in rml
+    assert "../icon/select-invert.png" in rml
     assert "../icon/scene/trash.png" in rml
     assert "../icon/scene/x.png" in rml
     assert rml.count('class="crop-roi-popover hidden"') == 2
@@ -1756,6 +1811,10 @@ def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
     resources = project_root / "src/visualizer/gui/rmlui/resources"
     right_panel_rcss = (resources / "right_panel.rcss").read_text(encoding="utf-8")
     right_panel_theme = (resources / "right_panel.theme.rcss").read_text(encoding="utf-8")
+    right_panel_rml = (resources / "right_panel.rml").read_text(encoding="utf-8")
+    right_panel_cpp = (
+        project_root / "src/visualizer/gui/rml_right_panel.cpp"
+    ).read_text(encoding="utf-8")
     shell_theme = (resources / "shell.theme.rcss").read_text(encoding="utf-8")
     panel_host_theme = (resources / "panel_host.theme.rcss").read_text(encoding="utf-8")
     scene_tree_rcss = (resources / "scene_tree.rcss").read_text(encoding="utf-8")
@@ -1772,6 +1831,13 @@ def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
     assert "border-bottom-width: 2dp;" in tab_rule
     assert "transition: none;" in tab_rule
     assert "0.15s" not in tab_rule
+
+    assert right_panel_rml.index('href="panel_tabs.rcss"') < right_panel_rml.index(
+        'href="right_panel.rcss"'
+    )
+    assert right_panel_cpp.index('loadBaseRCSS("rmlui/panel_tabs.rcss")') < (
+        right_panel_cpp.index('loadBaseRCSS("rmlui/right_panel.rcss")')
+    )
 
     for token in (
         "right_panel.tab_border",
@@ -1925,7 +1991,7 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     assert preferences["tooltip_text"] == "Preferences"
     assert preferences["selected"] is True
     assert extra_by_id["util-viewport-export"]["action"] == "toggle_viewport_export"
-    assert extra_by_id["util-viewport-export"]["icon_src"] == "../icon/sequencer/export.png"
+    assert extra_by_id["util-viewport-export"]["icon_src"] == "../icon/viewport-export.png"
     assert extra_by_id["util-viewport-export"]["tooltip_text"] == "Export"
     assert extra_by_id["util-viewport-export"]["selected"] is False
     assert extra_by_id["util-asset-manager"]["action"] == "toggle_panel"

@@ -706,6 +706,8 @@ namespace lfs::python {
         void (*set_input)(void* host, const void* input);
         void (*set_forced_height)(void* host, float h);
         bool (*needs_animation)(void* host);
+        bool (*needs_immediate_animation)(void* host);
+        std::string (*animation_demand_description)(void* host);
         // Returns true and writes delay when the host has a finite scheduled
         // update delay > 0 seconds; false for continuous demand or idle.
         bool (*next_scheduled_update_delay)(void* host, double* out_seconds);

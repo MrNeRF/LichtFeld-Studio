@@ -9,6 +9,8 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <memory>
+#include <mutex>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -38,6 +40,8 @@ static constexpr uint32_t MAX_TIMESTAMP_QUERY_COUNT =
 namespace {
     constexpr std::string_view kSlangShaderBytecodeScope = "vksplat.shaders.slang.spirv";
     constexpr std::string_view kSlangShaderRootScope = "vksplat.shaders.slang";
+    std::mutex g_spirv_cache_mutex;
+    std::unordered_map<std::string, std::shared_ptr<const std::vector<uint32_t>>> g_spirv_cache;
 
     [[nodiscard]] bool isGeneratedSlangSpirvPath(const std::string& spirv_path) {
         return spirv_path.find("/generated/") != std::string::npos ||
@@ -175,6 +179,12 @@ std::vector<uint32_t> loadSpirv(std::string spirv_path) {
     }
 #endif
 
+    {
+        const std::lock_guard lock(g_spirv_cache_mutex);
+        if (const auto it = g_spirv_cache.find(spirv_path); it != g_spirv_cache.end())
+            return *it->second;
+    }
+
     std::ifstream file(spirv_path, std::ios::binary | std::ios::ate);
     if (!file) {
         lfs::rendering::throw_vk_setup(
@@ -215,7 +225,16 @@ std::vector<uint32_t> loadSpirv(std::string spirv_path) {
             LFS_SOURCE_SITE_CURRENT());
     }
 
+    {
+        const std::lock_guard lock(g_spirv_cache_mutex);
+        g_spirv_cache[spirv_path] = std::make_shared<const std::vector<uint32_t>>(spirv_code);
+    }
     return spirv_code;
+}
+
+void preloadSpirvFiles(const std::vector<std::string>& paths) {
+    for (const auto& path : paths)
+        (void)loadSpirv(path);
 }
 
 VulkanGSPipeline::VulkanGSPipeline() : instance(VK_NULL_HANDLE),
@@ -578,6 +597,7 @@ void VulkanGSPipeline::cleanup() {
         for (_ComputePipeline* pipeline : all_compute_pipelines)
             destroyComputePipeline(*pipeline);
         all_compute_pipelines.clear();
+        pending_compute_pipelines.clear();
 
         if (fence != VK_NULL_HANDLE) {
             vkDestroyFence(device, fence, nullptr);
@@ -1911,6 +1931,7 @@ void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline,
                                              const uint32_t expected_workgroup_size_x) {
 
     pipeline.diagnostic_name = spirvDiagnosticName(spirv_path);
+    all_compute_pipelines.push_back(&pipeline);
     const auto spirv_code = loadSpirv(spirv_path);
     if (expected_workgroup_size_x != 0 &&
         !spirvHasComputeWorkgroupSize(spirv_code, expected_workgroup_size_x, 1u, 1u)) {
@@ -1931,31 +1952,28 @@ void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline,
     }
     createComputeDescriptorSetLayout(pipeline);
 
-    // Create push constant range for uniforms
-    VkPushConstantRange push_constant_range = {};
+    VkPushConstantRange push_constant_range{};
     push_constant_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     push_constant_range.offset = 0;
-    push_constant_range.size = (uint32_t)MAX_UNIFORM_SIZE;
+    push_constant_range.size = static_cast<uint32_t>(MAX_UNIFORM_SIZE);
 
-    VkPipelineLayoutCreateInfo pipeline_layout_info = {};
+    VkPipelineLayoutCreateInfo pipeline_layout_info{};
     pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipeline_layout_info.setLayoutCount = 1;
     pipeline_layout_info.pSetLayouts = &pipeline.descriptor_set_layout;
     pipeline_layout_info.pushConstantRangeCount = 1;
     pipeline_layout_info.pPushConstantRanges = &push_constant_range;
 
-    const VkResult layout_result = vkCreatePipelineLayout(device, &pipeline_layout_info, nullptr, &pipeline.pipeline_layout);
+    const VkResult layout_result = vkCreatePipelineLayout(
+        device, &pipeline_layout_info, nullptr, &pipeline.pipeline_layout);
     if (layout_result != VK_SUCCESS) {
         lfs::rendering::throw_vk_result(
             layout_result,
             "vkCreatePipelineLayout",
-            std::format(
-                "VkSplat compute pipeline-layout creation failed (pipeline='{}', descriptor_layout={:#x}, push_constant_bytes={}, result={}({}))",
-                pipeline.diagnostic_name,
-                lfs::rendering::vkHandleValue(pipeline.descriptor_set_layout),
-                push_constant_range.size,
-                lfs::rendering::vkResultToString(layout_result),
-                static_cast<int>(layout_result)),
+            std::format("VkSplat compute pipeline-layout creation failed (pipeline='{}', result={}({}))",
+                        pipeline.diagnostic_name,
+                        lfs::rendering::vkResultToString(layout_result),
+                        static_cast<int>(layout_result)),
             LFS_SOURCE_SITE_CURRENT());
     }
     if (debug_name_writer_.enabled()) {
@@ -1964,48 +1982,68 @@ void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline,
                            std::format("vksplat.{}.pipeline_layout", pipeline.diagnostic_name));
     }
 
-    VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT req = {};
-    req.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT;
-    req.requiredSubgroupSize = SUBGROUP_SIZE; // 32
+    pipeline.compatible_subgroup_size = compatible_subgroup_size;
+    pipeline.expected_workgroup_size_x = expected_workgroup_size_x;
+    pending_compute_pipelines.push_back(&pipeline);
+}
 
-    VkPipelineShaderStageCreateInfo compute_shader_stage_info = {};
-    compute_shader_stage_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    compute_shader_stage_info.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    compute_shader_stage_info.module = pipeline.shader;
-    compute_shader_stage_info.pName = "main";
-    if (compatible_subgroup_size && deviceInfo.subgroupSize != SUBGROUP_SIZE)
-        compute_shader_stage_info.pNext = &req;
+void VulkanGSPipeline::createPendingComputePipelines() {
+    if (pending_compute_pipelines.empty())
+        return;
 
-    VkComputePipelineCreateInfo pipeline_info = {};
-    pipeline_info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    pipeline_info.layout = pipeline.pipeline_layout;
-    pipeline_info.stage = compute_shader_stage_info;
+    std::vector<VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT> subgroup_infos;
+    subgroup_infos.reserve(pending_compute_pipelines.size());
+    std::vector<VkPipelineShaderStageCreateInfo> stages;
+    stages.reserve(pending_compute_pipelines.size());
+    std::vector<VkComputePipelineCreateInfo> infos;
+    infos.reserve(pending_compute_pipelines.size());
+    std::vector<VkPipeline> pipelines(pending_compute_pipelines.size(), VK_NULL_HANDLE);
 
-    const VkResult pipeline_result =
-        vkCreateComputePipelines(device, pipeline_cache, 1, &pipeline_info, nullptr, &pipeline.pipeline);
-    if (pipeline_result != VK_SUCCESS) {
+    for (auto* const pipeline : pending_compute_pipelines) {
+        VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT subgroup_info{};
+        subgroup_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT;
+        subgroup_info.requiredSubgroupSize = SUBGROUP_SIZE;
+        subgroup_infos.push_back(subgroup_info);
+
+        VkPipelineShaderStageCreateInfo stage{};
+        stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        stage.module = pipeline->shader;
+        stage.pName = "main";
+        if (pipeline->compatible_subgroup_size && deviceInfo.subgroupSize != SUBGROUP_SIZE)
+            stage.pNext = &subgroup_infos.back();
+        stages.push_back(stage);
+
+        VkComputePipelineCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        info.layout = pipeline->pipeline_layout;
+        info.stage = stages.back();
+        infos.push_back(info);
+    }
+
+    const VkResult result = vkCreateComputePipelines(
+        device, pipeline_cache, static_cast<uint32_t>(infos.size()), infos.data(), nullptr, pipelines.data());
+    if (result != VK_SUCCESS) {
         lfs::rendering::throw_vk_result(
-            pipeline_result,
+            result,
             "vkCreateComputePipelines",
-            std::format(
-                "VkSplat compute pipeline creation failed (pipeline='{}', layout={:#x}, shader={:#x}, required_subgroup={}, device_subgroup={}, device_shared_bytes={}, result={}({}))",
-                pipeline.diagnostic_name,
-                lfs::rendering::vkHandleValue(pipeline.pipeline_layout),
-                lfs::rendering::vkHandleValue(pipeline.shader),
-                compatible_subgroup_size ? SUBGROUP_SIZE : 0,
-                deviceInfo.subgroupSize,
-                deviceInfo.sharedSize,
-                lfs::rendering::vkResultToString(pipeline_result),
-                static_cast<int>(pipeline_result)),
+            std::format("VkSplat batched compute pipeline creation failed (count={}, result={}({}))",
+                        infos.size(),
+                        lfs::rendering::vkResultToString(result),
+                        static_cast<int>(result)),
             LFS_SOURCE_SITE_CURRENT());
     }
-    if (debug_name_writer_.enabled()) {
-        setDebugObjectName(VK_OBJECT_TYPE_PIPELINE,
-                           pipeline.pipeline,
-                           std::format("vksplat.{}.pipeline", pipeline.diagnostic_name));
-    }
 
-    all_compute_pipelines.push_back(&pipeline);
+    for (std::size_t i = 0; i < pending_compute_pipelines.size(); ++i) {
+        auto& pipeline = *pending_compute_pipelines[i];
+        pipeline.pipeline = pipelines[i];
+        if (debug_name_writer_.enabled()) {
+            setDebugObjectName(VK_OBJECT_TYPE_PIPELINE,
+                               pipeline.pipeline,
+                               std::format("vksplat.{}.pipeline", pipeline.diagnostic_name));
+        }
+    }
+    pending_compute_pipelines.clear();
 }
 
 void VulkanGSPipeline::emitPlannedBufferBarriers(

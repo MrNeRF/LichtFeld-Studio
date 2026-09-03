@@ -6,14 +6,12 @@ import hashlib
 import json
 import logging
 import os
-import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from .environment import value as environment_value
-from urllib.parse import quote
 
 from .compat import (
     LICHTFELD_VERSION,
@@ -291,6 +289,8 @@ class RegistryClient:
 
     def _fetch_json(self, url: str) -> Dict:
         """Fetch JSON from URL."""
+        import urllib.request
+
         req = urllib.request.Request(url, headers={"User-Agent": "LichtFeld-PluginManager/1.0"})
         with urlopen(req, timeout=HTTP_TIMEOUT_SEC) as resp:
             return json.loads(resp.read().decode())
@@ -311,6 +311,8 @@ class RegistryClient:
         return self._cache_dir / "plugins" / safe_namespace / f"{safe_name}.json"
 
     def _plugin_detail_urls(self, namespace: str, name: str) -> Tuple[str, ...]:
+        from urllib.parse import quote
+
         namespace_q = quote(namespace, safe="")
         name_q = quote(name, safe="")
         full_id_q = quote(f"{namespace}:{name}", safe="")
