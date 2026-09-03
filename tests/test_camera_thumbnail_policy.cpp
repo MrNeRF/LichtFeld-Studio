@@ -5,6 +5,7 @@
 #include "gui/camera_thumbnail_policy.hpp"
 #include "gui/frustum_overlay_key.hpp"
 
+#include <algorithm>
 #include <gtest/gtest.h>
 #include <optional>
 #include <vector>
@@ -24,6 +25,17 @@ TEST(CameraThumbnailPolicyTest, RequestsAllCamerasSelectedFirst) {
     const auto requested = lfs::vis::gui::cameraThumbnailRequestOrder(all, visible, selected);
 
     EXPECT_EQ(requested, (std::vector<int>{12, 13, 10, 11}));
+}
+
+TEST(CameraThumbnailPolicyTest, NullCameraPlaceholderIsNotRequested) {
+    const std::vector<int> all = {10, -1, 11};
+    const std::vector<int> visible;
+    const std::vector<int> selected;
+
+    const auto requested = lfs::vis::gui::cameraThumbnailRequestOrder(all, visible, selected);
+
+    EXPECT_EQ(requested, (std::vector<int>{10, 11}));
+    EXPECT_EQ(std::count(requested.begin(), requested.end(), -1), 0);
 }
 
 TEST(CameraThumbnailPolicyTest, ScrollingReprioritizesWithoutDroppingCameras) {

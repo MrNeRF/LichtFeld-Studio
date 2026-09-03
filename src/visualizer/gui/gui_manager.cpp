@@ -2464,6 +2464,7 @@ namespace lfs::vis::gui {
 
             std::vector<std::shared_ptr<const lfs::core::Camera>> cameras;
             std::vector<int> uids;
+            std::vector<int> all_uid_list;
             std::vector<glm::mat4> models;
             std::vector<glm::vec3> positions;
             std::vector<std::uint8_t> valid_cameras;
@@ -2481,6 +2482,7 @@ namespace lfs::vis::gui {
             std::vector<glm::vec4> camera_colors;
             std::vector<std::uint32_t> instance_camera_indices;
             std::vector<std::uint32_t> textured_camera_indices;
+            bool has_equirectangular_lines = false;
             std::shared_ptr<VulkanViewportFrustumOverlayData> data =
                 std::make_shared<VulkanViewportFrustumOverlayData>();
             std::chrono::steady_clock::time_point last_rebuild_log_at{};
@@ -2670,6 +2672,8 @@ namespace lfs::vis::gui {
                 const auto disabled_uids = scene.getTrainingDisabledCameraUids();
                 cache.cameras = cameras;
                 cache.uids.resize(cameras.size(), -1);
+                cache.all_uid_list.clear();
+                cache.all_uid_list.reserve(cameras.size());
                 cache.models.resize(cameras.size(), glm::mat4(1.0f));
                 cache.positions.resize(cameras.size(), glm::vec3(0.0f));
                 cache.valid_cameras.assign(cameras.size(), 0);
@@ -2682,6 +2686,7 @@ namespace lfs::vis::gui {
                     if (!camera || camera->uid() < 0)
                         continue;
                     cache.uids[i] = camera->uid();
+                    cache.all_uid_list.push_back(cache.uids[i]);
                     cache.equirectangular_cameras[i] =
                         camera->camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
                     cache.validation_cameras[i] = camera->image_name().find("test") != std::string::npos;
@@ -2718,11 +2723,10 @@ namespace lfs::vis::gui {
                     cache.emphasized_cameras.resize(cache.uids.size(), 0);
                 for (size_t i = 0; i < cache.uids.size(); ++i)
                     cache.emphasized_cameras[i] = selected_uids.contains(cache.uids[i]);
-                const std::vector<int> all_uid_list = cache.uids;
                 const std::vector<int> visible_uid_list(visible_uids.begin(), visible_uids.end());
                 const std::vector<int> selected_uid_list(selected_uids.begin(), selected_uids.end());
                 const auto thumbnail_order = cameraThumbnailRequestOrder(
-                    all_uid_list, visible_uid_list, selected_uid_list);
+                    cache.all_uid_list, visible_uid_list, selected_uid_list);
                 std::unordered_map<int, std::shared_ptr<const lfs::core::Camera>> cameras_by_uid;
                 cameras_by_uid.reserve(cache.cameras.size());
                 for (const auto& camera : cache.cameras) {
@@ -2803,7 +2807,7 @@ namespace lfs::vis::gui {
                                        cache.key.thumbnail_atlas_generation != thumbnail_atlas_generation;
             const bool geometry_changed = !cache.valid ||
                                           frustumOverlayNeedsRebuild(previous_geometry_key, geometry_key) ||
-                                          (loss_changed && settings.equirectangular);
+                                          (loss_changed && cache.has_equirectangular_lines);
             const bool output_rebuild = geometry_changed || loss_changed || atlas_changed;
             if (output_rebuild) {
                 const auto now = std::chrono::steady_clock::now();
@@ -2833,7 +2837,7 @@ namespace lfs::vis::gui {
                 cache.data->frustum_batches.clear();
                 cache.instance_camera_indices.clear();
                 cache.textured_camera_indices.clear();
-                cache.data->overlay_triangles.reserve(cache.data->overlay_triangles.size());
+                cache.has_equirectangular_lines = false;
                 cache.data->textured_overlays.reserve(camera_count * panel_count);
                 cache.data->frustum_instances.reserve(camera_count * panel_count);
                 cache.data->frustum_batches.reserve(panel_count);
@@ -2892,6 +2896,7 @@ namespace lfs::vis::gui {
                         if (cache.equirectangular_cameras[camera_index]) {
                             appendEquirectangularCameraFrustum(
                                 line_params, panel, settings, cache.models[camera_index], color);
+                            cache.has_equirectangular_lines = true;
                             continue;
                         }
 
