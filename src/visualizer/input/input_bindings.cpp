@@ -1533,6 +1533,19 @@ namespace lfs::vis::input {
         return result;
     }
 
+    std::optional<SelectionOp> selectionOpForModifiers(
+        const InputBindings& bindings,
+        const ToolMode mode,
+        const int modifiers,
+        const std::vector<int>& held_keys) {
+        switch (bindings.getActionForDrag(mode, MouseButton::LEFT, modifiers, held_keys)) {
+        case Action::SELECTION_ADD: return SelectionOp::Add;
+        case Action::SELECTION_REMOVE: return SelectionOp::Remove;
+        case Action::SELECTION_INTERSECT: return SelectionOp::Intersect;
+        default: return std::nullopt;
+        }
+    }
+
     void InputBindings::startCapture(ToolMode mode, Action action) {
         capture_state_ = CaptureState{};
         capture_state_.active = true;

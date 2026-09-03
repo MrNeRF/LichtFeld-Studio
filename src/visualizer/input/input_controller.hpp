@@ -143,6 +143,9 @@ namespace lfs::vis {
         }
         [[nodiscard]] bool hasViewportKeyboardFocus() const;
         [[nodiscard]] bool isViewportPoint(double x, double y) const { return isInViewport(x, y); }
+        [[nodiscard]] int currentModifierKeys() const { return getModifierKeys(); }
+        [[nodiscard]] std::optional<input::SelectionOp> selectionDragOperation() const;
+        [[nodiscard]] bool hasViewportCursorOverride() const;
         void setInputRouter(input::InputRouter* router) { input_router_ = router; }
 
         // Node rectangle selection state (for rendering)
@@ -301,6 +304,7 @@ namespace lfs::vis {
         // Used to resolve chord-bound scroll/drag triggers, e.g. R+Scroll for
         // Camera Roll. Newest held key wins when multiple chords are possible.
         std::vector<int> held_keys_;
+        std::optional<input::SelectionOp> selection_drag_op_;
         bool keys_movement_[6] = {false, false, false, false, false, false}; // fwd, left, back, right, up, down
 
         // Cached movement key bindings, indexed by ToolMode. Refreshed on
