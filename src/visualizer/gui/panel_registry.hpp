@@ -167,6 +167,11 @@ namespace lfs::vis::gui {
             (void)ctx;
             return true;
         }
+        // Poll-gated panels can publish whether their last poll allows them to
+        // participate in animation demand. The registry updates this for both
+        // fresh and cached poll results.
+        virtual void setPollVisibility(bool visible) { (void)visible; }
+        virtual bool isVisibleForAnimation() const { return true; }
         virtual void on_visibility_changed(bool visible) { (void)visible; }
         virtual void preload(const PanelDrawContext& ctx) { (void)ctx; }
         virtual PanelRenderCapabilities renderCapabilities() const { return {}; }
