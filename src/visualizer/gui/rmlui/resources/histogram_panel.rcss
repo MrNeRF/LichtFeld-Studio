@@ -16,30 +16,6 @@
     min-height: 0;
 }
 
-.dock-drag-handle {
-    flex: 0 0 auto;
-    height: 8dp;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding-top: 3dp;
-}
-
-.dock-drag-handle-bar {
-    width: 36dp;
-    height: 3dp;
-    background-color: rgba(108, 112, 134, 160);
-    border-radius: 2dp;
-}
-
-.dock-drag-handle:hover .dock-drag-handle-bar {
-    background-color: rgba(137, 180, 250, 220);
-}
-
-.dock-drag-handle.hidden {
-    display: none;
-}
-
 #histogram-shell {
     flex: 1;
     padding: 8dp 10dp 12dp;

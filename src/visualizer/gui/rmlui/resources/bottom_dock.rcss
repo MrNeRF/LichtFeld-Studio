@@ -6,3 +6,21 @@ body {
     font-size: 12dp;
     nav: auto;
 }
+
+#dock-grip {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 8dp;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+
+.dock-grip-bar {
+    width: 36dp;
+    height: 3dp;
+    border-radius: 2dp;
+}

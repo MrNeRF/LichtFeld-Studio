@@ -4,9 +4,6 @@
   <link type="text/rcss" href="histogram_panel.rcss"/>
 </head>
 <body template="docked-panel" data-model="histogram_panel">
-  <div class="dock-drag-handle" data-class-hidden="is_floating">
-    <div class="dock-drag-handle-bar"></div>
-  </div>
   <div id="histogram-shell" data-class-is-floating="is_floating">
     <div id="histogram-floating-header" class="hidden" data-class-hidden="!is_floating">
       <span id="histogram-floating-title">{{ panel_label }}</span>

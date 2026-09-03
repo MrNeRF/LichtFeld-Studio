@@ -4,6 +4,9 @@
     <link type="text/rcss" href="panel_tabs.rcss"/>
 </head>
 <body id="bottom-dock-body" data-model="bottom_dock_tabs">
+    <div id="dock-grip">
+        <div class="dock-grip-bar"></div>
+    </div>
     <div id="tab-bar" data-class-with-scroll="tabs_overflow">
         <button id="tab-scroll-left" class="tab-nav"
                 data-class-hidden="!tabs_overflow"
