@@ -7567,18 +7567,13 @@ namespace lfs::vis {
                 }
             }
             auto empty_output = Tensor::empty({num_splats}, Device::CUDA, DataType::Bool);
+            empty_output.set_stream(render_stream_);
             if (const cudaError_t status = cudaMemsetAsync(empty_output.ptr<bool>(),
                                                            0,
                                                            num_splats * sizeof(bool),
                                                            render_stream_);
                 status != cudaSuccess) {
                 return std::unexpected(std::format("VkSplat polygon empty-output clear failed: {} ({})",
-                                                   cudaGetErrorName(status),
-                                                   cudaGetErrorString(status)));
-            }
-            if (const cudaError_t status = cudaStreamSynchronize(render_stream_);
-                status != cudaSuccess) {
-                return std::unexpected(std::format("VkSplat polygon empty-output sync failed: {} ({})",
                                                    cudaGetErrorName(status),
                                                    cudaGetErrorString(status)));
             }
@@ -7589,7 +7584,7 @@ namespace lfs::vis {
         }
 
         {
-            LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.ensureInitialized");
+            LOG_TIMER_THRESHOLD("VksplatViewportRenderer::buildSelectionMask.ensure_initialized", 1.0);
             if (auto ok = ensureInitialized(context); !ok) {
                 return std::unexpected(ok.error());
             }
@@ -7598,7 +7593,7 @@ namespace lfs::vis {
 
         std::size_t ring_slot = 0;
         {
-            LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.wait_ring_slot");
+            LOG_TIMER_THRESHOLD("VksplatViewportRenderer::buildSelectionMask.wait_ring_slot", 1.0);
             ring_slot = acquireRingSlot();
             if (auto ok = waitForRingSlot(ring_slot, "selection query"); !ok) {
                 return std::unexpected(legacyErrorString(ok.error()));
@@ -7606,7 +7601,7 @@ namespace lfs::vis {
         }
 
         auto input_binding = [&] {
-            LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.prepareInputs");
+            LOG_TIMER_THRESHOLD("VksplatViewportRenderer::buildSelectionMask.prepare_inputs", 1.0);
             return prepareInputs(context, splat_data, ring_slot, force_input_upload, 0);
         }();
         if (!input_binding) {
@@ -7677,7 +7672,7 @@ namespace lfs::vis {
         const auto previous_region_bytes = slot.region_bytes;
 
         {
-            LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.ensure_query_buffer");
+            LOG_TIMER_THRESHOLD("VksplatViewportRenderer::buildSelectionMask.ensure_query_buffer", 1.0);
             if (query_buffer_reallocated) {
                 LOG_PERF("VksplatViewportRenderer::buildSelectionMask.query_buffer_reallocate "
                          "required={} previous={}",
@@ -7743,6 +7738,10 @@ namespace lfs::vis {
         if (!output_storage) {
             return std::unexpected("VkSplat selection output tensor is not Vulkan external storage");
         }
+        // The external tensor has no home stream by default. Stamp the stream
+        // before dispatch so consumers can bridge from the Vulkan/CUDA query
+        // work without synchronizing this stream on the host.
+        slot.output_tensor.set_stream(render_stream_);
         const auto output_view = makeBorrowedBufferView(output_storage->vkBuffer(),
                                                         output_storage->vkBufferSize(),
                                                         output_storage->bytes(),
@@ -7818,7 +7817,7 @@ namespace lfs::vis {
 
         const cudaStream_t selection_query_stream = render_stream_;
         {
-            LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.upload");
+            LOG_TIMER_THRESHOLD("VksplatViewportRenderer::buildSelectionMask.upload", 1.0);
             if (transform_indices_enabled && !slot.transform_indices_uploaded) {
                 if (auto ok = copyTensorToBlockRegion(slot.block,
                                                       slot.copy_keep_alive,
@@ -8022,15 +8021,15 @@ namespace lfs::vis {
         }
 
         {
-            LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.dispatch.cuda_wait");
+            LOG_TIMER_THRESHOLD("VksplatViewportRenderer::buildSelectionMask.dispatch.cuda_wait", 1.0);
             if (!selection_query_timeline_.cuda_semaphore.cudaWait(selection_query_complete_value,
                                                                    selection_query_stream)) {
                 return std::unexpected(std::format("VkSplat selection query completion wait failed: {}",
                                                    selection_query_timeline_.cuda_semaphore.lastError()));
             }
         }
-        {
-            LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.dispatch.cuda_sync");
+        if (ring_mode) {
+            LOG_TIMER_THRESHOLD("VksplatViewportRenderer::buildSelectionMask.dispatch.cuda_sync", 1.0);
             if (const cudaError_t status = cudaStreamSynchronize(selection_query_stream);
                 status != cudaSuccess) {
                 return std::unexpected(std::format("VkSplat selection query sync failed: {} ({})",
@@ -8040,7 +8039,7 @@ namespace lfs::vis {
         }
 
         if (ring_mode) {
-            LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.ring_pick");
+            LOG_TIMER_THRESHOLD("VksplatViewportRenderer::buildSelectionMask.ring_pick", 1.0);
             std::array<std::uint32_t, 2> ring_pick{kRingPickNoHit, kRingPickNoHit};
             const auto* const ring_pick_src =
                 static_cast<const std::uint8_t*>(exportableDevicePtr(slot.block)) +
@@ -8089,16 +8088,10 @@ namespace lfs::vis {
                     }
                 }
             }
-            if (const cudaError_t status = cudaStreamSynchronize(selection_query_stream);
-                status != cudaSuccess) {
-                return std::unexpected(std::format("VkSplat ring-pick output sync failed: {} ({})",
-                                                   cudaGetErrorName(status),
-                                                   cudaGetErrorString(status)));
-            }
         }
 
         {
-            LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.output_tensor");
+            LOG_TIMER_THRESHOLD("VksplatViewportRenderer::buildSelectionMask.output_tensor", 1.0);
             if (!slot.output_tensor.is_valid() || slot.output_tensor.numel() != num_splats) {
                 return std::unexpected("VkSplat selection output tensor became invalid after dispatch");
             }
