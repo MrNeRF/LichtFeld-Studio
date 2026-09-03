@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <expected>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -71,6 +72,9 @@ namespace lfs::vis {
 
         // Training control
         bool startTraining();
+        // Wait for the off-thread initialization phase. Callers must not be the
+        // viewer thread; the GUI start path intentionally returns in Starting.
+        [[nodiscard]] lfs::Result<void> waitForInitialization();
         void pauseTraining();
         void resumeTraining();
         void stopTraining();
@@ -210,6 +214,7 @@ namespace lfs::vis {
             bool success = false;
             bool user_stopped = false;
             bool resource_exhausted = false;
+            bool initialization_failure = false;
             FinishReason reason = FinishReason::None;
             std::optional<std::string> error;
             std::optional<lfs::Error> typed_error;
@@ -221,8 +226,11 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
         friend class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
 
-        // Training thread function
+        // Training initialization and execution thread functions
+        void trainingInitializationThreadFunc(std::stop_token stop_token);
         void trainingThreadFunc(std::stop_token stop_token);
+        [[nodiscard]] lfs::Result<void>
+        initializeTrainingOnWorker(std::stop_token stop_token);
         void launchTrainingThread();
         void completionReaperLoop(std::stop_token stop_token);
         void finishTrainingThreadJoin();
@@ -235,7 +243,7 @@ namespace lfs::vis {
         void setupEventHandlers();
         void setupStateMachineCallbacks();
 
-        [[nodiscard]] lfs::core::SplatTensorAllocator createTrainingSplatTensorAllocator(
+        [[nodiscard]] lfs::Result<lfs::core::SplatTensorAllocator> createTrainingSplatTensorAllocator(
             const lfs::core::param::TrainingParameters& params,
             std::size_t min_capacity = 0);
 
@@ -253,10 +261,21 @@ namespace lfs::vis {
 
         // Member variables
         std::unique_ptr<lfs::training::Trainer> trainer_;
+        std::unique_ptr<std::jthread> initialization_thread_;
         std::unique_ptr<std::jthread> training_thread_;
         std::optional<std::stop_source> training_stop_source_;
         std::mutex training_thread_mutex_;
         std::condition_variable training_thread_cv_;
+        bool initialization_thread_done_ = true;
+        std::mutex initialization_mutex_;
+        std::condition_variable initialization_cv_;
+        bool initialization_complete_ = true;
+        std::optional<lfs::Error> initialization_error_;
+        std::mutex initialization_gate_mutex_;
+        std::condition_variable initialization_gate_cv_;
+        bool initialization_gate_open_ = true;
+        bool initialization_main_step_failed_ = false;
+        std::atomic<bool> initialization_pause_requested_{false};
         std::jthread completion_reaper_;
         VisualizerImpl* viewer_ = nullptr;
         core::Scene* scene_ = nullptr;

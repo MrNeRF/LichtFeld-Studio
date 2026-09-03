@@ -2412,10 +2412,20 @@ namespace lfs::app {
                     });
                 },
             .start_training =
-                [viewer]() {
-                    return post_and_wait(viewer, [viewer]() {
+                [viewer, viewer_impl]() {
+                    // The GUI hop only acknowledges Starting. MCP keeps its
+                    // historical start contract by waiting for worker-side
+                    // initialization before returning to the caller.
+                    auto result = post_and_wait(viewer, [viewer]() {
                         return viewer->startTraining();
                     });
+                    if (result) {
+                        if (auto initialized = viewer_impl->getTrainerManager()->waitForInitialization();
+                            !initialized) {
+                            result = std::unexpected(lfs::format_for_developer(initialized.error()));
+                        }
+                    }
+                    return result;
                 },
             .render_capture =
                 [viewer](std::optional<int> camera_index, int width, int height) {

@@ -1824,6 +1824,8 @@ namespace lfs::vis {
 
         // Training started - switch to splat rendering without hijacking scene selection
         state::TrainingStarted::when([this, sync_viewer_mip_filter_with_training](const auto&) {
+            // Keep the completion handoff metadata-only. Rendering consumes the
+            // dirty bit on the next frame; no viewport teardown/re-setup occurs here.
             sync_viewer_mip_filter_with_training();
 
             ui::PointCloudModeChanged{
@@ -2501,7 +2503,7 @@ namespace lfs::vis {
         if (gui_manager_)
             gui_manager_->sequencerUI().tickPlaybackBeforeSceneRender();
 
-        const bool is_training = trainer_manager_ && trainer_manager_->isRunning();
+        const bool is_training = trainer_manager_ && trainer_manager_->isTrainingActive();
         const FrameDemand frame_demand = collectFrameDemand(viewport_export_locked, store_dirty);
         if (gui_frame_rendered_ && !frame_demand.shouldRenderFrame()) {
             LOG_PERF("loop_idle skip_gui_render=true needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} window_resize_paint_pending={} viewport_resize_deferring={} viewport_resize_settle_ready={} wake_reason={} wake_timeout_source={}",

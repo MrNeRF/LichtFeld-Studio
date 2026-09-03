@@ -18,6 +18,11 @@
       <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reset" data-if="show_reset_ready" data-event-click="action('reset')">{{label_reset}}</button>
       <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_clear" data-event-click="action('clear')">{{label_clear}}</button>
     </div>
+    <div data-if="show_ctrl_starting">
+      <span class="status-text status-muted">{{label_status_starting}}</span>
+      <button class="btn btn--warning btn--full" data-tooltip="training.tooltip.btn_pause" data-event-click="action('pause')">{{label_pause}}</button>
+      <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_stop" data-event-click="action('stop')">{{label_stop}}</button>
+    </div>
     <div data-if="show_ctrl_running">
       <button class="btn btn--warning btn--full" data-tooltip="training.tooltip.btn_pause" data-event-click="action('pause')">{{label_pause}}</button>
     </div>

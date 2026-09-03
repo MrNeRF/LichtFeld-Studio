@@ -22,7 +22,7 @@ except Exception:
         return fallback
 
 
-_TOOLBAR_HIDDEN_STATES = ("running", "paused", "stopping", "completed", "finished", "stopped")
+_TOOLBAR_HIDDEN_STATES = ("starting", "running", "paused", "stopping", "completed", "finished", "stopped")
 _RML_PATH_SAFE_CHARS = "/:._-~"
 _OVERLAY_DOC_KEY_ATTR = "data-viewport-toolbar-doc-key"
 
