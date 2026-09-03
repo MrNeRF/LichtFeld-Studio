@@ -416,9 +416,6 @@ def set_bottom_dock_active_tab(panel_id: str) -> None:
 def get_panel(panel_id: str) -> PanelInfo | None:
     """Get typed panel info by id (None if not found)"""
 
-def get_panel_object(panel_id: str) -> object | None:
-    """Get the Python object for a retained Python panel, or None if unavailable"""
-
 def set_panel_label(panel_id: str, label: str) -> bool:
     """Set the display label for a panel"""
 
@@ -965,6 +962,11 @@ def modal_get() -> dict | None:
 def modal_press(label: str) -> bool:
     """
     Press an enabled modal button by label. Returns False if no matching enabled button.
+    """
+
+def get_panel_object(panel_id: str) -> object:
+    """
+    Get the Python object for a retained Python panel, or None if unavailable
     """
 
 def begin_drag_payload(type: str, data: str, label: str = '') -> int:
