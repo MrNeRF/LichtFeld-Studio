@@ -4,15 +4,30 @@
 #include "core/image_io.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <stb_image_write.h>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
+
+    std::filesystem::path unique_temp_path(const std::string_view stem,
+                                           const std::string_view extension) {
+        static std::atomic_uint64_t sequence{0};
+        const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        return std::filesystem::temp_directory_path() /
+               ("lfs_image_io_" + std::string(stem) + "_" + std::to_string(timestamp) + "_" +
+                std::to_string(sequence.fetch_add(1, std::memory_order_relaxed)) +
+                std::string(extension));
+    }
 
     void append_u16(std::vector<std::uint8_t>& data, const std::uint16_t value) {
         data.push_back(static_cast<std::uint8_t>(value));
@@ -90,6 +105,65 @@ TEST(ImageIoTest, ConvertsSixteenBitPngMemoryToUint8) {
     EXPECT_EQ(decoded[6], 128);
     EXPECT_EQ(decoded[9], 255);
     lfs::core::free_image(decoded);
+}
+
+TEST(ImageIoTest, ThumbnailJpegUsesScaledDecode) {
+    const auto path = unique_temp_path("thumbnail", ".jpg");
+    constexpr int width = 1024;
+    constexpr int height = 768;
+    std::vector<std::uint8_t> source(static_cast<std::size_t>(width) * height * 3);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const auto offset = (static_cast<std::size_t>(y) * width + x) * 3;
+            source[offset + 0] = static_cast<std::uint8_t>(x * 255 / (width - 1));
+            source[offset + 1] = static_cast<std::uint8_t>(y * 255 / (height - 1));
+            source[offset + 2] = static_cast<std::uint8_t>((x + y) * 255 / (width + height - 2));
+        }
+    }
+    ASSERT_NE(stbi_write_jpg(path.string().c_str(), width, height, 3, source.data(), 95), 0);
+
+    auto [full, full_width, full_height, full_channels] = lfs::core::load_image(path);
+    auto [thumb, thumb_width, thumb_height, thumb_channels] =
+        lfs::core::load_image_thumbnail(path, 256);
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+
+    ASSERT_NE(full, nullptr);
+    ASSERT_NE(thumb, nullptr);
+    EXPECT_EQ(full_width, width);
+    EXPECT_EQ(full_height, height);
+    EXPECT_EQ(full_channels, 3);
+    EXPECT_LE(std::max(thumb_width, thumb_height), 256);
+    EXPECT_EQ(thumb_channels, 3);
+    double mean_absolute_error = 0.0;
+    for (int y = 0; y < thumb_height; ++y) {
+        const double source_y = (y + 0.5) * full_height / thumb_height - 0.5;
+        const double sy = std::clamp(source_y, 0.0, static_cast<double>(full_height - 1));
+        const int y0 = static_cast<int>(sy);
+        const int y1 = std::min(full_height - 1, y0 + 1);
+        const double fy = sy - y0;
+        for (int x = 0; x < thumb_width; ++x) {
+            const double source_x = (x + 0.5) * full_width / thumb_width - 0.5;
+            const double sx = std::clamp(source_x, 0.0, static_cast<double>(full_width - 1));
+            const int x0 = static_cast<int>(sx);
+            const int x1 = std::min(full_width - 1, x0 + 1);
+            const double fx = sx - x0;
+            for (int channel = 0; channel < 3; ++channel) {
+                const auto at = [&](const int px, const int py) {
+                    return static_cast<double>(full[(static_cast<std::size_t>(py) * full_width + px) * 3 + channel]);
+                };
+                const double top = at(x0, y0) * (1.0 - fx) + at(x1, y0) * fx;
+                const double bottom = at(x0, y1) * (1.0 - fx) + at(x1, y1) * fx;
+                const auto expected = static_cast<unsigned char>(std::lround(top * (1.0 - fy) + bottom * fy));
+                const auto actual = thumb[(static_cast<std::size_t>(y) * thumb_width + x) * 3 + channel];
+                mean_absolute_error += std::abs(static_cast<double>(actual) - expected) / 255.0;
+            }
+        }
+    }
+    mean_absolute_error /= static_cast<double>(thumb_width) * thumb_height * 3;
+    EXPECT_LE(mean_absolute_error, 2.0 / 255.0);
+    lfs::core::free_image(full);
+    lfs::core::free_image(thumb);
 }
 
 TEST(ImageIoTest, ExpandsEightBitPngToUint16) {

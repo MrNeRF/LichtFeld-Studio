@@ -42,6 +42,11 @@
     display: none;
 }
 
+.filmstrip-virtual-spacer {
+    width: 60dp;
+    flex-shrink: 0;
+}
+
 .thumb-item {
     width: 60dp;
     height: 44dp;

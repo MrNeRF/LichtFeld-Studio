@@ -5,6 +5,8 @@
 from importlib import import_module
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+import threading
+import time
 import sys
 
 import pytest
@@ -53,7 +55,13 @@ def new_project_module(monkeypatch, tmp_path):
         dirty=False,
         training=False,
         embed_default=False,
+        scheduled=[],
+        scheduled_event=threading.Event(),
     )
+
+    def schedule_on_ui_thread(callback):
+        state.scheduled.append(callback)
+        state.scheduled_event.set()
 
     def confirm(title, message, buttons, callback=None):
         state.prompts.append((title, message, buttons, callback))
@@ -72,6 +80,7 @@ def new_project_module(monkeypatch, tmp_path):
         open_dataset_folder_dialog=lambda: str(dataset),
         open_ply_file_dialog=lambda _start="": str(splat),
         get_embed_dataset_by_default=lambda: state.embed_default,
+        schedule_on_ui_thread=schedule_on_ui_thread,
     )
     lf_stub.is_dataset_path = lambda path: str(path) == str(dataset)
     lf_stub.detect_dataset_info = lambda _path: info
@@ -89,7 +98,22 @@ def new_project_module(monkeypatch, tmp_path):
 def _panel(module):
     panel = module.NewProjectPanel()
     panel._handle = _Handle()
+    panel._dialog_mounted = True
     return panel
+
+
+def _run_scheduled(state, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if state.scheduled:
+            callbacks = state.scheduled[:]
+            del state.scheduled[:]
+            state.scheduled_event.clear()
+            for callback in callbacks:
+                callback()
+            return
+        state.scheduled_event.wait(max(0.0, deadline - time.monotonic()))
+    raise AssertionError("worker did not schedule a UI callback")
 
 
 def test_dataset_create_emits_project_before_load_without_output_path(new_project_module):
@@ -97,6 +121,7 @@ def test_dataset_create_emits_project_before_load_without_output_path(new_projec
     panel = _panel(module)
 
     assert panel.show(str(state.dataset)) is True
+    _run_scheduled(state)
     panel._on_do_create()
 
     assert [call[0] for call in state.calls] == ["create", "load"]
@@ -109,12 +134,14 @@ def test_splat_and_blank_create(new_project_module):
     module, state = new_project_module
     panel = _panel(module)
     panel.show(str(state.splat))
+    _run_scheduled(state)
     panel._on_do_create()
     assert len(state.calls) == 2
     assert state.calls[1][2] == {"path": str(state.splat), "is_dataset": False, "discard_changes": True}
 
     state.calls.clear()
     panel.show("")
+    _run_scheduled(state)
     panel._on_do_create()
     assert len(state.calls) == 1
     assert state.calls[0][0] == "create"
@@ -126,6 +153,7 @@ def test_dataset_checkbox_defaults_from_preference_and_embeds_after_load(new_pro
     panel = _panel(module)
 
     assert panel.show(str(state.dataset)) is True
+    _run_scheduled(state)
     assert panel._source_kind == "dataset"
     assert panel._embed_dataset is True
     panel._on_do_create()
@@ -133,6 +161,7 @@ def test_dataset_checkbox_defaults_from_preference_and_embeds_after_load(new_pro
 
     state.calls.clear()
     panel.show(str(state.splat))
+    _run_scheduled(state)
     assert panel._source_kind == "splat"
     assert panel._embed_dataset is True
     panel._on_do_create()
@@ -169,8 +198,12 @@ def test_exists_check_and_dedupe(new_project_module):
     (state.location / "garden.licht").write_bytes(b"existing")
     panel = _panel(module)
     panel.show(str(state.dataset))
+    _run_scheduled(state)
     assert panel._name == "garden-2"
     panel._set_name("garden")
+    panel._source_probe_due = time.monotonic() - 1.0
+    panel.on_update(None)
+    _run_scheduled(state)
     assert panel._target_exists() is True
     assert panel._can_create() is False
 
@@ -182,6 +215,7 @@ def test_min_track_length_and_keyboard_boundaries(new_project_module):
     (sparse / "points3D.txt").write_text("", encoding="utf-8")
     panel = _panel(module)
     panel.show(str(state.dataset))
+    _run_scheduled(state)
     assert panel._show_min_track_length() is True
     panel._set_min_track_length_str("4")
     panel._on_min_track_length_step(args=["1"])
@@ -190,3 +224,17 @@ def test_min_track_length_and_keyboard_boundaries(new_project_module):
     assert panel._show_min_track_length_warning() is True
     panel._on_do_cancel()
     assert state.enabled[-1] == ("lfs.new_project", False)
+
+
+def test_source_probe_is_debounced_until_idle(new_project_module, monkeypatch):
+    module, state = new_project_module
+    calls = []
+    module.lf.is_dataset_path = lambda path: calls.append(path) or True
+    panel = _panel(module)
+    panel._set_source_path(str(state.dataset))
+    assert calls == []
+    assert panel._source_kind == "checking"
+    panel._source_probe_due = time.monotonic() - 1.0
+    panel.on_update(None)
+    _run_scheduled(state)
+    assert calls == [str(state.dataset)]

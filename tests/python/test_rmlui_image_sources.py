@@ -143,6 +143,10 @@ def test_image_preview_mask_decorator_escapes_paths(panel_modules, tmp_path):
 
     panel._image_paths = [image_path]
     panel._mask_paths = [mask_path]
+    panel._path_stat_cache = {
+        str(image_path): (True, image_path.stat().st_mtime_ns, image_path.stat().st_size),
+        str(mask_path): (True, mask_path.stat().st_mtime_ns, mask_path.stat().st_size),
+    }
     panel._camera_uids = [7]
     panel._show_overlay = True
     panel._prev_image_index = -1
