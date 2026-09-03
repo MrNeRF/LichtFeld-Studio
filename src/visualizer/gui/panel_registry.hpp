@@ -381,6 +381,7 @@ namespace lfs::vis::gui {
             PanelSpace space, const PanelDrawContext& ctx, bool check_poll);
         std::vector<std::string> get_panel_names(PanelSpace space) const;
         std::optional<PanelDetails> get_panel(const std::string& id);
+        std::shared_ptr<IPanel> get_panel_instance(const std::string& id) const;
         [[nodiscard]] std::vector<PanelProjectState>
         capture_project_state() const;
         void apply_project_state(

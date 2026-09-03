@@ -50,6 +50,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::string captureChromeJson() const override;
         void applyChromeJson(std::string_view json) override;
         void setForeground(bool fg);
+        [[nodiscard]] nb::object panelInstance() const { return panel_instance_; }
 
     private:
         enum class LifecycleState : uint8_t {

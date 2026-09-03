@@ -23,15 +23,17 @@ __lfs_panel_ids__ = ["lfs.new_project", "lfs.resume_checkpoint"]
 
 
 def open_new_project_panel(source_path: str = "") -> bool:
-    if _new_project_panel is None:
+    panel = _new_project_panel or lf.ui.get_panel_object("lfs.new_project")
+    if panel is None:
         return False
-    return _new_project_panel.show(source_path)
+    return panel.show(source_path)
 
 
 def open_resume_checkpoint_panel(checkpoint_path: str) -> bool:
-    if _resume_checkpoint_panel is None:
+    panel = _resume_checkpoint_panel or lf.ui.get_panel_object("lfs.resume_checkpoint")
+    if panel is None:
         return False
-    return _resume_checkpoint_panel.show(checkpoint_path)
+    return panel.show(checkpoint_path)
 
 
 def _directory_has_colmap_file(path: str) -> bool:

@@ -44,6 +44,7 @@
 #include "rendering/render_constants.hpp"
 #include "rendering/scene_upscaler_registry.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
+#include "rml_python_panel_adapter.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/gui/gui_manager.hpp"
@@ -2756,6 +2757,25 @@ namespace lfs::python {
         register_ui_operators(m);
         register_ui_modals(m);
         register_rml_bindings(m);
+
+        m.def(
+            "get_panel_object",
+            [](const std::string& panel_id) {
+                return invoke_on_viewer(
+                    [panel_id]() -> nb::object {
+                        const nb::gil_scoped_acquire acquire;
+                        const auto panel = vis::gui::PanelRegistry::instance().get_panel_instance(panel_id);
+                        const auto retained_panel =
+                            std::dynamic_pointer_cast<vis::gui::RmlPythonPanelAdapter>(panel);
+                        if (!retained_panel)
+                            return nb::none();
+
+                        return retained_panel->panelInstance();
+                    },
+                    nb::none());
+            },
+            nb::arg("panel_id"),
+            "Get the Python object for a retained Python panel, or None if unavailable");
 
         m.def(
             "begin_drag_payload",
