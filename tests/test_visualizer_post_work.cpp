@@ -501,6 +501,22 @@ protected:
         return condition();
     }
 
+    [[nodiscard]] bool pumpUntilImportSettled(
+        lfs::vis::VisualizerImpl& viewer,
+        std::mutex& queue_mutex,
+        std::vector<lfs::vis::Visualizer::WorkItem>& queue,
+        const std::chrono::milliseconds timeout = std::chrono::seconds(30)) {
+        return pumpUntil(
+            queue_mutex, queue,
+            [&] {
+                auto& tasks = viewer.getGuiManager()->asyncTasks();
+                tasks.pollImportCompletion();
+                return !tasks.isImporting() &&
+                       !tasks.hasPendingMainThreadCompletions();
+            },
+            timeout);
+    }
+
     void installModalOverlay(
         std::unique_ptr<lfs::vis::gui::RmlModalOverlay>& overlay,
         lfs::vis::gui::RmlUIManager& manager) {
@@ -5575,10 +5591,13 @@ namespace lfs::vis {
                     "Keep until splat load"),
                 nullptr);
 
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
             ASSERT_TRUE(pumpUntil(
                 viewer.work_queue_mutex_,
                 viewer.work_queue_,
                 [&] {
+                    gui->asyncTasks().pollImportCompletion();
                     return viewer.pending_training_action_ ==
                                VisualizerImpl::PendingTrainingAction::
                                    None &&
@@ -5587,7 +5606,9 @@ namespace lfs::vis {
                            !viewer.getTrainerManager()
                                 ->isTrainingActive() &&
                            !viewer.getTrainerManager()
-                                ->isCompletionPending();
+                                ->isCompletionPending() &&
+                           !gui->asyncTasks().isImporting() &&
+                           !gui->asyncTasks().hasPendingMainThreadCompletions();
                 }));
             EXPECT_FALSE(drop_blocked) << drop_error;
             EXPECT_FALSE(
@@ -5693,10 +5714,13 @@ namespace lfs::vis {
                 viewer.getSceneManager()->getContentType(),
                 SceneManager::ContentType::Dataset);
 
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
             ASSERT_TRUE(pumpUntil(
                 viewer.work_queue_mutex_,
                 viewer.work_queue_,
                 [&] {
+                    gui->asyncTasks().pollImportCompletion();
                     return viewer.pending_training_action_ ==
                                VisualizerImpl::PendingTrainingAction::
                                    None &&
@@ -5705,7 +5729,9 @@ namespace lfs::vis {
                            !viewer.getTrainerManager()
                                 ->isTrainingActive() &&
                            !viewer.getTrainerManager()
-                                ->isCompletionPending();
+                                ->isCompletionPending() &&
+                           !gui->asyncTasks().isImporting() &&
+                           !gui->asyncTasks().hasPendingMainThreadCompletions();
                 }));
             EXPECT_FALSE(drop_blocked) << drop_error;
             EXPECT_EQ(
@@ -6030,6 +6056,8 @@ namespace lfs::vis {
                 .discard_changes = true}
                 .emit();
 
+            ASSERT_TRUE(pumpUntilImportSettled(
+                viewer, viewer.work_queue_mutex_, viewer.work_queue_));
             EXPECT_FALSE(lifecycle->hasSourcePath());
             EXPECT_FALSE(lifecycle->isScratchBoundSession());
             EXPECT_EQ(
@@ -6093,6 +6121,8 @@ namespace lfs::vis {
                 .is_dataset = false}
                 .emit();
 
+            ASSERT_TRUE(pumpUntilImportSettled(
+                viewer, viewer.work_queue_mutex_, viewer.work_queue_));
             EXPECT_TRUE(lifecycle->hasSourcePath());
             EXPECT_FALSE(lifecycle->isScratchBoundSession());
             const auto has_path = viewer.projectHasPath();
