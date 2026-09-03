@@ -166,6 +166,25 @@ TEST(ImageIoTest, ThumbnailJpegUsesScaledDecode) {
     lfs::core::free_image(thumb);
 }
 
+TEST(ImageIoTest, LoadsJpegThumbnailWithDctScaling) {
+    const auto path = std::filesystem::temp_directory_path() / "lfs_image_io_thumbnail.jpg";
+    constexpr int width = 1024;
+    constexpr int height = 512;
+    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) * height * 3, 127);
+    ASSERT_NE(stbi_write_jpg(path.string().c_str(), width, height, 3, pixels.data(), 90), 0);
+
+    auto [decoded, decoded_width, decoded_height, channels] =
+        lfs::core::load_image_thumbnail(path, 128);
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+
+    ASSERT_NE(decoded, nullptr);
+    EXPECT_EQ(decoded_width, 128);
+    EXPECT_EQ(decoded_height, 64);
+    EXPECT_EQ(channels, 3);
+    lfs::core::free_image(decoded);
+}
+
 TEST(ImageIoTest, ExpandsEightBitPngToUint16) {
     const auto source_path = std::filesystem::path(PROJECT_ROOT_PATH) / "data/bicycle/images_4/_DSC8679.JPG";
     auto [source, source_width, source_height, source_channels] = lfs::core::load_image(source_path);

@@ -467,6 +467,7 @@ set(TEST_FILES
     test_metrics_evaluator_appearance.cpp
     test_export_env_composite.cpp
     test_image_io.cpp
+    test_camera_thumbnail_policy.cpp
     test_undistort.cpp
     test_viewport_region_utils.cpp
     test_viewport_interop_decision.cpp

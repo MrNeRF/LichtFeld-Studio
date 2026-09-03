@@ -486,6 +486,25 @@ namespace lfs::vis::gui {
         panel_screen_y_ = y;
     }
 
+    std::unordered_set<int> SceneGraphElement::visibleCameraUids() const {
+        std::unordered_set<int> result;
+        if (last_visible_start_ == kUnsetVisibleRange ||
+            last_visible_end_ == kUnsetVisibleRange) {
+            return result;
+        }
+        result.reserve(last_visible_end_ - last_visible_start_);
+        const size_t end = std::min(last_visible_end_, flat_rows_.size());
+        for (size_t i = std::min(last_visible_start_, end); i < end; ++i) {
+            const auto snapshot_it = node_snapshots_.find(flat_rows_[i].id);
+            if (snapshot_it != node_snapshots_.end() &&
+                snapshot_it->second.type == core::NodeType::CAMERA &&
+                snapshot_it->second.camera_uid >= 0) {
+                result.insert(snapshot_it->second.camera_uid);
+            }
+        }
+        return result;
+    }
+
     void SceneGraphElement::setModelsCollapsed(const bool /*collapsed*/) {
         // The redundant Models header was removed. Keep accepting legacy session
         // state, but never let an old collapsed flag hide the root rows.
@@ -849,6 +868,7 @@ namespace lfs::vis::gui {
             snapshot.visible = static_cast<bool>(node->visible);
             snapshot.has_children = !node->children.empty();
             snapshot.training_enabled = node->training_enabled;
+            snapshot.camera_uid = node->camera_uid;
             snapshot.has_mask = node->type == core::NodeType::CAMERA &&
                                 (!node->mask_path.empty() ||
                                  (node->camera && node->camera->has_in_memory_mask()));

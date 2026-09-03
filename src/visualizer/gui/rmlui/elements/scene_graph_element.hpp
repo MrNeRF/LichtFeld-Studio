@@ -49,6 +49,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] size_t rootCount() const { return root_count_; }
         [[nodiscard]] size_t nodeCount() const { return node_snapshots_.size(); }
         [[nodiscard]] size_t selectedCount() const { return selected_ids_.size(); }
+        [[nodiscard]] std::unordered_set<int> visibleCameraUids() const;
         [[nodiscard]] SelectionActionState selectionActionState() const;
         void setSelectedVisibility(bool visible);
         void setSelectedTrainingEnabled(bool enabled);
@@ -112,6 +113,7 @@ namespace lfs::vis::gui {
             bool delete_enabled = false;
             bool can_rename = false;
             bool rename_enabled = false;
+            int camera_uid = -1;
             std::optional<std::string> camera_loss_icon_color;
         };
 
