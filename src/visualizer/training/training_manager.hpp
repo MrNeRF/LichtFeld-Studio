@@ -234,7 +234,9 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
 
         // Training thread function
-        void trainingThreadFunc(std::stop_token stop_token);
+        void trainingThreadFunc(
+            std::stop_token stop_token,
+            std::shared_ptr<IMethodSession> method_session);
         void launchTrainingThread();
         void completionReaperLoop(std::stop_token stop_token);
         void finishTrainingThreadJoin();
@@ -266,7 +268,7 @@ namespace lfs::vis {
         // Member variables
         std::unique_ptr<lfs::training::Trainer> trainer_;
         MethodRegistry method_registry_;
-        std::unique_ptr<IMethodSession> method_session_;
+        std::shared_ptr<IMethodSession> method_session_;
         std::string active_method_id_ = "3dgs";
         std::unique_ptr<std::jthread> training_thread_;
         std::optional<std::stop_source> training_stop_source_;

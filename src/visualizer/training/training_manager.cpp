@@ -1429,9 +1429,14 @@ namespace lfs::vis {
         completion_pending_.store(true, std::memory_order_release);
 
         last_training_error_.clear();
+        std::shared_ptr<IMethodSession> method_session;
+        {
+            std::lock_guard lock(trainer_lifetime_mutex_);
+            method_session = method_session_;
+        }
         auto worker = std::make_unique<std::jthread>(
-            [this](const std::stop_token stop_token) {
-                trainingThreadFunc(stop_token);
+            [this, method_session](const std::stop_token stop_token) {
+                trainingThreadFunc(stop_token, method_session);
             });
         {
             std::lock_guard lock(training_thread_mutex_);
@@ -2043,16 +2048,20 @@ namespace lfs::vis {
             lfs::training::TrainingPhase::Idle);
     }
 
-    void TrainerManager::trainingThreadFunc(std::stop_token stop_token) {
+    void TrainerManager::trainingThreadFunc(
+        const std::stop_token stop_token,
+        std::shared_ptr<IMethodSession> method_session) {
         LOG_INFO("Training thread started");
         LOG_TIMER("Training execution");
 
-        if (method_session_) {
+        if (method_session) {
             try {
                 LOG_DEBUG("Starting method '{}' session with stop token", active_method_id_);
-                method_session_->run(stop_token);
-                updateLoss(method_session_->status().loss);
-                LOG_INFO("Method '{}' completed successfully", active_method_id_);
+                method_session->run(stop_token);
+                updateLoss(method_session->status().loss);
+                const bool user_stopped = getState() == TrainingState::Stopping;
+                LOG_INFO("Method '{}' {}", active_method_id_,
+                         user_stopped ? "stopped by user" : "completed successfully");
                 handleTrainingComplete(true);
             } catch (const std::exception& e) {
                 LOG_ERROR("Exception in method '{}' training thread: {}", active_method_id_, e.what());

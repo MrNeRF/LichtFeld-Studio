@@ -14,6 +14,18 @@ namespace {
 
     using namespace std::chrono_literals;
 
+    template <typename Predicate>
+    bool wait_for_condition(Predicate predicate) {
+        const auto deadline = std::chrono::steady_clock::now() + 10s;
+        while (!predicate()) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                return false;
+            }
+            std::this_thread::sleep_for(1ms);
+        }
+        return true;
+    }
+
     class DummySession final : public lfs::vis::IMethodSession {
     public:
         std::expected<void, std::string> initialize(
@@ -156,13 +168,13 @@ TEST(MethodRegistry, DummySessionHonorsControlAndStop) {
         session.run(stop_token);
     });
 
-    while (session.status().iteration == 0) {
-        std::this_thread::yield();
-    }
+    ASSERT_TRUE(wait_for_condition([&session] {
+        return session.status().iteration != 0;
+    })) << "session did not start within the deadline";
     session.request_pause();
-    while (!session.is_paused()) {
-        std::this_thread::yield();
-    }
+    ASSERT_TRUE(wait_for_condition([&session] {
+        return session.is_paused();
+    })) << "session did not pause within the deadline";
     session.request_resume();
     worker.request_stop();
     worker.join();
