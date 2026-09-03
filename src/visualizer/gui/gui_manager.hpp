@@ -25,6 +25,7 @@
 #include "gui/rml_viewport_overlay.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/scene_tree_session.hpp"
+#include "gui/selection_cursor.hpp"
 #include "gui/sequencer_ui_manager.hpp"
 #include "gui/sequencer_ui_state.hpp"
 #include "gui/startup_overlay.hpp"
@@ -201,6 +202,7 @@ namespace lfs::vis {
 
             bool isCapturingInput() const;
             bool isModalWindowOpen() const;
+            [[nodiscard]] bool selectionRingCursorActive(float mouse_x, float mouse_y) const;
             [[nodiscard]] bool passiveMouseMoveNeedsRender(float mouse_x, float mouse_y) const;
             [[nodiscard]] std::optional<double> secondsUntilTooltipReveal() const;
             [[nodiscard]] bool isStartupVisible() const { return startup_overlay_.isVisible(); }
@@ -271,6 +273,25 @@ namespace lfs::vis {
             void initCustomCursors();
             void destroyCustomCursors();
             void applyRmlCursorRequest(RmlCursorRequest req);
+            void prepareSelectionRingCursor(float mouse_x, float mouse_y);
+
+            struct SelectionRingCursorKey {
+                int radius_px = 0;
+                float density = 1.0f;
+                std::size_t theme_signature = 0;
+                SelectionCursorColor color;
+                SelectionCursorOperation operation = SelectionCursorOperation::Replace;
+
+                bool operator==(const SelectionRingCursorKey&) const = default;
+            };
+
+            struct SelectionRingCursorParameters {
+                SelectionRingCursorKey key;
+                SelectionCursorOperation operation = SelectionCursorOperation::Replace;
+            };
+
+            [[nodiscard]] std::optional<SelectionRingCursorParameters>
+            selectionRingCursorParameters(float mouse_x, float mouse_y) const;
             struct DevResourceScanResult {
                 std::unordered_map<std::string, std::filesystem::file_time_type> file_times;
                 bool rml_changed = false;
@@ -434,6 +455,17 @@ namespace lfs::vis {
             SDL_Cursor* selection_remove_cursor_ = nullptr;
             SDL_Cursor* selection_intersect_cursor_ = nullptr;
             SDL_Cursor* last_selection_cursor_ = nullptr;
+            SDL_Cursor* selection_ring_cursor_ = nullptr;
+            SDL_Cursor* selection_ring_cursor_pending_destroy_ = nullptr;
+            mutable SelectionRingCursorKey selection_ring_cursor_key_;
+            mutable bool selection_ring_cursor_attempted_ = false;
+            mutable std::size_t selection_ring_theme_signature_ = 0;
+            mutable bool selection_ring_theme_signature_valid_ = false;
+            std::vector<uint8_t> selection_add_badge_pixels_;
+            std::vector<uint8_t> selection_remove_badge_pixels_;
+            std::vector<uint8_t> selection_intersect_badge_pixels_;
+            int selection_badge_width_ = 0;
+            int selection_badge_height_ = 0;
 
             // Native panel wrapper storage (registered with PanelRegistry)
             std::vector<std::shared_ptr<IPanel>> native_panel_storage_;
