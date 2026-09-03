@@ -1671,6 +1671,7 @@ namespace lfs::vis {
 
         const auto history_before = op::SceneGraphMetadataEntry::captureNodes(*this, {name});
         scene_.setNodeVisibility(id, visible);
+        scene_.invalidateCache();
         selection_.invalidateNodeMask();
 
         if (visible) {
@@ -1692,6 +1693,7 @@ namespace lfs::vis {
         }
 
         scene_.setNodeVisibility(id, visible);
+        scene_.invalidateCache();
         selection_.invalidateNodeMask();
         if (visible) {
             if (const auto* updated = scene_.getNodeById(id))
@@ -3276,6 +3278,9 @@ namespace lfs::vis {
     }
 
     SceneRenderState SceneManager::buildRenderState() const {
+        if (selection_service_) {
+            selection_service_->pollPendingSelectionCounts();
+        }
         std::lock_guard<std::mutex> lock(state_mutex_);
 
         const auto scene_generation = app_store().scene_generation.get();
@@ -3434,6 +3439,12 @@ namespace lfs::vis {
         cached_render_model_ = current_model;
         cached_render_content_type_ = content_type_;
         return *cached_render_state_;
+    }
+
+    void SceneManager::completePendingSelectionCounts() const {
+        if (selection_service_) {
+            selection_service_->completePendingSelectionCounts();
+        }
     }
 
     SceneManager::SceneInfo SceneManager::getSceneInfo() const {
@@ -5329,6 +5340,7 @@ namespace lfs::vis {
             return;
 
         auto entry = std::make_unique<op::SceneSnapshot>(*this, "select.invert");
+        entry->setSelectionChangeHint(true, true);
         entry->captureSelection();
 
         const uint8_t group_id = scene_.getActiveSelectionGroup() != 0 ? scene_.getActiveSelectionGroup() : 1;
@@ -5370,6 +5382,7 @@ namespace lfs::vis {
             return;
 
         auto entry = std::make_unique<op::SceneSnapshot>(*this, "select.none");
+        entry->setSelectionChangeHint(true, true);
         entry->captureSelection();
 
         scene_.clearSelection();
@@ -5414,6 +5427,7 @@ namespace lfs::vis {
                 return;
 
             auto entry = std::make_unique<op::SceneSnapshot>(*this, "select.all");
+            entry->setSelectionChangeHint(true, true);
             entry->captureSelection();
 
             const auto group_id = scene_.getActiveSelectionGroup() != 0 ? scene_.getActiveSelectionGroup() : 1;

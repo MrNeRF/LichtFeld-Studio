@@ -293,6 +293,7 @@ namespace lfs::vis {
 
         void initSelectionService();
         [[nodiscard]] SelectionService* getSelectionService() { return selection_service_.get(); }
+        void completePendingSelectionCounts() const;
 
         void setAppearanceModel(std::unique_ptr<lfs::training::PPISP> ppisp,
                                 std::unique_ptr<lfs::training::PPISPControllerPool> controller_pool = nullptr);

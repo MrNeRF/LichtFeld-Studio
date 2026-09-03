@@ -516,6 +516,18 @@ namespace lfs::core {
         void setSelectionMaskWithGroupCounts(std::shared_ptr<lfs::core::Tensor> mask,
                                              size_t selected_count,
                                              const SelectionGroupCounts& group_counts);
+        // Interactive selection commit. The mask is normalized in place and
+        // installed without reducing it on the host. Counts are filled by the
+        // selection service's deferred GPU readback.
+        void setSelectionMaskDeferred(std::shared_ptr<lfs::core::Tensor> mask,
+                                      bool has_selection,
+                                      size_t selected_count_hint = 0);
+        void applyDeferredSelectionCounts(size_t selected_count,
+                                          const SelectionGroupCounts& group_counts);
+        // Last completed GPU histogram. Interactive commits update this
+        // asynchronously; callers needing an exact current count must call
+        // updateSelectionGroupCounts() first.
+        [[nodiscard]] size_t selectedCount() const { return selected_count_; }
         void clearSelection();
         bool hasSelection() const;
         [[nodiscard]] SelectionStateMetadata captureSelectionStateMetadata() const;
@@ -725,8 +737,15 @@ namespace lfs::core {
         mutable std::shared_ptr<lfs::core::Tensor> selection_mask_;
         mutable std::shared_ptr<lfs::core::Tensor>
             point_cloud_selection_mask_;
+        mutable lfs::core::Tensor cached_live_selection_mask_;
+        mutable size_t cached_live_selection_size_ = 0;
+        mutable Device cached_live_selection_device_ = Device::CPU;
+        mutable DataType cached_live_selection_dtype_ = DataType::UInt8;
+        mutable const lfs::core::SplatData* cached_live_selection_model_ = nullptr;
+        mutable uint64_t cached_live_selection_revision_ = 0;
         mutable bool has_selection_ = false;
         mutable bool has_point_cloud_selection_ = false;
+        size_t selected_count_ = 0;
 
         std::vector<SelectionGroup> selection_groups_;
         uint8_t active_selection_group_ = 1;

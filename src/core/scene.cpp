@@ -2015,8 +2015,51 @@ namespace lfs::core {
     lfs::core::Tensor Scene::liveSelectionMask(const size_t expected_size,
                                                const Device device,
                                                const DataType dtype) const {
+        uint64_t revision = 1469598103934665603ull;
+        const auto mix_revision = [&revision](const auto value) {
+            revision ^= static_cast<uint64_t>(std::hash<std::uintptr_t>{}(
+                reinterpret_cast<std::uintptr_t>(value)));
+            revision *= 1099511628211ull;
+        };
+        const auto mix_integer = [&revision](const uint64_t value) {
+            revision ^= value + 0x9e3779b97f4a7c15ull + (revision << 6u) + (revision >> 2u);
+        };
+
+        const SplatData* revision_model = nullptr;
+        if (consolidated_) {
+            const auto* const combined = getCombinedModel();
+            revision_model = combined;
+            mix_revision(combined);
+            mix_integer(combined ? combined->deleted_mask_version() : 0);
+            mix_integer(combined && combined->has_deleted_mask() ? 1 : 0);
+        } else {
+            for (const auto& node : nodes_) {
+                if (node->type != NodeType::SPLAT) {
+                    continue;
+                }
+                mix_revision(node->model.get());
+                mix_integer(node->model ? node->model->deleted_mask_version() : 0);
+                mix_integer(node->model && node->model->has_deleted_mask() ? 1 : 0);
+            }
+        }
+
+        if (cached_live_selection_mask_.is_valid() &&
+            cached_live_selection_size_ == expected_size &&
+            cached_live_selection_device_ == device &&
+            cached_live_selection_dtype_ == dtype &&
+            cached_live_selection_model_ == revision_model &&
+            cached_live_selection_revision_ == revision) {
+            return cached_live_selection_mask_;
+        }
+
         Tensor live = Tensor::ones({expected_size}, device, dtype);
         if (expected_size == 0) {
+            cached_live_selection_mask_ = live;
+            cached_live_selection_size_ = expected_size;
+            cached_live_selection_device_ = device;
+            cached_live_selection_dtype_ = dtype;
+            cached_live_selection_model_ = revision_model;
+            cached_live_selection_revision_ = revision;
             return live;
         }
 
@@ -2025,33 +2068,39 @@ namespace lfs::core {
             if (combined &&
                 combined->has_deleted_mask() &&
                 combined->deleted().numel() == expected_size) {
-                return combined->deleted().logical_not().to(device).to(dtype);
+                live = combined->deleted().logical_not().to(device).to(dtype);
+            }
+        } else {
+            size_t offset = 0;
+            for (const auto& node : nodes_) {
+                if (node->type != NodeType::SPLAT) {
+                    continue;
+                }
+
+                const size_t node_size = node->model
+                                             ? static_cast<size_t>(node->model->size())
+                                             : node->gaussian_count.load(std::memory_order_acquire);
+                const size_t node_end = offset + node_size;
+                if (node_end > expected_size) {
+                    break;
+                }
+
+                if (node->model &&
+                    node->model->has_deleted_mask() &&
+                    node->model->deleted().numel() == node_size) {
+                    live.slice(0, offset, node_end) = node->model->deleted().logical_not().to(device).to(dtype);
+                }
+
+                offset = node_end;
             }
         }
 
-        size_t offset = 0;
-        for (const auto& node : nodes_) {
-            if (node->type != NodeType::SPLAT) {
-                continue;
-            }
-
-            const size_t node_size = node->model
-                                         ? static_cast<size_t>(node->model->size())
-                                         : node->gaussian_count.load(std::memory_order_acquire);
-            const size_t node_end = offset + node_size;
-            if (node_end > expected_size) {
-                break;
-            }
-
-            if (node->model &&
-                node->model->has_deleted_mask() &&
-                node->model->deleted().numel() == node_size) {
-                live.slice(0, offset, node_end) = node->model->deleted().logical_not().to(device).to(dtype);
-            }
-
-            offset = node_end;
-        }
-
+        cached_live_selection_mask_ = live;
+        cached_live_selection_size_ = expected_size;
+        cached_live_selection_device_ = device;
+        cached_live_selection_dtype_ = dtype;
+        cached_live_selection_model_ = revision_model;
+        cached_live_selection_revision_ = revision;
         return live;
     }
 
@@ -2081,17 +2130,28 @@ namespace lfs::core {
             }
         }
 
-        const auto live = liveSelectionMask(expected_size, mask->device(), mask->dtype());
-        auto normalized = mask->where(live.ne(0), lfs::core::Tensor::zeros({expected_size}, mask->device(), mask->dtype()));
-        const size_t count = normalized.count_nonzero();
-        if (count == 0) {
-            return nullptr;
+        bool has_deleted_rows = false;
+        if (consolidated_) {
+            const auto* const combined = getCombinedModel();
+            has_deleted_rows = combined && combined->has_deleted_mask() &&
+                               combined->deleted().numel() == expected_size;
+        } else {
+            has_deleted_rows = std::ranges::any_of(nodes_, [](const auto& node) {
+                return node->type == NodeType::SPLAT && node->model &&
+                       node->model->has_deleted_mask();
+            });
         }
-
+        if (has_deleted_rows) {
+            const auto live = liveSelectionMask(expected_size, mask->device(), mask->dtype());
+            mask->and_live_(live);
+        }
         if (selected_count) {
-            *selected_count = count;
+            *selected_count = mask->count_nonzero();
+            if (*selected_count == 0) {
+                return nullptr;
+            }
         }
-        return std::make_shared<lfs::core::Tensor>(std::move(normalized));
+        return mask;
     }
 
     std::vector<const SceneNode*> Scene::getNodes() const {
@@ -2712,6 +2772,7 @@ namespace lfs::core {
                 selection_mask_.reset();
                 selected_count = 0;
             }
+            selected_count_ = selected_count;
             selection_group_counts_dirty_ = true;
         }
         events::state::SelectionChanged{
@@ -2739,6 +2800,7 @@ namespace lfs::core {
                 selection_mask_.reset();
                 count = 0;
             }
+            selected_count_ = count;
             selection_group_counts_dirty_ = true;
         }
         events::state::SelectionChanged{
@@ -2835,12 +2897,69 @@ namespace lfs::core {
             clearSelectionGroupCounts();
             selection_group_counts_dirty_ = has_selection;
         }
+        selected_count_ = count;
 
         events::state::SelectionChanged{
             .has_selection = has_selection,
             .count = static_cast<int>(std::min(count, static_cast<size_t>(std::numeric_limits<int>::max())))}
             .emit();
         notifyMutation(MutationType::SELECTION_CHANGED);
+    }
+
+    void Scene::setSelectionMaskDeferred(std::shared_ptr<lfs::core::Tensor> mask,
+                                         const bool has_selection,
+                                         const size_t selected_count_hint) {
+        const size_t expected_size = currentSelectionCapacity();
+        mask = normalizeSelectionMask(std::move(mask), expected_size, nullptr);
+        bool installed = false;
+        {
+            std::unique_lock lock(selection_mutex_);
+            selection_mask_ = (has_selection && mask && mask->is_valid())
+                                  ? std::move(mask)
+                                  : nullptr;
+            has_selection_ = selection_mask_ != nullptr && has_selection;
+            installed = has_selection_;
+            selected_count_ = has_selection_ ? selected_count_hint : 0;
+            selection_group_counts_dirty_ = has_selection_;
+        }
+        events::state::SelectionChanged{
+            .has_selection = installed,
+            .count = static_cast<int>(std::min(
+                selected_count_, static_cast<size_t>(std::numeric_limits<int>::max())))}
+            .emit();
+        notifyMutation(MutationType::SELECTION_CHANGED);
+    }
+
+    void Scene::applyDeferredSelectionCounts(
+        const size_t selected_count,
+        const SelectionGroupCounts& group_counts) {
+        bool was_selected = false;
+        bool has_selection = false;
+        {
+            std::unique_lock lock(selection_mutex_);
+            was_selected = has_selection_;
+            selected_count_ = selected_count;
+            has_selection_ = selected_count > 0 && selection_mask_ &&
+                             selection_mask_->is_valid();
+            has_selection = has_selection_;
+            if (!has_selection_) {
+                selection_mask_.reset();
+            }
+        }
+        if (has_selection) {
+            applySelectionGroupCounts(group_counts);
+        } else {
+            clearSelectionGroupCounts();
+        }
+        selection_group_counts_dirty_ = false;
+        if (was_selected != has_selection || was_selected) {
+            events::state::SelectionChanged{
+                .has_selection = has_selection,
+                .count = static_cast<int>(std::min(
+                    selected_count_, static_cast<size_t>(std::numeric_limits<int>::max())))}
+                .emit();
+            notifyMutation(MutationType::SELECTION_CHANGED);
+        }
     }
 
     void Scene::clearSelection() {
@@ -2850,6 +2969,7 @@ namespace lfs::core {
             point_cloud_selection_mask_.reset();
             has_selection_ = false;
             has_point_cloud_selection_ = false;
+            selected_count_ = 0;
         }
         clearSelectionGroupCounts();
         selection_group_counts_dirty_ = false;
@@ -2902,9 +3022,12 @@ namespace lfs::core {
                                   ? std::make_shared<lfs::core::Tensor>(snapshot.mask->clone())
                                   : nullptr;
             has_selection_ = has_selection;
+            selected_count_ = 0;
             selection_group_counts_dirty_ = false;
             if (has_selection_) {
-                count = static_cast<int>(selection_mask_->ne(0).to(core::DataType::Float32).sum_scalar());
+                selected_count_ = selection_mask_->count_nonzero();
+                count = static_cast<int>(std::min(
+                    selected_count_, static_cast<size_t>(std::numeric_limits<int>::max())));
             }
         }
 
@@ -3181,6 +3304,10 @@ namespace lfs::core {
                     group->count++;
                 }
             }
+        }
+        selected_count_ = 0;
+        for (const auto& group : selection_groups_) {
+            selected_count_ += group.count;
         }
         selection_group_counts_dirty_ = false;
     }
@@ -3704,6 +3831,10 @@ namespace lfs::core {
         has_selection_ = state.has_splat_selection;
         has_point_cloud_selection_ =
             state.has_point_cloud_selection;
+        selected_count_ = 0;
+        for (const auto& group : selection_groups_) {
+            selected_count_ += group.count;
+        }
         selection_group_counts_dirty_ = false;
     }
 
@@ -3749,6 +3880,7 @@ namespace lfs::core {
         has_selection_ = staged->has_selection_;
         has_point_cloud_selection_ =
             staged->has_point_cloud_selection_;
+        selected_count_ = staged->selected_count_;
         ++selection_generation_;
         selection_group_counts_dirty_ =
             staged->selection_group_counts_dirty_;
@@ -3910,6 +4042,7 @@ namespace lfs::core {
                 staged->has_selection_;
             has_point_cloud_selection_ =
                 staged->has_point_cloud_selection_;
+            selected_count_ = staged->selected_count_;
             selection_group_counts_dirty_ =
                 staged->selection_group_counts_dirty_;
             report.selection_installed = true;
