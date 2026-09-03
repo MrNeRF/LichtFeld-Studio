@@ -236,6 +236,9 @@ namespace lfs::vis {
         bool reparentNode(std::string node_name, std::string new_parent_name);
         bool reparentNode(core::NodeId node_id, core::NodeId new_parent_id);
         bool moveNode(core::NodeId node_id, core::NodeId new_parent_id, int index);
+        bool moveNodes(const std::vector<core::NodeId>& node_ids, core::NodeId new_parent_id, int index);
+        bool groupNodes(const std::vector<core::NodeId>& node_ids);
+        bool ungroupNode(core::NodeId node_id);
         std::string addGroupNode(const std::string& name, const std::string& parent_name = "");
         std::string addGroupNode(const std::string& name, core::NodeId parent_id);
         std::string addPlySequenceNode(const std::string& name, const std::string& parent_name = "", size_t frame_count = 0);

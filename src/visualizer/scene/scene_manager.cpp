@@ -560,6 +560,26 @@ namespace lfs::vis {
                      cmd.index);
         });
 
+        cmd::MoveNodesById::when([this](const auto& cmd) {
+            std::vector<core::NodeId> ids;
+            ids.reserve(cmd.node_ids.size());
+            for (const int32_t id : cmd.node_ids)
+                ids.push_back(static_cast<core::NodeId>(id));
+            moveNodes(ids, static_cast<core::NodeId>(cmd.new_parent_id), cmd.index);
+        });
+
+        cmd::GroupNodesById::when([this](const auto& cmd) {
+            std::vector<core::NodeId> ids;
+            ids.reserve(cmd.node_ids.size());
+            for (const int32_t id : cmd.node_ids)
+                ids.push_back(static_cast<core::NodeId>(id));
+            groupNodes(ids);
+        });
+
+        cmd::UngroupNodeById::when([this](const auto& cmd) {
+            ungroupNode(static_cast<core::NodeId>(cmd.node_id));
+        });
+
         cmd::AddGroup::when([this](const auto& cmd) {
             addGroupNode(cmd.name, cmd.parent_name);
         });
@@ -3992,6 +4012,194 @@ namespace lfs::vis {
             "Move Node",
             history_before,
             op::SceneGraphMetadataEntry::captureNodes(*this, {node_name}));
+        return true;
+    }
+
+    bool SceneManager::moveNodes(const std::vector<core::NodeId>& node_ids,
+                                 const core::NodeId new_parent_id,
+                                 const int index) {
+        if (node_ids.empty() || (new_parent_id != core::NULL_NODE &&
+                                 (!scene_.getNodeById(new_parent_id) ||
+                                  scene_.getNodeById(new_parent_id)->type != core::NodeType::GROUP))) {
+            return false;
+        }
+
+        std::vector<core::NodeId> ids;
+        ids.reserve(node_ids.size());
+        for (const core::NodeId id : node_ids) {
+            if (!scene_.getNodeById(id) || std::ranges::find(ids, id) != ids.end())
+                return false;
+            ids.push_back(id);
+        }
+
+        const auto isSelected = [&ids](const core::NodeId id) {
+            return std::ranges::find(ids, id) != ids.end();
+        };
+        for (const core::NodeId id : ids) {
+            if (new_parent_id == id)
+                return false;
+            for (core::NodeId ancestor = new_parent_id; ancestor != core::NULL_NODE;) {
+                if (ancestor == id)
+                    return false;
+                const auto* node = scene_.getNodeById(ancestor);
+                if (!node)
+                    return false;
+                ancestor = node->parent_id;
+            }
+        }
+
+        const auto siblings = [this](const core::NodeId parent) {
+            if (parent == core::NULL_NODE) {
+                std::vector<core::NodeId> result;
+                for (const auto* node : scene_.getNodes()) {
+                    if (node && node->parent_id == core::NULL_NODE)
+                        result.push_back(node->id);
+                }
+                return result;
+            }
+            const auto* parent_node = scene_.getNodeById(parent);
+            return parent_node ? parent_node->children : std::vector<core::NodeId>{};
+        };
+
+        const auto destination_before = siblings(new_parent_id);
+        const int raw_index = index < 0 ? static_cast<int>(destination_before.size()) : index;
+        int adjusted_index = std::clamp(raw_index, 0, static_cast<int>(destination_before.size()));
+        int selected_before = 0;
+        for (int i = 0; i < adjusted_index; ++i)
+            selected_before += isSelected(destination_before[static_cast<size_t>(i)]) ? 1 : 0;
+        adjusted_index -= selected_before;
+
+        std::vector<core::NodeId> desired;
+        desired.reserve(destination_before.size() + ids.size());
+        for (const core::NodeId id : destination_before) {
+            if (!isSelected(id))
+                desired.push_back(id);
+        }
+        adjusted_index = std::clamp(adjusted_index, 0, static_cast<int>(desired.size()));
+        desired.insert(desired.begin() + adjusted_index, ids.begin(), ids.end());
+
+        std::vector<std::string> names;
+        names.reserve(ids.size());
+        for (const core::NodeId id : ids)
+            names.push_back(scene_.getNodeById(id)->name);
+        const auto before = op::SceneGraphMetadataEntry::captureNodes(*this, names);
+
+        bool changed = false;
+        for (size_t desired_index = 0; desired_index < desired.size(); ++desired_index) {
+            const core::NodeId id = desired[desired_index];
+            const auto current = siblings(new_parent_id);
+            const auto current_it = std::ranges::find(current, id);
+            if (current_it != current.end() &&
+                static_cast<size_t>(std::distance(current.begin(), current_it)) == desired_index)
+                continue;
+            const int current_index = current_it == current.end()
+                                          ? -1
+                                          : static_cast<int>(std::distance(current.begin(), current_it));
+            const int raw_target = static_cast<int>(desired_index) +
+                                   (current_index >= 0 && current_index < static_cast<int>(desired_index) ? 1 : 0);
+            changed |= scene_.moveNode(id, new_parent_id, raw_target);
+        }
+        if (!changed)
+            return false;
+
+        const auto after = op::SceneGraphMetadataEntry::captureNodes(*this, names);
+        for (size_t i = 0; i < std::min(before.size(), after.size()); ++i) {
+            state::NodeReparented{
+                .name = after[i].name,
+                .old_parent = before[i].parent_name,
+                .new_parent = after[i].parent_name}
+                .emit();
+        }
+        selection_.invalidateNodeMask();
+        pushSceneGraphMetadataHistoryEntry(
+            *this,
+            std::format("Move {} nodes", ids.size()),
+            before,
+            after);
+        return true;
+    }
+
+    bool SceneManager::groupNodes(const std::vector<core::NodeId>& node_ids) {
+        if (node_ids.empty())
+            return false;
+        std::vector<core::NodeId> ids;
+        for (const core::NodeId id : node_ids) {
+            const auto* node = scene_.getNodeById(id);
+            if (!node || node->type == core::NodeType::GROUP)
+                return false;
+            ids.push_back(id);
+        }
+
+        const core::NodeId parent_id = scene_.getNodeById(ids.front())->parent_id;
+        const auto* parent = parent_id == core::NULL_NODE ? nullptr : scene_.getNodeById(parent_id);
+        const auto siblings = [&] {
+            if (parent)
+                return parent->children;
+            std::vector<core::NodeId> roots;
+            for (const auto* node : scene_.getNodes())
+                if (node && node->parent_id == core::NULL_NODE)
+                    roots.push_back(node->id);
+            return roots;
+        }();
+        for (const core::NodeId id : ids)
+            if (scene_.getNodeById(id)->parent_id != parent_id)
+                return false;
+        int first_index = static_cast<int>(siblings.size());
+        for (const core::NodeId id : ids) {
+            const auto it = std::ranges::find(siblings, id);
+            if (it != siblings.end())
+                first_index = std::min(first_index, static_cast<int>(std::distance(siblings.begin(), it)));
+        }
+
+        const auto roots_before = [&] {
+            std::vector<core::NodeId> roots;
+            for (const auto* node : scene_.getNodes())
+                if (node && node->parent_id == core::NULL_NODE)
+                    roots.push_back(node->id);
+            return roots;
+        }();
+        const auto options = sceneGraphCaptureOptions(true, true);
+        auto before = op::SceneGraphPatchEntry::captureStateByIds(*this, roots_before, options);
+        const auto group_id = scene_.addGroup(
+            makeUniqueNodeName(scene_, LOC("scene.new_group_name")), parent_id);
+        if (group_id == core::NULL_NODE)
+            return false;
+        (void)scene_.moveNode(group_id, parent_id, first_index);
+        for (size_t i = 0; i < ids.size(); ++i)
+            if (!scene_.moveNode(ids[i], group_id, static_cast<int>(i)))
+                return false;
+        selection_.invalidateNodeMask();
+        pushSceneGraphHistoryEntryByIds(*this, "Group Selected", std::move(before), roots_before, options);
+        return true;
+    }
+
+    bool SceneManager::ungroupNode(const core::NodeId node_id) {
+        const auto* group = scene_.getNodeById(node_id);
+        if (!group || group->type != core::NodeType::GROUP)
+            return false;
+        const auto roots_before = [&] {
+            std::vector<core::NodeId> roots;
+            for (const auto* node : scene_.getNodes())
+                if (node && node->parent_id == core::NULL_NODE)
+                    roots.push_back(node->id);
+            return roots;
+        }();
+        const auto options = sceneGraphCaptureOptions(true, true);
+        auto before = op::SceneGraphPatchEntry::captureStateByIds(*this, roots_before, options);
+        const core::NodeId parent_id = group->parent_id;
+        const int group_index = [&] {
+            const auto siblings = parent_id == core::NULL_NODE ? roots_before : scene_.getNodeById(parent_id)->children;
+            return static_cast<int>(std::distance(siblings.begin(), std::ranges::find(siblings, node_id)));
+        }();
+        const auto children = group->children;
+        for (size_t i = 0; i < children.size(); ++i)
+            if (!scene_.moveNode(children[i], parent_id, group_index + static_cast<int>(i)))
+                return false;
+        if (!scene_.getNodeById(node_id))
+            return false;
+        scene_.removeNodeById(node_id, false);
+        selection_.invalidateNodeMask();
+        pushSceneGraphHistoryEntryByIds(*this, "Ungroup", std::move(before), roots_before, options);
         return true;
     }
 

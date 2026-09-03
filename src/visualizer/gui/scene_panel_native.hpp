@@ -40,7 +40,7 @@ namespace lfs::vis::gui {
         }
         PanelDirectRenderResult renderDirect(const PanelDirectRenderRequest& request,
                                              const PanelDrawContext& ctx) override;
-        bool needsAnimationFrame() const override { return host_.needsAnimationFrame(); }
+        bool needsAnimationFrame() const override;
         std::optional<double> nextScheduledAnimationDelay() const override {
             return host_.nextScheduledUpdateDelay();
         }
@@ -55,6 +55,8 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool selectAllIfFocused();
         [[nodiscard]] bool toggleSelectionVisibilityIfFocused();
         [[nodiscard]] bool toggleSelectionTrainingIfFocused();
+        [[nodiscard]] bool groupSelectedNodesIfFocused();
+        [[nodiscard]] bool ungroupSelectedNodeIfFocused();
         [[nodiscard]] bool requestDeleteSelectionIfAvailable();
         [[nodiscard]] std::unordered_set<int> visibleCameraUids() const;
 

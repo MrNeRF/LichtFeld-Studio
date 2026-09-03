@@ -373,6 +373,11 @@ namespace lfs::vis::gui {
         last_log_generation_ = std::numeric_limits<uint64_t>::max();
     }
 
+    bool NativeScenePanel::needsAnimationFrame() const {
+        return host_.needsAnimationFrame() ||
+               (tree_el_ && tree_el_->needsAnimationFrame());
+    }
+
     void NativeScenePanel::EventListener::ProcessEvent(Rml::Event& event) {
         if (owner)
             owner->handleEvent(event);
@@ -380,6 +385,8 @@ namespace lfs::vis::gui {
 
     void NativeScenePanel::clearElementCache() {
         logging_rows_.clear();
+        if (manager_)
+            manager_->setActiveSceneGraphElement(nullptr);
         tree_el_ = nullptr;
         scene_tab_el_ = nullptr;
         history_tab_el_ = nullptr;
@@ -529,6 +536,9 @@ namespace lfs::vis::gui {
         if (tree_el_)
             tree_el_->setPanelScreenOffset(x, y);
 
+        if (tree_el_ && tree_el_->needsAnimationFrame())
+            host_.markContentDirty();
+
         if (last_prepare_frame_ != ctx.frame_serial)
             syncPanel(ctx);
 
@@ -588,6 +598,8 @@ namespace lfs::vis::gui {
         filter_input_revert_.clear();
         clearElementCache();
         tree_el_ = dynamic_cast<SceneGraphElement*>(document_->GetElementById("tree-container"));
+        if (manager_)
+            manager_->setActiveSceneGraphElement(tree_el_);
         scene_tab_el_ = document_->GetElementById("scene-tab");
         history_tab_el_ = document_->GetElementById("history-tab");
         logging_tab_el_ = document_->GetElementById("logging-tab");
@@ -1045,7 +1057,7 @@ namespace lfs::vis::gui {
             return false;
 
         bool changed = false;
-        changed |= setCachedText(summary_model_chip_el_, pluralize(tree_el_->rootCount(), "model"));
+        changed |= setCachedText(summary_model_chip_el_, pluralize(tree_el_->modelCount(), "model"));
         changed |= setCachedText(summary_node_chip_el_, pluralize(tree_el_->nodeCount(), "node"));
 
         const bool show_filter = !tree_el_->filterText().empty();
@@ -1362,6 +1374,22 @@ namespace lfs::vis::gui {
 
     bool NativeScenePanel::toggleSelectionTrainingIfFocused() {
         return active_tab_ == Tab::Scene && tree_el_ && tree_el_->toggleSelectedTrainingIfFocused();
+    }
+
+    bool NativeScenePanel::groupSelectedNodesIfFocused() {
+        if (active_tab_ != Tab::Scene || !tree_el_ ||
+            !tree_el_->IsPseudoClassSet("focus") || tree_el_->selectedCount() < 2)
+            return false;
+        (void)tree_el_->executeContextMenuAction("scene_panel:group_selected");
+        return true;
+    }
+
+    bool NativeScenePanel::ungroupSelectedNodeIfFocused() {
+        if (active_tab_ != Tab::Scene || !tree_el_ ||
+            !tree_el_->IsPseudoClassSet("focus") || tree_el_->selectedCount() != 1)
+            return false;
+        (void)tree_el_->executeContextMenuAction("scene_panel:ungroup_selected");
+        return true;
     }
 
     bool NativeScenePanel::requestDeleteSelectionIfAvailable() {

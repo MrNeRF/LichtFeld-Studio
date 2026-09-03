@@ -1391,7 +1391,7 @@ namespace lfs::vis {
         std::ifstream persisted(profile_path);
         ASSERT_TRUE(persisted.is_open());
         const std::string contents((std::istreambuf_iterator<char>(persisted)), {});
-        EXPECT_NE(contents.find("\"version\": 25"), std::string::npos); // PROFILE_VERSION
+        EXPECT_NE(contents.find("\"version\": 26"), std::string::npos); // PROFILE_VERSION
         EXPECT_NE(contents.find("Toggle MCP Server"), std::string::npos);
         EXPECT_NE(contents.find("Toggle MCP Local/Network Binding"), std::string::npos);
 
