@@ -842,6 +842,10 @@ namespace lfs::app {
                     });
             }
 
+            ~RuntimeEventJournal() {
+                handlers_ = event::ScopedHandler{};
+            }
+
             void publish(const std::string& type, json payload) {
                 const auto timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                               std::chrono::system_clock::now().time_since_epoch())

@@ -4178,7 +4178,7 @@ namespace lfs::python {
                 auto* rm = lfs::python::get_rendering_manager();
                 if (!rm)
                     return "rgb";
-                switch (rm->getSettings().gt_comparison_mode) {
+                switch (rm->getGTComparisonMode()) {
                 case vis::GTComparisonMode::Normal: return "normal";
                 case vis::GTComparisonMode::Depth: return "depth";
                 case vis::GTComparisonMode::RGB:
@@ -5665,7 +5665,7 @@ namespace lfs::python {
                 auto* rm = get_rendering_manager();
                 if (!rm)
                     return "none";
-                switch (rm->getSettings().split_view_mode) {
+                switch (rm->getSplitViewMode()) {
                 case vis::SplitViewMode::GTComparison: return "gt_comparison";
                 case vis::SplitViewMode::PLYComparison: return "ply_comparison";
                 case vis::SplitViewMode::IndependentDual: return "independent_dual";

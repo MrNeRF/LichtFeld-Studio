@@ -126,6 +126,7 @@ namespace lfs::vis {
     }
 
     RenderingManager::~RenderingManager() {
+        event_handlers_ = lfs::event::ScopedHandler{};
         invalidateGTComparisonImageCache();
         gt_comparison_image_worker_.request_stop();
         gt_comparison_image_cv_.notify_all();
@@ -635,6 +636,11 @@ namespace lfs::vis {
         return split_view_service_.getInfo();
     }
 
+    std::optional<SplitViewInfo> RenderingManager::getSplitViewInfoIfChanged(
+        std::uint64_t& generation) const {
+        return split_view_service_.getInfoIfChanged(generation);
+    }
+
     bool RenderingManager::isSplitViewActive() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         return split_view_service_.isActive(settings_);
@@ -643,6 +649,16 @@ namespace lfs::vis {
     bool RenderingManager::isGTComparisonActive() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         return split_view_service_.isGTComparisonActive(settings_);
+    }
+
+    GTComparisonMode RenderingManager::getGTComparisonMode() const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return settings_.gt_comparison_mode;
+    }
+
+    SplitViewMode RenderingManager::getSplitViewMode() const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return settings_.split_view_mode;
     }
 
     bool RenderingManager::isIndependentSplitViewActive() const {

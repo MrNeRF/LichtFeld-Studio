@@ -1757,10 +1757,7 @@ namespace lfs::vis {
             uniforms.image_height = static_cast<std::uint32_t>(frame_view.size.y);
             uniforms.grid_width = _CEIL_DIV(uniforms.image_width, TILE_WIDTH);
             uniforms.grid_height = _CEIL_DIV(uniforms.image_height, TILE_HEIGHT);
-            const glm::ivec2 camera_size =
-                frame_view.subregion_full_size.x > 0 && frame_view.subregion_full_size.y > 0
-                    ? frame_view.subregion_full_size
-                    : frame_view.size;
+            const glm::ivec2 camera_size = frame_view.cameraSize();
             uniforms.render_origin_x = static_cast<std::uint32_t>(std::max(frame_view.subregion_origin.x, 0));
             uniforms.render_origin_y = static_cast<std::uint32_t>(std::max(frame_view.subregion_origin.y, 0));
             uniforms.camera_width = static_cast<std::uint32_t>(std::max(camera_size.x, 1));
@@ -1773,29 +1770,11 @@ namespace lfs::vis {
             uniforms.camera_model = packedVksplatCameraModel(frame_view, equirectangular, gut);
             uniforms.mip_filter = mip_filter ? 1u : 0u;
 
-            if (frame_view.orthographic) {
-                const float ortho_scale =
-                    std::isfinite(frame_view.ortho_scale) && frame_view.ortho_scale > 1.0e-5f
-                        ? frame_view.ortho_scale
-                        : lfs::rendering::DEFAULT_ORTHO_SCALE;
-                uniforms.fx = ortho_scale;
-                uniforms.fy = ortho_scale;
-                uniforms.cx = static_cast<float>(camera_size.x) * 0.5f;
-                uniforms.cy = static_cast<float>(camera_size.y) * 0.5f;
-            } else if (frame_view.intrinsics_override) {
-                const auto& intrinsics = *frame_view.intrinsics_override;
-                uniforms.fx = intrinsics.focal_x;
-                uniforms.fy = intrinsics.focal_y;
-                uniforms.cx = intrinsics.center_x;
-                uniforms.cy = intrinsics.center_y;
-            } else {
-                const auto [fx, fy] = lfs::rendering::computePixelFocalLengths(
-                    camera_size, frame_view.focal_length_mm);
-                uniforms.fx = fx;
-                uniforms.fy = fy;
-                uniforms.cx = static_cast<float>(camera_size.x) * 0.5f;
-                uniforms.cy = static_cast<float>(camera_size.y) * 0.5f;
-            }
+            const auto intrinsics = frame_view.getCameraIntrinsics();
+            uniforms.fx = intrinsics.focal_x;
+            uniforms.fy = intrinsics.focal_y;
+            uniforms.cx = intrinsics.center_x;
+            uniforms.cy = intrinsics.center_y;
 
             const glm::mat3 camera_to_world =
                 lfs::rendering::dataCameraToWorldFromVisualizerRotation(frame_view.rotation);
@@ -4299,7 +4278,8 @@ namespace lfs::vis {
         VulkanContext& context,
         const lfs::rendering::ViewportRenderRequest& request,
         const std::size_t num_splats,
-        const std::size_t ring_slot) {
+        const std::size_t ring_slot,
+        const OutputSlot output_slot) {
         if (num_splats == 0) {
             return std::unexpected("VkSplat overlay bindings cannot bind an empty model");
         }
@@ -4505,6 +4485,7 @@ namespace lfs::vis {
             // H2D copy was costing ~6.5 ms/frame.
             const bool node_mask_cache_hit =
                 !slot.node_mask_upload_cpu.empty() &&
+                slot.cached_node_mask_output_slot == output_slot &&
                 slot.cached_emphasized_node_mask == forward_node_mask_source;
             if (!node_mask_cache_hit) {
                 LOG_TIMER("uploadOverlayBindings.prepare_sources.node_mask");
@@ -4512,6 +4493,7 @@ namespace lfs::vis {
                                  forward_node_mask_source,
                                  slot.region_bytes[OverlayNodeMask]);
                 slot.cached_emphasized_node_mask = forward_node_mask_source;
+                slot.cached_node_mask_output_slot = output_slot;
                 slot.node_mask_uploaded = false;
             }
             {
@@ -8200,7 +8182,7 @@ namespace lfs::vis {
 
         auto overlay_bindings = [&] {
             LOG_TIMER("vksplat.selection_overlay.uploadOverlayBindings");
-            return uploadOverlayBindings(context, request, num_splats, ring_slot);
+            return uploadOverlayBindings(context, request, num_splats, ring_slot, output_slot);
         }();
         if (!overlay_bindings) {
             return std::unexpected(overlay_bindings.error());
@@ -9051,7 +9033,7 @@ namespace lfs::vis {
         auto overlay_bindings = [&] {
             LOG_TIMER("vksplat.render.uploadOverlayBindings");
             return uploadOverlayBindings(
-                context, request, static_cast<std::size_t>(splat_data.size()), ring_slot);
+                context, request, static_cast<std::size_t>(splat_data.size()), ring_slot, output_slot);
         }();
         if (!overlay_bindings) {
             return std::unexpected(overlay_bindings.error());

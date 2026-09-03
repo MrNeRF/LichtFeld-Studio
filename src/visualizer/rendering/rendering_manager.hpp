@@ -6,6 +6,7 @@
 
 #include "camera_interaction_service.hpp"
 #include "core/cuda/undistort/undistort.hpp"
+#include "core/event_bridge/scoped_handler.hpp"
 #include "core/export.hpp"
 #include "core/tensor.hpp"
 #include "dirty_flags.hpp"
@@ -280,9 +281,12 @@ namespace lfs::vis {
 
         void advanceSplitOffset();
         SplitViewInfo getSplitViewInfo() const;
+        [[nodiscard]] std::optional<SplitViewInfo> getSplitViewInfoIfChanged(std::uint64_t& generation) const;
         [[nodiscard]] bool isSplitViewActive() const;
         [[nodiscard]] bool isGTComparisonActive() const;
         [[nodiscard]] bool isIndependentSplitViewActive() const;
+        [[nodiscard]] GTComparisonMode getGTComparisonMode() const;
+        [[nodiscard]] SplitViewMode getSplitViewMode() const;
         // Project restore may only enter/leave split modes through the service
         // transition path; it must never assign RenderSettings::split_view_mode.
         void restoreSplitViewMode(SplitViewMode mode,
@@ -921,6 +925,8 @@ namespace lfs::vis {
         ViewportInteractionContext viewport_interaction_context_;
 
         ViewportOverlayService viewport_overlay_service_;
+
+        lfs::event::ScopedHandler event_handlers_;
 
         friend class RenderingManagerEventsTest_SceneClearedResetsFrustumLoaderSyncCache_Test;
         friend class SceneManager;
