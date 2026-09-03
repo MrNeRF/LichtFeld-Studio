@@ -187,6 +187,20 @@ namespace lfs::vis {
             lfs::training::release_fastgs_sort_workspace_buffers();
         }
 
+        void join_thread_if_not_current(std::jthread& thread, const std::string_view name) {
+            if (!thread.joinable()) {
+                return;
+            }
+            if (thread.get_id() == std::this_thread::get_id()) {
+                // A worker must never join itself. Detach before destruction so
+                // std::jthread does not retry the self-join from its destructor.
+                LOG_ERROR("Skipping self-join of {} thread", name);
+                thread.detach();
+                return;
+            }
+            thread.join();
+        }
+
         [[nodiscard]] lfs::core::SplatTensorAllocator makeVulkanTrainingTensorAllocator(VisualizerImpl* viewer) {
             if (!viewer || !viewer->getWindowManager()) {
                 return {};
@@ -721,8 +735,12 @@ namespace lfs::vis {
             completion_reaper_.request_stop();
         }
         training_thread_cv_.notify_all();
-        if (completion_reaper_.joinable()) {
-            completion_reaper_.join();
+        join_thread_if_not_current(completion_reaper_, "completion reaper");
+        if (initialization_thread_) {
+            join_thread_if_not_current(*initialization_thread_, "training initialization");
+        }
+        if (training_thread_) {
+            join_thread_if_not_current(*training_thread_, "training execution");
         }
         if (trainer_) {
             lfs::training::CommandCenter::instance().reset_snapshot();
@@ -1633,11 +1651,11 @@ namespace lfs::vis {
                 }
             }
 
-            if (initialization_worker && initialization_worker->joinable()) {
-                initialization_worker->join();
+            if (initialization_worker) {
+                join_thread_if_not_current(*initialization_worker, "training initialization");
             }
-            if (training_worker && training_worker->joinable()) {
-                training_worker->join();
+            if (training_worker) {
+                join_thread_if_not_current(*training_worker, "training execution");
             }
 
             // Initialization failures do not launch a training worker, but
@@ -1673,12 +1691,7 @@ namespace lfs::vis {
 
     void TrainerManager::dispatchTrainingCompleted(TrainingCompletionData completion) {
         auto emit_completion = [this, completion = std::move(completion)]() mutable {
-            if (completion.initialization_failure) {
-                if (state_machine_.getState() != TrainingState::Idle &&
-                    !state_machine_.transitionTo(TrainingState::Idle)) {
-                    LOG_WARN("Failed to transition to Idle after training initialization failure");
-                }
-            } else if (!state_machine_.transitionToFinished(completion.reason)) {
+            if (!state_machine_.transitionToFinished(completion.reason)) {
                 LOG_WARN("Failed to transition to Finished");
             }
             LOG_INFO("Training finished: iter={}, loss={:.6f}, time={:.1f}s",
@@ -2226,21 +2239,10 @@ namespace lfs::vis {
             last_training_error_.set(typed);
 
             // The initialization helper rolls back all scene changes before
-            // this existing completion/error path is made observable.
-            if (state_machine_.getState() == TrainingState::Running ||
-                state_machine_.getState() == TrainingState::Paused) {
-                if (!state_machine_.transitionTo(TrainingState::Stopping)) {
-                    LOG_WARN("Failed to transition to Stopping after training initialization failure");
-                }
-            }
-            if (state_machine_.getState() != TrainingState::Idle &&
-                !state_machine_.transitionTo(TrainingState::Idle)) {
-                LOG_WARN("Failed to transition to Idle after training initialization failure");
-            }
-            // The Idle callback clears errors for normal resets; retain this
-            // failure until the completion event has been dispatched.
-            last_error_ = error_message;
-            last_training_error_.set(typed);
+            // this existing completion/error path is made observable. Keep
+            // this worker-side path limited to completion data: the reaper
+            // owns the joins, and joining initialization_thread_ here would
+            // self-join.
             {
                 std::lock_guard lock(completion_mutex_);
                 pending_completion_ = TrainingCompletionData{
@@ -2250,7 +2252,6 @@ namespace lfs::vis {
                     .success = false,
                     .user_stopped = false,
                     .resource_exhausted = false,
-                    .initialization_failure = true,
                     .reason = FinishReason::Error,
                     .error = error_message,
                     .typed_error = typed};

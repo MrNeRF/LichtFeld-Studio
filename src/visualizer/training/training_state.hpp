@@ -98,7 +98,7 @@ namespace lfs::vis {
             // To:    Idle   Ready  Starting Running Paused Stopping Finished
             /* Idle */ {false, true, false, false, true, false, true}, // Paused/Finished: project CKPT
             /* Ready */ {true, false, true, false, false, false, false},
-            /* Starting */ {true, false, false, true, false, true, false},
+            /* Starting */ {true, false, false, true, false, true, true},
             /* Running */ {false, false, false, false, true, true, false},
             /* Paused */ {false, true, false, true, false, true, true}, // Finished: completed restore
             /* Stopping */ {true, false, false, false, false, false, true},

@@ -214,7 +214,6 @@ namespace lfs::vis {
             bool success = false;
             bool user_stopped = false;
             bool resource_exhausted = false;
-            bool initialization_failure = false;
             FinishReason reason = FinishReason::None;
             std::optional<std::string> error;
             std::optional<lfs::Error> typed_error;

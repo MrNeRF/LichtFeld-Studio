@@ -12,6 +12,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -171,6 +172,17 @@ namespace lfs::python {
                                                    vis::TrainingState::Paused,
                                                    vis::TrainingState::Running,
                                                    vis::TrainingState::Stopping}));
+    }
+
+    TEST(TrainingStateMachineTest, StartingCanFinishWithError) {
+        vis::TrainingStateMachine state_machine;
+        ASSERT_TRUE(state_machine.transitionTo(vis::TrainingState::Ready));
+        ASSERT_TRUE(state_machine.transitionTo(vis::TrainingState::Starting));
+
+        ASSERT_TRUE(state_machine.transitionToFinished(vis::FinishReason::Error));
+        EXPECT_EQ(state_machine.getState(), vis::TrainingState::Finished);
+        EXPECT_EQ(state_machine.getFinishReason(), vis::FinishReason::Error);
+        EXPECT_TRUE(state_machine.canPerform(vis::TrainingAction::Reset));
     }
 
     TEST(BilateralGridValidationTest, RejectsInvalidConstructorAndImageContracts) {
@@ -729,6 +741,54 @@ namespace lfs::python {
         EXPECT_EQ(scene.getTrainingModelNodeUuid(), initial_model_uuid);
         ASSERT_NE(scene.getTrainingModel(), nullptr);
         EXPECT_EQ(scene.getTrainingModel()->size(), 1u);
+    }
+
+    TEST(TrainerConstructionTest, StartAcknowledgesBeforeWorkerInitializationFailure) {
+        core::Scene scene;
+        const auto model_id = scene.addSplat("Model", make_test_splat(1));
+        ASSERT_NE(model_id, core::NULL_NODE);
+        scene.setTrainingModelNode(model_id);
+        const auto cameras = scene.addGroup("Cameras");
+        ASSERT_NE(scene.addCamera("camera.png", cameras, make_test_camera()), core::NULL_NODE);
+
+        auto trainer = std::make_unique<training::Trainer>(scene);
+        auto params = trainer->getParams();
+        params.init_path = (std::filesystem::temp_directory_path() /
+                            "lichtfeld-missing-training-init.ply")
+                               .string();
+        trainer->setParams(params);
+        std::unique_lock initialization_lock(trainer->getRenderMutex());
+
+        lfs::vis::TrainerManager manager;
+        manager.setScene(&scene);
+        manager.setTrainer(std::move(trainer));
+
+        std::promise<void> completion;
+        auto completion_future = completion.get_future();
+        const auto handler_id = lfs::core::events::state::TrainingCompleted::when(
+            [&](const auto& event) {
+                if (!event.success) {
+                    completion.set_value();
+                }
+            });
+
+        ASSERT_TRUE(manager.startTraining());
+        EXPECT_EQ(manager.getState(), lfs::vis::TrainingState::Starting);
+        initialization_lock.unlock();
+        ASSERT_FALSE(manager.waitForInitialization());
+        ASSERT_EQ(completion_future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+
+        EXPECT_EQ(manager.getState(), lfs::vis::TrainingState::Finished);
+        EXPECT_EQ(manager.getStateMachine().getFinishReason(), lfs::vis::FinishReason::Error);
+        EXPECT_TRUE(manager.canReset());
+        EXPECT_FALSE(manager.getLastError().empty());
+        EXPECT_TRUE(manager.lastTrainingError().has_value());
+
+        ASSERT_TRUE(manager.clearTrainer());
+        EXPECT_EQ(manager.getState(), lfs::vis::TrainingState::Idle);
+
+        lfs::event::EventBridge::instance().unsubscribe(
+            typeid(lfs::core::events::state::TrainingCompleted), handler_id);
     }
 
     class SceneValidityTest : public ::testing::Test {

@@ -8206,23 +8206,52 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest, ResetTrainingStopsTrainerDuringStarting) {
+        const auto dataset_path = temporary_.path / "reset-starting-failure-dataset";
+        write_minimal_transforms_dataset(dataset_path);
+
         VisualizerImpl viewer(projectOptions());
         viewer.getSceneManager()->changeContentType(SceneManager::ContentType::Dataset);
+        viewer.getSceneManager()->setDatasetPath(dataset_path);
         const auto cameras = viewer.getScene().addGroup("Train cameras");
         ASSERT_NE(viewer.getScene().addCamera(
                       "camera.png", cameras,
                       make_project_request_test_camera()),
                   lfs::core::NULL_NODE);
-        viewer.getTrainerManager()->setTrainer(
-            std::make_unique<lfs::training::Trainer>(viewer.getScene()));
 
-        auto& state_machine = const_cast<lfs::vis::TrainingStateMachine&>(
-            viewer.getTrainerManager()->getStateMachine());
-        ASSERT_TRUE(state_machine.transitionTo(lfs::vis::TrainingState::Starting));
+        auto params = viewer.getDataLoader()->getParameters();
+        params.dataset.data_path = dataset_path;
+        params.init_path = (dataset_path / "missing-init.ply").string();
+        viewer.getDataLoader()->setParameters(params);
+
+        auto trainer = std::make_unique<lfs::training::Trainer>(viewer.getScene());
+        trainer->setParams(params);
+        viewer.getTrainerManager()->setTrainer(std::move(trainer));
+
+        // Hold the worker before its first scene snapshot so ResetTraining is
+        // deterministically issued while the manager is still Starting.
+        std::unique_lock initialization_lock(
+            viewer.getTrainerManager()->getTrainer()->getRenderMutex());
+        ASSERT_TRUE(viewer.getTrainerManager()->startTraining());
+        ASSERT_EQ(viewer.getTrainerManager()->getState(), lfs::vis::TrainingState::Starting);
 
         lfs::core::events::cmd::ResetTraining{}.emit();
-
         EXPECT_EQ(viewer.getTrainerManager()->getState(), lfs::vis::TrainingState::Stopping);
+
+        initialization_lock.unlock();
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                return viewer.getTrainerManager()->getState() == lfs::vis::TrainingState::Finished;
+            }));
+
+        EXPECT_EQ(viewer.getTrainerManager()->getStateMachine().getFinishReason(),
+                  lfs::vis::FinishReason::Error);
+        EXPECT_TRUE(viewer.getTrainerManager()->canReset());
+
+        // The completion handler queues the requested reset after publishing
+        // Finished(Error); drain that request and verify a fresh Ready trainer.
+        lfs::test::licht::drain_work_queue(viewer.work_queue_mutex_, viewer.work_queue_);
+        EXPECT_EQ(viewer.getTrainerManager()->getState(), lfs::vis::TrainingState::Ready);
+        EXPECT_NE(viewer.getTrainerManager()->getTrainer(), nullptr);
     }
 
     TEST_F(VisualizerImplResetTest,
