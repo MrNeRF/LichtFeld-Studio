@@ -113,7 +113,8 @@ namespace lfs::vis::tools {
                     mouse_buttons == 0 &&
                     !gui::guiFocusState().want_capture_mouse &&
                     pointInViewportBounds(ctx.getViewportBounds(), last_mouse_pos_);
-                if (rm && rm->getSelectionPreviewMode() == lfs::vis::SelectionPreviewMode::Centers) {
+                if (rm && rm->getSelectionPreviewMode() == lfs::vis::SelectionPreviewMode::Centers &&
+                    !service->isInteractiveSelectionActive()) {
                     if (passive_hover) {
                         const SDL_Keymod kmods = SDL_GetModState();
                         service->updatePassiveBrushHoverPreview(
