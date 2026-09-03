@@ -3801,9 +3801,7 @@ namespace lfs::vis::gui {
     }
 
     GuiManager::~GuiManager() {
-        if (floating_panel_cursor_hidden_)
-            SDL_ShowCursor();
-        destroyFloatingPanelDragCursorGeometry();
+        SDL_ShowCursor();
     }
 
     std::string GuiManager::scenePanelActiveTab() const {
@@ -5036,10 +5034,9 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::shutdown() {
-        if (floating_panel_cursor_hidden_) {
-            SDL_ShowCursor();
-            floating_panel_cursor_hidden_ = false;
-        }
+        SDL_ShowCursor();
+        floating_panel_cursor_hidden_ = false;
+        destroyFloatingPanelDragCursorGeometry();
         if (ui_visibility_resize_active_) {
             ui_visibility_resize_active_ = false;
             ui_visibility_layout_committed_ = false;
@@ -5064,7 +5061,6 @@ namespace lfs::vis::gui {
             video_widget_->shutdown();
 
         async_tasks_.shutdown();
-        destroyFloatingPanelDragCursorGeometry();
 
         const bool need_gil = lfs::python::get_main_thread_state() != nullptr;
         if (need_gil)
