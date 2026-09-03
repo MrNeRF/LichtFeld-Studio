@@ -179,71 +179,83 @@ class PluginMarketplaceCatalog:
             registry_ok = False
             registry_error = None
             github_enrichment_succeeded = False
+            backoff = None
             try:
-                from .manager import PluginManager
+                try:
+                    from .manager import PluginManager
 
-                mgr = PluginManager.instance()
-                for info in mgr.search(""):
-                    registry_entries.append(_from_registry(info))
-                registry_ok = True
-            except Exception as exc:
-                registry_error = exc
+                    mgr = PluginManager.instance()
+                    for info in mgr.search(""):
+                        registry_entries.append(_from_registry(info))
+                    registry_ok = True
+                except Exception as exc:
+                    registry_error = exc
 
-            try:
-                curated_entries = (
-                    _resolve_curated_from_github()
-                    if require_github_enrichment
-                    else _build_curated_fallback()
-                )
-                github_enrichment_succeeded = require_github_enrichment
-            except Exception as exc:
-                curated_entries = _build_curated_fallback()
-                registry_error = registry_error or exc
-            merged = _merge_entries(registry_entries, curated_entries)
-            if registry_ok:
-                _log.info(
-                    "Plugin marketplace registry loaded: %d registry entries, %d total catalog entries",
-                    len(registry_entries),
-                    len(merged),
-                )
-            with self._lock:
-                self._entries = merged
-                self._loading = False
-                self._registry_loaded = registry_ok
-                self._github_enriched = (
-                    self._github_enriched or github_enrichment_succeeded
-                )
-
-            with _catalog_cache_lock:
-                previous_failures = (
-                    _catalog_cache.failure_count
-                    if _catalog_cache is not None and not registry_ok
-                    else 0
-                )
-                failure_count = previous_failures + 1 if not registry_ok else 0
-                if failure_count:
-                    backoff = min(
-                        REFRESH_RETRY_COOLDOWN_SEC * 2 ** (failure_count - 1),
-                        REFRESH_RETRY_MAX_COOLDOWN_SEC,
+                try:
+                    curated_entries = (
+                        _resolve_curated_from_github()
+                        if require_github_enrichment
+                        else _build_curated_fallback()
                     )
-                    next_retry_at = time.monotonic() + backoff
-                else:
-                    next_retry_at = 0.0
-                _catalog_cache = _CatalogCache(
-                    entries=tuple(merged),
-                    registry_loaded=registry_ok,
-                    github_enriched=self._github_enriched,
-                    stored_at=time.monotonic(),
-                    next_retry_at=next_retry_at,
-                    failure_count=failure_count,
-                )
-                _catalog_refresh_inflight = False
-            if registry_error is not None:
-                _log.warning(
-                    "Plugin marketplace refresh failed; retrying after backoff: %s",
-                    registry_error,
-                )
-            self._notify_change()
+                    github_enrichment_succeeded = require_github_enrichment
+                except Exception as exc:
+                    curated_entries = _build_curated_fallback()
+                    registry_error = registry_error or exc
+                merged = _merge_entries(registry_entries, curated_entries)
+                if registry_ok:
+                    _log.info(
+                        "Plugin marketplace registry loaded: %d registry entries, %d total catalog entries",
+                        len(registry_entries),
+                        len(merged),
+                    )
+                with self._lock:
+                    self._entries = merged
+                    self._registry_loaded = registry_ok
+                    self._github_enriched = (
+                        self._github_enriched or github_enrichment_succeeded
+                    )
+
+                with _catalog_cache_lock:
+                    previous_failures = (
+                        _catalog_cache.failure_count
+                        if _catalog_cache is not None and not registry_ok
+                        else 0
+                    )
+                    failure_count = previous_failures + 1 if not registry_ok else 0
+                    if failure_count:
+                        backoff = min(
+                            REFRESH_RETRY_COOLDOWN_SEC * 2 ** (failure_count - 1),
+                            REFRESH_RETRY_MAX_COOLDOWN_SEC,
+                        )
+                        next_retry_at = time.monotonic() + backoff
+                    else:
+                        next_retry_at = 0.0
+                    _catalog_cache = _CatalogCache(
+                        entries=tuple(merged),
+                        registry_loaded=registry_ok,
+                        github_enriched=self._github_enriched,
+                        stored_at=time.monotonic(),
+                        next_retry_at=next_retry_at,
+                        failure_count=failure_count,
+                    )
+                if registry_error is not None:
+                    if backoff is not None:
+                        _log.warning(
+                            "Plugin marketplace refresh failed; retrying in %.0f s: %s",
+                            backoff,
+                            registry_error,
+                        )
+                    else:
+                        _log.warning(
+                            "Plugin marketplace GitHub enrichment failed: %s",
+                            registry_error,
+                        )
+            finally:
+                with _catalog_cache_lock:
+                    _catalog_refresh_inflight = False
+                with self._lock:
+                    self._loading = False
+                self._notify_change()
 
         threading.Thread(target=worker, daemon=True).start()
 

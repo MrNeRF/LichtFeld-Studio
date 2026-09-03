@@ -320,6 +320,50 @@ def test_plugin_marketplace_refresh_is_cached_across_catalog_instances(
     assert second.snapshot()[2] is True
 
 
+def test_plugin_marketplace_refresh_exception_clears_inflight_and_loading(
+    plugin_marketplace_module,
+    monkeypatch,
+):
+    _module, _state = plugin_marketplace_module
+    marketplace = __import__(
+        "lfs_plugins.marketplace", fromlist=["PluginMarketplaceCatalog"]
+    )
+
+    class _ManagerStub:
+        @classmethod
+        def instance(cls):
+            return cls()
+
+        def search(self, _query):
+            return []
+
+    manager_module = ModuleType("lfs_plugins.manager")
+    manager_module.PluginManager = _ManagerStub
+    monkeypatch.setitem(sys.modules, "lfs_plugins.manager", manager_module)
+    monkeypatch.setattr(marketplace, "_build_curated_fallback", lambda: [])
+    monkeypatch.setattr(marketplace, "_merge_entries", lambda *_args: (_ for _ in ()).throw(
+        RuntimeError("worker failed")
+    ))
+    monkeypatch.setattr(marketplace, "_catalog_cache", None)
+    monkeypatch.setattr(marketplace, "_catalog_refresh_inflight", False)
+
+    class _ImmediateThread:
+        def __init__(self, target, daemon=False):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    monkeypatch.setattr(marketplace.threading, "Thread", _ImmediateThread)
+
+    catalog = marketplace.PluginMarketplaceCatalog()
+    with pytest.raises(RuntimeError, match="worker failed"):
+        catalog.refresh_async()
+
+    assert marketplace._catalog_refresh_inflight is False
+    assert catalog.snapshot()[1] is False
+
+
 def test_plugin_marketplace_manual_success_clears_url(plugin_marketplace_module):
     module, _state = plugin_marketplace_module
     panel = module.PluginMarketplacePanel()
