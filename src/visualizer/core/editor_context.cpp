@@ -44,7 +44,7 @@ namespace lfs::vis {
         const auto selection_generation = app_store().selection_generation.get();
         const bool has_scene_manager = scene_manager != nullptr;
         const bool has_trainer_manager = trainer_manager != nullptr;
-        const bool trainer_running = trainer_manager && trainer_manager->isRunning();
+        const bool trainer_running = trainer_manager && trainer_manager->isTrainingActive();
         const bool trainer_paused = trainer_manager && trainer_manager->isPaused();
         const bool trainer_finished = trainer_manager && trainer_manager->isFinished();
         const std::size_t scene_node_count = scene_manager ? scene_manager->getScene().getNodeCount() : 0;
@@ -83,7 +83,7 @@ namespace lfs::vis {
 
         // Determine mode based on training state
         if (trainer_manager) {
-            if (trainer_manager->isRunning()) {
+            if (trainer_manager->isTrainingActive()) {
                 mode_ = EditorMode::TRAINING;
             } else if (trainer_manager->isPaused()) {
                 mode_ = EditorMode::PAUSED;

@@ -583,6 +583,8 @@ namespace {
             }
         }
         return state_machine.transitionTo(
+                   lfs::vis::TrainingState::Starting) &&
+               state_machine.transitionTo(
                    lfs::vis::TrainingState::Running) &&
                trainer_manager->isTrainingActive();
     }
@@ -1297,6 +1299,8 @@ namespace {
             }
         }
         return state_machine.transitionTo(
+                   lfs::vis::TrainingState::Starting) &&
+               state_machine.transitionTo(
                    lfs::vis::TrainingState::Running) &&
                state_machine.transitionTo(
                    lfs::vis::TrainingState::Paused) &&
@@ -4065,6 +4069,8 @@ namespace lfs::vis {
                 ASSERT_TRUE(state_machine.transitionTo(
                     TrainingState::Ready));
             }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_NE(
@@ -7128,6 +7134,8 @@ namespace lfs::vis {
                     TrainingState::Ready));
             }
             ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
+            ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Stopping));
@@ -7794,6 +7802,8 @@ namespace lfs::vis {
                     TrainingState::Ready));
             }
             ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
+            ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(viewer.getTrainerManager()
                             ->isTrainingActive());
@@ -7867,6 +7877,8 @@ namespace lfs::vis {
                 ASSERT_TRUE(state_machine.transitionTo(
                     TrainingState::Ready));
             }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(viewer.getTrainerManager()
@@ -8052,6 +8064,8 @@ namespace lfs::vis {
                     TrainingState::Ready));
             }
             ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
+            ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(viewer.getTrainerManager()
                             ->isTrainingActive());
@@ -8189,6 +8203,55 @@ namespace lfs::vis {
         EXPECT_EQ(viewer.getViewport().camera.home_R[2], preserved_camera.home_R[2]);
 
         std::filesystem::remove_all(dataset_path, ec);
+    }
+
+    TEST_F(VisualizerImplResetTest, ResetTrainingStopsTrainerDuringStarting) {
+        const auto dataset_path = temporary_.path / "reset-starting-failure-dataset";
+        write_minimal_transforms_dataset(dataset_path);
+
+        VisualizerImpl viewer(projectOptions());
+        viewer.getSceneManager()->changeContentType(SceneManager::ContentType::Dataset);
+        viewer.getSceneManager()->setDatasetPath(dataset_path);
+        const auto cameras = viewer.getScene().addGroup("Train cameras");
+        ASSERT_NE(viewer.getScene().addCamera(
+                      "camera.png", cameras,
+                      make_project_request_test_camera()),
+                  lfs::core::NULL_NODE);
+
+        auto params = viewer.getDataLoader()->getParameters();
+        params.dataset.data_path = dataset_path;
+        params.init_path = (dataset_path / "missing-init.ply").string();
+        viewer.getDataLoader()->setParameters(params);
+
+        auto trainer = std::make_unique<lfs::training::Trainer>(viewer.getScene());
+        trainer->setParams(params);
+        viewer.getTrainerManager()->setTrainer(std::move(trainer));
+
+        // Hold the worker before its first scene snapshot so ResetTraining is
+        // deterministically issued while the manager is still Starting.
+        std::unique_lock initialization_lock(
+            viewer.getTrainerManager()->getTrainer()->getRenderMutex());
+        ASSERT_TRUE(viewer.getTrainerManager()->startTraining());
+        ASSERT_EQ(viewer.getTrainerManager()->getState(), lfs::vis::TrainingState::Starting);
+
+        lfs::core::events::cmd::ResetTraining{}.emit();
+        EXPECT_EQ(viewer.getTrainerManager()->getState(), lfs::vis::TrainingState::Stopping);
+
+        initialization_lock.unlock();
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                return viewer.getTrainerManager()->getState() == lfs::vis::TrainingState::Finished;
+            }));
+
+        EXPECT_EQ(viewer.getTrainerManager()->getStateMachine().getFinishReason(),
+                  lfs::vis::FinishReason::Error);
+        EXPECT_TRUE(viewer.getTrainerManager()->canReset());
+
+        // The completion handler queues the requested reset after publishing
+        // Finished(Error); drain that request and verify a fresh Ready trainer.
+        lfs::test::licht::drain_work_queue(viewer.work_queue_mutex_, viewer.work_queue_);
+        EXPECT_EQ(viewer.getTrainerManager()->getState(), lfs::vis::TrainingState::Ready);
+        EXPECT_NE(viewer.getTrainerManager()->getTrainer(), nullptr);
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -8941,6 +9004,8 @@ namespace lfs::vis {
                     TrainingState::Ready));
             }
             ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
+            ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Paused));
@@ -9029,6 +9094,8 @@ namespace lfs::vis {
                 ASSERT_TRUE(state_machine.transitionTo(
                     TrainingState::Ready));
             }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_NE(
@@ -9664,6 +9731,8 @@ namespace lfs::vis {
                     TrainingState::Ready));
             }
             ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
+            ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Paused));
@@ -9773,6 +9842,8 @@ namespace lfs::vis {
                 ASSERT_TRUE(state_machine.transitionTo(
                     TrainingState::Ready));
             }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(state_machine.transitionTo(
@@ -9889,6 +9960,8 @@ namespace lfs::vis {
                 ASSERT_TRUE(state_machine.transitionTo(
                     TrainingState::Ready));
             }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(state_machine.transitionTo(
@@ -10109,6 +10182,8 @@ namespace lfs::vis {
                     TrainingState::Ready));
             }
             ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
+            ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Stopping));
@@ -10183,6 +10258,8 @@ namespace lfs::vis {
                 ASSERT_TRUE(state_machine.transitionTo(
                     TrainingState::Ready));
             }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(state_machine.transitionTo(
@@ -10274,6 +10351,8 @@ namespace lfs::vis {
                 ASSERT_TRUE(state_machine.transitionTo(
                     TrainingState::Ready));
             }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(state_machine.transitionTo(
@@ -10388,6 +10467,8 @@ namespace lfs::vis {
                 ASSERT_TRUE(state_machine.transitionTo(
                     TrainingState::Ready));
             }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(state_machine.transitionTo(
@@ -10553,6 +10634,8 @@ namespace lfs::vis {
                 ASSERT_TRUE(state_machine.transitionTo(
                     TrainingState::Ready));
             }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
 
@@ -10825,6 +10908,8 @@ namespace lfs::vis {
                 ASSERT_TRUE(state_machine.transitionTo(
                     TrainingState::Ready));
             }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
 
@@ -11727,6 +11812,8 @@ namespace lfs::vis {
                     TrainingState::Ready));
             }
             ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
+            ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Stopping));
@@ -11847,6 +11934,8 @@ namespace lfs::vis {
                 ASSERT_TRUE(state_machine.transitionTo(
                     TrainingState::Ready));
             }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(

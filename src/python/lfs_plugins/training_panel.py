@@ -344,6 +344,7 @@ class TrainingPanel(Panel):
         model.bind_func("label_status_stopped", lambda: tr("status.stopped"))
         model.bind_func("label_status_error", lambda: tr("status.error"))
         model.bind_func("label_status_stopping", lambda: tr("status.stopping"))
+        model.bind_func("label_status_starting", lambda: tr("runtime.task_starting"))
         model.bind_func(
             "label_save_project", lambda: tr("training_panel.save_project")
         )
@@ -553,6 +554,7 @@ class TrainingPanel(Panel):
 
         for state_name in [
             "ready",
+            "starting",
             "running",
             "paused",
             "completed",

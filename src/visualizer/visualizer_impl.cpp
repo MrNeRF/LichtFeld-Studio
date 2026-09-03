@@ -1824,6 +1824,8 @@ namespace lfs::vis {
 
         // Training started - switch to splat rendering without hijacking scene selection
         state::TrainingStarted::when([this, sync_viewer_mip_filter_with_training](const auto&) {
+            // Keep the completion handoff metadata-only. Rendering consumes the
+            // dirty bit on the next frame; no viewport teardown/re-setup occurs here.
             sync_viewer_mip_filter_with_training();
 
             ui::PointCloudModeChanged{
@@ -2501,7 +2503,7 @@ namespace lfs::vis {
         if (gui_manager_)
             gui_manager_->sequencerUI().tickPlaybackBeforeSceneRender();
 
-        const bool is_training = trainer_manager_ && trainer_manager_->isRunning();
+        const bool is_training = trainer_manager_ && trainer_manager_->isTrainingActive();
         const FrameDemand frame_demand = collectFrameDemand(viewport_export_locked, store_dirty);
         if (gui_frame_rendered_ && !frame_demand.shouldRenderFrame()) {
             LOG_PERF("loop_idle skip_gui_render=true needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} window_resize_paint_pending={} viewport_resize_deferring={} viewport_resize_settle_ready={} wake_reason={} wake_timeout_source={}",
@@ -4153,14 +4155,15 @@ namespace lfs::vis {
         const auto preserved_transforms = collectResetTransforms(scene_manager_->getScene());
 
         const auto& init_path = data_loader_->getParameters().init_path;
+        std::optional<lfs::core::param::TrainingParameters> reset_params;
         if (auto* const param_mgr = services().paramsOrNull(); param_mgr && param_mgr->ensureLoaded()) {
-            auto params = param_mgr->createForDataset(path, {});
+            reset_params = param_mgr->createForDataset(path, {});
             if (trainer_manager_) {
-                params.dataset = trainer_manager_->getEditableDatasetParams();
-                params.dataset.data_path = path;
-                params.init_path = init_path;
+                reset_params->dataset = trainer_manager_->getEditableDatasetParams();
+                reset_params->dataset.data_path = path;
+                reset_params->init_path = init_path;
             }
-            data_loader_->setParameters(params);
+            data_loader_->setParameters(*reset_params);
         }
 
         const auto restore_camera = [this, &preserved_camera]() {
@@ -4178,7 +4181,20 @@ namespace lfs::vis {
             wakeMainLoop();
         };
 
-        if (const auto result = data_loader_->loadDataset(path); !result) {
+        auto result = data_loader_->loadDataset(path);
+        if (!result && reset_params && init_path && !init_path->empty()) {
+            // A failed training initialization can leave an invalid init path
+            // in the editable parameters. Reset must still reconstruct the
+            // dataset/trainer, while preserving that setting for the UI.
+            LOG_WARN("Reset reload with initialization file '{}' failed; retrying without it",
+                     *init_path);
+            auto retry_params = *reset_params;
+            retry_params.init_path.reset();
+            data_loader_->setParameters(retry_params);
+            result = data_loader_->loadDataset(path);
+            data_loader_->setParameters(*reset_params);
+        }
+        if (!result) {
             LOG_ERROR("Reset reload failed: {}", result.error());
             restore_camera();
             return;

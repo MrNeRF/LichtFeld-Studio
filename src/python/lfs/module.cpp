@@ -957,6 +957,7 @@ NB_MODULE(lichtfeld, m) {
             switch (tm->getState()) {
             case lfs::vis::TrainingState::Idle: return "idle";
             case lfs::vis::TrainingState::Ready: return "ready";
+            case lfs::vis::TrainingState::Starting: return "starting";
             case lfs::vis::TrainingState::Running: return "running";
             case lfs::vis::TrainingState::Paused: return "paused";
             case lfs::vis::TrainingState::Stopping: return "stopping";
@@ -1009,13 +1010,20 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "start_training", []() {
             nb::gil_scoped_release release;
+            auto* const trainer_manager = lfs::python::get_trainer_manager();
             emit_project_cmd_marshaled(
                 "python.start_training", [] {
                     lfs::core::events::cmd::StartTraining{}
                         .emit();
                 });
+            if (trainer_manager) {
+                if (auto initialized = trainer_manager->waitForInitialization();
+                    !initialized) {
+                    throw std::runtime_error(lfs::format_for_developer(initialized.error()));
+                }
+            }
         },
-        "Start training with current parameters");
+        "Start training with current parameters; waits for off-thread initialization");
     m.def(
         "training_start_overwrite_conflict",
         []() -> std::optional<int> {
@@ -1130,7 +1138,7 @@ NB_MODULE(lichtfeld, m) {
             return trainer_manager &&
                    trainer_manager->isTrainingActive();
         },
-        "Whether training is running or paused");
+        "Whether training is starting, running, or paused");
     m.def(
         "new_project", [](const bool discard_changes, const bool stop_training) {
             nb::gil_scoped_release release;
