@@ -404,6 +404,15 @@ def is_panel_enabled(panel_id: str) -> bool:
 def get_main_panel_tabs() -> list[PanelSummary]:
     """Get all main panel tabs as typed panel summaries"""
 
+def get_bottom_dock_tabs() -> list[str]:
+    """Get the currently visible bottom-dock panel ids in registry order"""
+
+def get_bottom_dock_active_tab() -> str:
+    """Get the active bottom-dock panel id"""
+
+def set_bottom_dock_active_tab(panel_id: str) -> None:
+    """Set the active bottom-dock panel id"""
+
 def get_panel(panel_id: str) -> PanelInfo | None:
     """Get typed panel info by id (None if not found)"""
 

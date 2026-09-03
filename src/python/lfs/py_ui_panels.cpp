@@ -724,6 +724,43 @@ namespace lfs::python {
             "Get all main panel tabs as typed panel summaries");
 
         m.def(
+            "get_bottom_dock_tabs", []() {
+                return invoke_on_viewer(
+                    [] {
+                        std::vector<std::string> result;
+                        auto* const gui_manager = get_gui_manager();
+                        if (!gui_manager)
+                            return result;
+                        for (const auto& tab : gui_manager->panelLayout().bottomDockTabs())
+                            result.push_back(tab.id);
+                        return result;
+                    },
+                    std::vector<std::string>{});
+            },
+            "Get the currently visible bottom-dock panel ids in registry order");
+
+        m.def(
+            "get_bottom_dock_active_tab", []() {
+                return invoke_on_viewer(
+                    [] {
+                        auto* const gui_manager = get_gui_manager();
+                        return gui_manager ? gui_manager->panelLayout().getBottomDockActiveTab()
+                                           : std::string{};
+                    },
+                    std::string{});
+            },
+            "Get the active bottom-dock panel id");
+
+        m.def(
+            "set_bottom_dock_active_tab", [](const std::string& panel_id) {
+                invoke_on_viewer([panel_id] {
+                    if (auto* const gui_manager = get_gui_manager())
+                        gui_manager->panelLayout().setBottomDockActiveTab(panel_id);
+                });
+            },
+            nb::arg("panel_id"), "Set the active bottom-dock panel id");
+
+        m.def(
             "get_panel", [](const std::string& panel_id) {
                 return invoke_on_viewer(
                     [panel_id] {

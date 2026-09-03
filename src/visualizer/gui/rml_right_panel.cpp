@@ -203,9 +203,12 @@ namespace lfs::vis::gui {
         has_theme_signature_ = true;
 
         if (base_rcss_.empty())
-            base_rcss_ = rml_theme::loadBaseRCSS("rmlui/right_panel.rcss");
+            base_rcss_ = rml_theme::loadBaseRCSS("rmlui/right_panel.rcss") + "\n" +
+                         rml_theme::loadBaseRCSS("rmlui/panel_tabs.rcss");
 
-        rml_theme::applyTheme(document_, base_rcss_, rml_theme::loadBaseRCSS("rmlui/right_panel.theme.rcss"));
+        rml_theme::applyTheme(document_, base_rcss_,
+                              rml_theme::loadBaseRCSS("rmlui/panel_tabs.theme.rcss") + "\n" +
+                                  rml_theme::loadBaseRCSS("rmlui/right_panel.theme.rcss"));
         return true;
     }
 

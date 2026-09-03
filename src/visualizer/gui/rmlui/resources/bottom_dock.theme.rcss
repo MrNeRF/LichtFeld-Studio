@@ -1,0 +1,3 @@
+#tab-bar {
+    background-color: @{surface};
+}

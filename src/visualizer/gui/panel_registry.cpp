@@ -420,6 +420,7 @@ namespace lfs::vis::gui {
                 p = std::move(info);
                 instance = p.panel;
                 ++registration_revision_;
+                ++visibility_revision_;
                 goto apply_registered_chrome;
             }
 
@@ -456,6 +457,7 @@ namespace lfs::vis::gui {
                 return a.label < b.label;
             });
             ++registration_revision_;
+            ++visibility_revision_;
         }
 apply_registered_chrome:
         if (instance && !pending_payload.empty())
@@ -471,6 +473,7 @@ apply_registered_chrome:
                         return p.id == id;
                     }) != 0) {
                 ++registration_revision_;
+                ++visibility_revision_;
             }
             floating_interactions_.erase(id);
         }
@@ -492,8 +495,10 @@ apply_registered_chrome:
             std::erase_if(panels_, [](const PanelInfo& p) { return !p.is_native; });
             for (const auto& id : removed)
                 floating_interactions_.erase(id);
-            if (!removed.empty())
+            if (!removed.empty()) {
                 ++registration_revision_;
+                ++visibility_revision_;
+            }
             remaining.reserve(panels_.size());
             for (const auto& p : panels_)
                 remaining.push_back(p.id);
@@ -513,8 +518,10 @@ apply_registered_chrome:
             const bool changed = !panels_.empty() || !floating_interactions_.empty();
             panels_.clear();
             floating_interactions_.clear();
-            if (changed)
+            if (changed) {
                 ++registration_revision_;
+                ++visibility_revision_;
+            }
         }
         {
             std::lock_guard poll_lock(poll_mutex_);
@@ -1340,6 +1347,37 @@ apply_registered_chrome:
         return result;
     }
 
+    std::vector<PanelSummary> PanelRegistry::get_panel_summaries_for_space(
+        const PanelSpace space, const PanelDrawContext& ctx, const bool apply_poll) {
+        std::vector<PanelSnapshot> snapshots;
+        {
+            std::lock_guard lock(mutex_);
+            snapshots = collect_snapshots_locked(PanelRenderTarget::for_space(space), ctx);
+        }
+
+        std::vector<PanelSummary> result;
+        result.reserve(snapshots.size());
+        for (const auto& snap : snapshots) {
+            if (apply_poll) {
+                try {
+                    if (!PanelRegistry::check_poll(snap, ctx))
+                        continue;
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Panel '{}' poll error: {}", snap.label, e.what());
+                    continue;
+                }
+            }
+            result.push_back({std::string(snap.label), std::string(snap.id), snap.space,
+                              snap.order, true, false});
+        }
+        std::stable_sort(result.begin(), result.end(), [](const PanelSummary& a, const PanelSummary& b) {
+            if (a.order != b.order)
+                return a.order < b.order;
+            return a.label < b.label;
+        });
+        return result;
+    }
+
     std::optional<PanelDetails> PanelRegistry::get_panel(const std::string& id) {
         std::lock_guard lock(mutex_);
         for (const auto& p : panels_) {
@@ -1580,6 +1618,11 @@ apply_registered_chrome:
         return registration_revision_;
     }
 
+    uint64_t PanelRegistry::visibility_revision() const {
+        std::lock_guard lock(mutex_);
+        return visibility_revision_;
+    }
+
     std::vector<std::string> PanelRegistry::get_panel_names(PanelSpace space) const {
         std::lock_guard lock(mutex_);
         std::vector<std::string> names;
@@ -1607,6 +1650,7 @@ apply_registered_chrome:
 
                     p.enabled = enabled;
                     panel_to_notify = p.panel;
+                    ++visibility_revision_;
                     if (enabled && p.space == PanelSpace::Floating) {
                         auto& interaction = ensure_floating_interaction_locked(p);
                         if (const auto requested =
@@ -1957,6 +2001,7 @@ apply_registered_chrome:
         for (auto& p : panels_) {
             if (p.id == id) {
                 p.order = new_order;
+                ++visibility_revision_;
                 std::stable_sort(panels_.begin(), panels_.end(), [](const PanelInfo& a, const PanelInfo& b) {
                     if (a.order != b.order)
                         return a.order < b.order;
@@ -1977,6 +2022,7 @@ apply_registered_chrome:
                 const bool was_floating = p.space == PanelSpace::Floating;
                 requested_project_floating_state_.erase(p.id);
                 p.space = new_space;
+                ++visibility_revision_;
                 if (!was_floating && new_space == PanelSpace::Floating) {
                     auto& interaction = ensure_floating_interaction_locked(p);
                     interaction.x = NAN;
@@ -2018,6 +2064,7 @@ apply_registered_chrome:
                 if (!validatePanelContract(candidate, candidate.space))
                     return false;
                 p.parent_id = parent_id;
+                ++visibility_revision_;
                 return true;
             }
         }

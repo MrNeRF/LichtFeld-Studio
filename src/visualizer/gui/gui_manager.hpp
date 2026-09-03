@@ -15,6 +15,7 @@
 #include "gui/panel_registry.hpp"
 #include "gui/panels/menu_bar.hpp"
 #include "gui/perf_sampler.hpp"
+#include "gui/rml_bottom_dock.hpp"
 #include "gui/rml_menu_bar.hpp"
 #include "gui/rml_modal_overlay.hpp"
 #include "gui/rml_right_panel.hpp"
@@ -263,6 +264,7 @@ namespace lfs::vis {
             void applyDefaultStyle();
             void initMenuBar();
             void registerNativePanels();
+            void hideBottomDockPanel(const std::string& id);
             void updateInputOverrides(const PanelInputState& input, bool mouse_in_viewport);
             void applyUiScale(float scale);
             void rebuildFonts(float scale);
@@ -401,6 +403,7 @@ namespace lfs::vis {
             StartupOverlay startup_overlay_;
             RmlShellFrame rml_shell_frame_;
             RmlRightPanel rml_right_panel_;
+            RmlBottomDock rml_bottom_dock_;
             RmlViewportOverlay rml_viewport_overlay_;
             RmlMenuBar rml_menu_bar_;
             RmlStatusBar rml_status_bar_;
@@ -443,9 +446,11 @@ namespace lfs::vis {
             float last_ui_layout_bottom_dock_h_ = -1.0f;
             float last_ui_layout_left_dock_w_ = -1.0f;
             bool last_ui_layout_show_main_panel_ = false;
+            bool last_ui_layout_show_sequencer_ = false;
             bool last_ui_layout_ui_hidden_ = false;
             bool last_ui_layout_python_console_visible_ = false;
             bool last_ui_layout_bottom_dock_visible_ = false;
+            uint64_t last_ui_layout_panel_visibility_revision_ = 0;
             bool last_ui_layout_left_dock_visible_ = false;
             mutable std::chrono::steady_clock::time_point last_animation_demand_description_at_{};
             mutable std::string animation_demand_description_cache_;
@@ -464,6 +469,7 @@ namespace lfs::vis {
             bool left_dock_pointer_live_capture_ = false;
             bool dock_resize_interaction_active_ = false;
             std::string last_ui_layout_active_tab_;
+            std::string last_ui_layout_bottom_dock_active_tab_;
             std::uint64_t last_pre_scene_panel_sync_generation_ = 0;
 
             std::atomic<bool> camera_thumbnail_refresh_pending_{false};

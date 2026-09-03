@@ -372,6 +372,8 @@ namespace lfs::vis::gui {
         bool has_panels(PanelSpace space) const;
 
         std::vector<PanelSummary> get_panels_for_space(PanelSpace space);
+        std::vector<PanelSummary> get_panel_summaries_for_space(
+            PanelSpace space, const PanelDrawContext& ctx, bool check_poll);
         std::vector<std::string> get_panel_names(PanelSpace space) const;
         std::optional<PanelDetails> get_panel(const std::string& id);
         [[nodiscard]] std::vector<PanelProjectState>
@@ -390,6 +392,7 @@ namespace lfs::vis::gui {
         void apply_panel_payloads(
             const std::unordered_map<std::string, std::string>& payloads);
         [[nodiscard]] uint64_t registration_revision() const;
+        [[nodiscard]] uint64_t visibility_revision() const;
         bool isPositionOverFloatingPanel(double x, double y) const;
         void set_panel_enabled(const std::string& id, bool enabled);
         bool bring_panel_to_front(const std::string& id);
@@ -456,6 +459,7 @@ namespace lfs::vis::gui {
             requested_panel_payloads_;
         uint64_t next_float_stack_order_ = 1;
         uint64_t registration_revision_ = 0;
+        uint64_t visibility_revision_ = 0;
         int8_t floating_cursor_dir_x_ = 0;
         int8_t floating_cursor_dir_y_ = 0;
     };
