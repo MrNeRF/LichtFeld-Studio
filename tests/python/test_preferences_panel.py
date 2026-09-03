@@ -63,6 +63,8 @@ def preferences_panel_module(monkeypatch):
         asset_manager_directory="",
         viewport_chrome_style="translucent",
         set_viewport_chrome_style_calls=[],
+        viewport_toolbar_position="centered",
+        set_viewport_toolbar_position_calls=[],
     )
 
     def set_working_directory(path):
@@ -108,6 +110,10 @@ def preferences_panel_module(monkeypatch):
     def set_viewport_chrome_style(style):
         state.viewport_chrome_style = str(style)
         state.set_viewport_chrome_style_calls.append(str(style))
+
+    def set_viewport_toolbar_position(position):
+        state.viewport_toolbar_position = str(position)
+        state.set_viewport_toolbar_position_calls.append(str(position))
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
@@ -181,6 +187,8 @@ def preferences_panel_module(monkeypatch):
         set_progress_bar_style=lambda *_a, **_k: None,
         get_viewport_chrome_style=lambda: state.viewport_chrome_style,
         set_viewport_chrome_style=set_viewport_chrome_style,
+        get_viewport_toolbar_position=lambda: state.viewport_toolbar_position,
+        set_viewport_toolbar_position=set_viewport_toolbar_position,
     )
     lf_stub.keymap = SimpleNamespace(
         ToolMode=IntEnum(
@@ -353,6 +361,19 @@ def test_viewport_chrome_selection_uses_global_style_preference(preferences_pane
     assert state.viewport_chrome_style == "frosted"
     assert state.set_viewport_chrome_style_calls == ["frosted"]
     assert panel._viewport_chrome_index() == "2"
+
+
+def test_viewport_toolbar_position_uses_global_preference(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+
+    assert panel._viewport_toolbar_position_index() == "1"
+    panel._set_viewport_toolbar_position_index("2")
+
+    assert state.viewport_toolbar_position == "free"
+    assert state.set_viewport_toolbar_position_calls == ["free"]
+    assert panel._viewport_toolbar_position_index() == "2"
 
 
 def test_asset_manager_directory_is_saved_and_can_return_to_default(

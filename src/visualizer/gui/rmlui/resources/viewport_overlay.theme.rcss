@@ -54,6 +54,15 @@
     box-shadow: @{viewport.toolbar_shadow};
 }
 
+.toolbar-drag-line {
+    background-color: @{viewport.icon_disabled};
+}
+
+.toolbar-drag-handle:hover .toolbar-drag-line,
+.toolbar-dragging .toolbar-drag-line {
+    background-color: @{viewport.toolbar_text};
+}
+
 .toolbar-hcenter .toolbar-container {
     @{viewport.toolbar_glass_decor};
     border-width: 1dp;

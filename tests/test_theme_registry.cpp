@@ -355,11 +355,33 @@ TEST(ThemePreferencesContract, InvalidValuesFallBackToBuiltInDefaults) {
     ASSERT_TRUE(paths.has_value()) << lfs::format_for_developer(paths.error());
     ASSERT_TRUE(paths->ensureDirectories().has_value());
     std::ofstream(paths->preferencesFile())
-        << R"({"theme":"not-a-theme","ui_scale":999,"language":42})";
+        << R"({"theme":"not-a-theme","ui_scale":999,"language":42,"viewport_toolbar_position":"side","viewport_toolbar_free_y":"middle"})";
 
     EXPECT_EQ(lfs::vis::loadThemePreferenceName(), "dark");
     EXPECT_FLOAT_EQ(lfs::vis::loadUiScalePreference(), 0.0f);
     EXPECT_TRUE(lfs::vis::loadLanguagePreference().empty());
+    EXPECT_EQ(lfs::vis::loadViewportToolbarPositionPreference(), "centered");
+    EXPECT_FLOAT_EQ(lfs::vis::loadViewportToolbarFreeYPreference(), 0.5f);
+    std::filesystem::remove_all(root, error);
+}
+
+TEST(ThemePreferencesContract, ViewportToolbarPositionRoundTripsAndClampsFreeOffset) {
+    const auto root =
+        std::filesystem::temp_directory_path() / "lfs_viewport_toolbar_preferences";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const ScopedLfsHome home(root);
+
+    lfs::vis::saveViewportToolbarPositionPreference("free");
+    lfs::vis::saveViewportToolbarFreeYPreference(1.5f);
+    EXPECT_EQ(lfs::vis::loadViewportToolbarPositionPreference(), "free");
+    EXPECT_FLOAT_EQ(lfs::vis::loadViewportToolbarFreeYPreference(), 1.0f);
+
+    lfs::vis::saveViewportToolbarPositionPreference("invalid");
+    lfs::vis::saveViewportToolbarFreeYPreference(-0.25f);
+    EXPECT_EQ(lfs::vis::loadViewportToolbarPositionPreference(), "centered");
+    EXPECT_FLOAT_EQ(lfs::vis::loadViewportToolbarFreeYPreference(), 0.0f);
+
     std::filesystem::remove_all(root, error);
 }
 
@@ -711,6 +733,8 @@ TEST(ThemePreferencesContract, SafeModeNeitherReadsNorWritesPreferences) {
         EXPECT_EQ(lfs::vis::loadSceneUpscalerPreference(), "native");
         EXPECT_EQ(lfs::vis::loadSceneUpscalerPresetPreference("native"), "native");
         EXPECT_EQ(lfs::vis::loadViewportChromeStylePreference(), "translucent");
+        EXPECT_EQ(lfs::vis::loadViewportToolbarPositionPreference(), "centered");
+        EXPECT_FLOAT_EQ(lfs::vis::loadViewportToolbarFreeYPreference(), 0.5f);
         EXPECT_TRUE(lfs::vis::loadLanguagePreference().empty());
         const auto mcp = lfs::vis::loadMcpPreferences();
         EXPECT_TRUE(mcp.enabled);
@@ -721,6 +745,8 @@ TEST(ThemePreferencesContract, SafeModeNeitherReadsNorWritesPreferences) {
         lfs::vis::saveUiScalePreference(2.0f);
         lfs::vis::saveSceneUpscalerPreference("spatial", "performance");
         lfs::vis::saveViewportChromeStylePreference("frosted");
+        lfs::vis::saveViewportToolbarPositionPreference("free");
+        lfs::vis::saveViewportToolbarFreeYPreference(0.75f);
         lfs::vis::saveLanguagePreference("fr");
         lfs::vis::saveMcpPreferences({
             .enabled = true,

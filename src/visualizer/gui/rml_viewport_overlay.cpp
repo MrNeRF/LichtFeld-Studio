@@ -57,6 +57,7 @@ namespace lfs::vis::gui {
             return tag == "button" || tag == "input" || tag == "textarea" || tag == "select" ||
                    element->IsClassSet("icon-btn") ||
                    element->IsClassSet("toolbar-group-container") ||
+                   element->IsClassSet("toolbar-drag-handle") ||
                    element->IsClassSet("viewport-transform-option") ||
                    element->IsClassSet("viewport-transform-action") ||
                    element->IsClassSet("vram-hud-tree-row") ||
@@ -101,7 +102,9 @@ namespace lfs::vis::gui {
     } // namespace
 
     RmlViewportOverlay::RmlViewportOverlay()
-        : vram_hud_(std::make_unique<VramHudOverlay>()) {}
+        : vram_hud_(std::make_unique<VramHudOverlay>()) {
+        toolbar_drag_listener_.owner = this;
+    }
 
     RmlViewportOverlay::~RmlViewportOverlay() = default;
 
@@ -167,6 +170,7 @@ namespace lfs::vis::gui {
             refreshGTMetricsOverlayFromStore();
             applyLodStatsOverlay();
             applyProjectDragOverlay();
+            attachToolbarDragListeners();
             if (vram_hud_)
                 vram_hud_->onDocumentLoaded(document_);
         } catch (const std::exception& e) {
@@ -187,6 +191,7 @@ namespace lfs::vis::gui {
         camera_metrics_subscription_.reset();
         vram_hud_subscription_.reset();
         document_sync_subscriptions_.clear();
+        resetToolbarDragListeners();
 
         if (vram_hud_)
             vram_hud_->onDocumentDestroyed();
@@ -216,6 +221,7 @@ namespace lfs::vis::gui {
             rml_manager_->releaseCachedVulkanContext(direct_cache_);
 
         if (document_) {
+            resetToolbarDragListeners();
             rml_context_->UnloadDocument(document_);
             rml_context_->Update();
         }
@@ -253,6 +259,7 @@ namespace lfs::vis::gui {
             applyLeftDockResizeIndicator();
             applyLodStatsOverlay();
             applyProjectDragOverlay();
+            attachToolbarDragListeners();
             if (vram_hud_)
                 vram_hud_->onDocumentLoaded(document_);
             updateToolbarRoots();
@@ -338,6 +345,8 @@ namespace lfs::vis::gui {
             last_hover_element_ = nullptr;
         if (context_size_changed)
             markRenderNeeded(RenderReason::ViewportResize);
+        if (context_size_changed)
+            toolbar_roots_dirty_ = true;
         vp_pos_ = pos;
         vp_size_ = size;
         screen_origin_ = screen_origin;
@@ -529,7 +538,12 @@ namespace lfs::vis::gui {
         document_sync_subscriptions_.push_back(
             store.render_settings_generation.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(
-            store.viewport_toolbar_generation.subscribe(mark_document_dirty));
+            store.viewport_toolbar_generation.subscribe([this](const auto&) {
+                toolbar_position_preference_dirty_ = true;
+                toolbar_roots_dirty_ = true;
+                markDocumentSyncDirty();
+                markRenderNeeded(RenderReason::ToolbarLayout);
+            }));
         document_sync_subscriptions_.push_back(
             store.language_generation.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(
@@ -559,6 +573,16 @@ namespace lfs::vis::gui {
     bool RmlViewportOverlay::updateToolbarRoots() {
         if (!document_) {
             return false;
+        }
+
+        if (toolbar_position_preference_dirty_) {
+            viewport_toolbar_position_ = loadViewportToolbarPositionPreference();
+            viewport_toolbar_free_y_ = loadViewportToolbarFreeYPreference();
+            toolbar_position_preference_dirty_ = false;
+            if (viewport_toolbar_position_ != "free") {
+                toolbar_drag_active_ = false;
+                toolbar_drag_moved_ = false;
+            }
         }
 
         const bool changed =
@@ -593,6 +617,8 @@ namespace lfs::vis::gui {
             }
         };
         apply_left_toolbar_offset("primary-utility-toolbar", -primary_toolbar_x_);
+        attachToolbarDragListeners();
+        applyToolbarPosition();
         applied_primary_toolbar_x_ = primary_toolbar_x_;
         applied_primary_toolbar_width_ = primary_toolbar_width_;
         applied_show_secondary_toolbar_ = show_secondary_toolbar_;
@@ -600,6 +626,172 @@ namespace lfs::vis::gui {
         applied_secondary_toolbar_width_ = secondary_toolbar_width_;
         toolbar_roots_dirty_ = false;
         return true;
+    }
+
+    float RmlViewportOverlay::toolbarFreeGap(const float toolbar_height) const {
+        const float dp_ratio = rml_context_
+                                   ? std::max(rml_context_->GetDensityIndependentPixelRatio(), 0.01f)
+                                   : 1.0f;
+        constexpr float kViewportGapDp = 12.0f;
+        return std::min(kViewportGapDp * dp_ratio,
+                        std::max(0.0f, (vp_size_.y - std::max(toolbar_height, 0.0f)) * 0.5f));
+    }
+
+    float RmlViewportOverlay::toolbarFreeTravel(const float toolbar_height) const {
+        const float gap = toolbarFreeGap(toolbar_height);
+        return std::max(0.0f, vp_size_.y - 2.0f * gap - std::max(toolbar_height, 0.0f));
+    }
+
+    float RmlViewportOverlay::toolbarFreeTop(const float toolbar_height) const {
+        return toolbarFreeGap(toolbar_height) +
+               std::clamp(viewport_toolbar_free_y_, 0.0f, 1.0f) *
+                   toolbarFreeTravel(toolbar_height);
+    }
+
+    bool RmlViewportOverlay::applyToolbarPosition() {
+        if (!document_)
+            return false;
+
+        const bool mode_changed =
+            applied_viewport_toolbar_position_ != viewport_toolbar_position_;
+        const bool drag_state_changed =
+            applied_toolbar_drag_active_ != toolbar_drag_active_;
+        bool changed = mode_changed || drag_state_changed;
+
+        if (mode_changed || drag_state_changed) {
+            const auto apply_root_classes = [&](const char* element_id) {
+                if (auto* const root = document_->GetElementById(element_id)) {
+                    root->SetClass("toolbar-position-top", viewport_toolbar_position_ == "top");
+                    root->SetClass("toolbar-position-centered", viewport_toolbar_position_ == "centered");
+                    root->SetClass("toolbar-position-free", viewport_toolbar_position_ == "free");
+                    root->SetClass("toolbar-dragging", toolbar_drag_active_);
+                }
+            };
+            apply_root_classes("primary-toolbar-root");
+            apply_root_classes("secondary-toolbar-root");
+        }
+
+        float fallback_height = 0.0f;
+        if (auto* const primary = document_->GetElementById("primary-utility-toolbar"))
+            fallback_height = primary->GetBox().GetSize(Rml::BoxArea::Border).y;
+
+        const auto apply_toolbar = [&](const char* element_id, float& applied_top) {
+            auto* const toolbar = document_->GetElementById(element_id);
+            if (!toolbar)
+                return;
+
+            if (viewport_toolbar_position_ != "free") {
+                if (mode_changed)
+                    toolbar->RemoveProperty("margin-top");
+                applied_top = std::numeric_limits<float>::quiet_NaN();
+                return;
+            }
+
+            float height = toolbar->GetBox().GetSize(Rml::BoxArea::Border).y;
+            if (height <= 0.0f)
+                height = fallback_height;
+            const float top = toolbarFreeTop(height);
+            if (!std::isfinite(applied_top) || std::abs(applied_top - top) > 0.25f) {
+                toolbar->SetProperty("margin-top", std::format("{:.1f}px", top));
+                applied_top = top;
+                changed = true;
+            }
+        };
+        apply_toolbar("primary-utility-toolbar", applied_primary_toolbar_top_);
+        apply_toolbar("secondary-utility-toolbar", applied_secondary_toolbar_top_);
+
+        applied_viewport_toolbar_position_ = viewport_toolbar_position_;
+        applied_toolbar_drag_active_ = toolbar_drag_active_;
+        return changed;
+    }
+
+    void RmlViewportOverlay::attachToolbarDragListeners() {
+        if (!document_)
+            return;
+
+        const auto attach = [&](const char* element_id, Rml::Element*& cached) {
+            auto* const handle = document_->GetElementById(element_id);
+            if (!handle || handle == cached)
+                return;
+            handle->AddEventListener(Rml::EventId::Dragstart, &toolbar_drag_listener_);
+            handle->AddEventListener(Rml::EventId::Drag, &toolbar_drag_listener_);
+            handle->AddEventListener(Rml::EventId::Dragend, &toolbar_drag_listener_);
+            cached = handle;
+        };
+        attach("primary-utility-toolbar-handle", primary_toolbar_drag_handle_);
+        attach("secondary-utility-toolbar-handle", secondary_toolbar_drag_handle_);
+    }
+
+    void RmlViewportOverlay::resetToolbarDragListeners() {
+        if (toolbar_drag_moved_ && viewport_toolbar_position_ == "free")
+            saveViewportToolbarFreeYPreference(viewport_toolbar_free_y_);
+        primary_toolbar_drag_handle_ = nullptr;
+        secondary_toolbar_drag_handle_ = nullptr;
+        toolbar_drag_active_ = false;
+        applied_toolbar_drag_active_ = false;
+        toolbar_drag_moved_ = false;
+        applied_viewport_toolbar_position_.clear();
+        applied_primary_toolbar_top_ = std::numeric_limits<float>::quiet_NaN();
+        applied_secondary_toolbar_top_ = std::numeric_limits<float>::quiet_NaN();
+    }
+
+    void RmlViewportOverlay::ToolbarDragListener::ProcessEvent(Rml::Event& event) {
+        if (owner)
+            owner->onToolbarDrag(event);
+    }
+
+    void RmlViewportOverlay::onToolbarDrag(Rml::Event& event) {
+        if (viewport_toolbar_position_ != "free")
+            return;
+
+        const auto type = event.GetId();
+        const float mouse_y = event.GetParameter("mouse_y", 0.0f);
+        if (type == Rml::EventId::Dragstart) {
+            auto* const handle = event.GetCurrentElement();
+            auto* const toolbar = handle ? handle->GetParentNode() : nullptr;
+            if (!toolbar ||
+                (toolbar->GetId() != "primary-utility-toolbar" &&
+                 toolbar->GetId() != "secondary-utility-toolbar")) {
+                return;
+            }
+            toolbar_drag_active_ = true;
+            toolbar_drag_moved_ = false;
+            toolbar_drag_start_top_ = toolbar->GetAbsoluteOffset().y;
+            toolbar_drag_start_mouse_y_ = mouse_y;
+            applyToolbarPosition();
+            markRenderNeeded(RenderReason::PointerDrag);
+            event.StopPropagation();
+        } else if (type == Rml::EventId::Drag && toolbar_drag_active_) {
+            auto* const handle = event.GetCurrentElement();
+            auto* const toolbar = handle ? handle->GetParentNode() : nullptr;
+            if (!toolbar)
+                return;
+            const float height = toolbar->GetBox().GetSize(Rml::BoxArea::Border).y;
+            const float travel = toolbarFreeTravel(height);
+            const float desired_top = toolbar_drag_start_top_ +
+                                      (mouse_y - toolbar_drag_start_mouse_y_);
+            const float next_y = travel > 0.0f
+                                     ? std::clamp(
+                                           (desired_top - toolbarFreeGap(height)) / travel,
+                                           0.0f,
+                                           1.0f)
+                                     : 0.5f;
+            if (std::abs(next_y - viewport_toolbar_free_y_) > 0.0001f) {
+                viewport_toolbar_free_y_ = next_y;
+                toolbar_drag_moved_ = true;
+                applyToolbarPosition();
+                markRenderNeeded(RenderReason::PointerDrag);
+            }
+            event.StopPropagation();
+        } else if (type == Rml::EventId::Dragend && toolbar_drag_active_) {
+            toolbar_drag_active_ = false;
+            applyToolbarPosition();
+            if (toolbar_drag_moved_)
+                saveViewportToolbarFreeYPreference(viewport_toolbar_free_y_);
+            toolbar_drag_moved_ = false;
+            markRenderNeeded(RenderReason::PointerDrag);
+            event.StopPropagation();
+        }
     }
 
     void RmlViewportOverlay::updateViewportContentOffset() {
@@ -781,10 +973,11 @@ namespace lfs::vis::gui {
             !input.keys_repeated.empty() || !input.text_codepoints.empty() ||
             !input.text_inputs.empty() || input.has_text_editing;
         const bool vram_drag_capture = vram_hud_ && vram_hud_->isCapturingPointer();
+        const bool toolbar_drag_capture = toolbar_drag_active_;
         auto* const focused_before = rml_context_->GetFocusElement();
         const bool focused_text_target = rml_input::wantsTextInput(focused_before);
         if (mouse_pos_valid_ && !mouse_moved && !pointer_event && !pointer_drag &&
-            !keyboard_event && !vram_drag_capture) {
+            !keyboard_event && !vram_drag_capture && !toolbar_drag_capture) {
             wants_input_ = hovered_interactive_ || focused_text_target;
             auto* const hover = hovered_interactive_ ? rml_context_->GetHoverElement() : nullptr;
             const auto* const hover_root = viewportOverlayHoverRoot(hover);
@@ -813,17 +1006,18 @@ namespace lfs::vis::gui {
             markRenderNeeded(RenderReason::Keyboard);
         }
         if (external_mouse_capture && !point_interactive && !hovered_interactive_ &&
-            !vram_drag_capture) {
+            !vram_drag_capture && !toolbar_drag_capture) {
             tooltip_.setHover({}, nullptr);
             return;
         }
         const bool should_process_mouse_move =
             (mouse_moved || pointer_event) &&
-            (was_inside || is_inside || vram_drag_capture) &&
+            (was_inside || is_inside || vram_drag_capture || toolbar_drag_capture) &&
             (pointer_event || pointer_drag || hover_target_changed ||
-             hovered_interactive_ || was_inside != is_inside || vram_drag_capture) &&
+             hovered_interactive_ || was_inside != is_inside || vram_drag_capture ||
+             toolbar_drag_capture) &&
             (is_inside || hovered_interactive_ || was_inside != is_inside ||
-             vram_drag_capture);
+             vram_drag_capture || toolbar_drag_capture);
         if (should_process_mouse_move) {
             mouse_pos_valid_ = true;
             last_mouse_x_ = rml_mx;
@@ -833,7 +1027,7 @@ namespace lfs::vis::gui {
             rml_context_->ProcessMouseMove(rml_mx, rml_my, mods);
             auto* const next_hover = rml_context_->GetHoverElement();
             const auto* const next_hover_root = viewportOverlayHoverRoot(next_hover);
-            if (pointer_event || pointer_drag || vram_drag_capture ||
+            if (pointer_event || pointer_drag || vram_drag_capture || toolbar_drag_capture ||
                 was_inside != is_inside || next_hover_root != prev_hover_root) {
                 if (input.mouse_wheel != 0.0f)
                     markRenderNeeded(RenderReason::PointerWheel);
@@ -841,12 +1035,13 @@ namespace lfs::vis::gui {
                     input.mouse_clicked[1] || input.mouse_released[1] ||
                     input.mouse_clicked[2] || input.mouse_released[2])
                     markRenderNeeded(RenderReason::PointerButton);
-                if (pointer_drag || vram_drag_capture)
+                if (pointer_drag || vram_drag_capture || toolbar_drag_capture)
                     markRenderNeeded(RenderReason::PointerDrag);
                 if (was_inside != is_inside || next_hover_root != prev_hover_root)
                     markRenderNeeded(RenderReason::PointerHover);
             }
-        } else if (mouse_moved && (was_inside || is_inside || vram_drag_capture)) {
+        } else if (mouse_moved &&
+                   (was_inside || is_inside || vram_drag_capture || toolbar_drag_capture)) {
             mouse_pos_valid_ = true;
             last_mouse_x_ = rml_mx;
             last_mouse_y_ = rml_my;
@@ -859,7 +1054,7 @@ namespace lfs::vis::gui {
         const bool over_interactive = is_inside && hover_root != nullptr;
         hovered_interactive_ = over_interactive;
 
-        if (over_interactive || vram_drag_capture) {
+        if (over_interactive || vram_drag_capture || toolbar_drag_capture) {
             wants_input_ = true;
             guiFocusState().want_capture_mouse = true;
 
@@ -964,6 +1159,7 @@ namespace lfs::vis::gui {
             // Restore the original unbound body markup instead of recycling
             // the live subtree, which may already contain expanded data-for views.
             if (!body_template_rml_.empty()) {
+                resetToolbarDragListeners();
                 body->SetInnerRML(Rml::String(body_template_rml_));
                 toolbar_roots_dirty_ = true;
             } else {
@@ -1004,6 +1200,7 @@ namespace lfs::vis::gui {
         applyLeftDockResizeIndicator();
         applyLodStatsOverlay();
         applyProjectDragOverlay();
+        attachToolbarDragListeners();
         if (vram_hud_)
             vram_hud_->onDocumentLoaded(document_);
     }
@@ -1269,6 +1466,10 @@ namespace lfs::vis::gui {
             }
             {
                 LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render.update.context_update", 0.25);
+                rml_context_->Update();
+            }
+            if (viewport_toolbar_position_ == "free" && applyToolbarPosition()) {
+                LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render.update.toolbar_position", 0.25);
                 rml_context_->Update();
             }
         }

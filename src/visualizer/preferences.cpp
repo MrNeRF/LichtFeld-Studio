@@ -49,6 +49,10 @@ namespace lfs::vis {
             return style == "solid" || style == "translucent" || style == "frosted";
         }
 
+        [[nodiscard]] bool knownViewportToolbarPosition(std::string_view position) {
+            return position == "top" || position == "centered" || position == "free";
+        }
+
         [[nodiscard]] lfs::Error workingDirectoryError(
             const lfs::ErrorCode code,
             std::string user_message,
@@ -461,6 +465,38 @@ namespace lfs::vis {
         const std::string style = it->get<std::string>();
         return knownViewportChromeStyle(style) ? style : "translucent";
     }
+    void UserPreferences::setViewportToolbarPosition(const std::string_view value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["viewport_toolbar_position"] =
+            knownViewportToolbarPosition(value) ? std::string(value) : "centered";
+        impl_->saveLocked();
+    }
+    std::string UserPreferences::viewportToolbarPosition() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("viewport_toolbar_position");
+        if (it == impl_->values.end() || !it->is_string())
+            return "centered";
+        const std::string position = it->get<std::string>();
+        return knownViewportToolbarPosition(position) ? position : "centered";
+    }
+    void UserPreferences::setViewportToolbarFreeY(const float value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["viewport_toolbar_free_y"] =
+            std::clamp(std::isfinite(value) ? value : 0.5f, 0.0f, 1.0f);
+        impl_->saveLocked();
+    }
+    float UserPreferences::viewportToolbarFreeY() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("viewport_toolbar_free_y");
+        if (it == impl_->values.end() || !it->is_number())
+            return 0.5f;
+        const float value = it->get<float>();
+        return std::clamp(std::isfinite(value) ? value : 0.5f, 0.0f, 1.0f);
+    }
 
     void UserPreferences::setMcp(const McpPreferenceState& state) {
         std::scoped_lock lock(impl_->mutex);
@@ -578,6 +614,18 @@ namespace lfs::vis {
     }
     std::string loadViewportChromeStylePreference() {
         return UserPreferences::instance().viewportChromeStyle();
+    }
+    void saveViewportToolbarPositionPreference(const std::string_view position) {
+        UserPreferences::instance().setViewportToolbarPosition(position);
+    }
+    std::string loadViewportToolbarPositionPreference() {
+        return UserPreferences::instance().viewportToolbarPosition();
+    }
+    void saveViewportToolbarFreeYPreference(const float value) {
+        UserPreferences::instance().setViewportToolbarFreeY(value);
+    }
+    float loadViewportToolbarFreeYPreference() {
+        return UserPreferences::instance().viewportToolbarFreeY();
     }
     void saveMcpPreferences(const McpPreferenceState& state) { UserPreferences::instance().setMcp(state); }
     McpPreferenceState loadMcpPreferences() { return UserPreferences::instance().mcp(); }

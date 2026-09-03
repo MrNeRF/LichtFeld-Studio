@@ -4,6 +4,7 @@
 
 #include "py_ui.hpp"
 #include "python/python_runtime.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer/post_work_utils.hpp"
 #include "visualizer/preferences.hpp"
 #include "visualizer/theme/theme.hpp"
@@ -169,6 +170,17 @@ namespace lfs::python {
                 });
             },
             nb::arg("style"), "Set the viewport controls style (solid, translucent, or frosted)");
+        m.def("get_viewport_toolbar_position", &lfs::vis::loadViewportToolbarPositionPreference,
+              "Return the viewport toolbar position (top, centered, or free)");
+        m.def(
+            "set_viewport_toolbar_position",
+            [](std::string position) {
+                invoke_on_viewer_thread([position = std::move(position)]() {
+                    lfs::vis::saveViewportToolbarPositionPreference(position);
+                    lfs::vis::publish_viewport_toolbar_generation();
+                });
+            },
+            nb::arg("position"), "Set the viewport toolbar position (top, centered, or free)");
     }
 
 } // namespace lfs::python

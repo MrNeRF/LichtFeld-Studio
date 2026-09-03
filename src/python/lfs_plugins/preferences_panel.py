@@ -52,6 +52,12 @@ class PreferencesPanel(Panel):
         ("frosted", "preferences.viewport_chrome_frosted"),
     )
 
+    VIEWPORT_TOOLBAR_POSITION_OPTIONS = (
+        ("top", "preferences.viewport_toolbar_position_top"),
+        ("centered", "preferences.viewport_toolbar_position_centered"),
+        ("free", "preferences.viewport_toolbar_position_free"),
+    )
+
     EXPANDABLE_SECTIONS = (
         "language",
         "working_directory",
@@ -122,6 +128,11 @@ class PreferencesPanel(Panel):
             "viewport_chrome_idx",
             self._viewport_chrome_index,
             self._set_viewport_chrome_index,
+        )
+        model.bind(
+            "viewport_toolbar_position_idx",
+            self._viewport_toolbar_position_index,
+            self._set_viewport_toolbar_position_index,
         )
         model.bind("scale_idx", self._scale_index, self._set_scale_index)
         model.bind(
@@ -209,6 +220,7 @@ class PreferencesPanel(Panel):
         model.bind_record_list("theme_variants")
         model.bind_record_list("progress_bar_styles")
         model.bind_record_list("viewport_chrome_styles")
+        model.bind_record_list("viewport_toolbar_positions")
         model.bind_record_list("scales")
         model.bind_record_list("scene_upscalers")
         model.bind_record_list("scene_upscaler_presets")
@@ -263,6 +275,7 @@ class PreferencesPanel(Panel):
             lf.ui.get_theme_mode(),
             lf.ui.get_progress_bar_style(),
             lf.ui.get_viewport_chrome_style(),
+            lf.ui.get_viewport_toolbar_position(),
             float(lf.ui.get_ui_scale_preference()),
             self._scene_upscaler(),
             self._scene_upscaler_preset(),
@@ -323,6 +336,15 @@ class PreferencesPanel(Panel):
             [
                 {"index": str(index), "label": lf.ui.tr(label)}
                 for index, (_style, label) in enumerate(self.VIEWPORT_CHROME_OPTIONS)
+            ],
+        )
+        self._handle.update_record_list(
+            "viewport_toolbar_positions",
+            [
+                {"index": str(index), "label": lf.ui.tr(label)}
+                for index, (_position, label) in enumerate(
+                    self.VIEWPORT_TOOLBAR_POSITION_OPTIONS
+                )
             ],
         )
         self._handle.update_record_list(
@@ -467,6 +489,24 @@ class PreferencesPanel(Panel):
             return
         if 0 <= index < len(self.VIEWPORT_CHROME_OPTIONS):
             lf.ui.set_viewport_chrome_style(self.VIEWPORT_CHROME_OPTIONS[index][0])
+            self._refresh_selection()
+
+    def _viewport_toolbar_position_index(self):
+        current = lf.ui.get_viewport_toolbar_position()
+        for index, (position, _label) in enumerate(self.VIEWPORT_TOOLBAR_POSITION_OPTIONS):
+            if position == current:
+                return str(index)
+        return "1"
+
+    def _set_viewport_toolbar_position_index(self, value):
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            return
+        if 0 <= index < len(self.VIEWPORT_TOOLBAR_POSITION_OPTIONS):
+            lf.ui.set_viewport_toolbar_position(
+                self.VIEWPORT_TOOLBAR_POSITION_OPTIONS[index][0]
+            )
             self._refresh_selection()
 
     def _scale_index(self):
@@ -1204,6 +1244,7 @@ class PreferencesPanel(Panel):
             lf.ui.set_theme("dark")
             lf.ui.set_progress_bar_style("classic")
             lf.ui.set_viewport_chrome_style("translucent")
+            lf.ui.set_viewport_toolbar_position("centered")
             lf.ui.set_ui_scale(0.0)
             lf.ui.set_scene_reconstruction("native", "native")
             lf.ui.reset_scene_reconstruction_preferences()
@@ -1235,6 +1276,7 @@ class PreferencesPanel(Panel):
             self._handle.dirty("theme_has_variants")
             self._handle.dirty("progress_bar_idx")
             self._handle.dirty("viewport_chrome_idx")
+            self._handle.dirty("viewport_toolbar_position_idx")
             self._handle.dirty("scale_idx")
             self._handle.dirty("scene_upscaler_idx")
             self._handle.dirty("scene_upscaler_preset_idx")

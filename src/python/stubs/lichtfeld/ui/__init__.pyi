@@ -247,6 +247,12 @@ def get_viewport_chrome_style() -> str:
 def set_viewport_chrome_style(style: str) -> None:
     """Set the viewport controls style (solid, translucent, or frosted)"""
 
+def get_viewport_toolbar_position() -> str:
+    """Return the viewport toolbar position (top, centered, or free)"""
+
+def set_viewport_toolbar_position(position: str) -> None:
+    """Set the viewport toolbar position (top, centered, or free)"""
+
 class PanelSpace(enum.Enum):
     SIDE_PANEL = 0
 

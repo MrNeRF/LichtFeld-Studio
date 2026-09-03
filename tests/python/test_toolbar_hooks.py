@@ -1634,6 +1634,30 @@ def test_viewport_toolbar_uses_theme_glass_without_backdrop_filter():
         assert f'{{"{unused_token}"' not in resolver
 
 
+def test_viewport_toolbar_position_modes_keep_drag_explicit_and_persisted():
+    project_root = Path(__file__).parent.parent.parent
+    resources = project_root / "src/visualizer/gui/rmlui/resources"
+    rml = (resources / "viewport_overlay.rml").read_text(encoding="utf-8")
+    rcss = (resources / "viewport_overlay.rcss").read_text(encoding="utf-8")
+    overlay = (
+        project_root / "src/visualizer/gui/rml_viewport_overlay.cpp"
+    ).read_text(encoding="utf-8")
+    preferences = (project_root / "src/visualizer/preferences.cpp").read_text(
+        encoding="utf-8"
+    )
+
+    assert rml.count('class="toolbar-drag-handle"') == 2
+    assert rml.count('title="@tr:preferences.viewport_toolbar_drag"') == 2
+    assert ".panel-toolbar-root.toolbar-position-top" in rcss
+    assert ".panel-toolbar-root.toolbar-position-free" in rcss
+    assert ".toolbar-position-free .toolbar-drag-handle" in rcss
+    assert "drag: drag;" in rcss
+    assert 'SetClass("toolbar-position-centered"' in overlay
+    assert "toolbarFreeTravel" in overlay
+    assert "saveViewportToolbarFreeYPreference(viewport_toolbar_free_y_)" in overlay
+    assert 'position == "top" || position == "centered" || position == "free"' in preferences
+
+
 def test_python_theme_mutations_are_marshaled_to_viewer_thread():
     project_root = Path(__file__).parent.parent.parent
     py_ui = (project_root / "src/python/lfs/py_ui.cpp").read_text(encoding="utf-8")
@@ -1653,6 +1677,7 @@ def test_python_theme_mutations_are_marshaled_to_viewer_thread():
         (py_ui, "set_theme"),
         (py_ui, "set_theme_family"),
         (py_ui_theme, "set_viewport_chrome_style"),
+        (py_ui_theme, "set_viewport_toolbar_position"),
     ):
         start = source.index(f'"{binding}",')
         end = source.index("nb::arg", start)
@@ -1660,6 +1685,8 @@ def test_python_theme_mutations_are_marshaled_to_viewer_thread():
 
     assert "def get_viewport_chrome_style() -> str:" in ui_stub
     assert "def set_viewport_chrome_style(style: str) -> None:" in ui_stub
+    assert "def get_viewport_toolbar_position() -> str:" in ui_stub
+    assert "def set_viewport_toolbar_position(position: str) -> None:" in ui_stub
 
 
 def test_empty_viewport_rejects_independent_split_activation_and_hides_orphan_ui():

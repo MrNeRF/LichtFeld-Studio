@@ -285,6 +285,8 @@ def _install_lf_stub(monkeypatch):
         set_progress_bar_style=lambda _style: None,
         get_viewport_chrome_style=lambda: "translucent",
         set_viewport_chrome_style=lambda _style: None,
+        get_viewport_toolbar_position=lambda: "centered",
+        set_viewport_toolbar_position=lambda _position: None,
         get_scene_reconstruction_options=lambda: [
             {
                 "id": "native",
