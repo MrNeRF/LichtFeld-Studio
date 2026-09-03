@@ -148,6 +148,11 @@ namespace lfs::vis::gui {
         constexpr auto kInteractiveIdleToggleMinInterval = std::chrono::milliseconds(750);
         constexpr auto kInteractiveTrainingToggleMinInterval = std::chrono::milliseconds(3000);
 
+        void setCursorIfChanged(SDL_Cursor* const cursor) {
+            if (SDL_GetCursor() != cursor)
+                SDL_SetCursor(cursor);
+        }
+
         [[nodiscard]] std::string formatLodCount(const std::size_t value) {
             constexpr double kThousand = 1'000.0;
             constexpr double kMillion = 1'000'000.0;
@@ -3734,30 +3739,51 @@ namespace lfs::vis::gui {
             }
         }
 
-        SDL_Cursor* loadColorCursorFromAsset(const std::string& asset_name, int hot_x, int hot_y) {
+        struct ColorCursorAsset {
+            std::vector<uint8_t> rgba;
+            int width = 0;
+            int height = 0;
+        };
+
+        std::optional<ColorCursorAsset> loadColorCursorAsset(const std::string& asset_name) {
             try {
                 const auto path = lfs::vis::getAssetPath(asset_name);
                 auto [rgba_pixels, width, height, channels] = lfs::core::load_image_with_alpha(path);
                 if (!rgba_pixels || width <= 0 || height <= 0 || channels != 4) {
                     lfs::core::free_image(rgba_pixels);
-                    return nullptr;
+                    return std::nullopt;
                 }
 
-                SDL_Surface* surface = SDL_CreateSurfaceFrom(width, height, SDL_PIXELFORMAT_RGBA32,
-                                                             rgba_pixels, width * 4);
-                if (!surface) {
-                    lfs::core::free_image(rgba_pixels);
-                    return nullptr;
-                }
-
-                SDL_Cursor* cursor = SDL_CreateColorCursor(surface, hot_x, hot_y);
-                SDL_DestroySurface(surface);
+                ColorCursorAsset asset;
+                asset.rgba.assign(rgba_pixels, rgba_pixels + static_cast<size_t>(width) * height * 4);
+                asset.width = width;
+                asset.height = height;
                 lfs::core::free_image(rgba_pixels);
-                return cursor;
+                return asset;
             } catch (const std::exception& e) {
                 LOG_WARN("Could not load cursor asset '{}': {}", asset_name, e.what());
+                return std::nullopt;
+            }
+        }
+
+        SDL_Cursor* createColorCursorFromAsset(const ColorCursorAsset& asset, const int hot_x, const int hot_y) {
+            SDL_Surface* surface = SDL_CreateSurfaceFrom(asset.width, asset.height, SDL_PIXELFORMAT_RGBA32,
+                                                         const_cast<uint8_t*>(asset.rgba.data()), asset.width * 4);
+            if (!surface) {
                 return nullptr;
             }
+
+            SDL_Cursor* cursor = SDL_CreateColorCursor(surface, hot_x, hot_y);
+            SDL_DestroySurface(surface);
+            return cursor;
+        }
+
+        SDL_Cursor* loadColorCursorFromAsset(const std::string& asset_name, const int hot_x, const int hot_y) {
+            const auto asset = loadColorCursorAsset(asset_name);
+            if (!asset) {
+                return nullptr;
+            }
+            return createColorCursorFromAsset(*asset, hot_x, hot_y);
         }
 
         void applyDefaultWindowStates(std::unordered_map<std::string, bool>& states) {
@@ -3906,7 +3932,9 @@ namespace lfs::vis::gui {
 #endif
     }
 
-    GuiManager::~GuiManager() = default;
+    GuiManager::~GuiManager() {
+        SDL_ShowCursor();
+    }
 
     std::string GuiManager::scenePanelActiveTab() const {
         return native_scene_panel_
@@ -4048,26 +4076,34 @@ namespace lfs::vis::gui {
                 LOG_WARN("Could not create pipette cursor from icon/color-picker.png");
         }
 
-        if (!selection_add_cursor_) {
-            selection_add_cursor_ = loadColorCursorFromAsset("icon/cursor/select-add.png", 2, 2);
-            if (!selection_add_cursor_)
-                LOG_WARN("Could not create selection add cursor from icon/cursor/select-add.png");
-        }
-        if (!selection_remove_cursor_) {
-            selection_remove_cursor_ = loadColorCursorFromAsset("icon/cursor/select-remove.png", 2, 2);
-            if (!selection_remove_cursor_)
-                LOG_WARN("Could not create selection remove cursor from icon/cursor/select-remove.png");
-        }
-        if (!selection_intersect_cursor_) {
-            selection_intersect_cursor_ = loadColorCursorFromAsset("icon/cursor/select-intersect.png", 2, 2);
-            if (!selection_intersect_cursor_)
-                LOG_WARN("Could not create selection intersect cursor from icon/cursor/select-intersect.png");
-        }
+        const auto init_selection_badge = [&](const std::string& asset_name,
+                                              SDL_Cursor*& cursor,
+                                              std::vector<uint8_t>& pixels) {
+            if (cursor || !pixels.empty()) {
+                return;
+            }
+            const auto asset = loadColorCursorAsset(asset_name);
+            if (!asset) {
+                LOG_WARN("Could not load selection cursor asset {}", asset_name);
+                return;
+            }
+            if (selection_badge_width_ == 0) {
+                selection_badge_width_ = asset->width;
+                selection_badge_height_ = asset->height;
+            }
+            pixels = asset->rgba;
+            cursor = createColorCursorFromAsset(*asset, 2, 2);
+            if (!cursor)
+                LOG_WARN("Could not create selection cursor from {}", asset_name);
+        };
+
+        init_selection_badge("icon/cursor/select-add.png", selection_add_cursor_, selection_add_badge_pixels_);
+        init_selection_badge("icon/cursor/select-remove.png", selection_remove_cursor_, selection_remove_badge_pixels_);
+        init_selection_badge("icon/cursor/select-intersect.png", selection_intersect_cursor_, selection_intersect_badge_pixels_);
     }
 
     void GuiManager::destroyCustomCursors() {
-        if (pipette_cursor_ || last_selection_cursor_)
-            SDL_SetCursor(SDL_GetDefaultCursor());
+        setCursorIfChanged(SDL_GetDefaultCursor());
         last_selection_cursor_ = nullptr;
         if (pipette_cursor_) {
             SDL_DestroyCursor(pipette_cursor_);
@@ -4085,15 +4121,362 @@ namespace lfs::vis::gui {
             SDL_DestroyCursor(selection_intersect_cursor_);
             selection_intersect_cursor_ = nullptr;
         }
+        SDL_Cursor* const ring_cursor = selection_ring_cursor_;
+        SDL_Cursor* const pending_ring_cursor = selection_ring_cursor_pending_destroy_;
+        selection_ring_cursor_ = nullptr;
+        selection_ring_cursor_pending_destroy_ = nullptr;
+        if (ring_cursor)
+            SDL_DestroyCursor(ring_cursor);
+        if (pending_ring_cursor && pending_ring_cursor != ring_cursor)
+            SDL_DestroyCursor(pending_ring_cursor);
+        selection_ring_cursor_key_ = {};
+        selection_ring_cursor_attempted_ = false;
+        selection_ring_theme_signature_valid_ = false;
+        selection_add_badge_pixels_.clear();
+        selection_remove_badge_pixels_.clear();
+        selection_intersect_badge_pixels_.clear();
+        selection_badge_width_ = 0;
+        selection_badge_height_ = 0;
+    }
+
+    void GuiManager::updateFloatingPanelCursorVisibility() {
+        bool should_hide = false;
+        if (viewer_ && !ui_hidden_) {
+            if (auto* const window = viewer_->getWindow()) {
+                const auto flags = SDL_GetWindowFlags(window);
+                should_hide = (flags & SDL_WINDOW_INPUT_FOCUS) != 0 &&
+                              (flags & SDL_WINDOW_MOUSE_FOCUS) != 0 &&
+                              PanelRegistry::instance().has_active_floating_drag();
+            }
+        }
+
+        if (should_hide) {
+            if (!floating_panel_cursor_hidden_) {
+                SDL_HideCursor();
+                floating_panel_cursor_hidden_ = true;
+            }
+        } else if (floating_panel_cursor_hidden_) {
+            SDL_ShowCursor();
+            floating_panel_cursor_hidden_ = false;
+        }
+    }
+
+    void GuiManager::renderFloatingPanelDragCursor() {
+        if (!floating_panel_cursor_hidden_ || !s_frame_input)
+            return;
+
+        const float dp = std::max(current_ui_scale_, 1.0f);
+        if (!vulkan_gui_) {
+            auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
+            auto* const overlay = rendering ? rendering->getScreenOverlayRenderer() : nullptr;
+            if (!overlay || !overlay->isFrameActive())
+                return;
+
+            const glm::vec2 tip{s_frame_input->mouse_x, s_frame_input->mouse_y};
+            const std::array<glm::vec2, 7> points = {
+                tip + glm::vec2{0.0f, 0.0f},
+                tip + glm::vec2{0.0f, 14.0f * dp},
+                tip + glm::vec2{4.0f * dp, 10.0f * dp},
+                tip + glm::vec2{7.5f * dp, 19.0f * dp},
+                tip + glm::vec2{10.5f * dp, 17.0f * dp},
+                tip + glm::vec2{7.0f * dp, 9.0f * dp},
+                tip + glm::vec2{12.0f * dp, 9.0f * dp},
+            };
+            const std::array<glm::vec2, 3> head = {points[0], points[1], points[6]};
+            const std::array<glm::vec2, 4> shaft = {points[2], points[3], points[4], points[5]};
+            overlay->addConvexPolyFilled(head, {1.0f, 1.0f, 1.0f, 1.0f});
+            overlay->addConvexPolyFilled(shaft, {1.0f, 1.0f, 1.0f, 1.0f});
+            overlay->addPolyline(points, {0.0f, 0.0f, 0.0f, 1.0f}, true, dp);
+            return;
+        }
+
+        auto* const render_interface = rmlui_manager_.getVulkanRenderInterface();
+        if (!render_interface)
+            return;
+
+        if (floating_panel_drag_cursor_geometry_ == 0 ||
+            floating_panel_drag_cursor_geometry_scale_ != dp) {
+            destroyFloatingPanelDragCursorGeometry();
+
+            const std::array<glm::vec2, 7> points = {
+                glm::vec2{0.0f, 0.0f},
+                glm::vec2{0.0f, 14.0f * dp},
+                glm::vec2{4.0f * dp, 10.0f * dp},
+                glm::vec2{7.5f * dp, 19.0f * dp},
+                glm::vec2{10.5f * dp, 17.0f * dp},
+                glm::vec2{7.0f * dp, 9.0f * dp},
+                glm::vec2{12.0f * dp, 9.0f * dp},
+            };
+            std::vector<Rml::Vertex> vertices;
+            std::vector<int> indices;
+            const Rml::ColourbPremultiplied white(255, 255, 255, 255);
+            const Rml::ColourbPremultiplied black(0, 0, 0, 255);
+            const auto add_triangle = [&](const glm::vec2 a, const glm::vec2 b,
+                                          const glm::vec2 c, const Rml::ColourbPremultiplied color) {
+                const int first = static_cast<int>(vertices.size());
+                vertices.push_back({Rml::Vector2f(a.x, a.y), color, {}});
+                vertices.push_back({Rml::Vector2f(b.x, b.y), color, {}});
+                vertices.push_back({Rml::Vector2f(c.x, c.y), color, {}});
+                indices.insert(indices.end(), {first, first + 1, first + 2});
+            };
+            const auto add_segment = [&](const glm::vec2 a, const glm::vec2 b,
+                                         const Rml::ColourbPremultiplied color) {
+                const glm::vec2 direction = b - a;
+                const float length = glm::length(direction);
+                if (length <= 0.0f)
+                    return;
+                const glm::vec2 normal{-direction.y / length * dp * 0.5f,
+                                       direction.x / length * dp * 0.5f};
+                const int first = static_cast<int>(vertices.size());
+                const std::array<glm::vec2, 4> quad = {
+                    a + normal, a - normal, b - normal, b + normal};
+                for (const auto point : quad)
+                    vertices.push_back({Rml::Vector2f(point.x, point.y), color, {}});
+                indices.insert(indices.end(), {first, first + 1, first + 2,
+                                               first, first + 2, first + 3});
+            };
+
+            add_triangle(points[0], points[1], points[6], white);
+            add_triangle(points[2], points[3], points[4], white);
+            add_triangle(points[2], points[4], points[5], white);
+            for (std::size_t i = 0; i < points.size(); ++i)
+                add_segment(points[i], points[(i + 1) % points.size()], black);
+
+            floating_panel_drag_cursor_geometry_ = render_interface->CompileGeometry(
+                {vertices.data(), vertices.size()}, {indices.data(), indices.size()});
+            if (floating_panel_drag_cursor_geometry_ != 0)
+                floating_panel_drag_cursor_geometry_scale_ = dp;
+        }
+
+        if (floating_panel_drag_cursor_geometry_ != 0) {
+            render_interface->ResetContextRenderState();
+            render_interface->RenderGeometry(
+                floating_panel_drag_cursor_geometry_,
+                {s_frame_input->mouse_x, s_frame_input->mouse_y}, {});
+        }
+    }
+
+    void GuiManager::destroyFloatingPanelDragCursorGeometry() {
+        if (floating_panel_drag_cursor_geometry_ == 0)
+            return;
+        if (auto* const render_interface = rmlui_manager_.getVulkanRenderInterface())
+            render_interface->ReleaseGeometry(floating_panel_drag_cursor_geometry_);
+        floating_panel_drag_cursor_geometry_ = 0;
+        floating_panel_drag_cursor_geometry_scale_ = 0.0f;
+    }
+
+    std::optional<GuiManager::SelectionRingCursorParameters>
+    GuiManager::computeSelectionRingCursorParameters(const float mouse_x, const float mouse_y) const {
+        if (!viewer_ || ui_hidden_ || guiFocusState().want_capture_mouse ||
+            !isPositionInViewport(mouse_x, mouse_y)) {
+            return std::nullopt;
+        }
+
+        const auto* const selection_tool = viewer_->getSelectionTool();
+        if (!selection_tool || !selection_tool->isEnabled() ||
+            viewer_->getEditorContext().getActiveTool() != ToolType::Selection) {
+            return std::nullopt;
+        }
+
+        auto* const rendering = viewer_->getRenderingManager();
+        if (!rendering || rendering->getSelectionPreviewMode() != SelectionPreviewMode::Centers ||
+            !rendering->isCursorPreviewActive()) {
+            return std::nullopt;
+        }
+
+        float render_radius = 0.0f;
+        bool add_mode = true;
+        [[maybe_unused]] float cursor_x = 0.0f;
+        [[maybe_unused]] float cursor_y = 0.0f;
+        rendering->getCursorPreviewState(cursor_x, cursor_y, render_radius, add_mode);
+        const auto panel = rendering->resolveViewerPanel(
+            viewer_->getViewport(),
+            viewport_layout_.pos,
+            viewport_layout_.size,
+            std::nullopt,
+            rendering->getCursorPreviewPanel());
+        if (!panel || !panel->valid()) {
+            return std::nullopt;
+        }
+        if (mouse_x < panel->x || mouse_x >= panel->x + panel->width ||
+            mouse_y < panel->y || mouse_y >= panel->y + panel->height) {
+            return std::nullopt;
+        }
+
+        const auto pointer_hit = hitTestPointer(mouse_x, mouse_y);
+        if (pointer_hit.blocks_pointer || pointer_hit.blocks_mouse_button ||
+            gizmo_manager_.isViewportGizmoDragging() ||
+            gizmo_manager_.isPositionInViewportGizmo(mouse_x, mouse_y)) {
+            return std::nullopt;
+        }
+        if (const auto* const input_controller = viewer_->getInputController();
+            input_controller && input_controller->hasViewportCursorOverride()) {
+            return std::nullopt;
+        }
+
+        const float screen_radius = render_radius *
+                                    (panel->width / static_cast<float>(panel->render_width));
+        const int radius_px = std::lround(screen_radius);
+        if (!useHardwareSelectionRing(true, SelectionPreviewMode::Centers, radius_px)) {
+            return std::nullopt;
+        }
+
+        std::optional<input::SelectionOp> selection_op;
+        if (auto* const input_controller = viewer_->getInputController()) {
+            selection_op = input_controller->selectionDragOperation();
+            if (!selection_op) {
+                selection_op = input::selectionOpForModifiers(
+                    input_controller->getBindings(),
+                    input::ToolMode::SELECTION,
+                    input_controller->currentModifierKeys());
+            }
+        }
+
+        SelectionCursorOperation operation = SelectionCursorOperation::Replace;
+        if (selection_op == input::SelectionOp::Add) {
+            operation = SelectionCursorOperation::Add;
+        } else if (selection_op == input::SelectionOp::Remove) {
+            operation = SelectionCursorOperation::Remove;
+        } else if (selection_op == input::SelectionOp::Intersect) {
+            operation = SelectionCursorOperation::Intersect;
+        }
+
+        const auto& theme_palette = theme().palette;
+        const auto& ring_color = (operation == SelectionCursorOperation::Remove ||
+                                  (!selection_op && !add_mode))
+                                     ? theme_palette.error
+                                     : theme_palette.success;
+        const auto to_byte = [](const float value) {
+            return static_cast<uint8_t>(std::lround(std::clamp(value, 0.0f, 1.0f) * 255.0f));
+        };
+        const SelectionCursorColor color{
+            to_byte(ring_color.x), to_byte(ring_color.y), to_byte(ring_color.z), to_byte(0.8f)};
+
+        if (!selection_ring_theme_signature_valid_) {
+            selection_ring_theme_signature_ = rml_theme::currentThemeSignature();
+            selection_ring_theme_signature_valid_ = true;
+        }
+        return SelectionRingCursorParameters{
+            .key = SelectionRingCursorKey{
+                .radius_px = radius_px,
+                .theme_signature = selection_ring_theme_signature_,
+                .color = color,
+                .operation = operation,
+            },
+            .operation = operation,
+        };
+    }
+
+    std::optional<GuiManager::SelectionRingCursorParameters>
+    GuiManager::selectionRingCursorParameters(const float mouse_x, const float mouse_y) const {
+        const auto frame_serial = viewer_ && viewer_->getWindowManager()
+                                      ? viewer_->getWindowManager()->frameInput().serial
+                                      : 0;
+        if (selection_ring_cursor_cache_.valid &&
+            selection_ring_cursor_cache_.frame_serial == frame_serial) {
+            return selection_ring_cursor_cache_.parameters;
+        }
+
+        selection_ring_cursor_cache_.valid = true;
+        selection_ring_cursor_cache_.frame_serial = frame_serial;
+        selection_ring_cursor_cache_.parameters =
+            computeSelectionRingCursorParameters(mouse_x, mouse_y);
+        return selection_ring_cursor_cache_.parameters;
+    }
+
+    bool GuiManager::selectionRingCursorActive(const float mouse_x, const float mouse_y) const {
+        const SDL_Cursor* const current_cursor = SDL_GetCursor();
+        const bool ring_is_current = current_cursor == selection_ring_cursor_ ||
+                                     current_cursor == selection_ring_cursor_pending_destroy_;
+        const bool ring_was_selected = last_selection_cursor_ == selection_ring_cursor_ ||
+                                       last_selection_cursor_ == selection_ring_cursor_pending_destroy_;
+        return selection_ring_cursor_ && (ring_is_current || ring_was_selected) &&
+               selectionRingCursorParameters(mouse_x, mouse_y).has_value();
+    }
+
+    bool GuiManager::isHardwareSelectionRingActive() const {
+        if (!selection_ring_cursor_ || !viewer_ || !viewer_->getWindowManager())
+            return false;
+        const auto& input = viewer_->getWindowManager()->frameInput();
+        return selectionRingCursorParameters(input.mouse_x, input.mouse_y).has_value();
+    }
+
+    void GuiManager::prepareSelectionRingCursor(const float mouse_x, const float mouse_y) {
+        if (selection_ring_cursor_pending_destroy_ &&
+            selection_ring_cursor_pending_destroy_ != SDL_GetCursor()) {
+            SDL_DestroyCursor(selection_ring_cursor_pending_destroy_);
+            selection_ring_cursor_pending_destroy_ = nullptr;
+        }
+
+        const auto parameters = selectionRingCursorParameters(mouse_x, mouse_y);
+        if (!parameters) {
+            return;
+        }
+        if (selection_ring_cursor_attempted_ &&
+            selection_ring_cursor_key_ == parameters->key) {
+            return;
+        }
+
+        selection_ring_cursor_key_ = parameters->key;
+        selection_ring_cursor_attempted_ = true;
+        const std::vector<uint8_t>* badge_pixels = nullptr;
+        switch (parameters->operation) {
+        case SelectionCursorOperation::Add:
+            badge_pixels = &selection_add_badge_pixels_;
+            break;
+        case SelectionCursorOperation::Remove:
+            badge_pixels = &selection_remove_badge_pixels_;
+            break;
+        case SelectionCursorOperation::Intersect:
+            badge_pixels = &selection_intersect_badge_pixels_;
+            break;
+        case SelectionCursorOperation::Replace:
+            break;
+        }
+
+        auto image = makeSelectionCursorImage(
+            parameters->key.radius_px,
+            parameters->key.color,
+            badge_pixels ? std::span<const uint8_t>(*badge_pixels) : std::span<const uint8_t>{},
+            badge_pixels ? selection_badge_width_ : 0,
+            badge_pixels ? selection_badge_height_ : 0);
+        if (!image.valid()) {
+            return;
+        }
+
+        const ColorCursorAsset asset{
+            .rgba = std::move(image.rgba),
+            .width = image.size,
+            .height = image.size,
+        };
+        SDL_Cursor* const cursor = createColorCursorFromAsset(asset, image.hotspot, image.hotspot);
+        if (!cursor) {
+            if (selection_ring_cursor_ == SDL_GetCursor())
+                setCursorIfChanged(SDL_GetDefaultCursor());
+            SDL_Cursor* const failed_cursor = selection_ring_cursor_;
+            selection_ring_cursor_ = nullptr;
+            if (failed_cursor == selection_ring_cursor_pending_destroy_)
+                selection_ring_cursor_pending_destroy_ = nullptr;
+            if (failed_cursor && failed_cursor != selection_ring_cursor_pending_destroy_)
+                SDL_DestroyCursor(failed_cursor);
+            last_selection_cursor_ = nullptr;
+            return;
+        }
+
+        if (selection_ring_cursor_) {
+            selection_ring_cursor_pending_destroy_ = selection_ring_cursor_;
+        }
+        selection_ring_cursor_ = cursor;
     }
 
     void GuiManager::applyRmlCursorRequest(const RmlCursorRequest req) {
+        SDL_Cursor* cursor = nullptr;
         if (req != RmlCursorRequest::Pipette && pipette_cursor_)
-            SDL_SetCursor(SDL_GetDefaultCursor());
+            cursor = SDL_GetDefaultCursor();
 
         switch (req) {
         case RmlCursorRequest::Arrow:
-            SDL_SetCursor(SDL_GetDefaultCursor());
+            cursor = SDL_GetDefaultCursor();
             break;
         case RmlCursorRequest::TextInput:
         case RmlCursorRequest::Hand:
@@ -4103,15 +4486,16 @@ namespace lfs::vis::gui {
         case RmlCursorRequest::ResizeNESW:
         case RmlCursorRequest::ResizeAll:
         case RmlCursorRequest::NotAllowed:
-            if (SDL_Cursor* cursor = systemCursorForRequest(req))
-                SDL_SetCursor(cursor);
+            cursor = systemCursorForRequest(req);
             break;
         case RmlCursorRequest::Pipette:
-            SDL_SetCursor(pipette_cursor_ ? pipette_cursor_ : SDL_GetDefaultCursor());
+            cursor = pipette_cursor_ ? pipette_cursor_ : SDL_GetDefaultCursor();
             break;
         case RmlCursorRequest::None:
             break;
         }
+        if (cursor)
+            setCursorIfChanged(cursor);
     }
 
     void GuiManager::initMenuBar() {
@@ -4274,6 +4658,9 @@ namespace lfs::vis::gui {
         }
         lfs::vis::setThemeChangeCallback([this](const std::string& theme_id) {
             rmlui_manager_.activateTheme(theme_id);
+            selection_ring_cursor_key_ = {};
+            selection_ring_cursor_attempted_ = false;
+            selection_ring_theme_signature_valid_ = false;
             if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr) {
                 rendering->markDirty(DirtyFlag::OVERLAY);
             }
@@ -4779,6 +5166,9 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::shutdown() {
+        SDL_ShowCursor();
+        floating_panel_cursor_hidden_ = false;
+        destroyFloatingPanelDragCursorGeometry();
         if (ui_visibility_resize_active_) {
             ui_visibility_resize_active_ = false;
             ui_visibility_layout_committed_ = false;
@@ -5323,6 +5713,8 @@ namespace lfs::vis::gui {
                         auto* const rm = viewer_->getRenderingManager();
                         const auto mode = rm ? rm->getSelectionPreviewMode()
                                              : lfs::vis::SelectionPreviewMode::Centers;
+                        const bool hardware_selection_ring =
+                            selectionRingCursorActive(mp.x, mp.y);
                         const auto& palette = lfs::vis::theme().palette;
                         const auto& base = (SDL_GetModState() & SDL_KMOD_CTRL) ? palette.error : palette.primary;
                         const glm::vec4 color{base.x * 0.85f, base.y * 0.85f, base.z * 0.85f, 0.85f};
@@ -5343,13 +5735,14 @@ namespace lfs::vis::gui {
                                 line(pts.back(), pts.front(), thickness);
                             }
                         };
-
                         switch (mode) {
                         case lfs::vis::SelectionPreviewMode::Centers:
-                            appendShapeOverlayCircleOutline(params.ui_shape_overlay_triangles, params,
-                                                            mp, sel->getBrushRadius(), color, 2.0f);
-                            appendShapeOverlayCircle(params.ui_shape_overlay_triangles, params,
-                                                     mp, 3.0f, color);
+                            if (!hardware_selection_ring) {
+                                appendShapeOverlayCircleOutline(params.ui_shape_overlay_triangles, params,
+                                                                mp, sel->getBrushRadius(), color, 2.0f);
+                                appendShapeOverlayCircle(params.ui_shape_overlay_triangles, params,
+                                                         mp, 3.0f, color);
+                            }
                             break;
                         case lfs::vis::SelectionPreviewMode::Rings:
                             appendShapeOverlayCircleOutline(params.ui_shape_overlay_triangles, params,
@@ -5800,13 +6193,17 @@ namespace lfs::vis::gui {
         return guard_active && !ui_resize_ready;
     }
 
-    void GuiManager::render() {
+    bool GuiManager::render() {
         auto* window_manager = viewer_ ? viewer_->getWindowManager() : nullptr;
 
         auto* vulkan_context = (vulkan_gui_ && window_manager) ? window_manager->getVulkanContext() : nullptr;
         if (vulkan_gui_ && !vulkan_context) {
+            if (floating_panel_cursor_hidden_) {
+                SDL_ShowCursor();
+                floating_panel_cursor_hidden_ = false;
+            }
             updateInteractiveTransitionGuard();
-            return;
+            return false;
         }
 
         if (first_render_completed_ && deferred_startup_work_pending_) {
@@ -5823,6 +6220,7 @@ namespace lfs::vis::gui {
         }
 
         std::optional<::lfs::core::ScopedTimer> cpu_ui_before_vulkan_timer;
+        bool presented = false;
         if (vulkan_gui_) {
             cpu_ui_before_vulkan_timer.emplace("gui_render.cpu_ui_before_vulkan_begin",
                                                ::lfs::core::LogLevel::Performance,
@@ -5850,8 +6248,11 @@ namespace lfs::vis::gui {
             input_controller->getBindings().updateCapture();
         }
 
-        if (auto* input_controller = viewer_->getInputController())
-            input_controller->applySplitterCursorOverride();
+        updateFloatingPanelCursorVisibility();
+        if (!floating_panel_cursor_hidden_) {
+            if (auto* input_controller = viewer_->getInputController())
+                input_controller->applySplitterCursorOverride();
+        }
         rmlui_manager_.clearVulkanQueue();
         const auto& sdl_input = viewer_->getWindowManager()->frameInput();
         if (python::bridge().begin_ui_frame)
@@ -5910,6 +6311,8 @@ namespace lfs::vis::gui {
                 (window_flags & SDL_WINDOW_INPUT_FOCUS) == 0) {
                 rmlui_manager_.cancelDragPayload();
             }
+            if (escape_pressed)
+                PanelRegistry::instance().cancel_floating_interactions();
             if (escape_pressed) {
                 auto* console_state = panels::PythonConsoleState::tryGetInstance();
                 auto* editor = console_state ? console_state->getEditor() : nullptr;
@@ -6627,13 +7030,13 @@ namespace lfs::vis::gui {
             case CursorRequest::ResizeEW: {
                 static SDL_Cursor* const cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
                 if (cursor)
-                    SDL_SetCursor(cursor);
+                    setCursorIfChanged(cursor);
                 break;
             }
             case CursorRequest::ResizeNS: {
                 static SDL_Cursor* const cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NS_RESIZE);
                 if (cursor)
-                    SDL_SetCursor(cursor);
+                    setCursorIfChanged(cursor);
                 break;
             }
             default: break;
@@ -6910,7 +7313,8 @@ namespace lfs::vis::gui {
             overlay_renderer = rendering->getScreenOverlayRenderer();
         }
         const bool needs_screen_overlay_frame =
-            has_viewport_overlay_panels || has_python_overlay_hooks || has_overlay_popups;
+            has_viewport_overlay_panels || has_python_overlay_hooks || has_overlay_popups ||
+            (floating_panel_cursor_hidden_ && !vulkan_gui_);
         if (overlay_renderer && needs_screen_overlay_frame) {
             LOG_TIMER_THRESHOLD("gui_render.screen_overlay_renderer.beginFrame", 0.25);
             overlay_renderer->beginFrame();
@@ -6937,12 +7341,11 @@ namespace lfs::vis::gui {
             }
         };
 
+        prepareSelectionRingCursor(sdl_input.mouse_x, sdl_input.mouse_y);
         if (overlay_renderer && needs_screen_overlay_frame) {
             const python::ScopedOverlayDrawContext overlay_context(
                 {.renderer = overlay_renderer});
             draw_screen_overlay_content();
-            LOG_TIMER_THRESHOLD("gui_render.screen_overlay_renderer.endFrame", 0.25);
-            overlay_renderer->endFrame();
         } else {
             draw_screen_overlay_content();
         }
@@ -6963,6 +7366,7 @@ namespace lfs::vis::gui {
                               },
                               draw_ctx);
         }
+        updateFloatingPanelCursorVisibility();
         // Floating Rml panels process their release after the viewport overlay,
         // so resolve a second time to consume a drag ending in this frame.
         resolve_project_asset_drag();
@@ -7039,87 +7443,110 @@ namespace lfs::vis::gui {
         if (!window_resize_active) {
             const auto rml_cursor = rmlui_manager_.consumeCursorRequest();
             const bool floating_resize_applied =
-                has_floating_panels && reg.apply_floating_resize_cursor();
+                !floating_panel_cursor_hidden_ && has_floating_panels &&
+                reg.apply_floating_resize_cursor();
             if (!floating_resize_applied) {
                 const auto right_panel_cursor = rml_right_panel_.getCursorRequest();
                 const auto bottom_dock_cursor = rml_bottom_dock_.getCursorRequest();
                 const auto layout_cursor = panel_layout_.getCursorRequest();
-                applyRmlCursorRequest(rml_cursor);
-                apply_cursor(right_panel_cursor);
-                apply_cursor(bottom_dock_cursor);
-                apply_cursor(layout_cursor);
-                auto* const input_controller = viewer_->getInputController();
-                if (input_controller)
-                    input_controller->applySplitterCursorOverride();
+                if (floating_panel_cursor_hidden_) {
+                    last_selection_cursor_ = nullptr;
+                } else {
+                    applyRmlCursorRequest(rml_cursor);
+                    apply_cursor(right_panel_cursor);
+                    apply_cursor(bottom_dock_cursor);
+                    apply_cursor(layout_cursor);
+                    auto* const input_controller = viewer_->getInputController();
+                    if (input_controller)
+                        input_controller->applySplitterCursorOverride();
 
-                const bool gizmo_cursor_applied =
-                    isBoundsGizmoHovered() || isBoundsGizmoActive() ||
-                    isRotationGizmoHovered() || isRotationGizmoActive() ||
-                    isScaleGizmoHovered() || isScaleGizmoActive() ||
-                    isTranslationGizmoHovered() || isTranslationGizmoActive() ||
-                    gizmo_manager_.isPositionInViewportGizmo(sdl_input.mouse_x, sdl_input.mouse_y);
-                const bool higher_priority_cursor_applied =
-                    (rml_cursor != RmlCursorRequest::None &&
-                     rml_cursor != RmlCursorRequest::Arrow) ||
-                    right_panel_cursor != CursorRequest::None ||
-                    bottom_dock_cursor != CursorRequest::None ||
-                    layout_cursor != CursorRequest::None ||
-                    gizmo_cursor_applied ||
-                    (input_controller && input_controller->hasViewportCursorOverride());
-                const auto pointer_hit = hitTestPointer(sdl_input.mouse_x, sdl_input.mouse_y);
+                    const bool gizmo_cursor_applied =
+                        isBoundsGizmoHovered() || isBoundsGizmoActive() ||
+                        isRotationGizmoHovered() || isRotationGizmoActive() ||
+                        isScaleGizmoHovered() || isScaleGizmoActive() ||
+                        isTranslationGizmoHovered() || isTranslationGizmoActive() ||
+                        gizmo_manager_.isPositionInViewportGizmo(sdl_input.mouse_x, sdl_input.mouse_y);
+                    const bool higher_priority_cursor_applied =
+                        (rml_cursor != RmlCursorRequest::None &&
+                         rml_cursor != RmlCursorRequest::Arrow) ||
+                        right_panel_cursor != CursorRequest::None ||
+                        bottom_dock_cursor != CursorRequest::None ||
+                        layout_cursor != CursorRequest::None ||
+                        gizmo_cursor_applied ||
+                        (input_controller && input_controller->hasViewportCursorOverride());
+                    const auto pointer_hit = hitTestPointer(sdl_input.mouse_x, sdl_input.mouse_y);
 
-                std::optional<input::SelectionOp> selection_op;
-                if (input_controller) {
-                    selection_op = input_controller->selectionDragOperation();
-                    if (!selection_op && viewer_->getSelectionTool() &&
-                        viewer_->getSelectionTool()->isEnabled() &&
-                        viewer_->getEditorContext().getActiveTool() == ToolType::Selection) {
-                        selection_op = input::selectionOpForModifiers(
-                            input_controller->getBindings(),
-                            input::ToolMode::SELECTION,
-                            input_controller->currentModifierKeys());
+                    std::optional<input::SelectionOp> selection_op;
+                    if (input_controller) {
+                        selection_op = input_controller->selectionDragOperation();
+                        if (!selection_op && viewer_->getSelectionTool() &&
+                            viewer_->getSelectionTool()->isEnabled() &&
+                            viewer_->getEditorContext().getActiveTool() == ToolType::Selection) {
+                            selection_op = input::selectionOpForModifiers(
+                                input_controller->getBindings(),
+                                input::ToolMode::SELECTION,
+                                input_controller->currentModifierKeys());
+                        }
                     }
-                }
-                // RmlUI can publish a default-arrow request when a viewport
-                // mouse press changes its capture state. Allow the selection
-                // cursor to replace that transient reset while retaining the
-                // normal priority for specialized RmlUI cursors.
-                if (rml_cursor == RmlCursorRequest::Arrow)
-                    last_selection_cursor_ = nullptr;
-                SDL_Cursor* wanted_selection_cursor = nullptr;
-                if (!higher_priority_cursor_applied &&
-                    isPositionInViewport(sdl_input.mouse_x, sdl_input.mouse_y) &&
-                    (!guiFocusState().want_capture_mouse || selection_op.has_value()) &&
-                    !pointer_hit.blocks_pointer && !pointer_hit.blocks_mouse_button &&
-                    (selection_op.has_value() ||
-                     (viewer_->getSelectionTool() && viewer_->getSelectionTool()->isEnabled() &&
-                      viewer_->getEditorContext().getActiveTool() == ToolType::Selection))) {
-                    if (selection_op == input::SelectionOp::Add)
-                        wanted_selection_cursor = selection_add_cursor_;
-                    else if (selection_op == input::SelectionOp::Remove)
-                        wanted_selection_cursor = selection_remove_cursor_;
-                    else if (selection_op == input::SelectionOp::Intersect)
-                        wanted_selection_cursor = selection_intersect_cursor_;
-                }
-                if (higher_priority_cursor_applied) {
-                    last_selection_cursor_ = nullptr;
-                } else if (wanted_selection_cursor != last_selection_cursor_ ||
-                           (wanted_selection_cursor && wanted_selection_cursor != SDL_GetCursor())) {
-                    SDL_SetCursor(wanted_selection_cursor ? wanted_selection_cursor : SDL_GetDefaultCursor());
-                    last_selection_cursor_ = wanted_selection_cursor;
+                    // RmlUI can publish a default-arrow request when a viewport
+                    // mouse press changes its capture state. Allow the selection
+                    // cursor to replace that transient reset while retaining the
+                    // normal priority for specialized RmlUI cursors.
+                    if (rml_cursor == RmlCursorRequest::Arrow)
+                        last_selection_cursor_ = nullptr;
+                    SDL_Cursor* wanted_selection_cursor = nullptr;
+                    if (!higher_priority_cursor_applied &&
+                        !pointer_hit.blocks_pointer && !pointer_hit.blocks_mouse_button) {
+                        if (selection_ring_cursor_ &&
+                            selectionRingCursorParameters(sdl_input.mouse_x, sdl_input.mouse_y)) {
+                            wanted_selection_cursor = selection_ring_cursor_;
+                        } else if (isPositionInViewport(sdl_input.mouse_x, sdl_input.mouse_y) &&
+                                   (!guiFocusState().want_capture_mouse || selection_op.has_value()) &&
+                                   (selection_op.has_value() ||
+                                    (viewer_->getSelectionTool() && viewer_->getSelectionTool()->isEnabled() &&
+                                     viewer_->getEditorContext().getActiveTool() == ToolType::Selection))) {
+                            if (selection_op == input::SelectionOp::Add)
+                                wanted_selection_cursor = selection_add_cursor_;
+                            else if (selection_op == input::SelectionOp::Remove)
+                                wanted_selection_cursor = selection_remove_cursor_;
+                            else if (selection_op == input::SelectionOp::Intersect)
+                                wanted_selection_cursor = selection_intersect_cursor_;
+                        }
+                    }
+                    if (higher_priority_cursor_applied) {
+                        last_selection_cursor_ = nullptr;
+                    } else if (wanted_selection_cursor != last_selection_cursor_ ||
+                               (wanted_selection_cursor && wanted_selection_cursor != SDL_GetCursor())) {
+                        setCursorIfChanged(wanted_selection_cursor ? wanted_selection_cursor : SDL_GetDefaultCursor());
+                        last_selection_cursor_ = wanted_selection_cursor;
+                    }
                 }
             } else {
                 last_selection_cursor_ = nullptr;
             }
+        } else if (floating_panel_cursor_hidden_) {
+            last_selection_cursor_ = nullptr;
         } else if (auto* const wm = viewer_->getWindowManager()) {
             last_selection_cursor_ = nullptr;
             wm->refreshResizeCursor();
+        }
+        if (selection_ring_cursor_pending_destroy_ &&
+            selection_ring_cursor_pending_destroy_ != SDL_GetCursor()) {
+            SDL_DestroyCursor(selection_ring_cursor_pending_destroy_);
+            selection_ring_cursor_pending_destroy_ = nullptr;
         }
         // Re-sample after every Rml surface has processed input so the next
         // SDL key (handleKey) sees text focus even when GUI frames are idle.
         if (rmlui_manager_.wantsTextInput())
             guiFocusState().want_text_input = true;
         syncWindowTextInput(viewer_->getWindow());
+
+        if (!vulkan_gui_)
+            renderFloatingPanelDragCursor();
+        if (overlay_renderer && needs_screen_overlay_frame) {
+            LOG_TIMER_THRESHOLD("gui_render.screen_overlay_renderer.endFrame", 0.25);
+            overlay_renderer->endFrame();
+        }
 
         if (vulkan_gui_) {
             LOG_TIMER_THRESHOLD("gui_render.menu_context_modal_render", 0.25);
@@ -7319,6 +7746,7 @@ namespace lfs::vis::gui {
                             LOG_TIMER_THRESHOLD("gui_render.rmlui_record.foreground", 0.25);
                             rmlui_manager_.renderQueuedVulkanContexts(true);
                         }
+                        renderFloatingPanelDragCursor();
                         rmlui_manager_.endVulkanFrame();
                     } else {
                         rmlui_manager_.clearVulkanQueue();
@@ -7331,7 +7759,8 @@ namespace lfs::vis::gui {
                 // the active frame before returning its readback.
                 if (vulkan_context->hasActiveFrame()) {
                     LOG_TIMER("frame_pacing.vulkan_endFrame_present");
-                    if (!vulkan_context->endFrame()) {
+                    presented = vulkan_context->endFrame();
+                    if (!presented) {
                         LOG_WARN("Vulkan GUI frame present failed: {}", vulkan_context->lastError());
                     }
                 }
@@ -7361,7 +7790,7 @@ namespace lfs::vis::gui {
                 if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr)
                     rendering->markDirty(DirtyFlag::OVERLAY);
             }
-            return;
+            return presented;
         }
 
         if (!vulkan_gui_ && viewer_) {
@@ -7373,6 +7802,7 @@ namespace lfs::vis::gui {
             if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr)
                 rendering->markDirty(DirtyFlag::OVERLAY);
         }
+        return false;
     }
 
     void GuiManager::renderSelectionOverlays(const UIContext& ctx) {
@@ -7498,7 +7928,8 @@ namespace lfs::vis::gui {
                 return true;
             };
 
-            if (rm && rm->isCursorPreviewActive()) {
+            const bool hardware_selection_ring = isHardwareSelectionRingActive();
+            if (rm && rm->isCursorPreviewActive() && !hardware_selection_ring) {
                 const auto& t = theme();
                 float bx, by, br;
                 bool add_mode;
@@ -8130,7 +8561,7 @@ namespace lfs::vis::gui {
 
         if (!guiFocusState().want_capture_mouse && isPositionInViewport(mouse_x, mouse_y)) {
             if (auto* const sel = viewer_ ? viewer_->getSelectionTool() : nullptr; sel && sel->isEnabled()) {
-                return true;
+                return !selectionRingCursorActive(mouse_x, mouse_y);
             }
         }
 

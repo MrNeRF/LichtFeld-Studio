@@ -1218,8 +1218,13 @@ def open_image_preview(image_paths: list[Path], mask_paths: list[Path],
     global _pending_open
     _pending_open = (image_paths, mask_paths, start_index, camera_uids)
     lf.ui.set_panel_enabled("lfs.image_preview", True)
-    if _instance and _pending_open is not None:
-        _instance.open(*_pending_open)
+    panel = _instance
+    if panel is None:
+        get_panel_object = getattr(lf.ui, "get_panel_object", None)
+        if get_panel_object is not None:
+            panel = get_panel_object("lfs.image_preview")
+    if panel and _pending_open is not None:
+        panel.open(*_pending_open)
         _pending_open = None
 
 

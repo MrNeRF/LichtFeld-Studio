@@ -383,6 +383,10 @@ namespace lfs::vis::gui {
             owner->handleEvent(event);
     }
 
+    NativeScenePanel::~NativeScenePanel() {
+        clearElementCache();
+    }
+
     void NativeScenePanel::clearElementCache() {
         logging_rows_.clear();
         if (manager_)

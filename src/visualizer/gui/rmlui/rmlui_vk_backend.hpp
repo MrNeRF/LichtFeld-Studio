@@ -145,11 +145,12 @@ public:
     void PopLayer() override;
     /// Called by RmlUi when it wants to capture the current layer as a texture.
     Rml::TextureHandle SaveLayerAsTexture() override;
-    /// Like SaveLayerAsTexture(), but when `reuse_texture` has the same extent as the
-    /// capture bounds, reuses that image (copy into it) instead of allocating a new one.
+    /// Captures an explicit layer region for manager-owned context caches.
+    /// When `reuse_texture` has the same extent as `region`, reuses that image instead of
+    /// allocating a new one.
     /// On extent mismatch or invalid handle, allocates a new texture (caller must release
     /// the old one if it is no longer needed).
-    Rml::TextureHandle SaveLayerAsTexture(Rml::TextureHandle reuse_texture);
+    Rml::TextureHandle SaveLayerRegionAsTexture(VkRect2D region, Rml::TextureHandle reuse_texture);
 
     /// Called by RmlUi when it wants to set the current transform matrix to a new matrix.
     void SetTransform(const Rml::Matrix4f* transform) override;
@@ -662,6 +663,7 @@ private:
     VkSampler m_p_sampler_linear;
     VkSampler m_p_sampler_nearest;
     VkRect2D m_scissor;
+    VkRect2D m_scissor_requested;
 
     // @ means it captures the window size full width and full height, offset equals both x and y to 0
     VkRect2D m_scissor_original;

@@ -1142,6 +1142,8 @@ namespace lfs::vis {
         }
 
         case SDL_EVENT_DROP_FILE:
+            LOG_DEBUG("SDL drop file: window={} data={}", event.drop.windowID,
+                      event.drop.data ? event.drop.data : "(null)");
             if (!eventTargetsWindow(event, main_window_id))
                 break;
             if (event.drop.data) {
@@ -1149,7 +1151,20 @@ namespace lfs::vis {
             }
             break;
 
+        case SDL_EVENT_DROP_TEXT:
+            // A file drag that reached us as text (e.g. an X11 source offering
+            // text/plain ahead of text/uri-list) carries no usable file list.
+            LOG_DEBUG("SDL drop text ignored: window={} text={}", event.drop.windowID,
+                      event.drop.data ? event.drop.data : "(null)");
+            break;
+
+        case SDL_EVENT_DROP_BEGIN:
+            LOG_DEBUG("SDL drop begin: window={}", event.drop.windowID);
+            break;
+
         case SDL_EVENT_DROP_COMPLETE:
+            LOG_DEBUG("SDL drop complete: window={} pending_files={}", event.drop.windowID,
+                      pending_drop_files_.size());
             if (!eventTargetsWindow(event, main_window_id))
                 break;
             if (input_controller_ && !pending_drop_files_.empty()) {

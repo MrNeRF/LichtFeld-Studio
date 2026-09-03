@@ -6,6 +6,7 @@
 #include "core/export.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
+#include "operation/undo_entry.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_types.hpp"
 #include <array>
@@ -28,10 +29,6 @@ namespace lfs::rendering {
 class Viewport;
 
 namespace lfs::vis {
-
-    namespace op {
-        class SceneSnapshot;
-    }
 
     class SceneManager;
     class RenderingManager;
@@ -195,6 +192,8 @@ namespace lfs::vis {
         }
         void updatePassiveRingHoverPreview(glm::vec2 cursor_pos, SelectionMode mode,
                                            SelectionFilterState filters = {});
+        void updatePassiveBrushHoverPreview(glm::vec2 cursor_pos, float brush_radius,
+                                            SelectionMode mode);
         void setInteractiveSelectionMode(SelectionMode mode) { interactive_selection_.mode = mode; }
         // Test-only observable for the incremental brush-preview cache: the number of
         // brush points already folded into the interactive preview. Zero after
@@ -218,6 +217,11 @@ namespace lfs::vis {
 
     private:
         struct PendingSelectionCounts {
+            PendingSelectionCounts();
+            ~PendingSelectionCounts();
+            PendingSelectionCounts(PendingSelectionCounts&&) noexcept;
+            PendingSelectionCounts& operator=(PendingSelectionCounts&&) noexcept;
+
             std::shared_ptr<core::Tensor> mask;
             std::unique_ptr<op::SceneSnapshot> undo_entry;
             core::Tensor scratch;
