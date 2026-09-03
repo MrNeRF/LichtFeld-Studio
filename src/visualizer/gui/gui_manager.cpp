@@ -5441,13 +5441,13 @@ namespace lfs::vis::gui {
         return guard_active && !ui_resize_ready;
     }
 
-    void GuiManager::render() {
+    bool GuiManager::render() {
         auto* window_manager = viewer_ ? viewer_->getWindowManager() : nullptr;
 
         auto* vulkan_context = (vulkan_gui_ && window_manager) ? window_manager->getVulkanContext() : nullptr;
         if (vulkan_gui_ && !vulkan_context) {
             updateInteractiveTransitionGuard();
-            return;
+            return false;
         }
 
         if (first_render_completed_ && deferred_startup_work_pending_) {
@@ -5464,6 +5464,7 @@ namespace lfs::vis::gui {
         }
 
         std::optional<::lfs::core::ScopedTimer> cpu_ui_before_vulkan_timer;
+        bool presented = false;
         if (vulkan_gui_) {
             cpu_ui_before_vulkan_timer.emplace("gui_render.cpu_ui_before_vulkan_begin",
                                                ::lfs::core::LogLevel::Performance,
@@ -6920,7 +6921,8 @@ namespace lfs::vis::gui {
                 // the active frame before returning its readback.
                 if (vulkan_context->hasActiveFrame()) {
                     LOG_TIMER("frame_pacing.vulkan_endFrame_present");
-                    if (!vulkan_context->endFrame()) {
+                    presented = vulkan_context->endFrame();
+                    if (!presented) {
                         LOG_WARN("Vulkan GUI frame present failed: {}", vulkan_context->lastError());
                     }
                 }
@@ -6950,7 +6952,7 @@ namespace lfs::vis::gui {
                 if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr)
                     rendering->markDirty(DirtyFlag::OVERLAY);
             }
-            return;
+            return presented;
         }
 
         if (!vulkan_gui_ && viewer_) {
@@ -6962,6 +6964,7 @@ namespace lfs::vis::gui {
             if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr)
                 rendering->markDirty(DirtyFlag::OVERLAY);
         }
+        return false;
     }
 
     void GuiManager::renderSelectionOverlays(const UIContext& ctx) {

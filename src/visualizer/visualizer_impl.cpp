@@ -2608,15 +2608,16 @@ namespace lfs::vis {
                       frame_demand.render_work,
                       frame_demand.store_dirty);
         }
+        bool presented_gui_frame = false;
         if (gui_manager_) {
             LOG_TIMER("VisualizerImpl::render.gui_frame_total_with_swapchain_wait");
             window_manager_->updateWindowSize("pre_gui_render");
-            gui_manager_->render();
+            presented_gui_frame = gui_manager_->render();
             window_manager_->refreshResizeCursor();
             // Count presented frames (GUI-only included). Scene FPS still comes
             // from framerate_controller_ inside renderVulkanFrame; this is
             // measurement-only and does not affect pacing.
-            if (rendering_manager_) {
+            if (presented_gui_frame && rendering_manager_) {
                 rendering_manager_->notePresentedFrame();
             }
         } else {
@@ -2677,8 +2678,15 @@ namespace lfs::vis {
 
         const auto py_redraw_due = python::seconds_until_scheduled_redraw();
         const double py_redraw_due_in = py_redraw_due ? *py_redraw_due : -1.0;
+        const auto poll_time = window_manager_->frameInput().poll_time;
+        const double input_age_ms =
+            poll_time == std::chrono::steady_clock::time_point{}
+                ? 0.0
+                : std::chrono::duration<double, std::milli>(
+                      std::chrono::steady_clock::now() - poll_time)
+                      .count();
 
-        LOG_PERF("loop_end needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} window_resize_paint_pending={} viewport_resize_deferring={} viewport_resize_settle_ready={} gui_only_throttle={} py_redraw_due_in={:.4f} gui_anim_sources={} wake_reason={} wake_timeout_source={}",
+        LOG_PERF("loop_end needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} window_resize_paint_pending={} viewport_resize_deferring={} viewport_resize_settle_ready={} gui_only_throttle={} py_redraw_due_in={:.4f} gui_anim_sources={} wake_reason={} wake_timeout_source={} input_age_ms={:.2f}",
                  next_demand.scene_dirty,
                  next_demand.continuous_input,
                  next_demand.python_animation,
@@ -2698,13 +2706,18 @@ namespace lfs::vis {
                  py_redraw_due_in,
                  gui_manager_ ? gui_manager_->describeAnimationDemand() : std::string{"none"},
                  last_wake_reason_,
-                 last_wake_timeout_source_);
+                 last_wake_timeout_source_,
+                 input_age_ms);
 
         if (next_demand.needsContinuousLoop()) {
             if (gui_only_animation) {
                 // GUI-only animation must not free-run against a MAILBOX swapchain.
                 // Cap at the display interval; waitEvents still wakes instantly on input.
                 const double gui_animation_frame_interval = guiAnimationFrameInterval();
+                if (presented_gui_frame) {
+                    if (auto* const vulkan_context = window_manager_->getVulkanContext())
+                        static_cast<void>(vulkan_context->waitForNextFrameSlot());
+                }
                 const double elapsed = std::chrono::duration<double>(
                                            std::chrono::high_resolution_clock::now() - last_frame_time_)
                                            .count();
@@ -2720,6 +2733,10 @@ namespace lfs::vis {
                                                     : "gui_animation_paced";
                 }
             } else {
+                if (presented_gui_frame) {
+                    if (auto* const vulkan_context = window_manager_->getVulkanContext())
+                        static_cast<void>(vulkan_context->waitForNextFrameSlot());
+                }
                 window_manager_->pollEvents();
                 last_wake_reason_ = window_manager_->frameInput().had_event ? "event" : "poll";
                 last_wake_timeout_source_ = "none";
@@ -2727,6 +2744,10 @@ namespace lfs::vis {
         } else {
             // Idle: wait to minimize CPU/GPU work. Mouse-motion-only viewport wakes
             // are filtered at the top of the next loop without presenting a GUI frame.
+            if (presented_gui_frame) {
+                if (auto* const vulkan_context = window_manager_->getVulkanContext())
+                    static_cast<void>(vulkan_context->waitForNextFrameSlot());
+            }
             waitForNextEvent(is_training);
         }
     }
