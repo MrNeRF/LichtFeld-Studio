@@ -219,6 +219,8 @@ namespace lfs::vis {
             DynamicBuffer ui_textured_overlay;
             DynamicBuffer grid_uniform;
             DynamicBuffer frustum_instances;
+            const VulkanViewportFrustumOverlayData* uploaded_frustum_overlay = nullptr;
+            std::uint64_t uploaded_frustum_overlay_generation = 0;
             VkDescriptorSet scene_descriptor_set = VK_NULL_HANDLE;
             VkDescriptorSet grid_descriptor_set = VK_NULL_HANDLE;
             VkDescriptorSet frustum_descriptor_set = VK_NULL_HANDLE;
@@ -396,11 +398,11 @@ namespace lfs::vis {
                 [this](const VulkanViewportPassParams& p) {
                     const auto& frame = resourcesForFrame(p.frame_slot);
                     return frame.textured_overlay.count > 0 && textured_overlay_pipeline != VK_NULL_HANDLE &&
-                           frame.textured_overlay.buffer != VK_NULL_HANDLE && !p.textured_overlays.empty();
+                           frame.textured_overlay.buffer != VK_NULL_HANDLE && !texturedOverlays(p).empty();
                 },
                 [this](const ViewportRecordContext& c, const VulkanViewportPassParams& p) {
                     const auto& frame = resourcesForFrame(p.frame_slot);
-                    recordTexturedOverlayPass(c, p, p.textured_overlays, frame.textured_overlay,
+                    recordTexturedOverlayPass(c, p, texturedOverlays(p), frame.textured_overlay,
                                               c.world_depth_params_push);
                 });
             addGraphPass(
@@ -430,7 +432,7 @@ namespace lfs::vis {
                     return frame.frustum_instances.count > 0 && frustum_pipeline != VK_NULL_HANDLE &&
                            frame.frustum_descriptor_set != VK_NULL_HANDLE &&
                            frame.shape_overlay_descriptor_set != VK_NULL_HANDLE &&
-                           frame.frustum_instances.buffer != VK_NULL_HANDLE && !p.frustum_batches.empty();
+                           frame.frustum_instances.buffer != VK_NULL_HANDLE && !frustumBatches(p).empty();
                 },
                 [this](const ViewportRecordContext& c, const VulkanViewportPassParams& p) {
                     recordFrustumPass(c, p);
@@ -495,6 +497,27 @@ namespace lfs::vis {
                 [this](const ViewportRecordContext& c, const VulkanViewportPassParams& p) {
                     recordPostUiOverlayPass(c.cmd, p);
                 });
+        }
+
+        [[nodiscard]] const std::vector<VulkanViewportTexturedOverlay>& texturedOverlays(
+            const VulkanViewportPassParams& params) const {
+            return params.frustum_overlay_data
+                       ? params.frustum_overlay_data->textured_overlays
+                       : params.textured_overlays;
+        }
+
+        [[nodiscard]] const std::vector<VulkanViewportFrustumInstance>& frustumInstances(
+            const VulkanViewportPassParams& params) const {
+            return params.frustum_overlay_data
+                       ? params.frustum_overlay_data->frustum_instances
+                       : params.frustum_instances;
+        }
+
+        [[nodiscard]] const std::vector<VulkanViewportFrustumBatch>& frustumBatches(
+            const VulkanViewportPassParams& params) const {
+            return params.frustum_overlay_data
+                       ? params.frustum_overlay_data->frustum_batches
+                       : params.frustum_batches;
         }
 
         [[nodiscard]] bool createBuffer(const VkDeviceSize size,
@@ -1991,18 +2014,19 @@ namespace lfs::vis {
 
         void updateFrustumInstances(const VulkanViewportPassParams& params) {
             auto& frame = resourcesForFrame(params.frame_slot);
-            if (params.frustum_instances.empty()) {
+            const auto& instances = frustumInstances(params);
+            if (instances.empty()) {
                 frame.frustum_instances.count = 0;
                 return;
             }
-            if (!ensureFrustumInstanceBuffer(frame, params.frustum_instances.size())) {
+            if (!ensureFrustumInstanceBuffer(frame, instances.size())) {
                 return;
             }
             const VkDeviceSize bytes = static_cast<VkDeviceSize>(
-                sizeof(VulkanViewportFrustumInstance) * params.frustum_instances.size());
-            if (writeAllocation(frame.frustum_instances.allocation, params.frustum_instances.data(), bytes)) {
+                sizeof(VulkanViewportFrustumInstance) * instances.size());
+            if (writeAllocation(frame.frustum_instances.allocation, instances.data(), bytes)) {
                 frame.frustum_instances.count = static_cast<std::uint32_t>(
-                    std::min<std::size_t>(params.frustum_instances.size(), std::numeric_limits<std::uint32_t>::max()));
+                    std::min<std::size_t>(instances.size(), std::numeric_limits<std::uint32_t>::max()));
             }
         }
 
@@ -2020,11 +2044,21 @@ namespace lfs::vis {
             auto& frame = resourcesForFrame(params.frame_slot);
             updateQuadBuffer(params.scene_image_flip_y);
             updateGridUniforms(params);
-            updateFrustumInstances(params);
-            updateTexturedOverlayBuffer(params.textured_overlays,
-                                        frame.textured_overlay,
-                                        params.frame_slot,
-                                        "textured_overlay");
+            const auto* const frustum_overlay = params.frustum_overlay_data.get();
+            const bool frustum_overlay_unchanged =
+                frustum_overlay != nullptr &&
+                frame.uploaded_frustum_overlay == frustum_overlay &&
+                frame.uploaded_frustum_overlay_generation == frustum_overlay->generation;
+            if (!frustum_overlay_unchanged) {
+                updateFrustumInstances(params);
+                updateTexturedOverlayBuffer(texturedOverlays(params),
+                                            frame.textured_overlay,
+                                            params.frame_slot,
+                                            "textured_overlay");
+                frame.uploaded_frustum_overlay = frustum_overlay;
+                frame.uploaded_frustum_overlay_generation =
+                    frustum_overlay ? frustum_overlay->generation : 0;
+            }
             updateTexturedOverlayBuffer(params.ui_textured_overlays,
                                         frame.ui_textured_overlay,
                                         params.frame_slot,
@@ -2487,7 +2521,7 @@ namespace lfs::vis {
                 "Viewport frustum pass requires instances, pipeline, both descriptor sets, and an instance buffer (frame_slot={}, instance_count={}, batch_count={}, pipeline={:#x}, frustum_descriptor_set={:#x}, shape_descriptor_set={:#x}, instance_buffer={:#x})",
                 params.frame_slot,
                 frame.frustum_instances.count,
-                params.frustum_batches.size(),
+                frustumBatches(params).size(),
                 vkHandleValue(frustum_pipeline),
                 vkHandleValue(frame.frustum_descriptor_set),
                 vkHandleValue(frame.shape_overlay_descriptor_set),
@@ -2503,7 +2537,7 @@ namespace lfs::vis {
                                     sets.data(),
                                     0,
                                     nullptr);
-            for (const auto& batch : params.frustum_batches) {
+            for (const auto& batch : frustumBatches(params)) {
                 if (batch.instance_count == 0 ||
                     batch.first_instance + batch.instance_count > frame.frustum_instances.count) {
                     continue;

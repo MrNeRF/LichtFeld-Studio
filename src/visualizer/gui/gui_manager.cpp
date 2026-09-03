@@ -15,6 +15,7 @@
 #include "diagnostics/vram_ledger_model.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/camera_thumbnail_policy.hpp"
+#include "gui/frustum_overlay_key.hpp"
 #include "preferences.hpp"
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -83,6 +84,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cassert>
 #include <cctype>
 #include <chrono>
@@ -1680,6 +1682,7 @@ namespace lfs::vis::gui {
             }
 
             void clearLocked() {
+                ++atlas_generation_;
                 load_queue_.clear();
                 ready_queue_.clear();
                 entries_.clear();
@@ -1852,6 +1855,7 @@ namespace lfs::vis::gui {
                         if (uploaded) {
                             it->second.state = State::Ready;
                             it->second.retry_frame = 0;
+                            ++atlas_generation_;
                         } else {
                             releaseSlotLocked(it->second);
                             it->second.state = State::Failed;
@@ -1886,18 +1890,57 @@ namespace lfs::vis::gui {
             void pruneTo(const std::unordered_set<int>& active_uids) {
                 {
                     std::lock_guard lock(mutex_);
+                    bool changed = false;
                     for (auto it = entries_.begin(); it != entries_.end();) {
                         if (active_uids.contains(it->first)) {
                             ++it;
                             continue;
                         }
+                        changed = true;
                         releaseSlotLocked(it->second);
                         it = entries_.erase(it);
                     }
                     while (!pages_.empty() && pages_.back().live_slots == 0) {
                         pages_.pop_back();
+                        changed = true;
                     }
+                    if (changed)
+                        ++atlas_generation_;
                     cv_.notify_all();
+                }
+            }
+
+            [[nodiscard]] std::uint64_t atlasGeneration() const {
+                std::lock_guard lock(mutex_);
+                return atlas_generation_;
+            }
+
+            void resolvePlacements(const std::vector<int>& uids,
+                                   std::vector<int>& indices,
+                                   std::vector<ThumbnailPlacement>& placements) const {
+                std::lock_guard lock(mutex_);
+                indices.assign(uids.size(), -1);
+                placements.resize(uids.size());
+                for (size_t i = 0; i < uids.size(); ++i) {
+                    const auto it = entries_.find(uids[i]);
+                    if (it == entries_.end() ||
+                        it->second.state != State::Ready ||
+                        it->second.page_index < 0 ||
+                        it->second.slot < 0 ||
+                        static_cast<size_t>(it->second.page_index) >= pages_.size()) {
+                        continue;
+                    }
+                    const AtlasPage& page = pages_[static_cast<size_t>(it->second.page_index)];
+                    const std::uintptr_t texture_id = page.texture.textureId();
+                    if (texture_id == 0)
+                        continue;
+                    const auto [uv_min, uv_max] = slotUv(it->second.slot);
+                    placements[i] = ThumbnailPlacement{
+                        .texture_id = texture_id,
+                        .uv_min = uv_min,
+                        .uv_max = uv_max,
+                    };
+                    indices[i] = static_cast<int>(i);
                 }
             }
 
@@ -2182,6 +2225,7 @@ namespace lfs::vis::gui {
             std::vector<AtlasPage> pages_;
             uint64_t frame_counter_ = 0;
             uint64_t generation_serial_ = 0;
+            uint64_t atlas_generation_ = 0;
             const void* dataset_scene_identity_ = nullptr;
             std::uint64_t dataset_camera_generation_ = 0;
             std::uint64_t exif_count_ = 0;
@@ -2407,6 +2451,127 @@ namespace lfs::vis::gui {
             return *cache;
         }
 
+        struct CachedFrustumOverlay {
+            FrustumOverlayInputKey key{};
+            bool valid = false;
+            const lfs::core::Scene* scene = nullptr;
+            std::uint64_t camera_list_generation = 0;
+            std::uint64_t scene_render_generation = 0;
+            std::uint64_t thumbnail_atlas_generation = 0;
+            std::uint64_t training_loss_color_generation = 0;
+            float frustum_scale = 0.0f;
+            const lfs::training::Trainer* loss_trainer = nullptr;
+
+            std::vector<std::shared_ptr<const lfs::core::Camera>> cameras;
+            std::vector<int> uids;
+            std::vector<glm::mat4> models;
+            std::vector<glm::vec3> positions;
+            std::vector<std::uint8_t> valid_cameras;
+            std::vector<std::uint8_t> equirectangular_cameras;
+            std::vector<std::uint8_t> validation_cameras;
+            std::vector<std::uint8_t> disabled_cameras;
+            std::vector<std::uint8_t> emphasized_cameras;
+            std::vector<int> thumbnail_indices;
+            std::vector<ThumbnailPlacement> thumbnail_placements;
+            std::vector<glm::vec3> loss_colors;
+
+            std::vector<std::array<glm::vec2, 4>> projected_points;
+            std::vector<std::array<float, 4>> projected_depths;
+            std::vector<std::uint8_t> projected_visible;
+            std::vector<glm::vec4> camera_colors;
+            std::vector<std::uint32_t> instance_camera_indices;
+            std::vector<std::uint32_t> textured_camera_indices;
+            std::shared_ptr<VulkanViewportFrustumOverlayData> data =
+                std::make_shared<VulkanViewportFrustumOverlayData>();
+            std::chrono::steady_clock::time_point last_rebuild_log_at{};
+        };
+
+        CachedFrustumOverlay& cachedFrustumOverlay() {
+            static auto* const cache = new CachedFrustumOverlay();
+            return *cache;
+        }
+
+        void hashCombine(std::uint64_t& hash, const std::uint64_t value) {
+            hash ^= value + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+        }
+
+        [[nodiscard]] std::uint64_t hashFloat(const float value) {
+            return std::bit_cast<std::uint32_t>(value);
+        }
+
+        [[nodiscard]] std::uint64_t hashQuantizedFloat(const float value,
+                                                       const float quantum) {
+            if (!std::isfinite(value))
+                return std::bit_cast<std::uint32_t>(value);
+            return static_cast<std::uint64_t>(std::llround(value / quantum));
+        }
+
+        [[nodiscard]] std::uint64_t hashViewportPose(const Viewport& viewport) {
+            // The overlay is projected from the unjittered viewport pose below.
+            // Hashing derived view/projection matrix bytes made this cache depend
+            // on matrix reconstruction details (and on any temporal projection
+            // jitter applied by the scene renderer), although that jitter is not
+            // part of the CPU overlay geometry.
+            std::uint64_t hash = 0;
+            const glm::mat3 rotation = viewport.getRotationMatrix();
+            const glm::vec3 translation = viewport.getTranslation();
+            for (size_t i = 0; i < 9; ++i)
+                hashCombine(hash, hashQuantizedFloat(rotation[i / 3][i % 3], 1.0e-6f));
+            for (size_t i = 0; i < 3; ++i)
+                hashCombine(hash, hashQuantizedFloat(translation[i], 1.0e-6f));
+            return hash;
+        }
+
+        [[nodiscard]] std::uint64_t frustumOverlaySettingsHash(const RenderSettings& settings) {
+            std::uint64_t hash = 0;
+            hashCombine(hash, settings.show_camera_frustums);
+            hashCombine(hash, hashFloat(settings.camera_frustum_scale));
+            hashCombine(hash, hashFloat(settings.focal_length_mm));
+            hashCombine(hash, settings.orthographic);
+            hashCombine(hash, settings.equirectangular);
+            hashCombine(hash, hashFloat(settings.ortho_scale));
+            for (size_t i = 0; i < 3; ++i) {
+                hashCombine(hash, hashFloat(settings.train_camera_color[i]));
+                hashCombine(hash, hashFloat(settings.eval_camera_color[i]));
+            }
+            return hash;
+        }
+
+        [[nodiscard]] glm::vec4 cachedCameraFrustumColor(
+            const bool validation,
+            const std::span<const glm::vec3> loss_colors,
+            const std::size_t camera_index,
+            const RenderSettings& settings,
+            const float alpha,
+            const bool focused,
+            const bool disabled,
+            const bool emphasized) {
+            glm::vec3 color = validation ? settings.eval_camera_color : settings.train_camera_color;
+            if (camera_index < loss_colors.size()) {
+                const auto& override_color = loss_colors[camera_index];
+                if (std::isfinite(override_color.x) &&
+                    std::isfinite(override_color.y) &&
+                    std::isfinite(override_color.z)) {
+                    color = override_color;
+                }
+            }
+            float final_alpha = alpha;
+            if (emphasized) {
+                color = glm::vec3(1.0f, 0.55f, 0.0f);
+                final_alpha = std::min(1.0f, final_alpha + 0.4f);
+            }
+            if (focused) {
+                color = validation ? glm::vec3(0.9f, 0.75f, 0.0f)
+                                   : glm::vec3(1.0f, 0.55f, 0.0f);
+                final_alpha = std::min(1.0f, final_alpha + 0.3f);
+            }
+            if (disabled) {
+                color = glm::mix(color, glm::vec3(0.5f), 0.5f);
+                final_alpha *= 0.5f;
+            }
+            return glm::vec4(color, std::clamp(final_alpha, 0.0f, 1.0f));
+        }
+
         void appendEquirectangularCameraFrustum(VulkanViewportPassParams& params,
                                                 const VulkanGuidePanelTarget& panel,
                                                 const RenderSettings& settings,
@@ -2462,7 +2627,7 @@ namespace lfs::vis::gui {
         }
 
         void appendCameraFrustumOverlays(VulkanViewportPassParams& params,
-                                         const VulkanGuidePanelTarget& panel,
+                                         const std::vector<VulkanGuidePanelTarget>& panels,
                                          const RenderSettings& settings,
                                          RenderingManager& rendering_manager,
                                          const SceneManager& scene_manager,
@@ -2471,250 +2636,454 @@ namespace lfs::vis::gui {
                 return;
             }
 
-            const auto& all_cameras = scene_manager.getScene().getAllCamerasCached();
-            std::unordered_set<int> scene_camera_uids;
-            scene_camera_uids.reserve(all_cameras.size());
-            for (const auto& camera : all_cameras) {
-                if (camera && camera->uid() >= 0)
-                    scene_camera_uids.insert(camera->uid());
-            }
-            const auto& cameras = scene_manager.getScene().getVisibleCamerasCached();
-            auto& frustum_cache = cameraFrustumCache();
-            frustum_cache.begin(scene_manager.getScene(),
-                                scene_manager.getScene().renderGeneration(),
-                                settings.camera_frustum_scale);
-            const auto disabled_uids = scene_manager.getScene().getTrainingDisabledCameraUids();
-            const int hovered_camera_id = rendering_manager.getHoveredCameraId();
+            const auto& scene = scene_manager.getScene();
+            auto& cache = cachedFrustumOverlay();
             auto& thumbnail_cache = cameraThumbnailCache();
             thumbnail_cache.beginFrame();
-            thumbnail_cache.beginDataset(&scene_manager.getScene(),
-                                         scene_manager.getScene().cameraListGeneration());
+            const std::uint64_t camera_list_generation = scene.cameraListGeneration();
+            const std::uint64_t scene_render_generation = scene.renderGeneration();
+            const bool camera_data_changed =
+                cache.scene != &scene ||
+                cache.camera_list_generation != camera_list_generation ||
+                cache.scene_render_generation != scene_render_generation ||
+                cache.frustum_scale != settings.camera_frustum_scale;
+            auto& frustum_cache = cameraFrustumCache();
+            const int hovered_camera_id = rendering_manager.getHoveredCameraId();
+            const auto selection_generation = static_cast<std::uint64_t>(scene_manager.selectionState().generation());
+            const auto* trainer = scene_manager.getTrainerManager()
+                                      ? scene_manager.getTrainerManager()->getTrainer()
+                                      : nullptr;
+            const std::uint64_t loss_generation = trainer ? trainer->cameraLossColorGeneration() : 0;
 
-            std::unordered_set<int> emphasized_uids;
-            for (const auto& name : scene_manager.getSelectedNodeNames()) {
-                const auto* node = scene_manager.getScene().getNode(name);
-                if (node && node->type == lfs::core::NodeType::CAMERA && node->camera_uid >= 0) {
-                    emphasized_uids.insert(node->camera_uid);
+            if (camera_data_changed) {
+                const auto& all_cameras = scene.getAllCamerasCached();
+                std::unordered_set<int> scene_camera_uids;
+                scene_camera_uids.reserve(all_cameras.size());
+                for (const auto& camera : all_cameras) {
+                    if (camera && camera->uid() >= 0)
+                        scene_camera_uids.insert(camera->uid());
                 }
-            }
-            const auto visible_camera_uids = services().guiOrNull()
-                                                 ? services().guiOrNull()->visibleCameraUids()
-                                                 : std::unordered_set<int>{};
-            const std::vector<int> visible_camera_uid_list(visible_camera_uids.begin(),
-                                                           visible_camera_uids.end());
-            const std::vector<int> selected_camera_uid_list(emphasized_uids.begin(),
-                                                            emphasized_uids.end());
-            const bool frustum_cache_complete = [&] {
-                for (const auto& camera : cameras) {
-                    if (camera && !frustum_cache.contains(camera->uid()))
-                        return false;
+
+                const auto& cameras = scene.getVisibleCamerasCached();
+                frustum_cache.begin(scene, scene_render_generation, settings.camera_frustum_scale);
+                const auto scene_transforms = resolveCameraSceneTransforms(scene_manager, scene_state, cameras.size());
+                const auto disabled_uids = scene.getTrainingDisabledCameraUids();
+                cache.cameras = cameras;
+                cache.uids.resize(cameras.size(), -1);
+                cache.models.resize(cameras.size(), glm::mat4(1.0f));
+                cache.positions.resize(cameras.size(), glm::vec3(0.0f));
+                cache.valid_cameras.assign(cameras.size(), 0);
+                cache.equirectangular_cameras.assign(cameras.size(), 0);
+                cache.validation_cameras.assign(cameras.size(), 0);
+                cache.disabled_cameras.assign(cameras.size(), 0);
+                cache.emphasized_cameras.assign(cameras.size(), 0);
+                for (size_t i = 0; i < cameras.size(); ++i) {
+                    const auto& camera = cameras[i];
+                    if (!camera || camera->uid() < 0)
+                        continue;
+                    cache.uids[i] = camera->uid();
+                    cache.equirectangular_cameras[i] =
+                        camera->camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
+                    cache.validation_cameras[i] = camera->image_name().find("test") != std::string::npos;
+                    cache.disabled_cameras[i] = disabled_uids.contains(camera->uid());
+                    const auto& cached_frustum = frustum_cache.getOrBuild(*camera, scene_transforms[i]);
+                    if (!cached_frustum.visualizer_camera_to_world || !cached_frustum.model)
+                        continue;
+                    cache.models[i] = *cached_frustum.model;
+                    cache.positions[i] = glm::vec3((*cached_frustum.visualizer_camera_to_world)[3]);
+                    cache.valid_cameras[i] = 1;
                 }
-                return true;
-            }();
-            const std::vector<glm::mat4> scene_transforms = frustum_cache_complete
-                                                                ? std::vector<glm::mat4>{}
-                                                                : resolveCameraSceneTransforms(scene_manager, scene_state, cameras.size());
-            std::vector<int> all_camera_uid_list;
-            all_camera_uid_list.reserve(cameras.size());
-            std::unordered_map<int, std::shared_ptr<const lfs::core::Camera>> cameras_by_uid;
-            cameras_by_uid.reserve(cameras.size());
-            for (const auto& camera : cameras) {
-                if (!camera || camera->uid() < 0)
-                    continue;
-                all_camera_uid_list.push_back(camera->uid());
-                cameras_by_uid.emplace(camera->uid(), camera);
+                cache.scene = &scene;
+                cache.camera_list_generation = camera_list_generation;
+                cache.scene_render_generation = scene_render_generation;
+                cache.frustum_scale = settings.camera_frustum_scale;
+                thumbnail_cache.beginDataset(&scene, camera_list_generation);
+                thumbnail_cache.pruneTo(scene_camera_uids);
             }
-            const auto thumbnail_order = cameraThumbnailRequestOrder(
-                all_camera_uid_list, visible_camera_uid_list, selected_camera_uid_list);
-            thumbnail_cache.pruneTo(scene_camera_uids);
-            for (const int uid : thumbnail_order) {
-                const auto camera_it = cameras_by_uid.find(uid);
-                if (camera_it != cameras_by_uid.end() && camera_it->second->has_image())
-                    thumbnail_cache.request(*camera_it->second);
+
+            const bool priority_changed =
+                camera_data_changed || !cache.valid ||
+                cache.key.selected_set_generation != selection_generation;
+            if (priority_changed) {
+                const auto visible_uids = services().guiOrNull()
+                                              ? services().guiOrNull()->visibleCameraUids()
+                                              : std::unordered_set<int>{};
+                std::unordered_set<int> selected_uids;
+                for (const auto& name : scene_manager.getSelectedNodeNames()) {
+                    const auto* node = scene.getNode(name);
+                    if (node && node->type == lfs::core::NodeType::CAMERA && node->camera_uid >= 0)
+                        selected_uids.insert(node->camera_uid);
+                }
+                if (cache.emphasized_cameras.size() != cache.uids.size())
+                    cache.emphasized_cameras.resize(cache.uids.size(), 0);
+                for (size_t i = 0; i < cache.uids.size(); ++i)
+                    cache.emphasized_cameras[i] = selected_uids.contains(cache.uids[i]);
+                const std::vector<int> all_uid_list = cache.uids;
+                const std::vector<int> visible_uid_list(visible_uids.begin(), visible_uids.end());
+                const std::vector<int> selected_uid_list(selected_uids.begin(), selected_uids.end());
+                const auto thumbnail_order = cameraThumbnailRequestOrder(
+                    all_uid_list, visible_uid_list, selected_uid_list);
+                std::unordered_map<int, std::shared_ptr<const lfs::core::Camera>> cameras_by_uid;
+                cameras_by_uid.reserve(cache.cameras.size());
+                for (const auto& camera : cache.cameras) {
+                    if (camera && camera->uid() >= 0)
+                        cameras_by_uid.emplace(camera->uid(), camera);
+                }
+                for (const int uid : thumbnail_order) {
+                    const auto camera_it = cameras_by_uid.find(uid);
+                    if (camera_it != cameras_by_uid.end() && camera_it->second->has_image())
+                        thumbnail_cache.request(*camera_it->second);
+                }
+                thumbnail_cache.reprioritize(thumbnail_order);
             }
-            thumbnail_cache.reprioritize(thumbnail_order);
             thumbnail_cache.processReadyUploads(4);
-
-            if (cameras.empty()) {
-                if (scene_camera_uids.empty())
-                    thumbnail_cache.clear();
-                return;
-            }
-
-            std::vector<glm::vec3> per_camera_colors;
-            if (const auto* trainer_manager = scene_manager.getTrainerManager()) {
-                if (const auto* trainer = trainer_manager->getTrainer()) {
-                    std::vector<std::array<float, 3>> loss_colors;
-                    if (trainer->fillCameraLossColors(cameras, loss_colors) &&
-                        loss_colors.size() == cameras.size()) {
-                        per_camera_colors.reserve(loss_colors.size());
-                        for (const auto& color : loss_colors) {
-                            per_camera_colors.emplace_back(color[0], color[1], color[2]);
-                        }
-                    }
-                }
-            }
-
-            constexpr float kMinRenderAlpha = 0.01f;
-            const glm::mat3 panel_rotation = panel.viewport->getRotationMatrix();
-            const glm::vec3 panel_translation = panel.viewport->getTranslation();
-            const glm::mat3 world_to_panel_rotation = glm::transpose(panel_rotation);
-            const glm::vec3 view_position = panel_translation;
-            const float panel_render_width = static_cast<float>(std::max(panel.render_size.x, 1));
-            const float panel_render_height = static_cast<float>(std::max(panel.render_size.y, 1));
-            const float panel_cx = panel_render_width * 0.5f;
-            const float panel_cy = panel_render_height * 0.5f;
-            const auto [panel_fx, panel_fy] =
-                lfs::rendering::computePixelFocalLengths(panel.render_size, settings.focal_length_mm);
-            const auto project_panel_point = [&](const glm::vec3& world) -> std::optional<glm::vec2> {
-                const glm::vec3 view = world_to_panel_rotation * (world - panel_translation);
-                if (settings.equirectangular) {
-                    const float len = glm::length(view);
-                    if (!std::isfinite(len) || len <= 1e-6f) {
-                        return std::nullopt;
-                    }
-                    const glm::vec3 dir = view / len;
-                    const float ndc_x = std::atan2(dir.x, -dir.z) / glm::pi<float>();
-                    const float ndc_y = -std::asin(std::clamp(dir.y, -1.0f, 1.0f)) /
-                                        (glm::pi<float>() * 0.5f);
-                    if (!std::isfinite(ndc_x) || !std::isfinite(ndc_y)) {
-                        return std::nullopt;
-                    }
-                    return panel.pos + glm::vec2((ndc_x * 0.5f + 0.5f) * panel.size.x,
-                                                 (ndc_y * 0.5f + 0.5f) * panel.size.y);
-                }
-
-                constexpr float kMinViewZ = -1e-4f;
-                if (view.z >= kMinViewZ) {
-                    return std::nullopt;
-                }
-                if (settings.orthographic) {
-                    if (!std::isfinite(settings.ortho_scale) || settings.ortho_scale <= 0.0f) {
-                        return std::nullopt;
-                    }
-                    return renderToPanelScreen(panel, glm::vec2(panel_cx + view.x * settings.ortho_scale,
-                                                                panel_cy - view.y * settings.ortho_scale));
-                }
-
-                const float depth = -view.z;
-                if (depth <= 0.0f) {
-                    return std::nullopt;
-                }
-                return renderToPanelScreen(panel, glm::vec2(panel_cx + view.x * panel_fx / depth,
-                                                            panel_cy - view.y * panel_fy / depth));
-            };
-            const std::uint32_t frustum_first_instance =
-                static_cast<std::uint32_t>(params.frustum_instances.size());
-            params.frustum_instances.reserve(params.frustum_instances.size() + cameras.size());
-            for (size_t i = 0; i < cameras.size(); ++i) {
-                const auto& camera = cameras[i];
-                if (!camera) {
-                    continue;
-                }
-
-                const glm::mat4 scene_transform = scene_transforms.empty()
-                                                      ? glm::mat4(1.0f)
-                                                      : scene_transforms[i];
-                const auto& cached_frustum = frustum_cache.getOrBuild(*camera, scene_transform);
-                if (!cached_frustum.visualizer_camera_to_world || !cached_frustum.model) {
-                    continue;
-                }
-
-                const bool disabled = disabled_uids.count(camera->uid()) > 0;
-                const float alpha = cameraFrustumVisibilityAlpha(
-                    glm::vec3((*cached_frustum.visualizer_camera_to_world)[3]),
-                    view_position,
-                    settings.camera_frustum_scale,
-                    disabled);
-                if (alpha <= kMinRenderAlpha) {
-                    continue;
-                }
-
-                const glm::vec4 color = cameraFrustumColor(*camera,
-                                                           i,
-                                                           settings,
-                                                           per_camera_colors,
-                                                           alpha,
-                                                           camera->uid() == hovered_camera_id,
-                                                           disabled,
-                                                           emphasized_uids.count(camera->uid()) > 0);
-                if (color.a <= kMinRenderAlpha) {
-                    continue;
-                }
-
-                const auto& model = cached_frustum.model;
-
-                if (camera->camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR) {
-                    appendEquirectangularCameraFrustum(params, panel, settings, *model, color);
-                } else {
-                    constexpr std::array image_corners{
-                        glm::vec3(-0.5f, -0.5f, -1.0f),
-                        glm::vec3(0.5f, -0.5f, -1.0f),
-                        glm::vec3(0.5f, 0.5f, -1.0f),
-                        glm::vec3(-0.5f, 0.5f, -1.0f),
-                    };
-                    std::array<glm::vec2, image_corners.size()> screen_points{};
-                    std::array<float, image_corners.size()> corner_depths{};
-                    bool quad_visible = true;
-                    for (size_t corner = 0; corner < image_corners.size(); ++corner) {
-                        const glm::vec3 world_point =
-                            glm::vec3((*model) * glm::vec4(image_corners[corner], 1.0f));
-                        const auto projected = project_panel_point(world_point);
-                        if (!projected) {
-                            quad_visible = false;
-                            break;
-                        }
-                        screen_points[corner] = *projected;
-                        const glm::vec3 view = world_to_panel_rotation * (world_point - panel_translation);
-                        corner_depths[corner] = settings.equirectangular ? glm::length(view) : -view.z;
-                    }
-                    quad_visible = quad_visible && projectedQuadVisible(screen_points, panel);
-                    const auto placement = thumbnail_cache.placement(camera->uid());
-                    if (placement && quad_visible) {
-                        const float opacity = std::clamp(color.a * 0.8f, 0.0f, 0.8f);
-                        const float disabled_mix = disabled ? 0.5f : 0.0f;
-                        const float emphasis_mix = emphasized_uids.count(camera->uid()) > 0 ? 0.18f : 0.0f;
-                        appendTexturedOverlayQuad(params,
-                                                  params.textured_overlays,
-                                                  placement->texture_id,
-                                                  screen_points,
-                                                  placement->uv_min,
-                                                  placement->uv_max,
-                                                  {color.r, color.g, color.b, opacity},
-                                                  {emphasis_mix, disabled_mix, 0.0f, 0.0f},
-                                                  corner_depths);
-                    }
-                    params.frustum_instances.push_back(VulkanViewportFrustumInstance{
-                        .model = *model,
-                        .color = color,
-                    });
-                }
-            }
-
-            const std::uint32_t frustum_instance_count =
-                static_cast<std::uint32_t>(params.frustum_instances.size()) - frustum_first_instance;
-            if (frustum_instance_count > 0) {
-                const glm::mat4 frustum_view =
-                    lfs::rendering::makeViewMatrix(panel_rotation, panel_translation);
-                params.frustum_batches.push_back(VulkanViewportFrustumBatch{
-                    .view = frustum_view,
-                    .viewport_pos = panel.pos,
-                    .viewport_size = panel.size,
-                    .render_size = glm::vec2(panel.render_size),
-                    .focal_x = settings.orthographic ? settings.ortho_scale : panel_fx,
-                    .focal_y = settings.orthographic ? settings.ortho_scale : panel_fy,
-                    .orthographic = settings.orthographic,
-                    .equirectangular = settings.equirectangular,
-                    .first_instance = frustum_first_instance,
-                    .instance_count = frustum_instance_count,
-                });
-            }
-
             if (thumbnail_cache.hasReadyUploads()) {
                 if (auto* const gui = services().guiOrNull())
                     gui->notifyCameraThumbnailReady(true);
             }
             thumbnail_cache.maybeLogDecodeSummary();
+
+            if (camera_data_changed || cache.loss_trainer != trainer ||
+                cache.loss_colors.size() != cache.cameras.size() ||
+                cache.training_loss_color_generation != loss_generation) {
+                std::vector<std::array<float, 3>> loss_colors;
+                if (trainer)
+                    trainer->fillCameraLossColors(cache.cameras, loss_colors);
+                cache.loss_colors.assign(
+                    cache.cameras.size(), glm::vec3(std::numeric_limits<float>::quiet_NaN()));
+                for (size_t i = 0; i < loss_colors.size(); ++i)
+                    cache.loss_colors[i] = glm::vec3(loss_colors[i][0], loss_colors[i][1], loss_colors[i][2]);
+                cache.training_loss_color_generation = loss_generation;
+                cache.loss_trainer = trainer;
+            }
+
+            const std::uint64_t thumbnail_atlas_generation = thumbnail_cache.atlasGeneration();
+            if (cache.thumbnail_atlas_generation != thumbnail_atlas_generation || camera_data_changed) {
+                thumbnail_cache.resolvePlacements(cache.uids,
+                                                  cache.thumbnail_indices,
+                                                  cache.thumbnail_placements);
+                cache.thumbnail_atlas_generation = thumbnail_atlas_generation;
+            }
+
+            FrustumOverlayInputKey key{
+                .scene_identity = reinterpret_cast<std::uintptr_t>(&scene),
+                .camera_list_generation = camera_list_generation,
+                .scene_render_generation = scene_render_generation,
+                .view_projection_hash = 0,
+                .hovered_camera_id = hovered_camera_id,
+                .selected_set_generation = selection_generation,
+                .training_loss_color_generation = loss_generation,
+                .thumbnail_atlas_generation = thumbnail_atlas_generation,
+                .overlay_settings_hash = frustumOverlaySettingsHash(settings),
+            };
+            for (const auto& panel : panels) {
+                if (!panel.valid())
+                    continue;
+                hashCombine(key.view_projection_hash, hashViewportPose(*panel.viewport));
+                // The overlay is rasterized in screen space. Quantizing layout
+                // values removes sub-pixel churn from repeated UI layout solves
+                // without hiding a meaningful viewport-size change.
+                hashCombine(key.view_projection_hash, hashQuantizedFloat(panel.pos.x, 1.0e-4f));
+                hashCombine(key.view_projection_hash, hashQuantizedFloat(panel.pos.y, 1.0e-4f));
+                hashCombine(key.view_projection_hash, hashQuantizedFloat(panel.size.x, 1.0e-4f));
+                hashCombine(key.view_projection_hash, hashQuantizedFloat(panel.size.y, 1.0e-4f));
+                hashCombine(key.view_projection_hash, static_cast<std::uint64_t>(panel.render_size.x));
+                hashCombine(key.view_projection_hash, static_cast<std::uint64_t>(panel.render_size.y));
+            }
+
+            FrustumOverlayInputKey geometry_key = key;
+            geometry_key.training_loss_color_generation = 0;
+            geometry_key.thumbnail_atlas_generation = 0;
+            FrustumOverlayInputKey previous_geometry_key = cache.key;
+            previous_geometry_key.training_loss_color_generation = 0;
+            previous_geometry_key.thumbnail_atlas_generation = 0;
+            const bool loss_changed = cache.training_loss_color_generation == loss_generation &&
+                                      cache.key.training_loss_color_generation != loss_generation;
+            const bool atlas_changed = cache.thumbnail_atlas_generation == thumbnail_atlas_generation &&
+                                       cache.key.thumbnail_atlas_generation != thumbnail_atlas_generation;
+            const bool geometry_changed = !cache.valid ||
+                                          frustumOverlayNeedsRebuild(previous_geometry_key, geometry_key) ||
+                                          (loss_changed && settings.equirectangular);
+            const bool output_rebuild = geometry_changed || loss_changed || atlas_changed;
+            if (output_rebuild) {
+                const auto now = std::chrono::steady_clock::now();
+                if (cache.last_rebuild_log_at == std::chrono::steady_clock::time_point{} ||
+                    now - cache.last_rebuild_log_at >= std::chrono::seconds(1)) {
+                    const std::string differences = cache.valid
+                                                        ? frustumOverlayKeyDifferenceNames(cache.key, key)
+                                                        : "initial";
+                    LOG_DEBUG("Frustum overlay rebuild: key components changed: {}", differences);
+                    cache.last_rebuild_log_at = now;
+                }
+            }
+            if (!geometry_changed && !loss_changed && !atlas_changed && cache.valid) {
+                params.frustum_overlay_data = cache.data;
+                params.overlay_triangles.insert(params.overlay_triangles.end(),
+                                                cache.data->overlay_triangles.begin(),
+                                                cache.data->overlay_triangles.end());
+                return;
+            }
+
+            const size_t camera_count = cache.cameras.size();
+            const size_t panel_count = panels.size();
+            if (geometry_changed) {
+                cache.data->overlay_triangles.clear();
+                cache.data->textured_overlays.clear();
+                cache.data->frustum_instances.clear();
+                cache.data->frustum_batches.clear();
+                cache.instance_camera_indices.clear();
+                cache.textured_camera_indices.clear();
+                cache.data->overlay_triangles.reserve(cache.data->overlay_triangles.size());
+                cache.data->textured_overlays.reserve(camera_count * panel_count);
+                cache.data->frustum_instances.reserve(camera_count * panel_count);
+                cache.data->frustum_batches.reserve(panel_count);
+                cache.instance_camera_indices.reserve(camera_count * panel_count);
+                cache.textured_camera_indices.reserve(camera_count * panel_count);
+                cache.projected_points.resize(panel_count * camera_count);
+                cache.projected_depths.resize(panel_count * camera_count);
+                cache.projected_visible.assign(panel_count * camera_count, 0);
+                cache.camera_colors.resize(panel_count * camera_count);
+
+                VulkanViewportPassParams line_params{};
+                line_params.viewport_pos = params.viewport_pos;
+                line_params.viewport_size = params.viewport_size;
+                line_params.framebuffer_scale = params.framebuffer_scale;
+                line_params.overlay_triangles.swap(cache.data->overlay_triangles);
+                line_params.overlay_triangles.clear();
+                for (size_t panel_index = 0; panel_index < panel_count; ++panel_index) {
+                    const auto& panel = panels[panel_index];
+                    if (!panel.valid())
+                        continue;
+                    const glm::mat3 rotation = panel.viewport->getRotationMatrix();
+                    const glm::vec3 translation = panel.viewport->getTranslation();
+                    const glm::mat3 world_to_panel_rotation = glm::transpose(rotation);
+                    const float width = static_cast<float>(std::max(panel.render_size.x, 1));
+                    const float height = static_cast<float>(std::max(panel.render_size.y, 1));
+                    const float cx = width * 0.5f;
+                    const float cy = height * 0.5f;
+                    const auto [fx, fy] = lfs::rendering::computePixelFocalLengths(
+                        panel.render_size, settings.focal_length_mm);
+                    const std::uint32_t first_instance =
+                        static_cast<std::uint32_t>(cache.data->frustum_instances.size());
+                    for (size_t camera_index = 0; camera_index < camera_count; ++camera_index) {
+                        if (!cache.valid_cameras[camera_index])
+                            continue;
+                        const bool disabled = cache.disabled_cameras[camera_index] != 0;
+                        const float alpha = cameraFrustumVisibilityAlpha(
+                            cache.positions[camera_index], translation,
+                            settings.camera_frustum_scale, disabled);
+                        if (alpha <= 0.01f)
+                            continue;
+                        const bool emphasized = cache.emphasized_cameras[camera_index] != 0;
+                        const bool focused = cache.uids[camera_index] == hovered_camera_id;
+                        const glm::vec4 color = cachedCameraFrustumColor(
+                            cache.validation_cameras[camera_index] != 0,
+                            cache.loss_colors,
+                            camera_index,
+                            settings,
+                            alpha,
+                            focused,
+                            disabled,
+                            emphasized);
+                        if (color.a <= 0.01f)
+                            continue;
+                        const size_t projected_index = panel_index * camera_count + camera_index;
+                        cache.camera_colors[projected_index] = color;
+                        if (cache.equirectangular_cameras[camera_index]) {
+                            appendEquirectangularCameraFrustum(
+                                line_params, panel, settings, cache.models[camera_index], color);
+                            continue;
+                        }
+
+                        constexpr std::array image_corners{
+                            glm::vec3(-0.5f, -0.5f, -1.0f),
+                            glm::vec3(0.5f, -0.5f, -1.0f),
+                            glm::vec3(0.5f, 0.5f, -1.0f),
+                            glm::vec3(-0.5f, 0.5f, -1.0f),
+                        };
+                        std::array<glm::vec2, 4> screen_points{};
+                        std::array<float, 4> depths{};
+                        bool quad_visible = true;
+                        const glm::vec3 center = glm::vec3(
+                            cache.models[camera_index] * glm::vec4(0.0f, 0.0f, -0.5f, 1.0f));
+                        const float radius = 0.5f * std::sqrt(
+                                                        glm::dot(glm::vec3(cache.models[camera_index][0]), glm::vec3(cache.models[camera_index][0])) +
+                                                        glm::dot(glm::vec3(cache.models[camera_index][1]), glm::vec3(cache.models[camera_index][1])) +
+                                                        glm::dot(glm::vec3(cache.models[camera_index][2]), glm::vec3(cache.models[camera_index][2])));
+                        const glm::vec3 center_view = world_to_panel_rotation * (center - translation);
+                        if (!settings.equirectangular && center_view.z - radius >= -1e-4f) {
+                            continue;
+                        }
+                        if (!settings.equirectangular && center_view.z + radius < -1e-4f) {
+                            if (settings.orthographic &&
+                                std::isfinite(settings.ortho_scale) && settings.ortho_scale > 0.0f) {
+                                const float projected_radius = radius * settings.ortho_scale;
+                                const float projected_x = cx + center_view.x * settings.ortho_scale;
+                                const float projected_y = cy - center_view.y * settings.ortho_scale;
+                                if (projected_x + projected_radius < 0.0f ||
+                                    projected_x - projected_radius > width ||
+                                    projected_y + projected_radius < 0.0f ||
+                                    projected_y - projected_radius > height) {
+                                    continue;
+                                }
+                            } else if (!settings.orthographic && fx > 0.0f && fy > 0.0f) {
+                                const float depth = -center_view.z;
+                                const float distance = glm::length(center_view);
+                                const float angular_radius = std::asin(std::clamp(radius / distance, 0.0f, 1.0f));
+                                const float horizontal_angle = std::atan2(center_view.x, depth);
+                                const float vertical_angle = std::atan2(center_view.y, depth);
+                                const float horizontal_limit = std::atan2(cx, fx);
+                                const float vertical_limit = std::atan2(cy, fy);
+                                if (std::abs(horizontal_angle) - angular_radius > horizontal_limit ||
+                                    std::abs(vertical_angle) - angular_radius > vertical_limit) {
+                                    continue;
+                                }
+                            }
+                        }
+                        for (size_t corner = 0; corner < image_corners.size(); ++corner) {
+                            const glm::vec3 world_point = glm::vec3(
+                                cache.models[camera_index] * glm::vec4(image_corners[corner], 1.0f));
+                            const glm::vec3 view = world_to_panel_rotation * (world_point - translation);
+                            if (settings.equirectangular) {
+                                const float len = glm::length(view);
+                                if (!std::isfinite(len) || len <= 1e-6f) {
+                                    quad_visible = false;
+                                    break;
+                                }
+                                const glm::vec3 direction = view / len;
+                                const float ndc_x = std::atan2(direction.x, -direction.z) / glm::pi<float>();
+                                const float ndc_y = -std::asin(std::clamp(direction.y, -1.0f, 1.0f)) /
+                                                    (glm::pi<float>() * 0.5f);
+                                screen_points[corner] = panel.pos + glm::vec2(
+                                                                        (ndc_x * 0.5f + 0.5f) * panel.size.x,
+                                                                        (ndc_y * 0.5f + 0.5f) * panel.size.y);
+                                depths[corner] = len;
+                            } else {
+                                if (view.z >= -1e-4f) {
+                                    quad_visible = false;
+                                    break;
+                                }
+                                const glm::vec2 projected = settings.orthographic
+                                                                ? glm::vec2(cx + view.x * settings.ortho_scale,
+                                                                            cy - view.y * settings.ortho_scale)
+                                                                : glm::vec2(cx + view.x * fx / -view.z,
+                                                                            cy - view.y * fy / -view.z);
+                                screen_points[corner] = renderToPanelScreen(panel, projected);
+                                depths[corner] = -view.z;
+                            }
+                        }
+                        quad_visible = quad_visible && projectedQuadVisible(screen_points, panel);
+                        cache.projected_points[projected_index] = screen_points;
+                        cache.projected_depths[projected_index] = depths;
+                        cache.projected_visible[projected_index] = quad_visible;
+                        if (quad_visible && cache.thumbnail_indices[camera_index] >= 0) {
+                            const auto& placement = cache.thumbnail_placements[camera_index];
+                            appendTexturedOverlayQuad(
+                                params,
+                                cache.data->textured_overlays,
+                                placement.texture_id,
+                                screen_points,
+                                placement.uv_min,
+                                placement.uv_max,
+                                {color.r, color.g, color.b, std::clamp(color.a * 0.8f, 0.0f, 0.8f)},
+                                {emphasized ? 0.18f : 0.0f, disabled ? 0.5f : 0.0f, 0.0f, 0.0f},
+                                depths);
+                            cache.textured_camera_indices.push_back(
+                                static_cast<std::uint32_t>(projected_index));
+                        }
+                        cache.data->frustum_instances.push_back({.model = cache.models[camera_index], .color = color});
+                        cache.instance_camera_indices.push_back(static_cast<std::uint32_t>(projected_index));
+                    }
+                    const auto instance_count = static_cast<std::uint32_t>(
+                                                    cache.data->frustum_instances.size()) -
+                                                first_instance;
+                    if (instance_count > 0) {
+                        const glm::mat4 view = lfs::rendering::makeViewMatrix(rotation, translation);
+                        cache.data->frustum_batches.push_back({
+                            .view = view,
+                            .viewport_pos = panel.pos,
+                            .viewport_size = panel.size,
+                            .render_size = glm::vec2(panel.render_size),
+                            .focal_x = settings.orthographic ? settings.ortho_scale : fx,
+                            .focal_y = settings.orthographic ? settings.ortho_scale : fy,
+                            .orthographic = settings.orthographic,
+                            .equirectangular = settings.equirectangular,
+                            .first_instance = first_instance,
+                            .instance_count = instance_count,
+                        });
+                    }
+                }
+                cache.data->overlay_triangles.swap(line_params.overlay_triangles);
+                params.overlay_triangles.insert(params.overlay_triangles.end(),
+                                                cache.data->overlay_triangles.begin(),
+                                                cache.data->overlay_triangles.end());
+            } else if (loss_changed) {
+                for (size_t panel_index = 0; panel_index < panel_count; ++panel_index) {
+                    const auto& panel = panels[panel_index];
+                    if (!panel.valid())
+                        continue;
+                    const glm::vec3 view_position = panel.viewport->getTranslation();
+                    for (size_t camera_index = 0; camera_index < camera_count; ++camera_index) {
+                        if (!cache.valid_cameras[camera_index])
+                            continue;
+                        const bool disabled = cache.disabled_cameras[camera_index] != 0;
+                        const float alpha = cameraFrustumVisibilityAlpha(
+                            cache.positions[camera_index], view_position,
+                            settings.camera_frustum_scale, disabled);
+                        cache.camera_colors[panel_index * camera_count + camera_index] =
+                            cachedCameraFrustumColor(
+                                cache.validation_cameras[camera_index] != 0,
+                                cache.loss_colors,
+                                camera_index,
+                                settings,
+                                alpha,
+                                cache.uids[camera_index] == hovered_camera_id,
+                                disabled,
+                                cache.emphasized_cameras[camera_index] != 0);
+                    }
+                }
+                for (size_t i = 0; i < cache.data->frustum_instances.size(); ++i)
+                    cache.data->frustum_instances[i].color = cache.camera_colors[cache.instance_camera_indices[i]];
+                for (size_t i = 0; i < cache.data->textured_overlays.size(); ++i) {
+                    const glm::vec4 color = cache.camera_colors[cache.textured_camera_indices[i]];
+                    cache.data->textured_overlays[i].tint_opacity = {
+                        color.r, color.g, color.b, std::clamp(color.a * 0.8f, 0.0f, 0.8f)};
+                }
+            }
+            if (!geometry_changed && atlas_changed) {
+                cache.data->textured_overlays.clear();
+                cache.textured_camera_indices.clear();
+                for (size_t projected_index = 0; projected_index < cache.projected_points.size(); ++projected_index) {
+                    if (!cache.projected_visible[projected_index])
+                        continue;
+                    const size_t camera_index = projected_index % camera_count;
+                    if (camera_index >= cache.thumbnail_indices.size() ||
+                        cache.thumbnail_indices[camera_index] < 0)
+                        continue;
+                    const glm::vec4 color = cache.camera_colors[projected_index];
+                    const auto& placement = cache.thumbnail_placements[camera_index];
+                    appendTexturedOverlayQuad(
+                        params,
+                        cache.data->textured_overlays,
+                        placement.texture_id,
+                        cache.projected_points[projected_index],
+                        placement.uv_min,
+                        placement.uv_max,
+                        {color.r, color.g, color.b, std::clamp(color.a * 0.8f, 0.0f, 0.8f)},
+                        {cache.emphasized_cameras[camera_index] != 0 ? 0.18f : 0.0f,
+                         cache.disabled_cameras[camera_index] != 0 ? 0.5f : 0.0f,
+                         0.0f,
+                         0.0f},
+                        cache.projected_depths[projected_index]);
+                    cache.textured_camera_indices.push_back(static_cast<std::uint32_t>(projected_index));
+                }
+            }
+
+            if (geometry_changed || loss_changed || atlas_changed)
+                ++cache.data->generation;
+            cache.key = key;
+            cache.valid = true;
+            params.frustum_overlay_data = cache.data;
         }
 
         void appendProjectedEllipsoid(VulkanViewportPassParams& params,
@@ -2941,15 +3310,6 @@ namespace lfs::vis::gui {
                 }
 
                 appendCropAndFilterOverlays(params, panel, settings, scene_state, scene_manager, gizmo);
-                if (scene_manager) {
-                    appendCameraFrustumOverlays(params,
-                                                panel,
-                                                settings,
-                                                rendering_manager,
-                                                *scene_manager,
-                                                scene_state);
-                }
-
                 if (settings.show_coord_axes) {
                     for (size_t axis = 0; axis < axes.size(); ++axis) {
                         if (settings.axes_visibility[axis]) {
@@ -2976,6 +3336,15 @@ namespace lfs::vis::gui {
                                               : 1.0f - std::clamp(time_since_set / kPivotDurationSec, 0.0f, 1.0f);
                     appendPivotShaderOverlay(params, panel, settings, panel.viewport->camera.getPivot(), opacity);
                 }
+            }
+
+            if (scene_manager) {
+                appendCameraFrustumOverlays(params,
+                                            panels,
+                                            settings,
+                                            rendering_manager,
+                                            *scene_manager,
+                                            scene_state);
             }
         }
 
