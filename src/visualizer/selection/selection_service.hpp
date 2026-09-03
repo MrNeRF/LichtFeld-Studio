@@ -6,6 +6,7 @@
 #include "core/export.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
+#include "operation/undo_entry.hpp"
 #include "rendering/rendering_types.hpp"
 #include <array>
 #include <cstdint>
@@ -26,10 +27,6 @@ namespace lfs::rendering {
 class Viewport;
 
 namespace lfs::vis {
-
-    namespace op {
-        class SceneSnapshot;
-    }
 
     class SceneManager;
     class RenderingManager;
