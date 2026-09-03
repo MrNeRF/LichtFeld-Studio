@@ -4,6 +4,7 @@
 
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -16,6 +17,12 @@
 #include <regex>
 #include <vector>
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <unistd.h>
