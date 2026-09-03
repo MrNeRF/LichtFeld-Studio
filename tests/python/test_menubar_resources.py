@@ -560,6 +560,51 @@ def test_open_menu_requests_passive_mouse_render_and_blocks_viewport_hit_testing
     assert "if (!ui_hidden_ && rml_menu_bar_.isOpen())" not in gui_manager_cpp
 
 
+def test_menu_pointer_input_is_not_replayed_into_underlay_panels():
+    gui_manager_cpp = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "gui_manager.cpp"
+    ).read_text(encoding="utf-8")
+    gui_manager_header = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "gui_manager.hpp"
+    ).read_text(encoding="utf-8")
+
+    assert "bool menu_pointer_capture_active_ = false;" in gui_manager_header
+    assert "const bool menu_was_open = rml_menu_bar_.isOpen();" in gui_manager_cpp
+    assert (
+        "menu_was_open || rml_menu_bar_.isOpen() || rml_menu_bar_.wantsInput()"
+        in gui_manager_cpp
+    )
+    assert "menu_blocks_underlay_pointer = menu_owns_pointer ||" in gui_manager_cpp
+    assert "menu_pointer_capture_active_;" in gui_manager_cpp
+    assert (
+        "else if (menu_blocks_underlay_pointer)\n"
+        "                frame_input = maskPointerInputForUnderlay(std::move(frame_input));"
+        in gui_manager_cpp
+    )
+
+    menu_dispatch = gui_manager_cpp.index("rml_menu_bar_.processInput(menu_input);")
+    underlay_mask = gui_manager_cpp.index(
+        "frame_input = maskPointerInputForUnderlay(std::move(frame_input));"
+    )
+    underlay_route = gui_manager_cpp.index("PanelInputState panel_input = frame_input;")
+    assert menu_dispatch < underlay_mask < underlay_route
+
+    pointer_mask = gui_manager_cpp.split(
+        "PanelInputState maskPointerInputForUnderlay", 1
+    )[1].split("PanelInputState maskInputForBlockedUi", 1)[0]
+    assert "input.key_ctrl" not in pointer_mask
+    assert "input.keys_pressed" not in pointer_mask
+    assert "input.text_inputs" not in pointer_mask
+
+
 def test_viewport_overlay_toolbar_origin_tracks_viewport_content_offset():
     gui_manager_cpp = (
         PROJECT_ROOT

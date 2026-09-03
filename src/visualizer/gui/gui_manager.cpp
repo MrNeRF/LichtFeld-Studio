@@ -2887,7 +2887,7 @@ namespace lfs::vis::gui {
             return result;
         }
 
-        PanelInputState maskInputForBlockedUi(PanelInputState input) {
+        PanelInputState maskPointerInputForUnderlay(PanelInputState input) {
             input.mouse_x = -1.0e9f;
             input.mouse_y = -1.0e9f;
             for (auto& value : input.mouse_down)
@@ -2897,6 +2897,11 @@ namespace lfs::vis::gui {
             for (auto& value : input.mouse_released)
                 value = false;
             input.mouse_wheel = 0.0f;
+            return input;
+        }
+
+        PanelInputState maskInputForBlockedUi(PanelInputState input) {
+            input = maskPointerInputForUnderlay(std::move(input));
             input.key_ctrl = false;
             input.key_shift = false;
             input.key_alt = false;
@@ -5121,6 +5126,7 @@ namespace lfs::vis::gui {
             next_theme_check = now + std::chrono::seconds(1);
         }
 
+        bool menu_blocks_underlay_pointer = menu_pointer_capture_active_;
         if (menu_bar_) {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.menu_bar", 0.25);
             menu_bar_->render();
@@ -5157,10 +5163,24 @@ namespace lfs::vis::gui {
             if (block_underlay_input)
                 menu_input = maskInputForBlockedUi(std::move(menu_input));
 
+            const bool menu_was_open = rml_menu_bar_.isOpen();
             rml_menu_bar_.setUiHidden(ui_hidden_);
             rml_menu_bar_.processInput(menu_input);
 
-            if (rml_menu_bar_.wantsInput())
+            // A command may close its dropdown while handling mouse-down. Retain
+            // ownership through release so that click sequence cannot be replayed
+            // into a panel that becomes exposed in the same or following frame.
+            const bool menu_owns_pointer =
+                menu_was_open || rml_menu_bar_.isOpen() || rml_menu_bar_.wantsInput();
+            if (menu_owns_pointer &&
+                (hasMouseButtonClicked(sdl_input) || hasMouseButtonDown(sdl_input))) {
+                menu_pointer_capture_active_ = true;
+            }
+            menu_blocks_underlay_pointer = menu_owns_pointer || menu_pointer_capture_active_;
+            if (menu_pointer_capture_active_ && !hasMouseButtonDown(sdl_input))
+                menu_pointer_capture_active_ = false;
+
+            if (menu_blocks_underlay_pointer)
                 guiFocusState().want_capture_mouse = true;
 
             if (!vulkan_gui_) {
@@ -5170,6 +5190,8 @@ namespace lfs::vis::gui {
         } else {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.menu_bar_suspend", 0.25);
             rml_menu_bar_.suspend();
+            menu_pointer_capture_active_ = false;
+            menu_blocks_underlay_pointer = false;
         }
 
         PanelInputState frame_input;
@@ -5180,6 +5202,8 @@ namespace lfs::vis::gui {
             startup_overlay_input = frame_input;
             if (startup_overlay_blocking)
                 frame_input = maskInputForBlockedUi(std::move(frame_input));
+            else if (menu_blocks_underlay_pointer)
+                frame_input = maskPointerInputForUnderlay(std::move(frame_input));
             updateInputOverrides(frame_input, mouse_in_viewport);
             if (auto* const wm = viewer_->getWindowManager()) {
                 frame_input.viewport_keyboard_focus = wm->inputRouter().isViewportKeyboardFocused();
