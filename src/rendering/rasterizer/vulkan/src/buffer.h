@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
@@ -87,6 +88,34 @@ struct _VulkanBuffer {
     }
 };
 
+// Bind `view` onto `owner` as a non-owning alias (same VkBuffer + offset).
+// Destroying the view is a no-op because allocation is cleared. Independently
+// owned allocations (test forges, distinct VMA handles) are left alone.
+// Lifetime: owner must remain live while the view is bound; the two names
+// must not be written concurrently.
+inline void aliasDeviceView(_VulkanBuffer& view, const _VulkanBuffer& owner) {
+    if (owner.buffer == VK_NULL_HANDLE) {
+        return;
+    }
+    if (view.buffer == owner.buffer && view.offset == owner.offset &&
+        view.allocation == VK_NULL_HANDLE) {
+        view.allocSize = owner.allocSize;
+        view.capacity = owner.capacity;
+        view.size = owner.size;
+        view.extra_usage = owner.extra_usage;
+        view.created_with_extra_usage = owner.created_with_extra_usage;
+        return;
+    }
+    if (view.allocation != VK_NULL_HANDLE && view.buffer != VK_NULL_HANDLE &&
+        view.buffer != owner.buffer) {
+        return;
+    }
+    const char* const label = view.label;
+    view = owner;
+    view.allocation = VK_NULL_HANDLE;
+    view.label = label;
+}
+
 // Buffer<T> shallow-copies deviceBuffer (shared VkBuffer/VmaAllocation handle).
 // Ownership is external (pipeline destroyBuffer); copies are views, not RAII.
 // Accepted-risk design (epic #1496 sweep_c C1.1); trap mitigated by census,
@@ -156,14 +185,16 @@ struct VulkanGSPipelineBuffers {
     size_t shN_committed_bytes = 0;
 
     // projection outputs
-    Buffer<int32_t> tiles_touched;    // (N,)
+    Buffer<int32_t> tiles_touched;    // (N,) legacy; aliases index_buffer_offset after apply_depth_ordering
     Buffer<int64_t> rect_tile_space;  // (N,)
-    Buffer<int32_t> radii;            // (N,)
     Buffer<float> xy_vs;              // (N, 2)
     Buffer<float> depths;             // (N, 1)
     Buffer<float> inv_cov_vs_opacity; // (N, 4)
     Buffer<float> rgb;                // (N, 3)
-    Buffer<int32_t> overlay_flags;    // (N, 1), selection/filter classification
+    // 3-bit payload (DIM|NONSELECTABLE|FLASH). Allocated N-wide only while
+    // raster overlays are active; otherwise a 1-element dummy is bound and
+    // projection skips the store (lod_enabled bit 6).
+    Buffer<uint8_t> overlay_flags; // (N,) or (1,) dummy
 
     // Two-stage sort (Splatshop): visible primitives are compacted and sorted by
     // radial distance (depth), then tile instances are emitted in depth order and
@@ -171,11 +202,21 @@ struct VulkanGSPipelineBuffers {
     // reference (kernels_forward.cuh: primitive_depth_keys → SortPairs →
     // apply_depth_ordering → create_instances → SortPairs) without sorting
     // projection rejects.
+    //
+    // Legacy aliases (same VkBuffer/offset, documented at bind/resize):
+    //   primitive_depth_keys  ↔ primitive_sort_indices   (keys die after compact; indices born at post-radix copy)
+    //   tiles_touched         ↔ index_buffer_offset      (last tiles_touched read is apply_depth_ordering)
+    //   visible_flags         ↔ tiles_touched_depth_ordered (mask dies after scan)
     Buffer<uint32_t> primitive_depth_keys;       // (N,) float-as-uint of ‖mean − cam‖²
     Buffer<int32_t> primitive_sort_indices;      // (N,) depth-ranked primitive idx
     Buffer<int32_t> tiles_touched_depth_ordered; // (N,) reordered tiles_touched
-    Buffer<int32_t> visible_flags;               // (N,) projection-visible primitive flag
-    Buffer<int32_t> visible_prefix;              // (N,) inclusive scan of visible_flags
+    // Packed legacy visibility scan. The member names are retained for the
+    // stable renderer/test surface; their extents are no longer N:
+    // visible_flags is four words per 128-splat block, visible_block_counts and
+    // visible_prefix are one inclusive count per 128-splat workgroup.
+    Buffer<int32_t> visible_flags;               // (4*ceil(N/128),) packed visibility mask
+    Buffer<int32_t> visible_block_counts;        // (ceil(N/128),) count per mask block
+    Buffer<int32_t> visible_prefix;              // (ceil(N/128),) inclusive block-count scan
     Buffer<uint32_t> visible_count;              // (1,) visible primitive count
     Buffer<uint32_t> visible_sort_dispatch_args; // VisibleSortDispatch: radix only
 

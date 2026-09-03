@@ -57,6 +57,25 @@ namespace lfs::io::project {
         std::unique_ptr<Impl> impl_;
     };
 
+    struct LFS_IO_API EmbeddedDatasetEntry {
+        std::string rel_path;
+        std::string kind;
+        lfs::core::Uuid chunk_uuid;
+        std::uint64_t bytes = 0;
+        Hash128 xxh3_128;
+
+        friend bool operator==(const EmbeddedDatasetEntry&, const EmbeddedDatasetEntry&) = default;
+    };
+
+    struct LFS_IO_API EmbeddedDatasetManifest {
+        std::uint32_t schema_version = 1;
+        std::string images_folder;
+        bool complete = false;
+        std::vector<EmbeddedDatasetEntry> entries;
+
+        friend bool operator==(const EmbeddedDatasetManifest&, const EmbeddedDatasetManifest&) = default;
+    };
+
     struct SemanticVersion {
         std::uint16_t major = 1;
         std::uint16_t minor = 0;
@@ -75,6 +94,13 @@ namespace lfs::io::project {
         std::vector<std::string> optional_capabilities;
 
         friend bool operator==(const ProjectManifest&, const ProjectManifest&) = default;
+    };
+
+    struct ProjectLicense {
+        std::string identifier;
+        std::string notice;
+
+        friend bool operator==(const ProjectLicense&, const ProjectLicense&) = default;
     };
 
     enum class WorldOriginProvenance : std::uint8_t {
@@ -197,6 +223,9 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<ProjectGeoreference> georeference() const;
         [[nodiscard]] lfs::Result<void>
         set_georeference(const ProjectGeoreference& value);
+        [[nodiscard]] lfs::Result<std::optional<ProjectLicense>> license() const;
+        [[nodiscard]] lfs::Result<void> set_license(const ProjectLicense& value);
+        [[nodiscard]] lfs::Result<void> clear_license();
 
         [[nodiscard]] lfs::Result<std::vector<EmbedDecision>> embed_decisions() const;
         [[nodiscard]] lfs::Result<void> upsert_embed_decision(const EmbedDecision& value);
@@ -471,6 +500,11 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<ParameterManagerSnapshot> snapshot() const;
         [[nodiscard]] lfs::Result<void>
         set_snapshot(const ParameterManagerSnapshot& value);
+        [[nodiscard]] lfs::Result<std::optional<EmbeddedDatasetManifest>>
+        embedded_dataset() const;
+        [[nodiscard]] lfs::Result<void>
+        set_embedded_dataset(const EmbeddedDatasetManifest& value);
+        void clear_embedded_dataset();
 
     private:
         JsonChapterDom dom_;

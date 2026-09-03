@@ -1,0 +1,136 @@
+<rml>
+<head>
+  <link type="text/template" href="floating_window.rml"/>
+  <link type="text/rcss" href="import_dialog.rcss"/>
+</head>
+<body template="floating-window" data-model="new_project">
+  <span class="impdlg-subtitle text-muted">@tr:new_project.source_hint</span>
+  <div class="separator"></div>
+
+  <form id="new-project-form" class="impdlg-form">
+    <div class="impdlg-control-group">
+      <span class="impdlg-field-label text-muted">@tr:new_project.name</span>
+      <div class="impdlg-control-main">
+        <div class="impdlg-control-row">
+          <input type="text" class="impdlg-input" data-value="name" />
+        </div>
+      </div>
+    </div>
+
+    <div class="impdlg-control-group">
+      <span class="impdlg-field-label text-muted">@tr:new_project.source</span>
+      <div class="impdlg-control-main">
+        <div class="impdlg-control-row">
+          <input type="text" class="impdlg-input" data-value="source_path" />
+          <button type="button" class="btn btn--secondary impdlg-browse-btn" data-event-click="browse_folder">@tr:new_project.browse_folder</button>
+          <button type="button" class="btn btn--secondary impdlg-browse-btn" data-event-click="browse_file">@tr:new_project.browse_file</button>
+        </div>
+      </div>
+    </div>
+
+    <span class="impdlg-status status-error" data-if="create_hint">{{create_hint}}</span>
+    <span class="impdlg-note text-muted">{{location_preview}}</span>
+
+    <div class="impdlg-advanced-header text-accent" data-class-is-expanded="advanced_expanded" data-event-click="toggle_advanced">
+      <span class="section-arrow text-accent" data-class-is-expanded="advanced_expanded">&#x25B6;</span>
+      <span>@tr:new_project.advanced</span>
+    </div>
+    <div class="impdlg-advanced-content" data-if="advanced_expanded">
+      <div class="impdlg-info-row" data-if="source_is_dataset">
+        <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.images_dir</span>
+        <div class="impdlg-info-main">
+          <span class="impdlg-value text-default">{{images_path}}</span>
+          <span class="impdlg-meta text-muted">{{images_count_text}}</span>
+        </div>
+      </div>
+      <div class="impdlg-info-row" data-if="source_is_dataset">
+        <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.sparse_dir</span>
+        <div class="impdlg-info-main">
+          <div class="impdlg-control-row">
+            <span class="impdlg-value text-default">{{sparse_path}}</span>
+            <label class="impdlg-checkbox-label">
+              <input type="checkbox" data-checked="apply_auto_crop" />
+              <span class="text-muted">@tr:load_dataset_popup.apply_auto_crop</span>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="impdlg-info-row" data-if="source_is_dataset && show_masks">
+        <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.masks_dir</span>
+        <div class="impdlg-info-main">
+          <span class="impdlg-value text-default">{{masks_path}}</span>
+          <span class="impdlg-meta text-muted">{{mask_count_text}}</span>
+        </div>
+      </div>
+      <div class="impdlg-control-group" data-if="source_is_dataset">
+        <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.init_file</span>
+        <div class="impdlg-control-main">
+          <div class="impdlg-control-row">
+            <input type="text" class="impdlg-input" data-value="init_path" />
+            <button type="button" class="btn btn--secondary impdlg-browse-btn" data-event-click="browse_init">@tr:common.browse</button>
+          </div>
+        </div>
+      </div>
+      <div class="impdlg-control-group" data-if="embed_dataset_visible">
+        <span class="impdlg-field-label text-muted">@tr:new_project.embed_dataset</span>
+        <div class="impdlg-control-main">
+          <label class="impdlg-checkbox-label">
+            <input type="checkbox" data-checked="embed_dataset" />
+            <span class="text-muted">@tr:new_project.embed_dataset_description</span>
+          </label>
+        </div>
+      </div>
+      <div class="impdlg-control-group" data-if="source_is_dataset">
+        <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.ppisp_sidecar</span>
+        <div class="impdlg-control-main">
+          <div class="impdlg-control-row">
+            <input type="text" class="impdlg-input" data-value="ppisp_sidecar_path" />
+            <button type="button" class="btn btn--secondary impdlg-browse-btn" data-event-click="browse_ppisp_sidecar">@tr:common.browse</button>
+          </div>
+        </div>
+      </div>
+      <div class="impdlg-control-group" data-if="source_is_dataset">
+        <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.centralize_dataset</span>
+        <div class="impdlg-control-main">
+          <select class="impdlg-input" data-value="centralize_dataset">
+            <option value="off" selected>@tr:load_dataset_popup.centralize_off</option>
+            <option value="by_pointcloud">@tr:load_dataset_popup.centralize_by_pointcloud</option>
+            <option value="by_cameras">@tr:load_dataset_popup.centralize_by_cameras</option>
+          </select>
+        </div>
+      </div>
+      <div class="impdlg-control-group" data-if="source_is_dataset">
+        <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.max_width</span>
+        <div class="impdlg-control-main">
+          <div class="impdlg-control-row">
+            <input type="text" class="impdlg-input" data-value="max_width_str" />
+            <label class="impdlg-checkbox-label">
+              <input type="checkbox" data-checked="max_width_disabled" />
+              <span class="text-muted">@tr:load_dataset_popup.max_width_disable</span>
+            </label>
+          </div>
+          <span class="impdlg-meta text-muted">@tr:load_dataset_popup.max_width_hint</span>
+        </div>
+      </div>
+      <div class="impdlg-control-group" data-if="source_is_dataset && show_min_track_length">
+        <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.min_track_length</span>
+        <div class="impdlg-control-main">
+          <div class="impdlg-control-row">
+            <input type="text" class="impdlg-input impdlg-track-length-input" data-value="min_track_length_str" />
+            <button class="num-step-btn" data-event-click="min_track_length_step(-1)">-</button>
+            <button class="num-step-btn" data-event-click="min_track_length_step(1)">+</button>
+          </div>
+          <span class="impdlg-meta text-muted">@tr:load_dataset_popup.min_track_length_hint</span>
+          <span class="impdlg-meta status-warning" data-if="show_min_track_length_warning">@tr:load_dataset_popup.min_track_length_init_warning</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="impdlg-buttons">
+      <button type="button" class="btn btn--secondary impdlg-action-btn" data-event-click="do_cancel">@tr:common.cancel</button>
+      <button type="button" class="btn btn--primary impdlg-action-btn" data-attrif-disabled="!can_create" data-event-click="do_create">@tr:new_project.create</button>
+    </div>
+    <input class="submit-proxy" type="submit" />
+  </form>
+</body>
+</rml>

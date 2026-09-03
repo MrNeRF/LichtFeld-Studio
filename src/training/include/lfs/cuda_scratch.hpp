@@ -7,6 +7,7 @@
 #include "core/cuda_allocation.hpp"
 #include "diagnostics/vram_profiler.hpp"
 
+#include <cstdint>
 #include <cuda_runtime.h>
 #include <string_view>
 
@@ -51,5 +52,35 @@ namespace lfs::training::cuda_scratch {
     using DeviceBuffer = lfs::core::UniqueCudaAllocation<
         lfs::core::StreamOrderedCudaAllocator, VramProfilerAllocationHooks>;
     using CubWorkspace = lfs::core::CudaCubWorkspace<DeviceBuffer, TrainingCubWorkspaceTraits>;
+
+    // Reused by the q16 mutation codec. Mutation calls are serialized by the
+    // live-model mutation guard, so one process-local workspace is sufficient.
+    struct Q16BlockRunWorkspace {
+        DeviceBuffer flags;
+        DeviceBuffer compact;
+        DeviceBuffer scan;
+        size_t n_capacity = 0;
+        size_t scan_bytes = 0;
+
+        void ensure(const size_t n,
+                    const size_t required_scan_bytes,
+                    const cudaStream_t stream) {
+            if (n > n_capacity) {
+                flags = DeviceBuffer(
+                    checked_bytes(n, sizeof(std::int32_t), "q16 block-run flags"),
+                    stream, "training.q16.block_runs.flags");
+                compact = DeviceBuffer(
+                    checked_bytes(n, sizeof(std::int32_t), "q16 block-run compact"),
+                    stream, "training.q16.block_runs.compact");
+                n_capacity = n;
+            }
+            if (required_scan_bytes > scan_bytes) {
+                scan = DeviceBuffer(
+                    required_scan_bytes,
+                    stream, "training.q16.block_runs.scan");
+                scan_bytes = required_scan_bytes;
+            }
+        }
+    };
 
 } // namespace lfs::training::cuda_scratch

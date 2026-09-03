@@ -40,9 +40,9 @@ namespace lfs::training {
         int32_t* last_ids_ptr = nullptr;     // [C, H, W]
         float* compensations_ptr = nullptr;  // [C, N] or nullptr
 
-        // Borrowed from gsplat TLS high-water isect cache (do NOT cudaFree).
-        // Valid from forward through backward on this thread; released only at
-        // release_intersect_thread_local_cache() / thread shutdown.
+        // Borrowed from the gsplat TLS VMM intersection cache (do NOT free).
+        // Valid from forward through backward on this thread; released by the
+        // cache release hook or at thread shutdown.
         int64_t* isect_ids_ptr = nullptr;
         int32_t* flatten_ids_ptr = nullptr;
         int32_t n_isects = 0;
@@ -129,7 +129,9 @@ namespace lfs::training {
         const lfs::core::Tensor& grad_alpha,
         lfs::core::SplatData& gaussian_model,
         AdamOptimizer& optimizer,
-        const lfs::core::Tensor& pixel_error_map = {});
+        const lfs::core::Tensor& pixel_error_map = {},
+        const lfs::core::Tensor& edge_weight_map = {},
+        lfs::core::Tensor edge_score_out = {});
 
     // Release per-thread renderer caches before the owning CUDA stream is torn down.
     bool release_gsplat_rasterizer_thread_local_caches() noexcept;
@@ -149,10 +151,10 @@ namespace lfs::training {
         if (!result) {
             throw std::runtime_error(result.error());
         }
-        // Isect/flatten ids are TLS high-water (not owned by the context) —
-        // leave them resident. Stream-ordered arena end_frame keeps the frame
-        // chain intact (a streamless end_frame would force a device sync on
-        // the calling — often UI — thread every inference render).
+        // Isect/flatten ids are owned by the TLS VMM cache, not this context.
+        // Stream-ordered arena end_frame keeps the frame chain intact (a
+        // streamless end_frame would force a device sync on the calling — often
+        // UI — thread every inference render).
         const cudaStream_t stream = result->second.stream;
         auto& arena = core::GlobalArenaManager::instance().get_arena();
         arena.end_frame(result->second.frame_id, stream);

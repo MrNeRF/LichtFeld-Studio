@@ -51,10 +51,10 @@ def _build_builtin_panel_steps(lf):
         lf.register_class(TrainingPanel)
 
     def import_panels():
-        from .import_panels import DatasetImportPanel, ResumeCheckpointPanel
+        from .import_panels import NewProjectPanel, ResumeCheckpointPanel
 
-        lf.register_class(DatasetImportPanel)
-        lf.ui.set_panel_enabled("lfs.dataset_import", False)
+        lf.register_class(NewProjectPanel)
+        lf.ui.set_panel_enabled("lfs.new_project", False)
         lf.register_class(ResumeCheckpointPanel)
         lf.ui.set_panel_enabled("lfs.resume_checkpoint", False)
 

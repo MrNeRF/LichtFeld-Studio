@@ -81,6 +81,8 @@ crashes happen, and files outlive programs.
 - **Checksummed throughout.** Every record and payload carries a CRC32c to catch corruption.
 - **Organized into chapters.** State is split into typed chapters (model, scene graph, parameters,
   layout, sequencer, camera, …); each chapter is the single source of truth for its fields.
+- The `PROJ` chapter may optionally carry a `license` object with a non-empty `identifier` and an
+  optional `notice`; omitted `license` means that no project license is declared.
 - **Autosave & recovery.** A periodic autosave writes to a separate `<project>.licht.autosave`
   sidecar. Recovery validates that sidecar against the master head and can materialize it into a
   retained recovery session before the next durable save. Compaction and recovery publication
@@ -96,5 +98,10 @@ use `--headless --resume project.licht`; a complete autosave newer than the
 master head is recovered automatically. Ambiguous recovery candidates remain
 an error.
 
-The current grammar is **1.0** on this development branch. The framed payload layout is guarded by
+The current grammar is **1.1** on this development branch. Version 1.1 makes CKPT history
+explicit: SCNG binds exactly one resumable checkpoint when a training node exists, while
+additional live CKPT chapters are historical and are copied by compaction. The existing
+Version major/minor fields and commit minimum-reader fields are the compatibility mechanism;
+old 1.0 readers reject a 1.1 multi-checkpoint commit before validation with an unsupported
+version error rather than reporting data loss. The framed payload layout is guarded by
 reader/writer tests; no compatibility promise is made for pre-framed development files.

@@ -84,6 +84,8 @@ namespace lfs::vis {
             focusSplitPanel(panel);
         }
         void applySplitterCursorOverride() const;
+        void releaseDepthWindowCursor();
+        bool applyDepthWindowHoverCursor(double x, double y, bool modifiers_held);
 
         void toggleIndependentSplitView();
 
@@ -326,9 +328,11 @@ namespace lfs::vis {
         enum class CursorType {
             Default,
             Resize,
-            Hand
+            Hand,
+            DepthWindow
         };
         CursorType current_cursor_ = CursorType::Default;
+        int depth_window_cursor_ = 0;
         SDL_Cursor* resize_cursor_ = nullptr;
         SDL_Cursor* hand_cursor_ = nullptr;
 

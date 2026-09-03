@@ -176,6 +176,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         operator/operator_id.cpp
         operator/operator_registry.cpp
         operator/ops/align_ops.cpp
+        operator/ops/depth_window_ops.cpp
         operator/ops/edit_ops.cpp
         operator/ops/scene_ops.cpp
         operator/ops/selection_ops.cpp
@@ -183,6 +184,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # Compositional operations system
         operation/undo_entry.cpp
+        operation/depth_window_undo_entry.cpp
         operation/undo_history.cpp
         operation/operation.cpp
         operation/pipeline.cpp
@@ -238,6 +240,7 @@ target_include_directories(lfs_visualizer
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/external
         ${CMAKE_SOURCE_DIR}/external/httplib
 )
 
@@ -265,7 +268,7 @@ target_link_libraries(lfs_visualizer
         Freetype::Freetype
         nfd::nfd
         vterm
-        lfs_oiio
+        fmt::fmt-header-only
 )
 
 set_property(SOURCE

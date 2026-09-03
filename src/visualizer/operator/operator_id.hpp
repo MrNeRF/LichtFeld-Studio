@@ -35,6 +35,7 @@ namespace lfs::vis::op {
         EllipsoidSet,
         EllipsoidFit,
         EllipsoidReset,
+        DepthWindowDrag,
 
         _Count
     };

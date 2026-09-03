@@ -316,6 +316,39 @@ namespace lfs::vis::op {
         std::optional<SceneTopologyProof> expected_topology_;
     };
 
+    struct DepthWindowSettingsState {
+        float scale_x = 1.0f;
+        float scale_y = 1.0f;
+        float offset_x = 0.0f;
+        float offset_y = 0.0f;
+
+        friend bool operator==(const DepthWindowSettingsState&,
+                               const DepthWindowSettingsState&) = default;
+    };
+
+    class LFS_VIS_API DepthWindowSettingsUndoEntry : public UndoEntry {
+    public:
+        DepthWindowSettingsUndoEntry(RenderingManager& rendering_manager,
+                                     DepthWindowSettingsState before,
+                                     DepthWindowSettingsState after,
+                                     bool rebase_readout);
+
+        void undo() override;
+        void redo() override;
+        [[nodiscard]] std::string name() const override { return "selection.depth_window_drag"; }
+        [[nodiscard]] UndoMetadata metadata() const override;
+        [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this); }
+        [[nodiscard]] DirtyMask dirtyFlags() const override { return DirtyFlag::SELECTION; }
+
+    private:
+        void apply(const DepthWindowSettingsState& state);
+
+        RenderingManager& rendering_manager_;
+        DepthWindowSettingsState before_;
+        DepthWindowSettingsState after_;
+        bool rebase_readout_ = false;
+    };
+
     class LFS_VIS_API CropBoxUndoEntry : public UndoEntry {
     public:
         CropBoxUndoEntry(SceneManager& scene,

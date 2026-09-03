@@ -12,24 +12,17 @@ from .training_confirm import confirm_discard_work_then
 from .types import Panel
 from .ui import RuntimeState
 
-_dataset_import_panel = None
+_new_project_panel = None
 _resume_checkpoint_panel = None
 
-__lfs_panel_classes__ = ["DatasetImportPanel", "ResumeCheckpointPanel"]
-__lfs_panel_ids__ = ["lfs.dataset_import", "lfs.resume_checkpoint"]
+__lfs_panel_classes__ = ["NewProjectPanel", "ResumeCheckpointPanel"]
+__lfs_panel_ids__ = ["lfs.new_project", "lfs.resume_checkpoint"]
 
 
-def open_dataset_import_panel(
-    dataset_path: str,
-    *,
-    clear_scene_on_load: bool = False,
-) -> bool:
-    if _dataset_import_panel is None:
+def open_new_project_panel(source_path: str = "") -> bool:
+    if _new_project_panel is None:
         return False
-    return _dataset_import_panel.show(
-        dataset_path,
-        clear_scene_on_load=clear_scene_on_load,
-    )
+    return _new_project_panel.show(source_path)
 
 
 def open_resume_checkpoint_panel(checkpoint_path: str) -> bool:
@@ -151,30 +144,36 @@ class _ImportDialogPanel(Panel):
         return False
 
 
-class DatasetImportPanel(_ImportDialogPanel):
-    """Floating panel for configuring dataset import paths."""
+class NewProjectPanel(_ImportDialogPanel):
+    """Floating panel for creating a project and optionally importing a source."""
 
-    id = "lfs.dataset_import"
-    label = "Load Dataset"
+    id = "lfs.new_project"
+    label = "New Project"
     space = lf.ui.PanelSpace.FLOATING
     order = 11
     options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    template = "rmlui/dataset_import_panel.rml"
+    template = "rmlui/new_project_panel.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (560, 0)
-    form_id = "dataset-import-form"
+    form_id = "new-project-form"
 
     DEFAULT_MAX_WIDTH = 3840
+    _INVALID_NAME_CHARACTERS = set('<>:"|?*')
+    _WINDOWS_RESERVED_NAMES = {
+        "con", "prn", "aux", "nul",
+        *(f"com{i}" for i in range(1, 10)),
+        *(f"lpt{i}" for i in range(1, 10)),
+    }
 
     def __init__(self):
-        global _dataset_import_panel
-        _dataset_import_panel = self
+        global _new_project_panel
+        _new_project_panel = self
 
         self._handle = None
-        self._dataset_path = ""
+        self._name = ""
+        self._source_path = ""
+        self._source_kind = "blank"
         self._dataset_info = None
-        self._dataset_valid = False
-        self._output_path = ""
         self._init_path = ""
         self._ppisp_sidecar_path = ""
         self._centralize_dataset = "off"
@@ -183,15 +182,24 @@ class DatasetImportPanel(_ImportDialogPanel):
         self._min_track_length = 0
         self._min_track_length_str = "0"
         self._apply_auto_crop = False
-        self._clear_scene_on_load = False
+        self._embed_dataset = False
+        self._advanced_expanded = False
         self._last_lang = ""
 
     def on_bind_model(self, ctx):
-        model = ctx.create_data_model("dataset_import")
+        model = ctx.create_data_model("new_project")
         if model is None:
             return
 
-        model.bind_func("panel_label", lambda: lf.ui.tr("load_dataset_popup.title"))
+        model.bind_func("panel_label", lambda: lf.ui.tr("new_project.title"))
+        model.bind_func("source_is_dataset", lambda: self._source_kind == "dataset")
+        model.bind_func("embed_dataset_visible", lambda: self._source_kind == "dataset")
+        model.bind_func("advanced_expanded", lambda: self._advanced_expanded)
+        model.bind_func("name_valid", self._name_is_valid)
+        model.bind_func("target_exists", self._target_exists)
+        model.bind_func("can_create", self._can_create)
+        model.bind_func("location_preview", self._location_preview)
+        model.bind_func("create_hint", self._create_hint)
 
         model.bind_func("images_path", lambda: self._string_attr("images_path"))
         model.bind_func("sparse_path", lambda: self._string_attr("sparse_path"))
@@ -201,10 +209,9 @@ class DatasetImportPanel(_ImportDialogPanel):
         model.bind_func("show_masks", lambda: bool(self._dataset_info and getattr(self._dataset_info, "has_masks", False)))
         model.bind_func("show_min_track_length", self._show_min_track_length)
         model.bind_func("show_min_track_length_warning", self._show_min_track_length_warning)
-        model.bind_func("can_load", lambda: bool(self._dataset_valid and self._output_path.strip()))
+        model.bind("name", lambda: self._name, self._set_name)
+        model.bind("source_path", lambda: self._source_path, self._set_source_path)
 
-        model.bind("dataset_path", lambda: self._dataset_path, self._set_dataset_path)
-        model.bind("output_path", lambda: self._output_path, self._set_output_path)
         model.bind("init_path", lambda: self._init_path, self._set_init_path)
         model.bind("ppisp_sidecar_path", lambda: self._ppisp_sidecar_path, self._set_ppisp_sidecar_path)
         model.bind("centralize_dataset", lambda: self._centralize_dataset, self._set_centralize_dataset)
@@ -212,13 +219,15 @@ class DatasetImportPanel(_ImportDialogPanel):
         model.bind("max_width_disabled", lambda: self._max_width == 0, self._set_max_width_disabled)
         model.bind("min_track_length_str", lambda: self._min_track_length_str, self._set_min_track_length_str)
         model.bind("apply_auto_crop", lambda: self._apply_auto_crop, self._set_apply_auto_crop)
+        model.bind("embed_dataset", lambda: self._embed_dataset, self._set_embed_dataset)
 
-        model.bind_event("browse_dataset", self._on_browse_dataset)
-        model.bind_event("browse_output", self._on_browse_output)
+        model.bind_event("browse_folder", self._on_browse_folder)
+        model.bind_event("browse_file", self._on_browse_file)
         model.bind_event("browse_init", self._on_browse_init)
         model.bind_event("browse_ppisp_sidecar", self._on_browse_ppisp_sidecar)
         model.bind_event("min_track_length_step", self._on_min_track_length_step)
-        model.bind_event("do_load", self._on_do_load)
+        model.bind_event("toggle_advanced", self._on_toggle_advanced)
+        model.bind_event("do_create", self._on_do_create)
         model.bind_event("do_cancel", self._on_do_cancel)
 
         self._handle = model.get_handle()
@@ -232,12 +241,11 @@ class DatasetImportPanel(_ImportDialogPanel):
             return True
         return False
 
-    def show(self, dataset_path: str, *, clear_scene_on_load: bool = False) -> bool:
-        self._clear_scene_on_load = False
-        if not self._apply_dataset_path(dataset_path, reset_output=True):
-            return False
-
-        self._clear_scene_on_load = bool(clear_scene_on_load)
+    def show(self, source_path: str = "") -> bool:
+        self._name = ""
+        self._source_path = ""
+        self._source_kind = "blank"
+        self._dataset_info = None
         self._init_path = ""
         self._centralize_dataset = "off"
         self._max_width = self.DEFAULT_MAX_WIDTH
@@ -245,16 +253,23 @@ class DatasetImportPanel(_ImportDialogPanel):
         self._min_track_length = 0
         self._min_track_length_str = "0"
         self._apply_auto_crop = False
+        self._embed_dataset = bool(getattr(lf.ui, "get_embed_dataset_by_default", lambda: False)())
+        self._advanced_expanded = False
         params = lf.optimization_params()
+        self._ppisp_sidecar_path = ""
+        self._set_source_path(source_path, derive_name=True)
         self._ppisp_sidecar_path = (
             str(params.ppisp_sidecar_path) if params and params.has_params() else ""
         )
+        self._dirty_model("ppisp_sidecar_path")
+        if not self._name:
+            self._set_name(self._dedupe_name("untitled"))
         self._dirty_model()
         lf.ui.set_panel_enabled(self.id, True)
         return True
 
     def _can_submit_from_keyboard(self) -> bool:
-        return bool(self._dataset_valid and self._output_path.strip())
+        return self._can_create()
 
     def _preview_base_path(self, dataset_path: str) -> Path:
         path = Path(dataset_path)
@@ -262,31 +277,24 @@ class DatasetImportPanel(_ImportDialogPanel):
             return path.parent
         return path
 
-    def _default_output_path(self, dataset_path: str, info) -> str:
-        preview_root = self._preview_base_path(dataset_path)
-        base_path = Path(info.base_path) if info is not None else preview_root
-        return str(base_path / "output")
-
-    def _apply_dataset_path(self, dataset_path: str, reset_output: bool) -> bool:
-        next_value = str(dataset_path).strip()
-        dataset_changed = next_value != self._dataset_path
-        self._dataset_path = next_value
-        self._dataset_valid = bool(next_value) and lf.is_dataset_path(next_value)
+    def _apply_source_path(self, source_path: str) -> None:
+        next_value = str(source_path).strip()
+        self._source_path = next_value
         self._dataset_info = None
-
-        if dataset_changed:
-            self._init_path = ""
-            self._ppisp_sidecar_path = ""
-
-        if self._dataset_valid:
+        if not next_value:
+            self._source_kind = "blank"
+        elif Path(next_value).is_dir() and lf.is_dataset_path(next_value):
+            self._source_kind = "dataset"
             self._dataset_info = lf.detect_dataset_info(str(self._preview_base_path(next_value)))
-            if reset_output:
-                self._output_path = self._default_output_path(next_value, self._dataset_info)
-        elif reset_output:
-            self._output_path = ""
+        elif Path(next_value).is_file() and self._is_splat_path(next_value):
+            self._source_kind = "splat"
+        else:
+            self._source_kind = "invalid"
 
         self._dirty_model(
-            "dataset_path",
+            "source_path",
+            "source_is_dataset",
+            "embed_dataset_visible",
             "images_path",
             "sparse_path",
             "masks_path",
@@ -295,13 +303,77 @@ class DatasetImportPanel(_ImportDialogPanel):
             "show_masks",
             "show_min_track_length",
             "show_min_track_length_warning",
-            "output_path",
             "init_path",
             "ppisp_sidecar_path",
-            "can_load",
+            "can_create",
+            "target_exists",
+            "location_preview",
+            "create_hint",
             "min_track_length_str",
+            "embed_dataset_visible",
         )
-        return self._dataset_valid
+
+    @staticmethod
+    def _is_splat_path(path: str) -> bool:
+        suffix = Path(path).suffix.lower()
+        return suffix in {".ply", ".sog", ".spz", ".rad"} or suffix.startswith(".usd")
+
+    def _set_source_path(self, value, derive_name=False):
+        previous = self._source_path
+        self._apply_source_path(value)
+        if derive_name or (not self._name and str(value).strip()):
+            source = Path(str(value).strip())
+            stem = source.name if self._source_kind == "dataset" else source.stem
+            if stem:
+                self._set_name(self._dedupe_name(stem))
+        if previous != self._source_path:
+            self._init_path = ""
+            self._ppisp_sidecar_path = ""
+
+    def _set_name(self, value):
+        self._name = str(value)
+        self._dirty_model("name", "name_valid", "target_exists", "can_create", "location_preview", "create_hint")
+
+    def _name_is_valid(self) -> bool:
+        name = self._name.strip()
+        if not name or name[-1] in ". ":
+            return False
+        if any(character in name for character in "/\\" + "".join(self._INVALID_NAME_CHARACTERS)):
+            return False
+        return name.split(".", 1)[0].casefold() not in self._WINDOWS_RESERVED_NAMES
+
+    def _target_path(self) -> Path:
+        location = str(getattr(lf.ui, "get_project_location", lambda: "")() or "")
+        return Path(location) / f"{self._name.strip()}.licht"
+
+    def _target_exists(self) -> bool:
+        return bool(self._name.strip()) and self._target_path().exists()
+
+    def _can_create(self) -> bool:
+        return self._name_is_valid() and not self._target_exists() and self._source_kind != "invalid"
+
+    def _location_preview(self) -> str:
+        template = lf.ui.tr("new_project.location_preview") or "Will be created at: {path}"
+        return template.replace("{path}", str(self._target_path()))
+
+    def _create_hint(self) -> str:
+        if self._target_exists():
+            return lf.ui.tr("new_project.already_exists")
+        if not self._name_is_valid():
+            return lf.ui.tr("new_project.invalid_name")
+        if self._source_kind == "invalid":
+            return lf.ui.tr("new_project.source_invalid")
+        return ""
+
+    def _dedupe_name(self, name: str) -> str:
+        base = name.strip() or "untitled"
+        location = Path(str(getattr(lf.ui, "get_project_location", lambda: "")() or ""))
+        candidate = base
+        suffix = 2
+        while (location / f"{candidate}.licht").exists():
+            candidate = f"{base}-{suffix}"
+            suffix += 1
+        return candidate
 
     def _dirty_model(self, *fields):
         if not self._handle:
@@ -342,19 +414,6 @@ class DatasetImportPanel(_ImportDialogPanel):
             and bool(self._init_path.strip())
             and self._min_track_length > 0
         )
-
-    def _set_output_path(self, value):
-        next_value = str(value)
-        if next_value == self._output_path:
-            return
-        self._output_path = next_value
-        self._dirty_model("output_path", "can_load")
-
-    def _set_dataset_path(self, value):
-        next_value = str(value)
-        if next_value == self._dataset_path:
-            return
-        self._apply_dataset_path(next_value, reset_output=True)
 
     def _set_init_path(self, value):
         next_value = str(value)
@@ -437,46 +496,62 @@ class DatasetImportPanel(_ImportDialogPanel):
         self._apply_auto_crop = enabled
         self._dirty_model("apply_auto_crop")
 
-    def _on_browse_dataset(self, _handle=None, _ev=None, _args=None):
-        path = lf.ui.open_dataset_folder_dialog()
-        if path:
-            self._set_dataset_path(path)
-
-    def _on_browse_output(self, _handle=None, _ev=None, _args=None):
-        path = lf.ui.open_dataset_folder_dialog()
-        if path:
-            self._set_output_path(path)
+    def _set_embed_dataset(self, value):
+        value = bool(value)
+        if value == self._embed_dataset:
+            return
+        self._embed_dataset = value
+        self._dirty_model("embed_dataset")
 
     def _on_browse_init(self, _handle=None, _ev=None, _args=None):
-        if not self._dataset_path.strip():
+        if self._source_kind != "dataset":
             return
-        path = lf.ui.open_ply_file_dialog(str(self._preview_base_path(self._dataset_path)))
+        path = lf.ui.open_ply_file_dialog(str(self._preview_base_path(self._source_path)))
         if path:
             self._set_init_path(path)
 
     def _on_browse_ppisp_sidecar(self, _handle=None, _ev=None, _args=None):
-        start_dir = str(self._preview_base_path(self._dataset_path)) if self._dataset_path else ""
+        start_dir = str(self._preview_base_path(self._source_path)) if self._source_path else ""
         if self._ppisp_sidecar_path:
             start_dir = self._ppisp_sidecar_path
         path = lf.ui.open_ppisp_file_dialog(start_dir)
         if path:
             self._set_ppisp_sidecar_path(path)
 
-    def _on_do_load(self, _handle=None, _ev=None, _args=None):
-        if not self._dataset_valid or not self._output_path.strip():
+    def _on_toggle_advanced(self, _handle=None, _ev=None, _args=None):
+        self._advanced_expanded = not self._advanced_expanded
+        self._dirty_model("advanced_expanded")
+
+    def _on_browse_folder(self, _handle=None, _ev=None, _args=None):
+        path = lf.ui.open_dataset_folder_dialog()
+        if path:
+            self._set_source_path(path)
+
+    def _on_browse_file(self, _handle=None, _ev=None, _args=None):
+        path = lf.ui.open_ply_file_dialog("")
+        if path:
+            self._set_source_path(path)
+
+    def _on_do_create(self, _handle=None, _ev=None, _args=None):
+        if not self._can_create():
             return
 
-        dataset_path = self._dataset_path.strip()
+        name = self._name.strip()
+        source_path = self._source_path.strip()
+        source_kind = self._source_kind
+        target = self._target_path()
         init_path = self._init_path.strip()
         ppisp_sidecar_path = self._ppisp_sidecar_path.strip()
         centralize_dataset = self._centralize_dataset
-        output_path = self._output_path.strip()
         max_width = self._max_width
         apply_auto_crop = self._apply_auto_crop
         min_track_length = self._min_track_length
-        clear_scene_on_load = self._clear_scene_on_load
+        embed_dataset = self._embed_dataset
 
         def _commit(stop_training: bool) -> None:
+            if not self._can_create() or self._target_path() != target:
+                self._dirty_model()
+                return
             params = lf.optimization_params()
             if params and params.has_params():
                 params.ppisp_sidecar_path = ppisp_sidecar_path
@@ -484,33 +559,37 @@ class DatasetImportPanel(_ImportDialogPanel):
                 if ppisp_sidecar_path:
                     params.ppisp = True
 
-            self._clear_scene_on_load = False
             lf.ui.set_panel_enabled(self.id, False)
-            if clear_scene_on_load:
-                lf.clear_scene()
-            load_kwargs = {
-                "path": dataset_path,
-                "is_dataset": True,
-                "output_path": output_path,
-                "init_path": init_path,
-                "centralize_dataset": centralize_dataset,
-                "max_width": max_width,
-                "apply_auto_crop": apply_auto_crop,
-                "min_track_length": min_track_length,
-                "discard_changes": True,
-            }
-            if stop_training:
-                load_kwargs["stop_training"] = True
-            lf.load_file(**load_kwargs)
+            lf.project_create(str(target), discard_changes=True, stop_training=stop_training)
+            if source_kind == "dataset":
+                load_kwargs = {
+                    "path": source_path,
+                    "is_dataset": True,
+                    "init_path": init_path,
+                    "centralize_dataset": centralize_dataset,
+                    "max_width": max_width,
+                    "apply_auto_crop": apply_auto_crop,
+                    "min_track_length": min_track_length,
+                    "discard_changes": True,
+                }
+                if stop_training:
+                    load_kwargs["stop_training"] = True
+                lf.load_file(**load_kwargs)
+                if embed_dataset:
+                    lf.project_embed_dataset()
+            elif source_kind == "splat":
+                lf.load_file(path=source_path, is_dataset=False, discard_changes=True)
 
         confirm_discard_work_then(
-            lf.ui.tr("load_dataset_popup.save_title"),
+            lf.ui.tr("new_project.title"),
             _commit,
         )
 
     def _on_do_cancel(self, _handle=None, _ev=None, _args=None):
-        self._clear_scene_on_load = False
         lf.ui.set_panel_enabled(self.id, False)
+
+    def _on_do_load(self, _handle=None, _ev=None, _args=None):
+        self._on_do_create(_handle, _ev, _args)
 
 
 class ResumeCheckpointPanel(_ImportDialogPanel):

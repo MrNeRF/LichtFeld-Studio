@@ -1673,15 +1673,15 @@ def test_python_theme_mutations_are_marshaled_to_viewer_thread():
         assert "nb::gil_scoped_release release;" in source
         assert "vis::post_work_and_wait(" in source
 
-    for source, binding in (
-        (py_ui, "set_theme"),
-        (py_ui, "set_theme_family"),
-        (py_ui_theme, "set_viewport_chrome_style"),
-        (py_ui_theme, "set_viewport_toolbar_position"),
+    for source, binding, helper in (
+        (py_ui, "set_theme", "invoke_on_viewer("),
+        (py_ui, "set_theme_family", "invoke_on_viewer("),
+        (py_ui_theme, "set_viewport_chrome_style", "invoke_on_viewer_thread("),
+        (py_ui_theme, "set_viewport_toolbar_position", "invoke_on_viewer_thread("),
     ):
         start = source.index(f'"{binding}",')
         end = source.index("nb::arg", start)
-        assert "invoke_on_viewer_thread(" in source[start:end]
+        assert helper in source[start:end]
 
     assert "def get_viewport_chrome_style() -> str:" in ui_stub
     assert "def set_viewport_chrome_style(style: str) -> None:" in ui_stub

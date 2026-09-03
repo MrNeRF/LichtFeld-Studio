@@ -19,6 +19,7 @@
 #include <format>
 #include <fstream>
 #include <memory>
+#include <thread>
 #include <zlib.h>
 
 namespace lfs::io {
@@ -32,6 +33,35 @@ namespace lfs::io {
         // SH coefficient count per degree: 0->0, 1->3, 2->8, 3->15
         constexpr int SH_COEFFS_FOR_DEGREE[] = {0, 3, 8, 15};
         constexpr float SCENE_SCALE = 0.5f; // Match PLY loader
+
+        template <typename Function>
+        void parallel_for_chunks(size_t count, Function&& function) {
+            if (count < 4096) {
+                function(0, count);
+                return;
+            }
+
+            const unsigned hardware_threads = std::thread::hardware_concurrency();
+            const size_t thread_count = std::min<size_t>(
+                count, std::min(16u, hardware_threads == 0 ? 1u : hardware_threads));
+            if (thread_count == 1) {
+                function(0, count);
+                return;
+            }
+
+            const size_t chunk_size = (count + thread_count - 1) / thread_count;
+            std::vector<std::thread> workers;
+            workers.reserve(thread_count);
+            for (size_t begin = 0; begin < count; begin += chunk_size) {
+                const size_t end = std::min(begin + chunk_size, count);
+                workers.emplace_back([begin, end, &function]() {
+                    function(begin, end);
+                });
+            }
+            for (auto& worker : workers) {
+                worker.join();
+            }
+        }
 
         const char* coordinate_system_name(spz::CoordinateSystem system) {
             switch (system) {
@@ -224,28 +254,29 @@ namespace lfs::io {
             const auto* const opacity_ptr = static_cast<const float*>(opacity.data_ptr());
             const auto* const sh0_ptr = static_cast<const float*>(sh0.data_ptr());
 
-            std::copy(means_ptr, means_ptr + num_points * 3, cloud.positions.begin());
-            std::copy(scaling_ptr, scaling_ptr + num_points * 3, cloud.scales.begin());
-            std::copy(sh0_ptr, sh0_ptr + num_points * 3, cloud.colors.begin());
+            const size_t attribute_count = static_cast<size_t>(num_points) * 3;
+            std::memcpy(cloud.positions.data(), means_ptr, attribute_count * sizeof(float));
+            std::memcpy(cloud.scales.data(), scaling_ptr, attribute_count * sizeof(float));
+            std::memcpy(cloud.colors.data(), sh0_ptr, attribute_count * sizeof(float));
 
             // Rotation: SplatData wxyz -> SPZ xyzw
-            for (int i = 0; i < num_points; ++i) {
-                cloud.rotations[i * 4 + 0] = rotation_ptr[i * 4 + 1]; // x
-                cloud.rotations[i * 4 + 1] = rotation_ptr[i * 4 + 2]; // y
-                cloud.rotations[i * 4 + 2] = rotation_ptr[i * 4 + 3]; // z
-                cloud.rotations[i * 4 + 3] = rotation_ptr[i * 4 + 0]; // w
-            }
+            parallel_for_chunks(static_cast<size_t>(num_points), [&](size_t begin, size_t end) {
+                for (size_t i = begin; i < end; ++i) {
+                    cloud.rotations[i * 4 + 0] = rotation_ptr[i * 4 + 1]; // x
+                    cloud.rotations[i * 4 + 1] = rotation_ptr[i * 4 + 2]; // y
+                    cloud.rotations[i * 4 + 2] = rotation_ptr[i * 4 + 3]; // z
+                    cloud.rotations[i * 4 + 3] = rotation_ptr[i * 4 + 0]; // w
+                }
+            });
 
-            for (int i = 0; i < num_points; ++i) {
-                cloud.alphas[i] = opacity_ptr[i];
-            }
+            std::memcpy(cloud.alphas.data(), opacity_ptr, static_cast<size_t>(num_points) * sizeof(float));
 
             if (sh_coeffs > 0 && splat.shN().is_valid() && splat.shN().numel() > 0) {
                 // shN is stored swizzled; unpack on CPU to avoid a canonical CUDA copy.
                 const auto shN = splat.shN_canonical_cpu().contiguous();
                 cloud.sh.resize(num_points * sh_coeffs * 3);
                 const auto* const shN_ptr = static_cast<const float*>(shN.data_ptr());
-                std::copy(shN_ptr, shN_ptr + num_points * sh_coeffs * 3, cloud.sh.begin());
+                std::memcpy(cloud.sh.data(), shN_ptr, cloud.sh.size() * sizeof(float));
             }
 
             return cloud;

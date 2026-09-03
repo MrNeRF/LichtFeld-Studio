@@ -1548,9 +1548,9 @@ namespace lfs::vis {
 
     RenderingManager::VulkanFrameResult RenderingManager::renderVulkanFrame(const RenderContext& context) {
         LOG_TIMER("renderVulkanFrame");
-        const RenderSettings frame_settings = [this] {
+        const auto [frame_settings, frame_depth_window_drag_preview] = [this] {
             std::lock_guard lock(settings_mutex_);
-            return settings_;
+            return std::pair(settings_, depth_window_drag_preview_);
         }();
         SceneManager* const scene_manager = context.scene_manager;
         auto* const trainer_manager = scene_manager ? scene_manager->getTrainerManager() : nullptr;
@@ -1563,6 +1563,15 @@ namespace lfs::vis {
         }
         if (context.vulkan_context) {
             last_vulkan_context_ = context.vulkan_context;
+        }
+        if (!is_training && vksplat_viewport_renderer_ &&
+            vksplat_terminal_release_pending_.exchange(false, std::memory_order_acq_rel)) {
+            // TrainingCompleted is posted by the training side, but Vulkan
+            // resources must be released on this render thread. The event is
+            // emitted only after the trainer's B3 cleanup has detached its
+            // arena backing, so this also drops the viewer's final import.
+            vksplat_viewport_renderer_->releaseScratchOnIdle(true);
+            vksplat_idle_frame_count_ = 0;
         }
 
         const auto framebuffer_region =
@@ -2232,6 +2241,7 @@ namespace lfs::vis {
             .viewport_pos = {0, 0},
             .frame_dirty = frame_dirty,
             .training_active = is_training,
+            .depth_window_drag_preview = frame_depth_window_drag_preview,
             .cursor_preview = viewport_overlay_service_.cursorPreview(),
             .gizmo = viewport_overlay_service_.makeFrameGizmoState(),
             .hovered_camera_id = camera_interaction_service_.hoveredCameraId(),
@@ -4197,7 +4207,12 @@ namespace lfs::vis {
                     };
 
                     const DirtyMask non_overlay_dirty = frame_dirty & ~DirtyFlag::SELECTION;
+                    // During a depth-window drag the per-move changes are CONTAINMENT-side
+                    // (overlay flags from the projection pass), which this fast path cannot
+                    // refresh — it re-rasters from cached overlay_flags. Force the full
+                    // render while the drag is live so the reveal tracks the box.
                     const bool can_rerender_selection_overlay =
+                        !frame_depth_window_drag_preview &&
                         (frame_dirty & DirtyFlag::SELECTION) != 0 &&
                         (frame_dirty == DirtyFlag::SELECTION ||
                          (is_training && (non_overlay_dirty & ~DirtyFlag::SPLATS) == 0)) &&

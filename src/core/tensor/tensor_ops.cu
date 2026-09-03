@@ -2497,6 +2497,9 @@ namespace lfs::core::tensor_ops {
 
     // Type conversions
     template void launch_convert_type<float, uint8_t>(const float*, uint8_t*, size_t, cudaStream_t);
+    template void launch_convert_type<float, uint32_t>(const float*, uint32_t*, size_t, cudaStream_t);
+    template void launch_convert_type<uint32_t, float>(const uint32_t*, float*, size_t, cudaStream_t);
+    template void launch_convert_type<uint32_t, int64_t>(const uint32_t*, int64_t*, size_t, cudaStream_t);
     template void launch_convert_type<uint8_t, float>(const uint8_t*, float*, size_t, cudaStream_t);
     template void launch_convert_type<int, uint8_t>(const int*, uint8_t*, size_t, cudaStream_t);
     template void launch_convert_type<uint8_t, int>(const uint8_t*, int*, size_t, cudaStream_t);

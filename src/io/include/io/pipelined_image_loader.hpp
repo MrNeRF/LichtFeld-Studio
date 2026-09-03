@@ -73,6 +73,10 @@ namespace lfs::io {
         size_t jpeg_batch_size = config::DEFAULT_BATCH_SIZE;
         size_t prefetch_count = config::DEFAULT_PREFETCH_COUNT;
         size_t output_queue_size = config::DEFAULT_OUTPUT_QUEUE_SIZE;
+        // Maximum number of reusable decoded RGB frame slots. Zero keeps the
+        // historical 14-slot limit; training normally narrows this to the
+        // tuned prefetch target plus two safety slots.
+        size_t decode_frame_ring_capacity = DECODE_FRAME_RING_CAPACITY;
         size_t decoder_pool_size = config::DEFAULT_BATCH_SIZE;
         size_t io_threads = config::DEFAULT_IO_THREADS;
         size_t cold_process_threads = config::DEFAULT_COLD_THREADS;
@@ -539,6 +543,7 @@ namespace lfs::io {
         double adaptive_wait_sum_ms_ = 0.0;
         size_t adaptive_wait_samples_ = 0;
         size_t adaptive_target_ = config::DEFAULT_PREFETCH_COUNT;
+        size_t adaptive_max_target_ = 12;
         size_t adaptive_low_recommendation_windows_ = 0;
         size_t adaptive_growth_cooldown_windows_ = 0;
         size_t adaptive_occupancy_ = 0;

@@ -1102,7 +1102,8 @@ static const uint OVERLAY_PARAM_CROP_EXTRA_COUNT = 15;
 static const uint OVERLAY_PARAM_ELLIPSOID_EXTRA_BASE = OVERLAY_PARAM_CROP_EXTRA_BASE + OVERLAY_PARAM_CROP_STRIDE * OVERLAY_PARAM_CROP_EXTRA_COUNT;
 static const uint OVERLAY_PARAM_ELLIPSOID_STRIDE = 5;
 static const uint OVERLAY_PARAM_ELLIPSOID_EXTRA_COUNT = 15;
-static const uint OVERLAY_PARAM_COUNT = OVERLAY_PARAM_ELLIPSOID_EXTRA_BASE + OVERLAY_PARAM_ELLIPSOID_STRIDE * OVERLAY_PARAM_ELLIPSOID_EXTRA_COUNT;
+static const uint OVERLAY_PARAM_VIEW_WINDOW = OVERLAY_PARAM_ELLIPSOID_EXTRA_BASE + OVERLAY_PARAM_ELLIPSOID_STRIDE * OVERLAY_PARAM_ELLIPSOID_EXTRA_COUNT;
+static const uint OVERLAY_PARAM_COUNT = OVERLAY_PARAM_VIEW_WINDOW + 1;
 
 [ForceInline]
 bool overlay_enabled(float value)
@@ -1148,6 +1149,7 @@ struct OverlayUniformState {
     bool add_mode;
     int focused_gaussian_id;
     float flash_intensity;
+    bool drag_preview_active;
 };
 
 [ForceInline]
@@ -1174,6 +1176,7 @@ OverlayUniformState load_overlay_uniform_state(StructuredBuffer<float4> overlay_
     state.add_mode = overlay_enabled(selection_flags.z);
     state.focused_gaussian_id = overlay_int(selection_flags.w);
     state.flash_intensity = emphasis_flags.w;
+    state.drag_preview_active = overlay_enabled(overlay_params[OVERLAY_PARAM_VIEW_WINDOW].z);
     return state;
 }
 
@@ -1259,7 +1262,10 @@ uint selection_status(
     }
     bool is_committed = group_id > 0;
     bool is_in_preview = false;
-    if (state.preview_mask_enabled) {
+    // During a depth-window drag the stale exact-preview mask is ignored; the
+    // live reveal is the containment undim itself. No tint class exists:
+    // eligible splats simply keep their normal appearance.
+    if (!state.drag_preview_active && state.preview_mask_enabled) {
         is_in_preview = preview_byte != 0;
     }
     bool under_brush = false;

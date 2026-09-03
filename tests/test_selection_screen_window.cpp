@@ -4,6 +4,7 @@
 
 #include "rendering/render_constants.hpp"
 #include "rendering/selection_ops.hpp"
+#include "selection/depth_window_geometry.hpp"
 
 #include "core/tensor.hpp"
 
@@ -44,7 +45,8 @@ namespace {
         float ortho_scale = kOrthoScale;
         float near_depth = 0.25f;
         float far_depth = 20.0f;
-        float scale = 0.35f;
+        float scale_x = 0.35f;
+        float scale_y = 0.35f;
         float offset_x = 0.0f;
         float offset_y = 0.0f;
     };
@@ -106,16 +108,16 @@ namespace {
         const float view_x = visualizer_x;
         const float view_y = -visualizer_y;
         const float view_z = -visualizer_z;
-        const float width = static_cast<float>(config.width);
-        const float height = static_cast<float>(config.height);
+        const float W = static_cast<float>(config.width);
+        const float H = static_cast<float>(config.height);
 
         ProjectedPoint projected{.depth = view_z};
         if (config.camera_model == ScreenWindowCameraModel::Pinhole) {
             projected.px = config.center_x + config.pixel_focal_x * view_x / view_z;
             projected.py = config.center_y + config.pixel_focal_y * view_y / view_z;
         } else if (config.camera_model == ScreenWindowCameraModel::Orthographic) {
-            projected.px = 0.5f * width + config.ortho_scale * view_x;
-            projected.py = 0.5f * height + config.ortho_scale * view_y;
+            projected.px = 0.5f * W + config.ortho_scale * view_x;
+            projected.py = 0.5f * H + config.ortho_scale * view_y;
         } else {
             const float len = std::sqrt(view_x * view_x + view_y * view_y + view_z * view_z);
             if (len <= 1.0e-6f || !std::isfinite(len)) {
@@ -125,9 +127,9 @@ namespace {
                 const float dir_y = view_y / len;
                 const float dir_z = view_z / len;
                 constexpr float pi = 3.14159265358979323846f;
-                projected.px = (std::atan2(dir_x, dir_z) / (2.0f * pi) + 0.5f) * width;
+                projected.px = (std::atan2(dir_x, dir_z) / (2.0f * pi) + 0.5f) * W;
                 projected.py =
-                    (std::asin(std::clamp(dir_y, -1.0f, 1.0f)) / pi + 0.5f) * height;
+                    (std::asin(std::clamp(dir_y, -1.0f, 1.0f)) / pi + 0.5f) * H;
                 projected.depth = len;
             }
         }
@@ -135,8 +137,8 @@ namespace {
     }
 
     bool cpuReferenceInside(const ProjectedPoint& projected, const ScreenWindowConfig& config) {
-        const float width = static_cast<float>(config.width);
-        const float height = static_cast<float>(config.height);
+        const float W = static_cast<float>(config.width);
+        const float H = static_cast<float>(config.height);
 
         // KEEP IN SYNC: the screen-window formula lives in four places — this CPU
         // reference, vertex_shader.slang compute_splat_active_state,
@@ -148,14 +150,64 @@ namespace {
         // jitter moves the draw sample, not the containment boundary.
         // Coverage warning: the slang copy is still uncompared, but the host packing
         // that feeds it is covered by the overlay-slot test.
-        const float half_w = 0.5f * config.scale * width;
-        const float half_h = 0.5f * config.scale * height;
-        const float cx = 0.5f * width + config.offset_x * (0.5f * width - half_w);
-        const float cy = 0.5f * height + config.offset_y * (0.5f * height - half_h);
+        const float scale_x = config.scale_x;
+        const float scale_y = config.scale_y;
+        const float offset_x = config.offset_x;
+        const float offset_y = config.offset_y;
+        const float half_w = 0.5f * scale_x * W;
+        const float half_h = 0.5f * scale_y * H;
+        const float cx = 0.5f * W + offset_x * (0.5f * W - half_w);
+        const float cy = 0.5f * H + offset_y * (0.5f * H - half_h);
         const bool inside_rect = std::abs(projected.px - cx) <= half_w &&
                                  std::abs(projected.py - cy) <= half_h;
         return inside_rect && projected.depth >= config.near_depth &&
                projected.depth <= config.far_depth && projected.depth > 0.0f;
+    }
+
+    bool legacySingleScaleInside(const ProjectedPoint& projected,
+                                 const ScreenWindowConfig& config,
+                                 const float scale) {
+        const float W = static_cast<float>(config.width);
+        const float H = static_cast<float>(config.height);
+        const float half_w = 0.5f * scale * W;
+        const float half_h = 0.5f * scale * H;
+        const float cx = 0.5f * W + config.offset_x * (0.5f * W - half_w);
+        const float cy = 0.5f * H + config.offset_y * (0.5f * H - half_h);
+        const bool inside_rect = std::abs(projected.px - cx) <= half_w &&
+                                 std::abs(projected.py - cy) <= half_h;
+        return inside_rect && projected.depth >= config.near_depth &&
+               projected.depth <= config.far_depth && projected.depth > 0.0f;
+    }
+
+    std::array<float, 3> pointForProjectedPixel(const ScreenWindowConfig& config,
+                                                const float px,
+                                                const float py,
+                                                const float depth) {
+        const float W = static_cast<float>(config.width);
+        const float H = static_cast<float>(config.height);
+        if (config.camera_model == ScreenWindowCameraModel::Pinhole) {
+            const float view_x = (px - config.center_x) * depth / config.pixel_focal_x;
+            const float view_y = (py - config.center_y) * depth / config.pixel_focal_y;
+            return {view_x, -view_y, -depth};
+        }
+        if (config.camera_model == ScreenWindowCameraModel::Orthographic) {
+            const float view_x = (px - 0.5f * W) / config.ortho_scale;
+            const float view_y = (py - 0.5f * H) / config.ortho_scale;
+            return {view_x, -view_y, -depth};
+        }
+
+        constexpr float pi = 3.14159265358979323846f;
+        const float longitude = (px / W - 0.5f) * (2.0f * pi);
+        const float latitude = (py / H - 0.5f) * pi;
+        const float cos_latitude = std::cos(latitude);
+        const float view_x = depth * std::sin(longitude) * cos_latitude;
+        const float view_y = depth * std::sin(latitude);
+        const float view_z = depth * std::cos(longitude) * cos_latitude;
+        return {view_x, -view_y, -view_z};
+    }
+
+    void appendPoint(std::vector<float>& points, const std::array<float, 3>& point) {
+        points.insert(points.end(), point.begin(), point.end());
     }
 
     float boundaryTolerance(const float scale_of_quantity) {
@@ -163,26 +215,30 @@ namespace {
     }
 
     bool nearDecisionBoundary(const ProjectedPoint& projected, const ScreenWindowConfig& config) {
-        const float width = static_cast<float>(config.width);
-        const float height = static_cast<float>(config.height);
-        const float half_w = 0.5f * config.scale * width;
-        const float half_h = 0.5f * config.scale * height;
-        const float cx = 0.5f * width + config.offset_x * (0.5f * width - half_w);
-        const float cy = 0.5f * height + config.offset_y * (0.5f * height - half_h);
+        const float W = static_cast<float>(config.width);
+        const float H = static_cast<float>(config.height);
+        const float scale_x = config.scale_x;
+        const float scale_y = config.scale_y;
+        const float offset_x = config.offset_x;
+        const float offset_y = config.offset_y;
+        const float half_w = 0.5f * scale_x * W;
+        const float half_h = 0.5f * scale_y * H;
+        const float cx = 0.5f * W + offset_x * (0.5f * W - half_w);
+        const float cy = 0.5f * H + offset_y * (0.5f * H - half_h);
         const float x_distance = std::abs(std::abs(projected.px - cx) - half_w);
         const float y_distance = std::abs(std::abs(projected.py - cy) - half_h);
         const float depth_scale = std::max(
             {std::abs(projected.depth), std::abs(config.near_depth), std::abs(config.far_depth), 1.0f});
 
-        if (x_distance < boundaryTolerance(width) || y_distance < boundaryTolerance(height) ||
+        if (x_distance < boundaryTolerance(W) || y_distance < boundaryTolerance(H) ||
             std::abs(projected.depth - config.near_depth) < boundaryTolerance(depth_scale) ||
             std::abs(projected.depth - config.far_depth) < boundaryTolerance(depth_scale) ||
             std::abs(projected.depth) < boundaryTolerance(depth_scale)) {
             return true;
         }
         if (config.camera_model == ScreenWindowCameraModel::Equirectangular) {
-            const float seam_distance = std::min(std::abs(projected.px), std::abs(width - projected.px));
-            return seam_distance < boundaryTolerance(width);
+            const float seam_distance = std::min(std::abs(projected.px), std::abs(W - projected.px));
+            return seam_distance < boundaryTolerance(W);
         }
         return false;
     }
@@ -215,7 +271,8 @@ namespace {
             config.ortho_scale,
             config.near_depth,
             config.far_depth,
-            config.scale,
+            config.scale_x,
+            config.scale_y,
             config.offset_x,
             config.offset_y,
             model_transforms,
@@ -319,7 +376,13 @@ namespace {
             ScreenWindowCameraModel::Orthographic,
             ScreenWindowCameraModel::Equirectangular,
         };
-        constexpr std::array scales{0.05f, 0.35f, 1.0f};
+        constexpr std::array scale_pairs{
+            std::pair{0.05f, 0.05f},
+            std::pair{0.35f, 0.35f},
+            std::pair{1.0f, 1.0f},
+            std::pair{0.15f, 0.80f},
+            std::pair{0.80f, 0.15f},
+        };
         constexpr std::array offsets{-1.0f, 0.0f, 1.0f};
         constexpr std::array near_far_pairs{
             std::pair{0.0f, 5.0f},
@@ -328,7 +391,7 @@ namespace {
         };
 
         for (const auto model : models) {
-            for (const float scale : scales) {
+            for (const auto [scale_x, scale_y] : scale_pairs) {
                 for (const float offset_x : offsets) {
                     for (const float offset_y : offsets) {
                         for (const auto [near_depth, far_depth] : near_far_pairs) {
@@ -336,7 +399,8 @@ namespace {
                                 .camera_model = model,
                                 .near_depth = near_depth,
                                 .far_depth = far_depth,
-                                .scale = scale,
+                                .scale_x = scale_x,
+                                .scale_y = scale_y,
                                 .offset_x = offset_x,
                                 .offset_y = offset_y,
                             };
@@ -356,7 +420,7 @@ namespace {
                                 ++compared;
                                 ASSERT_EQ(actual[i], cpuReferenceInside(projected, config))
                                     << "point=" << i << " model=" << static_cast<std::uint32_t>(model)
-                                    << " scale=" << scale << " offsets=(" << offset_x << ',' << offset_y
+                                    << " scales=(" << scale_x << ',' << scale_y << ") offsets=(" << offset_x << ',' << offset_y
                                     << ") near=" << near_depth << " far=" << far_depth;
                             }
                             EXPECT_GT(compared, kRandomPointCount / 2);
@@ -365,6 +429,305 @@ namespace {
                 }
             }
         }
+    }
+
+    TEST_F(SelectionScreenWindow, AnisotropicExtremeOffsetsAcrossAllCameraModels) {
+        constexpr std::array<float, 9> identity_rows{
+            1.0f,
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f,
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f,
+        };
+        constexpr std::array<float, 3> origin{0.0f, 0.0f, 0.0f};
+        constexpr std::array configs{
+            ScreenWindowConfig{
+                .camera_model = ScreenWindowCameraModel::Pinhole,
+                .width = 1024,
+                .height = 512,
+                .pixel_focal_x = 256.0f,
+                .pixel_focal_y = 256.0f,
+                .center_x = 512.0f,
+                .center_y = 256.0f,
+                .near_depth = 2.0f,
+                .far_depth = 8.0f,
+                .scale_x = 0.50f,
+                .scale_y = 0.25f,
+                .offset_x = -1.0f,
+                .offset_y = 1.0f,
+            },
+            ScreenWindowConfig{
+                .camera_model = ScreenWindowCameraModel::Orthographic,
+                .width = 1024,
+                .height = 512,
+                .ortho_scale = 64.0f,
+                .near_depth = 2.0f,
+                .far_depth = 8.0f,
+                .scale_x = 0.25f,
+                .scale_y = 0.50f,
+                .offset_x = 1.0f,
+                .offset_y = -1.0f,
+            },
+            ScreenWindowConfig{
+                .camera_model = ScreenWindowCameraModel::Equirectangular,
+                .width = 1024,
+                .height = 512,
+                .near_depth = 2.0f,
+                .far_depth = 8.0f,
+                .scale_x = 0.50f,
+                .scale_y = 0.25f,
+                .offset_x = 1.0f,
+                .offset_y = -1.0f,
+            },
+        };
+
+        for (const auto& config : configs) {
+            const float W = static_cast<float>(config.width);
+            const float H = static_cast<float>(config.height);
+            const float half_w = 0.5f * config.scale_x * W;
+            const float half_h = 0.5f * config.scale_y * H;
+            const float cx = 0.5f * W + config.offset_x * (0.5f * W - half_w);
+            const float cy = 0.5f * H + config.offset_y * (0.5f * H - half_h);
+            std::vector<float> points;
+            appendPoint(points, pointForProjectedPixel(config, cx, cy, 4.0f));
+            appendPoint(points, pointForProjectedPixel(config, cx - half_w + 2.0f, cy, 4.0f));
+            appendPoint(points, pointForProjectedPixel(config, cx, cy + half_h - 2.0f, 4.0f));
+            appendPoint(points, pointForProjectedPixel(config, cx - half_w - 2.0f, cy, 4.0f));
+            appendPoint(points, pointForProjectedPixel(config, cx, cy + half_h + 2.0f, 4.0f));
+
+            SCOPED_TRACE(static_cast<std::uint32_t>(config.camera_model));
+            EXPECT_EQ(runCuda(points, config, identity_rows, origin),
+                      (std::vector<bool>{true, true, true, false, false}));
+        }
+    }
+
+    TEST_F(SelectionScreenWindow, AnisotropicInclusiveAxisBoundaries) {
+        constexpr std::array<float, 9> identity_rows{
+            1.0f,
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f,
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f,
+        };
+        constexpr std::array<float, 3> origin{0.0f, 0.0f, 0.0f};
+        const ScreenWindowConfig config{
+            .camera_model = ScreenWindowCameraModel::Pinhole,
+            .width = 1024,
+            .height = 512,
+            .pixel_focal_x = 256.0f,
+            .pixel_focal_y = 256.0f,
+            .center_x = 512.0f,
+            .center_y = 256.0f,
+            .near_depth = 2.0f,
+            .far_depth = 8.0f,
+            .scale_x = 0.50f,
+            .scale_y = 0.25f,
+            .offset_x = -1.0f,
+            .offset_y = 1.0f,
+        };
+        const std::vector<float> points{
+            -8.0f,
+            -3.0f,
+            -4.0f, // left boundary
+            0.0f,
+            -3.0f,
+            -4.0f, // right boundary
+            -4.0f,
+            -2.0f,
+            -4.0f, // top boundary
+            -4.0f,
+            -4.0f,
+            -4.0f, // bottom boundary
+            -8.015625f,
+            -3.0f,
+            -4.0f, // outside X
+            -4.0f,
+            -4.015625f,
+            -4.0f, // outside Y
+        };
+        EXPECT_EQ(runCuda(points, config, identity_rows, origin),
+                  (std::vector<bool>{true, true, true, true, false, false}));
+    }
+
+    TEST_F(SelectionScreenWindow, IsotropicScalesMatchLegacySingleScaleClassification) {
+        constexpr std::array<float, 9> identity_rows{
+            1.0f,
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f,
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f,
+        };
+        constexpr std::array<float, 3> origin{0.0f, 0.0f, 0.0f};
+        constexpr std::array models{
+            ScreenWindowCameraModel::Pinhole,
+            ScreenWindowCameraModel::Orthographic,
+            ScreenWindowCameraModel::Equirectangular,
+        };
+        constexpr std::array scales{0.05f, 0.35f, 1.0f};
+        constexpr std::array offset_pairs{
+            std::pair{-1.0f, 1.0f},
+            std::pair{1.0f, -1.0f},
+        };
+
+        std::mt19937 rng(0x1507A0u);
+        std::uniform_real_distribution<float> coordinate(-12.0f, 12.0f);
+        constexpr std::size_t point_count = 512;
+        std::vector<float> points(point_count * 3);
+        std::vector<std::array<float, 3>> point_arrays(point_count);
+        for (std::size_t i = 0; i < point_count; ++i) {
+            point_arrays[i] = {coordinate(rng), coordinate(rng), coordinate(rng)};
+            points[i * 3] = point_arrays[i][0];
+            points[i * 3 + 1] = point_arrays[i][1];
+            points[i * 3 + 2] = point_arrays[i][2];
+        }
+
+        for (const auto model : models) {
+            for (const float scale : scales) {
+                for (const auto [offset_x, offset_y] : offset_pairs) {
+                    const ScreenWindowConfig config{
+                        .camera_model = model,
+                        .near_depth = 0.25f,
+                        .far_depth = 20.0f,
+                        .scale_x = scale,
+                        .scale_y = scale,
+                        .offset_x = offset_x,
+                        .offset_y = offset_y,
+                    };
+                    const auto actual = runCuda(points, config, identity_rows, origin);
+                    std::size_t compared = 0;
+                    for (std::size_t i = 0; i < point_count; ++i) {
+                        const auto projected =
+                            projectCpu(point_arrays[i], config, identity_rows, origin);
+                        const bool legacy_inside = legacySingleScaleInside(projected, config, scale);
+                        ASSERT_EQ(cpuReferenceInside(projected, config), legacy_inside);
+                        if (nearDecisionBoundary(projected, config)) {
+                            continue;
+                        }
+                        ++compared;
+                        ASSERT_EQ(actual[i], legacy_inside)
+                            << "point=" << i << " model=" << static_cast<std::uint32_t>(model)
+                            << " scale=" << scale << " offsets=(" << offset_x << ',' << offset_y
+                            << ')';
+                    }
+                    EXPECT_GT(compared, point_count / 2);
+                }
+            }
+        }
+    }
+
+    TEST_F(SelectionScreenWindow, AnisotropicOffCentreAsymmetricFocalsCpuReferenceMatchesCuda) {
+        constexpr std::array<float, 9> identity_rows{
+            1.0f,
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f,
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f,
+        };
+        constexpr std::array<float, 3> origin{0.0f, 0.0f, 0.0f};
+        const ScreenWindowConfig config{
+            .width = 640,
+            .height = 480,
+            .pixel_focal_x = 500.0f,
+            .pixel_focal_y = 600.0f,
+            .center_x = 120.0f,
+            .center_y = 210.0f,
+            .near_depth = 0.25f,
+            .far_depth = 20.0f,
+            .scale_x = 0.25f,
+            .scale_y = 0.55f,
+            .offset_x = -0.5f,
+            .offset_y = 0.25f,
+        };
+        const std::vector<float> point{1.44f, 0.0f, -4.0f};
+        const std::array<float, 3> point_arr{point[0], point[1], point[2]};
+        const auto projected = projectCpu(point_arr, config, identity_rows, origin);
+        ASSERT_FALSE(nearDecisionBoundary(projected, config));
+        const bool cpu_inside = cpuReferenceInside(projected, config);
+        const auto cuda = runCuda(point, config, identity_rows, origin);
+        ASSERT_EQ(cuda.size(), 1u);
+        EXPECT_EQ(cuda.front(), cpu_inside);
+
+        std::mt19937 rng(0xA51F70u);
+        std::uniform_real_distribution<float> coordinate(-25.0f, 25.0f);
+        std::vector<float> points(kRandomPointCount * 3);
+        std::vector<std::array<float, 3>> point_arrays(kRandomPointCount);
+        for (std::size_t i = 0; i < kRandomPointCount; ++i) {
+            point_arrays[i] = {coordinate(rng), coordinate(rng), coordinate(rng)};
+            points[i * 3] = point_arrays[i][0];
+            points[i * 3 + 1] = point_arrays[i][1];
+            points[i * 3 + 2] = point_arrays[i][2];
+        }
+        const auto actual = runCuda(points, config, identity_rows, origin);
+        ASSERT_EQ(actual.size(), kRandomPointCount);
+        std::size_t compared = 0;
+        for (std::size_t i = 0; i < kRandomPointCount; ++i) {
+            const auto random_projected = projectCpu(point_arrays[i], config, identity_rows, origin);
+            if (nearDecisionBoundary(random_projected, config)) {
+                continue;
+            }
+            ++compared;
+            ASSERT_EQ(actual[i], cpuReferenceInside(random_projected, config)) << "point=" << i;
+        }
+        EXPECT_GT(compared, kRandomPointCount / 2);
+    }
+
+    TEST_F(SelectionScreenWindow, EquirectPrincipalPointInvariantUnderAnisotropicScales) {
+        constexpr std::array<float, 9> identity_rows{
+            1.0f,
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f,
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f,
+        };
+        constexpr std::array<float, 3> origin{0.0f, 0.0f, 0.0f};
+        const ScreenWindowConfig equirectangular{
+            .camera_model = ScreenWindowCameraModel::Equirectangular,
+            .width = 1024,
+            .height = 512,
+            .near_depth = 0.0f,
+            .far_depth = 8.0f,
+            .scale_x = 0.50f,
+            .scale_y = 0.25f,
+            .offset_x = 0.35f,
+            .offset_y = -0.35f,
+        };
+        const std::vector<std::array<float, 3>> equirect_point_arrays{
+            {1.0e-7f, 0.0f, 4.0f},
+            {-1.0e-7f, 0.0f, 4.0f},
+            {0.0f, 0.0f, 0.0f}};
+        const std::vector<float> equirect_points{1.0e-7f, 0.0f, 4.0f, -1.0e-7f, 0.0f, 4.0f, 0.0f, 0.0f, 0.0f};
+        // Expectations come from the file's own CPU reference, never hand-derived.
+        std::vector<bool> equirect_expected;
+        for (const auto& point : equirect_point_arrays) {
+            const auto projected = projectCpu(point, equirectangular, identity_rows, origin);
+            equirect_expected.push_back(cpuReferenceInside(projected, equirectangular));
+        }
+        const auto centred_equirect = runCuda(equirect_points, equirectangular, identity_rows, origin);
+        ScreenWindowConfig bogus_equirect = equirectangular;
+        bogus_equirect.center_x = 9999.0f;
+        bogus_equirect.center_y = -9999.0f;
+        EXPECT_EQ(runCuda(equirect_points, bogus_equirect, identity_rows, origin), centred_equirect);
+        EXPECT_EQ(centred_equirect, equirect_expected);
     }
 
     TEST_F(SelectionScreenWindow, InclusiveBoundariesAndPinnedCases) {
@@ -393,7 +756,8 @@ namespace {
             .center_y = 256.0f,
             .near_depth = 2.0f,
             .far_depth = 8.0f,
-            .scale = 0.5f,
+            .scale_x = 0.5f,
+            .scale_y = 0.5f,
         };
         const std::vector<float> boundary_points{
             -4.0f,
@@ -444,7 +808,8 @@ namespace {
             .height = 512,
             .near_depth = 0.0f,
             .far_depth = 8.0f,
-            .scale = 1.0f,
+            .scale_x = 1.0f,
+            .scale_y = 1.0f,
         };
         const std::vector<float> seam_and_sentinel_points{
             1.0e-7f,
@@ -526,7 +891,8 @@ namespace {
             .center_y = 240.0f,
             .near_depth = 2.0f,
             .far_depth = 8.0f,
-            .scale = 0.35f,
+            .scale_x = 0.35f,
+            .scale_y = 0.35f,
             .offset_x = -1.0f};
         ScreenWindowConfig image_centre = off_centre;
         image_centre.center_x = 320.0f;
@@ -565,7 +931,8 @@ namespace {
             .center_y = 240.0f,
             .near_depth = 2.0f,
             .far_depth = 8.0f,
-            .scale = 0.35f,
+            .scale_x = 0.35f,
+            .scale_y = 0.35f,
             .offset_x = 0.35f};
         ScreenWindowConfig aspect_reconstruction = carried_focals;
         aspect_reconstruction.pixel_focal_x = 600.0f;
@@ -604,7 +971,8 @@ namespace {
             .center_y = 210.0f,
             .near_depth = 0.25f,
             .far_depth = 20.0f,
-            .scale = 0.35f,
+            .scale_x = 0.35f,
+            .scale_y = 0.35f,
             .offset_x = -0.5f,
             .offset_y = 0.25f};
         const auto actual = runCuda(points, config, kViewRotationRows, kTranslation);
@@ -640,7 +1008,8 @@ namespace {
             .height = 512,
             .near_depth = 0.0f,
             .far_depth = 8.0f,
-            .scale = 1.0f};
+            .scale_x = 1.0f,
+            .scale_y = 1.0f};
         const std::vector<float> equirect_points{1.0e-7f, 0.0f, 4.0f, -1.0e-7f, 0.0f, 4.0f, 0.0f, 0.0f, 0.0f};
         const std::vector<bool> equirect_expected{true, true, false};
         const auto centred_equirect = runCuda(equirect_points, equirectangular, identity_rows, origin);
@@ -728,6 +1097,90 @@ namespace {
             EXPECT_NEAR(actual[i * 2 + 1], projected.py, 1.0e-3f) << "point=" << i;
         }
         EXPECT_GT(compared, kRandomPointCount / 2);
+    }
+
+    using lfs::vis::op::DEPTH_WINDOW_HANDLE_HIT_RADIUS_PX;
+    using lfs::vis::op::DepthWindowHandle;
+    using lfs::vis::op::DepthWindowHandleGeometry;
+    using lfs::vis::op::depthWindowHandleGeometry;
+    using lfs::vis::op::hitTestDepthWindowHandles;
+
+    [[nodiscard]] float zoneForAxis(const float dim) {
+        return std::min(std::max(0.4f * dim, 24.0f), 0.5f * dim);
+    }
+
+    [[nodiscard]] DepthWindowHandleGeometry geometryForDim(const float dim_x, const float dim_y) {
+        return depthWindowHandleGeometry(lfs::vis::op::DepthWindowRect{
+            .min = {0.0f, 0.0f},
+            .max = {dim_x, dim_y},
+        });
+    }
+
+    // Overlay suppression under GT keys on the broad MODE predicate alone —
+    // engagement of the GT selection context deliberately plays no part, which is what
+    // closes the loading-window gap (mode on, context still unpublished).
+    TEST(DepthWindowGtSuppressionTest, OverlaySuppressionKeysOnModeNotEngagement) {
+        static_assert(lfs::vis::op::depthWindowOverlaySuppressed(true));
+        static_assert(!lfs::vis::op::depthWindowOverlaySuppressed(false));
+        EXPECT_TRUE(lfs::vis::op::depthWindowOverlaySuppressed(true));
+        EXPECT_FALSE(lfs::vis::op::depthWindowOverlaySuppressed(false));
+    }
+
+    TEST(DepthWindowMoveZoneTest, ZoneSizeFollowsPerAxisRegimesAndBoundaryValues) {
+        const struct Case {
+            float dim;
+            float expected;
+            // Just outside the zone along +x. For the capped regime (dim=40) the
+            // probe falls inside the right edge-handle circle, and edges win by
+            // the pinned precedence (corner -> edge -> move-zone).
+            DepthWindowHandle expected_outside;
+        } cases[]{
+            {40.0f, 20.0f, DepthWindowHandle::EdgeRight}, // cap: 0.5*40
+            {47.0f, 23.5f, DepthWindowHandle::None},      // cap: 0.5*47
+            {48.0f, 24.0f, DepthWindowHandle::None},      // boundary: floor == cap
+            {59.0f, 24.0f, DepthWindowHandle::None},      // floor
+            {60.0f, 24.0f, DepthWindowHandle::None},      // boundary: 0.4*60 == floor
+            {100.0f, 40.0f, DepthWindowHandle::None},     // proportional 0.4*dim
+        };
+
+        for (const auto& test_case : cases) {
+            const auto geometry = geometryForDim(test_case.dim, 200.0f);
+            const glm::vec2 center = geometry.center;
+            const float zone_x = zoneForAxis(test_case.dim);
+            EXPECT_NEAR(zone_x, test_case.expected, 1.0e-5f) << "dim=" << test_case.dim;
+            EXPECT_EQ(hitTestDepthWindowHandles(center, geometry), DepthWindowHandle::Center)
+                << "dim=" << test_case.dim;
+            EXPECT_EQ(hitTestDepthWindowHandles(center + glm::vec2(0.5f * zone_x + 0.1f, 0.0f), geometry),
+                      test_case.expected_outside)
+                << "dim=" << test_case.dim;
+
+            const auto geometry_y = geometryForDim(200.0f, test_case.dim);
+            const float zone_y = zoneForAxis(test_case.dim);
+            EXPECT_NEAR(zone_y, test_case.expected, 1.0e-5f) << "dim=" << test_case.dim;
+            EXPECT_EQ(hitTestDepthWindowHandles(geometry_y.center, geometry_y), DepthWindowHandle::Center)
+                << "dim=" << test_case.dim;
+        }
+    }
+
+    TEST(DepthWindowMoveZoneTest, EdgeHandlePrecedenceOverOverlappingMoveZone) {
+        constexpr float kDim = 40.0f;
+        const auto geometry = geometryForDim(kDim, kDim);
+        const glm::vec2 edge_overlap{20.0f, 10.0f};
+        EXPECT_EQ(hitTestDepthWindowHandles(edge_overlap, geometry), DepthWindowHandle::EdgeTop);
+    }
+
+    TEST(DepthWindowMoveZoneTest, ClassifiesCenterInteriorCornerAndEdgeHandles) {
+        constexpr float kDim = 100.0f;
+        const auto geometry = geometryForDim(kDim, kDim);
+        const float zone = zoneForAxis(kDim);
+
+        EXPECT_EQ(hitTestDepthWindowHandles(geometry.center, geometry), DepthWindowHandle::Center);
+        EXPECT_EQ(hitTestDepthWindowHandles(geometry.corners[0], geometry), DepthWindowHandle::TopLeft);
+        EXPECT_EQ(hitTestDepthWindowHandles(geometry.edge_midpoints[1], geometry), DepthWindowHandle::EdgeRight);
+        // (25,25): interior, outside the 40px zone, clear of every handle circle.
+        EXPECT_EQ(hitTestDepthWindowHandles(glm::vec2(25.0f, 25.0f), geometry), DepthWindowHandle::None);
+        EXPECT_EQ(hitTestDepthWindowHandles(glm::vec2(50.0f, 50.0f - 0.5f * zone - 1.0f), geometry),
+                  DepthWindowHandle::None);
     }
 
 } // namespace

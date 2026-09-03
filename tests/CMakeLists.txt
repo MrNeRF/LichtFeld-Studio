@@ -482,6 +482,7 @@ set(TEST_FILES
     test_selection_screen_window.cpp
     test_rendering_refactor_services.cpp
     test_theme_registry.cpp
+    test_preferences_migration.cpp
     test_viewport.cpp
     test_input_controller_focus.cpp
     test_input_controller_dataset_load.cpp
@@ -497,6 +498,7 @@ set(TEST_FILES
     test_metrics_evaluator.cpp
     test_background_image.cpp
     test_nvcodec_jpeg2k_16bit.cpp
+    test_nvcodec_sentinel_validation.cpp
     test_compressed_blob_tier.cpp
     test_pipelined_loader.cpp
     test_pipelined_loader_ledger.cpp
@@ -527,6 +529,7 @@ set(TEST_FILES
     test_ppisp_exposure_seed.cpp
     test_metrics_evaluator_appearance.cpp
     test_export_env_composite.cpp
+    test_image_io.cpp
     test_undistort.cpp
     test_viewport_region_utils.cpp
     test_viewport_interop_decision.cpp
@@ -538,6 +541,7 @@ set(TEST_FILES
     test_missing_dataset_images.cpp
     test_colmap_points3d_text.cpp
     test_colmap_binary_error_taxonomy.cpp
+    test_colmap_binary_parallel_parse.cpp
     test_splat_simplify.cpp
     test_rml_text_input_handler.cpp
     test_rml_im_mode_layout.cpp
@@ -615,15 +619,6 @@ list(APPEND TEST_SOURCES
 # Create test executable
 add_executable(lichtfeld_tests ${TEST_SOURCES})
 
-# USD (pxr) headers from vcpkg pull in deprecated <ext/hash_set> and emit
-# #warning (-Wcpp). Third-party; suppress only for this translation unit.
-if(NOT MSVC)
-    set_source_files_properties(
-        test_usd_format.cpp
-        PROPERTIES COMPILE_OPTIONS "-Wno-cpp"
-    )
-endif()
-
 # Python integration tests import the in-tree extension at runtime.
 add_dependencies(lichtfeld_tests lfs_py)
 
@@ -646,6 +641,7 @@ target_include_directories(lichtfeld_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/app/include
     ${CMAKE_SOURCE_DIR}/src/visualizer # For visualizer-relative headers (e.g. gui/ui_widgets.hpp)
     ${CMAKE_SOURCE_DIR}/external/spz   # SPZ library headers
+    ${CMAKE_SOURCE_DIR}/external       # Vendored stb headers
     ${NB_DIR}/include
     ${CUDAToolkit_INCLUDE_DIRS}
 )
@@ -726,7 +722,6 @@ target_link_libraries(lichtfeld_tests PRIVATE
     GTest::gtest
     nanobind-static
     ${TORCH_LIBRARIES}
-    OpenImageIO::OpenImageIO
     OpenMeshCore
     assimp::assimp
 

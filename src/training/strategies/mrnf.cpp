@@ -11,9 +11,7 @@
 #include "core/logger.hpp"
 #include "core/sh_value_quant.hpp"
 #include "diagnostics/vram_profiler.hpp"
-#include "edge_rasterizer.hpp"
 #include "kernels/densification_kernels.hpp"
-#include "kernels/image_kernels.hpp"
 #include "kernels/mrnf_kernels.hpp"
 #include "lfs/training/mean_step_scale.cuh"
 #include "lfs/training/morton_reorder.hpp"
@@ -43,7 +41,7 @@ namespace lfs::training {
         constexpr int MRNF_RATIO_RANK_LOG_INTERVAL = 25;
 
         constexpr float MRNF_EDGE_SCORE_WEIGHT = 0.25f;
-        constexpr int MRNF_EDGE_MIN_VIEW_SAMPLES = 10;
+        constexpr int MRNF_EXPLORE_MIN_VIEW_SAMPLES = 10;
         constexpr int MRNF_BOUNDS_RECOMPUTE_INTERVAL_REFINES = 5;
         constexpr float MRNF_RAW_OPACITY_PRUNE_THRESHOLD = -5.54126358f; // logit(1 / 255)
         constexpr float MRNF_LOG_MIN_SCALE_THRESHOLD = -23.0258509f;     // log(1e-10)
@@ -197,6 +195,54 @@ namespace lfs::training {
             return std::pow(end / start, 1.0 / static_cast<double>(steps));
         }
 
+        [[nodiscard]] size_t splat_reserved_capacity(const lfs::core::SplatData& splat_data) {
+            const size_t n = static_cast<size_t>(splat_data.size());
+            if (!splat_data.means().is_valid()) {
+                return n;
+            }
+            // The GUI/exportable allocator commits live-N plus headroom and
+            // grows that reservation through preflight_grow_capacity().  The
+            // headless path may already be reserved to max_cap.  Use the
+            // parameter reservation in both cases, never the configured cap
+            // as an independent scratch allocation policy.
+            return std::max(splat_data.means().capacity(), n);
+        }
+
+        void grow_tensor_preserving_prefix(
+            lfs::core::Tensor& tensor,
+            const size_t desired_capacity) {
+            if (!tensor.is_valid() || tensor.capacity() >= desired_capacity) {
+                return;
+            }
+
+            const auto kind = tensor.external_storage_kind();
+            const bool direct_cuda_storage =
+                tensor.device() == lfs::core::Device::CUDA &&
+                (tensor.is_external_storage() || !kind.empty());
+            if (!direct_cuda_storage) {
+                tensor.reserve(desired_capacity);
+                return;
+            }
+
+            // Tensor::reserve() is deliberately forbidden for cuda.direct and
+            // externally-owned storage. Rebuild the owner, copy the logical
+            // prefix, and only then swap it in. All MRNF callers use private
+            // auxiliary tensors here; model/exportable tensors grow through
+            // SplatData::ensure_param_capacity() instead.
+            const lfs::core::Tensor source = tensor;
+            auto grown = lfs::core::Tensor::zeros_direct(
+                source.shape(), desired_capacity, source.device(), source.dtype());
+            if (source.numel() > 0) {
+                const cudaStream_t copy_stream = grown.stream();
+                source.sync_to_stream(copy_stream);
+                LFS_CUDA_CHECK(cudaMemcpyAsync(
+                    grown.data_ptr(), source.data_ptr(), source.bytes(),
+                    cudaMemcpyDeviceToDevice, copy_stream));
+                LFS_CUDA_CHECK(cudaStreamSynchronize(copy_stream));
+            }
+            tensor = std::move(grown);
+        }
+
         void reset_vector_buffer(
             lfs::core::Tensor& tensor,
             const size_t size,
@@ -238,7 +284,7 @@ namespace lfs::training {
 
             if (current_size == size) {
                 if (desired_capacity > size && tensor.capacity() < desired_capacity) {
-                    tensor.reserve(desired_capacity);
+                    grow_tensor_preserving_prefix(tensor, desired_capacity);
                 }
                 tensor.zero_();
                 return;
@@ -246,7 +292,7 @@ namespace lfs::training {
 
             if (current_size < size) {
                 if (tensor.capacity() < desired_capacity) {
-                    tensor.reserve(desired_capacity);
+                    grow_tensor_preserving_prefix(tensor, desired_capacity);
                 }
                 tensor.append_zeros(size - current_size);
                 tensor.zero_();
@@ -394,13 +440,13 @@ namespace lfs::training {
 
             if (!free_mask.is_valid()) {
                 splat_data.deleted() = lfs::core::Tensor::zeros_bool({current_size}, splat_data.means().device());
-                splat_data.deleted().reserve(desired_capacity);
+                grow_tensor_preserving_prefix(splat_data.deleted(), desired_capacity);
                 splat_data.notify_deleted_mask_changed();
                 return;
             }
 
             splat_data.deleted() = free_mask.slice(0, 0, current_size).clone();
-            splat_data.deleted().reserve(desired_capacity);
+            grow_tensor_preserving_prefix(splat_data.deleted(), desired_capacity);
             splat_data.notify_deleted_mask_changed();
         }
 
@@ -501,45 +547,6 @@ namespace lfs::training {
             splat_data.reconcile_deleted_mask();
         }
 
-        void ensure_canny_workspace(lfs::core::Tensor& nms_output, const int height, const int width) {
-            if (!nms_output.is_valid() ||
-                nms_output.ndim() != 2 ||
-                height != static_cast<int>(nms_output.shape()[0]) ||
-                width != static_cast<int>(nms_output.shape()[1])) {
-                nms_output = lfs::core::Tensor::zeros(
-                    {static_cast<size_t>(height), static_cast<size_t>(width)},
-                    lfs::core::Device::CUDA,
-                    lfs::core::DataType::Float32);
-            }
-        }
-
-        void apply_canny_filter(const lfs::core::Tensor& input_data, lfs::core::Tensor& nms_output) {
-            assert(input_data.dtype() == lfs::core::DataType::Float32 ||
-                   input_data.dtype() == lfs::core::DataType::UInt8);
-            assert(input_data.device() == lfs::core::Device::CUDA);
-            assert(input_data.ndim() == 3);
-            assert(input_data.shape()[0] >= 3);
-
-            const int width = static_cast<int>(input_data.shape()[2]);
-            const int height = static_cast<int>(input_data.shape()[1]);
-
-            ensure_canny_workspace(nms_output, height, width);
-            auto input_contig = input_data.contiguous();
-            if (input_contig.dtype() == lfs::core::DataType::UInt8) {
-                kernels::launch_fused_canny_edge_filter_chw(
-                    input_contig.ptr<uint8_t>(),
-                    nms_output.ptr<float>(),
-                    height,
-                    width);
-            } else {
-                kernels::launch_fused_canny_edge_filter_chw(
-                    input_contig.ptr<float>(),
-                    nms_output.ptr<float>(),
-                    height,
-                    width);
-            }
-        }
-
         void normalize_by_positive_median_inplace(
             lfs::core::Tensor& tensor,
             PositiveMedianScratch* scratch = nullptr) {
@@ -581,6 +588,7 @@ namespace lfs::training {
 
         _strategy_required_peak_bytes = 0;
         _strategy_allocated_peak_bytes = 0;
+        _topology_frozen = false;
         _densify_n_required_peak_bytes = 0;
         _densify_n_allocated_peak_bytes = 0;
         _densify_child_required_peak_bytes = 0;
@@ -675,17 +683,17 @@ namespace lfs::training {
 
         ensure_densification_info_shape();
 
-        const size_t capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap)
-                                                     : static_cast<size_t>(_splat_data->size());
-        _free_mask = Tensor::zeros_bool({capacity}, _splat_data->means().device());
+        const size_t capacity = splat_reserved_capacity(*_splat_data);
+        _free_mask = Tensor::zeros_direct(
+            TensorShape({capacity}), capacity, _splat_data->means().device(), DataType::Bool);
         sync_deleted_mask_from_free_mask(*_splat_data, _free_mask);
 
-        // Pre-size densification scratch to max_cap so increasing live N does not
-        // allocate from the driver during refinement.
+        // Pre-size densification scratch to the parameter reservation so
+        // increasing live N within the allocator's headroom does not allocate
+        // from the driver during refinement.
         if (capacity > 0) {
             const auto device = _splat_data->means().device();
             _densify_n_scratch.ensure_n(capacity, device);
-            _densify_n_scratch.ensure_k(std::max(capacity / 20, size_t{1024}), device);
             _gumbel_scratch.ensure_n(capacity, device);
             _median_scratch.ensure_n(capacity, device);
             if (lfs::training::PerfBenchCollector::enabled()) {
@@ -696,10 +704,10 @@ namespace lfs::training {
 
         const size_t n = static_cast<size_t>(_splat_data->size());
         _initial_sfm_point_count = n;
-        const size_t tracking_capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
+        const size_t tracking_capacity = splat_reserved_capacity(*_splat_data);
         reset_vector_buffer(_refine_weight_max, n, _splat_data->means().device(), tracking_capacity);
-        reset_vector_buffer(_vis_count, n, _splat_data->means().device(), tracking_capacity);
         if (cfg_ratio_rank_on()) {
+            reset_vector_buffer(_vis_count, n, _splat_data->means().device(), tracking_capacity);
             reset_vector_buffer(_refine_ratio_max, n, _splat_data->means().device(), tracking_capacity);
         }
 
@@ -719,7 +727,51 @@ namespace lfs::training {
         }
     }
 
+    lfs::core::Tensor MRNF::edge_score_scratch(const int iter) {
+        using namespace lfs::core;
+        if (_topology_frozen || !_params || !_params->use_edge_map ||
+            iter <= static_cast<int>(_params->start_refine) ||
+            iter >= static_cast<int>(_params->stop_refine) ||
+            !_splat_data || _splat_data->size() == 0) {
+            return {};
+        }
+
+        const size_t n = static_cast<size_t>(_splat_data->size());
+        if (!_edge_score_sum.is_valid() || _edge_score_sum.ndim() != 1 ||
+            _edge_score_sum.numel() != n) {
+            _edge_score_sum = Tensor::zeros({n}, _splat_data->means().device());
+            _edge_sample_count = 0;
+        }
+        if (!_edge_view_scores.is_valid() || _edge_view_scores.ndim() != 1 ||
+            _edge_view_scores.numel() != n) {
+            _edge_view_scores = Tensor::zeros({n}, _splat_data->means().device());
+        } else {
+            _edge_view_scores.zero_();
+        }
+        return _edge_view_scores;
+    }
+
+    void MRNF::on_edge_score_accumulated(const int iter) {
+        if (!_params || !_params->use_edge_map ||
+            iter <= static_cast<int>(_params->start_refine) ||
+            iter >= static_cast<int>(_params->stop_refine) ||
+            !_edge_view_scores.is_valid() || !_edge_score_sum.is_valid() ||
+            _edge_view_scores.numel() != _edge_score_sum.numel()) {
+            return;
+        }
+
+        // Match the old per-view estimator boundary: normalize each view's
+        // splat vector independently, then apply the frozen mask in effect for
+        // that sample before adding it to the persistent refine window.
+        normalize_by_positive_median_inplace(_edge_view_scores, &_median_scratch);
+        zero_frozen_scores_inplace(*_splat_data, _edge_view_scores);
+        _edge_score_sum.add_(_edge_view_scores);
+        ++_edge_sample_count;
+        publish_vram_attribution();
+    }
+
     void MRNF::pre_step(int iter, RenderOutput& render_output) {
+        (void)render_output;
         publish_vram_attribution();
         _precomputed_edge_scores = lfs::core::Tensor();
         _edge_precompute_valid = false;
@@ -728,10 +780,6 @@ namespace lfs::training {
             reset_edge_accumulator();
             publish_vram_attribution();
             return;
-        }
-
-        if (should_accumulate_edge_sample(iter)) {
-            accumulate_edge_sample(iter, render_output);
         }
 
         if (!is_refining(iter)) {
@@ -747,13 +795,16 @@ namespace lfs::training {
             return;
         }
 
-        _precomputed_edge_scores = _edge_score_sum.clone();
-        _precomputed_edge_scores.div_(static_cast<float>(_edge_sample_count));
+        // FastGS strategy hooks run at iteration start. Close and move the
+        // completed [previous-refine, iter) window here, before this iteration's
+        // main backward can request a scratch vector. Iteration iter therefore
+        // starts the next window after refinement/topology mutation.
+        const int completed_views = std::exchange(_edge_sample_count, 0);
+        _precomputed_edge_scores = std::move(_edge_score_sum);
+        _edge_view_scores = lfs::core::Tensor();
+        _precomputed_edge_scores.div_(static_cast<float>(completed_views));
         zero_frozen_scores_inplace(*_splat_data, _precomputed_edge_scores);
         _edge_precompute_valid = true;
-        // Capture the short, real overlap before score_sum is released.
-        publish_vram_attribution();
-        reset_edge_accumulator();
         publish_vram_attribution();
     }
 
@@ -775,17 +826,17 @@ namespace lfs::training {
         }
     }
 
-    int MRNF::edge_target_samples_per_refine_window() const {
+    int MRNF::view_target_samples_per_refine_window() const {
         const int refine_window = _params ? static_cast<int>(_params->refine_every) : 1;
         if (!_views || _views->size() == 0) {
-            return std::max(1, std::min(refine_window, MRNF_EDGE_MIN_VIEW_SAMPLES));
+            return std::max(1, std::min(refine_window, MRNF_EXPLORE_MIN_VIEW_SAMPLES));
         }
 
         const int num_cam_dataset = static_cast<int>(_views->size());
-        const int requested_samples = num_cam_dataset < MRNF_EDGE_MIN_VIEW_SAMPLES
+        const int requested_samples = num_cam_dataset < MRNF_EXPLORE_MIN_VIEW_SAMPLES
                                           ? num_cam_dataset
                                           : std::max(
-                                                MRNF_EDGE_MIN_VIEW_SAMPLES,
+                                                MRNF_EXPLORE_MIN_VIEW_SAMPLES,
                                                 static_cast<int>(0.08f * static_cast<float>(num_cam_dataset)));
         return std::max(1, std::min(refine_window, requested_samples));
     }
@@ -802,14 +853,10 @@ namespace lfs::training {
             return true;
         }
 
-        const int target_samples = edge_target_samples_per_refine_window();
+        const int target_samples = view_target_samples_per_refine_window();
         const int refine_every = std::max(1, static_cast<int>(_params->refine_every));
         const int stride = std::max(1, refine_every / target_samples);
         return (iter % stride) == 0;
-    }
-
-    bool MRNF::should_accumulate_edge_sample(int iter) const {
-        return _params && _params->use_edge_map && should_accumulate_view_sample(iter);
     }
 
     bool MRNF::should_accumulate_explore_sample(int iter) const {
@@ -819,8 +866,8 @@ namespace lfs::training {
 
     void MRNF::reset_edge_accumulator() {
         _edge_score_sum = lfs::core::Tensor();
+        _edge_view_scores = lfs::core::Tensor();
         _edge_sample_count = 0;
-        _edge_last_sample_iter = -1;
     }
 
     void MRNF::reset_explore_accumulator() {
@@ -853,12 +900,14 @@ namespace lfs::training {
 
             account_tensor("refine_weight_max", _refine_weight_max);
             account_tensor("refine_ratio_max", _refine_ratio_max);
-            account_tensor("vis_count", _vis_count);
+            if (has_separate_visibility_buffer()) {
+                account_tensor("vis_count", _vis_count);
+            }
             account_tensor("free_mask", _free_mask);
             account_tensor("refine_counts_device", _refine_counts_dev);
             account_tensor("edge.precomputed_scores", _precomputed_edge_scores);
             account_tensor("edge.score_sum", _edge_score_sum);
-            account_tensor("edge.canny_nms", _edge_canny_nms_output);
+            account_tensor("edge.view_scores", _edge_view_scores);
             account_tensor("explore.score_sum", _explore_score_sum);
             account_tensor("explore.error_hw", _explore_error_hw);
             account_tensor("explore.view_scores", _explore_view_scores);
@@ -879,11 +928,6 @@ namespace lfs::training {
                 _densify_n_required_peak_bytes, _densify_n_scratch.required_bytes());
             _densify_n_allocated_peak_bytes = std::max(
                 _densify_n_allocated_peak_bytes, _densify_n_scratch.resident_bytes());
-            _densify_child_required_peak_bytes = std::max(
-                _densify_child_required_peak_bytes, _densify_ws.required_bytes());
-            _densify_child_allocated_peak_bytes = std::max(
-                _densify_child_allocated_peak_bytes, _densify_ws.resident_bytes());
-
             if (publish_live) {
                 publish_required_allocated_pair(
                     profiler, "strategy_peak", _strategy_required_peak_bytes,
@@ -908,44 +952,6 @@ namespace lfs::training {
         } catch (...) {
             // Attribution must never alter the training control path.
         }
-    }
-
-    void MRNF::accumulate_edge_sample(int iter, const RenderOutput& render_output) {
-        using namespace lfs::core;
-
-        if (_edge_last_sample_iter == iter) {
-            return;
-        }
-        if (!render_output.camera ||
-            !render_output.target_image.is_valid() ||
-            render_output.target_image.device() != Device::CUDA ||
-            (render_output.target_image.dtype() != DataType::Float32 &&
-             render_output.target_image.dtype() != DataType::UInt8) ||
-            render_output.target_image.ndim() != 3 ||
-            render_output.target_image.shape()[0] < 3) {
-            return;
-        }
-
-        const size_t n = static_cast<size_t>(_splat_data->size());
-        if (!_edge_score_sum.is_valid() ||
-            _edge_score_sum.ndim() != 1 ||
-            _edge_score_sum.numel() != n) {
-            _edge_score_sum = Tensor::zeros({n}, _splat_data->means().device());
-            _edge_sample_count = 0;
-        }
-
-        apply_canny_filter(render_output.target_image, _edge_canny_nms_output);
-        normalize_by_positive_median_inplace(_edge_canny_nms_output, &_median_scratch);
-
-        auto score_render = edge_rasterize(
-            *render_output.camera,
-            this->get_model(),
-            _edge_canny_nms_output);
-        normalize_by_positive_median_inplace(score_render.edges_score, &_median_scratch);
-        _edge_score_sum.add_(zero_frozen_scores(*_splat_data, score_render.edges_score));
-        ++_edge_sample_count;
-        _edge_last_sample_iter = iter;
-        publish_vram_attribution();
     }
 
     bool MRNF::should_cache_seed_view(int iter) const {
@@ -1141,6 +1147,17 @@ namespace lfs::training {
                 _splat_data->shN().dtype() == lfs::core::DataType::Float32) {
                 lfs::training::sh_value::commit_shN_after_mutation(*_splat_data);
             }
+            _refine_weight_max = Tensor();
+            _gumbel_scratch.release();
+            _median_scratch.release();
+            _densify_n_scratch.release();
+            _topology_frozen = true;
+            assert(!_refine_weight_max.is_valid());
+            assert(_gumbel_scratch.resident_bytes() == 0);
+            assert(_median_scratch.resident_bytes() == 0);
+            assert(_densify_n_scratch.resident_bytes() == 0);
+            Tensor::trim_memory_pool();
+            publish_vram_attribution();
         }
 
         if (iter >= static_cast<int>(_params->stop_refine)) {
@@ -1168,20 +1185,32 @@ namespace lfs::training {
             if (cfg_ratio_rank_on() && _refine_ratio_max.numel() == n) {
                 ratio_max_ptr = _refine_ratio_max.ptr<float>();
             }
-            mrnf_strategy::launch_fold_densification_and_zero(
-                _vis_count.ptr<float>(),
-                _refine_weight_max.ptr<float>(),
-                _splat_data->_densification_info.ptr<float>(),
-                n,
-                nullptr,
-                densification_row_count(),
-                ratio_max_ptr,
-                cfg_ratio_pow());
+            if (has_separate_visibility_buffer()) {
+                mrnf_strategy::launch_fold_densification_and_zero(
+                    _vis_count.ptr<float>(),
+                    _refine_weight_max.ptr<float>(),
+                    _splat_data->_densification_info.ptr<float>(),
+                    n,
+                    nullptr,
+                    densification_row_count(),
+                    ratio_max_ptr,
+                    cfg_ratio_pow());
+            } else {
+                mrnf_strategy::launch_fold_densification_error_and_zero(
+                    _refine_weight_max.ptr<float>(),
+                    _splat_data->_densification_info.ptr<float>(),
+                    n);
+            }
             zero_frozen_scores_inplace(*_splat_data, _refine_weight_max);
             if (ratio_max_ptr != nullptr) {
                 zero_frozen_scores_inplace(*_splat_data, _refine_ratio_max);
             }
-            zero_frozen_scores_inplace(*_splat_data, _vis_count);
+            if (has_separate_visibility_buffer()) {
+                zero_frozen_scores_inplace(*_splat_data, _vis_count);
+            } else {
+                auto vis = _splat_data->_densification_info.slice(0, 0, 1).squeeze(0);
+                zero_frozen_scores_inplace(*_splat_data, vis);
+            }
         } else if (info.is_valid() && info.numel() > 0) {
             _splat_data->_densification_info.zero_();
         }
@@ -1207,7 +1236,9 @@ namespace lfs::training {
     void MRNF::permute_gaussian_rows(const lfs::core::Tensor& perm) {
         morton::permute_row_tensor(_refine_weight_max, perm);
         morton::permute_row_tensor(_refine_ratio_max, perm);
-        morton::permute_row_tensor(_vis_count, perm);
+        if (has_separate_visibility_buffer()) {
+            morton::permute_row_tensor(_vis_count, perm);
+        }
         morton::permute_row_tensor(_precomputed_edge_scores, perm);
         morton::permute_row_tensor(_edge_score_sum, perm);
         morton::permute_row_tensor(_explore_score_sum, perm);
@@ -1242,7 +1273,8 @@ namespace lfs::training {
         LOG_TIMER("MRNF::refine");
         LFS_VRAM_SCOPE("MRNF::refine");
         using namespace lfs::core;
-        (void)lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
+        // q16 stays authoritative for the refine window (gather/scatter/append
+        // re-encode only touched 256-splat blocks). IEEE-f16 still expands.
 
         ++_refine_windows_since_bounds;
         if (!_bounds_valid || _refine_windows_since_bounds >= MRNF_BOUNDS_RECOMPUTE_INTERVAL_REFINES) {
@@ -1389,9 +1421,11 @@ namespace lfs::training {
         ensure_mean_step_far_mask();
 
         const size_t new_n = static_cast<size_t>(_splat_data->size());
-        const size_t tracking_capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
+        const size_t tracking_capacity = splat_reserved_capacity(*_splat_data);
         reset_vector_buffer(_refine_weight_max, new_n, _splat_data->means().device(), tracking_capacity);
-        reset_vector_buffer(_vis_count, new_n, _splat_data->means().device(), tracking_capacity);
+        if (has_separate_visibility_buffer()) {
+            reset_vector_buffer(_vis_count, new_n, _splat_data->means().device(), tracking_capacity);
+        }
         if (cfg_ratio_rank_on()) {
             reset_vector_buffer(_refine_ratio_max, new_n, _splat_data->means().device(), tracking_capacity);
         }
@@ -1402,10 +1436,8 @@ namespace lfs::training {
             _splat_data->_max_screen_share.zero_();
         }
 
-        // Always-commit q16 after every refine (exportable + headless). The
-        // multi-iter exportable float densify window is deleted: Scene cache
-        // rebuild and preview share Trainer::render_mutex_ with commit+trim, so
-        // the float workspace cannot be read/decommitted concurrently.
+        // q16 refine never expands; this commit is a safety net for IEEE-f16
+        // or any leftover float workspace (e.g. tests that still expand).
         if (lfs::core::sh_value_quant::enabled() &&
             _splat_data->shN().is_valid() &&
             _splat_data->shN().dtype() == lfs::core::DataType::Float32) {
@@ -1427,6 +1459,23 @@ namespace lfs::training {
 
     float MRNF::cfg_ratio_pow() const {
         return cfg_ratio_rank_on() ? _params->growth_ratio_pow : 0.0f;
+    }
+
+    bool MRNF::has_separate_visibility_buffer() const {
+        return cfg_ratio_rank_on() ||
+               (_vis_count.is_valid() && !_vis_count.is_view());
+    }
+
+    lfs::core::Tensor MRNF::visibility_accumulator() const {
+        if (has_separate_visibility_buffer()) {
+            return _vis_count;
+        }
+        if (!_splat_data || !_splat_data->_densification_info.is_valid() ||
+            _splat_data->_densification_info.ndim() != 2 ||
+            _splat_data->_densification_info.shape()[0] < densification_row_count()) {
+            return {};
+        }
+        return _splat_data->_densification_info.slice(0, 0, 1).squeeze(0);
     }
 
     int MRNF::cfg_fill_target_iter() const {
@@ -1754,7 +1803,7 @@ namespace lfs::training {
         const uint64_t seed,
         const size_t known_nnz) {
         using namespace lfs::core;
-        if (k <= 0 || !weights.is_valid() || weights.numel() == 0) {
+        if (_topology_frozen || k <= 0 || !weights.is_valid() || weights.numel() == 0) {
             return {};
         }
 
@@ -1836,22 +1885,26 @@ namespace lfs::training {
 
     void MRNF::apply_explore_starvation_weights(lfs::core::Tensor& weights, const size_t n) {
         using namespace lfs::core;
+        if (_topology_frozen) {
+            return;
+        }
+        auto vis_count = visibility_accumulator();
         if (!weights.is_valid() || weights.numel() != n ||
-            !_vis_count.is_valid() || _vis_count.numel() != n) {
+            !vis_count.is_valid() || vis_count.numel() != n) {
             return;
         }
 
         float median_vis = 0.0f;
-        Tensor live_vis = _vis_count;
+        Tensor live_vis = vis_count;
         if (_free_mask.is_valid() && _free_mask.numel() >= n) {
-            live_vis = _vis_count.masked_select(_free_mask.slice(0, 0, n).logical_not());
+            live_vis = vis_count.masked_select(_free_mask.slice(0, 0, n).logical_not());
         }
         if (live_vis.is_valid() && live_vis.numel() > 0) {
             mrnf_strategy::launch_sorted_median(
                 live_vis.ptr<float>(), live_vis.numel(), &median_vis, &_median_scratch);
         }
         mrnf_strategy::launch_apply_explore_starvation_weights(
-            weights.ptr<float>(), _vis_count.ptr<float>(), n, median_vis);
+            weights.ptr<float>(), vis_count.ptr<float>(), n, median_vis);
     }
 
     lfs::core::Tensor MRNF::build_explore_split_weights(
@@ -1897,18 +1950,13 @@ namespace lfs::training {
         LOG_TIMER("MRNF::grow_and_split");
         LFS_VRAM_SCOPE("MRNF::grow_and_split");
         using namespace lfs::core;
-        // Expand q16 → float if needed. Do NOT re-encode here: refine() owns the single
-        // post-growth commit so bounds/codes always match the final N. Tests that call
-        // grow_and_split alone must commit themselves or force quant OFF (Legacy guard).
-        (void)lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
-
         const size_t n = static_cast<size_t>(_splat_data->size());
         if (!_far_growth.outside_mask.is_valid() || _far_growth.outside_mask.numel() != n) {
             begin_far_growth_window(n, 0);
         }
         const size_t current_active = active_count();
-        // densify N-scratch pre-sized to max_cap; views avoid per-refine
-        // driver allocs (post-refine trim_memory_pool would otherwise force
+        // densify N-scratch pre-sized to the parameter reservation; views avoid
+        // per-refine driver allocs (post-refine trim_memory_pool would otherwise force
         // pool misses on every growing exact size).
         _densify_n_scratch.ensure_n(n, Device::CUDA);
         if (PerfBenchCollector::enabled()) {
@@ -2231,14 +2279,23 @@ namespace lfs::training {
                              _splat_data->shN().is_valid() &&
                              _splat_data->shN().numel() > 0;
 
-        _densify_ws.ensure(K, sh_rest, use_shN, /*sh0_flat_layout=*/false, Device::CUDA);
+        // Child rows are consumed synchronously by the split/fill/append
+        // sequence below. Keep this staging allocation local to the refine
+        // event so its Tensor owners return storage to the CUDA pool before
+        // the next phase; no later refine reads the prior children.
+        DensifyChildWorkspace densify_ws;
+        densify_ws.ensure(K, sh_rest, use_shN, /*sh0_flat_layout=*/false, Device::CUDA);
+        _densify_child_required_peak_bytes = std::max(
+            _densify_child_required_peak_bytes, densify_ws.required_bytes());
+        _densify_child_allocated_peak_bytes = std::max(
+            _densify_child_allocated_peak_bytes, densify_ws.resident_bytes());
         publish_vram_attribution();
-        auto child_means = _densify_ws.means_view(K);
-        auto child_log_scales = _densify_ws.scales_view(K);
-        auto child_raw_opacities = _densify_ws.opacities_view(K);
-        auto child_rotations = _densify_ws.rotations_view(K);
-        auto child_sh0 = _densify_ws.sh0_view(K);
-        Tensor child_shN = use_shN ? _densify_ws.shN_view(K) : Tensor();
+        auto child_means = densify_ws.means_view(K);
+        auto child_log_scales = densify_ws.scales_view(K);
+        auto child_raw_opacities = densify_ws.opacities_view(K);
+        auto child_rotations = densify_ws.rotations_view(K);
+        auto child_sh0 = densify_ws.sh0_view(K);
+        Tensor child_shN = use_shN ? densify_ws.shN_view(K) : Tensor();
 
         // The LAS kernel only needs linear shN to copy child rows. shN itself is unchanged
         // for the parent rows, so keep the resident swizzled buffer in place and gather the
@@ -2262,13 +2319,8 @@ namespace lfs::training {
             nullptr);
 
         if (use_shN) {
-            shN_swizzled_gather_to_linear_i64(
-                _splat_data->shN().ptr<float>(),
-                split_indices.ptr<int64_t>(),
-                child_shN.ptr<float>(),
-                K,
-                layout_rest,
-                layout_rest);
+            lfs::training::sh_value::gather_shN_to_canonical(
+                *_splat_data, split_indices, child_shN);
         }
 
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Means, split_indices);
@@ -2279,6 +2331,7 @@ namespace lfs::training {
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Opacity, split_indices);
 
         size_t append_start = 0;
+        lfs::training::sh_value::ShNMutationBatch shn_batch(*_splat_data);
         if (free_count() > 0) {
             auto [filled_indices, remaining_after_fill] = fill_free_slots_with_data(
                 child_means,
@@ -2287,7 +2340,8 @@ namespace lfs::training {
                 child_sh0,
                 child_shN,
                 child_raw_opacities,
-                static_cast<int64_t>(K));
+                static_cast<int64_t>(K),
+                &shn_batch);
             append_start = K - static_cast<size_t>(remaining_after_fill);
         }
 
@@ -2299,7 +2353,9 @@ namespace lfs::training {
             child_shN,
             child_raw_opacities,
             append_start,
-            K);
+            K,
+            &shn_batch);
+        shn_batch.flush();
 
         LOG_DEBUG("MRNF: split {} splats at iter {} (reused: {}, appended: {}, active: {}, total slots: {})",
                   K, iter, append_start, n_append, active_count(), _splat_data->size());
@@ -2322,7 +2378,7 @@ namespace lfs::training {
             auto opacities = _splat_data->get_opacity();
             if (opacities.ndim() == 2 && opacities.shape()[1] == 1)
                 opacities = opacities.squeeze(-1);
-            replace_weights = opacities * (_vis_count > 0.0f);
+            replace_weights = opacities * (visibility_accumulator() > 0.0f);
         }
         if (active_mask.is_valid()) {
             replace_weights = replace_weights * active_mask;
@@ -2344,13 +2400,12 @@ namespace lfs::training {
     lfs::core::Tensor MRNF::compute_refine_candidates() const {
         using namespace lfs::core;
         auto candidate_weights = apply_crop_damping_to_scores(*_optimizer, _refine_weight_max);
-        return (candidate_weights > _params->growth_grad_threshold) && (_vis_count > 0.0f);
+        return (candidate_weights > _params->growth_grad_threshold) &&
+               (visibility_accumulator() > 0.0f);
     }
 
     void MRNF::compact_splats(const lfs::core::Tensor& keep_mask) {
         LOG_TIMER("MRNF::compact_splats");
-        // Float-native gather. Expand q16 if needed; refine() (or remove_gaussians) owns re-encode.
-        (void)lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
         using namespace lfs::core;
 
         const size_t old_size = static_cast<size_t>(_splat_data->size());
@@ -2414,8 +2469,14 @@ namespace lfs::training {
 
         compact(_splat_data->means());
         compact(_splat_data->sh0());
-        if (_splat_data->shN().is_valid() && _splat_data->shN().numel() > 0)
-            compact_shN_swizzled(_splat_data->shN(), cap);
+        if (_splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
+            if (_splat_data->shN_value_quantized()) {
+                lfs::training::sh_value::compact_shN_gather(
+                    *_splat_data, valid_indices, old_size, cap);
+            } else {
+                compact_shN_swizzled(_splat_data->shN(), cap);
+            }
+        }
         compact(_splat_data->scaling_raw());
         compact(_splat_data->rotation_raw());
         compact(_splat_data->opacity_raw());
@@ -2466,7 +2527,11 @@ namespace lfs::training {
                 state->capacity = cap;
             }
             // Grad buffers match param dtype/shape (fp32), not joint packed bytes.
-            if (pt == ParamType::ShN) {
+            // Fused FastGS leaves grads empty; rebuilding them here would be a
+            // 2.48 GiB spike. Preserve the allocated-grad path unchanged.
+            if (!(state->grad.is_valid() && state->grad.numel() > 0)) {
+                state->grad = {};
+            } else if (pt == ParamType::ShN) {
                 if (layout_rest_u32 > 0 && state->capacity > 0) {
                     const size_t logical_floats =
                         lfs::core::sh_swizzled_float_count(new_size, layout_rest_u32);
@@ -2571,10 +2636,13 @@ namespace lfs::training {
             compact(_refine_weight_max);
         if (_refine_ratio_max.is_valid() && _refine_ratio_max.numel() > new_size)
             compact(_refine_ratio_max);
-        if (_vis_count.is_valid() && _vis_count.numel() > new_size)
+        if (has_separate_visibility_buffer() && _vis_count.numel() > new_size)
             compact(_vis_count);
         if (_precomputed_edge_scores.is_valid() && _precomputed_edge_scores.numel() > new_size)
             compact(_precomputed_edge_scores);
+        if (_edge_score_sum.is_valid() && _edge_score_sum.numel() > new_size)
+            compact(_edge_score_sum);
+        _edge_view_scores = Tensor();
         if (_explore_score_sum.is_valid() && _explore_score_sum.numel() > new_size)
             compact(_explore_score_sum);
 
@@ -2596,7 +2664,7 @@ namespace lfs::training {
         mrnf_strategy::launch_mrnf_noise_injection(
             _splat_data->means().ptr<float>(),
             _splat_data->opacity_raw().ptr<float>(),
-            _vis_count.ptr<float>(),
+            visibility_accumulator().ptr<float>(),
             frozen_mask.is_valid() ? frozen_mask.ptr<bool>() : nullptr,
             frozen_mask.is_valid() ? frozen_mask.numel() : 0,
             lr_mean,
@@ -2765,7 +2833,8 @@ namespace lfs::training {
         const lfs::core::Tensor& sh0,
         const lfs::core::Tensor& shN,
         const lfs::core::Tensor& opacities,
-        int64_t count) {
+        int64_t count,
+        lfs::training::sh_value::ShNMutationBatch* shn_batch) {
 
         using namespace lfs::core;
 
@@ -2822,17 +2891,13 @@ namespace lfs::training {
         const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
         if (layout_rest > 0 && shN.is_valid() && shN.numel() > 0 &&
             _splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
-            auto target_i32 = target_indices.dtype() == DataType::Int32
-                                  ? target_indices
-                                  : target_indices.to(DataType::Int32);
             auto shN_slice = shN.slice(0, 0, slots_to_fill);
-            shN_swizzled_scatter_linear(
-                _splat_data->shN().ptr<float>(),
-                target_i32.ptr<int>(),
-                shN_slice.ptr<float>(),
-                static_cast<size_t>(slots_to_fill),
-                layout_rest,
-                layout_rest);
+            if (shn_batch) {
+                shn_batch->scatter(target_indices, shN_slice);
+            } else {
+                lfs::training::sh_value::scatter_canonical_into_shN(
+                    *_splat_data, target_indices, shN_slice);
+            }
         }
 
         // Zero residual grads so the post-densify Adam step does not use
@@ -2852,7 +2917,8 @@ namespace lfs::training {
         const lfs::core::Tensor& child_shN,
         const lfs::core::Tensor& child_raw_opacities,
         const size_t append_start,
-        const size_t K) {
+        const size_t K,
+        lfs::training::sh_value::ShNMutationBatch* shn_batch) {
         using namespace lfs::core;
         if (K <= append_start) {
             return 0;
@@ -2878,13 +2944,10 @@ namespace lfs::training {
             return 0;
         }
 
-        // Grow free_mask bookkeeping first, then params (size()), then the
-        // deleted mask — never leave deleted.numel() != size() mid-grow
-        // (viewer packer rejects stale masks and freezes the viewport).
-        if (_free_mask.is_valid() && _free_mask.numel() < old_size + n_append) {
-            _free_mask.reserve(old_size + n_append);
-            _free_mask.append_zeros(n_append);
-        }
+        // Grow bookkeeping first, then params (size()), then the deleted mask
+        // — never leave deleted.numel() != size() mid-grow (the viewer packer
+        // rejects stale masks and freezes the viewport).
+        ensure_auxiliary_capacity_for_growth(old_size + n_append);
 
         auto append_means = child_means.slice(0, append_start, K);
         auto append_sh0 = child_sh0.slice(0, append_start, K);
@@ -2903,40 +2966,12 @@ namespace lfs::training {
         _optimizer->add_new_params(ParamType::Sh0, append_sh0, true);
 
         if (use_shN && append_shN.is_valid() && append_shN.numel() > 0) {
-            const size_t new_size = old_size + n_append;
-            const size_t needed_floats = sh_swizzled_float_count(new_size, layout_rest);
-            auto& shN_buf = _splat_data->shN();
-            // Grow capacity to means/max_cap headroom so post-densify re-encode is not exact-N.
-            const size_t means_cap = _splat_data->means().is_valid()
-                                         ? std::max(_splat_data->means().capacity(), new_size)
-                                         : new_size;
-            const size_t cap_floats = sh_swizzled_float_count(means_cap, layout_rest);
-            if (shN_buf.capacity() < needed_floats) {
-                const size_t dest_cap = std::max(needed_floats, cap_floats);
-                auto grown = Tensor::zeros_direct(
-                    TensorShape({static_cast<size_t>(shN_buf.numel())}), dest_cap,
-                    shN_buf.device(), shN_buf.dtype());
-                if (shN_buf.numel() > 0) {
-                    // Sync copy before move-free of source (async UAF → illegal address).
-                    LFS_CUDA_CHECK(cudaMemcpy(grown.data_ptr(), shN_buf.data_ptr(),
-                                              shN_buf.bytes(), cudaMemcpyDeviceToDevice));
-                }
-                grown.set_name(shN_buf.name().empty() ? "splat.shN" : shN_buf.name());
-                shN_buf = std::move(grown);
+            if (shn_batch) {
+                shn_batch->append(append_shN, old_size);
+            } else {
+                lfs::training::sh_value::append_canonical_to_shN(
+                    *_splat_data, append_shN, old_size);
             }
-            if (shN_buf.numel() < needed_floats) {
-                shN_buf.append_zeros(needed_floats - shN_buf.numel());
-            }
-        }
-
-        if (use_shN && append_shN.is_valid() && append_shN.numel() > 0) {
-            shN_swizzled_gather_from_linear(
-                _splat_data->shN().ptr<float>(),
-                old_size,
-                append_shN.ptr<float>(),
-                n_append,
-                layout_rest,
-                layout_rest);
             _optimizer->extend_state_for_new_params(ParamType::ShN, n_append);
         } else {
             _optimizer->extend_state_for_new_params(ParamType::ShN, n_append);
@@ -2957,6 +2992,41 @@ namespace lfs::training {
         return n_append;
     }
 
+    void MRNF::ensure_auxiliary_capacity_for_growth(const size_t target_size) {
+        using namespace lfs::core;
+        if (target_size == 0) {
+            return;
+        }
+
+        const auto device = _splat_data->means().device();
+        const size_t reserved = std::max(target_size, splat_reserved_capacity(*_splat_data));
+        const auto ensure = [&](Tensor& tensor, const DataType dtype) {
+            if (!tensor.is_valid() || tensor.ndim() != 1 || tensor.device() != device ||
+                tensor.dtype() != dtype) {
+                tensor = Tensor::zeros_direct(TensorShape({target_size}), reserved, device, dtype);
+                return;
+            }
+            if (tensor.capacity() < reserved) {
+                grow_tensor_preserving_prefix(tensor, reserved);
+            }
+            if (tensor.numel() < target_size) {
+                tensor.append_zeros(target_size - tensor.numel());
+            }
+        };
+
+        ensure(_free_mask, DataType::Bool);
+        ensure(_refine_weight_max, DataType::Float32);
+        if (has_separate_visibility_buffer()) {
+            ensure(_vis_count, DataType::Float32);
+        }
+        if (cfg_ratio_rank_on() || _refine_ratio_max.is_valid()) {
+            ensure(_refine_ratio_max, DataType::Float32);
+        }
+        if (_explore_score_sum.is_valid()) {
+            ensure(_explore_score_sum, DataType::Float32);
+        }
+    }
+
     void MRNF::seed_from_view(int iter, const RenderOutput& render_output) {
         using namespace lfs::core;
         if (!background_improvements_enabled() ||
@@ -2965,7 +3035,6 @@ namespace lfs::training {
             return;
         }
         LOG_TIMER("MRNF::seed_from_view");
-        (void)lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
 
         Tensor image = render_output.image;
         Tensor target = render_output.target_image;
@@ -3222,10 +3291,12 @@ namespace lfs::training {
             shN = Tensor::zeros({kept_n, sh_rest, 3}, Device::CUDA);
         }
 
+        lfs::training::sh_value::ShNMutationBatch shn_batch(*_splat_data);
         auto [filled, remaining_after_fill] = fill_free_slots_with_data(
-            pos, rot, scl, sh0, shN, opa, static_cast<int64_t>(kept_n));
+            pos, rot, scl, sh0, shN, opa, static_cast<int64_t>(kept_n), &shn_batch);
         const size_t append_start = kept_n - static_cast<size_t>(remaining_after_fill);
-        append_child_rows(pos, rot, scl, sh0, shN, opa, append_start, kept_n);
+        append_child_rows(pos, rot, scl, sh0, shN, opa, append_start, kept_n, &shn_batch);
+        shn_batch.flush();
 
         _far_growth.allocated += kept;
         _far_growth.outside_used += outside_kept;
@@ -3385,7 +3456,7 @@ namespace lfs::training {
             return;
 
         compact_splats(keep_mask);
-        // compact expands q16 → float; re-encode when quant is on.
+        // q16 compact stays packed; this commit is only for a leftover float workspace.
         if (lfs::core::sh_value_quant::enabled() &&
             _splat_data->shN().is_valid() &&
             _splat_data->shN().dtype() == lfs::core::DataType::Float32) {
@@ -3400,7 +3471,7 @@ namespace lfs::training {
     }
 
     lfs::core::Tensor MRNF::edge_guidance_factor() {
-        if (!_params || !_params->use_edge_map || !_edge_precompute_valid) {
+        if (_topology_frozen || !_params || !_params->use_edge_map || !_edge_precompute_valid) {
             return {};
         }
 
@@ -3525,26 +3596,38 @@ namespace lfs::training {
         }
 
         if (!_free_mask.is_valid()) {
-            const size_t capacity = (_params && _params->max_cap > 0)
-                                        ? static_cast<size_t>(_params->max_cap)
-                                        : static_cast<size_t>(_splat_data->size());
-            _free_mask = lfs::core::Tensor::zeros_bool({capacity}, _splat_data->means().device());
+            const size_t capacity = splat_reserved_capacity(*_splat_data);
+            _free_mask = lfs::core::Tensor::zeros_direct(
+                {capacity}, capacity, _splat_data->means().device(), lfs::core::DataType::Bool);
         }
         sync_deleted_mask_from_free_mask(*_splat_data, _free_mask);
 
         const size_t n = static_cast<size_t>(_splat_data->size());
-        const size_t tracking_capacity = (_params && _params->max_cap > 0)
-                                             ? static_cast<size_t>(_params->max_cap)
-                                             : 0;
+        const size_t capacity = splat_reserved_capacity(*_splat_data);
+        const auto device = _splat_data->means().device();
+        if (capacity > 0) {
+            _densify_n_scratch.ensure_n(capacity, device);
+            _gumbel_scratch.ensure_n(capacity, device);
+            _median_scratch.ensure_n(capacity, device);
+        }
+        const size_t tracking_capacity = capacity;
         reset_vector_buffer(_refine_weight_max, n, _splat_data->means().device(), tracking_capacity);
-        reset_vector_buffer(_vis_count, n, _splat_data->means().device(), tracking_capacity);
         reset_vector_buffer(_explore_score_sum, n, _splat_data->means().device(), tracking_capacity);
+        if (has_separate_visibility_buffer()) {
+            reset_vector_buffer(_vis_count, n, _splat_data->means().device(), tracking_capacity);
+        }
         if (cfg_ratio_rank_on()) {
             reset_vector_buffer(_refine_ratio_max, n, _splat_data->means().device(), tracking_capacity);
         }
         _explore_sample_count = 0;
         _explore_last_sample_iter = -1;
         ensure_densification_info_shape();
+        if (!cfg_ratio_rank_on() && !_vis_count.is_valid()) {
+            // Keep the legacy transient handle usable for checkpoint/tests
+            // without allocating a second visibility storage; MRNF uses row 0
+            // as the authoritative visibility accumulator in this mode.
+            _vis_count = _splat_data->_densification_info.slice(0, 0, 1).squeeze(0);
+        }
         _precomputed_edge_scores = lfs::core::Tensor();
         _edge_precompute_valid = false;
 
@@ -3586,9 +3669,8 @@ namespace lfs::training {
         std::swap(_precomputed_edge_scores, source._precomputed_edge_scores);
         std::swap(_edge_precompute_valid, source._edge_precompute_valid);
         std::swap(_edge_score_sum, source._edge_score_sum);
-        std::swap(_edge_canny_nms_output, source._edge_canny_nms_output);
+        std::swap(_edge_view_scores, source._edge_view_scores);
         std::swap(_edge_sample_count, source._edge_sample_count);
-        std::swap(_edge_last_sample_iter, source._edge_last_sample_iter);
         std::swap(_explore_score_sum, source._explore_score_sum);
         std::swap(_explore_error_hw, source._explore_error_hw);
         std::swap(_explore_view_scores, source._explore_view_scores);

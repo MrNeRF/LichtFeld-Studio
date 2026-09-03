@@ -173,6 +173,8 @@ class Action(enum.Enum):
 
     DEPTH_ADJUST_SIZE = 85
 
+    DEPTH_WINDOW_DRAG = 86
+
 class ToolMode(enum.Enum):
     GLOBAL = 0
 

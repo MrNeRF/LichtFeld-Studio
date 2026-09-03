@@ -9,10 +9,14 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/cuda_error_typed.hpp"
 #include "core/logger.hpp"
+#include "core/resource_messages.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/sh_value_quant_kernels.hpp"
 #include "core/splat_exportable_storage.hpp"
+#include "core/tensor.hpp"
 #include "core/tensor_serialization_sink.hpp"
+#include "lfs/cuda_scratch.hpp"
+#include "lfs/training/sh_value_codec.hpp"
 #include "strategies/istrategy.hpp"
 
 #include <algorithm>
@@ -21,6 +25,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <exception>
@@ -93,6 +98,45 @@ namespace lfs::training {
             });
         }
 
+        [[nodiscard]] std::string format_memory_size(
+            const std::uint64_t bytes) {
+            constexpr double BYTES_PER_MIB =
+                1024.0 * 1024.0;
+            constexpr double BYTES_PER_GIB =
+                1024.0 * 1024.0 * 1024.0;
+            if (bytes >=
+                static_cast<std::uint64_t>(BYTES_PER_GIB)) {
+                return std::format(
+                    "{:.1f} GiB",
+                    static_cast<double>(bytes) /
+                        BYTES_PER_GIB);
+            }
+            return std::format(
+                "{:.1f} MiB",
+                static_cast<double>(bytes) /
+                    BYTES_PER_MIB);
+        }
+
+        [[nodiscard]] lfs::Error snapshot_host_memory_error(
+            const std::uint64_t required_bytes,
+            const std::uint64_t available_bytes,
+            std::string detail,
+            const lfs::core::SourceSite source) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::ResourceExhausted,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = std::format(
+                    "{}: needed {}, available {}.",
+                    lfs::core::HOST_MEMORY_SAVE_ERROR_PREFIX,
+                    format_memory_size(required_bytes),
+                    format_memory_size(available_bytes)),
+                .detail = std::move(detail),
+                .detection = source,
+                .fields = lfs::SmallFields{}.add(
+                    "resource", "host_memory"),
+            });
+        }
+
         std::uint64_t read_rss_bytes() {
 #if defined(__linux__)
             std::ifstream input("/proc/self/status");
@@ -121,11 +165,12 @@ namespace lfs::training {
         };
 
         HostMemoryInfo read_host_memory_info() {
+            HostMemoryInfo result;
 #if defined(_WIN32)
             MEMORYSTATUSEX status{};
             status.dwLength = sizeof(status);
             if (GlobalMemoryStatusEx(&status)) {
-                return {
+                result = {
                     .total_bytes = status.ullTotalPhys,
                     .available_bytes = status.ullAvailPhys,
                 };
@@ -133,7 +178,6 @@ namespace lfs::training {
 #elif defined(__linux__)
             std::ifstream input("/proc/meminfo");
             std::string line;
-            HostMemoryInfo result;
             while (std::getline(input, line)) {
                 unsigned long long kib = 0;
                 if (std::sscanf(
@@ -149,9 +193,29 @@ namespace lfs::training {
                         static_cast<std::uint64_t>(kib) * 1024;
                 }
             }
-            return result;
 #endif
-            return {};
+            const auto read_override = [](const char* name)
+                -> std::optional<std::uint64_t> {
+                const auto* value = std::getenv(name);
+                if (!value) {
+                    return std::nullopt;
+                }
+                unsigned long long bytes = 0;
+                char trailing = '\0';
+                if (std::sscanf(value, "%llu %c", &bytes, &trailing) != 1) {
+                    return std::nullopt;
+                }
+                return static_cast<std::uint64_t>(bytes);
+            };
+            if (const auto total = read_override(
+                    "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_TOTAL_BYTES")) {
+                result.total_bytes = *total;
+            }
+            if (const auto available = read_override(
+                    "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES")) {
+                result.available_bytes = *available;
+            }
+            return result;
         }
 
 #if defined(__x86_64__) || defined(_M_X64)
@@ -712,6 +776,7 @@ namespace lfs::training {
                         cudaStreamNonBlocking),
                     "create snapshot D2H stream");
             }
+            ensure_device_scratch();
             calibrate_once(layout, mutating_streams);
             if (slots.empty()) {
                 slots.resize(config.ring_slots);
@@ -736,27 +801,16 @@ namespace lfs::training {
                         drain_loop(stop);
                     });
             }
-            ensure_sh_scratch(layout);
         }
 
-        void ensure_sh_scratch(
-            const std::vector<TensorLayoutWitness>& layout) {
-            const bool needs_sh_scratch =
-                std::ranges::any_of(
-                    layout,
-                    [](const TensorLayoutWitness& witness) {
-                        return witness.descriptor.encoding !=
-                               lfs::core::
-                                   TensorPayloadEncoding::
-                                       NativeContiguous;
-                    });
-            if (needs_sh_scratch && !sh_scratch) {
-                require_cuda(
-                    cudaMalloc(
-                        &sh_scratch,
-                        config.band_bytes),
-                    "allocate bounded SH snapshot scratch");
+        void ensure_device_scratch() {
+            if (device_scratch) {
+                return;
             }
+            device_scratch.allocate(
+                config.band_bytes,
+                d2h_stream,
+                "training.snapshot.device_scratch");
         }
 
         void calibrate_once(
@@ -814,7 +868,9 @@ namespace lfs::training {
             }
             const auto bytes = static_cast<std::size_t>(
                 std::min<std::uint64_t>(
-                    config.calibration_bytes,
+                    std::min<std::uint64_t>(
+                        config.calibration_bytes,
+                        config.band_bytes),
                     source->source_device ==
                             lfs::core::Device::CUDA
                         ? source_raw_bytes(*source)
@@ -822,6 +878,10 @@ namespace lfs::training {
             if (bytes == 0) {
                 throw std::runtime_error(
                     "Snapshot calibration found no CUDA source bytes");
+            }
+            if (!device_scratch) {
+                throw std::runtime_error(
+                    "Snapshot calibration requires device scratch");
             }
 
             void* pinned = nullptr;
@@ -839,12 +899,8 @@ namespace lfs::training {
                 require_cuda(
                     cudaEventCreate(&end),
                     "create D2H calibration end event");
-                require_cuda(
-                    cudaMemcpyAsync(
-                        pinned, source->source_pointer,
-                        bytes, cudaMemcpyDeviceToHost,
-                        d2h_stream),
-                    "warm D2H calibration");
+                issue_device_to_pinned(
+                    pinned, source->source_pointer, bytes);
                 require_cuda(
                     cudaStreamSynchronize(d2h_stream),
                     "finish D2H calibration warmup");
@@ -855,14 +911,9 @@ namespace lfs::training {
                      iteration <
                      config.calibration_iterations;
                      ++iteration) {
-                    require_cuda(
-                        cudaMemcpyAsync(
-                            pinned,
-                            source->source_pointer,
-                            bytes,
-                            cudaMemcpyDeviceToHost,
-                            d2h_stream),
-                        "measure raw pinned D2H");
+                    issue_device_to_pinned(
+                        pinned, source->source_pointer,
+                        bytes);
                 }
                 require_cuda(
                     cudaEventRecord(end, d2h_stream),
@@ -933,6 +984,28 @@ namespace lfs::training {
             return slot_index;
         }
 
+        void issue_device_to_pinned(
+            void* pinned_destination,
+            const void* source,
+            const std::size_t bytes) {
+            if (!device_scratch || bytes > config.band_bytes) {
+                throw std::runtime_error(
+                    "Snapshot D2H scratch is missing or undersized");
+            }
+            require_cuda(
+                cudaMemcpyAsync(
+                    device_scratch.get(), source, bytes,
+                    cudaMemcpyDeviceToDevice,
+                    d2h_stream),
+                "stage snapshot bytes through device scratch");
+            require_cuda(
+                cudaMemcpyAsync(
+                    pinned_destination, device_scratch.get(), bytes,
+                    cudaMemcpyDeviceToHost,
+                    d2h_stream),
+                "issue packed snapshot D2H");
+        }
+
         void issue_native_to_slot(
             const std::size_t slot_index,
             const std::size_t pinned_offset,
@@ -940,15 +1013,11 @@ namespace lfs::training {
             const std::size_t bytes) {
             validate_slot_range(
                 slot_index, pinned_offset, bytes);
-            require_cuda(
-                cudaMemcpyAsync(
-                    static_cast<std::byte*>(
-                        slots[slot_index].pinned) +
-                        pinned_offset,
-                    source, bytes,
-                    cudaMemcpyDeviceToHost,
-                    d2h_stream),
-                "issue packed snapshot D2H");
+            issue_device_to_pinned(
+                static_cast<std::byte*>(
+                    slots[slot_index].pinned) +
+                    pinned_offset,
+                source, bytes);
         }
 
         void issue_sh_to_slot(
@@ -959,7 +1028,7 @@ namespace lfs::training {
             const std::size_t bytes) {
             validate_slot_range(
                 slot_index, pinned_offset, bytes);
-            if (!sh_scratch ||
+            if (!device_scratch ||
                 tensor_byte_offset % sizeof(float) != 0 ||
                 bytes % sizeof(float) != 0) {
                 throw std::runtime_error(
@@ -977,7 +1046,7 @@ namespace lfs::training {
                         static_cast<const float*>(
                             witness
                                 .auxiliary_source_pointer),
-                        static_cast<float*>(sh_scratch),
+                        static_cast<float*>(device_scratch.get()),
                         tensor_byte_offset /
                             sizeof(float),
                         bytes / sizeof(float),
@@ -997,7 +1066,7 @@ namespace lfs::training {
                     decode_shN_f16_range_to_canonical(
                         static_cast<const std::uint16_t*>(
                             witness.source_pointer),
-                        static_cast<float*>(sh_scratch),
+                        static_cast<float*>(device_scratch.get()),
                         tensor_byte_offset /
                             sizeof(float),
                         bytes / sizeof(float),
@@ -1014,7 +1083,7 @@ namespace lfs::training {
                     undo_reorder_sh_range_from_swizzled(
                         static_cast<const float*>(
                             witness.source_pointer),
-                        static_cast<float*>(sh_scratch),
+                        static_cast<float*>(device_scratch.get()),
                         tensor_byte_offset /
                             sizeof(float),
                         bytes / sizeof(float),
@@ -1033,7 +1102,7 @@ namespace lfs::training {
                     static_cast<std::byte*>(
                         slots[slot_index].pinned) +
                         pinned_offset,
-                    sh_scratch, bytes,
+                    device_scratch.get(), bytes,
                     cudaMemcpyDeviceToHost,
                     d2h_stream),
                 "issue packed SH snapshot D2H");
@@ -1310,12 +1379,13 @@ namespace lfs::training {
                 ring_condition.notify_all();
                 drain_thread.join();
             }
-            if (sh_scratch) {
+            if (device_scratch && d2h_stream) {
                 LFS_CUDA_LOG_TEARDOWN(
-                    cudaFree(sh_scratch), d2h_stream,
-                    "training snapshot SH scratch teardown");
-                sh_scratch = nullptr;
+                    cudaStreamSynchronize(d2h_stream),
+                    d2h_stream,
+                    "training snapshot device scratch teardown sync");
             }
+            device_scratch.reset();
             for (auto& slot : slots) {
                 if (slot.d2h_complete) {
                     LFS_CUDA_LOG_TEARDOWN(
@@ -1345,7 +1415,7 @@ namespace lfs::training {
         bool initialized = false;
         double initialization_ms = 0.0;
         cudaStream_t d2h_stream = nullptr;
-        void* sh_scratch = nullptr;
+        cuda_scratch::DeviceBuffer device_scratch;
         std::vector<RingSlot> slots;
         std::size_t next_slot = 0;
         std::mutex ring_mutex;
@@ -1646,8 +1716,32 @@ namespace lfs::training {
                         lfs::core::
                             TensorPayloadEncoding::
                                 NativeContiguous) {
-                        count -=
-                            count % sizeof(float);
+                        const auto row_bytes =
+                            static_cast<std::uint64_t>(
+                                descriptor
+                                    .sh_coefficients_rest) *
+                            lfs::core::kShChannels *
+                            sizeof(float);
+                        const auto block_bytes =
+                            row_bytes *
+                            static_cast<std::uint64_t>(
+                                lfs::training::sh_value::
+                                    kBlockSize);
+                        if (block_bytes > 0 &&
+                            count >= block_bytes) {
+                            count -=
+                                count %
+                                static_cast<std::size_t>(
+                                    block_bytes);
+                        } else if (row_bytes > 0) {
+                            count -=
+                                count %
+                                static_cast<std::size_t>(
+                                    row_bytes);
+                        } else {
+                            count -=
+                                count % sizeof(float);
+                        }
                     }
                     if (count == 0) {
                         flush_active_slot();
@@ -1940,8 +2034,7 @@ namespace lfs::training {
 
             prepared->baseline_rss_bytes =
                 read_rss_bytes();
-            impl_->ensure_sh_scratch(
-                prepared->layout);
+            impl_->ensure_device_scratch();
 
             if (prepared->checkpoint_bytes >
                 std::numeric_limits<std::size_t>::max()) {
@@ -1953,9 +2046,11 @@ namespace lfs::training {
             const auto host_memory =
                 read_host_memory_info();
             const auto reserve_bytes =
-                std::max<std::uint64_t>(
-                    MIN_HOST_MEMORY_RESERVE_BYTES,
-                    host_memory.total_bytes / 5);
+                request.relaxed_host_memory_gate
+                    ? HOST_MEMORY_GATE_HEADROOM_BYTES
+                    : std::max<std::uint64_t>(
+                          MIN_HOST_MEMORY_RESERVE_BYTES,
+                          host_memory.total_bytes / 5);
             if (prepared->checkpoint_bytes >
                 std::numeric_limits<std::uint64_t>::max() -
                     reserve_bytes) {
@@ -1969,11 +2064,15 @@ namespace lfs::training {
             if (host_memory.available_bytes == 0 ||
                 host_memory.available_bytes <
                     required_host_memory) {
-                return snapshot_error(
-                    lfs::ErrorCode::ResourceExhausted,
+                return snapshot_host_memory_error(
+                    required_host_memory,
+                    host_memory.available_bytes,
                     std::format(
-                        "Training snapshot deferred: {} bytes available, "
+                        "Training snapshot {}: {} bytes available, "
                         "{} required ({} snapshot + {} reserve)",
+                        request.relaxed_host_memory_gate
+                            ? "rejected"
+                            : "deferred",
                         host_memory.available_bytes,
                         required_host_memory,
                         prepared->checkpoint_bytes,
@@ -2280,6 +2379,7 @@ namespace lfs::training {
                 pending->metrics.cold_path_ms <=
                 pending->metrics.rig_gate_ms;
             pending->pause_end = pause_end;
+            lfs::core::Tensor::trim_memory_pool();
 
             LOG_INFO(
                 "Training snapshot {} iter {}: "

@@ -24,6 +24,8 @@ class MRNFStrategyTest_CadenceScaledMatchesRefineEvery_Test;
 class MRNFStrategyTest_FarStarvationFactorFromSyntheticPopulations_Test;
 class MRNFStrategyTest_CensusGateActivatesAndSuppressesFarFeatures_Test;
 class MRNFStrategyTest_ExploreStarvationWeights_Test;
+class MRNFStrategyTest_DirectAuxiliaryGrowthPreservesPrefix_Test;
+class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Test;
 
 #include "core/camera.hpp"
 #include "core/cuda/sh_layout.cuh"
@@ -263,6 +265,64 @@ TEST(MRNFStrategyTest, EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores) {
     EXPECT_NEAR(guidance_ptr[2], 1.0f, 1e-5f);
     EXPECT_GT(guidance_ptr[0], 1.0f);
     EXPECT_GT(guidance_ptr[1], guidance_ptr[0]);
+}
+
+TEST(MRNFStrategyTest, EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+
+    auto opt_params = vanilla_mrnf_params();
+    opt_params.iterations = 1'000;
+    opt_params.start_refine = 0;
+    opt_params.stop_refine = 800;
+    opt_params.refine_every = 100;
+    opt_params.max_cap = 32;
+    opt_params.use_edge_map = true;
+    strategy.initialize(opt_params);
+
+    std::vector<float> raw_values(10);
+    for (size_t i = 0; i < raw_values.size(); ++i) {
+        raw_values[i] = static_cast<float>(i + 1);
+    }
+    const auto raw = Tensor::from_vector(
+        raw_values, TensorShape({raw_values.size()}), Device::CUDA);
+
+    const auto add_view = [&](const int iter, const float scale) {
+        auto scratch = strategy.edge_score_scratch(iter);
+        ASSERT_TRUE(scratch.is_valid());
+        scratch.copy_(raw * scale);
+        strategy.on_edge_score_accumulated(iter);
+    };
+
+    // Equal per-view weighting must survive an arbitrary raw score scale.
+    add_view(1, 1.0f);
+    add_view(99, 17.0f);
+    RenderOutput unused;
+    strategy.pre_step(100, unused);
+    ASSERT_TRUE(strategy._edge_precompute_valid);
+    EXPECT_FALSE(strategy._edge_score_sum.is_valid());
+    EXPECT_EQ(strategy._edge_sample_count, 0);
+    auto first_window = strategy._precomputed_edge_scores.cpu();
+    const auto* first_ptr = first_window.ptr<float>();
+    for (size_t i = 0; i < raw_values.size(); ++i) {
+        EXPECT_NEAR(first_ptr[i], raw_values[i] / 6.0f, 1.0e-6f) << "index=" << i;
+    }
+
+    // Refinement at 100 closes before iteration 100's main backward. Its view
+    // therefore starts the [100,200) window, and a mask active only for the
+    // later sample affects only that sample.
+    add_view(100, 3.0f);
+    splat_data.set_frozen_ranges({SplatData::FrozenRange{.start = 0, .count = 1}});
+    add_view(199, 11.0f);
+    splat_data.clear_frozen_ranges();
+    strategy.pre_step(200, unused);
+    ASSERT_TRUE(strategy._edge_precompute_valid);
+    auto second_window = strategy._precomputed_edge_scores.cpu();
+    const auto* second_ptr = second_window.ptr<float>();
+    EXPECT_NEAR(second_ptr[0], (raw_values[0] / 6.0f) * 0.5f, 1.0e-6f);
+    for (size_t i = 1; i < raw_values.size(); ++i) {
+        EXPECT_NEAR(second_ptr[i], raw_values[i] / 6.0f, 1.0e-6f) << "index=" << i;
+    }
 }
 
 TEST(CropDampingStrategyTest, MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale) {
@@ -629,6 +689,57 @@ TEST(MRNFStrategyTest, ShNReservationTracksMaxDegreeAndMaxCap) {
     const auto fused = scheduled_strategy.get_optimizer().prepare_fastgs_fused_adam(1001);
     EXPECT_TRUE(fused.shN.enabled);
     expect_shN_capacity(scheduled_splat, scheduled_strategy.get_optimizer(), 1);
+}
+
+TEST(MRNFStrategyTest, DirectAuxiliaryGrowthPreservesPrefix) {
+    constexpr size_t sfm_points = 8;
+    constexpr size_t grown_points = sfm_points * 3;
+
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(sfm_points));
+    MRNF strategy(splat_data);
+    auto params = vanilla_mrnf_params();
+    params.max_cap = 0;
+    params.growth_ratio_rank = true;
+    strategy.initialize(params);
+
+    // Model the post-SfM state immediately before a reservation boundary:
+    // every MRNF auxiliary is a direct-storage tensor with only SfM rows.
+    strategy._free_mask = Tensor::zeros_direct(
+        {sfm_points}, sfm_points, Device::CUDA, DataType::Bool);
+    const auto direct_float = [](const size_t n, const float value) {
+        auto tensor = Tensor::zeros_direct({n}, n, Device::CUDA, DataType::Float32);
+        tensor.copy_from(Tensor::full({n}, value, Device::CUDA));
+        return tensor;
+    };
+    strategy._refine_weight_max = direct_float(sfm_points, 1.25f);
+    strategy._vis_count = direct_float(sfm_points, 2.5f);
+    strategy._refine_ratio_max = direct_float(sfm_points, 3.75f);
+    strategy._explore_score_sum = direct_float(sfm_points, 5.0f);
+
+    EXPECT_TRUE(strategy.get_optimizer().preflight_grow_capacity(grown_points - sfm_points));
+    EXPECT_NO_THROW(strategy.ensure_auxiliary_capacity_for_growth(grown_points));
+
+    const auto expect_grown = [grown_points](const Tensor& tensor) {
+        EXPECT_EQ(tensor.numel(), grown_points);
+        EXPECT_GE(tensor.capacity(), grown_points);
+    };
+    expect_grown(strategy._free_mask);
+    expect_grown(strategy._refine_weight_max);
+    expect_grown(strategy._vis_count);
+    expect_grown(strategy._refine_ratio_max);
+    expect_grown(strategy._explore_score_sum);
+
+    const auto expect_prefix = [sfm_points](const Tensor& tensor, const float expected) {
+        const auto prefix = tensor.slice(0, 0, sfm_points).cpu();
+        const auto* values = prefix.ptr<float>();
+        for (size_t i = 0; i < sfm_points; ++i) {
+            EXPECT_FLOAT_EQ(values[i], expected);
+        }
+    };
+    expect_prefix(strategy._refine_weight_max, 1.25f);
+    expect_prefix(strategy._vis_count, 2.5f);
+    expect_prefix(strategy._refine_ratio_max, 3.75f);
+    expect_prefix(strategy._explore_score_sum, 5.0f);
 }
 
 TEST(MRNFStrategyTest, GrowAndSplitUsesIgsPlusSplitRule) {

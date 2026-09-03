@@ -48,7 +48,7 @@ namespace lfs::io::project {
         friend constexpr auto operator<=>(const Version&, const Version&) = default;
     };
 
-    inline constexpr Version CURRENT_CONTAINER_VERSION{1, 0};
+    inline constexpr Version CURRENT_CONTAINER_VERSION{1, 1};
 
     struct LFS_IO_API Fourcc {
         std::array<std::uint8_t, 4> bytes{};
@@ -97,6 +97,7 @@ namespace lfs::io::project {
     inline constexpr Fourcc FOURCC_SEQR = make_fourcc('S', 'E', 'Q', 'R');
     inline constexpr Fourcc FOURCC_METR = make_fourcc('M', 'E', 'T', 'R');
     inline constexpr Fourcc FOURCC_THMB = make_fourcc('T', 'H', 'M', 'B');
+    inline constexpr Fourcc FOURCC_DSRC = make_fourcc('D', 'S', 'R', 'C');
 
     struct ChunkKey {
         Fourcc fourcc;
@@ -551,8 +552,11 @@ namespace lfs::io::project {
         lfs::core::Uuid commit_uuid;
         lfs::core::Uuid snapshot_uuid;
         std::uint64_t wallclock_unix_ns = 0;
-        Version min_reader_version = CURRENT_CONTAINER_VERSION;
-        Version min_safe_writer_version = CURRENT_CONTAINER_VERSION;
+        // The 1.1 container can still carry 1.0-compatible commits.  A
+        // producer raises these fields when it publishes a feature that an
+        // older reader cannot preserve, such as checkpoint history.
+        Version min_reader_version{1, 0};
+        Version min_safe_writer_version{1, 0};
         CapabilitySet extra_reader_capabilities;
         CapabilitySet extra_writer_capabilities;
     };
@@ -570,6 +574,10 @@ namespace lfs::io::project {
         std::uint64_t wallclock_unix_ns = 0;
         std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
         CommitBoundaryObserver boundary_observer;
+        // Save As compaction writes a private intermediate file. The caller
+        // must complete the final append, full CRC verification, and durable
+        // publication before exposing it as the destination.
+        bool private_staging = false;
     };
 
     class LFS_IO_API ProjectWriter {
@@ -580,6 +588,18 @@ namespace lfs::io::project {
         append(const std::filesystem::path& path, const AppendOptions& options = {});
         [[nodiscard]] static lfs::Result<void>
         compact(const std::filesystem::path& path, const CompactionOptions& options = {});
+        // Compacts source_path into a new destination without first cloning
+        // the complete source file. Writer locks for both paths are held for
+        // the duration (one lock when the paths are equal). Normal compaction
+        // publishes the destination transactionally after full CRC validation
+        // and durability. With private_staging, the destination is a private
+        // intermediate: only its authority tuple is validated here; full CRC
+        // validation and durability are deferred to the caller's final commit
+        // before publication.
+        [[nodiscard]] static lfs::Result<void>
+        compact_to(const std::filesystem::path& source_path,
+                   const std::filesystem::path& destination_path,
+                   const CompactionOptions& options = {});
 
         ProjectWriter(ProjectWriter&&) noexcept;
         ProjectWriter& operator=(ProjectWriter&&) noexcept;

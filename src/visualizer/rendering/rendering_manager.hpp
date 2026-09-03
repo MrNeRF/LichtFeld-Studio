@@ -138,6 +138,9 @@ namespace lfs::vis {
             VulkanContext& context,
             const lfs::core::SplatData& model,
             glm::ivec2 viewport_size);
+        // Called by the viewer loop at idle cadence. Releases private viewer
+        // scratch after a hysteresis window, or immediately under pressure.
+        void noteVksplatIdleFrame(bool training_active);
 
         enum class VksplatSelectionMaskShape : std::uint32_t {
             Brush = 0,
@@ -289,6 +292,10 @@ namespace lfs::vis {
         SplitViewInfo getSplitViewInfo() const;
         [[nodiscard]] bool isSplitViewActive() const;
         [[nodiscard]] bool isGTComparisonActive() const;
+        // Internal drag-preview signal for the shader-approximate live reveal; never touches
+        // RenderSettings.
+        void setDepthWindowDragPreview(bool active);
+        [[nodiscard]] bool depthWindowDragPreview() const;
         [[nodiscard]] bool isIndependentSplitViewActive() const;
         // Project restore may only enter/leave split modes through the service
         // transition path; it must never assign RenderSettings::split_view_mode.
@@ -827,6 +834,8 @@ namespace lfs::vis {
         std::uint64_t point_cloud_data_revision_ = 0;
         std::uint64_t point_cloud_preview_selection_revision_ = 0;
         VulkanContext* last_vulkan_context_ = nullptr;
+        std::atomic<bool> vksplat_terminal_release_pending_{false};
+        std::uint32_t vksplat_idle_frame_count_ = 0;
         VkImage vulkan_external_viewport_image_ = VK_NULL_HANDLE;
         VkImageView vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
         VkImageLayout vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -922,6 +931,7 @@ namespace lfs::vis {
 
         // Settings
         RenderSettings settings_;
+        bool depth_window_drag_preview_ = false;
         SceneUpscalerSelection scene_upscaler_runtime_selection_{};
         std::array<int, 2> panel_grid_planes_{{1, 1}};
         mutable std::mutex settings_mutex_;

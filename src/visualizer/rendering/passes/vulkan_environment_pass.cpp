@@ -4,6 +4,7 @@
 
 #include "vulkan_environment_pass.hpp"
 
+#include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "diagnostics/vram_profiler.hpp"
@@ -13,7 +14,6 @@
 #include "window/vulkan_context.hpp"
 #include "window/vulkan_result.hpp"
 
-#include <OpenImageIO/imageio.h>
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -693,40 +693,30 @@ namespace lfs::vis {
                 }
             }
             const std::string utf8 = lfs::core::path_to_utf8(resolved);
-            std::unique_ptr<OIIO::ImageInput> in(OIIO::ImageInput::open(utf8));
-            if (!in) {
-                LOG_WARN("VulkanEnvironmentPass: failed to open environment map {}: {}", utf8, OIIO::geterror());
+            auto [source_data, w, h, nch] = lfs::core::load_image_float(resolved);
+            if (!source_data) {
+                LOG_WARN("VulkanEnvironmentPass: failed to read environment map {}", utf8);
                 return false;
             }
-            const OIIO::ImageSpec& spec = in->spec();
-            if (spec.width <= 0 || spec.height <= 0 || spec.nchannels <= 0) {
-                in->close();
+            if (w <= 0 || h <= 0 || nch <= 0) {
+                lfs::core::free_image_float(source_data);
                 return false;
             }
-            const int w = spec.width;
-            const int h = spec.height;
-            const int nch = spec.nchannels;
-            std::vector<float> source(static_cast<std::size_t>(w) * h * nch);
-            if (!in->read_image(0, 0, 0, nch, OIIO::TypeDesc::FLOAT, source.data())) {
-                LOG_WARN("VulkanEnvironmentPass: failed to read environment map {}: {}", utf8, in->geterror());
-                in->close();
-                return false;
-            }
-            in->close();
 
             // Repack to RGBA half-float (R16G16B16A16_SFLOAT). 3-channel float formats
             // are spotty in Vulkan, RGBA half is universally supported.
             const std::size_t pixel_count = static_cast<std::size_t>(w) * h;
             std::vector<std::uint16_t> rgba(pixel_count * 4);
             for (std::size_t i = 0; i < pixel_count; ++i) {
-                const float r = nch >= 1 ? source[i * nch + 0] : 0.0f;
-                const float g = nch >= 2 ? source[i * nch + 1] : r;
-                const float b = nch >= 3 ? source[i * nch + 2] : r;
+                const float r = nch >= 1 ? source_data[i * nch + 0] : 0.0f;
+                const float g = nch >= 2 ? source_data[i * nch + 1] : r;
+                const float b = nch >= 3 ? source_data[i * nch + 2] : r;
                 rgba[i * 4 + 0] = floatToHalf(r);
                 rgba[i * 4 + 1] = floatToHalf(g);
                 rgba[i * 4 + 2] = floatToHalf(b);
                 rgba[i * 4 + 3] = floatToHalf(1.0f);
             }
+            lfs::core::free_image_float(source_data);
 
             VkImageCreateInfo img{};
             img.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;

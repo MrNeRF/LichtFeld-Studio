@@ -67,6 +67,7 @@ class KeymapBindingsSection:
             lf.keymap.Action.TOGGLE_SELECTION_CROP_FILTER,
             lf.keymap.Action.DEPTH_ADJUST_FAR,
             lf.keymap.Action.DEPTH_ADJUST_SIZE,
+            lf.keymap.Action.DEPTH_WINDOW_DRAG,
         ],
         "crop_box": [
             lf.keymap.Action.APPLY_CROP_BOX,

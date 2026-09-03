@@ -50,10 +50,11 @@ namespace lfs::vis::tools {
             const Viewport& viewport,
             const RenderSettings& settings,
             const float far_depth,
-            const float window_scale) {
+            const float window_scale_x,
+            const float window_scale_y) {
             const glm::ivec2 size = glm::max(viewport.windowSize, glm::ivec2(1));
-            const float half_w_pixels = 0.5f * window_scale * static_cast<float>(size.x);
-            const float half_h_pixels = 0.5f * window_scale * static_cast<float>(size.y);
+            const float half_w_pixels = 0.5f * window_scale_x * static_cast<float>(size.x);
+            const float half_h_pixels = 0.5f * window_scale_y * static_cast<float>(size.y);
             if (settings.orthographic) {
                 const float pixels_per_world =
                     viewport.ortho_scale_override.value_or(settings.ortho_scale);
@@ -121,7 +122,8 @@ namespace lfs::vis::tools {
         const SDL_MouseButtonFlags mouse_buttons = SDL_GetMouseState(&mx, &my);
         last_mouse_pos_ = glm::vec2(mx, my);
 
-        if (depth_filter_enabled_ || crop_filter_enabled_) {
+        if ((depth_filter_enabled_ || crop_filter_enabled_) &&
+            depth_window_drag_count_ == 0) {
             applySelectionFilterSettings(ctx);
         }
 
@@ -218,16 +220,23 @@ namespace lfs::vis::tools {
     }
 
     void SelectionTool::adjustWindowScale(const float factor) {
-        if (tool_context_) {
-            if (auto* const rm = tool_context_->getRenderingManager()) {
-                window_scale_ = rm->getSettings().depth_filter_scale;
-            }
-        }
-        window_scale_ = std::clamp(window_scale_ * factor, 0.05f, 1.0f);
+        // Isotropic by contract: both axes scale by ONE common factor, bounded so
+        // that neither axis leaves [0.05, 1.0]. Clamping the axes separately let a
+        // window that hit a limit on one axis keep changing on the other and
+        // silently change shape.
         if (tool_context_) {
             if (auto* const rm = tool_context_->getRenderingManager()) {
                 auto settings = rm->getSettings();
-                settings.depth_filter_scale = window_scale_;
+                // Same bound formula as selection_controls._scale_factor_bounds,
+                // applied here to the current scales rather than its drawn-reference
+                // scales. Inputs are already sanitized to [0.05, 1.0].
+                const float sx = settings.depth_filter_scale_x;
+                const float sy = settings.depth_filter_scale_y;
+                const float f_min = std::max(0.05f / sx, 0.05f / sy);
+                const float f_max = std::min(1.0f / sx, 1.0f / sy);
+                const float f = std::clamp(factor, f_min, std::max(f_min, f_max));
+                settings.depth_filter_scale_x = std::clamp(sx * f, 0.05f, 1.0f);
+                settings.depth_filter_scale_y = std::clamp(sy * f, 0.05f, 1.0f);
                 rm->updateSettings(settings);
             }
         }
@@ -253,15 +262,24 @@ namespace lfs::vis::tools {
             settings.show_ellipsoid = true;
         }
         settings.depth_filter_enabled = depth_filter_enabled_;
-        window_scale_ = settings.depth_filter_scale;
         const glm::quat camera_quat = glm::quat_cast(viewport.camera.R);
         const glm::vec2 half_extents =
-            depthWindowFarPlaneHalfExtents(viewport, settings, depth_far_, settings.depth_filter_scale);
+            depthWindowFarPlaneHalfExtents(viewport, settings, depth_far_, settings.depth_filter_scale_x,
+                                           settings.depth_filter_scale_y);
         settings.depth_filter_transform = lfs::geometry::EuclideanTransform(camera_quat, viewport.camera.t);
         settings.depth_filter_min = glm::vec3(-half_extents.x, -half_extents.y, -depth_far_);
         settings.depth_filter_max = glm::vec3(half_extents.x, half_extents.y, -depth_near_);
         rm->updateSettings(settings);
         rm->markDirty(DirtyFlag::SELECTION);
+    }
+
+    void SelectionTool::setDepthWindowDragInProgress(const bool in_progress) {
+        const int previous = depth_window_drag_count_;
+        depth_window_drag_count_ = std::max(0, previous + (in_progress ? 1 : -1));
+        if (previous > 0 && depth_window_drag_count_ == 0 &&
+            tool_context_ && isEnabled() && depth_filter_enabled_) {
+            applySelectionFilterSettings(*tool_context_);
+        }
     }
 
     void SelectionTool::setCropFilterEnabled(const bool enabled) {
@@ -290,12 +308,12 @@ namespace lfs::vis::tools {
         // Window scale/offset live on RenderSettings. Read them from settings and
         // do not stamp tool members — crop-filter toggles and enable/disable
         // reach this path and would otherwise revert Python/slider/MCP writes.
-        const float window_scale = settings.depth_filter_scale;
         if (depth_filter_enabled_) {
             const auto& viewport = selectionFilterViewport(ctx);
             const glm::quat camera_quat = glm::quat_cast(viewport.camera.R);
             glm::vec2 half_extents =
-                depthWindowFarPlaneHalfExtents(viewport, settings, depth_far_, window_scale);
+                depthWindowFarPlaneHalfExtents(viewport, settings, depth_far_, settings.depth_filter_scale_x,
+                                               settings.depth_filter_scale_y);
             if (informational_half_width) {
                 const glm::ivec2 size = glm::max(viewport.windowSize, glm::ivec2(1));
                 const float aspect = std::max(
@@ -387,7 +405,13 @@ namespace lfs::vis::tools {
             }
         }
 
-        if (mode_name) {
+        // Under GT comparison the depth-window chord has no meaning, so the label
+        // is never suppressed there.
+        const auto* const label_rm = tool_context_ ? tool_context_->getRenderingManager() : nullptr;
+        const bool label_gt_active = label_rm && label_rm->isGTComparisonActive();
+        if (mode_name &&
+            !((kmods & SDL_KMOD_SHIFT) && (kmods & SDL_KMOD_ALT) && depth_filter_enabled_ &&
+              !label_gt_active)) {
             char label_buf[32];
             std::snprintf(label_buf, sizeof(label_buf), "%s%s", mode_name, op_suffix);
             const float label_size = t.fonts.large_size;

@@ -34,6 +34,7 @@ namespace lfs::core {
         static constexpr size_t CACHE_SIZE_PER_BUCKET = 4;
         static constexpr size_t MIN_CACHE_BUDGET = 64ULL * 1024 * 1024;
         static constexpr size_t MAX_CACHE_BUDGET = 256ULL * 1024 * 1024;
+        static constexpr size_t TRAINING_CACHE_BUDGET = 48ULL * 1024 * 1024;
         static constexpr size_t NUM_BUCKETS = 128;
 
         struct Stats {
@@ -331,6 +332,17 @@ namespace lfs::core {
             }
         }
 
+        // Training keeps a tighter reuse cache because its long-lived working set
+        // competes with the rasterizer arena. The normal device-sized budget remains
+        // cached and is restored automatically when training becomes inactive.
+        void set_training_active(const bool active) {
+            const bool was_active = training_active_.exchange(active, std::memory_order_acq_rel);
+            if (active && !was_active) {
+                enforce_cache_budget();
+                publish_cache_bytes();
+            }
+        }
+
         // Calculate waste percentage for a given size
         static double get_waste_percentage(size_t bytes) {
             size_t bucket = get_bucket_size(bytes);
@@ -361,7 +373,9 @@ namespace lfs::core {
         size_t current_cache_budget() {
             const size_t cached = cache_budget_bytes_.load(std::memory_order_acquire);
             if (cached != 0)
-                return cached;
+                return training_active_.load(std::memory_order_acquire)
+                           ? std::min(cached, TRAINING_CACHE_BUDGET)
+                           : cached;
 
             size_t free_bytes = 0;
             size_t total_bytes = 0;
@@ -378,9 +392,14 @@ namespace lfs::core {
 
             size_t expected = 0;
             if (cache_budget_bytes_.compare_exchange_strong(expected, budget, std::memory_order_release)) {
-                return budget;
+                return training_active_.load(std::memory_order_acquire)
+                           ? std::min(budget, TRAINING_CACHE_BUDGET)
+                           : budget;
             }
-            return cache_budget_bytes_.load(std::memory_order_acquire);
+            const size_t normal_budget = cache_budget_bytes_.load(std::memory_order_acquire);
+            return training_active_.load(std::memory_order_acquire)
+                       ? std::min(normal_budget, TRAINING_CACHE_BUDGET)
+                       : normal_budget;
         }
 
         size_t choose_eviction_bucket() {
@@ -470,6 +489,7 @@ namespace lfs::core {
 
         std::array<Bucket, NUM_BUCKETS> buckets_;
         std::atomic<bool> shutdown_{false};
+        std::atomic<bool> training_active_{false};
         std::atomic<size_t> cache_budget_bytes_{0};
         std::atomic<uint64_t> reuse_epoch_{1};
         Stats stats_;

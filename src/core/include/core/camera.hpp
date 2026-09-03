@@ -218,6 +218,9 @@ namespace lfs::core {
         void translate(const Tensor& trans);
 
         void precompute_undistortion(float blank_pixels = 0.0f);
+        // Install parameters computed for an equivalent camera record without
+        // repeating the distortion solve or its device-to-host copies.
+        void adopt_undistortion(const UndistortParams& params) noexcept;
         bool is_undistort_precomputed() const noexcept { return _undistort_precomputed; }
         void prepare_undistortion(float blank_pixels = 0.0f);
         bool is_undistort_prepared() const noexcept { return _undistort_prepared; }

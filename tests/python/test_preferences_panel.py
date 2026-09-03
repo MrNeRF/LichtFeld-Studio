@@ -59,27 +59,20 @@ def preferences_panel_module(monkeypatch):
             scene_upscaler_preset="native",
         ),
         scene_reconstruction_presets={"native": "native", "spatial": "quality"},
-        working_directory="",
-        asset_manager_directory="",
         viewport_chrome_style="translucent",
         set_viewport_chrome_style_calls=[],
         viewport_toolbar_position="centered",
         set_viewport_toolbar_position_calls=[],
+        project_location="",
+        embed_dataset_by_default=False,
     )
 
-    def set_working_directory(path):
-        state.working_directory = str(path)
+    def set_project_location(path):
+        state.project_location = str(path)
         return ""
 
-    def clear_working_directory():
-        state.working_directory = ""
-
-    def set_asset_manager_directory(path):
-        state.asset_manager_directory = str(path)
-        return ""
-
-    def clear_asset_manager_directory():
-        state.asset_manager_directory = ""
+    def clear_project_location():
+        state.project_location = ""
 
     def set_mcp_preferences(enabled, expose_network, port, request_logging):
         config = {
@@ -125,19 +118,15 @@ def preferences_panel_module(monkeypatch):
         get_mcp_preferences=lambda: dict(state.mcp_preferences),
         set_mcp_preferences=set_mcp_preferences,
         get_mcp_status=lambda: dict(state.mcp_status),
-        get_working_directory=lambda: state.working_directory or "/home/tester/.lichtfeld",
-        get_working_directory_preference=lambda: state.working_directory,
-        get_default_working_directory=lambda: "/home/tester/.lichtfeld",
-        get_temp_project_directory=lambda: (state.working_directory or "/home/tester/.lichtfeld") + "/tmp",
-        set_working_directory=set_working_directory,
-        clear_working_directory=clear_working_directory,
-        get_asset_manager_directory=lambda: (
-            state.asset_manager_directory or "/home/tester/.lichtfeld/assets"
+        get_project_location=lambda: state.project_location or "/home/tester/.lichtfeld/projects",
+        get_project_location_preference=lambda: state.project_location,
+        get_default_project_location=lambda: "/home/tester/.lichtfeld/projects",
+        get_embed_dataset_by_default=lambda: state.embed_dataset_by_default,
+        set_project_location=set_project_location,
+        clear_project_location=clear_project_location,
+        set_embed_dataset_by_default=lambda enabled: setattr(
+            state, "embed_dataset_by_default", bool(enabled)
         ),
-        get_asset_manager_directory_preference=lambda: state.asset_manager_directory,
-        get_default_asset_manager_directory=lambda: "/home/tester/.lichtfeld/assets",
-        set_asset_manager_directory=set_asset_manager_directory,
-        clear_asset_manager_directory=clear_asset_manager_directory,
         open_folder_dialog=lambda title, start: "",
         set_panel_enabled=lambda panel_id, enabled: state.panel_enabled_calls.append(
             (panel_id, bool(enabled))
@@ -292,6 +281,7 @@ def preferences_panel_module(monkeypatch):
                 name="TOGGLE_SCENE_SELECTION_TRAINING", value=84
             ),
             DEPTH_ADJUST_SIZE=SimpleNamespace(name="DEPTH_ADJUST_SIZE", value=85),
+            DEPTH_WINDOW_DRAG=SimpleNamespace(name="DEPTH_WINDOW_DRAG", value=86),
         ),
         get_available_profiles=lambda: ["Default"],
         get_current_profile=lambda: "Default",
@@ -376,26 +366,26 @@ def test_viewport_toolbar_position_uses_global_preference(preferences_panel_modu
     assert panel._viewport_toolbar_position_index() == "2"
 
 
-def test_asset_manager_directory_is_saved_and_can_return_to_default(
+def test_project_location_is_saved_and_can_return_to_default(
     preferences_panel_module,
 ):
     module, state = preferences_panel_module
     panel = module.PreferencesPanel()
-    panel._read_asset_manager_directory()
+    panel._read_project_location()
 
-    assert panel._asset_manager_directory == "/home/tester/.lichtfeld/assets"
+    assert panel._project_location == "/home/tester/.lichtfeld/projects"
 
-    panel._set_asset_manager_directory_draft("/mnt/projects/assets")
-    assert panel._commit_asset_manager_directory() is True
-    assert state.asset_manager_directory == "/mnt/projects/assets"
-    assert panel._applied_asset_manager_directory == "/mnt/projects/assets"
+    panel._set_project_location_draft("/mnt/projects")
+    assert panel._commit_project_location() is True
+    assert state.project_location == "/mnt/projects"
+    assert panel._applied_project_location == "/mnt/projects"
 
-    panel._on_use_default_asset_manager_directory(None, None, None)
-    assert state.asset_manager_directory == ""
-    assert panel._asset_manager_directory == "/home/tester/.lichtfeld/assets"
+    panel._on_use_default_project_location(None, None, None)
+    assert state.project_location == ""
+    assert panel._project_location == "/home/tester/.lichtfeld/projects"
 
 
-def test_general_preferences_expose_asset_manager_directory_controls():
+def test_general_preferences_expose_project_location_controls():
     project_root = Path(__file__).parent.parent.parent
     rml = (
         project_root
@@ -407,10 +397,10 @@ def test_general_preferences_expose_asset_manager_directory_controls():
         / "preferences.rml"
     ).read_text(encoding="utf-8")
 
-    assert 'data-event-click="toggle_section(\'asset_manager\')"' in rml
-    assert 'data-value="asset_manager_directory"' in rml
-    assert 'data-event-click="browse_asset_manager_directory"' in rml
-    assert 'data-event-click="use_default_asset_manager_directory"' in rml
+    assert 'data-event-click="toggle_section(\'project_location\')"' in rml
+    assert 'data-value="project_location"' in rml
+    assert 'data-event-click="browse_project_location"' in rml
+    assert 'data-event-click="use_default_project_location"' in rml
 
 
 def test_scene_reconstruction_uses_backend_specific_presets(preferences_panel_module):
@@ -874,3 +864,13 @@ def test_file_associations_rows_toggle_calls_set(preferences_panel_module):
 
     assert state.file_association_set_calls == [(".ply", True)]
     assert [row["registered"] for row in records["file_associations"]] == [True, True]
+
+
+def test_embed_dataset_default_is_exposed_and_settable(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+
+    assert module.lf.ui.get_embed_dataset_by_default() is False
+    panel._set_embed_dataset_by_default(True)
+    assert state.embed_dataset_by_default is True
+    assert module.lf.ui.get_embed_dataset_by_default() is True

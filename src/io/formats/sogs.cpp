@@ -14,7 +14,10 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
+#include "core/sh_value_quant_kernels.hpp"
+#include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "cuda/kmeans.hpp"
 #include "cuda/morton_encoding.hpp"
 #include "io/atomic_output.hpp"
@@ -28,11 +31,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
+#include <future>
 #include <limits>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string_view>
+#include <tbb/parallel_for.h>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -1346,6 +1351,19 @@ namespace lfs::io {
                 archive_entry_set_perm(entry, 0644);
                 archive_entry_set_mtime(entry, time_t, 0);
 
+                const bool is_webp = filename.size() >= 5 && filename.compare(filename.size() - 5, 5, ".webp") == 0;
+                const int compression_result = is_webp
+                                                   ? archive_write_zip_set_compression_store(a_)
+                                                   : archive_write_zip_set_compression_deflate(a_);
+                if (compression_result != ARCHIVE_OK) {
+                    const char* err = archive_error_string(a_);
+                    archive_entry_free(entry);
+                    return make_error(ErrorCode::WRITE_FAILURE,
+                                      std::format("Failed to configure compression for '{}': {}",
+                                                  filename, err ? err : "unknown error"),
+                                      output_path_);
+                }
+
                 if (archive_write_header(a_, entry) != ARCHIVE_OK) {
                     const char* err = archive_error_string(a_);
                     archive_entry_free(entry);
@@ -1374,30 +1392,6 @@ namespace lfs::io {
                 }
 
                 return {};
-            }
-
-            [[nodiscard]] Result<void> add_webp(const std::string& filename,
-                                                const uint8_t* data, int width, int height) {
-                if (!valid_) {
-                    return make_error(ErrorCode::ARCHIVE_CREATION_FAILED, last_error_, output_path_);
-                }
-
-                uint8_t* output = nullptr;
-                const size_t output_size = WebPEncodeLosslessRGBA(data, width, height, width * 4, &output);
-
-                if (output_size == 0 || !output) {
-                    if (output) {
-                        WebPFree(output);
-                    }
-                    return make_error(ErrorCode::ENCODING_FAILED,
-                                      std::format("WebP encoding failed for '{}' ({}x{} image)",
-                                                  filename, width, height),
-                                      output_path_);
-                }
-
-                auto result = add_file(filename, output, output_size);
-                WebPFree(output);
-                return result;
             }
         };
 
@@ -1520,6 +1514,13 @@ namespace lfs::io {
         }
 
         try {
+            const auto export_started = std::chrono::steady_clock::now();
+            const bool debug_logging_enabled =
+                lfs::core::Logger::get().is_enabled(lfs::core::LogLevel::Debug);
+            const auto milliseconds = [](const auto begin, const auto end) {
+                return std::chrono::duration<double, std::milli>(end - begin).count();
+            };
+
             LOG_INFO("SOG write: {}", lfs::core::path_to_utf8(options.output_path));
 
             const auto report_progress = [&](float progress, const std::string& stage) -> bool {
@@ -1541,9 +1542,41 @@ namespace lfs::io {
             constexpr int CHANNELS = 4;
             constexpr double COMPRESSION_RATIO = 0.4;
             constexpr size_t OVERHEAD = 4096;
+            const int sh_degree = splat_data.get_max_sh_degree();
+            if (sh_degree < 0 || sh_degree > 3) {
+                return make_error(
+                    ErrorCode::INVALID_DATASET,
+                    std::format("SOG export supports SH degree 0..3 (got {})", sh_degree),
+                    options.output_path);
+            }
+
+            struct ShKmeansResult {
+                Tensor centroids;
+                Tensor labels;
+                double milliseconds = 0.0;
+                double done_ms = 0.0;
+            };
+            std::future<ShKmeansResult> sh_kmeans_future;
+            std::optional<ShKmeansResult> sh_kmeans_result;
+            int sh_coeffs = 0;
+            int sh_dims = 0;
+            int palette_size = 0;
+            Tensor shN_float_swizzled;
+            double t_kmeans_launch_ms = 0.0;
+            double t_kmeans_done_ms = 0.0;
+            double t_join_ms = 0.0;
+            double t_labels_encoded_ms = 0.0;
+            double t_webp5_archived_ms = 0.0;
+            double t_archive_done_ms = 0.0;
+
+            const auto join_sh_kmeans_if_started = [&]() {
+                // The k-means kernel has no cancellation token, so cancellation checkpoints must join it.
+                if (sh_kmeans_future.valid() && !sh_kmeans_result) {
+                    sh_kmeans_result.emplace(sh_kmeans_future.get());
+                }
+            };
 
             const size_t texture_size = static_cast<size_t>(width) * height * CHANNELS;
-            const int sh_degree = splat_data.get_max_sh_degree();
 
             size_t estimated_size = texture_size * 5;
             if (sh_degree > 0) {
@@ -1564,203 +1597,21 @@ namespace lfs::io {
                                   "SOG export supports at most INT_MAX splats",
                                   options.output_path);
             }
-
-            auto means_cuda = as_cuda_contiguous(splat_data.means_raw());
-            auto sort_indices_tensor = morton_sort_indices_for_positions(means_cuda);
-            if (!sort_indices_tensor.is_valid()) {
-                return make_error(ErrorCode::ENCODING_FAILED,
-                                  "Failed to compute Morton order for SOG export",
-                                  options.output_path);
-            }
-            auto sort_indices_cpu = sort_indices_tensor.cpu();
-            const auto* indices = sort_indices_cpu.ptr<int32_t>();
-
-            auto means_cpu = means_cuda.cpu();
-            const auto* means_ptr = means_cpu.ptr<float>();
-            const auto source_index = [&](int64_t sorted_index) -> int64_t {
-                return static_cast<int64_t>(indices[sorted_index]);
-            };
-
-            ScopedAtomicOutputFile atomic_output(options.output_path);
-            SogArchive archive(atomic_output.temp_path());
-
-            // Check archive was created successfully
-            if (!archive.is_valid()) {
-                return make_error(ErrorCode::ARCHIVE_CREATION_FAILED, archive.last_error(), options.output_path);
-            }
-
-            const auto write_webp = [&](const std::string& filename,
-                                        const uint8_t* data, int w, int h) -> Result<void> {
-                return archive.add_webp(filename, data, w, h);
-            };
-
-            if (!report_progress(0.10f, "Positions")) {
-                return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
-            }
-
-            std::array<std::array<double, 2>, 3> means_min_max = {{{std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()},
-                                                                   {std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()},
-                                                                   {std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()}}};
-
-            for (int64_t i = 0; i < num_rows; ++i) {
-                const int64_t idx = source_index(i);
-                for (int d = 0; d < 3; ++d) {
-                    const double v = log_transform(static_cast<double>(means_ptr[idx * 3 + d]));
-                    means_min_max[d][0] = std::min(means_min_max[d][0], v);
-                    means_min_max[d][1] = std::max(means_min_max[d][1], v);
-                }
-            }
-
-            std::vector<uint8_t> means_l(width * height * CHANNELS, 0);
-            std::vector<uint8_t> means_u(width * height * CHANNELS, 0);
-
-            for (int64_t i = 0; i < num_rows; ++i) {
-                const int64_t idx = source_index(i);
-                const double x = 65535.0 * (log_transform(static_cast<double>(means_ptr[idx * 3 + 0])) - means_min_max[0][0]) /
-                                 (means_min_max[0][1] - means_min_max[0][0]);
-                const double y = 65535.0 * (log_transform(static_cast<double>(means_ptr[idx * 3 + 1])) - means_min_max[1][0]) /
-                                 (means_min_max[1][1] - means_min_max[1][0]);
-                const double z = 65535.0 * (log_transform(static_cast<double>(means_ptr[idx * 3 + 2])) - means_min_max[2][0]) /
-                                 (means_min_max[2][1] - means_min_max[2][0]);
-
-                const auto x16 = static_cast<uint16_t>(std::clamp(x, 0.0, 65535.0));
-                const auto y16 = static_cast<uint16_t>(std::clamp(y, 0.0, 65535.0));
-                const auto z16 = static_cast<uint16_t>(std::clamp(z, 0.0, 65535.0));
-
-                const auto ti = static_cast<int>(i);
-                means_l[ti * 4 + 0] = x16 & 0xff;
-                means_l[ti * 4 + 1] = y16 & 0xff;
-                means_l[ti * 4 + 2] = z16 & 0xff;
-                means_l[ti * 4 + 3] = 0xff;
-
-                means_u[ti * 4 + 0] = (x16 >> 8) & 0xff;
-                means_u[ti * 4 + 1] = (y16 >> 8) & 0xff;
-                means_u[ti * 4 + 2] = (z16 >> 8) & 0xff;
-                means_u[ti * 4 + 3] = 0xff;
-            }
-
-            if (auto result = write_webp("means_l.webp", means_l.data(), width, height); !result) {
-                return std::unexpected(result.error());
-            }
-            if (auto result = write_webp("means_u.webp", means_u.data(), width, height); !result) {
-                return std::unexpected(result.error());
-            }
-
-            if (!report_progress(0.20f, "Rotations")) {
-                return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
-            }
-
-            auto rotations = splat_data.rotation_raw().cpu();
-            const auto* rot_ptr = rotations.ptr<float>();
-
-            std::vector<uint8_t> quats(width * height * CHANNELS, 0);
-
-            for (int64_t i = 0; i < num_rows; ++i) {
-                const int64_t idx = source_index(i);
-                float q[4] = {rot_ptr[idx * 4 + 0], rot_ptr[idx * 4 + 1], rot_ptr[idx * 4 + 2], rot_ptr[idx * 4 + 3]};
-
-                const float len = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
-                for (float& j : q)
-                    j /= len;
-
-                int max_comp = 0;
-                for (int j = 1; j < 4; ++j) {
-                    if (std::abs(q[j]) > std::abs(q[max_comp]))
-                        max_comp = j;
-                }
-
-                if (q[max_comp] < 0) {
-                    for (float& j : q)
-                        j *= -1;
-                }
-
-                constexpr float SQRT2 = 1.41421356237f;
-                for (float& j : q)
-                    j *= SQRT2;
-
-                static const int IDX_TABLE[4][3] = {{1, 2, 3}, {0, 2, 3}, {0, 1, 3}, {0, 1, 2}};
-                const int* other_idx = IDX_TABLE[max_comp];
-
-                const auto ti = static_cast<int>(i);
-                quats[ti * 4 + 0] = static_cast<uint8_t>(255.0f * (q[other_idx[0]] * 0.5f + 0.5f));
-                quats[ti * 4 + 1] = static_cast<uint8_t>(255.0f * (q[other_idx[1]] * 0.5f + 0.5f));
-                quats[ti * 4 + 2] = static_cast<uint8_t>(255.0f * (q[other_idx[2]] * 0.5f + 0.5f));
-                quats[ti * 4 + 3] = static_cast<uint8_t>(252 + max_comp);
-            }
-
-            if (auto result = write_webp("quats.webp", quats.data(), width, height); !result) {
-                return std::unexpected(result.error());
-            }
-
-            if (!report_progress(0.30f, "Scales k-means")) {
-                return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
-            }
-
-            auto scales = splat_data.scaling_raw().cpu();
-            const auto* scales_ptr = scales.ptr<float>();
-
-            auto scale_result = cluster1d(scales_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations);
-
-            std::vector<uint8_t> scales_data(width * height * CHANNELS, 0);
-            for (int64_t i = 0; i < num_rows; ++i) {
-                const int64_t idx = source_index(i);
-                const auto ti = static_cast<int>(i);
-
-                scales_data[ti * 4 + 0] = scale_result.labels[0 * num_rows + idx];
-                scales_data[ti * 4 + 1] = scale_result.labels[1 * num_rows + idx];
-                scales_data[ti * 4 + 2] = scale_result.labels[2 * num_rows + idx];
-                scales_data[ti * 4 + 3] = 0xff;
-            }
-
-            if (auto result = write_webp("scales.webp", scales_data.data(), width, height); !result) {
-                return std::unexpected(result.error());
-            }
-
-            if (!report_progress(0.45f, "Colors k-means")) {
-                return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
-            }
-
-            auto sh0 = splat_data.sh0_raw().cpu();
-            const auto* sh0_ptr = sh0.ptr<float>();
-
-            auto color_result = cluster1d(sh0_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations);
-
-            auto opacity = splat_data.opacity_raw().cpu();
-            const auto* opacity_ptr = opacity.ptr<float>();
-
-            std::vector<uint8_t> sh0_data(width * height * CHANNELS, 0);
-            for (int64_t i = 0; i < num_rows; ++i) {
-                const int64_t idx = source_index(i);
-                const auto ti = static_cast<int>(i);
-
-                sh0_data[ti * 4 + 0] = color_result.labels[0 * num_rows + idx];
-                sh0_data[ti * 4 + 1] = color_result.labels[1 * num_rows + idx];
-                sh0_data[ti * 4 + 2] = color_result.labels[2 * num_rows + idx];
-                sh0_data[ti * 4 + 3] = static_cast<uint8_t>(
-                    std::max(0.0, std::min(255.0, sigmoid(static_cast<double>(opacity_ptr[idx])) * 255.0)));
-            }
-
-            if (auto result = write_webp("sh0.webp", sh0_data.data(), width, height); !result) {
-                return std::unexpected(result.error());
-            }
-
-            nlohmann::json sh_n_meta;
+            const int num_rows_int = static_cast<int>(num_rows);
 
             if (sh_degree > 0) {
-                if (!report_progress(0.60f, "SH k-means")) {
-                    return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
-                }
-
                 static const int SH_COEFFS_TABLE[] = {0, 3, 8, 15};
-                const int sh_coeffs = SH_COEFFS_TABLE[sh_degree];
-                const int sh_dims = sh_coeffs * 3;
+                sh_coeffs = SH_COEFFS_TABLE[sh_degree];
+                sh_dims = sh_coeffs * 3;
 
-                int palette_size = std::min(64, static_cast<int>(std::pow(2, std::floor(std::log2(num_rows / 1024.0))))) * 1024;
-                palette_size = std::clamp(palette_size, 1024, static_cast<int>(num_rows));
+                palette_size = std::min(
+                                   64, static_cast<int>(std::pow(2, std::floor(std::log2(num_rows / 1024.0))))) *
+                               1024;
+                palette_size = std::clamp(palette_size, 1, num_rows_int);
 
                 // k-means expects 1D float32 swizzled layout. Resident shN may be:
                 //  - Float32 swizzled (training default / legacy)
-                // Float16 pad-dropped q16 — must dequant+reswizzle first
+                //  - Float16 pad-dropped q16 — must dequant+reswizzle first
                 //  - any other dtype/layout is rejected
                 const auto& shN_raw = splat_data.shN_raw();
                 if (!shN_raw.is_valid() || shN_raw.numel() == 0) {
@@ -1769,12 +1620,45 @@ namespace lfs::io {
                                       options.output_path);
                 }
 
-                Tensor shN_float_swizzled;
                 if (shN_raw.ndim() == 1 && shN_raw.dtype() == lfs::core::DataType::Float32) {
                     shN_float_swizzled = shN_raw;
+                } else if (shN_raw.dtype() == lfs::core::DataType::Float16 &&
+                           splat_data.shN_value_quantized() &&
+                           splat_data.shN_value_bounds().is_valid() &&
+                           splat_data.shN_value_bounds().numel() > 0) {
+                    const size_t n = static_cast<size_t>(num_rows);
+                    const uint32_t k = static_cast<uint32_t>(splat_data.max_sh_coeffs_rest());
+                    const size_t float_count = lfs::core::sh_swizzled_float_count(n, k);
+                    shN_float_swizzled = Tensor::empty(
+                        {float_count}, Device::CUDA, lfs::core::DataType::Float32);
+
+                    const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+                    if (shN_float_swizzled.stream() != stream)
+                        shN_float_swizzled.set_stream(stream);
+                    const auto q16 = lfs::core::resolve_q16_bind_ptrs(splat_data);
+                    if (q16.codes == nullptr || q16.bounds == nullptr) {
+                        return make_error(ErrorCode::INVALID_DATASET,
+                                          "Invalid q16 SH codes or bounds for SOG export",
+                                          options.output_path);
+                    }
+                    lfs::core::sh_value_quant::decode_shN_u16_to_float4(
+                        reinterpret_cast<const std::uint16_t*>(q16.codes),
+                        q16.bounds,
+                        shN_float_swizzled.ptr<float>(),
+                        n,
+                        k,
+                        stream);
+                    const cudaError_t sync_status = cudaStreamSynchronize(stream);
+                    if (sync_status != cudaSuccess) {
+                        return make_error(
+                            ErrorCode::ENCODING_FAILED,
+                            std::format("Failed to decode quantized SH tensor for SOG export: {}",
+                                        cudaGetErrorString(sync_status)),
+                            options.output_path);
+                    }
                 } else {
-                    // Dequantize / reformat via canonical [N,K,3], then re-swizzle to float1D.
-                    // shN_canonical() handles q16 (Float16 + bounds) and float swizzled.
+                    // Fallback for IEEE-f16 without q16 bounds and any other layout:
+                    // materialise canonical [N,K,3], then re-swizzle to float1D.
                     Tensor shN_canon = splat_data.shN_canonical();
                     if (!shN_canon.is_valid() || shN_canon.ndim() != 3 ||
                         shN_canon.dtype() != lfs::core::DataType::Float32) {
@@ -1795,11 +1679,450 @@ namespace lfs::io {
                         n, k, k);
                 }
 
-                // Run k-means on float swizzled shN (no full canonical residency for float path).
-                auto [sh_centroids, sh_labels] = lfs::io::kmeans_sh_swizzled(
-                    shN_float_swizzled, static_cast<int>(num_rows), sh_coeffs,
-                    palette_size, options.kmeans_iterations);
+                sh_kmeans_future = std::async(
+                    std::launch::async,
+                    [shN_float_swizzled, num_rows, sh_coeffs, palette_size,
+                     iterations = options.kmeans_iterations, export_started]() mutable {
+                        const auto started = std::chrono::steady_clock::now();
+                        auto [centroids, labels] = lfs::io::kmeans_sh_swizzled(
+                            shN_float_swizzled, static_cast<int>(num_rows), sh_coeffs,
+                            palette_size, iterations);
+                        const auto finished = std::chrono::steady_clock::now();
+                        return ShKmeansResult{
+                            std::move(centroids),
+                            std::move(labels),
+                            std::chrono::duration<double, std::milli>(finished - started).count(),
+                            std::chrono::duration<double, std::milli>(finished - export_started).count()};
+                    });
+                t_kmeans_launch_ms = milliseconds(export_started, std::chrono::steady_clock::now());
+            }
+
+            const auto morton_started = std::chrono::steady_clock::now();
+            auto means_cuda = as_cuda_contiguous(splat_data.means_raw());
+            auto sort_indices_tensor = morton_sort_indices_for_positions(means_cuda);
+            if (!sort_indices_tensor.is_valid()) {
+                join_sh_kmeans_if_started();
+                return make_error(ErrorCode::ENCODING_FAILED,
+                                  "Failed to compute Morton order for SOG export",
+                                  options.output_path);
+            }
+            auto sort_indices_cpu = sort_indices_tensor.cpu();
+            const auto* indices = sort_indices_cpu.ptr<int32_t>();
+
+            auto means_cpu = means_cuda.cpu();
+            const auto* means_ptr = means_cpu.ptr<float>();
+            const auto morton_finished = std::chrono::steady_clock::now();
+            const auto source_index = [&](int64_t sorted_index) -> int64_t {
+                return static_cast<int64_t>(indices[sorted_index]);
+            };
+
+            ScopedAtomicOutputFile atomic_output(options.output_path);
+            SogArchive archive(atomic_output.temp_path());
+
+            // Check archive was created successfully
+            if (!archive.is_valid()) {
+                join_sh_kmeans_if_started();
+                return make_error(ErrorCode::ARCHIVE_CREATION_FAILED, archive.last_error(), options.output_path);
+            }
+
+            struct PendingWebp {
+                std::string filename;
+                const uint8_t* data;
+                int width;
+                int height;
+                int method;
+                float quality;
+            };
+            using EncodedWebp = std::vector<uint8_t>;
+            struct EncodedWebpResult {
+                EncodedWebp bytes;
+                double milliseconds = 0.0;
+                double finished_ms = 0.0;
+            };
+            struct WebpTiming {
+                std::string filename;
+                double milliseconds = 0.0;
+            };
+            std::vector<WebpTiming> webp_timings;
+            webp_timings.reserve(sh_degree > 0 ? 7 : 5);
+            std::vector<std::future<Result<EncodedWebpResult>>> webp_futures;
+            webp_futures.reserve(sh_degree > 0 ? 7 : 5);
+            auto webp_started = std::chrono::steady_clock::time_point::max();
+
+            const auto encode_webp = [&options, milliseconds, export_started](PendingWebp image) -> Result<EncodedWebpResult> {
+                const auto encode_started = std::chrono::steady_clock::now();
+
+                WebPConfig config;
+                if (!WebPConfigInit(&config) || !WebPConfigLosslessPreset(&config, 1)) {
+                    return make_error(ErrorCode::ENCODING_FAILED,
+                                      std::format("Invalid WebP configuration for '{}'", image.filename),
+                                      options.output_path);
+                }
+                config.method = image.method;
+                config.quality = image.quality;
+                config.exact = 1;
+                if (!WebPValidateConfig(&config)) {
+                    return make_error(ErrorCode::ENCODING_FAILED,
+                                      std::format("Invalid WebP configuration for '{}'", image.filename),
+                                      options.output_path);
+                }
+
+                WebPPicture picture;
+                if (!WebPPictureInit(&picture)) {
+                    return make_error(ErrorCode::ENCODING_FAILED,
+                                      std::format("WebP encoding failed for '{}' ({}x{} image)",
+                                                  image.filename, image.width, image.height),
+                                      options.output_path);
+                }
+
+                picture.width = image.width;
+                picture.height = image.height;
+                picture.use_argb = 1;
+                if (!WebPPictureImportRGBA(&picture, image.data, image.width * 4)) {
+                    WebPPictureFree(&picture);
+                    return make_error(ErrorCode::ENCODING_FAILED,
+                                      std::format("WebP encoding failed for '{}' ({}x{} image)",
+                                                  image.filename, image.width, image.height),
+                                      options.output_path);
+                }
+
+                WebPMemoryWriter writer;
+                WebPMemoryWriterInit(&writer);
+                picture.writer = WebPMemoryWrite;
+                picture.custom_ptr = &writer;
+                if (!WebPEncode(&config, &picture)) {
+                    WebPMemoryWriterClear(&writer);
+                    WebPPictureFree(&picture);
+                    return make_error(ErrorCode::ENCODING_FAILED,
+                                      std::format("WebP encoding failed for '{}' ({}x{} image)",
+                                                  image.filename, image.width, image.height),
+                                      options.output_path);
+                }
+
+                const auto encode_finished = std::chrono::steady_clock::now();
+                EncodedWebpResult encoded{
+                    EncodedWebp(writer.mem, writer.mem + writer.size),
+                    milliseconds(encode_started, encode_finished),
+                    milliseconds(export_started, encode_finished)};
+                WebPMemoryWriterClear(&writer);
+                WebPPictureFree(&picture);
+                return encoded;
+            };
+            std::vector<PendingWebp> pending_webps;
+            pending_webps.reserve(sh_degree > 0 ? 7 : 5);
+            const auto queue_webp = [&](const char* filename, const std::vector<uint8_t>& data,
+                                        const int image_width, const int image_height,
+                                        const int method, const float quality) {
+                pending_webps.push_back({filename, data.data(), image_width, image_height, method, quality});
+                if (webp_started == std::chrono::steady_clock::time_point::max()) {
+                    webp_started = std::chrono::steady_clock::now();
+                }
+                webp_futures.emplace_back(std::async(std::launch::async, encode_webp, pending_webps.back()));
+            };
+            const auto wait_for_webp_encodes = [&]() {
+                for (auto& future : webp_futures) {
+                    if (future.valid()) {
+                        future.wait();
+                    }
+                }
+            };
+
+            constexpr size_t PACK_CHUNK_SIZE = 65'536;
+            const auto chunk_count = [num_rows]() {
+                return (static_cast<size_t>(num_rows) + PACK_CHUNK_SIZE - 1) / PACK_CHUNK_SIZE;
+            };
+
+            auto rotations = splat_data.rotation_raw().cpu();
+            const auto* rot_ptr = rotations.ptr<float>();
+            auto scales = splat_data.scaling_raw().cpu();
+            const auto* scales_ptr = scales.ptr<float>();
+            auto sh0 = splat_data.sh0_raw().cpu();
+            const auto* sh0_ptr = sh0.ptr<float>();
+            auto opacity = splat_data.opacity_raw().cpu();
+            const auto* opacity_ptr = opacity.ptr<float>();
+
+            if (!report_progress(0.10f, "Positions")) {
+                join_sh_kmeans_if_started();
+                wait_for_webp_encodes();
+                return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
+            }
+
+            const auto join_sh_kmeans = [&]() -> ShKmeansResult& {
+                if (!sh_kmeans_result) {
+                    sh_kmeans_result.emplace(sh_kmeans_future.get());
+                }
+                return *sh_kmeans_result;
+            };
+            const auto join_sh_kmeans_and_wait_for_webp_encodes = [&]() {
+                if (sh_degree > 0) {
+                    try {
+                        (void)join_sh_kmeans();
+                    } catch (...) {
+                        wait_for_webp_encodes();
+                        throw;
+                    }
+                }
+                wait_for_webp_encodes();
+            };
+
+            constexpr size_t OVERLAPPED_WEBP_COUNT = 5;
+            size_t archived_webps = 0;
+            const auto archive_ready_webps = [&]() -> Result<void> {
+                while (archived_webps < std::min(OVERLAPPED_WEBP_COUNT, webp_futures.size())) {
+                    auto& future = webp_futures[archived_webps];
+                    if (future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
+                        break;
+                    }
+
+                    Result<EncodedWebpResult> encoded;
+                    try {
+                        encoded = future.get();
+                    } catch (...) {
+                        join_sh_kmeans_and_wait_for_webp_encodes();
+                        throw;
+                    }
+                    if (!encoded) {
+                        join_sh_kmeans_and_wait_for_webp_encodes();
+                        return std::unexpected(encoded.error());
+                    }
+                    if (debug_logging_enabled) {
+                        webp_timings.push_back({pending_webps[archived_webps].filename, encoded->milliseconds});
+                    }
+                    if (pending_webps[archived_webps].filename == "shN_labels.webp") {
+                        t_labels_encoded_ms = encoded->finished_ms;
+                    }
+                    auto result = archive.add_file(
+                        pending_webps[archived_webps].filename,
+                        encoded->bytes.data(), encoded->bytes.size());
+                    if (!result) {
+                        join_sh_kmeans_and_wait_for_webp_encodes();
+                        return std::unexpected(result.error());
+                    }
+                    ++archived_webps;
+                    if (archived_webps == OVERLAPPED_WEBP_COUNT) {
+                        t_webp5_archived_ms = milliseconds(export_started, std::chrono::steady_clock::now());
+                    }
+                }
+                return {};
+            };
+
+            double pack_ms = 0.0;
+            double cluster_scales_ms = 0.0;
+            double cluster_sh0_ms = 0.0;
+            double kmeans_sh_ms = 0.0;
+            double kmeans_sh_wait_ms = 0.0;
+
+            std::array<std::array<double, 2>, 3> means_min_max = {{{std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()},
+                                                                   {std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()},
+                                                                   {std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()}}};
+
+            using MeansBounds = std::array<std::array<double, 2>, 3>;
+            const auto initial_bounds = [] {
+                return MeansBounds{{{std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()},
+                                    {std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()},
+                                    {std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()}}};
+            };
+            const auto means_bounds_started = std::chrono::steady_clock::now();
+            std::vector<MeansBounds> chunk_bounds(chunk_count());
+            tbb::parallel_for(size_t{0}, chunk_bounds.size(), [&](const size_t chunk) {
+                auto& bounds = chunk_bounds[chunk];
+                bounds = initial_bounds();
+                const size_t begin = chunk * PACK_CHUNK_SIZE;
+                const size_t end = std::min(begin + PACK_CHUNK_SIZE, static_cast<size_t>(num_rows));
+                for (size_t i = begin; i < end; ++i) {
+                    const int64_t idx = source_index(static_cast<int64_t>(i));
+                    for (int d = 0; d < 3; ++d) {
+                        const double v = log_transform(static_cast<double>(means_ptr[idx * 3 + d]));
+                        bounds[d][0] = std::min(bounds[d][0], v);
+                        bounds[d][1] = std::max(bounds[d][1], v);
+                    }
+                }
+            });
+            for (const auto& bounds : chunk_bounds) {
+                for (int d = 0; d < 3; ++d) {
+                    means_min_max[d][0] = std::min(means_min_max[d][0], bounds[d][0]);
+                    means_min_max[d][1] = std::max(means_min_max[d][1], bounds[d][1]);
+                }
+            }
+            pack_ms += milliseconds(means_bounds_started, std::chrono::steady_clock::now());
+
+            std::vector<uint8_t> means_l(width * height * CHANNELS, 0);
+            std::vector<uint8_t> means_u(width * height * CHANNELS, 0);
+
+            const auto means_pack_started = std::chrono::steady_clock::now();
+            tbb::parallel_for(size_t{0}, chunk_count(), [&](const size_t chunk) {
+                const size_t begin = chunk * PACK_CHUNK_SIZE;
+                const size_t end = std::min(begin + PACK_CHUNK_SIZE, static_cast<size_t>(num_rows));
+                for (size_t i = begin; i < end; ++i) {
+                    const int64_t idx = source_index(static_cast<int64_t>(i));
+                    const double x = 65535.0 * (log_transform(static_cast<double>(means_ptr[idx * 3 + 0])) - means_min_max[0][0]) /
+                                     (means_min_max[0][1] - means_min_max[0][0]);
+                    const double y = 65535.0 * (log_transform(static_cast<double>(means_ptr[idx * 3 + 1])) - means_min_max[1][0]) /
+                                     (means_min_max[1][1] - means_min_max[1][0]);
+                    const double z = 65535.0 * (log_transform(static_cast<double>(means_ptr[idx * 3 + 2])) - means_min_max[2][0]) /
+                                     (means_min_max[2][1] - means_min_max[2][0]);
+
+                    const auto x16 = static_cast<uint16_t>(std::clamp(x, 0.0, 65535.0));
+                    const auto y16 = static_cast<uint16_t>(std::clamp(y, 0.0, 65535.0));
+                    const auto z16 = static_cast<uint16_t>(std::clamp(z, 0.0, 65535.0));
+
+                    means_l[i * 4 + 0] = x16 & 0xff;
+                    means_l[i * 4 + 1] = y16 & 0xff;
+                    means_l[i * 4 + 2] = z16 & 0xff;
+                    means_l[i * 4 + 3] = 0xff;
+
+                    means_u[i * 4 + 0] = (x16 >> 8) & 0xff;
+                    means_u[i * 4 + 1] = (y16 >> 8) & 0xff;
+                    means_u[i * 4 + 2] = (z16 >> 8) & 0xff;
+                    means_u[i * 4 + 3] = 0xff;
+                }
+            });
+            pack_ms += milliseconds(means_pack_started, std::chrono::steady_clock::now());
+            constexpr int OVERLAPPED_WEBP_METHOD = 4;
+            constexpr float OVERLAPPED_WEBP_QUALITY = 100.0f;
+            constexpr int CRITICAL_WEBP_METHOD = 1;
+            constexpr float CRITICAL_CENTROIDS_WEBP_QUALITY = 100.0f;
+            constexpr float CRITICAL_LABELS_WEBP_QUALITY = 90.0f;
+
+            queue_webp("means_l.webp", means_l, width, height,
+                       OVERLAPPED_WEBP_METHOD, OVERLAPPED_WEBP_QUALITY);
+            queue_webp("means_u.webp", means_u, width, height,
+                       OVERLAPPED_WEBP_METHOD, OVERLAPPED_WEBP_QUALITY);
+
+            if (!report_progress(0.20f, "Rotations")) {
+                join_sh_kmeans_and_wait_for_webp_encodes();
+                return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
+            }
+
+            std::vector<uint8_t> quats(width * height * CHANNELS, 0);
+
+            const auto quats_pack_started = std::chrono::steady_clock::now();
+            tbb::parallel_for(size_t{0}, chunk_count(), [&](const size_t chunk) {
+                const size_t begin = chunk * PACK_CHUNK_SIZE;
+                const size_t end = std::min(begin + PACK_CHUNK_SIZE, static_cast<size_t>(num_rows));
+                for (size_t i = begin; i < end; ++i) {
+                    const int64_t idx = source_index(static_cast<int64_t>(i));
+                    float q[4] = {rot_ptr[idx * 4 + 0], rot_ptr[idx * 4 + 1], rot_ptr[idx * 4 + 2], rot_ptr[idx * 4 + 3]};
+
+                    const float len = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+                    for (float& j : q)
+                        j /= len;
+
+                    int max_comp = 0;
+                    for (int j = 1; j < 4; ++j) {
+                        if (std::abs(q[j]) > std::abs(q[max_comp]))
+                            max_comp = j;
+                    }
+
+                    if (q[max_comp] < 0) {
+                        for (float& j : q)
+                            j *= -1;
+                    }
+
+                    constexpr float SQRT2 = 1.41421356237f;
+                    for (float& j : q)
+                        j *= SQRT2;
+
+                    static const int IDX_TABLE[4][3] = {{1, 2, 3}, {0, 2, 3}, {0, 1, 3}, {0, 1, 2}};
+                    const int* other_idx = IDX_TABLE[max_comp];
+
+                    quats[i * 4 + 0] = static_cast<uint8_t>(255.0f * (q[other_idx[0]] * 0.5f + 0.5f));
+                    quats[i * 4 + 1] = static_cast<uint8_t>(255.0f * (q[other_idx[1]] * 0.5f + 0.5f));
+                    quats[i * 4 + 2] = static_cast<uint8_t>(255.0f * (q[other_idx[2]] * 0.5f + 0.5f));
+                    quats[i * 4 + 3] = static_cast<uint8_t>(252 + max_comp);
+                }
+            });
+            pack_ms += milliseconds(quats_pack_started, std::chrono::steady_clock::now());
+            queue_webp("quats.webp", quats, width, height,
+                       OVERLAPPED_WEBP_METHOD, OVERLAPPED_WEBP_QUALITY);
+
+            if (!report_progress(0.30f, "Scales k-means")) {
+                join_sh_kmeans_and_wait_for_webp_encodes();
+                return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
+            }
+
+            const auto cluster_scales_started = std::chrono::steady_clock::now();
+            auto scale_result = cluster1d(scales_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations);
+            cluster_scales_ms = milliseconds(cluster_scales_started, std::chrono::steady_clock::now());
+            std::vector<uint8_t> scales_data(width * height * CHANNELS, 0);
+            const auto scales_pack_started = std::chrono::steady_clock::now();
+            tbb::parallel_for(size_t{0}, chunk_count(), [&](const size_t chunk) {
+                const size_t begin = chunk * PACK_CHUNK_SIZE;
+                const size_t end = std::min(begin + PACK_CHUNK_SIZE, static_cast<size_t>(num_rows));
+                for (size_t i = begin; i < end; ++i) {
+                    const int64_t idx = source_index(static_cast<int64_t>(i));
+
+                    scales_data[i * 4 + 0] = scale_result.labels[0 * num_rows + idx];
+                    scales_data[i * 4 + 1] = scale_result.labels[1 * num_rows + idx];
+                    scales_data[i * 4 + 2] = scale_result.labels[2 * num_rows + idx];
+                    scales_data[i * 4 + 3] = 0xff;
+                }
+            });
+            pack_ms += milliseconds(scales_pack_started, std::chrono::steady_clock::now());
+            queue_webp("scales.webp", scales_data, width, height,
+                       OVERLAPPED_WEBP_METHOD, OVERLAPPED_WEBP_QUALITY);
+
+            if (!report_progress(0.45f, "Colors k-means")) {
+                join_sh_kmeans_and_wait_for_webp_encodes();
+                return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
+            }
+
+            const auto cluster_sh0_started = std::chrono::steady_clock::now();
+            auto color_result = cluster1d(sh0_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations);
+            cluster_sh0_ms = milliseconds(cluster_sh0_started, std::chrono::steady_clock::now());
+
+            std::vector<uint8_t> sh0_data(width * height * CHANNELS, 0);
+            const auto sh0_pack_started = std::chrono::steady_clock::now();
+            tbb::parallel_for(size_t{0}, chunk_count(), [&](const size_t chunk) {
+                const size_t begin = chunk * PACK_CHUNK_SIZE;
+                const size_t end = std::min(begin + PACK_CHUNK_SIZE, static_cast<size_t>(num_rows));
+                for (size_t i = begin; i < end; ++i) {
+                    const int64_t idx = source_index(static_cast<int64_t>(i));
+
+                    sh0_data[i * 4 + 0] = color_result.labels[0 * num_rows + idx];
+                    sh0_data[i * 4 + 1] = color_result.labels[1 * num_rows + idx];
+                    sh0_data[i * 4 + 2] = color_result.labels[2 * num_rows + idx];
+                    sh0_data[i * 4 + 3] = static_cast<uint8_t>(
+                        std::max(0.0, std::min(255.0, sigmoid(static_cast<double>(opacity_ptr[idx])) * 255.0)));
+                }
+            });
+            pack_ms += milliseconds(sh0_pack_started, std::chrono::steady_clock::now());
+            queue_webp("sh0.webp", sh0_data, width, height,
+                       OVERLAPPED_WEBP_METHOD, OVERLAPPED_WEBP_QUALITY);
+
+            if (auto result = archive_ready_webps(); !result) {
+                return std::unexpected(result.error());
+            }
+
+            nlohmann::json sh_n_meta;
+            std::vector<uint8_t> sh_centroids_buf;
+            std::vector<uint8_t> sh_labels_buf;
+
+            if (sh_degree > 0) {
+                if (!report_progress(0.60f, "SH k-means")) {
+                    join_sh_kmeans_and_wait_for_webp_encodes();
+                    return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
+                }
+
+                const auto kmeans_sh_join_started = std::chrono::steady_clock::now();
+                while (sh_kmeans_future.wait_for(std::chrono::milliseconds(5)) !=
+                       std::future_status::ready) {
+                    if (auto result = archive_ready_webps(); !result) {
+                        return std::unexpected(result.error());
+                    }
+                }
+                if (auto result = archive_ready_webps(); !result) {
+                    return std::unexpected(result.error());
+                }
+                auto& sh_kmeans_data = join_sh_kmeans();
+                kmeans_sh_wait_ms = milliseconds(
+                    kmeans_sh_join_started, std::chrono::steady_clock::now());
+                t_join_ms = milliseconds(export_started, std::chrono::steady_clock::now());
+                t_kmeans_done_ms = sh_kmeans_data.done_ms;
+                auto sh_centroids = std::move(sh_kmeans_data.centroids);
+                auto sh_labels = std::move(sh_kmeans_data.labels);
                 if (!sh_centroids.is_valid() || !sh_labels.is_valid()) {
+                    wait_for_webp_encodes();
                     return make_error(ErrorCode::ENCODING_FAILED,
                                       "Failed to cluster swizzled SH tensor for SOG export",
                                       options.output_path);
@@ -1821,12 +2144,15 @@ namespace lfs::io {
                     }
                 }
 
+                const auto codebook_started = std::chrono::steady_clock::now();
                 auto codebook_result = cluster1d(sh_centroids_grouped.data(), actual_palette_size, sh_dims, options.kmeans_iterations);
+                kmeans_sh_ms = sh_kmeans_data.milliseconds +
+                               milliseconds(codebook_started, std::chrono::steady_clock::now());
 
                 const int centroids_width = 64 * sh_coeffs;
                 const int centroids_height = (actual_palette_size + 63) / 64;
 
-                std::vector<uint8_t> centroids_buf(centroids_width * centroids_height * CHANNELS, 0);
+                sh_centroids_buf.assign(centroids_width * centroids_height * CHANNELS, 0);
 
                 for (int i = 0; i < actual_palette_size; ++i) {
                     for (int j = 0; j < sh_coeffs; ++j) {
@@ -1834,34 +2160,37 @@ namespace lfs::io {
                         for (int c = 0; c < 3; ++c) {
                             const int col_idx = sh_coeffs * c + j;
                             const int label_idx = col_idx * actual_palette_size + i;
-                            centroids_buf[pixel_idx * 4 + c] = codebook_result.labels[label_idx];
+                            sh_centroids_buf[pixel_idx * 4 + c] = codebook_result.labels[label_idx];
                         }
-                        centroids_buf[pixel_idx * 4 + 3] = 0xff;
+                        sh_centroids_buf[pixel_idx * 4 + 3] = 0xff;
                     }
                 }
 
-                if (auto result = write_webp("shN_centroids.webp", centroids_buf.data(), centroids_width, centroids_height); !result) {
-                    return std::unexpected(result.error());
-                }
+                queue_webp("shN_centroids.webp", sh_centroids_buf, centroids_width, centroids_height,
+                           CRITICAL_WEBP_METHOD, CRITICAL_CENTROIDS_WEBP_QUALITY);
 
                 auto sh_labels_cpu = sh_labels.cpu();
                 const auto* sh_labels_ptr = static_cast<const int32_t*>(sh_labels_cpu.data_ptr());
 
-                std::vector<uint8_t> labels_buf(width * height * CHANNELS, 0);
-                for (int64_t i = 0; i < num_rows; ++i) {
-                    const int64_t idx = source_index(i);
-                    const int32_t label = sh_labels_ptr[idx];
-                    const auto ti = static_cast<int>(i);
+                sh_labels_buf.assign(width * height * CHANNELS, 0);
+                const auto sh_labels_pack_started = std::chrono::steady_clock::now();
+                tbb::parallel_for(size_t{0}, chunk_count(), [&](const size_t chunk) {
+                    const size_t begin = chunk * PACK_CHUNK_SIZE;
+                    const size_t end = std::min(begin + PACK_CHUNK_SIZE, static_cast<size_t>(num_rows));
+                    for (size_t i = begin; i < end; ++i) {
+                        const int64_t idx = source_index(static_cast<int64_t>(i));
+                        const int32_t label = sh_labels_ptr[idx];
 
-                    labels_buf[ti * 4 + 0] = label & 0xff;
-                    labels_buf[ti * 4 + 1] = (label >> 8) & 0xff;
-                    labels_buf[ti * 4 + 2] = 0;
-                    labels_buf[ti * 4 + 3] = 0xff;
-                }
+                        sh_labels_buf[i * 4 + 0] = label & 0xff;
+                        sh_labels_buf[i * 4 + 1] = (label >> 8) & 0xff;
+                        sh_labels_buf[i * 4 + 2] = 0;
+                        sh_labels_buf[i * 4 + 3] = 0xff;
+                    }
+                });
+                pack_ms += milliseconds(sh_labels_pack_started, std::chrono::steady_clock::now());
 
-                if (auto result = write_webp("shN_labels.webp", labels_buf.data(), width, height); !result) {
-                    return std::unexpected(result.error());
-                }
+                queue_webp("shN_labels.webp", sh_labels_buf, width, height,
+                           CRITICAL_WEBP_METHOD, CRITICAL_LABELS_WEBP_QUALITY);
 
                 sh_n_meta["count"] = actual_palette_size;
                 sh_n_meta["bands"] = sh_degree;
@@ -1869,6 +2198,41 @@ namespace lfs::io {
                 sh_n_meta["files"] = {"shN_centroids.webp", "shN_labels.webp"};
             }
 
+            // The non-SH encodes started as their buffers were queued above, and the SH
+            // encodes started after their buffers were completed. Consume and archive all
+            // remaining results in archive order below, releasing each encoded buffer immediately.
+            const auto archive_started = std::chrono::steady_clock::now();
+            for (size_t i = archived_webps; i < webp_futures.size(); ++i) {
+                auto encoded = [&]() -> Result<EncodedWebpResult> {
+                    try {
+                        return webp_futures[i].get();
+                    } catch (...) {
+                        wait_for_webp_encodes();
+                        throw;
+                    }
+                }();
+                if (!encoded) {
+                    wait_for_webp_encodes();
+                    return std::unexpected(encoded.error());
+                }
+                if (debug_logging_enabled) {
+                    webp_timings.push_back({pending_webps[i].filename, encoded->milliseconds});
+                }
+                if (pending_webps[i].filename == "shN_labels.webp") {
+                    t_labels_encoded_ms = encoded->finished_ms;
+                }
+                auto result = archive.add_file(
+                    pending_webps[i].filename, encoded->bytes.data(), encoded->bytes.size());
+                if (!result) {
+                    wait_for_webp_encodes();
+                    return std::unexpected(result.error());
+                }
+                archived_webps = i + 1;
+                if (archived_webps == OVERLAPPED_WEBP_COUNT) {
+                    t_webp5_archived_ms = milliseconds(export_started, std::chrono::steady_clock::now());
+                }
+            }
+            const auto webp_finished = std::chrono::steady_clock::now();
             if (!report_progress(0.90f, "Writing meta")) {
                 return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
             }
@@ -1906,6 +2270,8 @@ namespace lfs::io {
             if (auto result = archive.close(); !result) {
                 return std::unexpected(result.error());
             }
+            const auto archive_finished = std::chrono::steady_clock::now();
+            t_archive_done_ms = milliseconds(export_started, archive_finished);
 
             if (!report_progress(1.0f, "Complete")) {
                 return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
@@ -1915,6 +2281,39 @@ namespace lfs::io {
                 return std::unexpected(result.error());
             }
 
+            const auto export_finished = std::chrono::steady_clock::now();
+            if (debug_logging_enabled) {
+                std::string webp_timing_fields;
+                for (const auto& timing : webp_timings) {
+                    if (!webp_timing_fields.empty()) {
+                        webp_timing_fields += ' ';
+                    }
+                    webp_timing_fields += std::format("{}={:.3f}ms", timing.filename, timing.milliseconds);
+                }
+                LOG_DEBUG(
+                    "SOG export stages: morton_ms={:.3f} pack_ms={:.3f} cluster_scales_ms={:.3f} "
+                    "cluster_sh0_ms={:.3f} kmeans_sh_ms={:.3f} kmeans_sh_wait_ms={:.3f} "
+                    "t_kmeans_launch_ms={:.3f} t_join_ms={:.3f} t_kmeans_done_ms={:.3f} "
+                    "t_labels_encoded_ms={:.3f} t_webp5_archived_ms={:.3f} "
+                    "t_archive_done_ms={:.3f} webp_total_ms={:.3f} "
+                    "{} archive_ms={:.3f} total_ms={:.3f}",
+                    milliseconds(morton_started, morton_finished),
+                    pack_ms,
+                    cluster_scales_ms,
+                    cluster_sh0_ms,
+                    kmeans_sh_ms,
+                    kmeans_sh_wait_ms,
+                    t_kmeans_launch_ms,
+                    t_join_ms,
+                    t_kmeans_done_ms,
+                    t_labels_encoded_ms,
+                    t_webp5_archived_ms,
+                    t_archive_done_ms,
+                    milliseconds(webp_started, webp_finished),
+                    webp_timing_fields,
+                    milliseconds(archive_started, archive_finished),
+                    milliseconds(export_started, export_finished));
+            }
             LOG_INFO("SOG export complete: {} splats", num_rows);
             return {};
         } catch (const lfs::Exception& e) {

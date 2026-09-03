@@ -281,11 +281,26 @@ def is_training_active() -> bool:
 def new_project(discard_changes: bool = False, stop_training: bool = False) -> None:
     """Clear all project state and start a new project"""
 
+def project_create(path: str, discard_changes: bool = False, stop_training: bool = False) -> None:
+    """Create and bind a new .licht project at path"""
+
+def project_embed_dataset() -> None:
+    """Embed the active project's external dataset verbatim"""
+
 def project_save(wait: bool = False, regenerate_preview: bool = True) -> bool:
     """Save the active .licht project, prompting for a path when needed"""
 
 def project_save_as(path: str = '', wait: bool = False) -> bool:
     """Save the active project to a new .licht path"""
+
+def project_get_license() -> dict | None:
+    """Return the license metadata for the active project, or None"""
+
+def project_set_license(identifier: str, notice: str = '') -> None:
+    """Set the license metadata for the active project"""
+
+def project_clear_license() -> None:
+    """Clear the license metadata for the active project"""
 
 def project_poll_write() -> dict:
     """Return the active .licht project write state"""
@@ -301,6 +316,9 @@ def project_is_dirty() -> bool:
 
 def project_has_path() -> bool:
     """Return whether the active project has a bound .licht path"""
+
+def project_can_embed_dataset() -> bool:
+    """Return whether the active project can embed its external dataset"""
 
 def project_recent_files() -> list[str]:
     """Return the most-recently-used .licht project paths"""
@@ -327,6 +345,11 @@ def project_auto_save_on_close_enabled() -> bool:
 
 def project_set_auto_save_on_close(enabled: bool) -> None:
     """Enable or disable automatic project save on close"""
+
+def project_embed_dataset_by_default_enabled() -> bool: ...
+
+def project_set_embed_dataset_by_default(enabled: bool) -> None:
+    """Set whether new projects copy datasets into the project by default"""
 
 def project_autosave_interval_seconds() -> int:
     """Return the timed project autosave interval in seconds"""

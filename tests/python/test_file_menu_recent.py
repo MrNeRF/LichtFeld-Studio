@@ -31,6 +31,7 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     opened_stop_training = []
     opened_keep_asset_manager = []
     new_projects = []
+    embed_calls = []
     removed = []
     confirm_dialogs = []
     message_dialogs = []
@@ -88,6 +89,7 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     lf_stub.confirm_dialogs = confirm_dialogs
     lf_stub.message_dialogs = message_dialogs
     lf_stub.warning_messages = warnings
+    lf_stub.embed_calls = embed_calls
     loaded = []
 
     def load_file(*args, **kwargs):
@@ -97,6 +99,8 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     lf_stub.load_file_calls = loaded
     lf_stub.project_save = lambda *args, **kwargs: True
     lf_stub.project_save_as = lambda *args, **kwargs: True
+    lf_stub.project_can_embed_dataset = lambda: False
+    lf_stub.project_embed_dataset = lambda: embed_calls.append(True)
     lf_stub.load_config_file = lambda *_args, **_kwargs: None
     lf_stub.is_dataset_path = lambda _path: True
     lf_stub.read_checkpoint_header = lambda _path: object()
@@ -113,7 +117,7 @@ def _load_file_menu(monkeypatch, recent_paths=()):
     monkeypatch.setitem(sys.modules, "lfs_plugins.types", types_stub)
 
     imports_stub = ModuleType("lfs_plugins.import_panels")
-    imports_stub.open_dataset_import_panel = lambda _path: True
+    imports_stub.open_new_project_panel = lambda _path: True
     imports_stub.open_resume_checkpoint_panel = lambda _path: True
     monkeypatch.setitem(sys.modules, "lfs_plugins.import_panels", imports_stub)
 
@@ -332,6 +336,15 @@ def test_compact_project_enabled_only_with_durable_path(monkeypatch):
     assert guarded["enabled"] is False
 
 
+def test_embed_dataset_operator_requires_external_incomplete_dataset(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    assert file_menu.EmbedDatasetOperator.poll(None) is False
+    file_menu.lf.project_can_embed_dataset = lambda: True
+    assert file_menu.EmbedDatasetOperator.poll(None) is True
+    assert file_menu.EmbedDatasetOperator().execute(None) == {"FINISHED"}
+    assert file_menu.lf.embed_calls == [True]
+
+
 def test_imports_are_grouped_before_exports(monkeypatch):
     file_menu = _load_file_menu(monkeypatch)
     items = file_menu.FileMenu().menu_items()
@@ -443,24 +456,15 @@ def test_immediate_import_error_reports_reason(monkeypatch):
     assert "load failed" in file_menu.lf.warning_messages[0]
 
 
-def test_new_project_while_training_prompts_instead_of_switching(monkeypatch):
+def test_new_project_while_training_opens_dialog_without_prompt(monkeypatch):
     file_menu = _load_file_menu(monkeypatch)
     file_menu.lf.is_training_active = lambda: True
 
     file_menu.NewProjectOperator().execute(None)
 
     assert file_menu.lf.new_project_calls == []
-    assert len(file_menu.lf.confirm_dialogs) == 1
-    title, message, buttons, callback = file_menu.lf.confirm_dialogs[0]
-    assert title == "tr:project_switch.stop_training_title"
-    assert message == "tr:project_switch.stop_training_message"
-    assert buttons == ["tr:common.yes", "tr:common.no"]
-
-    callback("tr:common.no")
     assert file_menu.lf.new_project_calls == []
-
-    callback("tr:common.yes")
-    assert file_menu.lf.new_project_calls == [(True, True)]
+    assert file_menu.lf.confirm_dialogs == []
 
 
 def test_open_recent_while_training_prompts_instead_of_opening(
@@ -526,7 +530,7 @@ def test_drag_open_confirmation_preserves_asset_manager(monkeypatch):
     assert file_menu.lf.project_open_keep_asset_manager == [True]
 
 
-def test_new_project_dirty_offers_save_continue_cancel(monkeypatch):
+def test_new_project_dirty_opens_dialog_without_prompt(monkeypatch):
     file_menu = _load_file_menu(monkeypatch)
     file_menu.lf.project_is_dirty = lambda: True
     file_menu.lf.project_has_path = lambda: True
@@ -534,21 +538,8 @@ def test_new_project_dirty_offers_save_continue_cancel(monkeypatch):
     file_menu.NewProjectOperator().execute(None)
 
     assert file_menu.lf.new_project_calls == []
-    assert len(file_menu.lf.confirm_dialogs) == 1
-    title, message, buttons, callback = file_menu.lf.confirm_dialogs[0]
-    assert title == "tr:menu.file.new_project"
-    assert message == "tr:exit_popup.unsaved_warning"
-    assert buttons == [
-        "tr:common.save",
-        "tr:unsaved_work.continue_without_saving",
-        "tr:common.cancel",
-    ]
-
-    callback("tr:common.cancel")
     assert file_menu.lf.new_project_calls == []
-
-    callback("tr:unsaved_work.continue_without_saving")
-    assert file_menu.lf.new_project_calls == [(True, False)]
+    assert file_menu.lf.confirm_dialogs == []
 
 
 def test_load_file_confirmation_title_for_splat_and_dataset(monkeypatch):

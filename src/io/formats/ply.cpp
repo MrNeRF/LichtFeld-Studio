@@ -7,12 +7,14 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/pinned_memory_allocator.hpp"
 #include "core/provenance.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/sh_value_quant_kernels.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 #include "io/error.hpp"
 #include "io/ply_export_internal.hpp"
 #include "tinyply.hpp"
@@ -23,14 +25,17 @@
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <format>
 #include <fstream>
 #include <future>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <numeric>
 #include <optional>
@@ -98,7 +103,8 @@ namespace lfs::io {
         // for GPU driver / other workers, but allow more than the old 6-thread limit.
         constexpr int MAX_DECODE_THREADS = 16;
         constexpr size_t PLY_WRITE_IO_BUFFER_BYTES = 8 * 1024 * 1024;
-        constexpr size_t PLY_WRITE_PACK_CHUNK_VERTICES = 65536;
+        constexpr size_t PLY_WRITE_CHUNK_BYTES = size_t{64} * 1024 * 1024;
+        constexpr size_t FINITE_SCAN_BLOCK_SIZE = 1 << 20;
 
         // SIMD constants
         constexpr int SIMD_WIDTH = 8;
@@ -117,6 +123,108 @@ namespace lfs::io {
     } // namespace ply_constants
 
     namespace {
+
+        Tensor pageable_host_copy(const Tensor& input) {
+            LFS_ASSERT_MSG(input.is_valid(), "PLY pageable host copy requires a valid tensor");
+            if (input.device() == Device::CPU && input.is_contiguous() &&
+                !lfs::core::PinnedMemoryAllocator::instance().is_cuda_host_allocation(
+                    input.data_ptr())) {
+                return input;
+            }
+
+            const Tensor source = input.device() == Device::CUDA && !input.is_contiguous()
+                                      ? input.contiguous()
+                                      : input;
+            Tensor result = Tensor::empty_pageable_host(source.shape(), source.dtype());
+            if (source.numel() == 0) {
+                return result;
+            }
+
+            {
+                LOG_TIMER_DEBUG("PLY export: prefault");
+                lfs::core::prefault_pageable_host_memory(result.data_ptr(), result.bytes());
+            }
+
+            if (source.device() == Device::CPU) {
+                if (source.is_contiguous()) {
+                    std::memcpy(result.data_ptr(), source.data_ptr(), source.bytes());
+                } else {
+                    const size_t element_bytes = lfs::core::dtype_size(source.dtype());
+                    const auto shape = source.shape().dims();
+                    const auto strides = source.strides();
+                    const size_t elements = source.numel();
+                    const auto* src = static_cast<const std::byte*>(source.data_ptr());
+                    auto* dst = static_cast<std::byte*>(result.data_ptr());
+                    tbb::parallel_for(
+                        tbb::blocked_range<size_t>(0, elements, 1 << 14),
+                        [&](const tbb::blocked_range<size_t>& range) {
+                            std::vector<size_t> coordinates(shape.size(), 0);
+                            for (size_t linear = range.begin(); linear != range.end(); ++linear) {
+                                size_t remainder = linear;
+                                size_t source_offset = 0;
+                                for (size_t dim = shape.size(); dim-- > 0;) {
+                                    coordinates[dim] = remainder % shape[dim];
+                                    remainder /= shape[dim];
+                                    source_offset += coordinates[dim] * strides[dim];
+                                }
+                                std::memcpy(dst + linear * element_bytes,
+                                            src + source_offset * element_bytes,
+                                            element_bytes);
+                            }
+                        });
+                }
+                return result;
+            }
+
+            const cudaStream_t transfer_stream = lfs::core::prepare_inputs_for_stream({&source});
+            LFS_CUDA_CHECK_MSG_STREAM(
+                cudaMemcpyAsync(result.data_ptr(), source.data_ptr(), source.bytes(),
+                                cudaMemcpyDeviceToHost, transfer_stream),
+                transfer_stream,
+                "while copying PLY tensor to pageable host memory");
+            LFS_CUDA_CHECK_MSG_STREAM(
+                cudaStreamSynchronize(transfer_stream),
+                transfer_stream,
+                "while completing PLY tensor copy to pageable host memory");
+            return result;
+        }
+
+        Tensor flatten_sh_to_pageable_host(const Tensor& input) {
+            LFS_ASSERT_MSG(input.is_valid() && input.ndim() == 3,
+                           "PLY SH flatten requires a valid rank-3 tensor");
+            const Tensor source = pageable_host_copy(input);
+            const size_t rows = static_cast<size_t>(source.size(0));
+            const size_t bands = static_cast<size_t>(source.size(1));
+            const size_t channels = static_cast<size_t>(source.size(2));
+            Tensor result = Tensor::empty_pageable_host(
+                {rows, bands * channels}, source.dtype());
+            {
+                LOG_TIMER_DEBUG("PLY export: prefault");
+                lfs::core::prefault_pageable_host_memory(result.data_ptr(), result.bytes());
+            }
+
+            const size_t row_bytes = bands * channels * lfs::core::dtype_size(source.dtype());
+            const auto* src = static_cast<const std::byte*>(source.data_ptr());
+            auto* dst = static_cast<std::byte*>(result.data_ptr());
+            const size_t element_bytes = lfs::core::dtype_size(source.dtype());
+            tbb::parallel_for(
+                tbb::blocked_range<size_t>(0, rows, 1024),
+                [&](const tbb::blocked_range<size_t>& range) {
+                    for (size_t row = range.begin(); row != range.end(); ++row) {
+                        const auto* src_row = src + row * row_bytes;
+                        auto* dst_row = dst + row * row_bytes;
+                        for (size_t band = 0; band != bands; ++band) {
+                            for (size_t channel = 0; channel != channels; ++channel) {
+                                std::memcpy(
+                                    dst_row + (channel * bands + band) * element_bytes,
+                                    src_row + (band * channels + channel) * element_bytes,
+                                    element_bytes);
+                            }
+                        }
+                    }
+                });
+            return result;
+        }
 
         bool is_valid_ply_property_name_token(const std::string_view name) {
             if (name.empty()) {
@@ -1711,8 +1819,9 @@ namespace lfs::io {
                 }
             }
 
-            ~CudaStreamOwner() {
+            ~CudaStreamOwner() noexcept {
                 if (stream) {
+                    lfs::core::CudaMemoryPool::instance().release_stream(stream);
                     (void)cudaStreamDestroy(stream);
                 }
             }
@@ -2163,6 +2272,11 @@ namespace lfs::io {
 
             splat_data.set_tensor_allocator(options.splat_tensor_allocator);
 
+            // One-shot pool trim after the model is fully in SplatData / exportable
+            // storage. q16 encode and H2D staging otherwise leave reserved_not_used
+            // in the CUDA async pool (E2E: ~1.75 GiB after a 2.4 GB PLY).
+            Tensor::trim_memory_pool();
+
             const auto end_time = std::chrono::steady_clock::now();
             const auto duration =
                 std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
@@ -2220,6 +2334,11 @@ namespace lfs::io {
             float value = 0.0f;
         };
 
+        struct FloatValidationTarget {
+            const Tensor* values = nullptr;
+            std::string_view label;
+        };
+
         [[nodiscard]] std::optional<NonFiniteFloatValue> find_non_finite_float_value(
             const Tensor& values) {
             LFS_ASSERT_MSG(values.is_valid(),
@@ -2231,7 +2350,7 @@ namespace lfs::io {
                                        "(dtype={}({}), shape={})",
                                        dtype_name(values.dtype()), static_cast<int>(values.dtype()),
                                        values.shape().str()));
-            const Tensor cpu = values.cpu().contiguous();
+            const Tensor cpu = pageable_host_copy(values);
             const float* const data = cpu.ptr<float>();
             for (size_t i = 0; i < cpu.numel(); ++i) {
                 if (!std::isfinite(data[i])) {
@@ -2241,7 +2360,53 @@ namespace lfs::io {
             return std::nullopt;
         }
 
-        Result<void> validate_float_export_tensor(const Tensor& values,
+        [[nodiscard]] std::optional<NonFiniteFloatValue> find_non_finite_float_value_parallel(
+            const Tensor& values) {
+            LFS_ASSERT_MSG(values.is_valid(),
+                           std::format("PLY finite-value scan requires a valid tensor "
+                                       "(tensor_state={}, valid={})",
+                                       values.str(), values.is_valid()));
+            LFS_ASSERT_MSG(values.dtype() == DataType::Float32,
+                           std::format("PLY finite-value scan requires Float32 "
+                                       "(dtype={}({}), shape={})",
+                                       dtype_name(values.dtype()), static_cast<int>(values.dtype()),
+                                       values.shape().str()));
+            LFS_ASSERT_MSG(values.device() == Device::CPU && values.is_contiguous(),
+                           std::format("PLY parallel finite-value scan requires a contiguous "
+                                       "CPU tensor (device={}, contiguous={}, shape={})",
+                                       device_name(values.device()), values.is_contiguous(),
+                                       values.shape().str()));
+            const float* const data = values.ptr<float>();
+            const size_t value_count = values.numel();
+            const size_t block_count =
+                (value_count + ply_constants::FINITE_SCAN_BLOCK_SIZE - 1) /
+                ply_constants::FINITE_SCAN_BLOCK_SIZE;
+            std::vector<size_t> first_non_finite(block_count, value_count);
+
+            tbb::parallel_for(
+                tbb::blocked_range<size_t>(0, block_count, 1),
+                [&](const tbb::blocked_range<size_t>& range) {
+                    for (size_t block = range.begin(); block < range.end(); ++block) {
+                        const size_t begin = block * ply_constants::FINITE_SCAN_BLOCK_SIZE;
+                        const size_t end = std::min(
+                            value_count, begin + ply_constants::FINITE_SCAN_BLOCK_SIZE);
+                        for (size_t i = begin; i < end; ++i) {
+                            if (!std::isfinite(data[i])) {
+                                first_non_finite[block] = i;
+                                break;
+                            }
+                        }
+                    }
+                });
+
+            const auto first = std::ranges::min_element(first_non_finite);
+            if (first != first_non_finite.end() && *first != value_count) {
+                return NonFiniteFloatValue{.index = *first, .value = data[*first]};
+            }
+            return std::nullopt;
+        }
+
+        Result<void> validate_float_export_tensor(Tensor& values,
                                                   const std::string_view label,
                                                   const size_t expected_rows,
                                                   const std::span<const int> allowed_ranks,
@@ -2287,18 +2452,160 @@ namespace lfs::io {
                                       output_path);
                 }
             }
-            if (const auto invalid = find_non_finite_float_value(values)) {
-                return make_error(ErrorCode::INTERNAL_ERROR,
-                                  std::format("{} contains a non-finite value "
-                                              "(flat_index={}, value={}, shape={})",
-                                              label, invalid->index, invalid->value,
-                                              values.shape().str()),
-                                  output_path);
+            return {};
+        }
+
+        Result<void> validate_float_export_tensors_parallel(
+            const std::span<const FloatValidationTarget> targets,
+            const size_t rows,
+            const std::filesystem::path& output_path) {
+            if (targets.empty() || rows == 0)
+                return {};
+
+            const size_t missing = std::numeric_limits<size_t>::max();
+            struct ScanTarget {
+                const Tensor* values = nullptr;
+                const float* data = nullptr;
+                size_t value_count = 0;
+                std::string_view label;
+            };
+            std::vector<ScanTarget> scan_targets;
+            scan_targets.reserve(targets.size());
+            for (const auto& target : targets) {
+                scan_targets.push_back({target.values,
+                                        target.values->ptr<float>(),
+                                        target.values->numel(),
+                                        target.label});
+            }
+
+            struct ScanBlock {
+                size_t target_index = 0;
+                size_t begin = 0;
+                size_t end = 0;
+            };
+            std::vector<ScanBlock> scan_blocks;
+            size_t total_floats = 0;
+            for (size_t target_index = 0; target_index < scan_targets.size(); ++target_index) {
+                const auto& target = scan_targets[target_index];
+                total_floats += target.value_count;
+                for (size_t begin = 0; begin < target.value_count;
+                     begin += ply_constants::FINITE_SCAN_BLOCK_SIZE) {
+                    scan_blocks.push_back({target_index,
+                                           begin,
+                                           std::min(target.value_count,
+                                                    begin + ply_constants::FINITE_SCAN_BLOCK_SIZE)});
+                }
+            }
+            std::vector<size_t> first_non_finite(scan_blocks.size(), missing);
+
+            // Scan raw contiguous host pointers in approximately one-million-float blocks.
+            // Each block records only its first hit; the reduction below preserves the
+            // smallest flat index for every tensor without per-element Tensor accessors.
+            tbb::parallel_for(
+                tbb::blocked_range<size_t>(0, scan_blocks.size(), 1),
+                [&](const tbb::blocked_range<size_t>& range) {
+                    for (size_t block_index = range.begin(); block_index != range.end(); ++block_index) {
+                        const auto& block = scan_blocks[block_index];
+                        const auto& target = scan_targets[block.target_index];
+                        for (size_t i = block.begin; i < block.end; ++i) {
+                            if (!std::isfinite(target.data[i])) {
+                                first_non_finite[block_index] = i;
+                                break;
+                            }
+                        }
+                    }
+                });
+
+            size_t block_offset = 0;
+            for (const auto& target : scan_targets) {
+                const size_t target_blocks =
+                    (target.value_count + ply_constants::FINITE_SCAN_BLOCK_SIZE - 1) /
+                    ply_constants::FINITE_SCAN_BLOCK_SIZE;
+                const auto begin = first_non_finite.begin() +
+                                   static_cast<std::ptrdiff_t>(block_offset);
+                const auto end = begin + static_cast<std::ptrdiff_t>(target_blocks);
+                const auto first = std::ranges::min_element(begin, end);
+                if (first != end && *first != missing) {
+                    return make_error(
+                        ErrorCode::INTERNAL_ERROR,
+                        std::format("{} contains a non-finite value "
+                                    "(flat_index={}, value={}, shape={})",
+                                    target.label, *first, target.data[*first],
+                                    target.values->shape().str()),
+                        output_path);
+                }
+                block_offset += target_blocks;
+            }
+
+            return {};
+        }
+
+        Result<void> validate_rotation_norms(const Tensor& rotation,
+                                             const std::filesystem::path& output_path) {
+            constexpr size_t kRowsPerBlock = 1u << 14;
+            const size_t rows = static_cast<size_t>(rotation.size(0));
+            const size_t block_count = (rows + kRowsPerBlock - 1) / kRowsPerBlock;
+            const size_t missing = std::numeric_limits<size_t>::max();
+            std::vector<size_t> first_bad(block_count, missing);
+            const float* const data = rotation.ptr<float>();
+
+            tbb::parallel_for(
+                tbb::blocked_range<size_t>(0, block_count, 1),
+                [&](const tbb::blocked_range<size_t>& range) {
+                    for (size_t block = range.begin(); block != range.end(); ++block) {
+                        const size_t begin = block * kRowsPerBlock;
+                        const size_t end = std::min(rows, begin + kRowsPerBlock);
+                        for (size_t row = begin; row < end; ++row) {
+                            const float* const q = data + row * 4;
+                            const float norm_squared = q[0] * q[0] + q[1] * q[1] +
+                                                       q[2] * q[2] + q[3] * q[3];
+                            if ((!std::isfinite(norm_squared) ||
+                                 norm_squared <= ply_constants::MIN_ROTATION_NORM_SQUARED) &&
+                                first_bad[block] == missing)
+                                first_bad[block] = row;
+                        }
+                    }
+                });
+
+            const auto first = std::ranges::min_element(first_bad);
+            if (first != first_bad.end() && *first != missing) {
+                return make_error(
+                    ErrorCode::INTERNAL_ERROR,
+                    std::format("PointCloud.rotation row {} has a zero-length quaternion", *first),
+                    output_path);
             }
             return {};
         }
 
-        Result<void> validate_point_cloud_for_ply_write(const PointCloud& pc,
+        [[nodiscard]] std::optional<NonFiniteFloatValue> find_invalid_float_color_parallel(
+            const Tensor& values) {
+            const float* const data = values.ptr<float>();
+            const size_t count = values.numel();
+            const size_t block_count =
+                (count + ply_constants::FINITE_SCAN_BLOCK_SIZE - 1) /
+                ply_constants::FINITE_SCAN_BLOCK_SIZE;
+            std::vector<size_t> first(block_count, count);
+            tbb::parallel_for(
+                tbb::blocked_range<size_t>(0, block_count, 1),
+                [&](const tbb::blocked_range<size_t>& range) {
+                    for (size_t block = range.begin(); block != range.end(); ++block) {
+                        const size_t begin = block * ply_constants::FINITE_SCAN_BLOCK_SIZE;
+                        const size_t end = std::min(count, begin + ply_constants::FINITE_SCAN_BLOCK_SIZE);
+                        for (size_t i = begin; i != end; ++i) {
+                            if (!std::isfinite(data[i]) || data[i] < 0.0f || data[i] > 1.0f) {
+                                first[block] = i;
+                                break;
+                            }
+                        }
+                    }
+                });
+            const auto first_invalid = std::ranges::min_element(first);
+            if (first_invalid != first.end() && *first_invalid != count)
+                return NonFiniteFloatValue{*first_invalid, data[*first_invalid]};
+            return std::nullopt;
+        }
+
+        Result<void> validate_point_cloud_for_ply_write(PointCloud& pc,
                                                         const std::filesystem::path& output_path) {
             if (!pc.means.is_valid()) {
                 return make_error(ErrorCode::INTERNAL_ERROR,
@@ -2324,7 +2631,7 @@ namespace lfs::io {
                 return result;
             }
 
-            const auto validate_optional = [&](const Tensor& values,
+            const auto validate_optional = [&](Tensor& values,
                                                const std::string_view label,
                                                const std::span<const int> ranks,
                                                const std::optional<size_t> columns,
@@ -2351,45 +2658,81 @@ namespace lfs::io {
             if (auto result = validate_optional(pc.rotation, "PointCloud.rotation", rank2, 4); !result)
                 return result;
 
-            if (pc.rotation.is_valid()) {
-                const Tensor rotation = pc.rotation.cpu().contiguous();
-                const float* const data = rotation.ptr<float>();
-                for (size_t row = 0; row < rows; ++row) {
-                    const float norm_squared = data[row * 4 + 0] * data[row * 4 + 0] +
-                                               data[row * 4 + 1] * data[row * 4 + 1] +
-                                               data[row * 4 + 2] * data[row * 4 + 2] +
-                                               data[row * 4 + 3] * data[row * 4 + 3];
-                    if (!std::isfinite(norm_squared) ||
-                        norm_squared <= ply_constants::MIN_ROTATION_NORM_SQUARED) {
-                        return make_error(ErrorCode::INTERNAL_ERROR,
-                                          std::format("PointCloud.rotation row {} has a zero-length quaternion", row),
-                                          output_path);
-                    }
+            if (pc.colors.is_valid() &&
+                (pc.colors.ndim() != 2 || static_cast<size_t>(pc.colors.size(0)) != rows ||
+                 pc.colors.size(1) != 3 ||
+                 (pc.colors.dtype() != DataType::UInt8 && pc.colors.dtype() != DataType::Float32))) {
+                return make_error(ErrorCode::INTERNAL_ERROR,
+                                  std::format("PointCloud.colors must be [N,3] UInt8 or Float32 "
+                                              "(shape={}, dtype={}({}), expected_rows={})",
+                                              pc.colors.shape().str(), dtype_name(pc.colors.dtype()),
+                                              static_cast<int>(pc.colors.dtype()), rows),
+                                  output_path);
+            }
+
+            {
+                LOG_TIMER_DEBUG("PLY validate: downloads");
+                const auto download = [](Tensor& values) {
+                    if (values.is_valid())
+                        values = pageable_host_copy(values);
+                };
+                download(pc.means);
+                download(pc.normals);
+                download(pc.sh0);
+                download(pc.shN);
+                download(pc.opacity);
+                download(pc.scaling);
+                download(pc.rotation);
+                download(pc.colors);
+            }
+
+            std::vector<FloatValidationTarget> finite_targets;
+            finite_targets.reserve(7);
+            const auto add_finite_target = [&](const Tensor& values, const std::string_view label) {
+                // An empty SH-rest tensor is the normal SH-degree-0 representation. It has
+                // no payload to scan and, importantly, must not be handed to ptr()/numel()
+                // as though it were an export column block.
+                if (values.is_valid() && values.numel() > 0)
+                    finite_targets.push_back({&values, label});
+            };
+            add_finite_target(pc.means, "PointCloud.means");
+            add_finite_target(pc.normals, "PointCloud.normals");
+            add_finite_target(pc.sh0, "PointCloud.sh0");
+            add_finite_target(pc.shN, "PointCloud.shN");
+            add_finite_target(pc.opacity, "PointCloud.opacity");
+            add_finite_target(pc.scaling, "PointCloud.scaling");
+            add_finite_target(pc.rotation, "PointCloud.rotation");
+            {
+                LOG_TIMER_DEBUG("PLY validate: finite scan");
+                size_t total_floats = 0;
+                for (const auto& target : finite_targets)
+                    total_floats += target.values->numel();
+                LOG_DEBUG("PLY validate: finite scan total floats={}", total_floats);
+                if (auto result = validate_float_export_tensors_parallel(
+                        finite_targets, rows, output_path);
+                    !result) {
+                    return result;
                 }
             }
 
-            if (pc.colors.is_valid()) {
-                if (pc.colors.ndim() != 2 || static_cast<size_t>(pc.colors.size(0)) != rows ||
-                    pc.colors.size(1) != 3 ||
-                    (pc.colors.dtype() != DataType::UInt8 && pc.colors.dtype() != DataType::Float32)) {
-                    return make_error(ErrorCode::INTERNAL_ERROR,
-                                      std::format("PointCloud.colors must be [N,3] UInt8 or Float32 "
-                                                  "(shape={}, dtype={}({}), expected_rows={})",
-                                                  pc.colors.shape().str(), dtype_name(pc.colors.dtype()),
-                                                  static_cast<int>(pc.colors.dtype()), rows),
-                                      output_path);
+            {
+                LOG_TIMER_DEBUG("PLY validate: rotation norms");
+                if (pc.rotation.is_valid()) {
+                    if (auto result = validate_rotation_norms(pc.rotation, output_path); !result)
+                        return result;
                 }
-                if (pc.colors.dtype() == DataType::Float32) {
-                    const Tensor colors = pc.colors.cpu().contiguous();
-                    const float* const data = colors.ptr<float>();
-                    for (size_t i = 0; i < colors.numel(); ++i) {
-                        if (!std::isfinite(data[i]) || data[i] < 0.0f || data[i] > 1.0f) {
-                            return make_error(ErrorCode::INTERNAL_ERROR,
-                                              std::format("PointCloud Float32 colors must be finite and in [0,1] "
-                                                          "(flat_index={}, value={}, shape={})",
-                                                          i, data[i], colors.shape().str()),
-                                              output_path);
-                        }
+            }
+
+            {
+                LOG_TIMER_DEBUG("PLY validate: colors");
+                if (pc.colors.is_valid() && pc.colors.dtype() == DataType::Float32) {
+                    if (const auto invalid = find_invalid_float_color_parallel(pc.colors)) {
+                        return make_error(
+                            ErrorCode::INTERNAL_ERROR,
+                            std::format("PointCloud Float32 colors must be finite and in [0,1] "
+                                        "(flat_index={}, value={}, shape={})",
+                                        invalid->index, invalid->value, pc.colors.shape().str()),
+                            output_path);
                     }
                 }
             }
@@ -2530,14 +2873,18 @@ namespace lfs::io {
                                   output_path);
             }
 
-            prepared = prepared.to(DataType::Float32).cpu().contiguous();
-            if (const auto invalid = find_non_finite_float_value(prepared)) {
-                return make_error(
-                    ErrorCode::INTERNAL_ERROR,
-                    std::format("Extra PLY attribute tensor contains a non-finite value "
-                                "(flat_index={}, value={}, shape={})",
-                                invalid->index, invalid->value, prepared.shape().str()),
-                    output_path);
+            prepared = pageable_host_copy(prepared.to(DataType::Float32));
+            {
+                LOG_TIMER_DEBUG("PLY validate: finite scan");
+                LOG_DEBUG("PLY validate: finite scan total floats={}", prepared.numel());
+                if (const auto invalid = find_non_finite_float_value_parallel(prepared)) {
+                    return make_error(
+                        ErrorCode::INTERNAL_ERROR,
+                        std::format("Extra PLY attribute tensor contains a non-finite value "
+                                    "(flat_index={}, value={}, shape={})",
+                                    invalid->index, invalid->value, prepared.shape().str()),
+                        output_path);
+                }
             }
             return TensorWithNames{std::move(prepared), block.names};
         }
@@ -2895,83 +3242,101 @@ namespace lfs::io {
             const size_t N = pc.means.size(0);
 
             std::vector<TensorWithNames> float_blocks;
-            float_blocks.reserve(8 + extra_attributes.size());
-            size_t attr_off = 0;
-
-            auto append_builtin_block = [&](Tensor tensor, std::vector<std::string> fallback_names) {
-                const size_t cols = static_cast<size_t>(tensor.size(1));
-                std::vector<std::string> attrs = std::move(fallback_names);
-                if (pc.attribute_names.size() >= attr_off + cols) {
-                    attrs.assign(pc.attribute_names.begin() + static_cast<std::ptrdiff_t>(attr_off),
-                                 pc.attribute_names.begin() + static_cast<std::ptrdiff_t>(attr_off + cols));
-                }
-                float_blocks.emplace_back(std::move(tensor), std::move(attrs));
-                attr_off += cols;
-            };
-
-            auto as_cpu_contiguous = [](const Tensor& tensor) -> Tensor {
-                if (tensor.device() == Device::CPU && tensor.is_contiguous())
-                    return tensor;
-                return tensor.cpu().contiguous();
-            };
-
-            append_builtin_block(as_cpu_contiguous(pc.means), {"x", "y", "z"});
-
-            if (pc.normals.is_valid()) {
-                append_builtin_block(as_cpu_contiguous(pc.normals), {"nx", "ny", "nz"});
-            }
-
-            auto process_sh = [&](const Tensor& sh) -> Tensor {
-                if (sh.ndim() == 3) {
-                    auto transposed = sh.transpose(1, 2).contiguous();
-                    return as_cpu_contiguous(transposed.flatten(1));
-                }
-                return as_cpu_contiguous(sh);
-            };
-
-            if (pc.sh0.is_valid()) {
-                auto t = process_sh(pc.sh0);
-                const auto cols = static_cast<size_t>(t.size(1));
-                append_builtin_block(std::move(t), make_indexed_names("f_dc_", cols));
-            }
-            if (pc.shN.is_valid()) {
-                auto t = process_sh(pc.shN);
-                const auto cols = static_cast<size_t>(t.size(1));
-                append_builtin_block(std::move(t), make_indexed_names("f_rest_", cols));
-            }
-            if (pc.opacity.is_valid())
-                append_builtin_block(as_cpu_contiguous(pc.opacity), {"opacity"});
-            if (pc.scaling.is_valid()) {
-                auto t = as_cpu_contiguous(pc.scaling);
-                const auto cols = static_cast<size_t>(t.size(1));
-                append_builtin_block(std::move(t), make_indexed_names("scale_", cols));
-            }
-            if (pc.rotation.is_valid()) {
-                auto t = as_cpu_contiguous(pc.rotation);
-                const auto cols = static_cast<size_t>(t.size(1));
-                append_builtin_block(std::move(t), make_indexed_names("rot_", cols));
-            }
-            const size_t extra_block_offset = float_blocks.size();
-            for (const auto& extra_attribute : extra_attributes) {
-                auto prepared = prepare_extra_attribute_block(extra_attribute, N, output_path);
-                if (!prepared) {
-                    return std::unexpected(prepared.error());
-                }
-                float_blocks.emplace_back(std::move(*prepared));
-            }
-
-            // Optional colors: normalize to uchar red/green/blue before schema validation.
+            std::vector<unsigned char> zero_blocks;
+            size_t extra_block_offset = 0;
             Tensor colors_u8;
-            if (pc.colors.is_valid() && pc.colors.numel() > 0) {
-                auto colors_cpu = pc.colors.cpu().contiguous();
-                if (colors_cpu.ndim() == 2 && static_cast<size_t>(colors_cpu.size(0)) == N && colors_cpu.size(1) == 3) {
-                    if (colors_cpu.dtype() == DataType::UInt8) {
-                        colors_u8 = colors_cpu;
-                    } else if (colors_cpu.dtype() == DataType::Float32) {
-                        // PLY convention: float colors are typically [0,1]
-                        colors_u8 = (colors_cpu * 255.0f).clamp(0, 255).to(DataType::UInt8);
-                    } else {
-                        colors_u8 = colors_cpu.to(DataType::UInt8);
+            {
+                LOG_TIMER_DEBUG("PLY export: block prep");
+                float_blocks.reserve(8 + extra_attributes.size());
+                zero_blocks.reserve(8 + extra_attributes.size());
+                size_t attr_off = 0;
+
+                auto append_builtin_block = [&](Tensor tensor,
+                                                std::vector<std::string> fallback_names,
+                                                const bool zero = false) {
+                    const size_t cols = zero ? fallback_names.size()
+                                             : static_cast<size_t>(tensor.size(1));
+                    std::vector<std::string> attrs = std::move(fallback_names);
+                    if (pc.attribute_names.size() >= attr_off + cols) {
+                        attrs.assign(pc.attribute_names.begin() + static_cast<std::ptrdiff_t>(attr_off),
+                                     pc.attribute_names.begin() + static_cast<std::ptrdiff_t>(attr_off + cols));
+                    }
+                    float_blocks.emplace_back(std::move(tensor), std::move(attrs));
+                    zero_blocks.push_back(zero ? 1u : 0u);
+                    attr_off += cols;
+                };
+
+                auto as_cpu_contiguous = [](const Tensor& tensor) -> Tensor {
+                    return pageable_host_copy(tensor);
+                };
+
+                append_builtin_block(as_cpu_contiguous(pc.means), {"x", "y", "z"});
+
+                if (pc.normals.is_valid()) {
+                    append_builtin_block(as_cpu_contiguous(pc.normals), {"nx", "ny", "nz"});
+                } else if (pc.emit_zero_normals) {
+                    // Binary PLY writes can emit this constant column directly during
+                    // AoS packing. ASCII retains the legacy materialized path.
+                    Tensor zero_normals;
+                    if (!binary) {
+                        zero_normals = Tensor::empty_pageable_host({N, 3}, DataType::Float32);
+                        zero_normals.zero_();
+                    }
+                    append_builtin_block(std::move(zero_normals), {"nx", "ny", "nz"}, binary);
+                }
+
+                auto process_sh = [&](const Tensor& sh) -> Tensor {
+                    if (sh.ndim() == 3) {
+                        return flatten_sh_to_pageable_host(sh);
+                    }
+                    return as_cpu_contiguous(sh);
+                };
+
+                if (pc.sh0.is_valid()) {
+                    auto t = process_sh(pc.sh0);
+                    const auto cols = static_cast<size_t>(t.size(1));
+                    append_builtin_block(std::move(t), make_indexed_names("f_dc_", cols));
+                }
+                if (pc.shN.is_valid() && pc.shN.numel() > 0) {
+                    auto t = process_sh(pc.shN);
+                    const auto cols = static_cast<size_t>(t.size(1));
+                    append_builtin_block(std::move(t), make_indexed_names("f_rest_", cols));
+                }
+                if (pc.opacity.is_valid())
+                    append_builtin_block(as_cpu_contiguous(pc.opacity), {"opacity"});
+                if (pc.scaling.is_valid()) {
+                    auto t = as_cpu_contiguous(pc.scaling);
+                    const auto cols = static_cast<size_t>(t.size(1));
+                    append_builtin_block(std::move(t), make_indexed_names("scale_", cols));
+                }
+                if (pc.rotation.is_valid()) {
+                    auto t = as_cpu_contiguous(pc.rotation);
+                    const auto cols = static_cast<size_t>(t.size(1));
+                    append_builtin_block(std::move(t), make_indexed_names("rot_", cols));
+                }
+                extra_block_offset = float_blocks.size();
+                for (const auto& extra_attribute : extra_attributes) {
+                    auto prepared = prepare_extra_attribute_block(extra_attribute, N, output_path);
+                    if (!prepared) {
+                        return std::unexpected(prepared.error());
+                    }
+                    float_blocks.emplace_back(std::move(*prepared));
+                    zero_blocks.push_back(0u);
+                }
+
+                // Optional colors: normalize to uchar red/green/blue before schema validation.
+                if (pc.colors.is_valid() && pc.colors.numel() > 0) {
+                    auto colors_cpu = pageable_host_copy(pc.colors);
+                    if (colors_cpu.ndim() == 2 && static_cast<size_t>(colors_cpu.size(0)) == N && colors_cpu.size(1) == 3) {
+                        if (colors_cpu.dtype() == DataType::UInt8) {
+                            colors_u8 = colors_cpu;
+                        } else if (colors_cpu.dtype() == DataType::Float32) {
+                            // PLY convention: float colors are typically [0,1]
+                            colors_u8 = pageable_host_copy(
+                                (colors_cpu * 255.0f).clamp(0, 255).to(DataType::UInt8));
+                        } else {
+                            colors_u8 = colors_cpu.to(DataType::UInt8);
+                        }
                     }
                 }
             }
@@ -2993,21 +3358,28 @@ namespace lfs::io {
 
             for (size_t block_index = 0; block_index < float_blocks.size(); ++block_index) {
                 auto& [t, attrs] = float_blocks[block_index];
-                LFS_ASSERT_MSG(attrs.size() == static_cast<size_t>(t.size(1)),
+                const size_t block_cols = t.is_valid() ? static_cast<size_t>(t.size(1)) : attrs.size();
+                const std::string block_shape = t.is_valid() ? t.shape().str() : "<zero block>";
+                const char* const block_dtype = t.is_valid() ? dtype_name(t.dtype()) : "Float32";
+                const int block_dtype_value = t.is_valid() ? static_cast<int>(t.dtype())
+                                                           : static_cast<int>(DataType::Float32);
+                LFS_ASSERT_MSG(attrs.size() == block_cols,
                                std::format("PLY property name count must match its tensor columns "
                                            "(block_index={}, property_name_count={}, tensor_columns={}, "
                                            "tensor_shape={}, tensor_dtype={}({}))",
-                                           block_index, attrs.size(), t.size(1), t.shape().str(),
-                                           dtype_name(t.dtype()), static_cast<int>(t.dtype())));
+                                           block_index, attrs.size(), block_cols,
+                                           block_shape, block_dtype, block_dtype_value));
 
-                estimated_write_bytes += static_cast<size_t>(t.size(0)) *
-                                         static_cast<size_t>(t.size(1)) *
+                const size_t block_rows = t.is_valid() ? static_cast<size_t>(t.size(0)) : N;
+                estimated_write_bytes += block_rows * block_cols *
                                          sizeof(float);
 
-                ply.add_properties_to_element(
-                    "vertex", attrs, tinyply::Type::FLOAT32, t.size(0),
-                    reinterpret_cast<uint8_t*>(const_cast<float*>(t.ptr<float>())),
-                    tinyply::Type::INVALID, 0);
+                if (!zero_blocks[block_index]) {
+                    ply.add_properties_to_element(
+                        "vertex", attrs, tinyply::Type::FLOAT32, t.size(0),
+                        reinterpret_cast<uint8_t*>(const_cast<float*>(t.ptr<float>())),
+                        tinyply::Type::INVALID, 0);
+                }
             }
 
             const size_t expected_properties =
@@ -3029,15 +3401,20 @@ namespace lfs::io {
                 struct FloatPackBlock {
                     const float* data = nullptr;
                     size_t cols = 0;
+                    bool zero = false;
                 };
 
                 std::vector<FloatPackBlock> pack_blocks;
                 pack_blocks.reserve(float_blocks.size());
                 size_t floats_per_vertex = 0;
-                for (const auto& [t, attrs] : float_blocks) {
+                for (size_t block_index = 0; block_index < float_blocks.size(); ++block_index) {
+                    const auto& [t, attrs] = float_blocks[block_index];
                     (void)attrs;
-                    const size_t cols = static_cast<size_t>(t.size(1));
-                    pack_blocks.push_back(FloatPackBlock{t.ptr<float>(), cols});
+                    const size_t cols = t.is_valid() ? static_cast<size_t>(t.size(1)) : attrs.size();
+                    pack_blocks.push_back(FloatPackBlock{
+                        t.is_valid() ? t.ptr<float>() : nullptr,
+                        cols,
+                        zero_blocks[block_index] != 0});
                     floats_per_vertex += cols;
                 }
 
@@ -3077,145 +3454,309 @@ namespace lfs::io {
                 header += "end_header\n";
 
                 const size_t body_bytes = N * vertex_stride;
-                // Cap peak host RAM: full pack when body fits, else streaming chunks.
-                constexpr size_t kMaxFullBodyBytes = size_t{512} * 1024 * 1024;
                 const size_t pack_chunk_verts = std::max<size_t>(
-                    1, ply_constants::PLY_WRITE_PACK_CHUNK_VERTICES);
+                    1, ply_constants::PLY_WRITE_CHUNK_BYTES / std::max<size_t>(vertex_stride, 1));
 
+                {
+                    LOG_TIMER_DEBUG("PLY export: file write");
 #ifdef _WIN32
-                FILE* file = _wfopen(temp_path.wstring().c_str(), L"wb");
+                    FILE* file = _wfopen(temp_path.wstring().c_str(), L"wb");
 #else
-                FILE* file = std::fopen(temp_path.c_str(), "wb");
+                    FILE* file = std::fopen(temp_path.c_str(), "wb");
 #endif
-                if (!file) {
-                    return make_error(ErrorCode::WRITE_FAILURE,
-                                      "Cannot open temporary file", temp_path);
-                }
-                // declare the stdio buffer BEFORE FileCloser so destruction order
-                // is fclose (via guard) first, then buffer free. Declaring the guard
-                // first made early cancel/error returns destroy the buffer while
-                // fclose still flushed through it (heap use-after-free).
-                std::vector<char> io_buffer(ply_constants::PLY_WRITE_IO_BUFFER_BYTES);
-                struct FileCloser {
-                    FILE* f = nullptr;
-                    ~FileCloser() {
-                        if (f)
-                            std::fclose(f);
+                    if (!file) {
+                        return make_error(ErrorCode::WRITE_FAILURE,
+                                          "Cannot open temporary file", temp_path);
                     }
-                } file_guard{file};
-                std::setvbuf(file, io_buffer.data(), _IOFBF, io_buffer.size());
-
-                if (std::fwrite(header.data(), 1, header.size(), file) != header.size()) {
-                    return make_error(ErrorCode::WRITE_FAILURE, "Write failed", output_path);
-                }
-
-                size_t bytes_written = header.size();
-                size_t next_report_bytes = 16 * 1024 * 1024;
-                const auto report_progress = [&](const bool force) -> Result<void> {
-                    if (!progress_callback)
-                        return {};
-                    if (!force && bytes_written < next_report_bytes)
-                        return {};
-                    next_report_bytes = bytes_written + 16 * 1024 * 1024;
-                    const float ratio = force
-                                            ? 1.0f
-                                            : static_cast<float>(std::min(
-                                                  1.0,
-                                                  static_cast<double>(bytes_written) /
-                                                      static_cast<double>(std::max<size_t>(estimated_write_bytes, 1))));
-                    if (!progress_callback(ratio, "Writing PLY")) {
-                        return make_error(ErrorCode::CANCELLED,
-                                          "Export cancelled by user", output_path);
+                    // declare the stdio buffer BEFORE FileCloser so destruction order
+                    // is fclose (via guard) first, then buffer free. Declaring the guard
+                    // first made early cancel/error returns destroy the buffer while
+                    // fclose still flushed through it (heap use-after-free).
+                    std::vector<char> io_buffer;
+                    double ring_setup_total_ms = 0.0;
+                    const auto elapsed_ms = [](const auto start) {
+                        return std::chrono::duration<double, std::milli>(
+                                   std::chrono::high_resolution_clock::now() - start)
+                            .count();
+                    };
+                    {
+                        const auto ring_setup_start = std::chrono::high_resolution_clock::now();
+                        io_buffer.resize(ply_constants::PLY_WRITE_IO_BUFFER_BYTES);
+                        ring_setup_total_ms += elapsed_ms(ring_setup_start);
                     }
-                    return {};
-                };
+                    struct FileCloser {
+                        FILE* f = nullptr;
 
-                if (body_bytes <= kMaxFullBodyBytes && N > 0) {
-                    std::vector<uint8_t> body(body_bytes);
-                    ply_decode_arena().execute([&] {
-                        tbb::parallel_for(
-                            tbb::blocked_range<size_t>(0, N, pack_chunk_verts),
-                            [&](const tbb::blocked_range<size_t>& range) {
-                                for (size_t i = range.begin(); i < range.end(); ++i) {
-                                    uint8_t* dst = body.data() + i * vertex_stride;
-                                    size_t off = 0;
-                                    if (has_colors) {
-                                        std::memcpy(dst + off, colors_ptr + i * 3, 3);
-                                        off += 3;
-                                    }
-                                    for (const auto& blk : pack_blocks) {
-                                        const size_t nbytes = blk.cols * sizeof(float);
-                                        std::memcpy(dst + off, blk.data + i * blk.cols, nbytes);
-                                        off += nbytes;
-                                    }
-                                }
-                            });
-                    });
-
-                    constexpr size_t kWriteSlice = size_t{16} * 1024 * 1024;
-                    size_t offset = 0;
-                    while (offset < body_bytes) {
-                        const size_t chunk = std::min(kWriteSlice, body_bytes - offset);
-                        if (std::fwrite(body.data() + offset, 1, chunk, file) != chunk) {
-                            return make_error(ErrorCode::WRITE_FAILURE, "Write failed",
-                                              output_path);
+                        int close() noexcept {
+                            if (!f)
+                                return 0;
+                            FILE* const file = std::exchange(f, nullptr);
+                            return std::fclose(file);
                         }
-                        offset += chunk;
-                        bytes_written += chunk;
-                        if (auto r = report_progress(false); !r)
-                            return r;
+
+                        ~FileCloser() {
+                            (void)close();
+                        }
+                    } file_guard{file};
+                    std::setvbuf(file, io_buffer.data(), _IOFBF, io_buffer.size());
+
+                    {
+                        LOG_TIMER_DEBUG("PLY write: header");
+                        if (std::fwrite(header.data(), 1, header.size(), file) != header.size()) {
+                            return make_error(ErrorCode::WRITE_FAILURE, "Write failed", output_path);
+                        }
                     }
-                } else if (N > 0) {
-                    // Streaming path for very large clouds: parallel pack per chunk.
-                    std::vector<uint8_t> chunk(pack_chunk_verts * vertex_stride);
-                    for (size_t begin = 0; begin < N; begin += pack_chunk_verts) {
-                        const size_t end = std::min(N, begin + pack_chunk_verts);
-                        const size_t count = end - begin;
-                        ply_decode_arena().execute([&] {
-                            tbb::parallel_for(
-                                tbb::blocked_range<size_t>(
-                                    begin, end, std::max<size_t>(1, pack_chunk_verts / 8)),
-                                [&](const tbb::blocked_range<size_t>& range) {
-                                    // Pack into chunk-local offsets.
-                                    for (size_t i = range.begin(); i < range.end(); ++i) {
-                                        uint8_t* dst =
-                                            chunk.data() + (i - begin) * vertex_stride;
-                                        size_t off = 0;
-                                        if (has_colors) {
-                                            std::memcpy(dst + off, colors_ptr + i * 3, 3);
-                                            off += 3;
-                                        }
-                                        for (const auto& blk : pack_blocks) {
-                                            const size_t nbytes = blk.cols * sizeof(float);
-                                            std::memcpy(dst + off, blk.data + i * blk.cols,
-                                                        nbytes);
-                                            off += nbytes;
-                                        }
-                                    }
+                    size_t bytes_written = header.size();
+                    size_t next_report_bytes = 16 * 1024 * 1024;
+                    const auto report_progress = [&](const bool force) -> Result<void> {
+                        if (!progress_callback)
+                            return {};
+                        if (!force && bytes_written < next_report_bytes)
+                            return {};
+                        next_report_bytes = bytes_written + 16 * 1024 * 1024;
+                        const float ratio = force
+                                                ? 1.0f
+                                                : static_cast<float>(std::min(
+                                                      1.0,
+                                                      static_cast<double>(bytes_written) /
+                                                          static_cast<double>(std::max<size_t>(estimated_write_bytes, 1))));
+                        if (!progress_callback(ratio, "Writing PLY")) {
+                            return make_error(ErrorCode::CANCELLED,
+                                              "Export cancelled by user", output_path);
+                        }
+                        return {};
+                    };
+
+                    {
+                        struct PackedChunk {
+                            std::unique_ptr<uint8_t[]> data;
+                            size_t bytes = 0;
+                        };
+
+                        class WriteRing {
+                        public:
+                            WriteRing(FILE* file, std::atomic<size_t>& bytes_written,
+                                      std::atomic<uint64_t>& io_ns)
+                                : file_(file), bytes_written_(bytes_written), io_ns_(io_ns) {
+                                writer_ = std::thread([this] { run(); });
+                            }
+
+                            ~WriteRing() {
+                                stop(true);
+                                join();
+                            }
+
+                            bool push(PackedChunk chunk) {
+                                std::unique_lock lock(mutex_);
+                                not_full_.wait(lock, [&] {
+                                    return queue_.size() < 3 || stopping_;
                                 });
-                        });
-                        const size_t chunk_bytes = count * vertex_stride;
-                        if (std::fwrite(chunk.data(), 1, chunk_bytes, file) != chunk_bytes) {
-                            return make_error(ErrorCode::WRITE_FAILURE, "Write failed",
-                                              output_path);
+                                if (stopping_)
+                                    return false;
+                                queue_.push_back(std::move(chunk));
+                                not_empty_.notify_one();
+                                return true;
+                            }
+
+                            void stop(const bool cancel) {
+                                {
+                                    std::lock_guard lock(mutex_);
+                                    if (cancel)
+                                        stopping_ = true;
+                                    producer_done_ = true;
+                                }
+                                not_empty_.notify_one();
+                                not_full_.notify_all();
+                            }
+
+                            void join() {
+                                if (writer_.joinable()) {
+                                    writer_.join();
+                                }
+                            }
+
+                            [[nodiscard]] bool failed() const {
+                                std::lock_guard lock(mutex_);
+                                return !error_.empty();
+                            }
+
+                            [[nodiscard]] std::string error() const {
+                                std::lock_guard lock(mutex_);
+                                return error_;
+                            }
+
+                        private:
+                            void set_error(std::string message) {
+                                std::lock_guard lock(mutex_);
+                                if (error_.empty())
+                                    error_ = std::move(message);
+                                stopping_ = true;
+                                not_empty_.notify_all();
+                                not_full_.notify_all();
+                            }
+
+                            void run() {
+                                for (;;) {
+                                    PackedChunk chunk;
+                                    {
+                                        std::unique_lock lock(mutex_);
+                                        not_empty_.wait(lock, [&] {
+                                            return !queue_.empty() || producer_done_;
+                                        });
+                                        if (queue_.empty()) {
+                                            if (producer_done_)
+                                                return;
+                                            continue;
+                                        }
+                                        chunk = std::move(queue_.front());
+                                        queue_.pop_front();
+                                        not_full_.notify_one();
+                                        if (stopping_)
+                                            continue;
+                                    }
+
+                                    const auto io_start = std::chrono::high_resolution_clock::now();
+                                    size_t written = 0;
+                                    written = std::fwrite(chunk.data.get(), 1, chunk.bytes, file_);
+                                    io_ns_.fetch_add(static_cast<uint64_t>(
+                                                         std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                             std::chrono::high_resolution_clock::now() - io_start)
+                                                             .count()),
+                                                     std::memory_order_relaxed);
+                                    if (written != chunk.bytes) {
+                                        set_error("Write failed");
+                                        continue;
+                                    }
+                                    bytes_written_.fetch_add(chunk.bytes, std::memory_order_release);
+                                }
+                            }
+
+                            FILE* file_ = nullptr;
+                            std::atomic<size_t>& bytes_written_;
+                            std::atomic<uint64_t>& io_ns_;
+                            mutable std::mutex mutex_;
+                            std::condition_variable not_empty_;
+                            std::condition_variable not_full_;
+                            std::deque<PackedChunk> queue_;
+                            std::string error_;
+                            bool producer_done_ = false;
+                            bool stopping_ = false;
+                            std::thread writer_;
+                        };
+
+                        std::atomic<size_t> body_bytes_written{0};
+                        std::atomic<uint64_t> io_ns{0};
+                        const auto ring_create_start = std::chrono::high_resolution_clock::now();
+                        WriteRing ring(file, body_bytes_written, io_ns);
+                        ring_setup_total_ms += elapsed_ms(ring_create_start);
+                        const size_t chunk_count =
+                            (N + pack_chunk_verts - 1) / pack_chunk_verts;
+                        double pack_total_ms = 0.0;
+                        double prefault_total_ms = 0.0;
+                        bool cancelled = false;
+
+                        const auto pack_chunk = [&](uint8_t* data,
+                                                    const size_t begin,
+                                                    const size_t end) {
+                            ply_decode_arena().execute([&] {
+                                tbb::parallel_for(
+                                    tbb::blocked_range<size_t>(
+                                        begin, end, std::max<size_t>(1, pack_chunk_verts / 8)),
+                                    [&](const tbb::blocked_range<size_t>& range) {
+                                        for (size_t i = range.begin(); i < range.end(); ++i) {
+                                            uint8_t* dst = data + (i - begin) * vertex_stride;
+                                            size_t off = 0;
+                                            if (has_colors) {
+                                                std::memcpy(dst + off, colors_ptr + i * 3, 3);
+                                                off += 3;
+                                            }
+                                            for (const auto& blk : pack_blocks) {
+                                                const size_t nbytes = blk.cols * sizeof(float);
+                                                if (blk.zero)
+                                                    std::memset(dst + off, 0, nbytes);
+                                                else
+                                                    std::memcpy(dst + off, blk.data + i * blk.cols,
+                                                                nbytes);
+                                                off += nbytes;
+                                            }
+                                        }
+                                    });
+                            });
+                        };
+
+                        const auto pack_total_start = std::chrono::high_resolution_clock::now();
+                        for (size_t chunk_index = 0; chunk_index < chunk_count; ++chunk_index) {
+                            if (ring.failed()) {
+                                cancelled = true;
+                                break;
+                            }
+                            const size_t begin = chunk_index * pack_chunk_verts;
+                            const size_t end = std::min(N, begin + pack_chunk_verts);
+                            PackedChunk chunk;
+                            chunk.bytes = (end - begin) * vertex_stride;
+                            chunk.data = std::make_unique_for_overwrite<uint8_t[]>(chunk.bytes);
+#ifdef __linux__
+                            (void)::madvise(chunk.data.get(), chunk.bytes, MADV_HUGEPAGE);
+#endif
+                            const auto prefault_start = std::chrono::high_resolution_clock::now();
+                            lfs::core::prefault_pageable_host_memory(chunk.data.get(), chunk.bytes);
+                            prefault_total_ms += std::chrono::duration<double, std::milli>(
+                                                     std::chrono::high_resolution_clock::now() - prefault_start)
+                                                     .count();
+                            pack_chunk(chunk.data.get(), begin, end);
+                            if (!ring.push(std::move(chunk))) {
+                                cancelled = true;
+                                break;
+                            }
+                            bytes_written = header.size() +
+                                            body_bytes_written.load(std::memory_order_acquire);
+                            if (auto r = report_progress(false); !r) {
+                                cancelled = true;
+                                ring.stop(true);
+                                break;
+                            }
                         }
-                        bytes_written += chunk_bytes;
-                        if (auto r = report_progress(false); !r)
-                            return r;
+                        pack_total_ms = elapsed_ms(pack_total_start);
+
+                        const auto ring_join_start = std::chrono::high_resolution_clock::now();
+                        ring.stop(cancelled);
+                        ring.join();
+                        ring_setup_total_ms += elapsed_ms(ring_join_start);
+                        LOG_DEBUG("PLY write: pack total took {:.2f}ms", pack_total_ms);
+                        LOG_DEBUG("PLY export: prefault took {:.2f}ms", prefault_total_ms);
+                        LOG_DEBUG("PLY write: io total took {:.2f}ms",
+                                  static_cast<double>(io_ns.load(std::memory_order_relaxed)) /
+                                      1.0e6);
+                        LOG_DEBUG("PLY write: ring setup total took {:.2f}ms",
+                                  ring_setup_total_ms);
+                        if (ring.failed()) {
+                            return make_error(ErrorCode::WRITE_FAILURE, ring.error(), output_path);
+                        }
+                        if (cancelled)
+                            return make_error(ErrorCode::CANCELLED,
+                                              "Export cancelled by user", output_path);
+                        bytes_written = header.size() +
+                                        body_bytes_written.load(std::memory_order_acquire);
+                    }
+
+                    bool flush_failed = false;
+                    bool close_failed = false;
+                    {
+                        LOG_TIMER_DEBUG("PLY write: close");
+                        flush_failed = std::fflush(file) != 0;
+                        if (!flush_failed)
+                            close_failed = file_guard.close() != 0;
+                    }
+                    if (flush_failed) {
+                        return make_error(ErrorCode::WRITE_FAILURE, "Write failed", output_path);
+                    }
+                    if (auto r = report_progress(true); !r)
+                        return r;
+
+                    if (close_failed) {
+                        return make_error(ErrorCode::WRITE_FAILURE, "Write failed", output_path);
                     }
                 }
-
-                if (std::fflush(file) != 0) {
-                    return make_error(ErrorCode::WRITE_FAILURE, "Write failed", output_path);
-                }
-                if (auto r = report_progress(true); !r)
-                    return r;
-
-                if (std::fclose(file) != 0) {
-                    file_guard.f = nullptr;
-                    return make_error(ErrorCode::WRITE_FAILURE, "Write failed", output_path);
-                }
-                file_guard.f = nullptr;
 
 #ifndef NDEBUG
                 if (auto result = validate_written_ply_file(
@@ -3241,44 +3782,47 @@ namespace lfs::io {
                     "lichtfeld_provenance " + core::provenance_to_json(*provenance));
             }
 
-            std::filebuf fb;
-            // pubsetbuf before open — required for a portable large buffer.
-            std::vector<char> legacy_io_buffer(ply_constants::PLY_WRITE_IO_BUFFER_BYTES);
-            fb.pubsetbuf(legacy_io_buffer.data(),
-                         static_cast<std::streamsize>(legacy_io_buffer.size()));
+            {
+                LOG_TIMER_DEBUG("PLY export: file write");
+                std::filebuf fb;
+                // pubsetbuf before open — required for a portable large buffer.
+                std::vector<char> legacy_io_buffer(ply_constants::PLY_WRITE_IO_BUFFER_BYTES);
+                fb.pubsetbuf(legacy_io_buffer.data(),
+                             static_cast<std::streamsize>(legacy_io_buffer.size()));
 #ifdef _WIN32
-            fb.open(temp_path.wstring(), std::ios::out | std::ios::binary);
+                fb.open(temp_path.wstring(), std::ios::out | std::ios::binary);
 #else
-            fb.open(temp_path, std::ios::out | std::ios::binary);
+                fb.open(temp_path, std::ios::out | std::ios::binary);
 #endif
-            if (!fb.is_open()) {
-                return make_error(ErrorCode::WRITE_FAILURE, "Cannot open temporary file", temp_path);
-            }
-
-            if (progress_callback) {
-                ProgressReportingStreamBuf progress_buf(fb, std::move(progress_callback), estimated_write_bytes);
-                std::ostream out_stream(&progress_buf);
-                ply.write(out_stream, binary);
-                out_stream.flush();
-                const bool close_ok = fb.close() != nullptr;
-
-                if (progress_buf.cancelled()) {
-                    return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
+                if (!fb.is_open()) {
+                    return make_error(ErrorCode::WRITE_FAILURE, "Cannot open temporary file", temp_path);
                 }
-                if (!out_stream.good() || !close_ok) {
-                    return make_error(ErrorCode::WRITE_FAILURE, "Write failed", output_path);
-                }
-                if (!progress_buf.report_final()) {
-                    return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
-                }
-            } else {
-                std::ostream out_stream(&fb);
-                ply.write(out_stream, binary);
-                out_stream.flush();
-                const bool close_ok = fb.close() != nullptr;
 
-                if (!out_stream.good() || !close_ok) {
-                    return make_error(ErrorCode::WRITE_FAILURE, "Write failed", output_path);
+                if (progress_callback) {
+                    ProgressReportingStreamBuf progress_buf(fb, std::move(progress_callback), estimated_write_bytes);
+                    std::ostream out_stream(&progress_buf);
+                    ply.write(out_stream, binary);
+                    out_stream.flush();
+                    const bool close_ok = fb.close() != nullptr;
+
+                    if (progress_buf.cancelled()) {
+                        return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
+                    }
+                    if (!out_stream.good() || !close_ok) {
+                        return make_error(ErrorCode::WRITE_FAILURE, "Write failed", output_path);
+                    }
+                    if (!progress_buf.report_final()) {
+                        return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
+                    }
+                } else {
+                    std::ostream out_stream(&fb);
+                    ply.write(out_stream, binary);
+                    out_stream.flush();
+                    const bool close_ok = fb.close() != nullptr;
+
+                    if (!out_stream.good() || !close_ok) {
+                        return make_error(ErrorCode::WRITE_FAILURE, "Write failed", output_path);
+                    }
                 }
             }
 
@@ -3352,79 +3896,83 @@ namespace lfs::io {
             // Filter out deleted splats if deletion mask exists
             Tensor means, sh0, shN, opacity, scaling, rotation;
 
-            // Export wants canonical [N, K, 3], but resident shN is swizzled. Unpack on
-            // the host so saving cannot allocate a full canonical SH tensor in VRAM.
-            const auto shN_canonical_cpu = splat_data.shN_canonical_cpu();
-
-            if (splat_data.has_deleted_mask()) {
-                // Create keep mask (inverse of deleted mask)
-                const auto keep_mask = splat_data.deleted().logical_not();
-                const auto keep_mask_cpu = keep_mask.cpu().contiguous();
-
-                // Filter all tensors by keep mask
-                means = splat_data.means().index_select(0, keep_mask);
-                if (splat_data.sh0().is_valid())
-                    sh0 = splat_data.sh0().index_select(0, keep_mask);
-                if (shN_canonical_cpu.is_valid() && shN_canonical_cpu.numel() > 0)
-                    shN = shN_canonical_cpu.index_select(0, keep_mask_cpu);
-                if (splat_data.opacity_raw().is_valid())
-                    opacity = splat_data.opacity_raw().index_select(0, keep_mask);
-                if (splat_data.scaling_raw().is_valid())
-                    scaling = splat_data.scaling_raw().index_select(0, keep_mask);
-                if (splat_data.rotation_raw().is_valid())
-                    rotation = splat_data.rotation_raw().index_select(0, keep_mask);
-            } else {
-                // No deletion mask, use original tensors (canonical shN view)
-                means = splat_data.means();
-                sh0 = splat_data.sh0();
-                shN = shN_canonical_cpu;
-                opacity = splat_data.opacity_raw();
-                scaling = splat_data.scaling_raw();
-                rotation = splat_data.rotation_raw();
+            Tensor shN_ply_rest_cpu;
+            {
+                LOG_TIMER_DEBUG("PLY export: shN canonical host unpack");
+                shN_ply_rest_cpu = splat_data.shN_ply_rest_cpu();
             }
 
-            if (!report_export_progress(progress_callback, 0.10f, "Copying positions"))
-                return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
-            pc.means = means.cpu().contiguous();
-            pc.normals = Tensor::zeros_like(pc.means);
+            {
+                LOG_TIMER_DEBUG("PLY export: deleted-mask filter");
+                if (splat_data.has_deleted_mask()) {
+                    // Create keep mask (inverse of deleted mask)
+                    const auto keep_mask = splat_data.deleted().logical_not();
+                    const auto keep_mask_cpu = pageable_host_copy(keep_mask);
 
-            auto process_sh = [](const Tensor& sh) -> Tensor {
-                const auto sh_cpu = sh.cpu().contiguous();
-                if (sh_cpu.ndim() == 3) {
-                    const auto transposed = sh_cpu.transpose(1, 2);
-                    const size_t N = transposed.shape()[0];
-                    const size_t flat_dim = transposed.shape()[1] * transposed.shape()[2];
-                    return transposed.reshape({static_cast<int>(N), static_cast<int>(flat_dim)});
+                    // Filter all tensors by keep mask
+                    means = splat_data.means().index_select(0, keep_mask);
+                    if (splat_data.sh0().is_valid())
+                        sh0 = splat_data.sh0().index_select(0, keep_mask);
+                    if (shN_ply_rest_cpu.is_valid() && shN_ply_rest_cpu.numel() > 0)
+                        shN = shN_ply_rest_cpu.index_select(0, keep_mask_cpu);
+                    if (splat_data.opacity_raw().is_valid())
+                        opacity = splat_data.opacity_raw().index_select(0, keep_mask);
+                    if (splat_data.scaling_raw().is_valid())
+                        scaling = splat_data.scaling_raw().index_select(0, keep_mask);
+                    if (splat_data.rotation_raw().is_valid())
+                        rotation = splat_data.rotation_raw().index_select(0, keep_mask);
+                } else {
+                    means = splat_data.means();
+                    sh0 = splat_data.sh0();
+                    if (shN_ply_rest_cpu.is_valid() && shN_ply_rest_cpu.numel() > 0)
+                        shN = shN_ply_rest_cpu;
+                    opacity = splat_data.opacity_raw();
+                    scaling = splat_data.scaling_raw();
+                    rotation = splat_data.rotation_raw();
                 }
-                return sh_cpu;
-            };
-
-            if (!report_export_progress(progress_callback, 0.25f, "Copying SH DC"))
-                return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
-            if (sh0.is_valid())
-                pc.sh0 = process_sh(sh0);
-
-            if (!report_export_progress(progress_callback, 0.40f, "Copying SH coefficients"))
-                return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
-            if (shN.is_valid())
-                pc.shN = process_sh(shN);
-
-            if (!report_export_progress(progress_callback, 0.65f, "Copying opacity"))
-                return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
-            if (opacity.is_valid())
-                pc.opacity = opacity.cpu().contiguous();
-
-            if (!report_export_progress(progress_callback, 0.72f, "Copying scales"))
-                return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
-            if (scaling.is_valid())
-                pc.scaling = scaling.cpu().contiguous();
-
-            if (!report_export_progress(progress_callback, 0.82f, "Copying rotations"))
-                return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
-            if (rotation.is_valid()) {
-                pc.rotation = normalize_rotation_cpu(rotation.cpu().contiguous());
             }
 
+            {
+                LOG_TIMER_DEBUG("PLY export: host copies");
+                if (!report_export_progress(progress_callback, 0.10f, "Copying positions"))
+                    return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
+                pc.means = pageable_host_copy(means);
+                {
+                    LOG_TIMER_DEBUG("PLY export: normals zero-fill");
+                    pc.emit_zero_normals = true;
+                }
+
+                auto process_sh = [](const Tensor& sh) -> Tensor {
+                    return sh.ndim() == 3 ? flatten_sh_to_pageable_host(sh)
+                                          : pageable_host_copy(sh);
+                };
+
+                if (!report_export_progress(progress_callback, 0.25f, "Copying SH DC"))
+                    return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
+                if (sh0.is_valid())
+                    pc.sh0 = process_sh(sh0);
+
+                if (!report_export_progress(progress_callback, 0.40f, "Copying SH coefficients"))
+                    return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
+                if (shN.is_valid())
+                    pc.shN = shN;
+
+                if (!report_export_progress(progress_callback, 0.65f, "Copying opacity"))
+                    return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
+                if (opacity.is_valid())
+                    pc.opacity = pageable_host_copy(opacity);
+
+                if (!report_export_progress(progress_callback, 0.72f, "Copying scales"))
+                    return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
+                if (scaling.is_valid())
+                    pc.scaling = pageable_host_copy(scaling);
+
+                if (!report_export_progress(progress_callback, 0.82f, "Copying rotations"))
+                    return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
+                if (rotation.is_valid()) {
+                    pc.rotation = normalize_rotation_cpu(pageable_host_copy(rotation));
+                }
+            }
             pc.attribute_names = get_ply_attribute_names(splat_data);
 
             if (!report_export_progress(progress_callback, 1.0f, "PLY data prepared"))
@@ -3477,16 +4025,24 @@ namespace lfs::io {
         if (!report_export_progress(options.progress_callback, 0.0f, "Preparing PLY"))
             return make_error(ErrorCode::CANCELLED, "Export cancelled by user", options.output_path);
 
-        auto filtered_extra_attributes = filter_extra_attributes_for_splat_export(
-            splat_data, options.extra_attributes, options.output_path);
+        Result<std::vector<PlyAttributeBlock>> filtered_extra_attributes;
+        {
+            LOG_TIMER_DEBUG("PLY export: extra attribute filter");
+            filtered_extra_attributes = filter_extra_attributes_for_splat_export(
+                splat_data, options.extra_attributes, options.output_path);
+        }
         if (!filtered_extra_attributes) {
             return std::unexpected(filtered_extra_attributes.error());
         }
 
-        auto pc = to_point_cloud_with_progress(
-            splat_data,
-            scale_export_progress(options.progress_callback, 0.05f, 0.80f),
-            options.output_path);
+        Result<PointCloud> pc;
+        {
+            LOG_TIMER_DEBUG("PLY export: point cloud build total");
+            pc = to_point_cloud_with_progress(
+                splat_data,
+                scale_export_progress(options.progress_callback, 0.05f, 0.80f),
+                options.output_path);
+        }
         if (!pc)
             return std::unexpected(pc.error());
 
@@ -3502,65 +4058,81 @@ namespace lfs::io {
             options.provenance = core::make_minimal_provenance_stamp();
         }
 
-        if (auto result = validate_point_cloud_for_ply_write(point_cloud, options.output_path); !result) {
-            return result;
-        }
-
-        // Calculate estimated file size for disk space check
-        // PLY binary: header (~500 bytes) + vertex_count * stride (floats)
-        const size_t vertex_count = point_cloud.means.size(0);
-        size_t floats_per_vertex = 3; // positions
-
-        if (point_cloud.normals.is_valid())
-            floats_per_vertex += 3;
-        if (point_cloud.sh0.is_valid()) {
-            floats_per_vertex += point_cloud.sh0.ndim() == 3
-                                     ? point_cloud.sh0.size(1) * point_cloud.sh0.size(2)
-                                     : point_cloud.sh0.size(1);
-        }
-        if (point_cloud.shN.is_valid()) {
-            floats_per_vertex += point_cloud.shN.ndim() == 3
-                                     ? point_cloud.shN.size(1) * point_cloud.shN.size(2)
-                                     : point_cloud.shN.size(1);
-        }
-        if (point_cloud.opacity.is_valid())
-            floats_per_vertex += 1;
-        if (point_cloud.scaling.is_valid())
-            floats_per_vertex += 3;
-        if (point_cloud.rotation.is_valid())
-            floats_per_vertex += 4;
-        for (const auto& extra_attribute : options.extra_attributes) {
-            if (!extra_attribute.values.is_valid() || extra_attribute.values.numel() == 0)
-                continue;
-            if (extra_attribute.values.ndim() == 1) {
-                floats_per_vertex += 1;
-            } else if (extra_attribute.values.ndim() == 2) {
-                floats_per_vertex += static_cast<size_t>(extra_attribute.values.size(1));
+        // Validation canonicalizes every attribute to one contiguous CPU tensor. Keep this
+        // prepared copy alive through packing so direct GPU PointCloud exports do not download
+        // the same attributes a second time in the writer.
+        PointCloud prepared_point_cloud = point_cloud;
+        {
+            LOG_TIMER_DEBUG("PLY export: validation");
+            if (auto result = validate_point_cloud_for_ply_write(
+                    prepared_point_cloud, options.output_path);
+                !result) {
+                return result;
             }
         }
 
-        size_t estimated_size = 1024 + vertex_count * floats_per_vertex * sizeof(float);
-        if (point_cloud.colors.is_valid() && point_cloud.colors.numel() > 0) {
-            estimated_size += vertex_count * 3; // uchar RGB
+        size_t estimated_size = 0;
+        {
+            LOG_TIMER_DEBUG("PLY export: file size estimate");
+            // Calculate estimated file size for disk space check
+            // PLY binary: header (~500 bytes) + vertex_count * stride (floats)
+            const size_t vertex_count = prepared_point_cloud.means.size(0);
+            size_t floats_per_vertex = 3; // positions
+
+            if (prepared_point_cloud.normals.is_valid() || prepared_point_cloud.emit_zero_normals)
+                floats_per_vertex += 3;
+            if (prepared_point_cloud.sh0.is_valid()) {
+                floats_per_vertex += prepared_point_cloud.sh0.ndim() == 3
+                                         ? prepared_point_cloud.sh0.size(1) * prepared_point_cloud.sh0.size(2)
+                                         : prepared_point_cloud.sh0.size(1);
+            }
+            if (prepared_point_cloud.shN.is_valid()) {
+                floats_per_vertex += prepared_point_cloud.shN.ndim() == 3
+                                         ? prepared_point_cloud.shN.size(1) * prepared_point_cloud.shN.size(2)
+                                         : prepared_point_cloud.shN.size(1);
+            }
+            if (prepared_point_cloud.opacity.is_valid())
+                floats_per_vertex += 1;
+            if (prepared_point_cloud.scaling.is_valid())
+                floats_per_vertex += 3;
+            if (prepared_point_cloud.rotation.is_valid())
+                floats_per_vertex += 4;
+            for (const auto& extra_attribute : options.extra_attributes) {
+                if (!extra_attribute.values.is_valid() || extra_attribute.values.numel() == 0)
+                    continue;
+                if (extra_attribute.values.ndim() == 1) {
+                    floats_per_vertex += 1;
+                } else if (extra_attribute.values.ndim() == 2) {
+                    floats_per_vertex += static_cast<size_t>(extra_attribute.values.size(1));
+                }
+            }
+
+            estimated_size = 1024 + vertex_count * floats_per_vertex * sizeof(float);
+            if (prepared_point_cloud.colors.is_valid() && prepared_point_cloud.colors.numel() > 0) {
+                estimated_size += vertex_count * 3; // uchar RGB
+            }
         }
 
-        // Check disk space with 10% margin
-        if (auto space_check = check_disk_space(options.output_path, estimated_size, 1.1f); !space_check) {
-            return std::unexpected(space_check.error());
-        }
+        {
+            LOG_TIMER_DEBUG("PLY export: disk/space checks");
+            // Check disk space with 10% margin
+            if (auto space_check = check_disk_space(options.output_path, estimated_size, 1.1f); !space_check) {
+                return std::unexpected(space_check.error());
+            }
 
-        // Verify path is writable
-        if (auto writable_check = verify_writable(options.output_path); !writable_check) {
-            return std::unexpected(writable_check.error());
-        }
+            // Verify path is writable
+            if (auto writable_check = verify_writable(options.output_path); !writable_check) {
+                return std::unexpected(writable_check.error());
+            }
 
-        // Create parent directories
-        std::error_code ec;
-        std::filesystem::create_directories(options.output_path.parent_path(), ec);
-        if (ec) {
-            return make_error(ErrorCode::PERMISSION_DENIED,
-                              std::format("Cannot create directory: {}", ec.message()),
-                              options.output_path.parent_path());
+            // Create parent directories
+            std::error_code ec;
+            std::filesystem::create_directories(options.output_path.parent_path(), ec);
+            if (ec) {
+                return make_error(ErrorCode::PERMISSION_DENIED,
+                                  std::format("Cannot create directory: {}", ec.message()),
+                                  options.output_path.parent_path());
+            }
         }
 
         if (!report_export_progress(options.progress_callback, 0.1f, "Preparing PLY data"))
@@ -3570,7 +4142,8 @@ namespace lfs::io {
             cleanup_finished_saves();
             const std::lock_guard lock(g_save_mutex);
             g_save_futures.emplace_back(
-                std::async(std::launch::async, [pc = point_cloud, opts = options]() {
+                std::async(std::launch::async, [pc = prepared_point_cloud, opts = options]() {
+                    LOG_TIMER_DEBUG("PLY export: write total");
                     auto write_progress_callback = scale_export_progress(opts.progress_callback, 0.5f, 1.0f);
                     if (const auto result = write_ply_binary(
                             pc, opts.output_path, opts.binary, opts.extra_attributes,
@@ -3584,11 +4157,14 @@ namespace lfs::io {
                 return make_error(ErrorCode::CANCELLED, "Export cancelled by user", options.output_path);
 
             auto write_progress_callback = scale_export_progress(options.progress_callback, 0.5f, 1.0f);
-            if (const auto result = write_ply_binary(
-                    point_cloud, options.output_path, options.binary, options.extra_attributes,
-                    write_progress_callback, options.provenance);
-                !result) {
-                return std::unexpected(result.error());
+            {
+                LOG_TIMER_DEBUG("PLY export: write total");
+                if (const auto result = write_ply_binary(
+                        prepared_point_cloud, options.output_path, options.binary, options.extra_attributes,
+                        write_progress_callback, options.provenance);
+                    !result) {
+                    return std::unexpected(result.error());
+                }
             }
 
             if (!report_export_progress(options.progress_callback, 1.0f, "Done"))

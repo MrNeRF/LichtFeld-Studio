@@ -2,6 +2,7 @@
 
 #include "core/logger.hpp"
 #include "viewport_scratch_bucket.h"
+#include "visible_mask.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1037,10 +1038,17 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
     createComputePipeline(pipeline_sorting_indirect_2.spine, spirv_paths.at("radix_sort/spine_indirect"));
     createComputePipeline(pipeline_sorting_indirect_2.downsweep, spirv_paths.at("radix_sort/downsweep_indirect"));
     createComputePipeline(pipeline_apply_depth_ordering, spirv_paths.at("apply_depth_ordering"));
-    createComputePipeline(pipeline_visible_flags, spirv_paths.at("visible_flags"));
+    static_assert(lfs::rendering::vulkan::visible_mask::kWorkgroupSize == 128u);
+    createComputePipeline(pipeline_visible_flags,
+                          spirv_paths.at("visible_flags"),
+                          true,
+                          static_cast<uint32_t>(lfs::rendering::vulkan::visible_mask::kWorkgroupSize));
     createComputePipeline(pipeline_prepare_visible_sort, spirv_paths.at("prepare_visible_sort"));
     createComputePipeline(pipeline_prepare_tile_sort, spirv_paths.at("prepare_tile_sort"));
-    createComputePipeline(pipeline_compact_visible_primitives, spirv_paths.at("compact_visible_primitives"));
+    createComputePipeline(pipeline_compact_visible_primitives,
+                          spirv_paths.at("compact_visible_primitives"),
+                          true,
+                          static_cast<uint32_t>(lfs::rendering::vulkan::visible_mask::kWorkgroupSize));
     createComputePipeline(pipeline_lod_map_indices, spirv_paths.at("lod_map_indices"));
     createComputePipeline(pipeline_lod_select_threshold, spirv_paths.at("lod_select_threshold"));
     if (spirv_paths.count("lod_compact_touch")) {
@@ -1239,7 +1247,8 @@ void VulkanGSRenderer::executeProjectionForward(
     const _VulkanBuffer& lod_logical_indices,
     const _VulkanBuffer& lod_levels,
     const _VulkanBuffer& lod_weights,
-    const _VulkanBuffer& lod_counts) {
+    const _VulkanBuffer& lod_counts,
+    bool write_overlay_flags) {
     PerfTimer::Timer<PerfTimer::ProjectionForward> timer(this);
     DEVICE_GUARD;
 
@@ -1286,16 +1295,24 @@ void VulkanGSRenderer::executeProjectionForward(
 
     auto& tiles_touched = resizeDeviceBuffer(buffers.tiles_touched, alloc_size);
     auto& rect_tile_space = resizeDeviceBuffer(buffers.rect_tile_space, alloc_size);
-    auto& radii = resizeDeviceBuffer(buffers.radii, alloc_size);
     auto& xy_vs = resizeDeviceBuffer(buffers.xy_vs, 2 * alloc_size);
     auto& depths = resizeDeviceBuffer(buffers.depths, alloc_size);
     auto& inv_cov = resizeDeviceBuffer(buffers.inv_cov_vs_opacity, 4 * alloc_size);
     auto& rgb = resizeDeviceBuffer(buffers.rgb, 3 * alloc_size);
-    auto& overlay_flags = resizeDeviceBuffer(buffers.overlay_flags, alloc_size);
+    auto& overlay_flags = resizeDeviceBuffer(
+        buffers.overlay_flags, write_overlay_flags ? alloc_size : size_t{1});
+    // A2: keys die after compact (L4); sort indices are born at the post-radix
+    // copy (L6). Same int32 allocation, existing L5 barrier between them.
+    aliasDeviceView(buffers.primitive_sort_indices.deviceBuffer, primitive_depth_keys);
+    // A3: last tiles_touched read is apply_depth_ordering (L7); offset cumsum
+    // dest is born at L8.
+    aliasDeviceView(buffers.index_buffer_offset.deviceBuffer, tiles_touched);
 
     // Binding order: catalog appendix "executeProjectionForward L1266 projection_buffers".
     // Tags: attrs/transform/node/overlay/model/LOD reads; projection outputs write;
-    // primitive_depth_keys write (sentinel RMW after fill).
+    // primitive_depth_keys write (sentinel RMW after fill). Binding 8 is unused
+    // (legacy radii deleted); the placeholder keeps tagged indices aligned with
+    // shader binding numbers.
     std::vector<TaggedBinding> tagged = {
         {buffers.xyz_ws.deviceBuffer, BufferUse::ComputeRead},
         {buffers.sh0.deviceBuffer, BufferUse::ComputeRead},
@@ -1305,12 +1322,12 @@ void VulkanGSRenderer::executeProjectionForward(
         {buffers.opacity_raw.deviceBuffer, BufferUse::ComputeRead},
         {tiles_touched, BufferUse::ComputeWrite},
         {rect_tile_space, BufferUse::ComputeWrite},
-        {radii, BufferUse::ComputeWrite},
+        {tiles_touched, BufferUse::ComputeWrite}, // 8: unused (was radii)
         {xy_vs, BufferUse::ComputeWrite},
         {depths, BufferUse::ComputeWrite},
         {inv_cov, BufferUse::ComputeWrite},
         {rgb, BufferUse::ComputeWrite},
-        {overlay_flags, BufferUse::ComputeWrite},
+        {overlay_flags, write_overlay_flags ? BufferUse::ComputeWrite : BufferUse::ComputeRead},
         {transform_indices, BufferUse::ComputeRead},
         {node_mask, BufferUse::ComputeRead},
         {overlay_params, BufferUse::ComputeRead},
@@ -1324,6 +1341,11 @@ void VulkanGSRenderer::executeProjectionForward(
     };
 
     VulkanGSRendererUniforms projection_uniforms = uniforms;
+    if (write_overlay_flags) {
+        projection_uniforms.lod_enabled |= kLodEnabledWriteOverlayFlags;
+    } else {
+        projection_uniforms.lod_enabled &= ~kLodEnabledWriteOverlayFlags;
+    }
     if (buffers.quant_pool) {
         projection_uniforms.lod_page_splats = buffers.pool_page_splats;
         tagged.push_back({buffers.page_frames.deviceBuffer, BufferUse::ComputeRead});
@@ -2320,7 +2342,12 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
             timeCpuStage("vksplat.render.record.executeSortPrimitivesByDepth.ensure_buffers");
         unsorted_keys = &resizeDeviceBuffer(buffers.unsorted_keys(), num_splats);
         unsorted_idx = &resizeDeviceBuffer(buffers.unsorted_gauss_idx(), num_splats);
-        resizeDeviceBuffer(buffers.visible_flags, num_splats);
+        resizeDeviceBuffer(buffers.visible_flags,
+                           lfs::rendering::vulkan::visible_mask::maskWordCount(num_splats));
+        resizeDeviceBuffer(buffers.visible_block_counts,
+                           lfs::rendering::vulkan::visible_mask::workgroupCount(num_splats));
+        resizeDeviceBuffer(buffers.visible_prefix,
+                           lfs::rendering::vulkan::visible_mask::workgroupCount(num_splats));
         resizeDeviceBuffer(buffers.visible_count, 2);
         resizeDeviceBuffer(buffers.visible_sort_dispatch_args,
                            indirect::VisibleSortDispatch::kLayout.word_count);
@@ -2342,12 +2369,13 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
         [[maybe_unused]] auto cpu_timer =
             timeCpuStage("vksplat.render.record.executeSortPrimitivesByDepth.build_visible_flags");
         executeCompute(
-            {{num_splats, 64}},
+            {{num_splats, lfs::rendering::vulkan::visible_mask::kWorkgroupSize}},
             &visible_uniforms, sizeof(visible_uniforms),
             pipeline_visible_flags,
             std::vector<TaggedBinding>{
                 {buffers.tiles_touched.deviceBuffer, BufferUse::ComputeRead},
                 {buffers.visible_flags.deviceBuffer, BufferUse::ComputeWrite},
+                {buffers.visible_block_counts.deviceBuffer, BufferUse::ComputeWrite},
             });
     }
 
@@ -2355,7 +2383,7 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
         PerfTimer::Timer<PerfTimer::VisiblePrefix> gpu_timer(this);
         [[maybe_unused]] auto cpu_timer =
             timeCpuStage("vksplat.render.record.executeSortPrimitivesByDepth.visible_prefix");
-        executeCumsum(buffers, buffers.visible_flags, buffers.visible_prefix);
+        executeCumsum(buffers, buffers.visible_block_counts, buffers.visible_prefix);
     }
 
     struct PrepareUniforms {
@@ -2368,12 +2396,16 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
         PerfTimer::Timer<PerfTimer::PrepareVisibleSort> gpu_timer(this);
         [[maybe_unused]] auto cpu_timer =
             timeCpuStage("vksplat.render.record.executeSortPrimitivesByDepth.prepare_visible_sort");
-        // Shader indexes visible_prefix[num_splats-1]; dual-source with cumsum size.
-        if (num_splats > 0 && buffers.visible_prefix.deviceSize() < num_splats) {
+        // The prepare shader reads the last inclusive block count, not an
+        // N-wide per-splat prefix.
+        const std::size_t visible_blocks =
+            lfs::rendering::vulkan::visible_mask::workgroupCount(num_splats);
+        if (visible_blocks > 0 && buffers.visible_prefix.deviceSize() < visible_blocks) {
             lfs::rendering::throw_renderer_contract(
                 std::format(
-                    "prepare_visible_sort requires visible_prefix covering uniforms.num_splats (num_splats={}, device_elements={}, buffer={:#x})",
+                    "prepare_visible_sort requires visible_prefix covering all visibility blocks (num_splats={}, blocks={}, device_elements={}, buffer={:#x})",
                     num_splats,
+                    visible_blocks,
                     buffers.visible_prefix.deviceSize(),
                     lfs::rendering::vkHandleValue(buffers.visible_prefix.deviceBuffer.buffer)),
                 LFS_SOURCE_SITE_CURRENT());
@@ -2383,6 +2415,7 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
             &prepare_uniforms, sizeof(prepare_uniforms),
             pipeline_prepare_visible_sort,
             std::vector<TaggedBinding>{
+                {buffers.visible_block_counts.deviceBuffer, BufferUse::ComputeRead},
                 {buffers.visible_prefix.deviceBuffer, BufferUse::ComputeRead},
                 {buffers.visible_count.deviceBuffer, BufferUse::ComputeWrite},
                 {buffers.visible_sort_dispatch_args.deviceBuffer, BufferUse::ComputeWrite},
@@ -2401,11 +2434,11 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
         [[maybe_unused]] auto cpu_timer =
             timeCpuStage("vksplat.render.record.executeSortPrimitivesByDepth.compact_visible_primitives");
         executeCompute(
-            {{num_splats, 64}},
+            {{num_splats, lfs::rendering::vulkan::visible_mask::kWorkgroupSize}},
             &visible_uniforms, sizeof(visible_uniforms),
             pipeline_compact_visible_primitives,
             std::vector<TaggedBinding>{
-                {buffers.tiles_touched.deviceBuffer, BufferUse::ComputeRead},
+                {buffers.visible_flags.deviceBuffer, BufferUse::ComputeRead},
                 {buffers.visible_prefix.deviceBuffer, BufferUse::ComputeRead},
                 {buffers.primitive_depth_keys.deviceBuffer, BufferUse::ComputeRead},
                 {*unsorted_keys, BufferUse::ComputeWrite},
@@ -2587,7 +2620,8 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
     const _VulkanBuffer& lod_logical_indices,
     const _VulkanBuffer& lod_levels,
     const _VulkanBuffer& lod_weights,
-    const _VulkanBuffer& lod_counts) {
+    const _VulkanBuffer& lod_counts,
+    const bool write_overlay_flags) {
     PerfTimer::Timer<PerfTimer::ProjectionSurvivors> timer(this);
     DEVICE_GUARD;
 
@@ -2600,6 +2634,11 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
     survivor_uniforms.sort_capacity = static_cast<uint32_t>(
         std::min<size_t>(visible_capacity,
                          static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
+    if (write_overlay_flags) {
+        survivor_uniforms.lod_enabled |= kLodEnabledWriteOverlayFlags;
+    } else {
+        survivor_uniforms.lod_enabled &= ~kLodEnabledWriteOverlayFlags;
+    }
     if (buffers.quant_pool) {
         survivor_uniforms.lod_page_splats = buffers.pool_page_splats;
     }
@@ -2611,7 +2650,8 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
     auto& depths = resizeDeviceBuffer(buffers.depths, visible_capacity);
     auto& inv_cov = resizeDeviceBuffer(buffers.inv_cov_vs_opacity, 4 * visible_capacity);
     auto& rgb = resizeDeviceBuffer(buffers.rgb, 3 * visible_capacity);
-    auto& overlay_flags = resizeDeviceBuffer(buffers.overlay_flags, visible_capacity);
+    auto& overlay_flags = resizeDeviceBuffer(
+        buffers.overlay_flags, write_overlay_flags ? visible_capacity : size_t{1});
     auto& orig_ids = resizeDeviceBuffer(buffers.orig_ids, visible_capacity);
 
     const _VulkanBuffer lod_indices_binding =
@@ -2629,20 +2669,21 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
     // Pipeline layouts skip bindings 6 and 8 (placeholders still occupy slots).
     // Tags: attr/LOD/survivors/state reads; compact outputs write; emit_count R/W atomic.
     std::vector<TaggedBinding> tagged = {
-        {buffers.xyz_ws.deviceBuffer, BufferUse::ComputeRead},                  // 0
-        {buffers.sh0.deviceBuffer, BufferUse::ComputeRead},                     // 1
-        {buffers.shN.deviceBuffer, BufferUse::ComputeRead},                     // 2
-        {buffers.rotations.deviceBuffer, BufferUse::ComputeRead},               // 3
-        {buffers.scaling_raw.deviceBuffer, BufferUse::ComputeRead},             // 4
-        {buffers.opacity_raw.deviceBuffer, BufferUse::ComputeRead},             // 5
-        {unsorted_keys, BufferUse::ComputeWrite},                               // 6 placeholder
-        {rect_tile_space, BufferUse::ComputeWrite},                             // 7
-        {unsorted_keys, BufferUse::ComputeWrite},                               // 8 placeholder
-        {xy_vs, BufferUse::ComputeWrite},                                       // 9
-        {depths, BufferUse::ComputeWrite},                                      // 10
-        {inv_cov, BufferUse::ComputeWrite},                                     // 11
-        {rgb, BufferUse::ComputeWrite},                                         // 12
-        {overlay_flags, BufferUse::ComputeWrite},                               // 13
+        {buffers.xyz_ws.deviceBuffer, BufferUse::ComputeRead},      // 0
+        {buffers.sh0.deviceBuffer, BufferUse::ComputeRead},         // 1
+        {buffers.shN.deviceBuffer, BufferUse::ComputeRead},         // 2
+        {buffers.rotations.deviceBuffer, BufferUse::ComputeRead},   // 3
+        {buffers.scaling_raw.deviceBuffer, BufferUse::ComputeRead}, // 4
+        {buffers.opacity_raw.deviceBuffer, BufferUse::ComputeRead}, // 5
+        {unsorted_keys, BufferUse::ComputeWrite},                   // 6 placeholder
+        {rect_tile_space, BufferUse::ComputeWrite},                 // 7
+        {unsorted_keys, BufferUse::ComputeWrite},                   // 8 placeholder
+        {xy_vs, BufferUse::ComputeWrite},                           // 9
+        {depths, BufferUse::ComputeWrite},                          // 10
+        {inv_cov, BufferUse::ComputeWrite},                         // 11
+        {rgb, BufferUse::ComputeWrite},                             // 12
+        {overlay_flags, write_overlay_flags ? BufferUse::ComputeWrite
+                                            : BufferUse::ComputeRead},          // 13
         {transform_indices, BufferUse::ComputeRead},                            // 14
         {node_mask, BufferUse::ComputeRead},                                    // 15
         {overlay_params, BufferUse::ComputeRead},                               // 16

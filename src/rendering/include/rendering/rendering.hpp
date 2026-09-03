@@ -98,9 +98,11 @@ namespace lfs::rendering {
     };
 
     struct SelectionScreenWindow {
-        float scale = 0.35f;
+        float scale_x = 0.35f;
+        float scale_y = 0.35f;
         float offset_x = 0.0f;
         float offset_y = 0.0f;
+        bool drag_preview = false;
     };
 
     struct GaussianFilterState {

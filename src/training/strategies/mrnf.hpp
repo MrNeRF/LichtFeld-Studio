@@ -15,6 +15,10 @@
 #include <cassert>
 #include <memory>
 
+namespace lfs::training::sh_value {
+    class ShNMutationBatch;
+}
+
 class MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
 class MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
 class MRNFStrategyTest_SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth_Test;
@@ -32,6 +36,7 @@ class MRNFStrategyTest_DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate_
 class MRNFStrategyTest_LineBoundsUseFiniteSceneScaleForMeanLearningRate_Test;
 class CropDampingStrategyTest_MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale_Test;
 class MRNFStrategyTest_CompactSplatsCorrectAndPeakBelowThreeX_Test;
+class MRNFStrategyTest_CompactSplatsFusedPathLeavesGradsEmpty_Test;
 class MRNFStrategyTest_ExploreSplitsAreDisjointAndRespectMaxCap_Test;
 class MRNFStrategyTest_FarGrowthCapConstrainsOutsideAllocations_Test;
 class MRNFStrategyTest_FarDecayScaleAppliesOnlyToFarUnfrozenRows_Test;
@@ -43,6 +48,8 @@ class MRNFStrategyTest_CadenceScaledMatchesRefineEvery_Test;
 class MRNFStrategyTest_FarStarvationFactorFromSyntheticPopulations_Test;
 class MRNFStrategyTest_CensusGateActivatesAndSuppressesFarFeatures_Test;
 class MRNFStrategyTest_ExploreStarvationWeights_Test;
+class MRNFStrategyTest_DirectAuxiliaryGrowthPreservesPrefix_Test;
+class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Test;
 class MRNFStrategyTest_BackgroundImprovementsOffDisablesEveryProfileMechanism_Test;
 class MRNFStrategyTest_BackgroundImprovementsOnKeepsProfileMechanisms_Test;
 
@@ -103,8 +110,11 @@ namespace lfs::training {
         void reserve_optimizer_capacity(size_t capacity) override;
         void set_optimization_params(const lfs::core::param::OptimizationParameters& params) override;
         void set_training_dataset(std::shared_ptr<CameraDataset> views) override;
+        lfs::core::Tensor edge_score_scratch(int iter) override;
+        void on_edge_score_accumulated(int iter) override;
 
     private:
+        friend class ::MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Test;
         friend class ::MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
         friend class ::MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
         friend class ::MRNFStrategyTest_SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth_Test;
@@ -122,6 +132,7 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_LineBoundsUseFiniteSceneScaleForMeanLearningRate_Test;
         friend class ::CropDampingStrategyTest_MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale_Test;
         friend class ::MRNFStrategyTest_CompactSplatsCorrectAndPeakBelowThreeX_Test;
+        friend class ::MRNFStrategyTest_CompactSplatsFusedPathLeavesGradsEmpty_Test;
         friend class ::MRNFStrategyTest_ExploreSplitsAreDisjointAndRespectMaxCap_Test;
         friend class ::MRNFStrategyTest_FarGrowthCapConstrainsOutsideAllocations_Test;
         friend class ::MRNFStrategyTest_FarDecayScaleAppliesOnlyToFarUnfrozenRows_Test;
@@ -133,6 +144,7 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_FarStarvationFactorFromSyntheticPopulations_Test;
         friend class ::MRNFStrategyTest_CensusGateActivatesAndSuppressesFarFeatures_Test;
         friend class ::MRNFStrategyTest_ExploreStarvationWeights_Test;
+        friend class ::MRNFStrategyTest_DirectAuxiliaryGrowthPreservesPrefix_Test;
         friend class ::MRNFStrategyTest_BackgroundImprovementsOffDisablesEveryProfileMechanism_Test;
         friend class ::MRNFStrategyTest_BackgroundImprovementsOnKeepsProfileMechanisms_Test;
 
@@ -157,11 +169,9 @@ namespace lfs::training {
         void ensure_densification_info_shape();
         void enforce_max_cap();
         void refresh_decay_schedule_from_current_state();
-        void accumulate_edge_sample(int iter, const RenderOutput& render_output);
-        [[nodiscard]] bool should_accumulate_edge_sample(int iter) const;
         [[nodiscard]] bool should_accumulate_view_sample(int iter) const;
         [[nodiscard]] bool should_accumulate_explore_sample(int iter) const;
-        [[nodiscard]] int edge_target_samples_per_refine_window() const;
+        [[nodiscard]] int view_target_samples_per_refine_window() const;
         void reset_edge_accumulator();
         void reset_explore_accumulator();
         void accumulate_explore_sample(int iter, const RenderOutput& render_output);
@@ -170,6 +180,8 @@ namespace lfs::training {
         void seed_from_view(int iter, const RenderOutput& render_output);
         [[nodiscard]] bool cfg_ratio_rank_on() const;
         [[nodiscard]] float cfg_ratio_pow() const;
+        [[nodiscard]] bool has_separate_visibility_buffer() const;
+        [[nodiscard]] lfs::core::Tensor visibility_accumulator() const;
         [[nodiscard]] int cfg_fill_target_iter() const;
         [[nodiscard]] int cfg_seed_dose() const;
         [[nodiscard]] bool background_improvements_enabled() const;
@@ -209,7 +221,8 @@ namespace lfs::training {
             const lfs::core::Tensor& child_shN,
             const lfs::core::Tensor& child_raw_opacities,
             size_t append_start,
-            size_t K);
+            size_t K,
+            lfs::training::sh_value::ShNMutationBatch* shn_batch = nullptr);
         void publish_vram_attribution() noexcept;
         size_t active_count() const;
         size_t free_count() const;
@@ -223,7 +236,8 @@ namespace lfs::training {
             const lfs::core::Tensor& sh0,
             const lfs::core::Tensor& shN,
             const lfs::core::Tensor& opacities,
-            int64_t count);
+            int64_t count,
+            lfs::training::sh_value::ShNMutationBatch* shn_batch = nullptr);
         [[nodiscard]] lfs::core::Tensor edge_guidance_factor();
 
         std::unique_ptr<AdamOptimizer> _optimizer;
@@ -239,9 +253,8 @@ namespace lfs::training {
         lfs::core::Tensor _precomputed_edge_scores;
         bool _edge_precompute_valid = false;
         lfs::core::Tensor _edge_score_sum;
-        lfs::core::Tensor _edge_canny_nms_output;
+        lfs::core::Tensor _edge_view_scores;
         int _edge_sample_count = 0;
-        int _edge_last_sample_iter = -1;
         lfs::core::Tensor _explore_score_sum;
         lfs::core::Tensor _explore_error_hw;
         lfs::core::Tensor _explore_view_scores;
@@ -268,8 +281,8 @@ namespace lfs::training {
         float _far_starvation = 1.0f;
         float _logged_far_starvation = -1.0f;
         lfs::core::Tensor _free_mask;
+        bool _topology_frozen = false;
 
-        DensifyChildWorkspace _densify_ws;
         DensifyNScratch _densify_n_scratch;
         GumbelTopKScratch _gumbel_scratch;
         PositiveMedianScratch _median_scratch;
@@ -294,6 +307,12 @@ namespace lfs::training {
             const lfs::core::Tensor& active_mask,
             const lfs::core::Tensor& trainable_mask,
             const lfs::core::Tensor& edge_guidance) const;
+
+        // Grow MRNF bookkeeping after parameter preflight and before any
+        // parameter append. This is intentionally grow-only: refine resets
+        // the buffers after the append, while this step preserves their live
+        // prefix across a reservation boundary.
+        void ensure_auxiliary_capacity_for_growth(size_t target_size);
 
         // MRNF uses independent exponential schedules for mean and scale learning rates.
         double _mean_lr_unscaled = 0.0;

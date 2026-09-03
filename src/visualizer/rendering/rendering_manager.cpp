@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "rendering_manager.hpp"
+#include "core/cuda/memory_arena.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
@@ -69,8 +70,11 @@ namespace lfs::vis {
                 settings.depth_filter_max.z = 0.0f;
             }
 
-            if (!std::isfinite(settings.depth_filter_scale)) {
-                settings.depth_filter_scale = kDefaultScale;
+            if (!std::isfinite(settings.depth_filter_scale_x)) {
+                settings.depth_filter_scale_x = kDefaultScale;
+            }
+            if (!std::isfinite(settings.depth_filter_scale_y)) {
+                settings.depth_filter_scale_y = kDefaultScale;
             }
             if (!std::isfinite(settings.depth_filter_offset_x)) {
                 settings.depth_filter_offset_x = kDefaultOffset;
@@ -78,7 +82,8 @@ namespace lfs::vis {
             if (!std::isfinite(settings.depth_filter_offset_y)) {
                 settings.depth_filter_offset_y = kDefaultOffset;
             }
-            settings.depth_filter_scale = std::clamp(settings.depth_filter_scale, 0.05f, 1.0f);
+            settings.depth_filter_scale_x = std::clamp(settings.depth_filter_scale_x, 0.05f, 1.0f);
+            settings.depth_filter_scale_y = std::clamp(settings.depth_filter_scale_y, 0.05f, 1.0f);
             settings.depth_filter_offset_x = std::clamp(settings.depth_filter_offset_x, -1.0f, 1.0f);
             settings.depth_filter_offset_y = std::clamp(settings.depth_filter_offset_y, -1.0f, 1.0f);
             settings.depth_filter_viz_mode = std::clamp(settings.depth_filter_viz_mode, 0, 2);
@@ -96,6 +101,8 @@ namespace lfs::vis {
                    old_settings.ppisp_mode != new_settings.ppisp_mode ||
                    !ppispOverridesEqual(old_settings.ppisp_overrides, new_settings.ppisp_overrides);
         }
+
+        constexpr std::uint32_t kVksplatIdleScratchReleaseFrames = 30;
 
         [[nodiscard]] bool applySparkLodViewerDefaults(RenderSettings& settings) {
             bool changed = false;
@@ -507,6 +514,37 @@ namespace lfs::vis {
         lfs::core::Tensor::trim_memory_pool();
     }
 
+    void RenderingManager::noteVksplatIdleFrame(const bool training_active) {
+        if (!vksplat_viewport_renderer_) {
+            vksplat_idle_frame_count_ = 0;
+            return;
+        }
+
+        auto* const arena = lfs::core::GlobalArenaManager::instance().try_get_arena();
+        const bool under_pressure = arena != nullptr && arena->is_under_memory_pressure();
+
+        if (!training_active) {
+            vksplat_idle_frame_count_ = 0;
+            if (under_pressure) {
+                vksplat_viewport_renderer_->releaseScratchOnIdle(true);
+            }
+            return;
+        }
+
+        if (vksplat_idle_frame_count_ < kVksplatIdleScratchReleaseFrames) {
+            ++vksplat_idle_frame_count_;
+        }
+        if (under_pressure || vksplat_idle_frame_count_ >= kVksplatIdleScratchReleaseFrames) {
+            // During training the shared arena is owned by FastGS. Only release
+            // private viewer allocations here; the terminal callback below is
+            // the point at which the shared import may be relinquished.
+            vksplat_viewport_renderer_->releaseScratchOnIdle(
+                false,
+                vksplat_idle_frame_count_ >= kVksplatIdleScratchReleaseFrames);
+            vksplat_idle_frame_count_ = 0;
+        }
+    }
+
     void RenderingManager::updateSettings(const RenderSettings& new_settings) {
         updateSettings(new_settings, DirtyFlag::ALL);
     }
@@ -720,6 +758,22 @@ namespace lfs::vis {
     bool RenderingManager::isGTComparisonActive() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         return split_view_service_.isGTComparisonActive(settings_);
+    }
+
+    void RenderingManager::setDepthWindowDragPreview(const bool active) {
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex_);
+            if (depth_window_drag_preview_ == active) {
+                return;
+            }
+            depth_window_drag_preview_ = active;
+        }
+        markDirty(DirtyFlag::OVERLAY);
+    }
+
+    bool RenderingManager::depthWindowDragPreview() const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return depth_window_drag_preview_;
     }
 
     bool RenderingManager::isIndependentSplitViewActive() const {

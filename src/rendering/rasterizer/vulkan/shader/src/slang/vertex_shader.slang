@@ -339,6 +339,7 @@ SplatActiveState compute_splat_active_state(
 
     float3 projected_center = project_point(mean_ws, cam);
     float4 view_flags = overlay_params[OVERLAY_PARAM_VIEW_FLAGS];
+    float4 view_window = overlay_params[OVERLAY_PARAM_VIEW_WINDOW];
     if (active && overlay_enabled(view_flags.x)) {
         // KEEP IN SYNC: the screen-window formula lives in four places —
         // this block, filterSelectionByScreenWindowKernel (selection_ops.cu),
@@ -367,8 +368,8 @@ SplatActiveState compute_splat_active_state(
         float3 containment_center = project_point(mean_ws, containment_cam);
         float4 vmin = overlay_params[OVERLAY_PARAM_VIEW_MIN];
         float4 vmax = overlay_params[OVERLAY_PARAM_VIEW_MAX];
-        float half_w = 0.5f * view_flags.w * float(cam.W);
-        float half_h = 0.5f * view_flags.w * float(cam.H);
+        float half_w = 0.5f * view_window.x * float(cam.W);
+        float half_h = 0.5f * view_window.y * float(cam.H);
         float cx = 0.5f * float(cam.W) + vmin.w * (0.5f * float(cam.W) - half_w);
         float cy = 0.5f * float(cam.H) + vmax.w * (0.5f * float(cam.H) - half_h);
         bool inside_rect = abs(containment_center.x - cx) <= half_w &&
@@ -392,6 +393,8 @@ SplatActiveState compute_splat_active_state(
                 active = false;
             }
         }
+        // The live drag reveal needs no flag: inside splats simply receive no
+        // DIM, so the containment undim itself is the reveal. No tint class.
     }
 
     if (active && overlay_enabled(emphasis_flags.x) && node_data_enabled && node_idx >= 0 && node_idx < node_count) {

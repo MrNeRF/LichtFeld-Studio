@@ -56,6 +56,7 @@
 #include "core/events.hpp"
 #include "core/parameters.hpp"
 #include "core/scene.hpp"
+#include "operator/ops/depth_window_ops.hpp"
 #include "python/gil.hpp"
 #include "python/package_manager.hpp"
 #include "python/python_runtime.hpp"
@@ -78,7 +79,6 @@
 #include "window/vulkan_context.hpp"
 #include "window/window_manager.hpp"
 #include "window/window_state_utils.hpp"
-#include <OpenImageIO/imageio.h>
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
@@ -1880,7 +1880,7 @@ namespace lfs::vis::gui {
                 int channels = 0;
             };
 
-            // Thumbnail decode is OIIO read + CPU downscale; ~17-25 ms per
+            // Thumbnail decode + CPU downscale; ~17-25 ms per
             // image at typical full-res. With only 2 workers a 50-image
             // dataset took ~600 ms of single-threaded decode dominating
             // viewport_pass_prepare_record. Bumped to 8 — modern desktop
@@ -2607,9 +2607,10 @@ namespace lfs::vis::gui {
             // containment boundary.
             const float W = static_cast<float>(std::max(panel.render_size.x, 1));
             const float H = static_cast<float>(std::max(panel.render_size.y, 1));
-            const float scale = settings.depth_filter_scale;
-            const float half_w = 0.5f * scale * W;
-            const float half_h = 0.5f * scale * H;
+            const float scale_x = settings.depth_filter_scale_x;
+            const float scale_y = settings.depth_filter_scale_y;
+            const float half_w = 0.5f * scale_x * W;
+            const float half_h = 0.5f * scale_y * H;
             const float cx = 0.5f * W + settings.depth_filter_offset_x * (0.5f * W - half_w);
             const float cy = 0.5f * H + settings.depth_filter_offset_y * (0.5f * H - half_h);
             const glm::vec2 min_screen =
@@ -2640,6 +2641,107 @@ namespace lfs::vis::gui {
                                          const bool suppress_screen_window = false) {
             if (!suppress_screen_window) {
                 appendScreenWindowOverlay(params, panel, settings);
+                if (settings.depth_filter_enabled) {
+                    const op::DepthWindowPanelMapping window_panel{
+                        .panel = panel.panel,
+                        .x = panel.pos.x,
+                        .y = panel.pos.y,
+                        .width = panel.size.x,
+                        .height = panel.size.y,
+                        .render_width = panel.render_size.x,
+                        .render_height = panel.render_size.y,
+                    };
+                    const auto screen_rect = op::depthWindowScreenRect(
+                        window_panel,
+                        settings.depth_filter_scale_x,
+                        settings.depth_filter_scale_y,
+                        settings.depth_filter_offset_x,
+                        settings.depth_filter_offset_y);
+                    const auto& overlay_state = op::depthWindowOverlayState();
+                    if (overlay_state.visible) {
+                        const auto geometry = op::depthWindowHandleGeometry(screen_rect);
+                        const auto append_square = [&](const glm::vec2 center,
+                                                       const float radius,
+                                                       const glm::vec4 color) {
+                            const glm::vec2 extent(radius);
+                            appendShapeOverlayQuad(
+                                params.ui_shape_overlay_triangles,
+                                params.viewport_pos,
+                                params.viewport_size,
+                                center + glm::vec2(-extent.x, -extent.y),
+                                center + glm::vec2(extent.x, -extent.y),
+                                center + glm::vec2(extent.x, extent.y),
+                                center + glm::vec2(-extent.x, extent.y),
+                                center,
+                                center,
+                                color,
+                                {3.0f, 0.0f, 0.0f, 1.0f});
+                        };
+                        const auto append_move_glyph = [&](const glm::vec2 center,
+                                                           const float s,
+                                                           const glm::vec4 color) {
+                            const float bar_w = 0.12f * s;
+                            const float bar_end = 0.62f * s;
+                            const float head_w = 0.30f * s;
+                            const auto poly = [&](std::initializer_list<glm::vec2> pts) {
+                                std::array<glm::vec2, 4> buf;
+                                std::copy(pts.begin(), pts.end(), buf.begin());
+                                appendShapeOverlayPolygon(
+                                    params.ui_shape_overlay_triangles, params,
+                                    std::span<const glm::vec2>(buf.data(), pts.size()),
+                                    center, center, color, {3.0f, 0.0f, 0.0f, 1.0f});
+                            };
+                            const glm::vec2 c = center;
+                            poly({c + glm::vec2(-bar_end, -bar_w), c + glm::vec2(bar_end, -bar_w),
+                                  c + glm::vec2(bar_end, bar_w), c + glm::vec2(-bar_end, bar_w)});
+                            poly({c + glm::vec2(-bar_w, -bar_end), c + glm::vec2(bar_w, -bar_end),
+                                  c + glm::vec2(bar_w, bar_end), c + glm::vec2(-bar_w, bar_end)});
+                            poly({c + glm::vec2(-s, 0.0f), c + glm::vec2(-bar_end, -head_w),
+                                  c + glm::vec2(-bar_end, head_w)});
+                            poly({c + glm::vec2(s, 0.0f), c + glm::vec2(bar_end, head_w),
+                                  c + glm::vec2(bar_end, -head_w)});
+                            poly({c + glm::vec2(0.0f, -s), c + glm::vec2(head_w, -bar_end),
+                                  c + glm::vec2(-head_w, -bar_end)});
+                            poly({c + glm::vec2(0.0f, s), c + glm::vec2(-head_w, bar_end),
+                                  c + glm::vec2(head_w, bar_end)});
+                        };
+                        const auto& accent_src = lfs::vis::theme().palette.primary;
+                        const glm::vec4 accent(accent_src.x, accent_src.y,
+                                               accent_src.z, 0.95f);
+                        const auto draw_handle = [&](const glm::vec2 center,
+                                                     const bool circle) {
+                            constexpr float radius = op::DEPTH_WINDOW_HANDLE_DRAW_RADIUS_DP;
+                            const auto append_pass = [&](const float pass_radius,
+                                                         const glm::vec4 color) {
+                                if (circle) {
+                                    appendShapeOverlayCircle(
+                                        params.ui_shape_overlay_triangles,
+                                        params, center, pass_radius, color);
+                                } else {
+                                    append_square(center, pass_radius, color);
+                                }
+                            };
+                            append_pass(radius + 3.0f, glm::vec4(0.0f, 0.0f, 0.0f, 0.85f));
+                            append_pass(radius, accent);
+                        };
+
+                        if (!overlay_state.hide_handles) {
+                            for (size_t index = 0; index < geometry.corners.size(); ++index) {
+                                draw_handle(geometry.corners[index], false);
+                            }
+                            for (size_t index = 0; index < geometry.edge_midpoints.size(); ++index) {
+                                draw_handle(geometry.edge_midpoints[index], false);
+                            }
+                        }
+                        if (!overlay_state.hide_handles) {
+                            constexpr float glyph =
+                                op::DEPTH_WINDOW_HANDLE_DRAW_RADIUS_DP * 3.2f;
+                            append_move_glyph(geometry.center, glyph + 2.0f,
+                                              glm::vec4(0.0f, 0.0f, 0.0f, 0.85f));
+                            append_move_glyph(geometry.center, glyph, accent);
+                        }
+                    }
+                }
             }
 
             const auto selected_cropbox_is_visible = [&]() {
@@ -2780,8 +2882,6 @@ namespace lfs::vis::gui {
                 return;
             }
 
-            const auto gt_selection = rendering_manager.gtComparisonSelectionContext();
-
             constexpr std::array axis_colors{
                 glm::vec4(1.0f, 0.0f, 0.0f, 1.0f),
                 glm::vec4(0.0f, 1.0f, 0.0f, 1.0f),
@@ -2798,7 +2898,10 @@ namespace lfs::vis::gui {
                     continue;
                 }
 
-                appendCropAndFilterOverlays(params, panel, settings, scene_state, scene_manager, gizmo, gt_selection.has_value());
+                // The depth window (rect + handles) draws on no panel while GT
+                // comparison mode is active — see depthWindowOverlaySuppressed.
+                appendCropAndFilterOverlays(params, panel, settings, scene_state, scene_manager, gizmo,
+                                            op::depthWindowOverlaySuppressed(rendering_manager.isGTComparisonActive()));
                 if (scene_manager) {
                     appendCameraFrustumOverlays(params,
                                                 panel,
@@ -2836,25 +2939,9 @@ namespace lfs::vis::gui {
                 }
             }
 
-            if (gt_selection) {
-                // GT-C: the depth window belongs to the compare image, so it is drawn from a
-                // target describing that image — the whole letterboxed content rect at gt_size.
-                // Alex's Option A ruling: the rectangle spans the WHOLE content rect and is NOT
-                // clipped at the wipe divider, so part of it lies over the GT photograph half.
-                // Do not add clipping.
-                const auto bounds = rendering_manager.getContentBounds(
-                    glm::ivec2(params.viewport_size));
-                const VulkanGuidePanelTarget gt_panel{
-                    .panel = SplitViewPanelId::Right,
-                    .viewport = &viewer.getViewport(),
-                    .pos = params.viewport_pos + glm::vec2(bounds.x, bounds.y),
-                    .size = glm::vec2(bounds.width, bounds.height),
-                    .render_size = gt_selection->size,
-                };
-                if (gt_panel.valid()) {
-                    appendScreenWindowOverlay(params, gt_panel, settings);
-                }
-            }
+            // The former GT-panel depth-window draw is removed: while GT comparison
+            // is active no depth-window surface exists on any panel. Direct
+            // depth-window interaction in GT view is deferred as future work.
         }
 
         enum class DevResourceKind {
@@ -3019,68 +3106,22 @@ namespace lfs::vis::gui {
         SDL_Cursor* loadColorCursorFromAsset(const std::string& asset_name, int hot_x, int hot_y) {
             try {
                 const auto path = lfs::vis::getAssetPath(asset_name);
-                const std::string path_utf8 = lfs::core::path_to_utf8(path);
-                std::unique_ptr<OIIO::ImageInput> in(OIIO::ImageInput::open(path_utf8));
-                if (!in)
+                auto [rgba_pixels, width, height, channels] = lfs::core::load_image_with_alpha(path);
+                if (!rgba_pixels || width <= 0 || height <= 0 || channels != 4) {
+                    lfs::core::free_image(rgba_pixels);
                     return nullptr;
-
-                const OIIO::ImageSpec& spec = in->spec();
-                const int width = spec.width;
-                const int height = spec.height;
-                const int channels = spec.nchannels;
-                if (width <= 0 || height <= 0 || channels <= 0) {
-                    in->close();
-                    return nullptr;
-                }
-
-                const int read_channels = std::clamp(channels, 1, 4);
-                std::vector<unsigned char> source_pixels(static_cast<size_t>(width) * height * read_channels);
-                if (!in->read_image(0, 0, 0, read_channels, OIIO::TypeDesc::UINT8, source_pixels.data())) {
-                    in->close();
-                    return nullptr;
-                }
-                in->close();
-
-                std::vector<unsigned char> rgba_pixels(static_cast<size_t>(width) * height * 4, 0);
-                for (int i = 0; i < width * height; ++i) {
-                    const size_t src = static_cast<size_t>(i) * read_channels;
-                    const size_t dst = static_cast<size_t>(i) * 4;
-                    switch (read_channels) {
-                    case 1:
-                        rgba_pixels[dst + 0] = source_pixels[src + 0];
-                        rgba_pixels[dst + 1] = source_pixels[src + 0];
-                        rgba_pixels[dst + 2] = source_pixels[src + 0];
-                        rgba_pixels[dst + 3] = 255;
-                        break;
-                    case 2:
-                        rgba_pixels[dst + 0] = source_pixels[src + 0];
-                        rgba_pixels[dst + 1] = source_pixels[src + 0];
-                        rgba_pixels[dst + 2] = source_pixels[src + 0];
-                        rgba_pixels[dst + 3] = source_pixels[src + 1];
-                        break;
-                    case 3:
-                        rgba_pixels[dst + 0] = source_pixels[src + 0];
-                        rgba_pixels[dst + 1] = source_pixels[src + 1];
-                        rgba_pixels[dst + 2] = source_pixels[src + 2];
-                        rgba_pixels[dst + 3] = 255;
-                        break;
-                    default:
-                        rgba_pixels[dst + 0] = source_pixels[src + 0];
-                        rgba_pixels[dst + 1] = source_pixels[src + 1];
-                        rgba_pixels[dst + 2] = source_pixels[src + 2];
-                        rgba_pixels[dst + 3] = source_pixels[src + 3];
-                        break;
-                    }
                 }
 
                 SDL_Surface* surface = SDL_CreateSurfaceFrom(width, height, SDL_PIXELFORMAT_RGBA32,
-                                                             rgba_pixels.data(), width * 4);
+                                                             rgba_pixels, width * 4);
                 if (!surface) {
+                    lfs::core::free_image(rgba_pixels);
                     return nullptr;
                 }
 
                 SDL_Cursor* cursor = SDL_CreateColorCursor(surface, hot_x, hot_y);
                 SDL_DestroySurface(surface);
+                lfs::core::free_image(rgba_pixels);
                 return cursor;
             } catch (const std::exception& e) {
                 LOG_WARN("Could not load cursor asset '{}': {}", asset_name, e.what());
@@ -4493,100 +4534,108 @@ namespace lfs::vis::gui {
         // for another event-pump tick.
         if (viewer_ && !ui_hidden_ && !guiFocusState().want_capture_mouse) {
             if (auto* const sel = viewer_->getSelectionTool(); sel && sel->isEnabled()) {
-                SDL_Window* const window = viewer_->getWindow();
-                int win_x = 0;
-                int win_y = 0;
-                if (window) {
-                    SDL_GetWindowPosition(window, &win_x, &win_y);
-                }
-                float gx = 0.0f;
-                float gy = 0.0f;
-                SDL_GetGlobalMouseState(&gx, &gy);
-                const glm::vec2 mp{gx - static_cast<float>(win_x), gy - static_cast<float>(win_y)};
-                if (isPositionInViewport(mp.x, mp.y)) {
-                    auto* const rm = viewer_->getRenderingManager();
-                    const auto mode = rm ? rm->getSelectionPreviewMode()
-                                         : lfs::vis::SelectionPreviewMode::Centers;
-                    const auto& palette = lfs::vis::theme().palette;
-                    const auto& base = (SDL_GetModState() & SDL_KMOD_CTRL) ? palette.error : palette.primary;
-                    const glm::vec4 color{base.x * 0.85f, base.y * 0.85f, base.z * 0.85f, 0.85f};
-                    auto line = [&](const glm::vec2 a, const glm::vec2 b, const float thickness = 2.0f) {
-                        appendShapeOverlayLine(params.ui_shape_overlay_triangles, params, a, b, color, thickness);
-                    };
-                    auto rect = [&](const glm::vec2 mn, const glm::vec2 mx, const float thickness = 2.0f) {
-                        line({mn.x, mn.y}, {mx.x, mn.y}, thickness);
-                        line({mx.x, mn.y}, {mx.x, mx.y}, thickness);
-                        line({mx.x, mx.y}, {mn.x, mx.y}, thickness);
-                        line({mn.x, mx.y}, {mn.x, mn.y}, thickness);
-                    };
-                    auto polyline = [&](const auto& pts, const bool closed, const float thickness = 2.0f) {
-                        for (std::size_t i = 1; i < pts.size(); ++i) {
-                            line(pts[i - 1], pts[i], thickness);
-                        }
-                        if (closed && pts.size() > 1) {
-                            line(pts.back(), pts.front(), thickness);
-                        }
-                    };
+                const SDL_Keymod suppress_mods = SDL_GetModState();
+                const bool depth_window_chord = (suppress_mods & SDL_KMOD_SHIFT) && (suppress_mods & SDL_KMOD_ALT);
+                // Under GT comparison the depth-window chord has no meaning, so the
+                // selection ring is never suppressed there.
+                auto* const chord_rm = viewer_->getRenderingManager();
+                const bool chord_gt_active = chord_rm && chord_rm->isGTComparisonActive();
+                if (!(depth_window_chord && sel->isDepthFilterEnabled() && !chord_gt_active)) {
+                    SDL_Window* const window = viewer_->getWindow();
+                    int win_x = 0;
+                    int win_y = 0;
+                    if (window) {
+                        SDL_GetWindowPosition(window, &win_x, &win_y);
+                    }
+                    float gx = 0.0f;
+                    float gy = 0.0f;
+                    SDL_GetGlobalMouseState(&gx, &gy);
+                    const glm::vec2 mp{gx - static_cast<float>(win_x), gy - static_cast<float>(win_y)};
+                    if (isPositionInViewport(mp.x, mp.y)) {
+                        auto* const rm = viewer_->getRenderingManager();
+                        const auto mode = rm ? rm->getSelectionPreviewMode()
+                                             : lfs::vis::SelectionPreviewMode::Centers;
+                        const auto& palette = lfs::vis::theme().palette;
+                        const auto& base = (SDL_GetModState() & SDL_KMOD_CTRL) ? palette.error : palette.primary;
+                        const glm::vec4 color{base.x * 0.85f, base.y * 0.85f, base.z * 0.85f, 0.85f};
+                        auto line = [&](const glm::vec2 a, const glm::vec2 b, const float thickness = 2.0f) {
+                            appendShapeOverlayLine(params.ui_shape_overlay_triangles, params, a, b, color, thickness);
+                        };
+                        auto rect = [&](const glm::vec2 mn, const glm::vec2 mx, const float thickness = 2.0f) {
+                            line({mn.x, mn.y}, {mx.x, mn.y}, thickness);
+                            line({mx.x, mn.y}, {mx.x, mx.y}, thickness);
+                            line({mx.x, mx.y}, {mn.x, mx.y}, thickness);
+                            line({mn.x, mx.y}, {mn.x, mn.y}, thickness);
+                        };
+                        auto polyline = [&](const auto& pts, const bool closed, const float thickness = 2.0f) {
+                            for (std::size_t i = 1; i < pts.size(); ++i) {
+                                line(pts[i - 1], pts[i], thickness);
+                            }
+                            if (closed && pts.size() > 1) {
+                                line(pts.back(), pts.front(), thickness);
+                            }
+                        };
 
-                    switch (mode) {
-                    case lfs::vis::SelectionPreviewMode::Centers:
-                        appendShapeOverlayCircleOutline(params.ui_shape_overlay_triangles, params,
-                                                        mp, sel->getBrushRadius(), color, 2.0f);
-                        appendShapeOverlayCircle(params.ui_shape_overlay_triangles, params,
-                                                 mp, 3.0f, color);
-                        break;
-                    case lfs::vis::SelectionPreviewMode::Rings:
-                        appendShapeOverlayCircleOutline(params.ui_shape_overlay_triangles, params,
-                                                        mp, 10.0f, color, 2.0f);
-                        line({mp.x - 14.0f, mp.y}, {mp.x - 5.0f, mp.y}, 1.5f);
-                        line({mp.x + 5.0f, mp.y}, {mp.x + 14.0f, mp.y}, 1.5f);
-                        line({mp.x, mp.y - 14.0f}, {mp.x, mp.y - 5.0f}, 1.5f);
-                        line({mp.x, mp.y + 5.0f}, {mp.x, mp.y + 14.0f}, 1.5f);
-                        break;
-                    case lfs::vis::SelectionPreviewMode::Rectangle:
-                        rect({mp.x - 12.0f, mp.y - 9.0f}, {mp.x + 12.0f, mp.y + 9.0f});
-                        break;
-                    case lfs::vis::SelectionPreviewMode::Box:
-                        rect({mp.x - 11.0f, mp.y - 11.0f}, {mp.x + 11.0f, mp.y + 11.0f});
-                        line({mp.x - 11.0f, mp.y - 11.0f}, {mp.x - 5.0f, mp.y - 17.0f}, 1.5f);
-                        line({mp.x + 11.0f, mp.y - 11.0f}, {mp.x + 17.0f, mp.y - 17.0f}, 1.5f);
-                        line({mp.x + 11.0f, mp.y + 11.0f}, {mp.x + 17.0f, mp.y + 5.0f}, 1.5f);
-                        line({mp.x - 5.0f, mp.y - 17.0f}, {mp.x + 17.0f, mp.y - 17.0f}, 1.5f);
-                        line({mp.x + 17.0f, mp.y - 17.0f}, {mp.x + 17.0f, mp.y + 5.0f}, 1.5f);
-                        break;
-                    case lfs::vis::SelectionPreviewMode::Sphere:
-                        appendShapeOverlayCircleOutline(params.ui_shape_overlay_triangles, params,
-                                                        mp, 12.0f, color, 2.0f);
-                        appendShapeOverlayCircleOutline(params.ui_shape_overlay_triangles, params,
-                                                        mp, 7.0f, color, 1.5f);
-                        line({mp.x - 12.0f, mp.y}, {mp.x + 12.0f, mp.y}, 1.5f);
-                        break;
-                    case lfs::vis::SelectionPreviewMode::Polygon: {
-                        const std::array<glm::vec2, 3> pts{{
-                            {mp.x, mp.y - 13.0f},
-                            {mp.x + 12.0f, mp.y + 8.0f},
-                            {mp.x - 12.0f, mp.y + 8.0f},
-                        }};
-                        polyline(pts, true);
-                        break;
-                    }
-                    case lfs::vis::SelectionPreviewMode::Lasso: {
-                        const std::array<glm::vec2, 6> pts{{
-                            {mp.x - 13.0f, mp.y - 2.0f},
-                            {mp.x - 8.0f, mp.y - 11.0f},
-                            {mp.x + 5.0f, mp.y - 12.0f},
-                            {mp.x + 13.0f, mp.y - 3.0f},
-                            {mp.x + 9.0f, mp.y + 9.0f},
-                            {mp.x - 7.0f, mp.y + 11.0f},
-                        }};
-                        polyline(pts, true);
-                        break;
-                    }
-                    case lfs::vis::SelectionPreviewMode::Color:
-                        appendShapeOverlayCircleOutline(params.ui_shape_overlay_triangles, params,
-                                                        mp, 8.0f, color, 2.0f);
-                        line({mp.x - 10.0f, mp.y + 10.0f}, {mp.x + 10.0f, mp.y - 10.0f});
-                        break;
+                        switch (mode) {
+                        case lfs::vis::SelectionPreviewMode::Centers:
+                            appendShapeOverlayCircleOutline(params.ui_shape_overlay_triangles, params,
+                                                            mp, sel->getBrushRadius(), color, 2.0f);
+                            appendShapeOverlayCircle(params.ui_shape_overlay_triangles, params,
+                                                     mp, 3.0f, color);
+                            break;
+                        case lfs::vis::SelectionPreviewMode::Rings:
+                            appendShapeOverlayCircleOutline(params.ui_shape_overlay_triangles, params,
+                                                            mp, 10.0f, color, 2.0f);
+                            line({mp.x - 14.0f, mp.y}, {mp.x - 5.0f, mp.y}, 1.5f);
+                            line({mp.x + 5.0f, mp.y}, {mp.x + 14.0f, mp.y}, 1.5f);
+                            line({mp.x, mp.y - 14.0f}, {mp.x, mp.y - 5.0f}, 1.5f);
+                            line({mp.x, mp.y + 5.0f}, {mp.x, mp.y + 14.0f}, 1.5f);
+                            break;
+                        case lfs::vis::SelectionPreviewMode::Rectangle:
+                            rect({mp.x - 12.0f, mp.y - 9.0f}, {mp.x + 12.0f, mp.y + 9.0f});
+                            break;
+                        case lfs::vis::SelectionPreviewMode::Box:
+                            rect({mp.x - 11.0f, mp.y - 11.0f}, {mp.x + 11.0f, mp.y + 11.0f});
+                            line({mp.x - 11.0f, mp.y - 11.0f}, {mp.x - 5.0f, mp.y - 17.0f}, 1.5f);
+                            line({mp.x + 11.0f, mp.y - 11.0f}, {mp.x + 17.0f, mp.y - 17.0f}, 1.5f);
+                            line({mp.x + 11.0f, mp.y + 11.0f}, {mp.x + 17.0f, mp.y + 5.0f}, 1.5f);
+                            line({mp.x - 5.0f, mp.y - 17.0f}, {mp.x + 17.0f, mp.y - 17.0f}, 1.5f);
+                            line({mp.x + 17.0f, mp.y - 17.0f}, {mp.x + 17.0f, mp.y + 5.0f}, 1.5f);
+                            break;
+                        case lfs::vis::SelectionPreviewMode::Sphere:
+                            appendShapeOverlayCircleOutline(params.ui_shape_overlay_triangles, params,
+                                                            mp, 12.0f, color, 2.0f);
+                            appendShapeOverlayCircleOutline(params.ui_shape_overlay_triangles, params,
+                                                            mp, 7.0f, color, 1.5f);
+                            line({mp.x - 12.0f, mp.y}, {mp.x + 12.0f, mp.y}, 1.5f);
+                            break;
+                        case lfs::vis::SelectionPreviewMode::Polygon: {
+                            const std::array<glm::vec2, 3> pts{{
+                                {mp.x, mp.y - 13.0f},
+                                {mp.x + 12.0f, mp.y + 8.0f},
+                                {mp.x - 12.0f, mp.y + 8.0f},
+                            }};
+                            polyline(pts, true);
+                            break;
+                        }
+                        case lfs::vis::SelectionPreviewMode::Lasso: {
+                            const std::array<glm::vec2, 6> pts{{
+                                {mp.x - 13.0f, mp.y - 2.0f},
+                                {mp.x - 8.0f, mp.y - 11.0f},
+                                {mp.x + 5.0f, mp.y - 12.0f},
+                                {mp.x + 13.0f, mp.y - 3.0f},
+                                {mp.x + 9.0f, mp.y + 9.0f},
+                                {mp.x - 7.0f, mp.y + 11.0f},
+                            }};
+                            polyline(pts, true);
+                            break;
+                        }
+                        case lfs::vis::SelectionPreviewMode::Color:
+                            appendShapeOverlayCircleOutline(params.ui_shape_overlay_triangles, params,
+                                                            mp, 8.0f, color, 2.0f);
+                            line({mp.x - 10.0f, mp.y + 10.0f}, {mp.x + 10.0f, mp.y - 10.0f});
+                            break;
+                        }
                     }
                 }
             }

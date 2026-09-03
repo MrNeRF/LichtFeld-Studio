@@ -73,6 +73,13 @@ namespace lfs::training {
         virtual void set_training_dataset(std::shared_ptr<CameraDataset>) {}
 
         virtual void set_image_loader(lfs::io::PipelinedImageLoader*) {}
+
+        // Optional FastGS edge-scoring contract. The main backward writes one
+        // view into a zeroed scratch vector. The completion callback runs only
+        // after a successful backward and lets the strategy normalize/mask the
+        // view before adding it to its refine window.
+        virtual lfs::core::Tensor edge_score_scratch(int /*iter*/) { return {}; }
+        virtual void on_edge_score_accumulated(int /*iter*/) {}
     };
 
     class ICheckpointStateAdopter {
