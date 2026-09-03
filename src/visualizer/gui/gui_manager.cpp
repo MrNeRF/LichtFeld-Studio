@@ -3799,6 +3799,7 @@ namespace lfs::vis::gui {
     GuiManager::~GuiManager() {
         if (floating_panel_cursor_hidden_)
             SDL_ShowCursor();
+        destroyFloatingPanelDragCursorGeometry();
     }
 
     std::string GuiManager::scenePanelActiveTab() const {
@@ -4025,28 +4026,108 @@ namespace lfs::vis::gui {
         if (!floating_panel_cursor_hidden_ || !s_frame_input)
             return;
 
-        auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
-        auto* const overlay = rendering ? rendering->getScreenOverlayRenderer() : nullptr;
-        if (!overlay || !overlay->isFrameActive())
+        const float dp = std::max(current_ui_scale_, 1.0f);
+        if (!vulkan_gui_) {
+            auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
+            auto* const overlay = rendering ? rendering->getScreenOverlayRenderer() : nullptr;
+            if (!overlay || !overlay->isFrameActive())
+                return;
+
+            const glm::vec2 tip{s_frame_input->mouse_x, s_frame_input->mouse_y};
+            const std::array<glm::vec2, 7> points = {
+                tip + glm::vec2{0.0f, 0.0f},
+                tip + glm::vec2{0.0f, 14.0f * dp},
+                tip + glm::vec2{4.0f * dp, 10.0f * dp},
+                tip + glm::vec2{7.5f * dp, 19.0f * dp},
+                tip + glm::vec2{10.5f * dp, 17.0f * dp},
+                tip + glm::vec2{7.0f * dp, 9.0f * dp},
+                tip + glm::vec2{12.0f * dp, 9.0f * dp},
+            };
+            const std::array<glm::vec2, 3> head = {points[0], points[1], points[6]};
+            const std::array<glm::vec2, 4> shaft = {points[2], points[3], points[4], points[5]};
+            overlay->addConvexPolyFilled(head, {1.0f, 1.0f, 1.0f, 1.0f});
+            overlay->addConvexPolyFilled(shaft, {1.0f, 1.0f, 1.0f, 1.0f});
+            overlay->addPolyline(points, {0.0f, 0.0f, 0.0f, 1.0f}, true, dp);
+            return;
+        }
+
+        auto* const render_interface = rmlui_manager_.getVulkanRenderInterface();
+        if (!render_interface)
             return;
 
-        const float dp = std::max(current_ui_scale_, 1.0f);
-        const glm::vec2 tip{s_frame_input->mouse_x, s_frame_input->mouse_y};
-        const std::array<glm::vec2, 7> points = {
-            tip + glm::vec2{0.0f, 0.0f},
-            tip + glm::vec2{0.0f, 14.0f * dp},
-            tip + glm::vec2{4.0f * dp, 10.0f * dp},
-            tip + glm::vec2{7.5f * dp, 19.0f * dp},
-            tip + glm::vec2{10.5f * dp, 17.0f * dp},
-            tip + glm::vec2{7.0f * dp, 9.0f * dp},
-            tip + glm::vec2{12.0f * dp, 9.0f * dp},
-        };
-        overlay->addConvexPolyFilled(points, {1.0f, 1.0f, 1.0f, 1.0f});
-        overlay->addPolyline(points, {0.0f, 0.0f, 0.0f, 1.0f}, true, dp);
+        if (floating_panel_drag_cursor_geometry_ == 0 ||
+            floating_panel_drag_cursor_geometry_scale_ != dp) {
+            destroyFloatingPanelDragCursorGeometry();
+
+            const std::array<glm::vec2, 7> points = {
+                glm::vec2{0.0f, 0.0f},
+                glm::vec2{0.0f, 14.0f * dp},
+                glm::vec2{4.0f * dp, 10.0f * dp},
+                glm::vec2{7.5f * dp, 19.0f * dp},
+                glm::vec2{10.5f * dp, 17.0f * dp},
+                glm::vec2{7.0f * dp, 9.0f * dp},
+                glm::vec2{12.0f * dp, 9.0f * dp},
+            };
+            std::vector<Rml::Vertex> vertices;
+            std::vector<int> indices;
+            const Rml::ColourbPremultiplied white(255, 255, 255, 255);
+            const Rml::ColourbPremultiplied black(0, 0, 0, 255);
+            const auto add_triangle = [&](const glm::vec2 a, const glm::vec2 b,
+                                          const glm::vec2 c, const Rml::ColourbPremultiplied color) {
+                const int first = static_cast<int>(vertices.size());
+                vertices.push_back({Rml::Vector2f(a.x, a.y), color, {}});
+                vertices.push_back({Rml::Vector2f(b.x, b.y), color, {}});
+                vertices.push_back({Rml::Vector2f(c.x, c.y), color, {}});
+                indices.insert(indices.end(), {first, first + 1, first + 2});
+            };
+            const auto add_segment = [&](const glm::vec2 a, const glm::vec2 b,
+                                         const Rml::ColourbPremultiplied color) {
+                const glm::vec2 direction = b - a;
+                const float length = glm::length(direction);
+                if (length <= 0.0f)
+                    return;
+                const glm::vec2 normal{-direction.y / length * dp * 0.5f,
+                                       direction.x / length * dp * 0.5f};
+                const int first = static_cast<int>(vertices.size());
+                const std::array<glm::vec2, 4> quad = {
+                    a + normal, a - normal, b - normal, b + normal};
+                for (const auto point : quad)
+                    vertices.push_back({Rml::Vector2f(point.x, point.y), color, {}});
+                indices.insert(indices.end(), {first, first + 1, first + 2,
+                                               first, first + 2, first + 3});
+            };
+
+            add_triangle(points[0], points[1], points[6], white);
+            add_triangle(points[2], points[3], points[4], white);
+            add_triangle(points[2], points[4], points[5], white);
+            for (std::size_t i = 0; i < points.size(); ++i)
+                add_segment(points[i], points[(i + 1) % points.size()], black);
+
+            floating_panel_drag_cursor_geometry_ = render_interface->CompileGeometry(
+                {vertices.data(), vertices.size()}, {indices.data(), indices.size()});
+            if (floating_panel_drag_cursor_geometry_ != 0)
+                floating_panel_drag_cursor_geometry_scale_ = dp;
+        }
+
+        if (floating_panel_drag_cursor_geometry_ != 0) {
+            render_interface->ResetContextRenderState();
+            render_interface->RenderGeometry(
+                floating_panel_drag_cursor_geometry_,
+                {s_frame_input->mouse_x, s_frame_input->mouse_y}, {});
+        }
+    }
+
+    void GuiManager::destroyFloatingPanelDragCursorGeometry() {
+        if (floating_panel_drag_cursor_geometry_ == 0)
+            return;
+        if (auto* const render_interface = rmlui_manager_.getVulkanRenderInterface())
+            render_interface->ReleaseGeometry(floating_panel_drag_cursor_geometry_);
+        floating_panel_drag_cursor_geometry_ = 0;
+        floating_panel_drag_cursor_geometry_scale_ = 0.0f;
     }
 
     std::optional<GuiManager::SelectionRingCursorParameters>
-    GuiManager::selectionRingCursorParameters(const float mouse_x, const float mouse_y) const {
+    GuiManager::computeSelectionRingCursorParameters(const float mouse_x, const float mouse_y) const {
         if (!viewer_ || ui_hidden_ || guiFocusState().want_capture_mouse ||
             !isPositionInViewport(mouse_x, mouse_y)) {
             return std::nullopt;
@@ -4096,11 +4177,7 @@ namespace lfs::vis::gui {
 
         const float screen_radius = render_radius *
                                     (panel->width / static_cast<float>(panel->render_width));
-        const float density = [&] {
-            const float value = SDL_GetWindowPixelDensity(viewer_->getWindow());
-            return value > 0.0f ? value : 1.0f;
-        }();
-        const int radius_px = std::lround(screen_radius * density);
+        const int radius_px = std::lround(screen_radius);
         if (!useHardwareSelectionRing(true, SelectionPreviewMode::Centers, radius_px)) {
             return std::nullopt;
         }
@@ -4143,13 +4220,33 @@ namespace lfs::vis::gui {
         return SelectionRingCursorParameters{
             .key = SelectionRingCursorKey{
                 .radius_px = radius_px,
-                .density = density,
                 .theme_signature = selection_ring_theme_signature_,
                 .color = color,
                 .operation = operation,
             },
             .operation = operation,
         };
+    }
+
+    std::optional<GuiManager::SelectionRingCursorParameters>
+    GuiManager::selectionRingCursorParameters(const float mouse_x, const float mouse_y) const {
+        const auto frame_serial = viewer_ && viewer_->getWindowManager()
+                                      ? viewer_->getWindowManager()->frameInput().serial
+                                      : 0;
+        if (selection_ring_cursor_cache_.valid &&
+            selection_ring_cursor_cache_.frame_serial == frame_serial &&
+            selection_ring_cursor_cache_.mouse_x == mouse_x &&
+            selection_ring_cursor_cache_.mouse_y == mouse_y) {
+            return selection_ring_cursor_cache_.parameters;
+        }
+
+        selection_ring_cursor_cache_.valid = true;
+        selection_ring_cursor_cache_.frame_serial = frame_serial;
+        selection_ring_cursor_cache_.mouse_x = mouse_x;
+        selection_ring_cursor_cache_.mouse_y = mouse_y;
+        selection_ring_cursor_cache_.parameters =
+            computeSelectionRingCursorParameters(mouse_x, mouse_y);
+        return selection_ring_cursor_cache_.parameters;
     }
 
     bool GuiManager::selectionRingCursorActive(const float mouse_x, const float mouse_y) const {
@@ -4160,6 +4257,10 @@ namespace lfs::vis::gui {
                                        last_selection_cursor_ == selection_ring_cursor_pending_destroy_;
         return selection_ring_cursor_ && (ring_is_current || ring_was_selected) &&
                selectionRingCursorParameters(mouse_x, mouse_y).has_value();
+    }
+
+    bool GuiManager::selectionRingCursorWillBeActive(const float mouse_x, const float mouse_y) const {
+        return selection_ring_cursor_ && selectionRingCursorParameters(mouse_x, mouse_y).has_value();
     }
 
     void GuiManager::prepareSelectionRingCursor(const float mouse_x, const float mouse_y) {
@@ -4949,6 +5050,7 @@ namespace lfs::vis::gui {
             video_widget_->shutdown();
 
         async_tasks_.shutdown();
+        destroyFloatingPanelDragCursorGeometry();
 
         const bool need_gil = lfs::python::get_main_thread_state() != nullptr;
         if (need_gil)
@@ -6819,7 +6921,8 @@ namespace lfs::vis::gui {
             overlay_renderer = rendering->getScreenOverlayRenderer();
         }
         const bool needs_screen_overlay_frame =
-            has_viewport_overlay_panels || has_python_overlay_hooks || has_overlay_popups;
+            has_viewport_overlay_panels || has_python_overlay_hooks || has_overlay_popups ||
+            (floating_panel_cursor_hidden_ && !vulkan_gui_);
         if (overlay_renderer && needs_screen_overlay_frame) {
             LOG_TIMER_THRESHOLD("gui_render.screen_overlay_renderer.beginFrame", 0.25);
             overlay_renderer->beginFrame();
@@ -7046,7 +7149,8 @@ namespace lfs::vis::gui {
             guiFocusState().want_text_input = true;
         syncWindowTextInput(viewer_->getWindow());
 
-        renderFloatingPanelDragCursor();
+        if (!vulkan_gui_)
+            renderFloatingPanelDragCursor();
         if (overlay_renderer && needs_screen_overlay_frame) {
             LOG_TIMER_THRESHOLD("gui_render.screen_overlay_renderer.endFrame", 0.25);
             overlay_renderer->endFrame();
@@ -7198,6 +7302,7 @@ namespace lfs::vis::gui {
                             LOG_TIMER_THRESHOLD("gui_render.rmlui_record.foreground", 0.25);
                             rmlui_manager_.renderQueuedVulkanContexts(true);
                         }
+                        renderFloatingPanelDragCursor();
                         rmlui_manager_.endVulkanFrame();
                     } else {
                         rmlui_manager_.clearVulkanQueue();

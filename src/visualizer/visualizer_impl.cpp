@@ -397,7 +397,8 @@ namespace lfs::vis {
             rendering_manager_.get(),
             scene_manager_.get(),
             &viewport_,
-            window_manager_->getWindow());
+            window_manager_->getWindow(),
+            gui_manager_.get());
 
         // Connect tool context to input controller
         if (input_controller_) {

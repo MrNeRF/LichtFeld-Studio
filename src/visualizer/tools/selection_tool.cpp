@@ -5,6 +5,7 @@
 #include "tools/selection_tool.hpp"
 #include "geometry/euclidean_transform.hpp"
 #include "gui/gui_focus_state.hpp"
+#include "gui/gui_manager.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
@@ -333,7 +334,10 @@ namespace lfs::vis::tools {
             }
         }
 
-        if (mode_name) {
+        const bool hardware_ring_active =
+            tool_context_->getGuiManager() &&
+            tool_context_->getGuiManager()->selectionRingCursorWillBeActive(mouse_x, mouse_y);
+        if (mode_name && !hardware_ring_active) {
             char label_buf[32];
             std::snprintf(label_buf, sizeof(label_buf), "%s%s", mode_name, op_suffix);
             const float label_size = t.fonts.large_size;
