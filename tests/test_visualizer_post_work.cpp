@@ -14307,8 +14307,7 @@ namespace lfs::vis {
         ASSERT_NE(node, nullptr);
         ASSERT_NE(node->model, nullptr);
 
-        auto started = lifecycle->synchronizeDocumentFromViewer(
-            project::ProjectLifecycle::DocumentSyncMode::Autosave);
+        auto started = lifecycle->startAutosave();
         ASSERT_TRUE(started)
             << lfs::format_for_developer(started.error());
         ASSERT_TRUE(viewer.jobs().anyRunning(JobType::ProjectWrite));

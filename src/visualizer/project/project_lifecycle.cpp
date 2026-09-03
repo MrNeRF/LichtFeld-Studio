@@ -4752,6 +4752,13 @@ namespace lfs::vis::project {
             !synchronized) {
             return synchronized;
         }
+        // Synchronization may queue an asynchronous geometry capture in the
+        // same exclusive ProjectWrite slot. Autosave can continue only after
+        // that capture has settled; do not attempt the document write in the
+        // same tick and turn the expected overlap into an error.
+        if (viewer_.jobs().anyRunning(JobType::ProjectWrite)) {
+            return {};
+        }
         const bool untitled_crash_dirty =
             untitled &&
             (hasUntitledCrashDirtyChapters(
