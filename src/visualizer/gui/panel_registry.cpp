@@ -1412,6 +1412,15 @@ apply_registered_chrome:
         return std::nullopt;
     }
 
+    std::shared_ptr<IPanel> PanelRegistry::get_panel_instance(const std::string& id) const {
+        std::lock_guard lock(mutex_);
+        for (const auto& panel : panels_) {
+            if (panel.id == id)
+                return panel.panel;
+        }
+        return nullptr;
+    }
+
     std::vector<PanelProjectState>
     PanelRegistry::capture_project_state() const {
         std::lock_guard lock(mutex_);
