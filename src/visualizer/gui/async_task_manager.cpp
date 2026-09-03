@@ -944,6 +944,7 @@ namespace lfs::vis::gui {
             splat_load_state_.requests.clear();
             splat_load_state_.loaded_count = 0;
             splat_load_state_.failed_count = 0;
+            splat_load_state_.consolidation_pending = false;
             for (size_t index = 0; index < paths.size(); ++index) {
                 splat_load_state_.requests.push_back(SplatLoadRequest{
                     .path = std::move(paths[index]),
@@ -1077,12 +1078,6 @@ namespace lfs::vis::gui {
                          completion.stage_elapsed.count(),
                          attach_elapsed.count(),
                          completion.stage_elapsed.count() + attach_elapsed.count());
-                // Attachment invalidates the scene cache. Warm it before the
-                // next frame so getCombinedModel() never performs the cold
-                // six-tensor rebuild from inside the render callback.
-                jobs_.report(splat_load_state_.job, 0.95F,
-                             LOC(lichtfeld::Strings::Runtime::TASK_APPLYING));
-                static_cast<void>(scene_manager->getScene().getCombinedModel());
                 ++splat_load_state_.loaded_count;
             } catch (const std::exception& error) {
                 ++splat_load_state_.failed_count;
@@ -1116,10 +1111,23 @@ namespace lfs::vis::gui {
             return;
         }
 
-        if (scene_manager && splat_load_state_.loaded_count > 1) {
+        if (scene_manager && splat_load_state_.loaded_count > 1 &&
+            !splat_load_state_.consolidation_pending) {
             jobs_.report(splat_load_state_.job, 0.98F,
                          LOC(lichtfeld::Strings::Runtime::TASK_APPLYING));
+            scene_manager->getScene().requestCombinedModelBuild(true);
+            splat_load_state_.consolidation_pending = true;
+        }
+        if (scene_manager && splat_load_state_.consolidation_pending) {
+            // Polling getCombinedModel only swaps a completed worker cache;
+            // it never performs the large build on this thread.
+            static_cast<void>(scene_manager->getScene().getCombinedModel());
+            if (scene_manager->getScene().combinedModelBuildPending()) {
+                publishImportOverlayState();
+                return;
+            }
             scene_manager->consolidateNodeModels();
+            splat_load_state_.consolidation_pending = false;
         }
         const bool success = splat_load_state_.loaded_count > 0;
         {
