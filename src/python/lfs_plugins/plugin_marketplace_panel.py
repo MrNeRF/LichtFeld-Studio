@@ -907,6 +907,7 @@ class PluginMarketplacePanel(Panel):
             f'{self._build_feedback_markup(record, extra_class="plugin-list-feedback")}'
             f'<div class="plugin-list-options">'
             f'<div class="plugin-list-buttons" id="btns-{esc("card_id")}">{self._build_action_buttons_markup(record)}</div>'
+            f'{self._build_git_row(record, row_class="plugin-list-option-row", label_class="plugin-list-option-label text-disabled")}'
             f'{self._build_startup_row(record, row_class="plugin-list-option-row", label_class="plugin-list-option-label text-disabled")}'
             f'</div>'
             '</div>'
@@ -1081,12 +1082,13 @@ class PluginMarketplacePanel(Panel):
         if not card_el:
             return
 
-        # Operation-state changes only affect action controls.  Keep the row or
-        # card node and its details DOM intact so disclosure state, scroll
-        # anchoring, and focus survive feedback updates.
-        buttons_el = doc.get_element_by_id(f"btns-{card_id}")
-        if buttons_el:
-            buttons_el.set_inner_rml(self._build_action_buttons_markup(record))
+        # Keep the row or card node in place so list disclosure state and the
+        # surrounding panel chrome survive, while rebuilding the inner markup
+        # when operation state changes the available install options.
+        if self._view_mode == _VIEW_MODE_LIST:
+            card_el.set_inner_rml(self._build_list_inner_markup(record))
+        else:
+            card_el.set_inner_rml(self._build_card_inner_markup(record))
 
     def _refresh_all_card_records(self, doc, mgr):
         """Refresh installed-state chrome without replacing the result grid."""

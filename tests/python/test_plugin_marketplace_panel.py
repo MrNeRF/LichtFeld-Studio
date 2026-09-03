@@ -701,24 +701,26 @@ def test_plugin_marketplace_grid_rebuild_restores_scroll_after_layout(
     assert main.scroll_top == 843.0
 
 
-def test_plugin_marketplace_renders_git_checkbox_when_available(plugin_marketplace_module):
+def test_plugin_marketplace_renders_git_checkbox_in_both_views(plugin_marketplace_module):
     module, state = plugin_marketplace_module
     state.translations["plugin_marketplace.install_as_git_checkout"] = "Install as git checkout"
 
     panel = module.PluginMarketplacePanel()
     panel._git_available = True
 
-    markup = panel._build_card_markup({
+    record = {
         "card_id": "sample-card",
         "name": "Sample Plugin",
         "show_install": True,
+        "is_installed": False,
         "show_git_checkout": True,
-        "git_checkout_selected": True,
-    })
+        "git_checkout_selected": False,
+    }
 
-    assert 'data-action="git-checkout"' in markup
-    assert 'checked="checked"' in markup
-    assert "Install as git checkout" in markup
+    for markup in (panel._build_card_markup(record), panel._build_list_markup(record)):
+        assert 'data-action="git-checkout"' in markup
+        assert 'class="card-git-row"' in markup or 'class="plugin-list-option-row"' in markup
+        assert "Install as git checkout" in markup
 
 
 def test_plugin_marketplace_install_uses_git_transport_when_selected(plugin_marketplace_module):
@@ -726,7 +728,16 @@ def test_plugin_marketplace_install_uses_git_transport_when_selected(plugin_mark
 
     panel = module.PluginMarketplacePanel()
     panel._git_available = True
-    panel._git_checkout_selected["sample-card"] = True
+    checkbox = _ElementStub()
+    checkbox.attributes.update({
+        "type": "checkbox",
+        "data-action": "git-checkout",
+        "data-card-id": "sample-card",
+        "checked": "checked",
+    })
+    panel._view_mode = "list"
+    panel._on_card_change(_EventStub(target=checkbox))
+    assert panel._git_checkout_selected["sample-card"] is True
     panel._run_async = lambda _card_id, operation, _success, _error: operation(lambda _msg: None)
 
     calls = {}
@@ -757,6 +768,43 @@ def test_plugin_marketplace_install_uses_git_transport_when_selected(plugin_mark
 
     assert calls["url"] == "https://github.com/owner/repo"
     assert calls["transport"] == "git"
+
+
+def test_plugin_marketplace_refresh_rerenders_git_option(plugin_marketplace_module):
+    module, _state = plugin_marketplace_module
+
+    panel = module.PluginMarketplacePanel()
+    panel._git_available = True
+    panel._view_mode = "list"
+    entry = module.MarketplacePluginEntry(
+        source_url="https://github.com/owner/repo",
+        github_url="https://github.com/owner/repo",
+        owner="owner",
+        repo="repo",
+        name="Sample Plugin",
+        description="",
+    )
+    panel._cached_entries = [entry]
+    panel._cached_card_ids = ["sample-card"]
+    panel._cached_card_records = [{
+        "card_id": "sample-card",
+        "show_git_checkout": True,
+        "git_checkout_selected": False,
+    }]
+    card = _ElementStub()
+    card.inner_rml = panel._build_list_markup(panel._cached_card_records[0])
+    doc = _DocStub({"card-sample-card": card})
+
+    class _ManagerStub:
+        def discover(self):
+            return []
+
+    panel._card_ops["sample-card"] = module.CardOpState(
+        phase=module.CardOpPhase.IN_PROGRESS,
+    )
+    panel._refresh_card_record(doc, "sample-card", _ManagerStub())
+
+    assert 'data-action="git-checkout"' not in card.inner_rml
 
 
 def test_plugin_marketplace_list_view_marks_selected_toggle(plugin_marketplace_module):
