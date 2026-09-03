@@ -431,6 +431,64 @@ def test_selection_tool_uses_centered_modes(toolbar_module, monkeypatch):
     assert snapshot["selection_group_buttons"][0]["selected"] is False
 
 
+def test_selection_tool_falls_back_from_centers_for_cameras(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    state = SimpleNamespace(active_tool="builtin.select", active_submode="centers")
+    select_tool = SimpleNamespace(
+        id="builtin.select",
+        icon="selection",
+        label="Select",
+        shortcut="1",
+        submodes=(
+            SimpleNamespace(id="centers", label="Centers", icon="circle-dot", shortcut=""),
+            SimpleNamespace(id="rectangle", label="Rectangle", icon="rectangle", shortcut=""),
+            SimpleNamespace(id="polygon", label="Polygon", icon="polygon", shortcut=""),
+            SimpleNamespace(id="lasso", label="Lasso", icon="lasso", shortcut=""),
+            SimpleNamespace(id="rings", label="Rings", icon="ring", shortcut=""),
+            SimpleNamespace(id="color", label="Color", icon="color-picker", shortcut=""),
+            SimpleNamespace(id="box", label="Box", icon="box", shortcut=""),
+            SimpleNamespace(id="sphere", label="Sphere", icon="sphere", shortcut=""),
+        ),
+        pivot_modes=(),
+        selected=None,
+        can_activate=lambda _context: True,
+    )
+
+    monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: state.active_tool, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_active_submode", lambda: state.active_submode, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_selection_domain", lambda: "cameras", raising=False)
+    monkeypatch.setattr(
+        lf_stub.ui,
+        "set_selection_mode",
+        lambda mode: setattr(state, "active_submode", mode),
+        raising=False,
+    )
+    monkeypatch.setattr(module.ToolRegistry, "get_all", staticmethod(lambda: [select_tool]), raising=False)
+    monkeypatch.setattr(
+        module.ToolRegistry,
+        "get",
+        staticmethod(lambda tool_id: select_tool if tool_id == "builtin.select" else None),
+        raising=False,
+    )
+
+    snapshot = module._GizmoToolbarController().snapshot()
+
+    assert state.active_submode == "rectangle"
+    assert (
+        next(button for button in snapshot["selection_mode_buttons"] if button["value"] == "rectangle")["selected"]
+        is True
+    )
+    assert (
+        next(button for button in snapshot["selection_mode_buttons"] if button["value"] == "centers")["enabled"]
+        is False
+    )
+    assert all(
+        next(button for button in snapshot["selection_mode_buttons"] if button["value"] == mode)["enabled"] is False
+        for mode in ("rings", "color", "box", "sphere")
+    )
+
+
 def test_transform_and_mirror_tools_use_centered_subtool_rows(toolbar_module, monkeypatch):
     module, _hook_calls, _remove_calls = toolbar_module
     lf_stub = sys.modules["lichtfeld"]

@@ -911,9 +911,17 @@ namespace lfs::training {
         }
 
         lfs::core::PointCloud point_cloud_to_use;
+        lfs::core::PointCloud compacted_point_cloud;
         const int max_cap = params.optimization.max_cap;
 
         if (point_cloud && point_cloud->size() > 0) {
+            if (point_cloud->has_deleted()) {
+                const auto before_count = point_cloud->size();
+                compacted_point_cloud = lfs::core::remove_deleted_points(*point_cloud);
+                LOG_INFO("Removed soft-deleted points: {} -> {}", before_count, compacted_point_cloud.size());
+                point_cloud = &compacted_point_cloud;
+            }
+
             const lfs::core::CropBoxData* cropbox_data = nullptr;
             lfs::core::NodeId cropbox_id = lfs::core::NULL_NODE;
 

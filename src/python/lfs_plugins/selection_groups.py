@@ -13,6 +13,16 @@ __lfs_panel_classes__ = ["SelectionGroupsPanel"]
 __lfs_panel_ids__ = ["lfs.selection_groups"]
 
 
+def _selection_domain():
+    getter = getattr(getattr(lf, "ui", None), "get_selection_domain", None)
+    if not callable(getter):
+        return "gaussians"
+    try:
+        return getter()
+    except Exception:
+        return "gaussians"
+
+
 def __lfs_after_reload__(runtime):
     runtime.ui.set_panel_parent("lfs.selection_groups", "lfs.rendering")
 
@@ -52,7 +62,11 @@ class SelectionGroupsPanel(Panel):
     @classmethod
     def poll(cls, context):
         del context
-        return lf.ui.get_active_tool() == "builtin.select" and lf.get_scene() is not None
+        return (
+            lf.ui.get_active_tool() == "builtin.select"
+            and lf.get_scene() is not None
+            and _selection_domain() == "gaussians"
+        )
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model(SELECTION_GROUPS_MODEL)
@@ -125,7 +139,11 @@ class SelectionGroupsPanel(Panel):
 
     def _sync_panel_state(self, doc, force=False):
         dirty = False
-        visible = lf.ui.get_active_tool() == "builtin.select" and lf.get_scene() is not None
+        visible = (
+            lf.ui.get_active_tool() == "builtin.select"
+            and lf.get_scene() is not None
+            and _selection_domain() == "gaussians"
+        )
         wrap = doc.get_element_by_id("content-wrap")
         if wrap:
             wrap.set_class("hidden", not visible)

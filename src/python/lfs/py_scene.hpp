@@ -154,6 +154,9 @@ namespace lfs::python {
         }
 
         int64_t size() const { return pc_->size(); }
+        int64_t deleted_count() const {
+            return pc_->has_deleted() ? static_cast<int64_t>(pc_->deleted->count_nonzero()) : 0;
+        }
         bool is_gaussian() const { return pc_->is_gaussian(); }
         std::vector<std::string> attribute_names() const { return pc_->attribute_names; }
 

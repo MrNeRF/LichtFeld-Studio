@@ -20,6 +20,7 @@
 #include "scene/scene_manager.hpp"
 #include "selection_group_mask.hpp"
 #include "training/training_manager.hpp"
+#include "visualizer/gui_capabilities.hpp"
 #include "visualizer_impl.hpp"
 #include <algorithm>
 #include <array>
@@ -36,6 +37,7 @@
 #include <limits>
 #include <optional>
 #include <shared_mutex>
+#include <unordered_set>
 
 namespace lfs::vis {
 
@@ -149,6 +151,36 @@ namespace lfs::vis {
             return seed;
         }
 
+        [[nodiscard]] std::size_t makePointCloudScreenPositionCacheSignature(
+            const SceneRenderState& scene_state,
+            const rendering::ViewportData& viewport,
+            const bool equirectangular,
+            const std::uint64_t projection_generation) {
+            std::size_t seed = 0;
+            hashCombine(seed, std::hash<std::uint64_t>{}(projection_generation));
+            hashCombine(seed, reinterpret_cast<std::size_t>(scene_state.point_cloud));
+            if (scene_state.point_cloud) {
+                hashTensorIdentity(seed, &scene_state.point_cloud->means);
+                hashCombine(seed, static_cast<std::size_t>(scene_state.point_cloud->size()));
+            }
+            hashMat4(seed, scene_state.point_cloud_transform);
+            hashMat3(seed, viewport.rotation);
+            hashVec3(seed, viewport.translation);
+            hashCombine(seed, std::hash<int>{}(viewport.size.x));
+            hashCombine(seed, std::hash<int>{}(viewport.size.y));
+            hashFloat(seed, viewport.focal_length_mm);
+            hashCombine(seed, std::hash<bool>{}(viewport.orthographic));
+            hashFloat(seed, viewport.ortho_scale);
+            hashCombine(seed, std::hash<bool>{}(equirectangular));
+            return seed;
+        }
+
+        [[nodiscard]] std::size_t makePointCloudMeansSignature(const core::Tensor& means) {
+            std::size_t seed = 0;
+            hashTensorIdentity(seed, &means);
+            return seed;
+        }
+
         [[nodiscard]] core::Tensor& uploadFloat2PointsToBuffer(
             const std::vector<glm::vec2>& points,
             std::vector<float>& host_buffer,
@@ -207,6 +239,660 @@ namespace lfs::vis {
             const glm::vec2 closest = segment_start + delta * t;
             const glm::vec2 offset = point - closest;
             return glm::dot(offset, offset);
+        }
+
+        [[nodiscard]] bool isCameraSelectionShape(const SelectionShape shape) {
+            return shape == SelectionShape::Rectangle ||
+                   shape == SelectionShape::Polygon ||
+                   shape == SelectionShape::Lasso;
+        }
+
+        [[nodiscard]] bool pointInPolygon(const glm::vec2 point,
+                                          const std::vector<glm::vec2>& polygon) {
+            if (polygon.size() < 3) {
+                return false;
+            }
+
+            bool inside = false;
+            for (size_t i = 0, j = polygon.size() - 1; i < polygon.size(); j = i++) {
+                const auto& a = polygon[i];
+                const auto& b = polygon[j];
+                const float denom = (b.y - a.y) == 0.0f ? 1.0e-6f : (b.y - a.y);
+                const bool crosses = ((a.y > point.y) != (b.y > point.y)) &&
+                                     (point.x < (b.x - a.x) * (point.y - a.y) / denom + a.x);
+                if (crosses) {
+                    inside = !inside;
+                }
+            }
+            return inside;
+        }
+
+        [[nodiscard]] std::optional<glm::mat4> cameraVisualizerTransform(
+            const core::Camera& camera,
+            const glm::mat4& scene_transform) {
+            auto rotation_tensor = camera.R();
+            auto translation_tensor = camera.T();
+            if (!rotation_tensor.is_valid() || !translation_tensor.is_valid()) {
+                return std::nullopt;
+            }
+            if (rotation_tensor.device() != core::Device::CPU) {
+                rotation_tensor = rotation_tensor.cpu();
+            }
+            if (translation_tensor.device() != core::Device::CPU) {
+                translation_tensor = translation_tensor.cpu();
+            }
+            if (rotation_tensor.dtype() != core::DataType::Float32 ||
+                translation_tensor.dtype() != core::DataType::Float32 ||
+                rotation_tensor.numel() < 9 || translation_tensor.numel() < 3) {
+                return std::nullopt;
+            }
+
+            const float* const rotation = rotation_tensor.ptr<float>();
+            const float* const translation = translation_tensor.ptr<float>();
+            if (!rotation || !translation) {
+                return std::nullopt;
+            }
+
+            glm::mat4 world_to_camera(1.0f);
+            for (int row = 0; row < 3; ++row) {
+                for (int col = 0; col < 3; ++col) {
+                    world_to_camera[col][row] = rotation[row * 3 + col];
+                }
+                world_to_camera[3][row] = translation[row];
+            }
+
+            return scene_transform * glm::inverse(world_to_camera) * rendering::DATA_TO_VISUALIZER_CAMERA_AXES_4;
+        }
+
+        [[nodiscard]] std::optional<glm::vec2> projectCameraSelectionPoint(
+            const Viewport& viewport,
+            const glm::ivec2 render_size,
+            const glm::vec3& world_point,
+            const RenderSettings& settings) {
+            if (settings.equirectangular) {
+                const glm::vec3 view =
+                    glm::transpose(viewport.camera.R) * (world_point - viewport.camera.t);
+                const float len = glm::length(view);
+                if (!std::isfinite(len) || len <= 1.0e-6f) {
+                    return std::nullopt;
+                }
+
+                const glm::vec3 dir = view / len;
+                const float ndc_x = std::atan2(dir.x, -dir.z) / glm::pi<float>();
+                const float ndc_y = -std::asin(std::clamp(dir.y, -1.0f, 1.0f)) /
+                                    (glm::pi<float>() * 0.5f);
+                if (!std::isfinite(ndc_x) || !std::isfinite(ndc_y)) {
+                    return std::nullopt;
+                }
+
+                return glm::vec2(
+                    (ndc_x * 0.5f + 0.5f) * static_cast<float>(render_size.x),
+                    (ndc_y * 0.5f + 0.5f) * static_cast<float>(render_size.y));
+            }
+
+            return rendering::projectWorldPoint(
+                viewport.camera.R,
+                viewport.camera.t,
+                render_size,
+                world_point,
+                settings.focal_length_mm,
+                settings.orthographic,
+                settings.ortho_scale);
+        }
+
+        [[nodiscard]] std::optional<glm::mat4> cameraFrustumModelMatrix(
+            const core::Camera& camera,
+            const glm::mat4& visualizer_camera_to_world,
+            const float scale) {
+            const int image_width = camera.image_width() > 0 ? camera.image_width() : camera.camera_width();
+            const int image_height = camera.image_height() > 0 ? camera.image_height() : camera.camera_height();
+            if (image_width <= 0 || image_height <= 0 || scale <= 0.0f) {
+                return std::nullopt;
+            }
+
+            constexpr float kEquirectangularDisplayFov = 1.0472f;
+            const bool equirectangular =
+                camera.camera_model_type() == core::CameraModelType::EQUIRECTANGULAR;
+            if (!equirectangular && camera.focal_y() <= 0.0f) {
+                return std::nullopt;
+            }
+
+            const float aspect = static_cast<float>(image_width) / static_cast<float>(image_height);
+            const float fov_y = equirectangular
+                                    ? kEquirectangularDisplayFov
+                                    : core::focal2fov(camera.focal_y(), image_height);
+            const float half_height = std::tan(fov_y * 0.5f);
+            const float half_width = half_height * aspect;
+
+            glm::mat4 frustum_scale(1.0f);
+            frustum_scale[0][0] = half_width * 2.0f * scale;
+            frustum_scale[1][1] = half_height * 2.0f * scale;
+            frustum_scale[2][2] = scale;
+            return visualizer_camera_to_world * frustum_scale;
+        }
+
+        struct ProjectedCameraFootprint {
+            std::vector<glm::vec2> points;
+            std::vector<std::pair<size_t, size_t>> edges;
+            std::vector<std::vector<glm::vec2>> filled_polygons;
+            glm::vec2 bounds_min{std::numeric_limits<float>::max()};
+            glm::vec2 bounds_max{std::numeric_limits<float>::lowest()};
+
+            void addPoint(const glm::vec2 point) {
+                points.push_back(point);
+                bounds_min = glm::min(bounds_min, point);
+                bounds_max = glm::max(bounds_max, point);
+            }
+
+            void addFilledPolygon(std::vector<glm::vec2> polygon) {
+                if (polygon.size() >= 3) {
+                    filled_polygons.push_back(std::move(polygon));
+                }
+            }
+
+            [[nodiscard]] bool empty() const { return points.empty(); }
+        };
+
+        [[nodiscard]] ProjectedCameraFootprint projectCameraFootprint(
+            const core::Camera& camera,
+            const glm::mat4& visualizer_camera_to_world,
+            const Viewport& viewport,
+            const glm::ivec2 render_size,
+            const RenderSettings& settings) {
+            ProjectedCameraFootprint footprint;
+            const auto add_projected = [&](const glm::vec3& world_point) -> int {
+                const auto projected =
+                    projectCameraSelectionPoint(viewport, render_size, world_point, settings);
+                if (!projected || !std::isfinite(projected->x) || !std::isfinite(projected->y)) {
+                    return -1;
+                }
+
+                const int index = static_cast<int>(footprint.points.size());
+                footprint.addPoint(*projected);
+                return index;
+            };
+
+            const int center_index = add_projected(glm::vec3(visualizer_camera_to_world[3]));
+
+            const auto frustum_model = cameraFrustumModelMatrix(
+                camera,
+                visualizer_camera_to_world,
+                settings.show_camera_frustums ? settings.camera_frustum_scale : 0.0f);
+            if (!frustum_model) {
+                return footprint;
+            }
+
+            const auto add_edge = [&](const int a, const int b) {
+                if (a >= 0 && b >= 0) {
+                    footprint.edges.emplace_back(static_cast<size_t>(a), static_cast<size_t>(b));
+                }
+            };
+
+            if (camera.camera_model_type() == core::CameraModelType::EQUIRECTANGULAR) {
+                std::array<int, 8> cube_indices{};
+                cube_indices.fill(-1);
+                for (int i = 0; i < 8; ++i) {
+                    const glm::vec3 local_corner(
+                        (i & 1) ? 0.5f : -0.5f,
+                        (i & 2) ? 0.5f : -0.5f,
+                        (i & 4) ? 0.5f : -0.5f);
+                    cube_indices[static_cast<size_t>(i)] =
+                        add_projected(glm::vec3((*frustum_model) * glm::vec4(local_corner, 1.0f)));
+                }
+                for (int i = 0; i < 8; ++i) {
+                    for (int bit = 0; bit < 3; ++bit) {
+                        const int j = i ^ (1 << bit);
+                        if (i < j) {
+                            add_edge(cube_indices[static_cast<size_t>(i)],
+                                     cube_indices[static_cast<size_t>(j)]);
+                        }
+                    }
+                }
+                return footprint;
+            }
+
+            constexpr std::array image_corners{
+                glm::vec3(-0.5f, -0.5f, -1.0f),
+                glm::vec3(0.5f, -0.5f, -1.0f),
+                glm::vec3(0.5f, 0.5f, -1.0f),
+                glm::vec3(-0.5f, 0.5f, -1.0f),
+            };
+            std::array<int, image_corners.size()> corner_indices{};
+            corner_indices.fill(-1);
+            std::vector<glm::vec2> image_plane_polygon;
+            image_plane_polygon.reserve(image_corners.size());
+            for (size_t i = 0; i < image_corners.size(); ++i) {
+                corner_indices[i] =
+                    add_projected(glm::vec3((*frustum_model) * glm::vec4(image_corners[i], 1.0f)));
+                if (corner_indices[i] >= 0) {
+                    image_plane_polygon.push_back(footprint.points[static_cast<size_t>(corner_indices[i])]);
+                }
+                add_edge(center_index, corner_indices[i]);
+            }
+            if (image_plane_polygon.size() == image_corners.size()) {
+                footprint.addFilledPolygon(std::move(image_plane_polygon));
+            }
+            for (size_t i = 0; i < image_corners.size(); ++i) {
+                add_edge(corner_indices[i], corner_indices[(i + 1) % image_corners.size()]);
+            }
+            return footprint;
+        }
+
+        [[nodiscard]] std::vector<std::string> visibleCameraNodeNames(const SceneManager& scene_manager) {
+            std::vector<std::string> names;
+            const auto& scene = scene_manager.getScene();
+            for (const auto* const node : scene.getNodes()) {
+                if (node && node->type == core::NodeType::CAMERA && node->camera &&
+                    scene.isNodeEffectivelyVisible(node->id)) {
+                    names.push_back(node->name);
+                }
+            }
+            return names;
+        }
+
+        void collectVisibleCameraNodeNamesRecursive(const core::Scene& scene,
+                                                    const core::SceneNode& node,
+                                                    std::vector<std::string>& names,
+                                                    std::unordered_set<std::string>& seen) {
+            if (node.type == core::NodeType::CAMERA) {
+                if (node.camera && scene.isNodeEffectivelyVisible(node.id) &&
+                    seen.insert(node.name).second) {
+                    names.push_back(node.name);
+                }
+                return;
+            }
+            if (node.type != core::NodeType::CAMERA_GROUP &&
+                node.type != core::NodeType::GROUP) {
+                return;
+            }
+            for (const core::NodeId child_id : node.children) {
+                if (const auto* const child = scene.getNodeById(child_id)) {
+                    collectVisibleCameraNodeNamesRecursive(scene, *child, names, seen);
+                }
+            }
+        }
+
+        [[nodiscard]] std::vector<std::string> currentCameraSelectionNodeNames(
+            const SceneManager& scene_manager) {
+            std::vector<std::string> names;
+            std::unordered_set<std::string> seen;
+            const auto& scene = scene_manager.getScene();
+            for (const auto& selected_name : scene_manager.getSelectedNodeNames()) {
+                if (const auto* const node = scene.getNode(selected_name)) {
+                    collectVisibleCameraNodeNamesRecursive(scene, *node, names, seen);
+                }
+            }
+            return names;
+        }
+
+        [[nodiscard]] std::vector<std::string> cameraSelectionAfterMode(
+            const SceneManager& scene_manager,
+            const std::vector<std::string>& hits,
+            const SelectionMode mode) {
+            if (mode == SelectionMode::Replace) {
+                return hits;
+            }
+
+            auto current = currentCameraSelectionNodeNames(scene_manager);
+            if (hits.empty() && mode != SelectionMode::Intersect) {
+                return current;
+            }
+
+            const std::unordered_set<std::string> hit_set(hits.begin(), hits.end());
+            switch (mode) {
+            case SelectionMode::Add: {
+                std::unordered_set<std::string> selected_set(current.begin(), current.end());
+                for (const auto& hit : hits) {
+                    if (selected_set.insert(hit).second) {
+                        current.push_back(hit);
+                    }
+                }
+                return current;
+            }
+            case SelectionMode::Remove: {
+                std::vector<std::string> remaining;
+                remaining.reserve(current.size());
+                for (const auto& selected : current) {
+                    if (!hit_set.contains(selected)) {
+                        remaining.push_back(selected);
+                    }
+                }
+                return remaining;
+            }
+            case SelectionMode::Intersect: {
+                std::vector<std::string> intersection;
+                intersection.reserve(std::min(current.size(), hits.size()));
+                for (const auto& selected : current) {
+                    if (hit_set.contains(selected)) {
+                        intersection.push_back(selected);
+                    }
+                }
+                return intersection;
+            }
+            case SelectionMode::Replace:
+                break;
+            }
+            return hits;
+        }
+
+        [[nodiscard]] bool cameraShapeContainsPoint(const SelectionShape shape,
+                                                    const glm::vec2 projected,
+                                                    const std::vector<glm::vec2>& points,
+                                                    const glm::vec2 start,
+                                                    const glm::vec2 cursor,
+                                                    const float radius) {
+            switch (shape) {
+            case SelectionShape::Brush: {
+                if (points.empty()) {
+                    const glm::vec2 delta = projected - cursor;
+                    return glm::dot(delta, delta) <= radius * radius;
+                }
+                for (size_t i = 0; i < points.size(); ++i) {
+                    const glm::vec2 from = (i == 0) ? points[i] : points[i - 1];
+                    if (distanceSquaredToSegment(projected, from, points[i]) <= radius * radius) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            case SelectionShape::Rectangle:
+                return projected.x >= std::min(start.x, cursor.x) &&
+                       projected.x <= std::max(start.x, cursor.x) &&
+                       projected.y >= std::min(start.y, cursor.y) &&
+                       projected.y <= std::max(start.y, cursor.y);
+            case SelectionShape::Polygon:
+            case SelectionShape::Lasso:
+                return pointInPolygon(projected, points);
+            case SelectionShape::Rings:
+            case SelectionShape::Box:
+            case SelectionShape::Sphere:
+                return false;
+            }
+            return false;
+        }
+
+        [[nodiscard]] bool rectContainsPoint(const glm::vec2 min_point,
+                                             const glm::vec2 max_point,
+                                             const glm::vec2 point) {
+            return point.x >= min_point.x && point.x <= max_point.x &&
+                   point.y >= min_point.y && point.y <= max_point.y;
+        }
+
+        [[nodiscard]] bool rectsOverlap(const glm::vec2 a_min,
+                                        const glm::vec2 a_max,
+                                        const glm::vec2 b_min,
+                                        const glm::vec2 b_max) {
+            return !(a_max.x < b_min.x || b_max.x < a_min.x ||
+                     a_max.y < b_min.y || b_max.y < a_min.y);
+        }
+
+        [[nodiscard]] std::pair<glm::vec2, glm::vec2> boundsForPoints(
+            const std::vector<glm::vec2>& points) {
+            glm::vec2 min_point(std::numeric_limits<float>::max());
+            glm::vec2 max_point(std::numeric_limits<float>::lowest());
+            for (const auto& point : points) {
+                min_point = glm::min(min_point, point);
+                max_point = glm::max(max_point, point);
+            }
+            return {min_point, max_point};
+        }
+
+        [[nodiscard]] float cross2d(const glm::vec2 a, const glm::vec2 b) {
+            return a.x * b.y - a.y * b.x;
+        }
+
+        [[nodiscard]] bool pointOnSegment(const glm::vec2 point,
+                                          const glm::vec2 a,
+                                          const glm::vec2 b) {
+            constexpr float epsilon = 1.0e-4f;
+            if (std::abs(cross2d(point - a, b - a)) > epsilon) {
+                return false;
+            }
+            return point.x >= std::min(a.x, b.x) - epsilon &&
+                   point.x <= std::max(a.x, b.x) + epsilon &&
+                   point.y >= std::min(a.y, b.y) - epsilon &&
+                   point.y <= std::max(a.y, b.y) + epsilon;
+        }
+
+        [[nodiscard]] bool segmentsIntersect(const glm::vec2 a,
+                                             const glm::vec2 b,
+                                             const glm::vec2 c,
+                                             const glm::vec2 d) {
+            const float ab_c = cross2d(b - a, c - a);
+            const float ab_d = cross2d(b - a, d - a);
+            const float cd_a = cross2d(d - c, a - c);
+            const float cd_b = cross2d(d - c, b - c);
+
+            if (((ab_c > 0.0f && ab_d < 0.0f) || (ab_c < 0.0f && ab_d > 0.0f)) &&
+                ((cd_a > 0.0f && cd_b < 0.0f) || (cd_a < 0.0f && cd_b > 0.0f))) {
+                return true;
+            }
+
+            return pointOnSegment(c, a, b) ||
+                   pointOnSegment(d, a, b) ||
+                   pointOnSegment(a, c, d) ||
+                   pointOnSegment(b, c, d);
+        }
+
+        [[nodiscard]] bool segmentIntersectsRect(const glm::vec2 a,
+                                                 const glm::vec2 b,
+                                                 const glm::vec2 rect_min,
+                                                 const glm::vec2 rect_max) {
+            if (rectContainsPoint(rect_min, rect_max, a) ||
+                rectContainsPoint(rect_min, rect_max, b)) {
+                return true;
+            }
+
+            const glm::vec2 top_left(rect_min.x, rect_min.y);
+            const glm::vec2 top_right(rect_max.x, rect_min.y);
+            const glm::vec2 bottom_right(rect_max.x, rect_max.y);
+            const glm::vec2 bottom_left(rect_min.x, rect_max.y);
+            return segmentsIntersect(a, b, top_left, top_right) ||
+                   segmentsIntersect(a, b, top_right, bottom_right) ||
+                   segmentsIntersect(a, b, bottom_right, bottom_left) ||
+                   segmentsIntersect(a, b, bottom_left, top_left);
+        }
+
+        [[nodiscard]] bool segmentIntersectsPolygon(const glm::vec2 a,
+                                                    const glm::vec2 b,
+                                                    const std::vector<glm::vec2>& polygon) {
+            if (polygon.size() < 2) {
+                return false;
+            }
+            for (size_t i = 0; i < polygon.size(); ++i) {
+                if (segmentsIntersect(a, b, polygon[i], polygon[(i + 1) % polygon.size()])) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        [[nodiscard]] bool footprintFilledAreaContainsPoint(const ProjectedCameraFootprint& footprint,
+                                                            const glm::vec2 point) {
+            for (const auto& polygon : footprint.filled_polygons) {
+                for (size_t i = 0; i < polygon.size(); ++i) {
+                    if (pointOnSegment(point, polygon[i], polygon[(i + 1) % polygon.size()])) {
+                        return true;
+                    }
+                }
+                if (pointInPolygon(point, polygon)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        [[nodiscard]] bool cameraFootprintIntersectsShape(
+            const ProjectedCameraFootprint& footprint,
+            const SelectionShape shape,
+            const std::vector<glm::vec2>& points,
+            const glm::vec2 start,
+            const glm::vec2 cursor,
+            const float radius) {
+            if (footprint.empty()) {
+                return false;
+            }
+
+            for (const auto& projected : footprint.points) {
+                if (cameraShapeContainsPoint(shape, projected, points, start, cursor, radius)) {
+                    return true;
+                }
+            }
+
+            if (shape == SelectionShape::Brush) {
+                for (const auto& [a_index, b_index] : footprint.edges) {
+                    const glm::vec2 a = footprint.points[a_index];
+                    const glm::vec2 b = footprint.points[b_index];
+                    const float length = glm::distance(a, b);
+                    const int steps = std::max(1, static_cast<int>(std::ceil(length / 8.0f)));
+                    for (int step = 1; step < steps; ++step) {
+                        const float t = static_cast<float>(step) / static_cast<float>(steps);
+                        if (cameraShapeContainsPoint(shape, glm::mix(a, b, t), points, start, cursor, radius)) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            }
+
+            if (shape == SelectionShape::Rectangle) {
+                const glm::vec2 rect_min(std::min(start.x, cursor.x), std::min(start.y, cursor.y));
+                const glm::vec2 rect_max(std::max(start.x, cursor.x), std::max(start.y, cursor.y));
+                if (!rectsOverlap(rect_min, rect_max, footprint.bounds_min, footprint.bounds_max)) {
+                    return false;
+                }
+                const glm::vec2 rect_center = (rect_min + rect_max) * 0.5f;
+                if (footprintFilledAreaContainsPoint(footprint, rect_center)) {
+                    return true;
+                }
+                for (const auto& [a_index, b_index] : footprint.edges) {
+                    if (segmentIntersectsRect(
+                            footprint.points[a_index], footprint.points[b_index], rect_min, rect_max)) {
+                        return true;
+                    }
+                }
+                const std::array rect_corners{
+                    rect_min,
+                    glm::vec2(rect_max.x, rect_min.y),
+                    rect_max,
+                    glm::vec2(rect_min.x, rect_max.y),
+                };
+                return std::any_of(rect_corners.begin(), rect_corners.end(), [&](const glm::vec2 point) {
+                    return footprintFilledAreaContainsPoint(footprint, point);
+                });
+            }
+
+            if (shape == SelectionShape::Polygon || shape == SelectionShape::Lasso) {
+                if (points.size() < 3) {
+                    return false;
+                }
+                const auto [shape_min, shape_max] = boundsForPoints(points);
+                if (!rectsOverlap(shape_min, shape_max, footprint.bounds_min, footprint.bounds_max)) {
+                    return false;
+                }
+                for (const auto& point : points) {
+                    if (footprintFilledAreaContainsPoint(footprint, point)) {
+                        return true;
+                    }
+                }
+                for (const auto& [a_index, b_index] : footprint.edges) {
+                    if (segmentIntersectsPolygon(footprint.points[a_index], footprint.points[b_index], points)) {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        [[nodiscard]] std::vector<std::string> hitTestCamerasInShape(
+            const SceneManager& scene_manager,
+            const RenderingManager& rendering_manager,
+            const SelectionService::ViewportInfo& info,
+            const Viewport& viewport,
+            const SelectionShape shape,
+            const std::vector<glm::vec2>& screen_points,
+            const glm::vec2 screen_start,
+            const glm::vec2 screen_cursor,
+            const float brush_radius) {
+            if (!isCameraSelectionShape(shape) || !info.valid()) {
+                return {};
+            }
+
+            const auto to_render = [&](const glm::vec2 point) {
+                return screenToRender(point, info);
+            };
+
+            std::vector<glm::vec2> render_points;
+            render_points.reserve(screen_points.size());
+            for (const auto& point : screen_points) {
+                render_points.push_back(to_render(point));
+            }
+            const glm::vec2 render_start = to_render(screen_start);
+            const glm::vec2 render_cursor = to_render(screen_cursor);
+            const float render_radius = brush_radius * (static_cast<float>(info.render_width) / info.width);
+
+            Viewport projection_viewport = viewport;
+            projection_viewport.windowSize = {info.render_width, info.render_height};
+            const auto settings = rendering_manager.getSettings();
+            const glm::ivec2 render_size{
+                std::max(info.render_width, 1),
+                std::max(info.render_height, 1),
+            };
+
+            std::vector<std::string> hits;
+            const auto& scene = scene_manager.getScene();
+            for (const auto* const node : scene.getNodes()) {
+                if (!node || node->type != core::NodeType::CAMERA || !node->camera ||
+                    !scene.isNodeEffectivelyVisible(node->id)) {
+                    continue;
+                }
+
+                const auto visualizer_camera_to_world = cameraVisualizerTransform(
+                    *node->camera,
+                    rendering::dataWorldTransformToVisualizerWorld(scene.getWorldTransform(node->id)));
+                if (!visualizer_camera_to_world) {
+                    continue;
+                }
+
+                const auto footprint = projectCameraFootprint(
+                    *node->camera,
+                    *visualizer_camera_to_world,
+                    projection_viewport,
+                    render_size,
+                    settings);
+                if (cameraFootprintIntersectsShape(
+                        footprint, shape, render_points, render_start, render_cursor, render_radius)) {
+                    hits.push_back(node->name);
+                }
+            }
+            return hits;
+        }
+
+        [[nodiscard]] SelectionResult applyCameraNodeSelection(SceneManager& scene_manager,
+                                                               const std::vector<std::string>& hits,
+                                                               const SelectionMode mode) {
+            if (hits.empty() && mode != SelectionMode::Intersect) {
+                if (mode == SelectionMode::Replace) {
+                    if (auto result = cap::clearNodeSelection(scene_manager); !result) {
+                        return {false, 0, result.error()};
+                    }
+                    return {true, 0, {}};
+                }
+                return {true, scene_manager.getSelectedNodeNames().size(), {}};
+            }
+
+            const auto names = cameraSelectionAfterMode(scene_manager, hits, mode);
+            if (names.empty()) {
+                if (auto result = cap::clearNodeSelection(scene_manager); !result) {
+                    return {false, 0, result.error()};
+                }
+                return {true, 0, {}};
+            }
+            if (auto result = cap::selectNodes(scene_manager, names, "replace"); !result) {
+                return {false, 0, result.error()};
+            }
+            return {true, scene_manager.getSelectedNodeNames().size(), {}};
         }
 
         [[nodiscard]] core::Tensor ensureCudaBoolMask(const core::Tensor& mask) {
@@ -270,6 +956,32 @@ namespace lfs::vis {
                 return static_cast<size_t>(model->size());
             }
             return scene_manager->getScene().getTotalGaussianCount();
+        }
+
+        [[nodiscard]] size_t activeSelectionElementCount(const SceneManager* const scene_manager,
+                                                         const SelectionDomain domain) {
+            if (domain == SelectionDomain::Cameras) {
+                if (!scene_manager) {
+                    return 0;
+                }
+                size_t count = 0;
+                const auto& scene = scene_manager->getScene();
+                for (const auto* const node : scene.getNodes()) {
+                    if (node && node->type == core::NodeType::CAMERA && node->camera &&
+                        scene.isNodeEffectivelyVisible(node->id)) {
+                        ++count;
+                    }
+                }
+                return count;
+            }
+            if (domain != SelectionDomain::PointCloud) {
+                return activeSelectionGaussianCount(scene_manager);
+            }
+            const auto* const node = scene_manager ? resolveActivePointCloudNode(*scene_manager) : nullptr;
+            if (!node || !node->point_cloud) {
+                return 0;
+            }
+            return static_cast<size_t>(node->point_cloud->size());
         }
 
         [[nodiscard]] const core::Tensor* selectionMaskForSize(
@@ -647,7 +1359,7 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] std::shared_ptr<core::Tensor> projectGaussianScreenPositions(
-            const core::SplatData& model,
+            const core::Tensor& source_means,
             const rendering::ViewportData& viewport,
             const bool equirectangular,
             const rendering::GaussianSceneState& scene) {
@@ -656,19 +1368,17 @@ namespace lfs::vis {
                 return nullptr;
             }
 
-            const size_t count = static_cast<size_t>(model.size());
+            if (!source_means.is_valid() || source_means.ndim() != 2 || source_means.size(1) != 3) {
+                return nullptr;
+            }
+
+            const size_t count = source_means.size(0);
             if (count == 0) {
                 return nullptr;
             }
 
             try {
-                auto means = model.get_means();
-                if (!means.is_valid() || means.ndim() != 2 || means.size(0) != count || means.size(1) != 3) {
-                    return nullptr;
-                }
-                assert(means.ndim() == 2);
-                assert(means.size(1) == 3);
-                assert(means.size(0) == count);
+                auto means = source_means;
                 if (means.dtype() != core::DataType::Float32) {
                     means = means.to(core::DataType::Float32);
                 }
@@ -808,7 +1518,7 @@ namespace lfs::vis {
                         .cuda()
                         .contiguous());
             } catch (const std::exception& e) {
-                LOG_WARN("SelectionService: failed to project Gaussian screen positions: {}", e.what());
+                LOG_WARN("SelectionService: failed to project screen positions: {}", e.what());
                 return nullptr;
             }
         }
@@ -882,14 +1592,20 @@ namespace lfs::vis {
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
         }
+        const auto domain = resolveSelectionDomain(*scene_manager_);
+        if (domain == SelectionDomain::Cameras) {
+            return {false, 0, "Brush selection is not supported for cameras"};
+        }
         const auto filters = defaultFilterState();
-        const auto settings = rendering_manager_->getSettings();
-        const std::vector<glm::vec4> primitives{{x, y, radius * radius, 0.0f}};
-        if (const auto frame_view = resolveCommandFrameView(camera_index)) {
-            if (auto selection = tryBuildVksplatSelectionMask(
-                    scene_manager_, rendering_manager_, *frame_view, settings.equirectangular,
-                    RenderingManager::VksplatSelectionMaskShape::Brush, primitives)) {
-                return commitSelection(*selection, mode, effectiveNodeMask(true), filters, "selection.brush");
+        if (domain == SelectionDomain::Gaussians) {
+            const auto settings = rendering_manager_->getSettings();
+            const std::vector<glm::vec4> primitives{{x, y, radius * radius, 0.0f}};
+            if (const auto frame_view = resolveCommandFrameView(camera_index)) {
+                if (auto selection = tryBuildVksplatSelectionMask(
+                        scene_manager_, rendering_manager_, *frame_view, settings.equirectangular,
+                        RenderingManager::VksplatSelectionMaskShape::Brush, primitives)) {
+                    return commitSelection(*selection, mode, effectiveNodeMask(true), filters, "selection.brush");
+                }
             }
         }
 
@@ -900,6 +1616,9 @@ namespace lfs::vis {
 
         auto& selection = resetBoolScratchBuffer(command_selection_buffer_, screen_positions->size(0));
         rendering::brush_select_tensor(*screen_positions, x, y, radius, selection);
+        if (domain == SelectionDomain::PointCloud) {
+            return commitPointSelection(selection, mode, filters, "selection.brush", true);
+        }
         return commitSelection(selection, mode, effectiveNodeMask(true), filters, "selection.brush");
     }
 
@@ -909,19 +1628,32 @@ namespace lfs::vis {
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
         }
+        const auto domain = resolveSelectionDomain(*scene_manager_);
+        if (domain == SelectionDomain::Cameras) {
+            const auto context = resolveViewerViewportContext({glm::vec2{x0, y0}});
+            if (!context || !context->valid()) {
+                return {false, 0, "No viewport"};
+            }
+            const auto hits = hitTestCamerasInShape(
+                *scene_manager_, *rendering_manager_, context->info, *context->viewport,
+                SelectionShape::Rectangle, {}, {x0, y0}, {x1, y1}, 0.0f);
+            return applyCameraNodeSelection(*scene_manager_, hits, mode);
+        }
         const auto filters = defaultFilterState();
-        const auto settings = rendering_manager_->getSettings();
-        const std::vector<glm::vec4> primitives{{
-            std::min(x0, x1),
-            std::min(y0, y1),
-            std::max(x0, x1),
-            std::max(y0, y1),
-        }};
-        if (const auto frame_view = resolveCommandFrameView(camera_index)) {
-            if (auto selection = tryBuildVksplatSelectionMask(
-                    scene_manager_, rendering_manager_, *frame_view, settings.equirectangular,
-                    RenderingManager::VksplatSelectionMaskShape::Rectangle, primitives)) {
-                return commitSelection(*selection, mode, effectiveNodeMask(true), filters, "selection.rect");
+        if (domain == SelectionDomain::Gaussians) {
+            const auto settings = rendering_manager_->getSettings();
+            const std::vector<glm::vec4> primitives{{
+                std::min(x0, x1),
+                std::min(y0, y1),
+                std::max(x0, x1),
+                std::max(y0, y1),
+            }};
+            if (const auto frame_view = resolveCommandFrameView(camera_index)) {
+                if (auto selection = tryBuildVksplatSelectionMask(
+                        scene_manager_, rendering_manager_, *frame_view, settings.equirectangular,
+                        RenderingManager::VksplatSelectionMaskShape::Rectangle, primitives)) {
+                    return commitSelection(*selection, mode, effectiveNodeMask(true), filters, "selection.rect");
+                }
             }
         }
 
@@ -937,6 +1669,9 @@ namespace lfs::vis {
                                       std::max(x0, x1),
                                       std::max(y0, y1),
                                       selection);
+        if (domain == SelectionDomain::PointCloud) {
+            return commitPointSelection(selection, mode, filters, "selection.rect", true);
+        }
         return commitSelection(selection, mode, effectiveNodeMask(true), filters, "selection.rect");
     }
 
@@ -972,6 +1707,20 @@ namespace lfs::vis {
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
         }
+        const auto domain = resolveSelectionDomain(*scene_manager_);
+        if (domain == SelectionDomain::Cameras) {
+            if (vertices.size() < 3) {
+                return {false, 0, "Polygon requires at least 3 vertices"};
+            }
+            const auto context = resolveViewerViewportContext(vertices.front());
+            if (!context || !context->valid()) {
+                return {false, 0, "No viewport"};
+            }
+            const auto hits = hitTestCamerasInShape(
+                *scene_manager_, *rendering_manager_, context->info, *context->viewport,
+                SelectionShape::Polygon, vertices, vertices.front(), vertices.back(), 0.0f);
+            return applyCameraNodeSelection(*scene_manager_, hits, mode);
+        }
         if (vertices.size() < 3) {
             return {false, 0, "Polygon requires at least 3 vertices"};
         }
@@ -979,10 +1728,12 @@ namespace lfs::vis {
         const auto filters = defaultFilterState();
         const auto settings = rendering_manager_->getSettings();
 
-        if (const auto frame_view = resolveCommandFrameView(camera_index)) {
-            if (auto selection = tryBuildVksplatPolygonSelectionMask(
-                    scene_manager_, rendering_manager_, *frame_view, settings.equirectangular, vertices)) {
-                return commitSelection(*selection, mode, effectiveNodeMask(true), filters, "selection.polygon");
+        if (domain == SelectionDomain::Gaussians) {
+            if (const auto frame_view = resolveCommandFrameView(camera_index)) {
+                if (auto selection = tryBuildVksplatPolygonSelectionMask(
+                        scene_manager_, rendering_manager_, *frame_view, settings.equirectangular, vertices)) {
+                    return commitSelection(*selection, mode, effectiveNodeMask(true), filters, "selection.polygon");
+                }
             }
         }
 
@@ -994,12 +1745,48 @@ namespace lfs::vis {
         auto& selection = resetBoolScratchBuffer(command_selection_buffer_, screen_positions->size(0));
         auto& polygon = uploadFloat2PointsToBuffer(vertices, polygon_vertex_host_buffer_, polygon_vertex_device_buffer_);
         rendering::polygon_select_tensor(*screen_positions, polygon, selection);
+        if (domain == SelectionDomain::PointCloud) {
+            return commitPointSelection(selection, mode, filters, "selection.polygon", true);
+        }
         return commitSelection(selection, mode, effectiveNodeMask(true), filters, "selection.polygon");
     }
 
     SelectionResult SelectionService::selectLasso(const std::vector<glm::vec2>& vertices,
                                                   const SelectionMode mode, const int camera_index) {
         LOG_TIMER("SelectionService::selectLasso");
+        if (!scene_manager_ || !rendering_manager_) {
+            return {false, 0, "Missing managers"};
+        }
+        const auto domain = resolveSelectionDomain(*scene_manager_);
+        if (domain == SelectionDomain::PointCloud) {
+            if (vertices.size() < 3) {
+                return {false, 0, "Lasso requires at least 3 points"};
+            }
+            const auto filters = defaultFilterState();
+            const auto screen_positions = resolveCommandScreenPositions(camera_index);
+            if (!screen_positions || !screen_positions->is_valid()) {
+                return {false, 0, "No screen positions"};
+            }
+
+            auto& selection = resetBoolScratchBuffer(command_selection_buffer_, screen_positions->size(0));
+            auto& polygon =
+                uploadFloat2PointsToBuffer(vertices, polygon_vertex_host_buffer_, polygon_vertex_device_buffer_);
+            rendering::polygon_select_tensor(*screen_positions, polygon, selection);
+            return commitPointSelection(selection, mode, filters, "selection.lasso", true);
+        }
+        if (domain == SelectionDomain::Cameras) {
+            if (vertices.size() < 3) {
+                return {false, 0, "Lasso requires at least 3 points"};
+            }
+            const auto context = resolveViewerViewportContext(vertices.front());
+            if (!context || !context->valid()) {
+                return {false, 0, "No viewport"};
+            }
+            const auto hits = hitTestCamerasInShape(
+                *scene_manager_, *rendering_manager_, context->info, *context->viewport,
+                SelectionShape::Lasso, vertices, vertices.front(), vertices.back(), 0.0f);
+            return applyCameraNodeSelection(*scene_manager_, hits, mode);
+        }
         auto result = selectPolygon(vertices, mode, camera_index);
         if (result.success) {
             return result;
@@ -1014,6 +1801,13 @@ namespace lfs::vis {
                                                  const int camera_index) {
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
+        }
+        const auto domain = resolveSelectionDomain(*scene_manager_);
+        if (domain == SelectionDomain::PointCloud) {
+            return {false, 0, "Ring selection is not supported for point clouds yet"};
+        }
+        if (domain == SelectionDomain::Cameras) {
+            return {false, 0, "Ring selection is not supported for cameras yet"};
         }
 
         const auto filters = defaultFilterState();
@@ -1070,6 +1864,55 @@ namespace lfs::vis {
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
         }
+        const auto domain = resolveSelectionDomain(*scene_manager_);
+        if (domain == SelectionDomain::PointCloud) {
+            const auto* const node = resolveActivePointCloudNode(*scene_manager_);
+            if (!node || !node->point_cloud) {
+                return {false, 0, "No active point cloud"};
+            }
+            const auto screen_positions = resolveCommandScreenPositions(camera_index);
+            if (!screen_positions || !screen_positions->is_valid()) {
+                return {false, 0, "No screen positions"};
+            }
+
+            glm::vec2 cursor{x, y};
+            if (camera_index < 0) {
+                if (const auto context = resolveViewerViewportContext(cursor); context && context->valid()) {
+                    cursor = screenToRender(cursor, context->info);
+                }
+            }
+            const auto hovered_id = pickHoveredGaussianIdFromScreenPositions(*screen_positions, cursor, filters);
+            if (!hovered_id) {
+                return {false, 0, "No hovered point"};
+            }
+
+            const auto& point_cloud = *node->point_cloud;
+            if (!point_cloud.colors.is_valid() ||
+                point_cloud.colors.dtype() != core::DataType::UInt8 ||
+                point_cloud.colors.ndim() != 2 ||
+                point_cloud.colors.size(1) != 3 ||
+                static_cast<size_t>(*hovered_id) >= static_cast<size_t>(point_cloud.colors.size(0))) {
+                return {false, 0, "Invalid point color data"};
+            }
+
+            const auto colors_cpu = point_cloud.colors.cpu().contiguous();
+            const uint8_t* const colors_data = colors_cpu.ptr<uint8_t>();
+            const size_t ref_offset = static_cast<size_t>(*hovered_id) * 3;
+            const uint8_t ref_r = colors_data[ref_offset];
+            const uint8_t ref_g = colors_data[ref_offset + 1];
+            const uint8_t ref_b = colors_data[ref_offset + 2];
+
+            constexpr float COLOR_THRESHOLD = 0.2f;
+            const uint8_t tolerance = static_cast<uint8_t>(std::ceil(COLOR_THRESHOLD * 255.0f));
+            auto colors_cuda = point_cloud.colors.device() == core::Device::CUDA
+                                   ? point_cloud.colors.contiguous()
+                                   : point_cloud.colors.cuda().contiguous();
+            auto mask = core::cuda::select_points_by_color(colors_cuda, ref_r, ref_g, ref_b, tolerance);
+            return commitPointSelection(mask, mode, filters, "selection.by_color", true);
+        }
+        if (domain == SelectionDomain::Cameras) {
+            return {false, 0, "Color selection is not supported for cameras yet"};
+        }
 
         const auto hovered_id = resolveCommandHoveredGaussianId(x, y, camera_index, filters);
         if (!hovered_id) {
@@ -1115,13 +1958,17 @@ namespace lfs::vis {
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
         }
+        const auto domain = resolveSelectionDomain(*scene_manager_);
+        if (domain == SelectionDomain::Cameras) {
+            return {false, 0, "Box selection is not supported for cameras"};
+        }
 
         const auto gizmo = rendering_manager_->getGizmoState();
         if (!gizmo.cropbox_active) {
             return {false, 0, "No active box selection volume"};
         }
 
-        const size_t total = activeSelectionGaussianCount(scene_manager_);
+        const size_t total = activeSelectionElementCount(domain);
         if (total == 0) {
             return {true, 0, {}};
         }
@@ -1135,10 +1982,26 @@ namespace lfs::vis {
             core::Tensor::from_vector({gizmo.cropbox_max.x, gizmo.cropbox_max.y, gizmo.cropbox_max.z}, {3});
 
         auto selection = core::Tensor::ones({total}, core::Device::CUDA, core::DataType::Bool);
-        applyCropFilter(selection, &crop_t, &crop_min, &crop_max, nullptr, nullptr, false);
+        if (domain == SelectionDomain::PointCloud) {
+            const auto* const node = resolveActivePointCloudNode(*scene_manager_);
+            if (!node || !node->point_cloud || !node->point_cloud->means.is_valid()) {
+                return {false, 0, "No active point cloud"};
+            }
+            const glm::mat4 means_to_visualizer =
+                rendering::dataWorldTransformToVisualizerWorld(
+                    scene_manager_->getScene().getWorldTransform(node->id));
+            applyCropFilterToMeans(
+                selection, node->point_cloud->means, means_to_visualizer, &crop_t, &crop_min, &crop_max,
+                nullptr, nullptr, false);
+        } else {
+            applyCropFilter(selection, &crop_t, &crop_min, &crop_max, nullptr, nullptr, false);
+        }
 
         auto filters = defaultFilterState();
         filters.crop_filter = false;
+        if (domain == SelectionDomain::PointCloud) {
+            return commitPointSelection(selection, mode, filters, "selection.box", options.push_undo);
+        }
         return commitSelection(selection,
                                mode,
                                effectiveNodeMask(filters.restrict_to_selected_nodes),
@@ -1152,13 +2015,17 @@ namespace lfs::vis {
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
         }
+        const auto domain = resolveSelectionDomain(*scene_manager_);
+        if (domain == SelectionDomain::Cameras) {
+            return {false, 0, "Sphere selection is not supported for cameras"};
+        }
 
         const auto gizmo = rendering_manager_->getGizmoState();
         if (!gizmo.ellipsoid_active) {
             return {false, 0, "No active sphere selection volume"};
         }
 
-        const size_t total = activeSelectionGaussianCount(scene_manager_);
+        const size_t total = activeSelectionElementCount(domain);
         if (total == 0) {
             return {true, 0, {}};
         }
@@ -1171,10 +2038,26 @@ namespace lfs::vis {
             {gizmo.ellipsoid_radii.x, gizmo.ellipsoid_radii.y, gizmo.ellipsoid_radii.z}, {3});
 
         auto selection = core::Tensor::ones({total}, core::Device::CUDA, core::DataType::Bool);
-        applyCropFilter(selection, nullptr, nullptr, nullptr, &ellip_t, &ellip_radii, false);
+        if (domain == SelectionDomain::PointCloud) {
+            const auto* const node = resolveActivePointCloudNode(*scene_manager_);
+            if (!node || !node->point_cloud || !node->point_cloud->means.is_valid()) {
+                return {false, 0, "No active point cloud"};
+            }
+            const glm::mat4 means_to_visualizer =
+                rendering::dataWorldTransformToVisualizerWorld(
+                    scene_manager_->getScene().getWorldTransform(node->id));
+            applyCropFilterToMeans(
+                selection, node->point_cloud->means, means_to_visualizer, nullptr, nullptr, nullptr,
+                &ellip_t, &ellip_radii, false);
+        } else {
+            applyCropFilter(selection, nullptr, nullptr, nullptr, &ellip_t, &ellip_radii, false);
+        }
 
         auto filters = defaultFilterState();
         filters.crop_filter = false;
+        if (domain == SelectionDomain::PointCloud) {
+            return commitPointSelection(selection, mode, filters, "selection.sphere", options.push_undo);
+        }
         return commitSelection(selection,
                                mode,
                                effectiveNodeMask(filters.restrict_to_selected_nodes),
@@ -1186,6 +2069,26 @@ namespace lfs::vis {
     SelectionResult SelectionService::selectAllFiltered() {
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
+        }
+        const auto domain = resolveSelectionDomain(*scene_manager_);
+        if (domain == SelectionDomain::Cameras) {
+            const auto names = visibleCameraNodeNames(*scene_manager_);
+            if (names.empty()) {
+                return {true, 0, {}};
+            }
+            if (auto result = cap::selectNodes(*scene_manager_, names, "replace"); !result) {
+                return {false, 0, result.error()};
+            }
+            return {true, names.size(), {}};
+        }
+        if (domain == SelectionDomain::PointCloud) {
+            const size_t total = activeSelectionElementCount(domain);
+            if (total == 0) {
+                return {true, 0, {}};
+            }
+            const auto filters = defaultFilterState();
+            auto selection = core::Tensor::ones({total}, core::Device::CUDA, core::DataType::Bool);
+            return commitPointSelection(selection, SelectionMode::Replace, filters, "selection.all.filtered", true);
         }
 
         const size_t total = activeSelectionGaussianCount(scene_manager_);
@@ -1205,6 +2108,55 @@ namespace lfs::vis {
     SelectionResult SelectionService::invertFiltered() {
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
+        }
+        const auto domain = resolveSelectionDomain(*scene_manager_);
+        if (domain == SelectionDomain::Cameras) {
+            const auto visible_names = visibleCameraNodeNames(*scene_manager_);
+            if (visible_names.empty()) {
+                return {true, 0, {}};
+            }
+
+            std::unordered_set<std::string> selected_set;
+            for (const auto& name : scene_manager_->getSelectedNodeNames()) {
+                selected_set.insert(name);
+            }
+
+            std::vector<std::string> inverted;
+            inverted.reserve(visible_names.size());
+            for (const auto& name : visible_names) {
+                if (!selected_set.contains(name)) {
+                    inverted.push_back(name);
+                }
+            }
+
+            if (inverted.empty()) {
+                if (auto result = cap::clearNodeSelection(*scene_manager_); !result) {
+                    return {false, 0, result.error()};
+                }
+                return {true, 0, {}};
+            }
+            if (auto result = cap::selectNodes(*scene_manager_, inverted, "replace"); !result) {
+                return {false, 0, result.error()};
+            }
+            return {true, inverted.size(), {}};
+        }
+        if (domain == SelectionDomain::PointCloud) {
+            const auto* const node = resolveActivePointCloudNode(*scene_manager_);
+            if (!node || !node->point_cloud) {
+                return {false, 0, "No active point cloud"};
+            }
+            const size_t total = static_cast<size_t>(node->point_cloud->size());
+            if (total == 0) {
+                return {true, 0, {}};
+            }
+
+            core::Tensor current = core::Tensor::zeros({total}, core::Device::CUDA, core::DataType::Bool);
+            if (node->point_cloud->has_selection()) {
+                current = ensureCudaBoolMask(*node->point_cloud->selection);
+            }
+            auto inverted = current.logical_not();
+            return commitPointSelection(
+                inverted, SelectionMode::Replace, defaultFilterState(), "selection.invert.filtered", true);
         }
 
         const size_t total = activeSelectionGaussianCount(scene_manager_);
@@ -1240,6 +2192,21 @@ namespace lfs::vis {
             return {false, 0, "Missing scene manager"};
         }
 
+        const auto domain = resolveSelectionDomain(*scene_manager_);
+        if (domain == SelectionDomain::PointCloud) {
+            const size_t total = activeSelectionElementCount(domain);
+            if (total == 0 || mask.size() != total) {
+                return {false, 0, "Mask size mismatch"};
+            }
+
+            auto tensor_mask = core::Tensor::empty({mask.size()}, core::Device::CPU, core::DataType::UInt8);
+            std::memcpy(tensor_mask.ptr<uint8_t>(), mask.data(), mask.size() * sizeof(uint8_t));
+            return commitPointSelection(tensor_mask, mode, SelectionFilterState{}, "selection.mask", true);
+        }
+        if (domain == SelectionDomain::Cameras) {
+            return {false, 0, "Mask selection is not supported for cameras"};
+        }
+
         const size_t visible_total = activeSelectionGaussianCount(scene_manager_);
         const size_t full_total = scene_manager_->getScene().getSelectionGaussianCount();
         if (full_total == 0 || (mask.size() != visible_total && mask.size() != full_total)) {
@@ -1256,6 +2223,18 @@ namespace lfs::vis {
             return {false, 0, "Missing managers"};
         }
 
+        const auto domain = resolveSelectionDomain(*scene_manager_);
+        if (domain == SelectionDomain::PointCloud) {
+            const size_t total = activeSelectionElementCount(domain);
+            if (total == 0 || mask.numel() != total) {
+                return {false, 0, "Mask size mismatch"};
+            }
+            return commitPointSelection(mask, mode, SelectionFilterState{}, "selection.mask", true);
+        }
+        if (domain == SelectionDomain::Cameras) {
+            return {false, 0, "Mask selection is not supported for cameras"};
+        }
+
         const size_t visible_total = activeSelectionGaussianCount(scene_manager_);
         const size_t full_total = scene_manager_->getScene().getSelectionGaussianCount();
         if (full_total == 0 || (mask.numel() != visible_total && mask.numel() != full_total)) {
@@ -1268,6 +2247,18 @@ namespace lfs::vis {
     SelectionResult SelectionService::previewMask(const core::Tensor& mask, SelectionMode mode) {
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
+        }
+
+        const auto domain = resolveSelectionDomain(*scene_manager_);
+        if (domain == SelectionDomain::PointCloud) {
+            const size_t total = activeSelectionElementCount(domain);
+            if (total == 0 || mask.numel() != total) {
+                return {false, 0, "Mask size mismatch"};
+            }
+            return commitPointSelection(mask, mode, SelectionFilterState{}, "selection.preview", false);
+        }
+        if (domain == SelectionDomain::Cameras) {
+            return {false, 0, "Mask preview is not supported for cameras"};
         }
 
         const size_t visible_total = activeSelectionGaussianCount(scene_manager_);
@@ -1357,6 +2348,10 @@ namespace lfs::vis {
         return activeSelectionGaussianCount(scene_manager_);
     }
 
+    size_t SelectionService::activeSelectionElementCount(const SelectionDomain domain) const {
+        return lfs::vis::activeSelectionElementCount(scene_manager_, domain);
+    }
+
     bool SelectionService::hasScreenPositions() const {
         const auto screen_positions = getScreenPositions();
         return screen_positions && screen_positions->is_valid();
@@ -1375,6 +2370,9 @@ namespace lfs::vis {
             return nullptr;
         }
 
+        if (scene_manager_ && resolveSelectionDomain(*scene_manager_) == SelectionDomain::PointCloud) {
+            return getPointCloudScreenPositionsForContext(*context);
+        }
         return getScreenPositionsForContext(*context);
     }
 
@@ -1400,6 +2398,17 @@ namespace lfs::vis {
 
     void SelectionService::setTestingHoveredGaussianId(std::optional<int> hovered_gaussian_id) {
         testing_hovered_gaussian_id_ = hovered_gaussian_id;
+    }
+
+    void SelectionService::clearTestingOverrides() {
+        testing_screen_positions_.reset();
+        testing_camera_screen_positions_.clear();
+        testing_viewport_.reset();
+        testing_hovered_gaussian_id_.reset();
+        viewport_screen_positions_.fill(nullptr);
+        viewport_screen_position_keys_ = {};
+        point_cloud_means_cuda_ = {};
+        point_cloud_means_cuda_signature_ = 0;
     }
 
     std::optional<SelectionService::ViewerViewportContext> SelectionService::resolveViewerViewportContext(
@@ -1480,6 +2489,7 @@ namespace lfs::vis {
 
         const ScreenPositionCacheKey key{
             .valid = true,
+            .domain = SelectionDomain::Gaussians,
             .signature = makeScreenPositionCacheSignature(
                 scene_state,
                 viewport,
@@ -1493,12 +2503,82 @@ namespace lfs::vis {
         }
 
         auto screen_positions = projectGaussianScreenPositions(
-            *scene_state.combined_model,
+            scene_state.combined_model->means(),
             viewport,
             settings.equirectangular,
             {.model_transforms = &scene_state.model_transforms,
              .transform_indices = scene_state.transform_indices,
              .node_visibility_mask = scene_state.node_visibility_mask});
+        viewport_screen_positions_[panel_index] = screen_positions;
+        viewport_screen_position_keys_[panel_index] =
+            (screen_positions && screen_positions->is_valid()) ? key : ScreenPositionCacheKey{};
+        return screen_positions;
+    }
+
+    std::shared_ptr<core::Tensor> SelectionService::getPointCloudScreenPositionsForContext(
+        const ViewerViewportContext& context) const {
+        if (testing_screen_positions_ && testing_screen_positions_->is_valid()) {
+            return testing_screen_positions_;
+        }
+        if (!context.info.valid()) {
+            return nullptr;
+        }
+        if (!scene_manager_ || !rendering_manager_ || !context.viewport) {
+            return nullptr;
+        }
+
+        const size_t panel_index = splitViewPanelIndex(context.panel);
+        const auto settings = rendering_manager_->getSettings();
+        Viewport projection_viewport = *context.viewport;
+        projection_viewport.windowSize = {context.info.render_width, context.info.render_height};
+        const auto viewport = viewportDataFromViewer(projection_viewport, context.info, settings);
+
+        auto scene_state = scene_manager_->buildRenderState();
+        if (!scene_state.point_cloud || scene_state.point_cloud->size() == 0 ||
+            !scene_state.point_cloud->means.is_valid()) {
+            viewport_screen_positions_[panel_index].reset();
+            viewport_screen_position_keys_[panel_index] = {};
+            return nullptr;
+        }
+
+        const ScreenPositionCacheKey key{
+            .valid = true,
+            .domain = SelectionDomain::PointCloud,
+            .signature = makePointCloudScreenPositionCacheSignature(
+                scene_state,
+                viewport,
+                settings.equirectangular,
+                rendering_manager_->getViewportProjectionGeneration()),
+        };
+        if (viewport_screen_position_keys_[panel_index] == key &&
+            viewport_screen_positions_[panel_index] &&
+            viewport_screen_positions_[panel_index]->is_valid()) {
+            return viewport_screen_positions_[panel_index];
+        }
+
+        const auto& means = scene_state.point_cloud->means;
+        const auto means_signature = makePointCloudMeansSignature(means);
+        core::Tensor means_for_projection = means;
+        if (means_for_projection.device() != core::Device::CUDA) {
+            const bool needs_upload = !point_cloud_means_cuda_.is_valid() ||
+                                      point_cloud_means_cuda_signature_ != means_signature ||
+                                      point_cloud_means_cuda_.numel() != means.numel();
+            if (needs_upload) {
+                point_cloud_means_cuda_ = means.cuda().contiguous();
+                point_cloud_means_cuda_signature_ = means_signature;
+            }
+            means_for_projection = point_cloud_means_cuda_;
+        }
+
+        const std::vector<glm::mat4> transforms{scene_state.point_cloud_transform};
+        const std::vector<bool> visibility{true};
+        auto screen_positions = projectGaussianScreenPositions(
+            means_for_projection,
+            viewport,
+            settings.equirectangular,
+            {.model_transforms = &transforms,
+             .transform_indices = nullptr,
+             .node_visibility_mask = visibility});
         viewport_screen_positions_[panel_index] = screen_positions;
         viewport_screen_position_keys_[panel_index] =
             (screen_positions && screen_positions->is_valid()) ? key : ScreenPositionCacheKey{};
@@ -1512,7 +2592,18 @@ namespace lfs::vis {
             return false;
         }
 
-        const size_t total = activeSelectionGaussianCount(scene_manager_);
+        const SelectionDomain domain = resolveSelectionDomain(*scene_manager_);
+        if (domain == SelectionDomain::Cameras) {
+            if (!isCameraSelectionShape(shape)) {
+                return false;
+            }
+        }
+        if (domain == SelectionDomain::PointCloud &&
+            shape == SelectionShape::Rings) {
+            return false;
+        }
+
+        const size_t total = activeSelectionElementCount(domain);
         if (total == 0) {
             return false;
         }
@@ -1523,6 +2614,7 @@ namespace lfs::vis {
         interactive_selection_.active = true;
         interactive_selection_.shape = shape;
         interactive_selection_.mode = mode;
+        interactive_selection_.domain = domain;
         interactive_selection_.generation = ++interactive_selection_generation_;
         interactive_selection_.filters = filters;
         interactive_selection_.brush_radius = brush_radius;
@@ -1533,12 +2625,14 @@ namespace lfs::vis {
             interactive_selection_ = {};
             return false;
         }
-        try {
-            (void)resetBoolScratchBuffer(interactive_selection_.working_selection, total);
-        } catch (const std::exception& e) {
-            LOG_WARN("SelectionService: could not allocate interactive selection preview buffers: {}", e.what());
-            interactive_selection_ = {};
-            return false;
+        if (domain != SelectionDomain::Cameras) {
+            try {
+                (void)resetBoolScratchBuffer(interactive_selection_.working_selection, total);
+            } catch (const std::exception& e) {
+                LOG_WARN("SelectionService: could not allocate interactive selection preview buffers: {}", e.what());
+                interactive_selection_ = {};
+                return false;
+            }
         }
 
         switch (shape) {
@@ -1749,6 +2843,20 @@ namespace lfs::vis {
             return {false, 0, "No active interactive selection"};
         }
 
+        if (session.domain == SelectionDomain::Cameras) {
+            if (!session.viewport_context || !session.viewport_context->valid()) {
+                return {false, 0, "No viewport"};
+            }
+            const auto& context = *session.viewport_context;
+            const auto hits = hitTestCamerasInShape(
+                *scene_manager_, *rendering_manager_, context.info, *context.viewport,
+                session.shape, session.points, session.start_pos, session.cursor_pos, session.brush_radius);
+            const auto result = applyCameraNodeSelection(*scene_manager_, hits, session.mode);
+            clearInteractivePreviewState();
+            interactive_selection_ = {};
+            return result;
+        }
+
         core::Tensor selection;
         if (!buildSelectionMaskForInteractiveSession(selection)) {
             return {false, 0, "Interactive selection is incomplete"};
@@ -1780,10 +2888,65 @@ namespace lfs::vis {
         if (!scene_manager_ || !rendering_manager_ || interactive_selection_.active) {
             return;
         }
-
+        const auto domain = resolveSelectionDomain(*scene_manager_);
         const auto context = resolveViewerViewportContext(cursor_pos);
         if (!context || !context->valid()) {
             rendering_manager_->clearCursorPreviewState();
+            return;
+        }
+
+        if (domain == SelectionDomain::PointCloud) {
+            if (rendering_manager_->getSelectionPreviewMode() != SelectionPreviewMode::Centers) {
+                rendering_manager_->clearCursorPreviewState();
+                rendering_manager_->clearPreviewSelection();
+                rendering_manager_->markDirty(DirtyFlag::SELECTION);
+                return;
+            }
+
+            const auto screen_positions = getPointCloudScreenPositionsForContext(*context);
+            const size_t total = activeSelectionElementCount(domain);
+            if (!screen_positions || !screen_positions->is_valid() || total == 0 ||
+                screen_positions->size(0) != total) {
+                rendering_manager_->clearCursorPreviewState();
+                rendering_manager_->clearPreviewSelection();
+                return;
+            }
+
+            auto& selection = resetBoolScratchBuffer(command_selection_buffer_, total);
+            const auto render_cursor = screenToRender(cursor_pos, context->info);
+            const auto hovered_id = pickHoveredGaussianIdFromScreenPositions(*screen_positions, render_cursor, filters);
+            bool hit = false;
+            if (hovered_id && *hovered_id >= 0 && static_cast<size_t>(*hovered_id) < total) {
+                rendering::set_selection_element(selection.ptr<bool>(), *hovered_id, true);
+                if (filters.crop_filter || filters.depth_filter) {
+                    if (const auto* const node = resolveActivePointCloudNode(*scene_manager_);
+                        node && node->point_cloud) {
+                        const glm::mat4 means_to_visualizer =
+                            rendering::dataWorldTransformToVisualizerWorld(
+                                scene_manager_->getScene().getWorldTransform(node->id));
+                        if (filters.crop_filter) {
+                            applyCropFilterToMeans(
+                                selection, node->point_cloud->means, means_to_visualizer,
+                                nullptr, nullptr, nullptr, nullptr, nullptr, true, node->id);
+                        }
+                        if (filters.depth_filter) {
+                            applyDepthFilterToMeans(selection, node->point_cloud->means, means_to_visualizer);
+                        }
+                    }
+                }
+                hit = selectionMaskHasAny(selection);
+            }
+
+            const bool add_mode = mode != SelectionMode::Remove;
+            rendering_manager_->setCursorPreviewState(
+                true, render_cursor.x, render_cursor.y, 0.0f, add_mode, nullptr, false, 0.0f,
+                context->panel, hit && hovered_id ? *hovered_id : -1);
+            if (hit) {
+                rendering_manager_->setPreviewSelection(&command_selection_buffer_, add_mode);
+            } else {
+                rendering_manager_->clearPreviewSelection();
+            }
+            rendering_manager_->markDirty(DirtyFlag::SELECTION);
             return;
         }
 
@@ -1906,6 +3069,11 @@ namespace lfs::vis {
             }
         }
 
+        if (session.domain == SelectionDomain::Cameras) {
+            session.preview_dirty = false;
+            return;
+        }
+
         {
             LOG_TIMER("SelectionService::refreshInteractivePreview.live_mask");
             core::Tensor selection;
@@ -1929,6 +3097,122 @@ namespace lfs::vis {
         session.preview_dirty = false;
     }
 
+    SelectionResult SelectionService::commitPointSelection(const core::Tensor& selection,
+                                                           const SelectionMode mode,
+                                                           const SelectionFilterState& filters,
+                                                           const char* const undo_name,
+                                                           const bool push_undo) {
+        LOG_TIMER("SelectionService::commitPointSelection");
+        if (!scene_manager_ || !rendering_manager_) {
+            return {false, 0, "Missing managers"};
+        }
+
+        const auto* const active_node = resolveActivePointCloudNode(*scene_manager_);
+        if (!active_node || !active_node->point_cloud) {
+            return {false, 0, "No active point cloud"};
+        }
+
+        auto* const node = scene_manager_->getScene().getMutableNode(active_node->name);
+        if (!node || !node->point_cloud) {
+            return {false, 0, "No active point cloud"};
+        }
+        auto& point_cloud = *node->point_cloud;
+        const size_t point_count = static_cast<size_t>(point_cloud.size());
+        if (selection.numel() != point_count) {
+            return {false, 0, "Selection size mismatch"};
+        }
+
+        auto candidate = ensureCudaBoolMask(selection);
+        if (!candidate.is_valid()) {
+            return {false, 0, "Invalid selection mask"};
+        }
+
+        const cudaStream_t selection_stream =
+            (candidate.device() == core::Device::CUDA) ? candidate.stream() : nullptr;
+        if (selection_stream != nullptr) {
+            try {
+                core::waitForCUDAStream(core::getCurrentCUDAStream(), selection_stream);
+            } catch (const std::exception& e) {
+                LOG_DEBUG("SelectionService: failed to synchronize point selection stream: {}", e.what());
+                return {false, 0, e.what()};
+            }
+        }
+
+        if (point_cloud.has_deleted()) {
+            auto deleted = ensureCudaBoolMask(*point_cloud.deleted);
+            if (deleted.numel() == point_count) {
+                candidate = candidate.logical_and(deleted.logical_not());
+            }
+        }
+
+        if (filters.crop_filter || filters.depth_filter) {
+            auto means = point_cloud.means;
+            if (!means.is_valid() || means.size(0) != point_count) {
+                return {false, 0, "Invalid point cloud positions"};
+            }
+            if (means.dtype() != core::DataType::Float32) {
+                means = means.to(core::DataType::Float32);
+            }
+            const glm::mat4 means_to_visualizer =
+                rendering::dataWorldTransformToVisualizerWorld(
+                    scene_manager_->getScene().getWorldTransform(node->id));
+            if (filters.crop_filter) {
+                applyCropFilterToMeans(
+                    candidate, means, means_to_visualizer,
+                    nullptr, nullptr, nullptr, nullptr, nullptr, true, node->id);
+            }
+            if (filters.depth_filter) {
+                applyDepthFilterToMeans(candidate, means, means_to_visualizer);
+            }
+        }
+
+        core::Tensor old_selection = core::Tensor::zeros({point_count}, core::Device::CUDA, core::DataType::Bool);
+        if (point_cloud.has_selection()) {
+            old_selection = ensureCudaBoolMask(*point_cloud.selection);
+        }
+
+        core::Tensor combined;
+        switch (mode) {
+        case SelectionMode::Replace:
+            combined = candidate;
+            break;
+        case SelectionMode::Add:
+            combined = old_selection.logical_or(candidate);
+            break;
+        case SelectionMode::Remove:
+            combined = old_selection.logical_and(candidate.logical_not());
+            break;
+        case SelectionMode::Intersect:
+            combined = old_selection.logical_and(candidate);
+            break;
+        }
+
+        const auto selection_before = point_cloud.selection;
+        const auto deleted_before = point_cloud.deleted;
+        auto selection_after = std::make_shared<core::Tensor>(
+            combined.to(core::DataType::UInt8).contiguous());
+        const auto deleted_after = point_cloud.deleted;
+
+        point_cloud.selection = selection_after;
+        const size_t selected_count = selection_after->count_nonzero();
+        scene_manager_->setPointSelectionCountCache(node->id, point_cloud.selection, selected_count);
+
+        if (push_undo) {
+            op::undoHistory().push(std::make_unique<op::PointCloudMaskUndoEntry>(
+                *scene_manager_,
+                undo_name,
+                node->name,
+                selection_before,
+                deleted_before,
+                selection_after,
+                deleted_after));
+        }
+
+        scene_manager_->getScene().notifyMutation(core::Scene::MutationType::SELECTION_CHANGED);
+        rendering_manager_->markDirty(DirtyFlag::SELECTION);
+        return {true, selected_count, {}};
+    }
+
     SelectionResult SelectionService::commitSelection(const core::Tensor& selection, const SelectionMode mode,
                                                       const std::vector<bool>& node_mask,
                                                       const SelectionFilterState& filters,
@@ -1937,6 +3221,16 @@ namespace lfs::vis {
         LOG_TIMER("SelectionService::commitSelection");
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
+        }
+
+        const SelectionDomain domain = interactive_selection_.active
+                                           ? interactive_selection_.domain
+                                           : resolveSelectionDomain(*scene_manager_);
+        if (domain == SelectionDomain::PointCloud) {
+            return commitPointSelection(selection, mode, filters, undo_name, options.push_undo);
+        }
+        if (domain == SelectionDomain::Cameras) {
+            return {false, 0, "Mask selection is not supported for cameras"};
         }
 
         auto selection_mask = [&] {
@@ -1952,6 +3246,7 @@ namespace lfs::vis {
             try {
                 selection_mask.sync_to_stream(core::getCurrentCUDAStream());
             } catch (const std::exception& e) {
+                LOG_DEBUG("SelectionService: failed to synchronize selection mask: {}", e.what());
                 return {false, 0, e.what()};
             }
         }
@@ -2089,6 +3384,7 @@ namespace lfs::vis {
                 group_counts = rendering::count_selection_groups(output_mask, selection_group_counts_scratch_);
             }
         } catch (const std::exception& e) {
+            LOG_DEBUG("SelectionService: failed to count selection groups: {}", e.what());
             return {false, 0, e.what()};
         }
         size_t selected_count = 0;
@@ -2138,12 +3434,16 @@ namespace lfs::vis {
     }
 
     std::shared_ptr<core::Tensor> SelectionService::resolveCommandScreenPositions(const int camera_index) const {
+        const auto domain = scene_manager_ ? resolveSelectionDomain(*scene_manager_) : SelectionDomain::Gaussians;
         if (camera_index >= 0) {
             if (const auto it = testing_camera_screen_positions_.find(camera_index);
                 it != testing_camera_screen_positions_.end() &&
                 it->second &&
                 it->second->is_valid()) {
                 return it->second;
+            }
+            if (domain == SelectionDomain::PointCloud) {
+                return getScreenPositions();
             }
             if (auto remote_positions = renderScreenPositionsForCamera(camera_index);
                 remote_positions && remote_positions->is_valid()) {
@@ -2172,7 +3472,7 @@ namespace lfs::vis {
         const auto settings = rendering_manager_->getSettings();
         const auto viewport = viewportDataFromCamera(*cameras[camera_index]);
         return projectGaussianScreenPositions(
-            *scene_state.combined_model,
+            scene_state.combined_model->means(),
             viewport,
             settings.equirectangular,
             {.model_transforms = &scene_state.model_transforms,
@@ -2262,7 +3562,7 @@ namespace lfs::vis {
 
         const auto settings = rendering_manager_->getSettings();
         auto screen_positions = projectGaussianScreenPositions(
-            *scene_state.combined_model,
+            scene_state.combined_model->means(),
             viewport,
             settings.equirectangular,
             {.model_transforms = &scene_state.model_transforms,
@@ -2289,15 +3589,17 @@ namespace lfs::vis {
             return std::nullopt;
         }
 
+        const auto domain = resolveSelectionDomain(*scene_manager_);
+        const size_t total = activeSelectionElementCount(domain);
         const int hovered_id = *hovered_result;
-        if (hovered_id < 0 ||
-            static_cast<size_t>(hovered_id) >= activeSelectionGaussianCount(scene_manager_)) {
+        if (hovered_id < 0 || static_cast<size_t>(hovered_id) >= total) {
             return std::nullopt;
         }
 
-        if (filters.crop_filter || filters.depth_filter || filters.restrict_to_selected_nodes) {
+        if (domain == SelectionDomain::Gaussians &&
+            (filters.crop_filter || filters.depth_filter || filters.restrict_to_selected_nodes)) {
             auto candidate = core::Tensor::zeros(
-                {activeSelectionGaussianCount(scene_manager_)},
+                {total},
                 core::Device::CUDA,
                 core::DataType::Bool);
             rendering::set_selection_element(candidate.ptr<bool>(), hovered_id, true);
@@ -2332,7 +3634,7 @@ namespace lfs::vis {
             return false;
         }
 
-        const size_t total = activeSelectionGaussianCount(scene_manager_);
+        const size_t total = activeSelectionElementCount(session.domain);
         if (total == 0 || session.points.empty()) {
             return false;
         }
@@ -2386,7 +3688,7 @@ namespace lfs::vis {
             }
         }
 
-        {
+        if (session.domain == SelectionDomain::Gaussians) {
             LOG_TIMER("SelectionService::buildInteractiveBrushPreviewIncremental.applyFilters");
             applyFilters(delta_selection, session.filters, node_mask);
         }
@@ -2424,7 +3726,7 @@ namespace lfs::vis {
             return false;
         }
 
-        const size_t total = activeSelectionGaussianCount(scene_manager_);
+        const size_t total = activeSelectionElementCount(session.domain);
         if (total == 0) {
             return false;
         }
@@ -2475,7 +3777,25 @@ namespace lfs::vis {
             return false;
         }
 
-        applyFilters(selection_out, session.filters, effectiveNodeMask(session.filters.restrict_to_selected_nodes));
+        if (session.domain == SelectionDomain::Gaussians) {
+            applyFilters(selection_out, session.filters, effectiveNodeMask(session.filters.restrict_to_selected_nodes));
+        } else if (session.domain == SelectionDomain::PointCloud &&
+                   (session.filters.crop_filter || session.filters.depth_filter)) {
+            const auto* const node = resolveActivePointCloudNode(*scene_manager_);
+            if (node && node->point_cloud) {
+                const glm::mat4 means_to_visualizer =
+                    rendering::dataWorldTransformToVisualizerWorld(
+                        scene_manager_->getScene().getWorldTransform(node->id));
+                if (session.filters.crop_filter) {
+                    applyCropFilterToMeans(
+                        selection_out, node->point_cloud->means, means_to_visualizer,
+                        nullptr, nullptr, nullptr, nullptr, nullptr, true, node->id);
+                }
+                if (session.filters.depth_filter) {
+                    applyDepthFilterToMeans(selection_out, node->point_cloud->means, means_to_visualizer);
+                }
+            }
+        }
         return true;
     }
 
@@ -2498,7 +3818,7 @@ namespace lfs::vis {
             return false;
         }
         const auto settings = rendering_manager_->getSettings();
-        if (!testing_screen_positions_ && !testing_viewport_) {
+        if (session.domain == SelectionDomain::Gaussians && !testing_screen_positions_ && !testing_viewport_) {
             Viewport projection_viewport = *session.viewport_context->viewport;
             projection_viewport.windowSize = {info.render_width, info.render_height};
             const auto frame_view = frameViewFromViewport(
@@ -2513,7 +3833,9 @@ namespace lfs::vis {
             }
         }
 
-        const auto screen_positions = getScreenPositionsForContext(*session.viewport_context);
+        const auto screen_positions = session.domain == SelectionDomain::PointCloud
+                                          ? getPointCloudScreenPositionsForContext(*session.viewport_context)
+                                          : getScreenPositionsForContext(*session.viewport_context);
         if (!screen_positions || !screen_positions->is_valid() || screen_positions->size(0) != selection_out.numel()) {
             return false;
         }
@@ -2562,7 +3884,7 @@ namespace lfs::vis {
             std::max(render_start.y, render_end.y),
         }};
         const auto settings = rendering_manager_->getSettings();
-        if (!testing_screen_positions_ && !testing_viewport_) {
+        if (session.domain == SelectionDomain::Gaussians && !testing_screen_positions_ && !testing_viewport_) {
             Viewport projection_viewport = *session.viewport_context->viewport;
             projection_viewport.windowSize = {info.render_width, info.render_height};
             const auto frame_view = frameViewFromViewport(
@@ -2577,7 +3899,9 @@ namespace lfs::vis {
             }
         }
 
-        const auto screen_positions = getScreenPositionsForContext(*session.viewport_context);
+        const auto screen_positions = session.domain == SelectionDomain::PointCloud
+                                          ? getPointCloudScreenPositionsForContext(*session.viewport_context)
+                                          : getScreenPositionsForContext(*session.viewport_context);
         if (!screen_positions || !screen_positions->is_valid() || screen_positions->size(0) != selection_out.numel()) {
             return false;
         }
@@ -2612,7 +3936,7 @@ namespace lfs::vis {
         }
 
         const auto settings = rendering_manager_->getSettings();
-        if (!testing_screen_positions_ && !testing_viewport_) {
+        if (session.domain == SelectionDomain::Gaussians && !testing_screen_positions_ && !testing_viewport_) {
             Viewport projection_viewport = *session.viewport_context->viewport;
             projection_viewport.windowSize = {info.render_width, info.render_height};
             const auto frame_view = frameViewFromViewport(
@@ -2626,7 +3950,9 @@ namespace lfs::vis {
             }
         }
 
-        const auto screen_positions = getScreenPositionsForContext(*session.viewport_context);
+        const auto screen_positions = session.domain == SelectionDomain::PointCloud
+                                          ? getPointCloudScreenPositionsForContext(*session.viewport_context)
+                                          : getScreenPositionsForContext(*session.viewport_context);
         if (!screen_positions || !screen_positions->is_valid() || screen_positions->size(0) != selection_out.numel()) {
             return false;
         }
@@ -2673,7 +3999,7 @@ namespace lfs::vis {
             render_points.emplace_back(projected->x, projected->y);
         }
 
-        if (!testing_screen_positions_ && !testing_viewport_) {
+        if (session.domain == SelectionDomain::Gaussians && !testing_screen_positions_ && !testing_viewport_) {
             const auto frame_view = frameViewFromViewport(
                 viewportDataFromViewer(projection_viewport, session.viewport_context->info, settings),
                 settings.background_color,
@@ -2685,7 +4011,9 @@ namespace lfs::vis {
             }
         }
 
-        const auto screen_positions = getScreenPositionsForContext(*session.viewport_context);
+        const auto screen_positions = session.domain == SelectionDomain::PointCloud
+                                          ? getPointCloudScreenPositionsForContext(*session.viewport_context)
+                                          : getScreenPositionsForContext(*session.viewport_context);
         if (!screen_positions || !screen_positions->is_valid() || screen_positions->size(0) != selection_out.numel()) {
             return false;
         }
@@ -2708,6 +4036,9 @@ namespace lfs::vis {
         }
 
         const auto& session = interactive_selection_;
+        if (session.domain == SelectionDomain::PointCloud) {
+            return false;
+        }
         int hovered_id = testing_hovered_gaussian_id_.value_or(-1);
         if (hovered_id >= 0 && static_cast<size_t>(hovered_id) < selection_out.numel()) {
             rendering::set_selection_element(selection_out.ptr<bool>(), hovered_id, true);
@@ -2848,7 +4179,7 @@ namespace lfs::vis {
     bool SelectionService::buildVolumeSelection(const InteractiveVolumeGeometry& geometry,
                                                 core::Tensor& selection_out) const {
         const auto& session = interactive_selection_;
-        if (!selection_out.is_valid() ||
+        if (!scene_manager_ || !selection_out.is_valid() ||
             (session.shape != SelectionShape::Box && session.shape != SelectionShape::Sphere)) {
             return false;
         }
@@ -2865,11 +4196,37 @@ namespace lfs::vis {
                 {geometry.box_min.x, geometry.box_min.y, geometry.box_min.z}, {3});
             const auto box_max = core::Tensor::from_vector(
                 {geometry.box_max.x, geometry.box_max.y, geometry.box_max.z}, {3});
-            applyCropFilter(selection_out, &transform, &box_min, &box_max, nullptr, nullptr, false);
+            if (session.domain == SelectionDomain::PointCloud) {
+                const auto* const node = resolveActivePointCloudNode(*scene_manager_);
+                if (!node || !node->point_cloud) {
+                    return false;
+                }
+                const glm::mat4 means_to_visualizer =
+                    rendering::dataWorldTransformToVisualizerWorld(
+                        scene_manager_->getScene().getWorldTransform(node->id));
+                applyCropFilterToMeans(
+                    selection_out, node->point_cloud->means, means_to_visualizer, &transform, &box_min, &box_max,
+                    nullptr, nullptr, false);
+            } else {
+                applyCropFilter(selection_out, &transform, &box_min, &box_max, nullptr, nullptr, false);
+            }
         } else {
             const auto radii = core::Tensor::from_vector(
                 {geometry.ellipsoid_radii.x, geometry.ellipsoid_radii.y, geometry.ellipsoid_radii.z}, {3});
-            applyCropFilter(selection_out, nullptr, nullptr, nullptr, &transform, &radii, false);
+            if (session.domain == SelectionDomain::PointCloud) {
+                const auto* const node = resolveActivePointCloudNode(*scene_manager_);
+                if (!node || !node->point_cloud) {
+                    return false;
+                }
+                const glm::mat4 means_to_visualizer =
+                    rendering::dataWorldTransformToVisualizerWorld(
+                        scene_manager_->getScene().getWorldTransform(node->id));
+                applyCropFilterToMeans(
+                    selection_out, node->point_cloud->means, means_to_visualizer, nullptr, nullptr, nullptr,
+                    &transform, &radii, false);
+            } else {
+                applyCropFilter(selection_out, nullptr, nullptr, nullptr, &transform, &radii, false);
+            }
         }
 
         return true;
@@ -3248,6 +4605,146 @@ namespace lfs::vis {
                 model_transforms_ptr,
                 transform_indices_ptr);
         }
+    }
+
+    void SelectionService::applyCropFilterToMeans(core::Tensor& selection,
+                                                  const core::Tensor& means,
+                                                  const glm::mat4& means_to_visualizer,
+                                                  const core::Tensor* crop_box_transform,
+                                                  const core::Tensor* crop_box_min,
+                                                  const core::Tensor* crop_box_max,
+                                                  const core::Tensor* ellipsoid_transform,
+                                                  const core::Tensor* ellipsoid_radii,
+                                                  const bool use_scene_filters,
+                                                  const core::NodeId point_cloud_node_id) const {
+        LOG_TIMER("SelectionService::applyCropFilterToMeans");
+        if (!scene_manager_ || !selection.is_valid() || !means.is_valid() || means.size(0) != selection.size(0)) {
+            return;
+        }
+
+        core::Tensor means_cuda;
+        const core::Tensor* means_ptr = &means;
+        if (means.dtype() != core::DataType::Float32) {
+            means_cuda = means.to(core::DataType::Float32);
+            means_ptr = &means_cuda;
+        }
+        if (means_ptr->device() != core::Device::CUDA) {
+            const auto means_signature = makePointCloudMeansSignature(*means_ptr);
+            const bool needs_upload = !point_cloud_means_cuda_.is_valid() ||
+                                      point_cloud_means_cuda_signature_ != means_signature ||
+                                      point_cloud_means_cuda_.numel() != means_ptr->numel();
+            if (needs_upload) {
+                point_cloud_means_cuda_ = means_ptr->cuda().contiguous();
+                point_cloud_means_cuda_signature_ = means_signature;
+            }
+            means_ptr = &point_cloud_means_cuda_;
+        }
+
+        core::Tensor crop_t;
+        core::Tensor crop_min;
+        core::Tensor crop_max;
+        const core::Tensor* crop_t_ptr = nullptr;
+        const core::Tensor* crop_min_ptr = nullptr;
+        const core::Tensor* crop_max_ptr = nullptr;
+        bool crop_inverse = false;
+
+        core::Tensor ellip_t;
+        core::Tensor ellip_radii_tensor;
+        const core::Tensor* ellip_t_ptr = nullptr;
+        const core::Tensor* ellip_radii_ptr = nullptr;
+        bool ellipsoid_inverse = false;
+
+        const auto render_state = [&] {
+            LOG_TIMER("applyCropFilterToMeans.buildRenderState");
+            return scene_manager_->buildRenderState();
+        }();
+        if (crop_box_transform && crop_box_min && crop_box_max) {
+            crop_t_ptr = crop_box_transform;
+            crop_min_ptr = crop_box_min;
+            crop_max_ptr = crop_box_max;
+        } else if (use_scene_filters) {
+            core::NodeId cropbox_id = core::NULL_NODE;
+            if (point_cloud_node_id != core::NULL_NODE) {
+                cropbox_id = scene_manager_->getScene().getCropBoxForSplat(point_cloud_node_id);
+            }
+            if (cropbox_id == core::NULL_NODE) {
+                cropbox_id = scene_manager_->getActiveSelectionCropBoxId();
+            }
+
+            if (const auto* const cb = findRenderableByNodeId(render_state.cropboxes, cropbox_id);
+                cb && cb->data && cb->data->enabled) {
+                const glm::mat4 inv_transform = glm::inverse(cb->world_transform);
+                const float* const t_ptr = glm::value_ptr(inv_transform);
+                crop_t = core::Tensor::from_vector(std::vector<float>(t_ptr, t_ptr + 16), {4, 4});
+                crop_min = core::Tensor::from_vector({cb->data->min.x, cb->data->min.y, cb->data->min.z}, {3});
+                crop_max = core::Tensor::from_vector({cb->data->max.x, cb->data->max.y, cb->data->max.z}, {3});
+                crop_t_ptr = &crop_t;
+                crop_min_ptr = &crop_min;
+                crop_max_ptr = &crop_max;
+                crop_inverse = cb->data->inverse;
+            }
+        }
+
+        if (ellipsoid_transform && ellipsoid_radii) {
+            ellip_t_ptr = ellipsoid_transform;
+            ellip_radii_ptr = ellipsoid_radii;
+        } else if (use_scene_filters) {
+            if (const auto* const el =
+                    findRenderableByNodeId(render_state.ellipsoids, scene_manager_->getActiveSelectionEllipsoidId());
+                el && el->data) {
+                const glm::mat4 inv_transform = glm::inverse(el->world_transform);
+                const float* const t_ptr = glm::value_ptr(inv_transform);
+                ellip_t = core::Tensor::from_vector(std::vector<float>(t_ptr, t_ptr + 16), {4, 4});
+                ellip_radii_tensor =
+                    core::Tensor::from_vector({el->data->radii.x, el->data->radii.y, el->data->radii.z}, {3});
+                ellip_t_ptr = &ellip_t;
+                ellip_radii_ptr = &ellip_radii_tensor;
+                ellipsoid_inverse = el->data->inverse;
+            }
+        }
+
+        if (!crop_t_ptr && !ellip_t_ptr) {
+            return;
+        }
+
+        const std::vector<glm::mat4> model_transforms{means_to_visualizer};
+        const auto model_transforms_cuda = uploadModelTransformsToCuda(model_transforms);
+        rendering::filter_selection_by_crop(
+            selection, *means_ptr,
+            crop_t_ptr,
+            crop_min_ptr,
+            crop_max_ptr,
+            crop_inverse,
+            ellip_t_ptr,
+            ellip_radii_ptr,
+            ellipsoid_inverse,
+            &model_transforms_cuda,
+            nullptr);
+    }
+
+    void SelectionService::applyDepthFilterToMeans(core::Tensor& selection,
+                                                   const core::Tensor& means,
+                                                   const glm::mat4& means_to_visualizer) const {
+        LOG_TIMER("SelectionService::applyDepthFilterToMeans");
+        if (!rendering_manager_ || !selection.is_valid() || !means.is_valid() || means.size(0) != selection.size(0)) {
+            return;
+        }
+
+        const auto settings = rendering_manager_->getSettings();
+        if (!settings.depth_filter_enabled) {
+            return;
+        }
+
+        const glm::mat4 world_to_filter = settings.depth_filter_transform.inv().toMat4();
+        const float* const t_ptr = glm::value_ptr(world_to_filter);
+        const auto depth_t = core::Tensor::from_vector(std::vector<float>(t_ptr, t_ptr + 16), {4, 4});
+        const auto depth_min = core::Tensor::from_vector(
+            {settings.depth_filter_min.x, settings.depth_filter_min.y, settings.depth_filter_min.z}, {3});
+        const auto depth_max = core::Tensor::from_vector(
+            {settings.depth_filter_max.x, settings.depth_filter_max.y, settings.depth_filter_max.z}, {3});
+
+        applyCropFilterToMeans(
+            selection, means, means_to_visualizer, &depth_t, &depth_min, &depth_max, nullptr, nullptr, false);
     }
 
     void SelectionService::applyDepthFilter(core::Tensor& selection) const {

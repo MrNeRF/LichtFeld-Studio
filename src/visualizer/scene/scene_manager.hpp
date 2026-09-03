@@ -8,6 +8,7 @@
 #include "core/export.hpp"
 #include "core/parameters.hpp"
 #include "core/scene.hpp"
+#include "core/selection_domain.hpp"
 #include "core/services.hpp"
 #include "core/splat_data_mirror.hpp"
 #include "geometry/bounding_box.hpp"
@@ -148,6 +149,9 @@ namespace lfs::vis {
         void removeFromSelection(const std::string& name);
         void removeFromSelection(core::NodeId id);
         void clearSelection();
+        // Domain of the most recent non-empty node selection. Lets shape tools keep
+        // targeting cameras after a stroke empties the node selection.
+        [[nodiscard]] SelectionDomain stickySelectionDomain() const { return sticky_selection_domain_; }
         [[nodiscard]] std::string getSelectedNodeName() const;
         [[nodiscard]] std::vector<std::string> getSelectedNodeNames() const;
         [[nodiscard]] std::vector<core::NodeId> getSelectedNodeIds() const;
@@ -270,10 +274,23 @@ namespace lfs::vis {
 
         [[nodiscard]] std::expected<void, std::string> softDeleteSelectedGaussians();
         [[nodiscard]] std::expected<void, std::string> deleteSelectedGaussiansWithHistory();
+        [[nodiscard]] std::expected<void, std::string> deleteSelectedPointsWithHistory();
+        [[nodiscard]] std::expected<size_t, std::string> setCamerasTrainingEnabledWithHistory(
+            const std::vector<std::string>& node_names,
+            bool enabled);
         void deleteSelectedGaussians();
         void invertSelection();
         void deselectAllGaussians();
         void selectAllGaussians();
+        [[nodiscard]] size_t getActivePointSelectionCount() const;
+        void setPointSelectionCountCache(core::NodeId node_id,
+                                         const std::shared_ptr<lfs::core::Tensor>& selection,
+                                         size_t selected_count) const;
+        void refreshPointSelectionCountCache(core::NodeId node_id,
+                                             const std::shared_ptr<lfs::core::Tensor>& selection) const;
+        [[nodiscard]] std::expected<void, std::string> selectAllPoints();
+        [[nodiscard]] std::expected<void, std::string> clearPointSelection();
+        [[nodiscard]] std::expected<void, std::string> invertPointSelection();
         void copySelectionToClipboard();
         void pasteSelectionFromClipboard();
         [[nodiscard]] SelectionResult selectBrush(float x, float y, float radius, const std::string& mode,
@@ -331,6 +348,7 @@ namespace lfs::vis {
         };
 
         [[nodiscard]] bool resetToEmptyState(bool trainer_already_cleared = false);
+        void refreshStickySelectionDomain();
         enum class TrainingRemovalImpact {
             None,
             TrainingModel,
@@ -387,6 +405,7 @@ namespace lfs::vis {
         std::optional<lfs::core::param::TrainingParameters> cached_params_;
 
         SelectionState selection_;
+        SelectionDomain sticky_selection_domain_ = SelectionDomain::Gaussians;
 
         // Clipboard for copy/paste (supports multi-selection)
         struct ClipboardEntry {
@@ -425,6 +444,9 @@ namespace lfs::vis {
         std::unique_ptr<SelectionService> selection_service_;
         std::unique_ptr<op::SceneSnapshot> selection_preview_snapshot_;
         std::optional<core::Scene::SelectionStateSnapshot> selection_preview_before_;
+        mutable core::NodeId point_selection_cache_node_id_ = core::NULL_NODE;
+        mutable const lfs::core::Tensor* point_selection_cache_mask_ = nullptr;
+        mutable size_t point_selection_cache_count_ = 0;
         std::mutex consolidated_compaction_mutex_;
         std::jthread consolidated_compaction_thread_;
         bool consolidated_compaction_running_ = false;

@@ -930,6 +930,8 @@
     "polygon_selection": "다각형 선택",
     "lasso_selection": "올가미 선택",
     "ring_selection": "링 선택",
+    "ring_selection_pointcloud_unavailable": "Rings are only available for Gaussian selections.",
+    "submode_camera_unavailable": "This selection mode is not available for cameras.",
     "box_selection": "박스 선택",
     "sphere_selection": "구 선택",
     "color_selection": "색상으로 선택",

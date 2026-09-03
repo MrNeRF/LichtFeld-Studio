@@ -233,6 +233,27 @@ namespace lfs::core::cuda {
             out_mask[idx] = match ? group_id : 0;
         }
 
+        __global__ void point_color_threshold_kernel(
+            const uint8_t* __restrict__ colors,
+            uint8_t* __restrict__ out_mask,
+            uint8_t ref_r, uint8_t ref_g, uint8_t ref_b,
+            uint8_t tolerance,
+            int N) {
+            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx >= N)
+                return;
+
+            const int offset = idx * 3;
+            const int dr = static_cast<int>(colors[offset]) - static_cast<int>(ref_r);
+            const int dg = static_cast<int>(colors[offset + 1]) - static_cast<int>(ref_g);
+            const int db = static_cast<int>(colors[offset + 2]) - static_cast<int>(ref_b);
+            const int tol = static_cast<int>(tolerance);
+            const bool match = (dr >= -tol && dr <= tol) &&
+                               (dg >= -tol && dg <= tol) &&
+                               (db >= -tol && db <= tol);
+            out_mask[idx] = match ? 1 : 0;
+        }
+
         __device__ inline void atomicMinFloat(float* addr, float val) {
             int* addr_as_int = reinterpret_cast<int*>(addr);
             int old = *addr_as_int, assumed;
@@ -529,6 +550,37 @@ namespace lfs::core::cuda {
             sh0.ptr<float>(), out_mask.ptr<uint8_t>(),
             ref_r, ref_g, ref_b, threshold, group_id, N);
         LFS_CUDA_LAUNCH_CHECK(sh0.stream(), "core.selection.color_threshold");
+
+        nvtxRangePop();
+        return out_mask;
+    }
+
+    Tensor select_points_by_color(const Tensor& colors,
+                                  uint8_t ref_r,
+                                  uint8_t ref_g,
+                                  uint8_t ref_b,
+                                  uint8_t tolerance) {
+        assert(colors.device() == Device::CUDA);
+        assert(colors.dtype() == DataType::UInt8);
+        assert(colors.ndim() == 2 && colors.size(1) == 3);
+
+        nvtxRangePush("select_points_by_color");
+
+        const int N = static_cast<int>(colors.size(0));
+        if (N == 0) {
+            nvtxRangePop();
+            return Tensor::empty({0}, Device::CUDA, DataType::UInt8);
+        }
+
+        auto out_mask = Tensor::empty({static_cast<size_t>(N)}, Device::CUDA, DataType::UInt8);
+
+        int blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        point_color_threshold_kernel<<<blocks, BLOCK_SIZE, 0, colors.stream()>>>(
+            colors.ptr<uint8_t>(), out_mask.ptr<uint8_t>(),
+            ref_r, ref_g, ref_b, tolerance, N);
+
+        cudaError_t err = cudaGetLastError();
+        assert(err == cudaSuccess && "select_points_by_color kernel launch failed");
 
         nvtxRangePop();
         return out_mask;

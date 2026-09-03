@@ -930,6 +930,8 @@
     "polygon_selection": "Polygon selection",
     "lasso_selection": "Lasso selection",
     "ring_selection": "Ring selection",
+    "ring_selection_pointcloud_unavailable": "Rings are only available for Gaussian selections.",
+    "submode_camera_unavailable": "This selection mode is not available for cameras.",
     "box_selection": "Box selection",
     "sphere_selection": "Sphere selection",
     "color_selection": "Color selection",

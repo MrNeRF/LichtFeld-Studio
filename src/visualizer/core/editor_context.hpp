@@ -8,6 +8,7 @@
 #include "core/modal_event.hpp"
 #include "core/operator_callbacks.hpp"
 #include "core/scene.hpp"
+#include "core/selection_domain.hpp"
 #include <cstdint>
 #include <string>
 
@@ -86,6 +87,7 @@ namespace lfs::vis {
         // Selection queries
         [[nodiscard]] bool hasSelection() const { return has_selection_; }
         [[nodiscard]] core::NodeType getSelectedNodeType() const { return selected_node_type_; }
+        [[nodiscard]] SelectionDomain getSelectionDomain() const { return selection_domain_; }
 
         // Tool availability
         [[nodiscard]] bool isToolAvailable(ToolType tool) const;
@@ -94,6 +96,8 @@ namespace lfs::vis {
         // Capability queries
         [[nodiscard]] bool canTransformSelectedNode() const;
         [[nodiscard]] bool canSelectGaussians() const;
+        [[nodiscard]] bool canUseSelectionTool() const;
+        [[nodiscard]] bool hasGaussians() const { return has_gaussians_; }
         [[nodiscard]] bool forcePointCloudMode() const { return mode_ == EditorMode::PRE_TRAINING; }
 
         // Active tool management (legacy - will be removed)
@@ -146,8 +150,11 @@ namespace lfs::vis {
         EditorMode mode_ = EditorMode::EMPTY;
         core::NodeType selected_node_type_ = core::NodeType::SPLAT;
         ToolType active_tool_ = ToolType::None;
+        SelectionDomain selection_domain_ = SelectionDomain::Gaussians;
         bool has_selection_ = false;
         bool has_gaussians_ = false;
+        bool has_selectable_points_ = false;
+        bool has_selectable_cameras_ = false;
         bool has_editable_transform_selection_ = false;
         bool has_splat_selection_ = false;
         bool has_editable_splat_selection_ = false;

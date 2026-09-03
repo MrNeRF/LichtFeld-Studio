@@ -2423,36 +2423,33 @@ namespace lfs::vis::gui {
     void SceneGraphElement::toggleChildrenTraining(const core::NodeId group_id, const bool enabled) {
         auto* scene_manager = services().sceneOrNull();
         auto* scene = scene_manager ? &scene_manager->getScene() : nullptr;
-        if (!scene)
+        if (!scene_manager || !scene)
             return;
         const auto* group = scene->getNodeById(group_id);
         if (!group)
             return;
-        for (const core::NodeId child_id : group->children) {
-            const auto* child = scene->getNodeById(child_id);
-            if (child && child->type == core::NodeType::CAMERA)
-                scene->setCameraTrainingEnabled(child_id, enabled);
+        if (const auto result = scene_manager->setCamerasTrainingEnabledWithHistory({group->name}, enabled);
+            !result) {
+            LOG_WARN("Failed to update camera group training state: {}", result.error());
         }
     }
 
     void SceneGraphElement::toggleSelectedTraining(const bool enabled) {
         auto* scene_manager = services().sceneOrNull();
         auto* scene = scene_manager ? &scene_manager->getScene() : nullptr;
-        if (!scene)
+        if (!scene_manager || !scene)
             return;
+        std::vector<std::string> names;
+        names.reserve(selected_ids_.size());
         for (const core::NodeId id : selected_ids_) {
             const auto* node = scene->getNodeById(id);
-            if (!node)
-                continue;
-            if (node->type == core::NodeType::CAMERA) {
-                scene->setCameraTrainingEnabled(id, enabled);
-            } else if (node->type == core::NodeType::CAMERA_GROUP) {
-                for (const core::NodeId child_id : node->children) {
-                    const auto* child = scene->getNodeById(child_id);
-                    if (child && child->type == core::NodeType::CAMERA)
-                        scene->setCameraTrainingEnabled(child_id, enabled);
-                }
+            if (node && (node->type == core::NodeType::CAMERA ||
+                         node->type == core::NodeType::CAMERA_GROUP)) {
+                names.push_back(node->name);
             }
+        }
+        if (const auto result = scene_manager->setCamerasTrainingEnabledWithHistory(names, enabled); !result) {
+            LOG_WARN("Failed to update selected camera training state: {}", result.error());
         }
     }
 
@@ -2708,8 +2705,15 @@ namespace lfs::vis::gui {
             }
         } else if ((kind == "enable_train" || kind == "disable_train") && parts.size() >= 2) {
             core::NodeId node_id = core::NULL_NODE;
-            if (parseNodeId(parts[1], node_id))
-                scene->setCameraTrainingEnabled(node_id, kind == "enable_train");
+            if (parseNodeId(parts[1], node_id)) {
+                if (const auto* const node = scene->getNodeById(node_id)) {
+                    if (const auto result = scene_manager->setCamerasTrainingEnabledWithHistory(
+                            {node->name}, kind == "enable_train");
+                        !result) {
+                        LOG_WARN("Failed to update camera training state: {}", result.error());
+                    }
+                }
+            }
         } else if (kind == "go_to_kf" && parts.size() >= 2) {
             cmd::SequencerGoToKeyframe{.keyframe_index = static_cast<size_t>(std::stoul(parts[1]))}.emit();
         } else if (kind == "update_kf" && parts.size() >= 2) {

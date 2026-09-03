@@ -930,6 +930,8 @@
     "polygon_selection": "多边形选择",
     "lasso_selection": "套索选择",
     "ring_selection": "环形选择",
+    "ring_selection_pointcloud_unavailable": "Rings are only available for Gaussian selections.",
+    "submode_camera_unavailable": "This selection mode is not available for cameras.",
     "box_selection": "盒选",
     "sphere_selection": "球形选择",
     "color_selection": "按颜色选择",

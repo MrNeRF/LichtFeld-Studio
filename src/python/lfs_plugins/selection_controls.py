@@ -356,6 +356,13 @@ class SelectionControlsController:
         return False
 
     def _scene_has_selection(self):
+        ui = getattr(lf, "ui", None)
+        active_getter = getattr(ui, "has_active_selection", None) if ui is not None else None
+        if callable(active_getter):
+            try:
+                return bool(active_getter())
+            except Exception:
+                pass
         scene_getter = getattr(lf, "get_scene", None)
         if not callable(scene_getter):
             return False

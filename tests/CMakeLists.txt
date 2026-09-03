@@ -418,6 +418,10 @@ set(TEST_FILES
     test_render_settings_defaults.cpp
     test_scene_upscaler_registry.cpp
     test_selection_rasterization_ops.cpp
+    test_point_cloud_masks.cpp
+    test_camera_selection.cpp
+    test_point_cloud_selection.cpp
+    test_selection_domain.cpp
     test_rendering_refactor_services.cpp
     test_theme_registry.cpp
     test_preferences_migration.cpp

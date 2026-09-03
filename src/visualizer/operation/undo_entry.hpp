@@ -316,6 +316,43 @@ namespace lfs::vis::op {
         std::optional<SceneTopologyProof> expected_topology_;
     };
 
+    class LFS_VIS_API PointCloudMaskUndoEntry : public UndoEntry {
+    public:
+        PointCloudMaskUndoEntry(SceneManager& scene,
+                                std::string name,
+                                std::string node_name,
+                                std::shared_ptr<lfs::core::Tensor> selection_before,
+                                std::shared_ptr<lfs::core::Tensor> deleted_before,
+                                std::shared_ptr<lfs::core::Tensor> selection_after,
+                                std::shared_ptr<lfs::core::Tensor> deleted_after);
+
+        void undo() override;
+        void redo() override;
+        [[nodiscard]] std::string name() const override { return name_; }
+        [[nodiscard]] UndoMetadata metadata() const override;
+        [[nodiscard]] size_t estimatedBytes() const override;
+        [[nodiscard]] UndoMemoryBreakdown memoryBreakdown() const override;
+        void offloadToCPU() override;
+        void restoreToPreferredDevice() override;
+        [[nodiscard]] DirtyMask dirtyFlags() const override;
+
+    private:
+        struct MaskSnapshot {
+            std::shared_ptr<lfs::core::Tensor> selection;
+            std::shared_ptr<lfs::core::Tensor> deleted;
+            lfs::core::Device selection_device = lfs::core::Device::CPU;
+            lfs::core::Device deleted_device = lfs::core::Device::CPU;
+        };
+
+        void apply(const MaskSnapshot& snapshot);
+
+        SceneManager& scene_;
+        std::string name_;
+        std::string node_name_;
+        MaskSnapshot before_;
+        MaskSnapshot after_;
+    };
+
     class LFS_VIS_API CropBoxUndoEntry : public UndoEntry {
     public:
         CropBoxUndoEntry(SceneManager& scene,

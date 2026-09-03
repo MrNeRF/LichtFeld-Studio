@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <cuda_runtime.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <memory>
@@ -556,6 +557,11 @@ namespace lfs::python {
                 mesh->indices = mesh->indices.to(device);
             }
             return mesh;
+        }
+
+        bool has_cuda_device() {
+            int device_count = 0;
+            return cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0;
         }
 
         struct TrainingSceneNodes {
@@ -1212,6 +1218,32 @@ namespace lfs::python {
         EXPECT_EQ(max_capacity_for("SplatData.opacity"), capacity);
         EXPECT_EQ(max_capacity_for("SplatData.shN"),
                   core::sh_swizzled_float_count(capacity, core::sh_rest_coefficients_for_degree(1)));
+    }
+
+    TEST_F(SceneValidityTest, InitializeTrainingModelCompactsSoftDeletedPointCloudBeforeModelInit) {
+        if (!has_cuda_device()) {
+            GTEST_SKIP() << "CUDA device required for training model initialization";
+        }
+
+        auto point_cloud = make_test_point_cloud(6);
+        point_cloud->deleted = std::make_shared<core::Tensor>(
+            core::Tensor::from_vector(
+                std::vector<bool>{false, true, false, true, false, false},
+                {size_t{6}},
+                core::Device::CPU));
+        dummy_scene_.addPointCloud("PointCloud", point_cloud);
+
+        core::param::TrainingParameters params;
+        params.optimization.random = false;
+        params.optimization.sh_degree = 0;
+        params.optimization.max_cap = 0;
+
+        const auto result = lfs::training::initializeTrainingModel(params, dummy_scene_);
+
+        ASSERT_TRUE(result.has_value()) << result.error();
+        const auto* model = dummy_scene_.getTrainingModel();
+        ASSERT_NE(model, nullptr);
+        EXPECT_EQ(model->size(), 4);
     }
 
     TEST_F(SceneValidityTest, MigrateTrainingModelAcceptsCudaOnlyExportableStorage) {

@@ -273,6 +273,10 @@ class PointCloud:
     def size(self) -> int:
         """Number of points"""
 
+    @property
+    def deleted_count(self) -> int:
+        """Number of soft-deleted points"""
+
     def is_gaussian(self) -> bool:
         """Check if point cloud has Gaussian attributes"""
 

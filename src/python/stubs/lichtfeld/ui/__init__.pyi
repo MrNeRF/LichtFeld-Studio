@@ -974,6 +974,9 @@ def request_redraw(delay: float = 0.0) -> None:
 def consume_redraw_request() -> bool:
     """Consume and return pending redraw request flag"""
 
+def has_active_selection() -> bool:
+    """Return whether the active selection domain has a selection"""
+
 def schedule_on_ui_thread(callback: Callable) -> None:
     """Schedule a Python callable on the UI thread"""
 
@@ -2144,6 +2147,12 @@ def has_active_operator() -> bool:
 def can_edit_gaussian_selection() -> bool:
     """Return true when Gaussian selection editing is available"""
 
+def get_selection_domain() -> str:
+    """Return the active selection domain"""
+
+def can_edit_selection() -> bool:
+    """Return true when selection editing is available for the active domain"""
+
 def has_gaussian_selection() -> bool:
     """Return true when any Gaussians are selected"""
 
@@ -2213,6 +2222,9 @@ def reveal_in_file_manager(path: str) -> bool:
 
 def apply_cropbox() -> None:
     """Apply the selected cropbox"""
+
+def can_cropbox() -> bool:
+    """Return true when the current selection can own a cropbox"""
 
 def set_crop_tool_shape(shape: str) -> None:
     """Set the active crop tool shape: box or ellipsoid"""

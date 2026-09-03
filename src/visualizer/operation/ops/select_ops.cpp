@@ -6,14 +6,46 @@
 #include "core/cuda/selection_ops.hpp"
 #include "core/logger.hpp"
 #include "core/scene.hpp"
+#include "core/selection_domain.hpp"
 #include "core/tensor.hpp"
 #include "scene/scene_manager.hpp"
+#include "visualizer/gui_capabilities.hpp"
+#include <unordered_set>
+#include <vector>
 
 namespace lfs::vis::op {
+    namespace {
+        [[nodiscard]] std::vector<std::string> visibleCameraNodeNames(const SceneManager& scene) {
+            std::vector<std::string> names;
+            const auto& core_scene = scene.getScene();
+            for (const auto* const node : core_scene.getNodes()) {
+                if (node && node->type == lfs::core::NodeType::CAMERA && node->camera &&
+                    core_scene.isNodeEffectivelyVisible(node->id)) {
+                    names.push_back(node->name);
+                }
+            }
+            return names;
+        }
+    } // namespace
 
     OperationResult SelectAll::execute(SceneManager& scene,
                                        const OperatorProperties& /*props*/,
                                        const std::any& /*input*/) {
+        switch (resolveSelectionDomain(scene)) {
+        case SelectionDomain::PointCloud:
+            if (const auto result = scene.selectAllPoints(); !result) {
+                return OperationResult::failure(result.error());
+            }
+            return OperationResult::success();
+        case SelectionDomain::Cameras:
+            if (auto result = cap::selectNodes(scene, visibleCameraNodeNames(scene), "replace"); !result) {
+                return OperationResult::failure(result.error());
+            }
+            return OperationResult::success();
+        case SelectionDomain::Gaussians:
+            break;
+        }
+
         auto* model = scene.getScene().getCombinedModel();
         if (!model) {
             return OperationResult::failure("No model loaded");
@@ -30,19 +62,86 @@ namespace lfs::vis::op {
     }
 
     bool SelectAll::poll(SceneManager& scene) const {
-        return scene.getScene().getCombinedModel() != nullptr;
+        switch (resolveSelectionDomain(scene)) {
+        case SelectionDomain::Gaussians:
+            return scene.getScene().getCombinedModel() != nullptr;
+        case SelectionDomain::PointCloud:
+            return resolveActivePointCloudNode(scene) != nullptr;
+        case SelectionDomain::Cameras:
+            return !visibleCameraNodeNames(scene).empty();
+        }
+        return false;
     }
 
     OperationResult SelectNone::execute(SceneManager& scene,
                                         const OperatorProperties& /*props*/,
                                         const std::any& /*input*/) {
+        switch (resolveSelectionDomain(scene)) {
+        case SelectionDomain::PointCloud:
+            if (const auto result = scene.clearPointSelection(); !result) {
+                return OperationResult::failure(result.error());
+            }
+            return OperationResult::success();
+        case SelectionDomain::Cameras:
+            if (auto result = cap::clearNodeSelection(scene); !result) {
+                return OperationResult::failure(result.error());
+            }
+            return OperationResult::success();
+        case SelectionDomain::Gaussians:
+            break;
+        }
+
         scene.getScene().clearSelection();
         return OperationResult::success();
+    }
+
+    bool SelectNone::poll(SceneManager& scene) const {
+        switch (resolveSelectionDomain(scene)) {
+        case SelectionDomain::Gaussians:
+            return scene.getScene().hasSelection();
+        case SelectionDomain::PointCloud:
+            return scene.getActivePointSelectionCount() > 0;
+        case SelectionDomain::Cameras:
+            return !scene.getSelectedNodeNames().empty();
+        }
+        return false;
     }
 
     OperationResult SelectInvert::execute(SceneManager& scene,
                                           const OperatorProperties& /*props*/,
                                           const std::any& /*input*/) {
+        switch (resolveSelectionDomain(scene)) {
+        case SelectionDomain::PointCloud:
+            if (const auto result = scene.invertPointSelection(); !result) {
+                return OperationResult::failure(result.error());
+            }
+            return OperationResult::success();
+        case SelectionDomain::Cameras: {
+            const auto visible_names = visibleCameraNodeNames(scene);
+            std::unordered_set<std::string> selected_set;
+            for (const auto& name : scene.getSelectedNodeNames()) {
+                selected_set.insert(name);
+            }
+            std::vector<std::string> inverted;
+            inverted.reserve(visible_names.size());
+            for (const auto& name : visible_names) {
+                if (!selected_set.contains(name)) {
+                    inverted.push_back(name);
+                }
+            }
+            if (inverted.empty()) {
+                if (auto result = cap::clearNodeSelection(scene); !result) {
+                    return OperationResult::failure(result.error());
+                }
+            } else if (auto result = cap::selectNodes(scene, inverted, "replace"); !result) {
+                return OperationResult::failure(result.error());
+            }
+            return OperationResult::success();
+        }
+        case SelectionDomain::Gaussians:
+            break;
+        }
+
         auto mask = scene.getScene().getVisibleSelectionMask();
         if (!mask) {
             auto* model = scene.getScene().getCombinedModel();
@@ -74,7 +173,15 @@ namespace lfs::vis::op {
     }
 
     bool SelectInvert::poll(SceneManager& scene) const {
-        return scene.getScene().getCombinedModel() != nullptr;
+        switch (resolveSelectionDomain(scene)) {
+        case SelectionDomain::Gaussians:
+            return scene.getScene().getCombinedModel() != nullptr;
+        case SelectionDomain::PointCloud:
+            return resolveActivePointCloudNode(scene) != nullptr;
+        case SelectionDomain::Cameras:
+            return !visibleCameraNodeNames(scene).empty();
+        }
+        return false;
     }
 
     OperationResult SelectGrow::execute(SceneManager& scene,
@@ -106,7 +213,8 @@ namespace lfs::vis::op {
     }
 
     bool SelectGrow::poll(SceneManager& scene) const {
-        return scene.getScene().hasSelection();
+        return resolveSelectionDomain(scene) == SelectionDomain::Gaussians &&
+               scene.getScene().hasSelection();
     }
 
     OperationResult SelectShrink::execute(SceneManager& scene,
@@ -137,7 +245,8 @@ namespace lfs::vis::op {
     }
 
     bool SelectShrink::poll(SceneManager& scene) const {
-        return scene.getScene().hasSelection();
+        return resolveSelectionDomain(scene) == SelectionDomain::Gaussians &&
+               scene.getScene().hasSelection();
     }
 
     OperationResult SelectByOpacity::execute(SceneManager& scene,
@@ -159,7 +268,8 @@ namespace lfs::vis::op {
     }
 
     bool SelectByOpacity::poll(SceneManager& scene) const {
-        return scene.getScene().getCombinedModel() != nullptr;
+        return resolveSelectionDomain(scene) == SelectionDomain::Gaussians &&
+               scene.getScene().getCombinedModel() != nullptr;
     }
 
     OperationResult SelectByScale::execute(SceneManager& scene,
@@ -180,7 +290,8 @@ namespace lfs::vis::op {
     }
 
     bool SelectByScale::poll(SceneManager& scene) const {
-        return scene.getScene().getCombinedModel() != nullptr;
+        return resolveSelectionDomain(scene) == SelectionDomain::Gaussians &&
+               scene.getScene().getCombinedModel() != nullptr;
     }
 
 } // namespace lfs::vis::op

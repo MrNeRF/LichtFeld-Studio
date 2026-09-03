@@ -7,6 +7,7 @@
 #include "core/logger.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
+#include "core/services.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
@@ -2371,6 +2372,151 @@ namespace lfs::vis::op {
 
     DirtyMask ShNCanonicalRowsUndoEntry::dirtyFlags() const {
         return DirtyFlag::SPLATS;
+    }
+
+    PointCloudMaskUndoEntry::PointCloudMaskUndoEntry(SceneManager& scene,
+                                                     std::string name,
+                                                     std::string node_name,
+                                                     std::shared_ptr<lfs::core::Tensor> selection_before,
+                                                     std::shared_ptr<lfs::core::Tensor> deleted_before,
+                                                     std::shared_ptr<lfs::core::Tensor> selection_after,
+                                                     std::shared_ptr<lfs::core::Tensor> deleted_after)
+        : scene_(scene),
+          name_(std::move(name)),
+          node_name_(std::move(node_name)) {
+        before_.selection = std::move(selection_before);
+        before_.deleted = std::move(deleted_before);
+        after_.selection = std::move(selection_after);
+        after_.deleted = std::move(deleted_after);
+        if (before_.selection && before_.selection->is_valid()) {
+            before_.selection_device = before_.selection->device();
+        }
+        if (before_.deleted && before_.deleted->is_valid()) {
+            before_.deleted_device = before_.deleted->device();
+        }
+        if (after_.selection && after_.selection->is_valid()) {
+            after_.selection_device = after_.selection->device();
+        }
+        if (after_.deleted && after_.deleted->is_valid()) {
+            after_.deleted_device = after_.deleted->device();
+        }
+    }
+
+    namespace {
+        bool pointCloudMaskValidForSize(const std::shared_ptr<lfs::core::Tensor>& tensor,
+                                        const size_t point_count) {
+            return !tensor || (tensor->is_valid() && tensor->numel() == point_count);
+        }
+    } // namespace
+
+    void PointCloudMaskUndoEntry::apply(const MaskSnapshot& snapshot) {
+        auto* node = scene_.getScene().getMutableNode(node_name_);
+        if (!node || !node->point_cloud) {
+            return;
+        }
+
+        const size_t point_count = static_cast<size_t>(node->point_cloud->size());
+        if (!pointCloudMaskValidForSize(snapshot.selection, point_count) ||
+            !pointCloudMaskValidForSize(snapshot.deleted, point_count)) {
+            return;
+        }
+
+        node->point_cloud->selection = snapshot.selection;
+        node->point_cloud->deleted = snapshot.deleted;
+        scene_.refreshPointSelectionCountCache(node->id, node->point_cloud->selection);
+        scene_.getScene().notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+        if (auto* rm = services().renderingOrNull()) {
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::SELECTION);
+        }
+    }
+
+    void PointCloudMaskUndoEntry::undo() {
+        apply(before_);
+    }
+
+    void PointCloudMaskUndoEntry::redo() {
+        apply(after_);
+    }
+
+    UndoMetadata PointCloudMaskUndoEntry::metadata() const {
+        return UndoMetadata{
+            .id = name_,
+            .label = name_,
+            .source = "ui",
+            .scope = "selection",
+        };
+    }
+
+    size_t PointCloudMaskUndoEntry::estimatedBytes() const {
+        auto snapshot_bytes = [](const MaskSnapshot& snapshot) {
+            size_t bytes = 0;
+            if (snapshot.selection && snapshot.selection->is_valid()) {
+                bytes += snapshot.selection->bytes();
+            }
+            if (snapshot.deleted && snapshot.deleted->is_valid()) {
+                bytes += snapshot.deleted->bytes();
+            }
+            return bytes;
+        };
+        return snapshot_bytes(before_) + snapshot_bytes(after_);
+    }
+
+    UndoMemoryBreakdown PointCloudMaskUndoEntry::memoryBreakdown() const {
+        auto snapshot_memory = [](const MaskSnapshot& snapshot) {
+            UndoMemoryBreakdown total;
+            if (snapshot.selection) {
+                total += tensorMemory(*snapshot.selection);
+            }
+            if (snapshot.deleted) {
+                total += tensorMemory(*snapshot.deleted);
+            }
+            return total;
+        };
+
+        UndoMemoryBreakdown total;
+        total += snapshot_memory(before_);
+        total += snapshot_memory(after_);
+        return total;
+    }
+
+    void PointCloudMaskUndoEntry::offloadToCPU() {
+        auto offload_snapshot = [](MaskSnapshot& snapshot) {
+            if (snapshot.selection && snapshot.selection->is_valid() &&
+                snapshot.selection->device() != lfs::core::Device::CPU) {
+                snapshot.selection = std::make_shared<lfs::core::Tensor>(
+                    snapshot.selection->to(lfs::core::Device::CPU).contiguous());
+            }
+            if (snapshot.deleted && snapshot.deleted->is_valid() &&
+                snapshot.deleted->device() != lfs::core::Device::CPU) {
+                snapshot.deleted = std::make_shared<lfs::core::Tensor>(
+                    snapshot.deleted->to(lfs::core::Device::CPU).contiguous());
+            }
+        };
+
+        offload_snapshot(before_);
+        offload_snapshot(after_);
+    }
+
+    void PointCloudMaskUndoEntry::restoreToPreferredDevice() {
+        auto restore_snapshot = [](MaskSnapshot& snapshot) {
+            if (snapshot.selection && snapshot.selection->is_valid() &&
+                snapshot.selection->device() != snapshot.selection_device) {
+                snapshot.selection = std::make_shared<lfs::core::Tensor>(
+                    snapshot.selection->to(snapshot.selection_device).contiguous());
+            }
+            if (snapshot.deleted && snapshot.deleted->is_valid() &&
+                snapshot.deleted->device() != snapshot.deleted_device) {
+                snapshot.deleted = std::make_shared<lfs::core::Tensor>(
+                    snapshot.deleted->to(snapshot.deleted_device).contiguous());
+            }
+        };
+
+        restore_snapshot(before_);
+        restore_snapshot(after_);
+    }
+
+    DirtyMask PointCloudMaskUndoEntry::dirtyFlags() const {
+        return DirtyFlag::SPLATS | DirtyFlag::SELECTION;
     }
 
     CropBoxUndoEntry::CropBoxUndoEntry(SceneManager& scene,

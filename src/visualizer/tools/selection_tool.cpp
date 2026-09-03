@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "tools/selection_tool.hpp"
+#include "core/selection_domain.hpp"
 #include "geometry/euclidean_transform.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "rendering/rendering.hpp"
@@ -108,11 +109,19 @@ namespace lfs::vis::tools {
         if (auto* const sm = ctx.getSceneManager()) {
             if (auto* const service = sm->getSelectionService()) {
                 auto* const rm = ctx.getRenderingManager();
+                const auto selection_preview_mode = rm
+                                                        ? rm->getSelectionPreviewMode()
+                                                        : lfs::vis::SelectionPreviewMode::Centers;
+                const bool passive_point_center_mode =
+                    rm &&
+                    selection_preview_mode == lfs::vis::SelectionPreviewMode::Centers &&
+                    lfs::vis::resolveSelectionDomain(*sm) == lfs::vis::SelectionDomain::PointCloud &&
+                    !service->isInteractiveSelectionActive();
                 const bool passive_ring_mode =
                     rm &&
-                    rm->getSelectionPreviewMode() == lfs::vis::SelectionPreviewMode::Rings &&
+                    selection_preview_mode == lfs::vis::SelectionPreviewMode::Rings &&
                     !service->isInteractiveSelectionActive();
-                if (passive_ring_mode) {
+                if (passive_ring_mode || passive_point_center_mode) {
                     const bool update_hover =
                         mouse_buttons == 0 &&
                         !gui::guiFocusState().want_capture_mouse &&

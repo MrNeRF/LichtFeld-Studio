@@ -21,6 +21,7 @@
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
+#include "core/point_cloud.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
@@ -1718,13 +1719,20 @@ namespace lfs::app {
             }
 
             const core::PointCloud* point_cloud = nullptr;
+            std::shared_ptr<core::PointCloud> compacted_point_cloud;
             glm::mat4 point_cloud_transform{1.0f};
             for (const auto* node : scene.getNodes()) {
                 if (!node || node->type != core::NodeType::POINTCLOUD || !node->point_cloud ||
                     !scene.isNodeEffectivelyVisible(node->id)) {
                     continue;
                 }
-                point_cloud = node->point_cloud.get();
+                if (node->point_cloud->has_deleted()) {
+                    compacted_point_cloud =
+                        std::make_shared<core::PointCloud>(core::remove_deleted_points(*node->point_cloud));
+                    point_cloud = compacted_point_cloud.get();
+                } else {
+                    point_cloud = node->point_cloud.get();
+                }
                 point_cloud_transform = scene.getWorldTransform(node->id);
                 break;
             }

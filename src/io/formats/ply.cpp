@@ -2933,6 +2933,51 @@ namespace lfs::io {
             return filtered;
         }
 
+        Result<std::vector<PlyAttributeBlock>> filter_extra_attributes_for_point_cloud_export(
+            const PointCloud& point_cloud,
+            const PointCloud& compacted_point_cloud,
+            const std::vector<PlyAttributeBlock>& extra_attributes,
+            const std::filesystem::path& output_path) {
+            if (extra_attributes.empty() || !point_cloud.has_deleted()) {
+                return extra_attributes;
+            }
+
+            const auto keep_mask = point_cloud.deleted->logical_not();
+            const auto raw_count = static_cast<size_t>(point_cloud.size());
+            const auto visible_count = static_cast<size_t>(compacted_point_cloud.size());
+
+            std::vector<PlyAttributeBlock> filtered;
+            filtered.reserve(extra_attributes.size());
+
+            for (const auto& block : extra_attributes) {
+                if (auto result = validate_extra_attribute_tensor(block.values, output_path); !result) {
+                    return std::unexpected(result.error());
+                }
+
+                const auto rows = static_cast<size_t>(block.values.size(0));
+                if (rows == visible_count) {
+                    filtered.push_back(block);
+                    continue;
+                }
+
+                if (rows != raw_count) {
+                    return make_error(ErrorCode::INTERNAL_ERROR,
+                                      std::format("Extra PLY attribute row count {} must match either raw point count {} or visible point count {}",
+                                                  rows, raw_count, visible_count),
+                                      output_path);
+                }
+
+                auto mask = keep_mask.device() == block.values.device() ? keep_mask : keep_mask.to(block.values.device());
+
+                PlyAttributeBlock filtered_block;
+                filtered_block.values = block.values.index_select(0, mask);
+                filtered_block.names = block.names;
+                filtered.push_back(std::move(filtered_block));
+            }
+
+            return filtered;
+        }
+
         class ProgressReportingStreamBuf final : public std::streambuf {
         public:
             ProgressReportingStreamBuf(std::streambuf& target,
@@ -4058,10 +4103,21 @@ namespace lfs::io {
             options.provenance = core::make_minimal_provenance_stamp();
         }
 
+        PointCloud compacted_point_cloud;
+        if (point_cloud.has_deleted()) {
+            compacted_point_cloud = lfs::core::remove_deleted_points(point_cloud);
+            auto filtered_extra_attributes = filter_extra_attributes_for_point_cloud_export(
+                point_cloud, compacted_point_cloud, options.extra_attributes, options.output_path);
+            if (!filtered_extra_attributes) {
+                return std::unexpected(filtered_extra_attributes.error());
+            }
+            options.extra_attributes = std::move(*filtered_extra_attributes);
+        }
+
         // Validation canonicalizes every attribute to one contiguous CPU tensor. Keep this
         // prepared copy alive through packing so direct GPU PointCloud exports do not download
         // the same attributes a second time in the writer.
-        PointCloud prepared_point_cloud = point_cloud;
+        PointCloud prepared_point_cloud = point_cloud.has_deleted() ? std::move(compacted_point_cloud) : point_cloud;
         {
             LOG_TIMER_DEBUG("PLY export: validation");
             if (auto result = validate_point_cloud_for_ply_write(
