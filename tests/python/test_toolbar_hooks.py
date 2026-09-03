@@ -1683,8 +1683,6 @@ def test_viewport_toolbar_uses_theme_glass_without_backdrop_filter():
         "layered_shadow.1",
         "panel.body_bg",
         "panel.body_bg_or_transparent",
-        "right_panel.tab_active_bg",
-        "right_panel.separator",
     ):
         assert f'{{"{unused_token}"' not in resolver
 
@@ -1810,6 +1808,9 @@ def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
     project_root = Path(__file__).parent.parent.parent
     resources = project_root / "src/visualizer/gui/rmlui/resources"
     right_panel_rcss = (resources / "right_panel.rcss").read_text(encoding="utf-8")
+    panel_tabs_theme = (resources / "panel_tabs.theme.rcss").read_text(
+        encoding="utf-8"
+    )
     right_panel_theme = (resources / "right_panel.theme.rcss").read_text(encoding="utf-8")
     right_panel_rml = (resources / "right_panel.rml").read_text(encoding="utf-8")
     right_panel_cpp = (
@@ -1847,6 +1848,13 @@ def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
     ):
         assert f"@{{{token}}}" in right_panel_theme
         assert f'"{token}"' in resolver
+
+    for shared_token in (
+        "right_panel.tab_active_bg",
+        "right_panel.separator",
+    ):
+        assert f"@{{{shared_token}}}" in panel_tabs_theme
+        assert f'{{"{shared_token}"' in resolver
 
     hover_start = right_panel_theme.index(".tab:hover {")
     hover_end = right_panel_theme.index("\n}", hover_start)
