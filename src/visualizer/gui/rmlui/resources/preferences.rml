@@ -114,6 +114,20 @@
               <option data-for="mode : navigation_modes" data-attr-value="mode.index">{{ mode.label }}</option>
             </select>
           </div>
+          <div class="setting-row setting-row--aligned" data-tooltip="preferences.zoom_speed_tooltip">
+            <span class="setting-row__label-col">@tr:preferences.zoom_speed</span>
+            <div class="setting-row__control-col setting-row__control-col--slider">
+              <input type="range" class="setting-slider" data-value="zoom_speed" min="1" max="100" step="1" />
+              <span class="slider-value">{{ zoom_speed | format_int }}</span>
+            </div>
+          </div>
+          <div class="setting-row setting-row--aligned" data-tooltip="preferences.navigation_speed_tooltip">
+            <span class="setting-row__label-col">@tr:preferences.navigation_speed</span>
+            <div class="setting-row__control-col setting-row__control-col--slider">
+              <input type="range" class="setting-slider" data-value="navigation_speed" min="1" max="100" step="1" />
+              <span class="slider-value">{{ navigation_speed | format_int }}</span>
+            </div>
+          </div>
           <div class="preferences-row preferences-checkbox-row">
             <span class="preferences-label">@tr:preferences.remember_camera_navigation</span>
             <input type="checkbox" data-checked="remember_navigation" />

@@ -238,3 +238,25 @@ def test_panel_state_binding_can_dirty_specific_model_fields():
 
     assert handle.request_count == 0
     assert handle.dirty_fields == ["label", "tooltip"]
+
+
+def test_panel_state_binding_ignores_repeated_signal_payloads():
+    class EmittingSignal:
+        def __init__(self):
+            self.callback = None
+
+        def subscribe(self, callback):
+            self.callback = callback
+            return lambda: None
+
+        def emit(self, value):
+            self.callback(value)
+
+    signal = EmittingSignal()
+    handle = _PanelHandle()
+    PanelStateBinding(handle).watch(signal)
+
+    signal.emit(7)
+    signal.emit(7)
+
+    assert handle.request_count == 1
