@@ -57,6 +57,8 @@ def new_project_module(monkeypatch, tmp_path):
         embed_default=False,
         scheduled=[],
         scheduled_event=threading.Event(),
+        registered_classes=[],
+        registered_panels={},
     )
 
     def schedule_on_ui_thread(callback):
@@ -68,6 +70,7 @@ def new_project_module(monkeypatch, tmp_path):
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
+        Panel=type("Panel", (), {}),
         PanelSpace=SimpleNamespace(FLOATING="FLOATING"),
         PanelHeightMode=SimpleNamespace(CONTENT="CONTENT"),
         PanelOption=SimpleNamespace(DEFAULT_CLOSED="DEFAULT_CLOSED"),
@@ -81,7 +84,13 @@ def new_project_module(monkeypatch, tmp_path):
         open_ply_file_dialog=lambda _start="": str(splat),
         get_embed_dataset_by_default=lambda: state.embed_default,
         schedule_on_ui_thread=schedule_on_ui_thread,
+        get_panel_object=lambda panel_id: state.registered_panels.get(panel_id),
     )
+    def register_class(cls):
+        state.registered_classes.append(cls)
+        state.registered_panels[cls.id] = cls()
+
+    lf_stub.register_class = register_class
     lf_stub.is_dataset_path = lambda path: str(path) == str(dataset)
     lf_stub.detect_dataset_info = lambda _path: info
     lf_stub.optimization_params = lambda: None
@@ -92,6 +101,7 @@ def new_project_module(monkeypatch, tmp_path):
     lf_stub.load_file = lambda *args, **kwargs: state.calls.append(("load", args, kwargs))
     lf_stub.project_embed_dataset = lambda: state.calls.append(("embed", (), {}))
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
+    state.lf = lf_stub
     return import_module("lfs_plugins.import_panels"), state
 
 
@@ -114,6 +124,37 @@ def _run_scheduled(state, timeout=2.0):
             return
         state.scheduled_event.wait(max(0.0, deadline - time.monotonic()))
     raise AssertionError("worker did not schedule a UI callback")
+
+
+def _register_lazy_panel(state, name):
+    panels = import_module("lfs_plugins.panels")
+    panels._register_lazy_panel(state.lf, name)
+
+
+def test_open_new_project_panel_loads_lazy_proxy(new_project_module):
+    module, state = new_project_module
+    _register_lazy_panel(state, "new_project")
+
+    assert len(state.registered_classes) == 1
+    assert module._new_project_panel is None
+    assert module.open_new_project_panel("/tmp/x") is True
+    assert module._new_project_panel._source_path == "/tmp/x"
+
+
+def test_open_resume_checkpoint_panel_loads_lazy_proxy(new_project_module):
+    module, state = new_project_module
+    module.lf.read_checkpoint_header = lambda _path: SimpleNamespace(
+        iteration=12, num_gaussians=34
+    )
+    module.lf.read_checkpoint_params = lambda _path: SimpleNamespace(
+        dataset_path=state.dataset, output_path=state.location / "resumed.licht"
+    )
+    _register_lazy_panel(state, "resume_checkpoint")
+
+    assert len(state.registered_classes) == 1
+    assert module._resume_checkpoint_panel is None
+    assert module.open_resume_checkpoint_panel("/tmp/checkpoint.ckpt") is True
+    assert module._resume_checkpoint_panel._checkpoint_path == "/tmp/checkpoint.ckpt"
 
 
 def test_dataset_create_emits_project_before_load_without_output_path(new_project_module):

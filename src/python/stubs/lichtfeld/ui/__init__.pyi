@@ -976,6 +976,11 @@ def modal_press(label: str) -> bool:
     Press an enabled modal button by label. Returns False if no matching enabled button.
     """
 
+def get_panel_object(panel_id: str) -> object:
+    """
+    Get the Python object for a retained Python panel, or None if unavailable
+    """
+
 def begin_drag_payload(type: str, data: str, label: str = '') -> int:
     """
     Begin one typed cross-context RmlUI drag payload and return its source token
@@ -2637,6 +2642,18 @@ def get_ui_scale() -> float:
 
 def get_ui_scale_preference() -> float:
     """Get saved UI scale preference (0.0 = auto)"""
+
+def set_zoom_speed_preference(speed: float) -> None:
+    """Set the default camera zoom speed (1-100)"""
+
+def get_zoom_speed_preference() -> float:
+    """Get the default camera zoom speed"""
+
+def set_navigation_speed_preference(speed: float) -> None:
+    """Set the default WASD navigation speed (1-100)"""
+
+def get_navigation_speed_preference() -> float:
+    """Get the default WASD navigation speed"""
 
 def get_scene_reconstruction_options() -> list:
     """Get registered scene reconstruction backends and their presets"""

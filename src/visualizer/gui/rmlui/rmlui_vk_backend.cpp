@@ -281,6 +281,7 @@ RenderInterface_VK::RenderInterface_VK() : m_is_transform_enabled{false},
                                            m_p_sampler_linear{},
                                            m_p_sampler_nearest{},
                                            m_scissor{},
+                                           m_scissor_requested{},
                                            m_scissor_original{},
                                            m_viewport{},
                                            m_p_queue_graphics{},
@@ -516,6 +517,20 @@ void RenderInterface_VK::EnableScissorRegion(bool enable) {
 
 void RenderInterface_VK::SetScissorRegion(Rml::Rectanglei region) {
     if (m_is_use_scissor_specified) {
+        const float left_f = static_cast<float>(region.Left()) + m_context_offset.x;
+        const float top_f = static_cast<float>(region.Top()) + m_context_offset.y;
+        const float right_f = left_f + static_cast<float>(region.Width());
+        const float bottom_f = top_f + static_cast<float>(region.Height());
+        const int requested_left = static_cast<int>(std::floor(left_f));
+        const int requested_top = static_cast<int>(std::floor(top_f));
+        const int requested_right = static_cast<int>(std::ceil(right_f));
+        const int requested_bottom = static_cast<int>(std::ceil(bottom_f));
+        m_scissor_requested.offset = {requested_left, requested_top};
+        m_scissor_requested.extent = {
+            static_cast<uint32_t>(std::max(0, requested_right - requested_left)),
+            static_cast<uint32_t>(std::max(0, requested_bottom - requested_top)),
+        };
+
         if (m_is_transform_enabled) {
             Rml::Vertex vertices[4];
 
@@ -576,14 +591,10 @@ void RenderInterface_VK::SetScissorRegion(Rml::Rectanglei region) {
             m_is_transformed_scissor_enabled = false;
             m_is_apply_to_regular_geometry_stencil = m_is_clip_mask_enabled;
             // Enclose the translated rect; fractional panel offsets otherwise clip text edges.
-            const float left_f = static_cast<float>(region.Left()) + m_context_offset.x;
-            const float top_f = static_cast<float>(region.Top()) + m_context_offset.y;
-            const float right_f = left_f + static_cast<float>(region.Width());
-            const float bottom_f = top_f + static_cast<float>(region.Height());
-            const int left = Rml::Math::Clamp(static_cast<int>(std::floor(left_f)), 0, m_width);
-            const int top = Rml::Math::Clamp(static_cast<int>(std::floor(top_f)), 0, m_height);
-            const int right = Rml::Math::Clamp(static_cast<int>(std::ceil(right_f)), 0, m_width);
-            const int bottom = Rml::Math::Clamp(static_cast<int>(std::ceil(bottom_f)), 0, m_height);
+            const int left = Rml::Math::Clamp(requested_left, 0, m_width);
+            const int top = Rml::Math::Clamp(requested_top, 0, m_height);
+            const int right = Rml::Math::Clamp(requested_right, 0, m_width);
+            const int bottom = Rml::Math::Clamp(requested_bottom, 0, m_height);
             m_scissor.offset.x = left;
             m_scissor.offset.y = top;
             m_scissor.extent.width = static_cast<uint32_t>(std::max(0, right - left));
@@ -733,10 +744,21 @@ void RenderInterface_VK::PopLayer() {
 }
 
 Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture() {
-    return SaveLayerAsTexture({});
+    if (m_p_current_command_buffer == nullptr || m_render_layer_stack_size <= 0)
+        return {};
+
+    const render_layer_t* source_layer = GetRenderLayer(static_cast<Rml::LayerHandle>(m_render_layer_stack_size));
+    if (!source_layer || source_layer->width <= 0 || source_layer->height <= 0)
+        return {};
+
+    const VkRect2D declared_bounds = m_is_use_scissor_specified
+                                         ? m_scissor_requested
+                                         : VkRect2D{{0, 0}, {static_cast<uint32_t>(source_layer->width), static_cast<uint32_t>(source_layer->height)}};
+    return SaveLayerRegionAsTexture(declared_bounds, {});
 }
 
-Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture(Rml::TextureHandle reuse_texture) {
+Rml::TextureHandle RenderInterface_VK::SaveLayerRegionAsTexture(const VkRect2D region,
+                                                                const Rml::TextureHandle reuse_texture) {
     if (m_p_current_command_buffer == nullptr || m_render_layer_stack_size <= 0)
         return {};
 
@@ -746,30 +768,41 @@ Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture(Rml::TextureHandle reu
     if (source_layer->width <= 0 || source_layer->height <= 0)
         return {};
 
-    VkRect2D bounds = m_is_use_scissor_specified ? m_scissor : ContextClipScissor();
-    bounds = IntersectContextClip(bounds);
-    bounds = ClampToCacheCaptureArea(bounds);
-    bounds.offset.x = Rml::Math::Clamp(bounds.offset.x, 0, source_layer->width);
-    bounds.offset.y = Rml::Math::Clamp(bounds.offset.y, 0, source_layer->height);
-    if (bounds.offset.x + static_cast<int>(bounds.extent.width) > source_layer->width)
-        bounds.extent.width = static_cast<uint32_t>(source_layer->width - bounds.offset.x);
-    if (bounds.offset.y + static_cast<int>(bounds.extent.height) > source_layer->height)
-        bounds.extent.height = static_cast<uint32_t>(source_layer->height - bounds.offset.y);
-    if (bounds.extent.width == 0 || bounds.extent.height == 0)
+    VkRect2D declared_bounds = region;
+    const int declared_left = Rml::Math::Clamp(declared_bounds.offset.x, 0, source_layer->width);
+    const int declared_top = Rml::Math::Clamp(declared_bounds.offset.y, 0, source_layer->height);
+    const int declared_right = Rml::Math::Clamp(
+        declared_bounds.offset.x + static_cast<int>(declared_bounds.extent.width), 0, source_layer->width);
+    const int declared_bottom = Rml::Math::Clamp(
+        declared_bounds.offset.y + static_cast<int>(declared_bounds.extent.height), 0, source_layer->height);
+    declared_bounds.offset = {declared_left, declared_top};
+    declared_bounds.extent = {
+        static_cast<uint32_t>(std::max(0, declared_right - declared_left)),
+        static_cast<uint32_t>(std::max(0, declared_bottom - declared_top)),
+    };
+    if (declared_bounds.extent.width == 0 || declared_bounds.extent.height == 0)
         return {};
 
     EndActiveRendering();
 
-    const int capture_w = static_cast<int>(bounds.extent.width);
-    const int capture_h = static_cast<int>(bounds.extent.height);
-    const VkExtent3D extent{bounds.extent.width, bounds.extent.height, 1};
+    VkRect2D capture_bounds = IntersectContextClip(declared_bounds);
+    capture_bounds = ClampToCacheCaptureArea(capture_bounds);
+    const bool capture_covers_declared =
+        capture_bounds.offset.x == declared_bounds.offset.x &&
+        capture_bounds.offset.y == declared_bounds.offset.y &&
+        capture_bounds.extent.width == declared_bounds.extent.width &&
+        capture_bounds.extent.height == declared_bounds.extent.height;
+
+    const int declared_w = static_cast<int>(declared_bounds.extent.width);
+    const int declared_h = static_cast<int>(declared_bounds.extent.height);
+    const VkExtent3D extent{declared_bounds.extent.width, declared_bounds.extent.height, 1};
 
     texture_data_t* texture = nullptr;
     bool reusing = false;
     if (reuse_texture != 0) {
         auto* candidate = reinterpret_cast<texture_data_t*>(reuse_texture);
         if (candidate && candidate->m_p_vk_image != VK_NULL_HANDLE && candidate->m_p_vk_image_view != VK_NULL_HANDLE &&
-            candidate->m_width == capture_w && candidate->m_height == capture_h) {
+            candidate->m_width == declared_w && candidate->m_height == declared_h) {
             texture = candidate;
             reusing = true;
         }
@@ -813,13 +846,13 @@ Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture(Rml::TextureHandle reu
                              texture->m_p_vma_allocation,
                              "RmlUi saved layer texture");
         texture->m_barrier_generation = ++m_image_barrier_generation;
-        texture->m_width = capture_w;
-        texture->m_height = capture_h;
+        texture->m_width = declared_w;
+        texture->m_height = declared_h;
         texture->m_vram_scope = "vulkan.rmlui.saved_layer_texture";
         texture->m_vram_label = TextureVramLabel("saved_layer",
                                                  "clip",
-                                                 capture_w,
-                                                 capture_h,
+                                                 declared_w,
+                                                 declared_h,
                                                  texture);
         texture->m_vram_allocation_size = allocation_stats.size;
         RecordRmlUiVram(texture->m_vram_scope, texture->m_vram_label, texture->m_vram_allocation_size);
@@ -849,9 +882,11 @@ Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture(Rml::TextureHandle reu
         texture->m_p_vk_sampler = m_p_sampler_linear;
     }
 
-    TransitionImageLayout(source_layer->m_color.m_p_vk_image, source_layer->m_color.m_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, source_layer->m_color_layout,
-                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-    source_layer->m_color_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    if (capture_bounds.extent.width > 0 && capture_bounds.extent.height > 0) {
+        TransitionImageLayout(source_layer->m_color.m_p_vk_image, source_layer->m_color.m_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, source_layer->m_color_layout,
+                              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        source_layer->m_color_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    }
 
     // Fresh images: UNDEFINED → TRANSFER_DST (discard). Reused cache textures were last in
     // SHADER_READ_ONLY after composite sampling; WAR against those fragment reads on this queue.
@@ -860,21 +895,34 @@ Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture(Rml::TextureHandle reu
     TransitionImageLayout(texture->m_p_vk_image, texture->m_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, dst_old_layout,
                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
-    VkImageCopy copy_region{};
-    copy_region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    copy_region.srcSubresource.mipLevel = 0;
-    copy_region.srcSubresource.baseArrayLayer = 0;
-    copy_region.srcSubresource.layerCount = 1;
-    copy_region.srcOffset = {bounds.offset.x, bounds.offset.y, 0};
-    copy_region.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    copy_region.dstSubresource.mipLevel = 0;
-    copy_region.dstSubresource.baseArrayLayer = 0;
-    copy_region.dstSubresource.layerCount = 1;
-    copy_region.dstOffset = {0, 0, 0};
-    copy_region.extent = extent;
+    if (!capture_covers_declared) {
+        VkClearColorValue clear_color{};
+        VkImageSubresourceRange clear_range{};
+        clear_range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        clear_range.levelCount = 1;
+        clear_range.layerCount = 1;
+        vkCmdClearColorImage(m_p_current_command_buffer, texture->m_p_vk_image,
+                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_color, 1, &clear_range);
+    }
 
-    vkCmdCopyImage(m_p_current_command_buffer, source_layer->m_color.m_p_vk_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                   texture->m_p_vk_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);
+    if (capture_bounds.extent.width > 0 && capture_bounds.extent.height > 0) {
+        VkImageCopy copy_region{};
+        copy_region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copy_region.srcSubresource.mipLevel = 0;
+        copy_region.srcSubresource.baseArrayLayer = 0;
+        copy_region.srcSubresource.layerCount = 1;
+        copy_region.srcOffset = {capture_bounds.offset.x, capture_bounds.offset.y, 0};
+        copy_region.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copy_region.dstSubresource.mipLevel = 0;
+        copy_region.dstSubresource.baseArrayLayer = 0;
+        copy_region.dstSubresource.layerCount = 1;
+        copy_region.dstOffset = {capture_bounds.offset.x - declared_bounds.offset.x,
+                                 capture_bounds.offset.y - declared_bounds.offset.y, 0};
+        copy_region.extent = {capture_bounds.extent.width, capture_bounds.extent.height, 1};
+
+        vkCmdCopyImage(m_p_current_command_buffer, source_layer->m_color.m_p_vk_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       texture->m_p_vk_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);
+    }
 
     TransitionImageLayout(texture->m_p_vk_image, texture->m_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);

@@ -5,6 +5,7 @@
 import lichtfeld as lf
 
 from .keymap_bindings import KeymapBindingsSection
+from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
 from .panels import panel_class
 
@@ -49,6 +50,11 @@ class PreferencesPanel(Panel):
         ("free", "preferences.viewport_toolbar_position_free"),
     )
 
+    SPEED_SCRUB_FIELD_DEFS = {
+        "zoom_speed": ScrubFieldSpec(1.0, 100.0, 1.0, "%d", data_type=int),
+        "navigation_speed": ScrubFieldSpec(1.0, 100.0, 1.0, "%d", data_type=int),
+    }
+
     EXPANDABLE_SECTIONS = (
         "language",
         "project_location",
@@ -86,6 +92,11 @@ class PreferencesPanel(Panel):
         self._document = None
         self._file_associations = []
         self._mount_count = 0
+        self._scrub_fields = ScrubFieldController(
+            self.SPEED_SCRUB_FIELD_DEFS,
+            self._get_scrub_value,
+            self._set_scrub_value,
+        )
 
     @property
     def mount_count(self):
@@ -144,6 +155,12 @@ class PreferencesPanel(Panel):
         )
         model.bind("language_idx", self._language_index, self._set_language_index)
         model.bind("navigation_idx", self._navigation_index, self._set_navigation_index)
+        model.bind("zoom_speed", lf.ui.get_zoom_speed_preference, self._set_zoom_speed)
+        model.bind(
+            "navigation_speed",
+            lf.ui.get_navigation_speed_preference,
+            self._set_navigation_speed,
+        )
         model.bind("view_snap", lf.get_camera_view_snap_enabled, self._set_view_snap)
         model.bind("remember_navigation", lf.ui.remember_camera_navigation, self._set_remember_navigation)
         model.bind("remember_view_snap", lf.ui.remember_camera_view_snap, self._set_remember_view_snap)
@@ -225,8 +242,13 @@ class PreferencesPanel(Panel):
         self._refresh_selection()
         self._keymap.on_mount(doc)
         self._ensure_keymap_rows_if_visible()
+        if callable(getattr(doc, "query_selector_all", None)) and callable(
+            getattr(doc, "add_event_listener", None)
+        ):
+            self._scrub_fields.mount(doc)
 
     def on_unmount(self, doc):
+        self._scrub_fields.unmount()
         self._keymap.on_unmount()
         self._document = None
         self._handle = None
@@ -243,6 +265,7 @@ class PreferencesPanel(Panel):
             self._sync_theme_variant_records()
             self._dirty_selection()
             self._dirty_mcp()
+        self._scrub_fields.sync_all()
         self._keymap.on_update(doc)
 
     def _ensure_keymap_rows_if_visible(self):
@@ -262,6 +285,8 @@ class PreferencesPanel(Panel):
             self._scene_upscaler_preset(),
             lf.ui.get_current_language(),
             lf.get_camera_navigation_mode(),
+            float(lf.ui.get_zoom_speed_preference()),
+            float(lf.ui.get_navigation_speed_preference()),
             lf.get_camera_view_snap_enabled(),
             getattr(lf.ui, "get_embed_dataset_by_default", lambda: False)(),
             lf.ui.remember_camera_navigation(),
@@ -662,6 +687,27 @@ class PreferencesPanel(Panel):
         if 0 <= index < len(self.NAVIGATION_OPTIONS):
             lf.set_camera_navigation_mode(self.NAVIGATION_OPTIONS[index][0])
             self._refresh_selection()
+
+    def _set_zoom_speed(self, value):
+        lf.ui.set_zoom_speed_preference(float(value))
+        self._refresh_selection()
+
+    def _set_navigation_speed(self, value):
+        lf.ui.set_navigation_speed_preference(float(value))
+        self._refresh_selection()
+
+    def _get_scrub_value(self, prop):
+        if prop == "zoom_speed":
+            return float(lf.ui.get_zoom_speed_preference())
+        if prop == "navigation_speed":
+            return float(lf.ui.get_navigation_speed_preference())
+        return self.SPEED_SCRUB_FIELD_DEFS[prop].min_value
+
+    def _set_scrub_value(self, prop, value):
+        if prop == "zoom_speed":
+            self._set_zoom_speed(value)
+        elif prop == "navigation_speed":
+            self._set_navigation_speed(value)
 
     def _set_view_snap(self, enabled):
         lf.set_camera_view_snap_enabled(bool(enabled))
@@ -1171,6 +1217,8 @@ class PreferencesPanel(Panel):
             lf.ui.reset_scene_reconstruction_preferences()
             self._sync_scene_upscaler_preset_records()
         elif section == "input":
+            lf.ui.set_zoom_speed_preference(11.0)
+            lf.ui.set_navigation_speed_preference(8.0)
             lf.ui.set_remember_camera_navigation(False)
             lf.ui.set_remember_camera_view_snap(False)
             lf.set_camera_navigation_mode("orbit")
@@ -1204,6 +1252,8 @@ class PreferencesPanel(Panel):
             self._handle.dirty("scene_upscaler_has_preset")
             self._handle.dirty("language_idx")
             self._handle.dirty("navigation_idx")
+            self._handle.dirty("zoom_speed")
+            self._handle.dirty("navigation_speed")
             self._handle.dirty("view_snap")
             self._handle.dirty("remember_navigation")
             self._handle.dirty("remember_view_snap")

@@ -1903,6 +1903,31 @@ namespace lfs::vis {
         return capture;
     }
 
+    bool VulkanContext::waitForNextFrameSlot() {
+        if (device_ == VK_NULL_HANDLE || swapchain_ == VK_NULL_HANDLE ||
+            framebuffer_width_ <= 0 || framebuffer_height_ <= 0 || hasPendingSwapchainResize()) {
+            return true;
+        }
+
+        const std::size_t next_frame = frame_index_;
+        if (next_frame >= in_flight_.size() || next_frame >= frame_submit_serials_.size())
+            return true;
+
+        VkFence frame_fence = in_flight_[next_frame];
+        if (frame_fence == VK_NULL_HANDLE || frame_submit_serials_[next_frame] == 0)
+            return true;
+
+        LOG_TIMER_THRESHOLD("frame_pacing.vulkan_frame_slot_prewait", 0.25);
+        auto outcome = lfs::rendering::wait_fence_bounded(
+            device_, frame_fence, std::stop_token{}, lfs::rendering::VulkanWaitPolicy{},
+            makeWaitContext("vulkan.context.frame_fence"));
+        return mapWaitOutcome(
+            std::move(outcome),
+            std::format("next frame fence (slot {}, last_submit_id={})",
+                        next_frame,
+                        frame_submit_serials_[next_frame]));
+    }
+
     bool VulkanContext::waitForCurrentFrameSlot() {
         if (device_ == VK_NULL_HANDLE) {
             return fail("Cannot wait for Vulkan frame slot before device initialization");

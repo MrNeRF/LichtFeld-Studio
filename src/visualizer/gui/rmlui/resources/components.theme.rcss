@@ -6,6 +6,34 @@
     @{window.body_decor};
     border-color: @{alpha(border,0.4)};
     border-radius: @{num(size.window_rounding)}dp;
+    position: relative;
+    z-index: 1;
+}
+
+#window-shadow-ambient,
+#window-shadow-key {
+    position: absolute;
+    display: @{window.shadow_display};
+    pointer-events: none;
+    z-index: 0;
+}
+
+#window-shadow-ambient {
+    left: @{window.shadow_ambient_inset}dp;
+    right: @{window.shadow_ambient_inset}dp;
+    top: @{window.shadow_ambient_top}dp;
+    bottom: @{window.shadow_ambient_bottom}dp;
+    decorator: ninepatch(shadow-outer, shadow-inner, @{window.shadow_ambient_edge}dp @{window.shadow_ambient_edge}dp @{window.shadow_ambient_edge}dp @{window.shadow_ambient_edge}dp);
+    image-color: @{window.shadow_ambient_color};
+}
+
+#window-shadow-key {
+    left: @{window.shadow_key_inset}dp;
+    right: @{window.shadow_key_inset}dp;
+    top: @{window.shadow_key_top}dp;
+    bottom: @{window.shadow_key_bottom}dp;
+    decorator: ninepatch(shadow-outer, shadow-inner, @{window.shadow_key_edge}dp @{window.shadow_key_edge}dp @{window.shadow_key_edge}dp @{window.shadow_key_edge}dp);
+    image-color: @{window.shadow_key_color};
 }
 
 body.floating-panel {
@@ -16,7 +44,7 @@ body.floating-panel {
     bottom: @{window.shadow_padding}dp;
     width: auto;
     height: auto;
-    box-shadow: @{layered_shadow.4};
+    box-shadow: none;
     border-radius: @{num(size.window_rounding)}dp;
 }
 

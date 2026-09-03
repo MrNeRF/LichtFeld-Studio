@@ -120,6 +120,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rml_sequencer_overlay.cpp
         gui/keyframe_scene_sync.cpp
         gui/gizmo_transform.cpp
+        gui/selection_cursor.cpp
         gui/html_viewer_export.cpp
         gui/scene_panel_native.cpp
         gui/ui_widgets.cpp
@@ -518,15 +519,25 @@ endforeach ()
 # Copy RmlUI resources (re-copy on every build so edits are picked up)
 file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui")
 file(GLOB RMLUI_RESOURCE_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/gui/rmlui/resources/*")
+set(RMLUI_ASSET_FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/gui/assets/rmlui/soft_shadow.png"
+)
 foreach (RMLUI_FILE ${RMLUI_RESOURCE_FILES})
     get_filename_component(RMLUI_NAME ${RMLUI_FILE} NAME)
     configure_file(${RMLUI_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui/${RMLUI_NAME}" COPYONLY)
+endforeach ()
+foreach (RMLUI_ASSET_FILE ${RMLUI_ASSET_FILES})
+    if (EXISTS ${RMLUI_ASSET_FILE} AND NOT IS_DIRECTORY ${RMLUI_ASSET_FILE})
+        get_filename_component(RMLUI_ASSET_NAME ${RMLUI_ASSET_FILE} NAME)
+        configure_file(${RMLUI_ASSET_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui/${RMLUI_ASSET_NAME}" COPYONLY)
+    endif ()
 endforeach ()
 add_custom_target(copy_rmlui_resources ALL
     COMMAND ${CMAKE_COMMAND} -E rm -rf "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${RMLUI_RESOURCE_FILES}
+        ${RMLUI_ASSET_FILES}
         "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui/"
     COMMENT "Syncing RmlUI resources"
 )

@@ -339,6 +339,10 @@ namespace lfs::vis::gui::rml_theme {
         const ElevationParams& elevationParams(const int elevation) {
             return ELEVATION_LEVELS[std::clamp(elevation - 1, 0, 3)];
         }
+
+        float shadowExtent(const float blur) {
+            return std::max(0.0f, 1.5f * blur);
+        }
     } // namespace
 
     std::string layeredShadow(const Theme& t, const int elevation) {
@@ -361,8 +365,8 @@ namespace lfs::vis::gui::rml_theme {
         const auto& lv = elevationParams(elevation);
         const float ambient_blur =
             std::max(0.0f, t.shadows.blur * lv.ambient_blur_scale);
-        return std::ceil(std::max(std::abs(lv.tight_y) + lv.tight_blur,
-                                  std::abs(lv.ambient_y) + ambient_blur));
+        return std::ceil(std::max(std::abs(lv.tight_y) + shadowExtent(lv.tight_blur),
+                                  std::abs(lv.ambient_y) + shadowExtent(ambient_blur)));
     }
 
     namespace {
@@ -848,6 +852,11 @@ namespace lfs::vis::gui::rml_theme {
                 t.shadows.enabled ? layeredShadow(t, 3) : no_shadow;
             const std::string layered_shadow_4 =
                 t.shadows.enabled ? layeredShadow(t, 4) : no_shadow;
+            const auto& floating_shadow = elevationParams(4);
+            const float floating_ambient_blur =
+                std::max(0.0f, t.shadows.blur * floating_shadow.ambient_blur_scale);
+            const float floating_key_extent = shadowExtent(floating_shadow.tight_blur);
+            const float floating_ambient_extent = shadowExtent(floating_ambient_blur);
             const float window_shadow_padding = layeredShadowPadding(t, 4);
 
             std::unordered_map<std::string, std::string> tokens{
@@ -890,6 +899,17 @@ namespace lfs::vis::gui::rml_theme {
                 {"components.title_surface", colorToRml(title_surface_col)},
                 {"layered_shadow.3", layered_shadow_3},
                 {"layered_shadow.4", layered_shadow_4},
+                {"window.shadow_display", t.shadows.enabled ? "block" : "none"},
+                {"window.shadow_key_inset", std::format("-{:.1f}", floating_key_extent)},
+                {"window.shadow_key_top", std::format("{:.1f}", -floating_key_extent + floating_shadow.tight_y)},
+                {"window.shadow_key_bottom", std::format("{:.1f}", -floating_key_extent - floating_shadow.tight_y)},
+                {"window.shadow_key_edge", std::format("{:.1f}", floating_key_extent * 80.0f / 48.0f)},
+                {"window.shadow_key_color", colorToRmlAlpha({0, 0, 0, 1}, t.shadows.alpha * floating_shadow.tight_alpha)},
+                {"window.shadow_ambient_inset", std::format("-{:.1f}", floating_ambient_extent)},
+                {"window.shadow_ambient_top", std::format("{:.1f}", -floating_ambient_extent + floating_shadow.ambient_y)},
+                {"window.shadow_ambient_bottom", std::format("{:.1f}", -floating_ambient_extent - floating_shadow.ambient_y)},
+                {"window.shadow_ambient_edge", std::format("{:.1f}", floating_ambient_extent * 80.0f / 48.0f)},
+                {"window.shadow_ambient_color", colorToRmlAlpha({0, 0, 0, 1}, t.shadows.alpha * floating_shadow.ambient_alpha)},
                 {"asset.icon.check", assetToken("icon/check.png")},
                 {"asset.icon.dropdown_arrow", assetToken("icon/dropdown-arrow.png")},
                 {"panel.row_hover", colorToRmlAlpha(p.primary, 0.12f)},
@@ -1125,6 +1145,14 @@ namespace lfs::vis::gui::rml_theme {
                 "    icon-visible:          96px 48px 24px 24px;\n"
                 "}}\n\n",
                 atlas);
+            result += std::format(
+                "@spritesheet floating-shadows {{\n"
+                "    src: {};\n"
+                "    resolution: 1x;\n"
+                "    shadow-outer: 0px 0px 192px 192px;\n"
+                "    shadow-inner: 80px 80px 32px 32px;\n"
+                "}}\n\n",
+                pathToRmlImageSource(lfs::vis::getAssetPath("rmlui/soft_shadow.png")));
         } catch (...) {}
         return result;
     }
