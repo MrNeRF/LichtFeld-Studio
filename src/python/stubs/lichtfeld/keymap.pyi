@@ -27,8 +27,6 @@ class Action(enum.Enum):
 
     CAMERA_MOVE_DOWN = 10
 
-    CAMERA_RESET_HOME = 70
-
     CAMERA_SET_HOME = 11
 
     CAMERA_FOCUS_SELECTION = 12
@@ -73,10 +71,6 @@ class Action(enum.Enum):
 
     COPY_SELECTION = 32
 
-    CUT_SELECTION = 76
-
-    TOGGLE_PERFORMANCE_HUD = 77
-
     PASTE_SELECTION = 33
 
     DEPTH_ADJUST_FAR = 34
@@ -103,8 +97,6 @@ class Action(enum.Enum):
 
     SELECTION_REMOVE = 46
 
-    SELECTION_INTERSECT = 73
-
     SELECT_MODE_CENTERS = 47
 
     SELECT_MODE_RECTANGLE = 48
@@ -116,10 +108,6 @@ class Action(enum.Enum):
     SELECT_MODE_RINGS = 51
 
     SELECT_MODE_COLOR = 52
-
-    SELECT_MODE_BOX = 74
-
-    SELECT_MODE_SPHERE = 75
 
     APPLY_CROP_BOX = 53
 
@@ -153,9 +141,21 @@ class Action(enum.Enum):
 
     DEPTH_ADJUST_NEAR = 69
 
+    CAMERA_RESET_HOME = 70
+
     HISTOGRAM_ZOOM_MARKED = 71
 
     TOGGLE_CAMERA_FRUSTUMS = 72
+
+    SELECTION_INTERSECT = 73
+
+    SELECT_MODE_BOX = 74
+
+    SELECT_MODE_SPHERE = 75
+
+    CUT_SELECTION = 76
+
+    TOGGLE_PERFORMANCE_HUD = 77
 
     OPEN_PREFERENCES = 78
 
@@ -174,6 +174,11 @@ class Action(enum.Enum):
     DEPTH_ADJUST_SIZE = 85
 
     DEPTH_WINDOW_DRAG = 86
+
+    GROUP_SELECTED_SCENE_NODES = 87
+
+    UNGROUP_SELECTED_SCENE_NODE = 88
+
 
 class ToolMode(enum.Enum):
     GLOBAL = 0

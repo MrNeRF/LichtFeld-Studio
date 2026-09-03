@@ -195,6 +195,8 @@ namespace lfs::vis {
         }
         void updatePassiveRingHoverPreview(glm::vec2 cursor_pos, SelectionMode mode,
                                            SelectionFilterState filters = {});
+        void updatePassiveBrushHoverPreview(glm::vec2 cursor_pos, float brush_radius,
+                                            SelectionMode mode);
         void setInteractiveSelectionMode(SelectionMode mode) { interactive_selection_.mode = mode; }
         // Test-only observable for the incremental brush-preview cache: the number of
         // brush points already folded into the interactive preview. Zero after

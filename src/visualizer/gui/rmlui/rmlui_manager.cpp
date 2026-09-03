@@ -812,6 +812,9 @@ namespace lfs::vis::gui {
                     if (command.cache->texture != 0)
                         releaseCachedVulkanContext(*command.cache);
                 } else {
+                    const VkRect2D capture_region{
+                        {left, top},
+                        {static_cast<uint32_t>(vis_w), static_cast<uint32_t>(vis_h)}};
                     const bool region_changed =
                         command.cache->width != vis_w || command.cache->height != vis_h ||
                         std::abs(command.cache->offset_x - command.offset_x) > 0.5f ||
@@ -844,7 +847,7 @@ namespace lfs::vis::gui {
                         if (layer != 0) {
                             command.context->Render();
                             const Rml::TextureHandle saved_texture =
-                                vulkan_render_interface_->SaveLayerAsTexture(reuse_texture);
+                                vulkan_render_interface_->SaveLayerRegionAsTexture(capture_region, reuse_texture);
                             if (reuse_texture != 0 && saved_texture != 0 && saved_texture != reuse_texture)
                                 vulkan_render_interface_->ReleaseTexture(reuse_texture);
                             // On save failure keep a still-valid reuse handle (avoid leaking it).
@@ -896,6 +899,10 @@ namespace lfs::vis::gui {
                     }
                 }
             } else if (command.cache) {
+                const VkRect2D capture_region{
+                    {0, 0},
+                    {static_cast<uint32_t>(command.cache_width),
+                     static_cast<uint32_t>(command.cache_height)}};
                 const bool refresh_cache =
                     command.refresh_cache ||
                     command.cache->texture == 0 ||
@@ -925,7 +932,7 @@ namespace lfs::vis::gui {
                     if (layer != 0) {
                         command.context->Render();
                         const Rml::TextureHandle saved_texture =
-                            vulkan_render_interface_->SaveLayerAsTexture(reuse_texture);
+                            vulkan_render_interface_->SaveLayerRegionAsTexture(capture_region, reuse_texture);
                         if (reuse_texture != 0 && saved_texture != 0 && saved_texture != reuse_texture)
                             vulkan_render_interface_->ReleaseTexture(reuse_texture);
                         // On save failure keep a still-valid reuse handle (avoid leaking it).

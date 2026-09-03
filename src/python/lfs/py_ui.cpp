@@ -22,6 +22,7 @@
 #include "gui/utils/file_association.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 #include "gui/vulkan_ui_texture.hpp"
+#include "input/input_controller.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
 #include "mcp/mcp_http_server.hpp"
@@ -43,6 +44,7 @@
 #include "rendering/render_constants.hpp"
 #include "rendering/scene_upscaler_registry.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
+#include "rml_python_panel_adapter.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/gui/gui_manager.hpp"
@@ -2757,6 +2759,25 @@ namespace lfs::python {
         register_rml_bindings(m);
 
         m.def(
+            "get_panel_object",
+            [](const std::string& panel_id) {
+                return invoke_on_viewer(
+                    [panel_id]() -> nb::object {
+                        const nb::gil_scoped_acquire acquire;
+                        const auto panel = vis::gui::PanelRegistry::instance().get_panel_instance(panel_id);
+                        const auto retained_panel =
+                            std::dynamic_pointer_cast<vis::gui::RmlPythonPanelAdapter>(panel);
+                        if (!retained_panel)
+                            return nb::none();
+
+                        return retained_panel->panelInstance();
+                    },
+                    nb::none());
+            },
+            nb::arg("panel_id"),
+            "Get the Python object for a retained Python panel, or None if unavailable");
+
+        m.def(
             "begin_drag_payload",
             [](std::string type, std::string data, std::string label) {
                 auto* const manager = static_cast<lfs::vis::gui::RmlUIManager*>(
@@ -4990,6 +5011,42 @@ namespace lfs::python {
             "get_ui_scale_preference",
             []() -> float { return vis::loadUiScalePreference(); },
             "Get saved UI scale preference (0.0 = auto)");
+
+        m.def(
+            "set_zoom_speed_preference",
+            [](const float speed) {
+                vis::saveZoomSpeedPreference(speed);
+                const float zoom_speed = vis::loadZoomSpeedPreference();
+                const float navigation_speed = vis::loadNavigationSpeedPreference();
+                invoke_on_viewer([zoom_speed, navigation_speed] {
+                    if (auto* const controller = vis::InputController::instance())
+                        controller->applyNavigationSpeedPreferences(zoom_speed, navigation_speed);
+                });
+            },
+            nb::arg("speed"), "Set the default camera zoom speed (1-100)");
+
+        m.def(
+            "get_zoom_speed_preference",
+            []() -> float { return vis::loadZoomSpeedPreference(); },
+            "Get the default camera zoom speed");
+
+        m.def(
+            "set_navigation_speed_preference",
+            [](const float speed) {
+                vis::saveNavigationSpeedPreference(speed);
+                const float zoom_speed = vis::loadZoomSpeedPreference();
+                const float navigation_speed = vis::loadNavigationSpeedPreference();
+                invoke_on_viewer([zoom_speed, navigation_speed] {
+                    if (auto* const controller = vis::InputController::instance())
+                        controller->applyNavigationSpeedPreferences(zoom_speed, navigation_speed);
+                });
+            },
+            nb::arg("speed"), "Set the default WASD navigation speed (1-100)");
+
+        m.def(
+            "get_navigation_speed_preference",
+            []() -> float { return vis::loadNavigationSpeedPreference(); },
+            "Get the default WASD navigation speed");
 
         m.def(
             "get_scene_reconstruction_options",

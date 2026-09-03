@@ -977,8 +977,8 @@ namespace lfs::vis::gui {
         if (clip_x2 <= clip_x1 || clip_y2 <= clip_y1)
             return;
 
-        const float screen_x = x - input_->screen_x - padding;
-        const float screen_y = y - input_->screen_y - padding;
+        const float screen_x = std::round(x - input_->screen_x - padding);
+        const float screen_y = std::round(y - input_->screen_y - padding);
         const float screen_clip_x1 = clip_x1 - input_->screen_x;
         const float screen_clip_y1 = clip_y1 - input_->screen_y;
         const float screen_clip_x2 = clip_x2 - input_->screen_x;
