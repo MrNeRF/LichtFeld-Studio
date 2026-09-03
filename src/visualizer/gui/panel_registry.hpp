@@ -167,6 +167,7 @@ namespace lfs::vis::gui {
             (void)ctx;
             return true;
         }
+        virtual void on_visibility_changed(bool visible) { (void)visible; }
         virtual void preload(const PanelDrawContext& ctx) { (void)ctx; }
         virtual PanelRenderCapabilities renderCapabilities() const { return {}; }
         virtual PanelDirectRenderResult renderDirect(
@@ -393,6 +394,9 @@ namespace lfs::vis::gui {
         void set_panel_enabled(const std::string& id, bool enabled);
         bool bring_panel_to_front(const std::string& id);
         bool is_panel_enabled(const std::string& id) const;
+        // Prepare a registered panel without requiring it to be enabled or
+        // visible. Used for small, opt-in startup warmups.
+        void preload_panel(const std::string& id);
         bool apply_floating_resize_cursor() const;
         void rescale_floating_panels(float previous_scale, float new_scale);
         bool needsAnimationFrame() const;
