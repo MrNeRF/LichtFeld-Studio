@@ -48,6 +48,7 @@ PANEL_SPECS = {
     "about": _PanelSpec(
         "lfs_plugins.about_panel", "AboutPanel", "lfs.about", "About",
         "FLOATING", 100, "rmlui/about.rml", "CONTENT", (400, 0),
+        update_policy="dirty",
     ),
     "account": _PanelSpec(
         "lfs_plugins.account_panel", "AccountPanel", "lfs.account", "Account",
@@ -91,7 +92,7 @@ PANEL_SPECS = {
         "lfs_plugins.plugin_marketplace_panel", "PluginMarketplacePanel",
         "lfs.plugin_marketplace", "Plugin Marketplace", "FLOATING", 91,
         "rmlui/plugin_marketplace.rml", "FILL", (770, 560),
-        update_policy="interval", update_interval_ms=250,
+        update_policy="dirty",
     ),
     "asset_manager": _PanelSpec(
         "lfs_plugins.asset_manager_panel", "AssetManagerPanel", "lfs.asset_manager",

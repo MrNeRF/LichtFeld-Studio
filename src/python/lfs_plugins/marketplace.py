@@ -34,7 +34,9 @@ except Exception:
     pass
 
 GITHUB_TIMEOUT_SEC = 10
+CATALOG_CACHE_TTL_SEC = 300
 REFRESH_RETRY_COOLDOWN_SEC = 30
+REFRESH_RETRY_MAX_COOLDOWN_SEC = 300
 GITHUB_API_URL = "https://api.github.com/repos"
 
 CURATED_PLUGIN_URLS: Tuple[str, ...] = (
@@ -65,6 +67,21 @@ class MarketplacePluginEntry:
     error: str = ""
 
 
+@dataclass(frozen=True)
+class _CatalogCache:
+    entries: Tuple[MarketplacePluginEntry, ...]
+    registry_loaded: bool
+    github_enriched: bool
+    stored_at: float
+    next_retry_at: float = 0.0
+    failure_count: int = 0
+
+
+_catalog_cache_lock = threading.Lock()
+_catalog_cache: Optional[_CatalogCache] = None
+_catalog_refresh_inflight = False
+
+
 class PluginMarketplaceCatalog:
     """Dual-source catalog: registry entries merged with curated URL list."""
 
@@ -74,8 +91,8 @@ class PluginMarketplaceCatalog:
         self._loading = False
         self._registry_loaded = False
         self._github_enriched = False
-        self._last_attempt: float = 0.0
         self._on_change: Optional[Callable[[], None]] = None
+        self._restore_cached_catalog(time.monotonic())
 
     def set_on_change(self, callback: Optional[Callable[[], None]]) -> None:
         with self._lock:
@@ -91,63 +108,154 @@ class PluginMarketplaceCatalog:
         except Exception:
             _log.debug("Plugin marketplace change callback failed", exc_info=True)
 
+    def _restore_cached_catalog(self, now: float) -> None:
+        with _catalog_cache_lock:
+            cache = _catalog_cache
+            if cache is None:
+                return
+            if cache.registry_loaded:
+                usable = now - cache.stored_at < CATALOG_CACHE_TTL_SEC
+            else:
+                usable = now < cache.next_retry_at
+            if not usable:
+                return
+
+        with self._lock:
+            self._entries = list(cache.entries)
+            self._registry_loaded = cache.registry_loaded
+            self._github_enriched = cache.github_enriched
+
+    @staticmethod
+    def _cache_can_serve(
+        cache: Optional[_CatalogCache],
+        now: float,
+        require_github_enrichment: bool,
+    ) -> bool:
+        if cache is None:
+            return False
+        if now < cache.next_retry_at:
+            return True
+        if not cache.registry_loaded or now - cache.stored_at >= CATALOG_CACHE_TTL_SEC:
+            return False
+        return not require_github_enrichment or cache.github_enriched
+
     def refresh_async(self, force: bool = False, require_github_enrichment: bool = False) -> None:
         """Fetch registry entries, optionally enriching curated entries with GitHub metadata."""
+        global _catalog_refresh_inflight
+
+        now = time.monotonic()
+        with _catalog_cache_lock:
+            cache = _catalog_cache
+            cache_can_serve = self._cache_can_serve(
+                cache, now, require_github_enrichment
+            )
+            if _catalog_refresh_inflight:
+                return
         with self._lock:
             if self._loading:
                 return
-            needs_github_upgrade = require_github_enrichment and not self._github_enriched
-            if self._registry_loaded and not needs_github_upgrade and not force:
+            needs_github_upgrade = (
+                require_github_enrichment
+                and not self._github_enriched
+                and not (cache and cache.github_enriched)
+            )
+            if not force and cache_can_serve and not needs_github_upgrade:
                 return
-            now = time.monotonic()
-            if (
-                not force
-                and not needs_github_upgrade
-                and self._last_attempt > 0
-                and (now - self._last_attempt) < REFRESH_RETRY_COOLDOWN_SEC
-            ):
+            if not force and cache is not None and now < cache.next_retry_at:
                 return
             self._loading = True
-            self._last_attempt = now
+        with _catalog_cache_lock:
+            if _catalog_refresh_inflight:
+                with self._lock:
+                    self._loading = False
+                return
+            _catalog_refresh_inflight = True
         self._notify_change()
 
         def worker():
-            from .manager import PluginManager
+            global _catalog_refresh_inflight, _catalog_cache
 
-            mgr = PluginManager.instance()
             registry_entries: List[MarketplacePluginEntry] = []
             registry_ok = False
+            registry_error = None
+            github_enrichment_succeeded = False
+            backoff = None
             try:
-                for info in mgr.search(""):
-                    registry_entries.append(_from_registry(info))
-                registry_ok = True
-            except Exception as exc:
-                _log.debug("Registry search failed: %s", exc)
+                try:
+                    from .manager import PluginManager
 
-            curated_entries = (
-                _resolve_curated_from_github()
-                if require_github_enrichment
-                else _build_curated_fallback()
-            )
-            merged = _merge_entries(registry_entries, curated_entries)
-            if registry_ok:
-                _log.info(
-                    "Plugin marketplace registry loaded: %d registry entries, %d total catalog entries",
-                    len(registry_entries),
-                    len(merged),
-                )
-            else:
-                _log.info(
-                    "Plugin marketplace registry unavailable, using fallback catalog: %d fallback entries, %d total catalog entries",
-                    len(curated_entries),
-                    len(merged),
-                )
-            with self._lock:
-                self._entries = merged
-                self._loading = False
-                self._registry_loaded = registry_ok
-                self._github_enriched = self._github_enriched or require_github_enrichment
-            self._notify_change()
+                    mgr = PluginManager.instance()
+                    for info in mgr.search(""):
+                        registry_entries.append(_from_registry(info))
+                    registry_ok = True
+                except Exception as exc:
+                    registry_error = exc
+
+                try:
+                    curated_entries = (
+                        _resolve_curated_from_github()
+                        if require_github_enrichment
+                        else _build_curated_fallback()
+                    )
+                    github_enrichment_succeeded = require_github_enrichment
+                except Exception as exc:
+                    curated_entries = _build_curated_fallback()
+                    registry_error = registry_error or exc
+                merged = _merge_entries(registry_entries, curated_entries)
+                if registry_ok:
+                    _log.info(
+                        "Plugin marketplace registry loaded: %d registry entries, %d total catalog entries",
+                        len(registry_entries),
+                        len(merged),
+                    )
+                with self._lock:
+                    self._entries = merged
+                    self._registry_loaded = registry_ok
+                    self._github_enriched = (
+                        self._github_enriched or github_enrichment_succeeded
+                    )
+
+                with _catalog_cache_lock:
+                    previous_failures = (
+                        _catalog_cache.failure_count
+                        if _catalog_cache is not None and not registry_ok
+                        else 0
+                    )
+                    failure_count = previous_failures + 1 if not registry_ok else 0
+                    if failure_count:
+                        backoff = min(
+                            REFRESH_RETRY_COOLDOWN_SEC * 2 ** (failure_count - 1),
+                            REFRESH_RETRY_MAX_COOLDOWN_SEC,
+                        )
+                        next_retry_at = time.monotonic() + backoff
+                    else:
+                        next_retry_at = 0.0
+                    _catalog_cache = _CatalogCache(
+                        entries=tuple(merged),
+                        registry_loaded=registry_ok,
+                        github_enriched=self._github_enriched,
+                        stored_at=time.monotonic(),
+                        next_retry_at=next_retry_at,
+                        failure_count=failure_count,
+                    )
+                if registry_error is not None:
+                    if backoff is not None:
+                        _log.warning(
+                            "Plugin marketplace refresh failed; retrying in %.0f s: %s",
+                            backoff,
+                            registry_error,
+                        )
+                    else:
+                        _log.warning(
+                            "Plugin marketplace GitHub enrichment failed: %s",
+                            registry_error,
+                        )
+            finally:
+                with _catalog_cache_lock:
+                    _catalog_refresh_inflight = False
+                with self._lock:
+                    self._loading = False
+                self._notify_change()
 
         threading.Thread(target=worker, daemon=True).start()
 
