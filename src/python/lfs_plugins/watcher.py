@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Callable, Dict, Set, TYPE_CHECKING
 
-from .plugin import PluginState
+from .plugin import PluginState, iter_plugin_watch_files
 
 _log = logging.getLogger(__name__)
 
@@ -77,29 +77,29 @@ class PluginWatcher:
     def _has_changes(self, plugin) -> bool:
         """Check if any plugin files were modified."""
         plugin_name = plugin.info.name
+        current_files = set(iter_plugin_watch_files(plugin.info.path))
+        if any(path not in current_files for path in plugin.file_mtimes):
+            return True
 
-        for py_file in plugin.info.path.rglob("*.py"):
-            if ".venv" in py_file.parts:
-                continue
-
+        for source_file in current_files:
             try:
-                current_mtime = py_file.stat().st_mtime
-                prev_mtime = plugin.file_mtimes.get(py_file, 0)
+                current_mtime = source_file.stat().st_mtime
+                prev_mtime = plugin.file_mtimes.get(source_file, 0)
 
                 if current_mtime > prev_mtime:
                     return True
 
                 if current_mtime == prev_mtime and prev_mtime > 0:
-                    if self._content_changed(plugin_name, py_file):
+                    if self._content_changed(plugin_name, source_file):
                         return True
 
             except FileNotFoundError:
-                if py_file in plugin.file_mtimes:
+                if source_file in plugin.file_mtimes:
                     return True
             except PermissionError:
-                _log.warning("Permission denied: %s", py_file)
+                _log.warning("Permission denied: %s", source_file)
             except OSError as e:
-                _log.debug("OSError checking %s: %s", py_file, e)
+                _log.debug("OSError checking %s: %s", source_file, e)
 
         return False
 

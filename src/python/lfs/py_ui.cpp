@@ -3649,6 +3649,45 @@ namespace lfs::python {
             "Clear all localization overrides");
 
         m.def(
+            "_loc_register_catalog",
+            [](const std::string& owner_id,
+               const std::string& language_code,
+               const nb::dict& translations) {
+                lfs::event::LocalizationManager::TranslationMap entries;
+                entries.reserve(translations.size());
+                for (const auto& item : translations) {
+                    if (!nb::isinstance<nb::str>(item.first) ||
+                        !nb::isinstance<nb::str>(item.second))
+                        throw nb::type_error("translations must be a dict[str, str]");
+                    entries.emplace(nb::cast<std::string>(item.first),
+                                    nb::cast<std::string>(item.second));
+                }
+
+                std::string error;
+                const auto token =
+                    lfs::event::LocalizationManager::getInstance().registerPluginCatalog(
+                        owner_id, language_code, entries, &error);
+                if (token == 0)
+                    throw nb::value_error(error.c_str());
+
+                lfs::vis::publish_language_generation();
+                return token;
+            },
+            nb::arg("owner_id"), nb::arg("language_code"), nb::arg("translations"),
+            "Register one validated, owner-scoped plugin localization catalog");
+
+        m.def(
+            "_loc_unregister_catalog",
+            [](const std::uint64_t token) {
+                const bool removed =
+                    lfs::event::LocalizationManager::getInstance().unregisterPluginCatalog(token);
+                if (removed)
+                    lfs::vis::publish_language_generation();
+                return removed;
+            },
+            nb::arg("token"), "Unregister one plugin localization catalog by ownership token");
+
+        m.def(
             "register_popup_draw_callback",
             [](nb::object callback) {
                 warnLegacyPopupDrawCallbackOnce();

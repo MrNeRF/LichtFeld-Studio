@@ -36,7 +36,8 @@ from .installer import (
     update_plugin,
     write_plugin_source_metadata,
 )
-from .plugin import PluginInfo, PluginInstance, PluginState
+from .plugin import PluginInfo, PluginInstance, PluginState, iter_plugin_watch_files
+from .plugin_localization import PluginCatalogError, read_plugin_catalogs
 from .registry import RegistryClient, RegistryPluginInfo, RegistryVersionInfo
 from .watcher import PluginWatcher
 
@@ -347,6 +348,7 @@ class PluginManager:
             self._raise_if_cancelled(should_cancel)
             plugin.state = PluginState.LOADING
             self._emit_stage(on_stage, "import", f"Importing {name}")
+            self._register_localization_catalogs(plugin)
             self._load_module(plugin)
             t_module = time.monotonic()
 
@@ -471,6 +473,8 @@ class PluginManager:
             except Exception:
                 _log.exception("Failed to run on_unload while rolling back '%s'", name)
 
+        self._unregister_localization_catalogs(plugin)
+
         try:
             CapabilityRegistry.instance().unregister_all_for_plugin(name)
         except Exception:
@@ -518,6 +522,68 @@ class PluginManager:
         plugin.sys_paths = []
         plugin.module = None
 
+    def _register_localization_catalogs(self, plugin: PluginInstance) -> None:
+        """Validate and register plugin catalogs before module activation."""
+        if plugin.localization_tokens:
+            self._unregister_localization_catalogs(plugin)
+            if plugin.localization_tokens:
+                raise PluginError(
+                    f"Plugin '{plugin.info.name}' has localization catalogs that could not be cleared"
+                )
+
+        try:
+            bundle = read_plugin_catalogs(plugin.info.path, plugin.info.name)
+        except (OSError, PluginCatalogError) as exc:
+            raise PluginError(
+                f"Plugin '{plugin.info.name}' localization is invalid: {exc}"
+            ) from exc
+
+        if not bundle.catalogs:
+            return
+
+        try:
+            import lichtfeld as lf
+
+            register_catalog = lf.ui._loc_register_catalog
+            for language, entries in sorted(bundle.catalogs.items()):
+                token = int(register_catalog(bundle.owner_id, language, entries))
+                if token <= 0:
+                    raise RuntimeError("host returned an invalid localization ownership token")
+                plugin.localization_tokens.append(token)
+        except Exception as exc:
+            self._unregister_localization_catalogs(plugin)
+            raise PluginError(
+                f"Plugin '{plugin.info.name}' localization registration failed: {exc}"
+            ) from exc
+
+    @staticmethod
+    def _unregister_localization_catalogs(plugin: PluginInstance) -> None:
+        """Best-effort removal of exactly the catalogs registered by a plugin."""
+        if not plugin.localization_tokens:
+            return
+
+        try:
+            import lichtfeld as lf
+
+            unregister_catalog = lf.ui._loc_unregister_catalog
+        except Exception:
+            _log.exception(
+                "Failed to access localization cleanup for '%s'", plugin.info.name
+            )
+            return
+
+        remaining_tokens = []
+        for token in reversed(plugin.localization_tokens):
+            try:
+                unregister_catalog(token)
+            except Exception:
+                remaining_tokens.append(token)
+                _log.exception(
+                    "Failed to unregister localization catalog for '%s'",
+                    plugin.info.name,
+                )
+        plugin.localization_tokens = list(reversed(remaining_tokens))
+
     def _get_venv_site_packages(self, plugin: PluginInstance) -> Optional[Path]:
         """Get site-packages path for plugin venv."""
         venv = plugin.venv_path
@@ -563,6 +629,8 @@ class PluginManager:
                     unload_ok = False
                     plugin.error = str(e)
                     _log.exception("Plugin '%s' on_unload failed", name)
+
+            self._unregister_localization_catalogs(plugin)
 
             CapabilityRegistry.instance().unregister_all_for_plugin(name)
 
@@ -646,6 +714,9 @@ class PluginManager:
                 except Exception as e:
                     plugin.error = str(e)
                     _log.exception("Plugin '%s' on_unload failed during reload", name)
+            plugin.module = None
+
+            self._unregister_localization_catalogs(plugin)
 
             CapabilityRegistry.instance().unregister_all_for_plugin(name)
 
@@ -667,6 +738,12 @@ class PluginManager:
             for m in to_remove:
                 sys.modules.pop(m, None)
 
+            for path in plugin.sys_paths:
+                if path in sys.path:
+                    sys.path.remove(path)
+            plugin.sys_paths = []
+
+            self._register_localization_catalogs(plugin)
             self._load_module(plugin)
 
             if hasattr(plugin.module, "on_load"):
@@ -691,6 +768,7 @@ class PluginManager:
             return True
 
         except Exception as e:
+            self._rollback_failed_load(plugin)
             plugin.state = PluginState.ERROR
             plugin.error = str(e)
             plugin.error_traceback = traceback.format_exc()
@@ -740,9 +818,10 @@ class PluginManager:
     def _update_file_mtimes(self, plugin: PluginInstance):
         """Record file modification times for hot reload."""
         plugin.file_mtimes.clear()
-        for py_file in plugin.info.path.rglob("*.py"):
-            if ".venv" not in py_file.parts:
-                plugin.file_mtimes[py_file] = py_file.stat().st_mtime
+        for source_file in iter_plugin_watch_files(plugin.info.path):
+            plugin.file_mtimes[source_file] = source_file.stat().st_mtime
+        if self._watcher:
+            self._watcher.clear_plugin_hashes(plugin.info.name)
 
     def start_watcher(self, poll_interval: float = 1.0):
         """Start hot reload file watcher."""
