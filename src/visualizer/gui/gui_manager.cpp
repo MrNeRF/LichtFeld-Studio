@@ -22,6 +22,7 @@
 #include "core/tensor.hpp"
 #include "core/user_paths.hpp"
 #include "gui/bounds_gizmo.hpp"
+#include "gui/camera_thumbnail_batch.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/error_event_bridge.hpp"
 #include "gui/layout_state.hpp"
@@ -1797,15 +1798,52 @@ namespace lfs::vis::gui {
                 };
             }
 
-            bool processReadyUploads(const size_t max_uploads) {
+            bool processReadyUploads() {
+                constexpr auto kUploadTimeBudget = std::chrono::milliseconds(2);
+                constexpr size_t kUploadByteBudget = 8u * 1024u * 1024u;
+                const auto upload_started = std::chrono::steady_clock::now();
+                struct PendingUpload {
+                    Decoded decoded;
+                    int page_index = -1;
+                    int slot = -1;
+                };
+
+                std::vector<PendingUpload> pending;
+                std::vector<CameraThumbnailUploadCandidate> candidates;
+                size_t upload_bytes = 0;
                 bool progressed = false;
-                for (size_t upload_index = 0; upload_index < max_uploads; ++upload_index) {
+                while (true) {
+                    if (!pending.empty() &&
+                        std::chrono::steady_clock::now() - upload_started >= kUploadTimeBudget) {
+                        break;
+                    }
                     Decoded decoded;
                     int page_index = -1;
                     int slot = -1;
                     {
                         std::lock_guard lock(mutex_);
                         if (ready_queue_.empty()) {
+                            break;
+                        }
+                        const Decoded& next = ready_queue_.front();
+                        const size_t next_bytes = static_cast<size_t>(next.width) *
+                                                  static_cast<size_t>(next.height) * 4u;
+                        if (next_bytes == 0 || next_bytes > kUploadByteBudget) {
+                            decoded = std::move(ready_queue_.front());
+                            ready_queue_.pop_front();
+                            cv_.notify_all();
+                            const auto it = entries_.find(decoded.uid);
+                            if (it != entries_.end() &&
+                                it->second.path_key == decoded.path_key &&
+                                it->second.generation == decoded.generation &&
+                                it->second.state == State::UploadReady) {
+                                it->second.state = State::Failed;
+                                it->second.retry_frame = frame_counter_ + kUploadRetryFrames;
+                            }
+                            progressed = true;
+                            continue;
+                        }
+                        if (!pending.empty() && next_bytes > kUploadByteBudget - upload_bytes) {
                             break;
                         }
                         decoded = std::move(ready_queue_.front());
@@ -1829,40 +1867,91 @@ namespace lfs::vis::gui {
                         page_index = entry.page_index;
                         slot = entry.slot;
                     }
+                    upload_bytes += static_cast<size_t>(decoded.width) *
+                                    static_cast<size_t>(decoded.height) * 4u;
+                    candidates.push_back(CameraThumbnailUploadCandidate{
+                        .page_index = page_index,
+                        .byte_size = static_cast<size_t>(decoded.width) *
+                                     static_cast<size_t>(decoded.height) * 4u,
+                    });
+                    pending.push_back(PendingUpload{
+                        .decoded = std::move(decoded),
+                        .page_index = page_index,
+                        .slot = slot,
+                    });
+                    progressed = true;
+                }
 
-                    const int slot_x = (slot % kAtlasSlotsPerAxis) * kThumbnailSize;
-                    const int slot_y = (slot / kAtlasSlotsPerAxis) * kThumbnailSize;
-                    const bool uploaded =
-                        pages_[static_cast<size_t>(page_index)].texture.uploadRegion(decoded.pixels.data(),
-                                                                                     kAtlasTextureSize,
-                                                                                     kAtlasTextureSize,
-                                                                                     slot_x,
-                                                                                     slot_y,
-                                                                                     decoded.width,
-                                                                                     decoded.height,
-                                                                                     decoded.channels);
-
-                    {
-                        std::lock_guard lock(mutex_);
-                        const auto it = entries_.find(decoded.uid);
-                        if (it == entries_.end() ||
-                            it->second.path_key != decoded.path_key ||
-                            it->second.generation != decoded.generation) {
-                            progressed = true;
-                            continue;
-                        }
-
-                        if (uploaded) {
-                            it->second.state = State::Ready;
-                            it->second.retry_frame = 0;
-                            ++atlas_generation_;
-                        } else {
+                const auto batches = batchCameraThumbnailUploads(candidates, kUploadByteBudget);
+                const auto requeueUnprocessed = [&](const size_t first_batch) {
+                    std::lock_guard lock(mutex_);
+                    for (size_t batch_index = batches.size(); batch_index-- > first_batch;) {
+                        const auto& batch = batches[batch_index];
+                        for (size_t candidate_index = batch.candidate_indices.size(); candidate_index-- > 0;) {
+                            Decoded& decoded = pending[batch.candidate_indices[candidate_index]].decoded;
+                            const auto it = entries_.find(decoded.uid);
+                            if (it == entries_.end() ||
+                                it->second.path_key != decoded.path_key ||
+                                it->second.generation != decoded.generation) {
+                                continue;
+                            }
                             releaseSlotLocked(it->second);
-                            it->second.state = State::Failed;
-                            it->second.retry_frame = frame_counter_ + kUploadRetryFrames;
+                            ready_queue_.push_front(std::move(decoded));
                         }
                     }
-                    progressed = true;
+                    cv_.notify_all();
+                };
+
+                for (size_t batch_index = 0; batch_index < batches.size(); ++batch_index) {
+                    const auto& batch = batches[batch_index];
+                    std::vector<VulkanUiTexture::Region> regions;
+                    regions.reserve(batch.candidate_indices.size());
+                    for (const size_t candidate_index : batch.candidate_indices) {
+                        const PendingUpload& upload = pending[candidate_index];
+                        const int slot_x = (upload.slot % kAtlasSlotsPerAxis) * kThumbnailSize;
+                        const int slot_y = (upload.slot / kAtlasSlotsPerAxis) * kThumbnailSize;
+                        regions.push_back(VulkanUiTexture::Region{
+                            .pixels = upload.decoded.pixels.data(),
+                            .texture_width = kAtlasTextureSize,
+                            .texture_height = kAtlasTextureSize,
+                            .x = slot_x,
+                            .y = slot_y,
+                            .width = upload.decoded.width,
+                            .height = upload.decoded.height,
+                            .channels = upload.decoded.channels,
+                        });
+                    }
+
+                    const bool uploaded =
+                        pages_[static_cast<size_t>(batch.page_index)].texture.uploadRegions(regions);
+                    {
+                        std::lock_guard lock(mutex_);
+                        for (const size_t candidate_index : batch.candidate_indices) {
+                            const Decoded& decoded = pending[candidate_index].decoded;
+                            const auto it = entries_.find(decoded.uid);
+                            if (it == entries_.end() ||
+                                it->second.path_key != decoded.path_key ||
+                                it->second.generation != decoded.generation) {
+                                continue;
+                            }
+                            if (uploaded) {
+                                it->second.state = State::Ready;
+                                it->second.retry_frame = 0;
+                            } else {
+                                releaseSlotLocked(it->second);
+                                it->second.state = State::Failed;
+                                it->second.retry_frame = frame_counter_ + kUploadRetryFrames;
+                            }
+                        }
+                        if (uploaded)
+                            ++atlas_generation_;
+                    }
+                    const bool time_budget_reached =
+                        std::chrono::steady_clock::now() - upload_started >= kUploadTimeBudget;
+                    if (time_budget_reached)
+                        requeueUnprocessed(batch_index + 1);
+                    if (time_budget_reached)
+                        break;
                 }
                 return progressed;
             }
@@ -2740,10 +2829,10 @@ namespace lfs::vis::gui {
                 }
                 thumbnail_cache.reprioritize(thumbnail_order);
             }
-            thumbnail_cache.processReadyUploads(4);
+            thumbnail_cache.processReadyUploads();
             if (thumbnail_cache.hasReadyUploads()) {
                 if (auto* const gui = services().guiOrNull())
-                    gui->notifyCameraThumbnailReady(true);
+                    gui->notifyCameraThumbnailBatchReady();
             }
             thumbnail_cache.maybeLogDecodeSummary();
 
@@ -3711,11 +3800,13 @@ namespace lfs::vis::gui {
         const auto requested_ns = defer ? std::max(paced_ns, now_ns + kRefreshIntervalNs) : paced_ns;
         const bool was_pending = camera_thumbnail_refresh_pending_.exchange(true, std::memory_order_acq_rel);
 
-        auto due_ns = camera_thumbnail_refresh_due_ns_.load(std::memory_order_acquire);
-        while (due_ns < requested_ns) {
-            if (camera_thumbnail_refresh_due_ns_.compare_exchange_weak(
-                    due_ns, requested_ns, std::memory_order_acq_rel))
-                break;
+        if (!was_pending) {
+            auto due_ns = camera_thumbnail_refresh_due_ns_.load(std::memory_order_acquire);
+            while (due_ns < requested_ns) {
+                if (camera_thumbnail_refresh_due_ns_.compare_exchange_weak(
+                        due_ns, requested_ns, std::memory_order_acq_rel))
+                    break;
+            }
         }
 
         // The first completion wakes a sleeping event loop. Once a refresh is
@@ -3723,6 +3814,17 @@ namespace lfs::vis::gui {
         // the next 100 ms deadline; waking once per decoded JPEG defeats the
         // coalescing and produces a frame per completion.
         if (!defer && !was_pending && viewer_ && viewer_->getWindowManager())
+            viewer_->getWindowManager()->wakeEventLoop();
+    }
+
+    void GuiManager::notifyCameraThumbnailBatchReady() {
+        const auto now = std::chrono::steady_clock::now();
+        const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                now.time_since_epoch())
+                                .count();
+        camera_thumbnail_refresh_pending_.store(true, std::memory_order_release);
+        camera_thumbnail_refresh_due_ns_.store(now_ns, std::memory_order_release);
+        if (viewer_ && viewer_->getWindowManager())
             viewer_->getWindowManager()->wakeEventLoop();
     }
 
