@@ -5,6 +5,8 @@
 from importlib import import_module
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+import threading
+import time
 import sys
 
 import pytest
@@ -83,6 +85,8 @@ class _ElementStub:
         self.set_text_count = 0
         self.set_attribute_count = 0
         self._parent = None
+        self.scroll_top = 0.0
+        self.focus_count = 0
 
     def set_text(self, value):
         self.set_text_count += 1
@@ -109,6 +113,28 @@ class _ElementStub:
 
     def parent(self):
         return self._parent
+
+    def focus(self):
+        self.focus_count += 1
+
+    def is_class_set(self, name):
+        return self.classes.get(name, False)
+
+
+class _EventStub:
+    def __init__(self, key=None, target=None):
+        self.key = key
+        self._target = target
+        self.stopped = False
+
+    def get_parameter(self, name, default=""):
+        return str(self.key) if name == "key_identifier" and self.key is not None else default
+
+    def target(self):
+        return self._target
+
+    def stop_propagation(self):
+        self.stopped = True
 
 
 class _DocStub:
@@ -274,6 +300,18 @@ def test_plugin_marketplace_cache_ttl_and_retry_backoff(plugin_marketplace_modul
     assert not marketplace.PluginMarketplaceCatalog._cache_can_serve(failed, 130.0, True)
 
 
+def test_plugin_marketplace_lifecycle_callback_invalidates_discovery_cache(
+    plugin_marketplace_module,
+):
+    module, _state = plugin_marketplace_module
+    panel = module.PluginMarketplacePanel()
+    panel._discover_cache = [object()]
+
+    panel._on_manager_plugin_changed(None)
+
+    assert panel._discover_cache is None
+
+
 def test_plugin_marketplace_refresh_is_cached_across_catalog_instances(
     plugin_marketplace_module,
     monkeypatch,
@@ -298,7 +336,6 @@ def test_plugin_marketplace_refresh_is_cached_across_catalog_instances(
     monkeypatch.setitem(sys.modules, "lfs_plugins.manager", manager_module)
     monkeypatch.setattr(marketplace, "_build_curated_fallback", lambda: [])
     monkeypatch.setattr(marketplace, "_catalog_cache", None)
-    monkeypatch.setattr(marketplace, "_catalog_refresh_inflight", False)
     monkeypatch.setattr(marketplace._log, "disabled", True)
 
     class _ImmediateThread:
@@ -345,7 +382,6 @@ def test_plugin_marketplace_refresh_exception_clears_inflight_and_loading(
         RuntimeError("worker failed")
     ))
     monkeypatch.setattr(marketplace, "_catalog_cache", None)
-    monkeypatch.setattr(marketplace, "_catalog_refresh_inflight", False)
 
     class _ImmediateThread:
         def __init__(self, target, daemon=False):
@@ -360,8 +396,44 @@ def test_plugin_marketplace_refresh_exception_clears_inflight_and_loading(
     with pytest.raises(RuntimeError, match="worker failed"):
         catalog.refresh_async()
 
-    assert marketplace._catalog_refresh_inflight is False
     assert catalog.snapshot()[1] is False
+
+
+def test_plugin_marketplace_github_enrichment_is_parallel_and_isolated(
+    plugin_marketplace_module,
+    monkeypatch,
+):
+    _module, _state = plugin_marketplace_module
+    marketplace = __import__("lfs_plugins.marketplace", fromlist=["_resolve_curated_from_github"])
+    urls = tuple(f"https://github.com/owner/repo-{index}" for index in range(6))
+    monkeypatch.setattr(marketplace, "CURATED_PLUGIN_URLS", urls)
+
+    lock = threading.Lock()
+    active = 0
+    maximum_active = 0
+
+    def fetch(owner, repo):
+        nonlocal active, maximum_active
+        with lock:
+            active += 1
+            maximum_active = max(maximum_active, active)
+        try:
+            time.sleep(0.03)
+            if repo == "repo-2":
+                raise OSError("rate limited")
+            return {"name": repo, "stargazers_count": 3, "html_url": f"https://github.com/{owner}/{repo}"}
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(marketplace, "_fetch_repo_metadata", fetch)
+    entries = marketplace._resolve_curated_from_github()
+
+    assert marketplace.GITHUB_TIMEOUT_SEC == 4
+    assert len(entries) == 6
+    assert maximum_active > 1
+    assert entries[2].name == "repo-2"
+    assert entries[0].stars == 3
 
 
 def test_plugin_marketplace_manual_success_clears_url(plugin_marketplace_module):
@@ -409,6 +481,65 @@ def test_plugin_marketplace_confirm_message_sets_plain_text(plugin_marketplace_m
     assert panel._pending_uninstall_card_id == "sample-card"
     assert message_el.text == "Remove Sample Plugin?"
     assert overlay_el.classes["hidden"] is False
+
+
+def test_plugin_marketplace_confirm_is_keyboard_and_click_modal(plugin_marketplace_module):
+    module, state = plugin_marketplace_module
+    state.translations["plugin_marketplace.confirm_uninstall_message"] = "Remove {name}?"
+    panel = module.PluginMarketplacePanel()
+    overlay = _ElementStub()
+    dialog = _ElementStub()
+    message = _ElementStub()
+    panel._doc = _DocStub({
+        "confirm-overlay": overlay,
+        "confirm-dialog": dialog,
+        "confirm-message": message,
+    })
+
+    panel._request_uninstall_confirmation("Sample Plugin", "sample-card", None)
+    enter = _EventStub(module.KI_RETURN)
+    panel._on_keydown(enter)
+    assert enter.stopped
+    assert panel._confirm_is_open
+    assert panel._pending_uninstall_name == "Sample Plugin"
+
+    outside = _EventStub(target=overlay)
+    panel._on_confirm_overlay_click(outside)
+    assert outside.stopped
+    assert not panel._confirm_is_open
+    assert overlay.classes["hidden"] is True
+
+    panel._request_uninstall_confirmation("Sample Plugin", "sample-card", None)
+    escape = _EventStub(module.KI_ESCAPE)
+    panel._on_keydown(escape)
+    assert escape.stopped
+    assert not panel._confirm_is_open
+
+
+def test_plugin_marketplace_full_grid_rebuild_preserves_panel_chrome(plugin_marketplace_module):
+    module, _state = plugin_marketplace_module
+    panel = module.PluginMarketplacePanel()
+    panel._manual_url = "owner/repo"
+    panel._manual_url_focused = True
+    main = _ElementStub()
+    main.scroll_top = 240.0
+    manual = _ElementStub()
+    manual.attributes["value"] = "owner/repo"
+    overlay = _ElementStub()
+    overlay.classes["hidden"] = False
+    grid = _ElementStub()
+    doc = _DocStub({
+        "main-area": main,
+        "manual-url-input": manual,
+        "confirm-overlay": overlay,
+        "card-grid": grid,
+    })
+    panel._render_entry_layout(doc, [{"card_id": "sample-card"}], force=True)
+
+    assert main.scroll_top == 240.0
+    assert panel._manual_url == "owner/repo"
+    assert manual.focus_count == 1
+    assert overlay.classes["hidden"] is False
 
 
 def test_plugin_marketplace_renders_git_checkbox_when_available(plugin_marketplace_module):

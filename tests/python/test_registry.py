@@ -6,6 +6,7 @@ import json
 import pytest
 import sys
 import tempfile
+import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -150,6 +151,26 @@ class TestRegistryClient:
 
         assert len(results) == 1
         assert results[0].name == "colmap"
+
+    def test_search_skips_malformed_entries(self, registry_cache_dir, mock_registry_index):
+        scripts_dir = Path(__file__).parent.parent.parent / "scripts"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+
+        from lfs_plugins.registry import RegistryClient
+
+        index = json.loads(json.dumps(mock_registry_index))
+        index["plugins"].insert(0, {"summary": "missing identity"})
+        index["plugins"].insert(1, {
+            "name": "bad-keywords",
+            "latest_version": "1.0.0",
+            "keywords": "not-a-list",
+        })
+        client = RegistryClient(cache_dir=registry_cache_dir)
+        with patch.object(client, "_fetch_json", return_value=index):
+            results = client.search("", compatible_only=False)
+
+        assert [result.name for result in results] == ["colmap", "sam-segmentation"]
 
     def test_parse_plugin_id_with_namespace(self, registry_cache_dir):
         """Should parse namespace:name format."""
@@ -410,6 +431,30 @@ class TestCaching:
 
         results = client.search("colmap")
         assert len(results) == 1
+
+    def test_detail_cache_expires_and_offline_uses_stale_record(self, registry_cache_dir):
+        scripts_dir = Path(__file__).parent.parent.parent / "scripts"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+
+        from lfs_plugins.registry import RegistryClient, CACHE_TTL_HOURS
+
+        client = RegistryClient(cache_dir=registry_cache_dir)
+        old_detail = {"name": "foo", "namespace": "community", "versions": {}}
+        new_detail = {"name": "foo", "namespace": "community", "versions": {"2.0.0": {}}}
+        with patch.object(client, "_fetch_json", return_value=old_detail):
+            assert client.get_plugin("community:foo") == old_detail
+
+        cache_file = registry_cache_dir / "plugins" / "community" / "foo.json"
+        stale_time = time.time() - CACHE_TTL_HOURS * 3600 - 1
+        import os
+        os.utime(cache_file, (stale_time, stale_time))
+        with patch.object(client, "_fetch_json", return_value=new_detail):
+            assert client.get_plugin("community:foo") == new_detail
+
+        os.utime(cache_file, (stale_time, stale_time))
+        with patch.object(client, "_fetch_json", side_effect=OSError("offline")):
+            assert client.get_plugin("community:foo") == new_detail
 
 
 class TestChecksumVerification:

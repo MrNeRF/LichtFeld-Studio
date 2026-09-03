@@ -23,6 +23,7 @@
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
+#include "python/python_runtime.hpp"
 #include "python/runner.hpp"
 #include "rendering/mesh2splat.hpp"
 #include "rendering/mesh_offscreen_renderer.hpp"
@@ -1899,6 +1900,11 @@ namespace lfs::vis::gui {
             }
         }
         lfs::vis::app_store().import_overlay_state.set(std::move(state));
+        // Store notifications wake the event loop, but do not necessarily mark
+        // the cached viewport frame dirty.  This is especially important for
+        // the delayed completion dismissal, which runs after the import loop
+        // has gone idle.
+        lfs::python::request_redraw();
     }
 
     void AsyncTaskManager::setImportNumImages(const size_t num_images) {

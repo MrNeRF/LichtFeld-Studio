@@ -8,6 +8,7 @@ import json
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Set, Tuple
 
@@ -20,20 +21,26 @@ try:
 
     class _LfLogHandler(logging.Handler):
         def emit(self, record):
-            msg = self.format(record)
-            if record.levelno >= logging.ERROR:
-                _lf.log.error(msg)
-            elif record.levelno >= logging.WARNING:
-                _lf.log.warn(msg)
-            else:
-                _lf.log.info(msg)
+            try:
+                msg = self.format(record)
+                if record.levelno >= logging.ERROR:
+                    _lf.log.error(msg)
+                elif record.levelno >= logging.WARNING:
+                    _lf.log.warn(msg)
+                else:
+                    _lf.log.info(msg)
+            except Exception:
+                # Logging must never turn a per-entry network failure into a
+                # catalog-wide failure (and keeps lightweight test stubs safe).
+                pass
 
     _log.addHandler(_LfLogHandler())
     _log.setLevel(logging.DEBUG)
 except Exception:
     pass
 
-GITHUB_TIMEOUT_SEC = 10
+GITHUB_TIMEOUT_SEC = 4
+GITHUB_MAX_WORKERS = 4
 CATALOG_CACHE_TTL_SEC = 300
 REFRESH_RETRY_COOLDOWN_SEC = 30
 REFRESH_RETRY_MAX_COOLDOWN_SEC = 300
@@ -79,7 +86,9 @@ class _CatalogCache:
 
 _catalog_cache_lock = threading.Lock()
 _catalog_cache: Optional[_CatalogCache] = None
-_catalog_refresh_inflight = False
+# Refresh ownership is deliberately per catalog instance.  A global in-flight
+# flag used to make a second panel return without ever receiving the first
+# panel's result.
 
 
 class PluginMarketplaceCatalog:
@@ -141,16 +150,12 @@ class PluginMarketplaceCatalog:
 
     def refresh_async(self, force: bool = False, require_github_enrichment: bool = False) -> None:
         """Fetch registry entries, optionally enriching curated entries with GitHub metadata."""
-        global _catalog_refresh_inflight
-
         now = time.monotonic()
         with _catalog_cache_lock:
             cache = _catalog_cache
             cache_can_serve = self._cache_can_serve(
                 cache, now, require_github_enrichment
             )
-            if _catalog_refresh_inflight:
-                return
         with self._lock:
             if self._loading:
                 return
@@ -164,16 +169,10 @@ class PluginMarketplaceCatalog:
             if not force and cache is not None and now < cache.next_retry_at:
                 return
             self._loading = True
-        with _catalog_cache_lock:
-            if _catalog_refresh_inflight:
-                with self._lock:
-                    self._loading = False
-                return
-            _catalog_refresh_inflight = True
         self._notify_change()
 
         def worker():
-            global _catalog_refresh_inflight, _catalog_cache
+            global _catalog_cache
 
             registry_entries: List[MarketplacePluginEntry] = []
             registry_ok = False
@@ -251,8 +250,6 @@ class PluginMarketplaceCatalog:
                             registry_error,
                         )
             finally:
-                with _catalog_cache_lock:
-                    _catalog_refresh_inflight = False
                 with self._lock:
                     self._loading = False
                 self._notify_change()
@@ -320,14 +317,42 @@ def _resolve_curated_from_github() -> List[MarketplacePluginEntry]:
     """Resolve curated URLs via GitHub API (runs in background thread)."""
     from .installer import parse_github_url
 
-    entries: List[MarketplacePluginEntry] = []
+    requests = []
     for url in CURATED_PLUGIN_URLS:
         try:
             owner, repo, _ = parse_github_url(url)
         except Exception:
             continue
-        entries.append(_resolve_github_entry(url, owner, repo))
-    return entries
+        requests.append((url, owner, repo))
+
+    if not requests:
+        return []
+
+    # Keep the catalog responsive when GitHub is slow or rate-limiting.  Each
+    # task returns a fallback-shaped entry even when its request fails, so one
+    # bad repository cannot discard the rest of the catalog.
+    with ThreadPoolExecutor(max_workers=min(GITHUB_MAX_WORKERS, len(requests))) as pool:
+        futures = [pool.submit(_resolve_github_entry, *request) for request in requests]
+        entries = []
+        for request, future in zip(requests, futures):
+            try:
+                entries.append(future.result())
+            except Exception as exc:
+                url, owner, repo = request
+                _log.warning("GitHub metadata lookup failed for %s/%s: %s", owner, repo, exc)
+                entries.append(_fallback_github_entry(url, owner, repo))
+        return entries
+
+
+def _fallback_github_entry(source_url: str, owner: str, repo: str) -> MarketplacePluginEntry:
+    return MarketplacePluginEntry(
+        source_url=source_url,
+        github_url=f"https://github.com/{owner}/{repo}",
+        owner=owner,
+        repo=repo,
+        name=repo,
+        description="",
+    )
 
 
 def _resolve_github_entry(source_url: str, owner: str, repo: str) -> MarketplacePluginEntry:
