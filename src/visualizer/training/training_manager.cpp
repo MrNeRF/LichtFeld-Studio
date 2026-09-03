@@ -10,6 +10,7 @@
 #include "core/guarded_task.hpp"
 #include "core/logger.hpp"
 #include "core/parameter_manager.hpp"
+#include "core/path_utils.hpp"
 #include "core/reactive/store.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
@@ -36,7 +37,9 @@
 #include <cstdint>
 #include <cstring>
 #include <cuda_runtime.h>
+#include <filesystem>
 #include <format>
+#include <functional>
 #include <memory>
 #include <shared_mutex>
 #include <stdexcept>
@@ -187,10 +190,17 @@ namespace lfs::vis {
             lfs::training::release_fastgs_sort_workspace_buffers();
         }
 
+        [[nodiscard]] std::uint64_t thread_id_for_logging(const std::thread::id id) noexcept {
+            return static_cast<std::uint64_t>(std::hash<std::thread::id>{}(id));
+        }
+
         void join_thread_if_not_current(std::jthread& thread, const std::string_view name) {
             if (!thread.joinable()) {
                 return;
             }
+            const auto target_id = thread_id_for_logging(thread.get_id());
+            const auto caller_id = thread_id_for_logging(std::this_thread::get_id());
+            LOG_DEBUG("Joining {} thread: target={}, caller={}", name, target_id, caller_id);
             if (thread.get_id() == std::this_thread::get_id()) {
                 // A worker must never join itself. Detach before destruction so
                 // std::jthread does not retry the self-join from its destructor.
@@ -736,12 +746,6 @@ namespace lfs::vis {
         }
         training_thread_cv_.notify_all();
         join_thread_if_not_current(completion_reaper_, "completion reaper");
-        if (initialization_thread_) {
-            join_thread_if_not_current(*initialization_thread_, "training initialization");
-        }
-        if (training_thread_) {
-            join_thread_if_not_current(*training_thread_, "training execution");
-        }
         if (trainer_) {
             lfs::training::CommandCenter::instance().reset_snapshot();
         }
@@ -1068,7 +1072,6 @@ namespace lfs::vis {
         }
 
         clearEvaluationMetrics();
-        applyPendingParams();
 
         const auto reject_start = [this](std::string message, const lfs::ErrorCode code) {
             LOG_ERROR("Cannot start training: {}", message);
@@ -1134,6 +1137,12 @@ namespace lfs::vis {
                 "Trainer disappeared during training initialization"));
         }
 
+        // Applying parameters can call Trainer::apply_param_side_effects(),
+        // which takes render_mutex_ exclusively. Keep it off the caller thread
+        // so startTraining() can acknowledge Starting while that mutex is used
+        // to gate initialization.
+        applyPendingParams();
+
         std::optional<TrainingSceneInitializationRollback> scene_rollback;
         if (scene_) {
             // The snapshot is intentionally taken by the worker. It includes
@@ -1144,6 +1153,20 @@ namespace lfs::vis {
         }
 
         const auto& params = trainer_->getParams();
+        if (!trainer_->isInitialized() && params.init_path && !params.init_path->empty()) {
+            std::error_code path_error;
+            const auto init_path = lfs::core::utf8_to_path(*params.init_path);
+            if (!std::filesystem::exists(init_path, path_error)) {
+                const auto reason = path_error
+                                        ? std::format("Cannot access training initialization file '{}': {}",
+                                                      *params.init_path,
+                                                      path_error.message())
+                                        : std::format("Training initialization file '{}' does not exist",
+                                                      *params.init_path);
+                return lfs::Result<void>::failure(training_initialization_error(reason));
+            }
+        }
+
         if (trainer_->isInitialized()) {
             if (scene_) {
                 std::unique_lock scene_lock(trainer_->getRenderMutex());
