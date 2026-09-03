@@ -1101,6 +1101,16 @@ apply_registered_chrome:
                 draw_succeeded = true;
             } catch (const std::exception& e) {
                 LOG_ERROR("Panel '{}' draw error: {}", snap.label, e.what());
+                if (space == PanelSpace::Floating) {
+                    std::lock_guard lock(mutex_);
+                    if (const auto interaction = floating_interactions_.find(*snap.id_storage);
+                        interaction != floating_interactions_.end()) {
+                        interaction->second.dragging = false;
+                        interaction->second.resizing = false;
+                        interaction->second.resize_direction_x = 0;
+                        interaction->second.resize_direction_y = 0;
+                    }
+                }
             }
 
             track_draw_result(snap, draw_succeeded);
@@ -1327,6 +1337,32 @@ apply_registered_chrome:
         }
 
         return false;
+    }
+
+    bool PanelRegistry::has_active_floating_drag() const {
+        std::lock_guard lock(mutex_);
+        for (const auto& panel : panels_) {
+            if (panel.space != PanelSpace::Floating || !panel.enabled || panel.error_disabled ||
+                !panel.parent_id.empty()) {
+                continue;
+            }
+            if (const auto interaction = floating_interactions_.find(panel.id);
+                interaction != floating_interactions_.end() && interaction->second.last_bounds_valid &&
+                interaction->second.dragging) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void PanelRegistry::cancel_floating_interactions() {
+        std::lock_guard lock(mutex_);
+        for (auto& [id, interaction] : floating_interactions_) {
+            interaction.dragging = false;
+            interaction.resizing = false;
+            interaction.resize_direction_x = 0;
+            interaction.resize_direction_y = 0;
+        }
     }
 
     bool PanelRegistry::has_panels(PanelSpace space) const {

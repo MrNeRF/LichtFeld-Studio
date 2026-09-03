@@ -25,6 +25,7 @@ namespace lfs::vis {
     };
 
     struct FrameInputBuffer {
+        uint64_t serial = 0;
         float mouse_x = 0;
         float mouse_y = 0;
         bool mouse_down[3] = {};
@@ -52,6 +53,7 @@ namespace lfs::vis {
         std::chrono::steady_clock::time_point poll_time{};
 
         void beginFrame() {
+            ++serial;
             mouse_clicked[0] = mouse_clicked[1] = mouse_clicked[2] = false;
             mouse_released[0] = mouse_released[1] = mouse_released[2] = false;
             mouse_wheel = 0;

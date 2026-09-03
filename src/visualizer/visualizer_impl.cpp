@@ -397,7 +397,8 @@ namespace lfs::vis {
             rendering_manager_.get(),
             scene_manager_.get(),
             &viewport_,
-            window_manager_->getWindow());
+            window_manager_->getWindow(),
+            gui_manager_.get());
 
         // Connect tool context to input controller
         if (input_controller_) {
@@ -2264,7 +2265,7 @@ namespace lfs::vis {
 
         if (selection_tool_ && selection_tool_->isEnabled() && gui_manager_ &&
             gui_manager_->isPositionInViewport(input.mouse_x, input.mouse_y)) {
-            return true;
+            return !gui_manager_->selectionRingCursorActive(input.mouse_x, input.mouse_y);
         }
 
         if (gui_manager_ && gui_manager_->passiveMouseMoveNeedsRender(input.mouse_x, input.mouse_y)) {

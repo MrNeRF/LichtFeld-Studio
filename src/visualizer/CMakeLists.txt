@@ -107,6 +107,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rml_sequencer_overlay.cpp
         gui/keyframe_scene_sync.cpp
         gui/gizmo_transform.cpp
+        gui/selection_cursor.cpp
         gui/html_viewer_export.cpp
         gui/scene_panel_native.cpp
         gui/ui_widgets.cpp

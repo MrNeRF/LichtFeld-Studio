@@ -450,7 +450,7 @@ namespace lfs::vis {
                                    lfs::core::Tensor* selection_tensor = nullptr,
                                    bool saturation_mode = false, float saturation_amount = 0.0f,
                                    std::optional<SplitViewPanelId> panel = std::nullopt,
-                                   int focused_gaussian_id = -1);
+                                   int focused_gaussian_id = -1, bool request_render = true);
         void clearCursorPreviewState();
         [[nodiscard]] bool isCursorPreviewActive() const { return viewport_overlay_service_.isCursorPreviewActive(); }
         [[nodiscard]] std::optional<SplitViewPanelId> getCursorPreviewPanel() const {
