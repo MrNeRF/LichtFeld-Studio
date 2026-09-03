@@ -68,6 +68,7 @@ namespace lfs::vis {
     class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
     class VisualizerImplResetTest_SaveWhilePausedNoWorkerTrainerCompletes_Test;
     class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
+    class VisualizerImplResetTest_SaveWhileTrainerWriterInFlightQueuesUntilCompletion_Test;
     class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
     class VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
     class VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
@@ -353,6 +354,7 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveWhilePausedNoWorkerTrainerCompletes_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SaveWhileTrainerWriterInFlightQueuesUntilCompletion_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
         friend class lfs::vis::VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
@@ -575,6 +577,9 @@ namespace lfs::vis::project {
         waitOutBackgroundAutosaveForExplicitSave();
         [[nodiscard]] lfs::Result<void>
         waitOutTrainerPublishForExplicitSave();
+        [[nodiscard]] bool
+        queueExplicitSaveIfTrainerWriterInFlight(bool regenerate_preview);
+        void processPendingExplicitSave();
         [[nodiscard]] lfs::Result<void>
         ensureDocumentMatchesBoundMaster();
         [[nodiscard]] lfs::Result<void>
@@ -791,6 +796,7 @@ namespace lfs::vis::project {
         std::vector<std::jthread> hydration_threads_;
         std::atomic<CloseSaveState>
             close_save_state_{CloseSaveState::Idle};
+        std::optional<bool> pending_explicit_save_regenerate_preview_;
         mutable std::mutex close_save_mutex_;
         std::string close_save_error_;
         std::string hydration_error_;
