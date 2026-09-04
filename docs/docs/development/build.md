@@ -4,7 +4,7 @@ sidebar_position: 4
 
 # Building LichtFeld Studio
 
-Two presets are available, `build` and `debug`. Both build the complete
+The standard presets, `build` and `debug`, both build the complete
 application feature set, keep tests out of the normal app graph, compile for one
 native CUDA architecture, use at most six parallel jobs, and automatically use
 `sccache` or `ccache` when either launcher is installed.
@@ -29,6 +29,128 @@ support. The compiler cache can be disabled without changing the feature set:
 cmake -S . -B build -DENABLE_COMPILER_CACHE=OFF
 cmake --build build -j6
 ```
+
+## Release-only dependency profiles
+
+Native x64 Windows and Linux builds can opt into Release-only vcpkg packages.
+Release and RelWithDebInfo use the same dependency recipe, with separate build
+and installation directories so switching presets preserves each application's
+objects and configuration:
+
+| Platform | Configure and build preset | Application configuration | Build directory |
+| --- | --- | --- | --- |
+| Windows x64 | `windows-release` | Release | `build-windows-release/` |
+| Windows x64 | `windows-relwithdebinfo` | RelWithDebInfo | `build-windows-relwithdebinfo/` |
+| Linux x64 | `linux-release` | Release | `build-linux-release/` |
+| Linux x64 | `linux-relwithdebinfo` | RelWithDebInfo | `build-linux-relwithdebinfo/` |
+
+CMake only lists the profiles for the current host OS. These profiles require
+the same compiler, CUDA toolkit and system dependencies as the standard build;
+they do not install or change the development environment.
+
+On Windows, from the existing x64 MSVC/CUDA development shell:
+
+```sh
+cmake --preset windows-release
+cmake --build --preset windows-release
+cmake --preset windows-relwithdebinfo
+cmake --build --preset windows-relwithdebinfo
+```
+
+On Linux:
+
+```sh
+cmake --preset linux-release
+cmake --build --preset linux-release
+cmake --preset linux-relwithdebinfo
+cmake --build --preset linux-relwithdebinfo
+```
+
+The profiles select `cmake/triplets/release-only/` as a vcpkg triplet overlay.
+It retains the standard `x64-windows` / `x64-linux` names and linkage policies,
+and sets `VCPKG_BUILD_TYPE` to `release` inside the triplet. Both target and
+host tools use that recipe; host tools do not introduce another Debug package
+graph. The installed vcpkg checkout and its built-in triplets are not edited.
+
+All application features remain enabled, with tests off and the same compiler
+cache and parallelism settings as `build`. RelWithDebInfo retains the normal
+developer defaults, including Vulkan validation and shader debug information.
+Consequently, its first configure may install additional validation packages.
+RelWithDebInfo adds symbols to the application; it does not automatically add
+symbols to every vcpkg dependency. Windows vcpkg Release builds normally request
+debug information, while Linux dependency symbols depend on the port and its
+compiler flags. These profiles do not change those flags or disable optimization.
+
+### Reusing packages when switching configurations
+
+Each build directory keeps its own `vcpkg_installed/`. Share the **vcpkg binary
+archive cache**, not an installation directory. The presets preserve the normal
+vcpkg cache configuration, including user-provided `VCPKG_BINARY_SOURCES` and
+`VCPKG_DEFAULT_BINARY_CACHE`; no private feed is required. On a cache miss,
+vcpkg builds the missing package through the normal manifest/registry path.
+
+The first Release-only install may need to compile packages even if the standard
+dual-configuration packages are already cached: the overlay has a different ABI
+hash, and vcpkg cannot extract just the Release half as a new cached package.
+Once stored, compatible packages can be restored into the other profile's
+installation directory. Returning to either existing build directory reuses its
+installed packages and incremental build outputs.
+
+This requires unchanged compiler/toolchain, port versions, features and overlay
+contents, and a binary cache that allows reading and writing. A changed package
+or dependency ABI can require a rebuild. Windows and Linux packages are distinct;
+they do not share compiled binaries. An `already installed` or `Restored ...`
+message is reuse, not source compilation. Application CMake regeneration may
+still take time even when vcpkg installs nothing.
+
+### Keeping an existing Ninja build directory
+
+To migrate an existing native Windows x64 Ninja Release tree in `build/` and
+keep the usual application/test build command, configure it once with:
+
+```sh
+cmake --preset windows-release -B build -DBUILD_TESTS=ON
+cmake --build build --config Release --target LichtFeld-Studio lichtfeld_tests -j 4
+```
+
+On Linux x64, use `linux-release` in the configure command. `-B build` overrides
+the preset's default directory; without it the configure and build commands
+would address different trees. For single-config Ninja, `--config Release` is
+optional: the configuration comes from `CMAKE_BUILD_TYPE` at configure time.
+
+The migration lets vcpkg reconcile installed packages with the Release-only
+recipe and may rebuild dependencies once. Keep this directory on that profile
+afterward, and keep Debug in a separate tree. There is no need to delete the
+existing build cache. In particular, OpenMesh can populate
+`CMAKE_CONFIGURATION_TYPES` even for Ninja; the profile guard checks the actual
+generator rather than treating that cache entry as evidence of a multi-config
+build.
+
+### Debug and standard fallback
+
+Use `cmake --preset debug` and `cmake --build --preset debug` for Debug. The
+standard `build` and `debug` profiles and their existing directories are
+unchanged. vcpkg's standard triplets provide both dependency configurations;
+Debug-only ports are not generally supported.
+
+The Release-only overlay is rejected before vcpkg installation if it is used
+with Debug, an unknown build configuration, a multi-config generator, or
+nonmatching target and host triplets. Use a separate standard build directory
+for multi-config generators, other architectures or custom triplets. Apart
+from a deliberate migration as described above, do not alternate standard and
+Release-only profile policies inside one directory.
+
+The guard can be checked without configuring or compiling the application:
+
+```sh
+cmake --list-presets=all
+cmake -P tests/cmake/test_vcpkg_profiles.cmake
+```
+
+For build validation, build and launch both profiles on the target OS, then
+switch back without deleting either directory. Check the vcpkg install log for
+reuse; exercise Python imports and Vulkan validation in the RelWithDebInfo
+application. The script checks above do not replace compiler or runtime tests.
 
 ## Reproducible build measurements
 

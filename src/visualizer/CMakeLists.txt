@@ -430,110 +430,20 @@ set(VISUALIZER_BUILD_RESOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/resources")
 set(VISUALIZER_SOURCE_RESOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources")
 set(RENDERING_SOURCE_RESOURCE_DIR "${PROJECT_SOURCE_DIR}/src/rendering/resources")
 
-# Create resource directories in build folder
-file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets")
-file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/fonts")
-
-# Copy assets from resources/assets if they exist
-file(GLOB ASSET_FILES CONFIGURE_DEPENDS "${VISUALIZER_SOURCE_RESOURCE_DIR}/assets/*")
-foreach (ASSET_FILE ${ASSET_FILES})
-    get_filename_component(ASSET_NAME ${ASSET_FILE} NAME)
-    configure_file(${ASSET_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/${ASSET_NAME}" COPYONLY)
-endforeach ()
-
-set(GUI_ASSET_FILES
-        "${CMAKE_CURRENT_SOURCE_DIR}/gui/assets/JetBrainsMono-Regular.ttf"
-        "${CMAKE_CURRENT_SOURCE_DIR}/gui/assets/lichtfeld-icon.png"
+# Synchronize runtime resources at build time. The helper scans directories
+# without registering them as CMake configure dependencies, copies only changed
+# files, and removes stale files only inside the explicitly allowed build tree.
+add_custom_target(copy_visualizer_resources ALL
+    COMMAND ${CMAKE_COMMAND}
+        "-DLFS_VISUALIZER_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DLFS_RENDERING_SOURCE_DIR=${PROJECT_SOURCE_DIR}/src/rendering"
+        "-DLFS_DESTINATION_DIR=${VISUALIZER_BUILD_RESOURCE_DIR}"
+        "-DLFS_ALLOWED_DESTINATION_ROOT=${CMAKE_CURRENT_BINARY_DIR}"
+        -P "${PROJECT_SOURCE_DIR}/cmake/SyncVisualizerResources.cmake"
+    COMMENT "Syncing visualizer runtime resources"
+    VERBATIM
 )
-
-foreach (GUI_ASSET_FILE ${GUI_ASSET_FILES})
-    if (EXISTS ${GUI_ASSET_FILE} AND NOT IS_DIRECTORY ${GUI_ASSET_FILE})
-        get_filename_component(ASSET_NAME ${GUI_ASSET_FILE} NAME)
-        configure_file(${GUI_ASSET_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/${ASSET_NAME}" COPYONLY)
-    endif ()
-endforeach ()
-
-set(RENDERING_FONT_FILES
-        "${RENDERING_SOURCE_RESOURCE_DIR}/assets/JetBrainsMono-Regular.ttf"
-)
-
-foreach (RENDERING_FONT_FILE ${RENDERING_FONT_FILES})
-    if (EXISTS ${RENDERING_FONT_FILE} AND NOT IS_DIRECTORY ${RENDERING_FONT_FILE})
-        get_filename_component(FONT_NAME ${RENDERING_FONT_FILE} NAME)
-        configure_file(${RENDERING_FONT_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/fonts/${FONT_NAME}" COPYONLY)
-    endif ()
-endforeach ()
-
-# Copy icon files
-file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon")
-file(GLOB ICON_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/gui/assets/icon/*.png")
-foreach (ICON_FILE ${ICON_FILES})
-    get_filename_component(ICON_NAME ${ICON_FILE} NAME)
-    configure_file(${ICON_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon/${ICON_NAME}" COPYONLY)
-endforeach ()
-
-# Copy scene icon files (used by RmlUI scene panel)
-file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon/scene")
-file(GLOB SCENE_ICON_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/gui/assets/icon/scene/*.png")
-foreach (ICON_FILE ${SCENE_ICON_FILES})
-    get_filename_component(ICON_NAME ${ICON_FILE} NAME)
-    configure_file(${ICON_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon/scene/${ICON_NAME}" COPYONLY)
-endforeach ()
-
-# Copy sequencer icon files (used by RmlUI sequencer panel)
-file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon/sequencer")
-file(GLOB SEQUENCER_ICON_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/gui/assets/icon/sequencer/*.png")
-foreach (ICON_FILE ${SEQUENCER_ICON_FILES})
-    get_filename_component(ICON_NAME ${ICON_FILE} NAME)
-    configure_file(${ICON_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon/sequencer/${ICON_NAME}" COPYONLY)
-endforeach ()
-
-# Copy bundled environment maps
-file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/environments")
-file(GLOB ENVIRONMENT_ASSET_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/gui/assets/environments/*")
-foreach (ENVIRONMENT_ASSET_FILE ${ENVIRONMENT_ASSET_FILES})
-    if (EXISTS ${ENVIRONMENT_ASSET_FILE} AND NOT IS_DIRECTORY ${ENVIRONMENT_ASSET_FILE})
-        get_filename_component(ENVIRONMENT_ASSET_NAME ${ENVIRONMENT_ASSET_FILE} NAME)
-        configure_file(${ENVIRONMENT_ASSET_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/environments/${ENVIRONMENT_ASSET_NAME}" COPYONLY)
-    endif ()
-endforeach ()
-
-# Copy RmlUI resources (re-copy on every build so edits are picked up)
-file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui")
-file(GLOB RMLUI_RESOURCE_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/gui/rmlui/resources/*")
-set(RMLUI_ASSET_FILES
-        "${CMAKE_CURRENT_SOURCE_DIR}/gui/assets/rmlui/soft_shadow.png"
-)
-foreach (RMLUI_FILE ${RMLUI_RESOURCE_FILES})
-    get_filename_component(RMLUI_NAME ${RMLUI_FILE} NAME)
-    configure_file(${RMLUI_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui/${RMLUI_NAME}" COPYONLY)
-endforeach ()
-foreach (RMLUI_ASSET_FILE ${RMLUI_ASSET_FILES})
-    if (EXISTS ${RMLUI_ASSET_FILE} AND NOT IS_DIRECTORY ${RMLUI_ASSET_FILE})
-        get_filename_component(RMLUI_ASSET_NAME ${RMLUI_ASSET_FILE} NAME)
-        configure_file(${RMLUI_ASSET_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui/${RMLUI_ASSET_NAME}" COPYONLY)
-    endif ()
-endforeach ()
-add_custom_target(copy_rmlui_resources ALL
-    COMMAND ${CMAKE_COMMAND} -E rm -rf "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${RMLUI_RESOURCE_FILES}
-        ${RMLUI_ASSET_FILES}
-        "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui/"
-    COMMENT "Syncing RmlUI resources"
-)
-add_dependencies(lfs_visualizer copy_rmlui_resources)
-
-# Copy locale files
-file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/locales")
-file(GLOB LOCALE_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locales/*.json")
-foreach (LOCALE_FILE ${LOCALE_FILES})
-    get_filename_component(LOCALE_NAME ${LOCALE_FILE} NAME)
-    configure_file(${LOCALE_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/locales/${LOCALE_NAME}" COPYONLY)
-endforeach ()
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locale_index.json
-        "${VISUALIZER_BUILD_RESOURCE_DIR}/locale_index.json" COPYONLY)
+add_dependencies(lfs_visualizer copy_visualizer_resources)
 
 set(LFS_VISUALIZER_DEV_RESOURCE_DEFINITIONS)
 if(LFS_DEV_IMPORT_SOURCE_RESOURCES AND NOT BUILD_PORTABLE)

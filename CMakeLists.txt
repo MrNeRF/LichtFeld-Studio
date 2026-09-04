@@ -91,6 +91,9 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
 endif()
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/VcpkgProfiles.cmake")
+lfs_validate_vcpkg_profile()
+
 project(LichtFeld-Studio VERSION 0.5.3 LANGUAGES CUDA CXX C)
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SelectFastLinker.cmake")
@@ -160,35 +163,6 @@ add_custom_target(lfs_git_version ALL
             -P "${CMAKE_SOURCE_DIR}/cmake/GenerateGitVersion.cmake"
     COMMENT "Refreshing git_version.h"
     VERBATIM
-)
-
-# App/core ABI tripwire. Hash every lfs_core implementation and interface input,
-# because a dirty-worktree rebuild cannot rely on the Git commit alone to
-# distinguish a newly linked app from a stale shared library.
-file(GLOB_RECURSE LFS_CORE_BUILD_INPUTS CONFIGURE_DEPENDS
-    "${CMAKE_SOURCE_DIR}/src/core/*.cpp"
-    "${CMAKE_SOURCE_DIR}/src/core/*.cu"
-    "${CMAKE_SOURCE_DIR}/src/core/*.cuh"
-    "${CMAKE_SOURCE_DIR}/src/core/*.hpp"
-)
-list(APPEND LFS_CORE_BUILD_INPUTS
-    "${CMAKE_SOURCE_DIR}/src/core/CMakeLists.txt"
-)
-list(SORT LFS_CORE_BUILD_INPUTS)
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    ${LFS_CORE_BUILD_INPUTS}
-)
-set(_lfs_core_abi_material
-    "${PROJECT_VERSION}|${GIT_COMMIT_HASH_SHORT}|${CMAKE_BUILD_TYPE}|${CMAKE_SYSTEM_NAME}|${CMAKE_SIZEOF_VOID_P}|${CMAKE_CXX_COMPILER_ID}|${CMAKE_CXX_COMPILER_VERSION}|${CMAKE_CUDA_COMPILER_ID}|${CMAKE_CUDA_COMPILER_VERSION}|${CMAKE_CUDA_ARCHITECTURES}|${VCPKG_TARGET_TRIPLET}")
-foreach(_lfs_core_build_input IN LISTS LFS_CORE_BUILD_INPUTS)
-    file(SHA256 "${_lfs_core_build_input}" _lfs_core_build_input_hash)
-    string(APPEND _lfs_core_abi_material "|${_lfs_core_build_input_hash}")
-endforeach()
-string(SHA256 LFS_CORE_ABI_STAMP "${_lfs_core_abi_material}")
-configure_file(
-    "${CMAKE_SOURCE_DIR}/cmake/lfs_core_abi_stamp.h.in"
-    "${CMAKE_BINARY_DIR}/include/lfs_core_abi_stamp.h"
-    @ONLY
 )
 
 option(BUILD_TESTS "Build tests" OFF)
@@ -526,6 +500,36 @@ configure_file(
         @ONLY
 )
 
+# App/core ABI tripwire. Seed headers for IDEs and syntax checks at configure
+# time, then refresh before ABI consumers build without making core source/header
+# edits configure dependencies. Define this after the effective CUDA architecture
+# selection so the stamp represents the actual
+# target configuration. Each multi-config configuration gets its own header so
+# Debug and Release cannot race or overwrite each other.
+include(cmake/InitializeCoreAbiStamp.cmake)
+lfs_initialize_core_abi_stamps()
+add_custom_target(lfs_core_abi_stamp ALL
+    BYPRODUCTS "${LFS_CORE_ABI_HEADER}"
+    COMMAND ${CMAKE_COMMAND}
+        "-DLFS_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
+        "-DLFS_CORE_ABI_TEMPLATE=${CMAKE_SOURCE_DIR}/cmake/lfs_core_abi_stamp.h.in"
+        "-DLFS_CORE_ABI_HEADER=${LFS_CORE_ABI_HEADER}"
+        "-DLFS_PROJECT_VERSION=${PROJECT_VERSION}"
+        "-DLFS_CONFIGURED_GIT_COMMIT_HASH_SHORT=${GIT_COMMIT_HASH_SHORT}"
+        "-DLFS_BUILD_CONFIG=$<CONFIG>"
+        "-DLFS_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}"
+        "-DLFS_SIZEOF_VOID_P=${CMAKE_SIZEOF_VOID_P}"
+        "-DLFS_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+        "-DLFS_CXX_COMPILER_VERSION=${CMAKE_CXX_COMPILER_VERSION}"
+        "-DLFS_CUDA_COMPILER_ID=${CMAKE_CUDA_COMPILER_ID}"
+        "-DLFS_CUDA_COMPILER_VERSION=${CMAKE_CUDA_COMPILER_VERSION}"
+        "-DLFS_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}"
+        "-DLFS_VCPKG_TARGET_TRIPLET=${VCPKG_TARGET_TRIPLET}"
+        -P "${CMAKE_SOURCE_DIR}/cmake/GenerateCoreAbiStamp.cmake"
+    COMMENT "Refreshing lfs_core ABI stamp"
+    VERBATIM
+)
+
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     if(NOT MSVC)
         set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
@@ -594,6 +598,11 @@ add_executable(${PROJECT_NAME}
     src/app/converter.cpp
     resources/lichtfeld-studio.rc
     resources/lichtfeld-studio.manifest
+)
+
+add_dependencies(${PROJECT_NAME} lfs_core_abi_stamp)
+target_include_directories(${PROJECT_NAME} BEFORE PRIVATE
+    "${LFS_CORE_ABI_INCLUDE_DIR}"
 )
 
 # The binary only carries code for these architectures; the app refuses to start on anything
@@ -771,8 +780,17 @@ if(WIN32 AND DEFINED VCPKG_TARGET_TRIPLET)
     set(_vcpkg_debug_bin_dir "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/debug/bin")
     set(_vcpkg_release_bin_dir "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin")
     file(GLOB _vcpkg_release_dlls CONFIGURE_DEPENDS "${_vcpkg_release_bin_dir}/*.dll")
-    file(GLOB _vcpkg_debug_dlls CONFIGURE_DEPENDS "${_vcpkg_debug_bin_dir}/*.dll")
-    
+
+    # A single-config Release/RelWithDebInfo build never consumes Debug DLLs,
+    # so changes in debug/bin must not invalidate its CMake graph. Multi-config
+    # generators still need both lists because one graph serves all configs.
+    get_property(_is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+    if(_is_multi_config OR CMAKE_BUILD_TYPE STREQUAL "Debug")
+        file(GLOB _vcpkg_debug_dlls CONFIGURE_DEPENDS "${_vcpkg_debug_bin_dir}/*.dll")
+    else()
+        set(_vcpkg_debug_dlls)
+    endif()
+
     # Always copy release DLLs - needed for both Release and Debug builds
     if(_vcpkg_release_dlls)
         add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
@@ -782,11 +800,10 @@ if(WIN32 AND DEFINED VCPKG_TARGET_TRIPLET)
             COMMENT "Copying vcpkg release DLLs"
         )
     endif()
-    
+
     # Only copy debug DLLs for Debug builds (they link to debug CRT which breaks Release)
     # For single-config generators (Ninja, Makefiles): check CMAKE_BUILD_TYPE
     # For multi-config generators (VS, Xcode): use generator expression
-    get_property(_is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
     if(_is_multi_config)
         # Multi-config: use generator expression to conditionally copy
         if(_vcpkg_debug_dlls)
