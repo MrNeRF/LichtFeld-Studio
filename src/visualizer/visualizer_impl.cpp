@@ -18,6 +18,7 @@
 #include "core/path_utils.hpp"
 #include "core/services.hpp"
 #include "gui/error_event_bridge.hpp"
+#include "gui/native_panels.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/panels/tools_panel.hpp"
 #include "gui/panels/windows_console_utils.hpp"
@@ -396,7 +397,8 @@ namespace lfs::vis {
             rendering_manager_.get(),
             scene_manager_.get(),
             &viewport_,
-            window_manager_->getWindow());
+            window_manager_->getWindow(),
+            gui_manager_.get());
 
         // Connect tool context to input controller
         if (input_controller_) {
@@ -522,8 +524,12 @@ namespace lfs::vis {
                 return gm ? gm->panelLayout().isShowSequencer() : false;
             },
             [](bool visible) {
-                if (auto* gm = python::get_gui_manager())
+                if (auto* gm = python::get_gui_manager()) {
                     gm->panelLayout().setShowSequencer(visible);
+                    if (visible)
+                        gm->panelLayout().setBottomDockActiveTab(std::string(
+                            gui::native_panels::SEQUENCER_PANEL_ID));
+                }
             });
         callback_cleanup_.add([] { python::set_sequencer_callbacks(nullptr, nullptr); });
 
@@ -1824,6 +1830,8 @@ namespace lfs::vis {
 
         // Training started - switch to splat rendering without hijacking scene selection
         state::TrainingStarted::when([this, sync_viewer_mip_filter_with_training](const auto&) {
+            // Keep the completion handoff metadata-only. Rendering consumes the
+            // dirty bit on the next frame; no viewport teardown/re-setup occurs here.
             sync_viewer_mip_filter_with_training();
 
             ui::PointCloudModeChanged{
@@ -2260,7 +2268,7 @@ namespace lfs::vis {
 
         if (selection_tool_ && selection_tool_->isEnabled() && gui_manager_ &&
             gui_manager_->isPositionInViewport(input.mouse_x, input.mouse_y)) {
-            return true;
+            return !gui_manager_->selectionRingCursorActive(input.mouse_x, input.mouse_y);
         }
 
         if (gui_manager_ && gui_manager_->passiveMouseMoveNeedsRender(input.mouse_x, input.mouse_y)) {
@@ -2504,7 +2512,7 @@ namespace lfs::vis {
         if (gui_manager_)
             gui_manager_->sequencerUI().tickPlaybackBeforeSceneRender();
 
-        const bool is_training = trainer_manager_ && trainer_manager_->isRunning();
+        const bool is_training = trainer_manager_ && trainer_manager_->isTrainingActive();
         const FrameDemand frame_demand = collectFrameDemand(viewport_export_locked, store_dirty);
         if (gui_frame_rendered_ && !frame_demand.shouldRenderFrame()) {
             LOG_PERF("loop_idle skip_gui_render=true needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} window_resize_paint_pending={} viewport_resize_deferring={} viewport_resize_settle_ready={} wake_reason={} wake_timeout_source={}",
@@ -2604,15 +2612,16 @@ namespace lfs::vis {
                       frame_demand.render_work,
                       frame_demand.store_dirty);
         }
+        bool presented_gui_frame = false;
         if (gui_manager_) {
             LOG_TIMER("VisualizerImpl::render.gui_frame_total_with_swapchain_wait");
             window_manager_->updateWindowSize("pre_gui_render");
-            gui_manager_->render();
+            presented_gui_frame = gui_manager_->render();
             window_manager_->refreshResizeCursor();
             // Count presented frames (GUI-only included). Scene FPS still comes
             // from framerate_controller_ inside renderVulkanFrame; this is
             // measurement-only and does not affect pacing.
-            if (rendering_manager_) {
+            if (presented_gui_frame && rendering_manager_) {
                 rendering_manager_->notePresentedFrame();
             }
         } else {
@@ -2673,8 +2682,15 @@ namespace lfs::vis {
 
         const auto py_redraw_due = python::seconds_until_scheduled_redraw();
         const double py_redraw_due_in = py_redraw_due ? *py_redraw_due : -1.0;
+        const auto poll_time = window_manager_->frameInput().poll_time;
+        const double input_age_ms =
+            poll_time == std::chrono::steady_clock::time_point{}
+                ? 0.0
+                : std::chrono::duration<double, std::milli>(
+                      std::chrono::steady_clock::now() - poll_time)
+                      .count();
 
-        LOG_PERF("loop_end needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} window_resize_paint_pending={} viewport_resize_deferring={} viewport_resize_settle_ready={} gui_only_throttle={} py_redraw_due_in={:.4f} gui_anim_sources={} wake_reason={} wake_timeout_source={}",
+        LOG_PERF("loop_end needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} window_resize_paint_pending={} viewport_resize_deferring={} viewport_resize_settle_ready={} gui_only_throttle={} py_redraw_due_in={:.4f} gui_anim_sources={} wake_reason={} wake_timeout_source={} input_age_ms={:.2f}",
                  next_demand.scene_dirty,
                  next_demand.continuous_input,
                  next_demand.python_animation,
@@ -2694,13 +2710,18 @@ namespace lfs::vis {
                  py_redraw_due_in,
                  gui_manager_ ? gui_manager_->describeAnimationDemand() : std::string{"none"},
                  last_wake_reason_,
-                 last_wake_timeout_source_);
+                 last_wake_timeout_source_,
+                 input_age_ms);
 
         if (next_demand.needsContinuousLoop()) {
             if (gui_only_animation) {
                 // GUI-only animation must not free-run against a MAILBOX swapchain.
                 // Cap at the display interval; waitEvents still wakes instantly on input.
                 const double gui_animation_frame_interval = guiAnimationFrameInterval();
+                if (presented_gui_frame) {
+                    if (auto* const vulkan_context = window_manager_->getVulkanContext())
+                        static_cast<void>(vulkan_context->waitForNextFrameSlot());
+                }
                 const double elapsed = std::chrono::duration<double>(
                                            std::chrono::high_resolution_clock::now() - last_frame_time_)
                                            .count();
@@ -2716,6 +2737,10 @@ namespace lfs::vis {
                                                     : "gui_animation_paced";
                 }
             } else {
+                if (presented_gui_frame) {
+                    if (auto* const vulkan_context = window_manager_->getVulkanContext())
+                        static_cast<void>(vulkan_context->waitForNextFrameSlot());
+                }
                 window_manager_->pollEvents();
                 last_wake_reason_ = window_manager_->frameInput().had_event ? "event" : "poll";
                 last_wake_timeout_source_ = "none";
@@ -2723,6 +2748,10 @@ namespace lfs::vis {
         } else {
             // Idle: wait to minimize CPU/GPU work. Mouse-motion-only viewport wakes
             // are filtered at the top of the next loop without presenting a GUI frame.
+            if (presented_gui_frame) {
+                if (auto* const vulkan_context = window_manager_->getVulkanContext())
+                    static_cast<void>(vulkan_context->waitForNextFrameSlot());
+            }
             waitForNextEvent(is_training);
         }
     }
@@ -2914,6 +2943,9 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::undo() {
+        if (scene_manager_) {
+            scene_manager_->completePendingSelectionCounts();
+        }
         op::undoHistory().undo();
         if (rendering_manager_) {
             rendering_manager_->markDirty(DirtyFlag::ALL);
@@ -2921,6 +2953,9 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::redo() {
+        if (scene_manager_) {
+            scene_manager_->completePendingSelectionCounts();
+        }
         op::undoHistory().redo();
         if (rendering_manager_) {
             rendering_manager_->markDirty(DirtyFlag::ALL);
@@ -2958,6 +2993,18 @@ namespace lfs::vis {
         }
 
         LOG_INFO("Loading PLY file: {}", lfs::core::path_to_utf8(path));
+        if (trainer_manager_ &&
+            (trainer_manager_->isTrainingActive() ||
+             trainer_manager_->isCompletionPending())) {
+            cmd::LoadFile{
+                .path = path,
+                .is_dataset = false,
+                .stop_training = true,
+                .discard_changes = true,
+                .replace = true}
+                .emit();
+            return {};
+        }
         return data_loader_->loadPLY(path);
     }
 
@@ -3649,6 +3696,22 @@ namespace lfs::vis {
         return true;
     }
 
+    bool VisualizerImpl::pumpPostedWorkForProjectWrite() {
+        if (!isOnViewerThread()) {
+            return false;
+        }
+        std::vector<WorkItem> work;
+        {
+            std::lock_guard lock(work_queue_mutex_);
+            work.swap(work_queue_);
+        }
+        if (work.empty()) {
+            return false;
+        }
+        runPostedWork(work, "viewer.project_wait", viewer_thread_id_);
+        return true;
+    }
+
     bool VisualizerImpl::postRenderWork(WorkItem work) {
         {
             std::lock_guard lock(work_queue_mutex_);
@@ -4161,14 +4224,15 @@ namespace lfs::vis {
         const auto preserved_transforms = collectResetTransforms(scene_manager_->getScene());
 
         const auto& init_path = data_loader_->getParameters().init_path;
+        std::optional<lfs::core::param::TrainingParameters> reset_params;
         if (auto* const param_mgr = services().paramsOrNull(); param_mgr && param_mgr->ensureLoaded()) {
-            auto params = param_mgr->createForDataset(path, {});
+            reset_params = param_mgr->createForDataset(path, {});
             if (trainer_manager_) {
-                params.dataset = trainer_manager_->getEditableDatasetParams();
-                params.dataset.data_path = path;
-                params.init_path = init_path;
+                reset_params->dataset = trainer_manager_->getEditableDatasetParams();
+                reset_params->dataset.data_path = path;
+                reset_params->init_path = init_path;
             }
-            data_loader_->setParameters(params);
+            data_loader_->setParameters(*reset_params);
         }
 
         const auto restore_camera = [this, &preserved_camera]() {
@@ -4186,7 +4250,20 @@ namespace lfs::vis {
             wakeMainLoop();
         };
 
-        if (const auto result = data_loader_->loadDataset(path); !result) {
+        auto result = data_loader_->loadDataset(path);
+        if (!result && reset_params && init_path && !init_path->empty()) {
+            // A failed training initialization can leave an invalid init path
+            // in the editable parameters. Reset must still reconstruct the
+            // dataset/trainer, while preserving that setting for the UI.
+            LOG_WARN("Reset reload with initialization file '{}' failed; retrying without it",
+                     *init_path);
+            auto retry_params = *reset_params;
+            retry_params.init_path.reset();
+            data_loader_->setParameters(retry_params);
+            result = data_loader_->loadDataset(path);
+            data_loader_->setParameters(*reset_params);
+        }
+        if (!result) {
             LOG_ERROR("Reset reload failed: {}", result.error());
             restore_camera();
             return;
@@ -4296,9 +4373,17 @@ namespace lfs::vis {
             auto commands =
                 std::exchange(
                     pending_load_files_, {});
-            for (auto& command : commands) {
-                command.stop_training = false;
-                command.emit();
+            if (commands.empty()) {
+                break;
+            }
+            auto command = std::move(commands.front());
+            commands.erase(commands.begin());
+            auto remaining = std::move(commands);
+            command.stop_training = false;
+            command.emit();
+            if (!remaining.empty()) {
+                pending_load_files_ = std::move(remaining);
+                pending_training_action_ = PendingTrainingAction::LoadDataset;
             }
             break;
         }

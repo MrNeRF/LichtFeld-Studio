@@ -15,6 +15,7 @@
 #include "gui/panel_registry.hpp"
 #include "gui/panels/menu_bar.hpp"
 #include "gui/perf_sampler.hpp"
+#include "gui/rml_bottom_dock.hpp"
 #include "gui/rml_menu_bar.hpp"
 #include "gui/rml_modal_overlay.hpp"
 #include "gui/rml_right_panel.hpp"
@@ -24,6 +25,7 @@
 #include "gui/rml_viewport_overlay.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/scene_tree_session.hpp"
+#include "gui/selection_cursor.hpp"
 #include "gui/sequencer_ui_manager.hpp"
 #include "gui/sequencer_ui_state.hpp"
 #include "gui/startup_overlay.hpp"
@@ -33,6 +35,7 @@
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -44,6 +47,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -102,10 +106,17 @@ namespace lfs::vis {
             // Drop viewport-pass GPU objects (descriptor sets that sample external
             // scene image views) while the Vulkan context is still alive.
             void shutdownVulkanViewportPass();
-            void render();
+            [[nodiscard]] bool render();
             void updateInteractiveTransitions();
             [[nodiscard]] bool isInteractiveTransitionSettling() const;
             void syncVisiblePanelsBeforeSceneRender();
+            // Called by camera-thumbnail workers. It schedules one coalesced
+            // overlay refresh; only workers wake the GUI for the first pending
+            // batch.
+            void notifyCameraThumbnailReady(bool defer = false);
+            // Called after a bounded main-thread upload batch. The next frame
+            // is requested immediately while decoded thumbnails remain ready.
+            void notifyCameraThumbnailBatchReady();
             void setRmlResizeDeferring(bool defer) { rmlui_manager_.setResizeDeferring(defer); }
             void ensureCjkFontsLoaded() { rmlui_manager_.ensureCjkFontsLoaded(); }
 
@@ -167,10 +178,13 @@ namespace lfs::vis {
                 return window_states_;
             }
             [[nodiscard]] std::string scenePanelActiveTab() const;
+            [[nodiscard]] std::unordered_set<int> visibleCameraUids() const;
             void setScenePanelActiveTab(std::string_view tab);
             [[nodiscard]] bool selectAllSceneNodesIfFocused();
             [[nodiscard]] bool toggleSceneSelectionVisibilityIfFocused();
             [[nodiscard]] bool toggleSceneSelectionTrainingIfFocused();
+            [[nodiscard]] bool groupSelectedSceneNodesIfFocused();
+            [[nodiscard]] bool ungroupSelectedSceneNodeIfFocused();
             [[nodiscard]] bool requestDeleteSceneSelectionIfAvailable();
             [[nodiscard]] SceneTreeSessionChrome captureSceneTreeChrome(
                 const lfs::core::Scene& scene) const;
@@ -190,6 +204,8 @@ namespace lfs::vis {
 
             bool isCapturingInput() const;
             bool isModalWindowOpen() const;
+            [[nodiscard]] bool selectionRingCursorActive(float mouse_x, float mouse_y) const;
+            [[nodiscard]] bool isHardwareSelectionRingActive() const;
             [[nodiscard]] bool passiveMouseMoveNeedsRender(float mouse_x, float mouse_y) const;
             [[nodiscard]] std::optional<double> secondsUntilTooltipReveal() const;
             [[nodiscard]] bool isStartupVisible() const { return startup_overlay_.isVisible(); }
@@ -253,12 +269,41 @@ namespace lfs::vis {
             void applyDefaultStyle();
             void initMenuBar();
             void registerNativePanels();
+            void hideBottomDockPanel(const std::string& id);
             void updateInputOverrides(const PanelInputState& input, bool mouse_in_viewport);
             void applyUiScale(float scale);
             void rebuildFonts(float scale);
             void initCustomCursors();
             void destroyCustomCursors();
             void applyRmlCursorRequest(RmlCursorRequest req);
+            void updateFloatingPanelCursorVisibility();
+            void renderFloatingPanelDragCursor();
+            void destroyFloatingPanelDragCursorGeometry();
+            void prepareSelectionRingCursor(float mouse_x, float mouse_y);
+
+            struct SelectionRingCursorKey {
+                int radius_px = 0;
+                std::size_t theme_signature = 0;
+                SelectionCursorColor color;
+                SelectionCursorOperation operation = SelectionCursorOperation::Replace;
+
+                bool operator==(const SelectionRingCursorKey&) const = default;
+            };
+
+            struct SelectionRingCursorParameters {
+                SelectionRingCursorKey key;
+                SelectionCursorOperation operation = SelectionCursorOperation::Replace;
+            };
+
+            [[nodiscard]] std::optional<SelectionRingCursorParameters>
+            selectionRingCursorParameters(float mouse_x, float mouse_y) const;
+            [[nodiscard]] std::optional<SelectionRingCursorParameters>
+            computeSelectionRingCursorParameters(float mouse_x, float mouse_y) const;
+            struct SelectionRingCursorCache {
+                bool valid = false;
+                std::uint64_t frame_serial = 0;
+                std::optional<SelectionRingCursorParameters> parameters;
+            };
             struct DevResourceScanResult {
                 std::unordered_map<std::string, std::filesystem::file_time_type> file_times;
                 bool rml_changed = false;
@@ -278,6 +323,9 @@ namespace lfs::vis {
             bool shouldDeferDevResourceHotReload() const;
             bool reloadLocalizationResources();
             void reloadRmlResources();
+            [[nodiscard]] bool cameraThumbnailRefreshDue(
+                std::chrono::steady_clock::time_point now) const;
+            bool consumeCameraThumbnailRefresh();
 
             [[nodiscard]] bool isVramHudOverlayVisible() const;
             [[nodiscard]] bool isVramHudPublishDue(std::chrono::steady_clock::time_point now) const;
@@ -349,6 +397,7 @@ namespace lfs::vis {
             bool fullscreen_toggle_pending_ = false;
             bool fullscreen_target_state_ = false;
             bool interactive_transition_resume_training_ = false;
+            bool interactive_transition_pause_pending_ = false;
             std::optional<AppStore::GTMetricsOverlayConfig> published_gt_metrics_overlay_config_;
             bool menu_labels_synced_ = false;
             std::uint64_t synced_menu_entries_version_ = 0;
@@ -388,8 +437,10 @@ namespace lfs::vis {
             StartupOverlay startup_overlay_;
             RmlShellFrame rml_shell_frame_;
             RmlRightPanel rml_right_panel_;
+            RmlBottomDock rml_bottom_dock_;
             RmlViewportOverlay rml_viewport_overlay_;
             RmlMenuBar rml_menu_bar_;
+            bool menu_pointer_capture_active_ = false;
             RmlStatusBar rml_status_bar_;
             std::unique_ptr<GlobalContextMenu> global_context_menu_;
             bool deferred_startup_work_pending_ = false;
@@ -414,6 +465,25 @@ namespace lfs::vis {
             std::unique_ptr<lfs::vis::VulkanViewportPass> vulkan_viewport_pass_;
             bool vulkan_gui_ = false;
             SDL_Cursor* pipette_cursor_ = nullptr;
+            SDL_Cursor* selection_add_cursor_ = nullptr;
+            SDL_Cursor* selection_remove_cursor_ = nullptr;
+            SDL_Cursor* selection_intersect_cursor_ = nullptr;
+            SDL_Cursor* last_selection_cursor_ = nullptr;
+            SDL_Cursor* selection_ring_cursor_ = nullptr;
+            SDL_Cursor* selection_ring_cursor_pending_destroy_ = nullptr;
+            mutable SelectionRingCursorKey selection_ring_cursor_key_;
+            mutable bool selection_ring_cursor_attempted_ = false;
+            mutable SelectionRingCursorCache selection_ring_cursor_cache_;
+            mutable std::size_t selection_ring_theme_signature_ = 0;
+            mutable bool selection_ring_theme_signature_valid_ = false;
+            std::vector<uint8_t> selection_add_badge_pixels_;
+            std::vector<uint8_t> selection_remove_badge_pixels_;
+            std::vector<uint8_t> selection_intersect_badge_pixels_;
+            int selection_badge_width_ = 0;
+            int selection_badge_height_ = 0;
+            bool floating_panel_cursor_hidden_ = false;
+            Rml::CompiledGeometryHandle floating_panel_drag_cursor_geometry_ = 0;
+            float floating_panel_drag_cursor_geometry_scale_ = 0.0f;
 
             // Native panel wrapper storage (registered with PanelRegistry)
             std::vector<std::shared_ptr<IPanel>> native_panel_storage_;
@@ -430,9 +500,11 @@ namespace lfs::vis {
             float last_ui_layout_bottom_dock_h_ = -1.0f;
             float last_ui_layout_left_dock_w_ = -1.0f;
             bool last_ui_layout_show_main_panel_ = false;
+            bool last_ui_layout_show_sequencer_ = false;
             bool last_ui_layout_ui_hidden_ = false;
             bool last_ui_layout_python_console_visible_ = false;
             bool last_ui_layout_bottom_dock_visible_ = false;
+            uint64_t last_ui_layout_panel_visibility_revision_ = 0;
             bool last_ui_layout_left_dock_visible_ = false;
             mutable std::chrono::steady_clock::time_point last_animation_demand_description_at_{};
             mutable std::string animation_demand_description_cache_;
@@ -451,7 +523,12 @@ namespace lfs::vis {
             bool left_dock_pointer_live_capture_ = false;
             bool dock_resize_interaction_active_ = false;
             std::string last_ui_layout_active_tab_;
+            std::string last_ui_layout_bottom_dock_active_tab_;
             std::uint64_t last_pre_scene_panel_sync_generation_ = 0;
+
+            std::atomic<bool> camera_thumbnail_refresh_pending_{false};
+            std::atomic<std::int64_t> camera_thumbnail_refresh_due_ns_{0};
+            std::atomic<std::int64_t> camera_thumbnail_last_refresh_ns_{0};
 
             struct DevResourceWatchState {
                 bool enabled = false;

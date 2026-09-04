@@ -111,14 +111,18 @@ class SelectionGroupsPanel(Panel):
             RuntimeState.selection_generation,
             RuntimeState.active_tool,
         )
-        self._reactive_binding.set_handle(self._handle).watch(*native_signals)
+        self._reactive_binding.set_handle(self._handle).watch(
+            *native_signals,
+            refresh=self._refresh_reactive_state,
+        )
 
     def _unsubscribe_reactive_state(self):
         self._reactive_binding.close()
 
-    def _request_reactive_update(self):
-        if self._handle:
-            rml_widgets.request_model_update(self._handle)
+    def _refresh_reactive_state(self):
+        if self.doc is None:
+            return None
+        return self._sync_panel_state(self.doc, force=False)
 
     def on_update(self, doc):
         return self._sync_panel_state(doc, force=False)
@@ -126,11 +130,12 @@ class SelectionGroupsPanel(Panel):
     def _sync_panel_state(self, doc, force=False):
         dirty = False
         visible = lf.ui.get_active_tool() == "builtin.select" and lf.get_scene() is not None
+        visibility_changed = force or visible != self._last_visible
         wrap = doc.get_element_by_id("content-wrap")
-        if wrap:
+        if wrap and visibility_changed:
             wrap.set_class("hidden", not visible)
-            if force or visible != self._last_visible:
-                dirty = True
+        if visibility_changed:
+            dirty = True
         self._last_visible = visible
         if not visible:
             return dirty
@@ -157,15 +162,14 @@ class SelectionGroupsPanel(Panel):
         )
         self._last_scene_generation = scene_generation
         self._last_selection_generation = selection_generation
-        self._rebuild_groups(recompute_counts=recompute_counts)
-        return True
+        groups_changed = self._rebuild_groups(recompute_counts=recompute_counts)
+        return dirty or groups_changed
 
     def on_scene_changed(self, doc):
         del doc
         self._prev_group_hash = None
         self._last_scene_generation = None
         self._last_selection_generation = None
-        self._request_reactive_update()
         return True
 
     def on_unmount(self, doc):
@@ -219,13 +223,13 @@ class SelectionGroupsPanel(Panel):
     def _rebuild_groups(self, recompute_counts=True):
         scene = lf.get_scene()
         if not scene or not self._handle:
-            return
+            return False
 
         if recompute_counts:
             scene.update_selection_group_counts()
         group_hash = self._compute_group_hash(scene)
         if group_hash == self._prev_group_hash:
-            return
+            return False
         self._prev_group_hash = group_hash
 
         groups = scene.selection_groups()
@@ -244,6 +248,7 @@ class SelectionGroupsPanel(Panel):
             })
 
         self._handle.update_record_list("groups", records)
+        return True
 
     def _find_action_element(self, element):
         while element is not None:

@@ -60,6 +60,7 @@ namespace lfs::vis {
 
     class LFS_VIS_API VisualizerImpl : public Visualizer {
         friend class gui::GuiManager;
+        friend class gui::AsyncTaskManager;
 
     public:
         explicit VisualizerImpl(const ViewerOptions& options);
@@ -78,6 +79,7 @@ namespace lfs::vis {
             return scene_manager_->getScene();
         }
         bool postWork(WorkItem work) override;
+        bool pumpPostedWorkForProjectWrite() override;
         bool postRenderWork(WorkItem work);
         [[nodiscard]] bool isOnViewerThread() const override {
             return std::this_thread::get_id() == viewer_thread_id_;
@@ -284,6 +286,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_RestoreThenTrainWritesNewCheckpoint_Test;
         friend class VisualizerImplResetTest_HeadlessOpenPrintsHydrationStagesWhenBenchPathSet_Test;
         friend class VisualizerImplResetTest_ResetTrainingPreservesExplicitInitPath_Test;
+        friend class VisualizerImplResetTest_ResetTrainingStopsTrainerDuringStarting_Test;
         friend class VisualizerImplResetTest_DirtyProjectSwitchRequiresExplicitDiscardAuthorization_Test;
         friend class VisualizerImplResetTest_NewProjectDirtyGateRunsBelowEveryCommandEntry_Test;
         friend class VisualizerImplResetTest_NewProjectWhileTrainingPromptsInsteadOfErroring_Test;
@@ -306,6 +309,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
         friend class VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
         friend class VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
+        friend class VisualizerImplResetTest_AsyncCaptureKeepsNewerSceneDirty_Test;
         friend class VisualizerImplResetTest_AutosaveSkipsWhileManualProjectWriteJobIsRunning_Test;
         friend class VisualizerImplResetTest_RecoveredProjectSwitchDeletesTempOnlyAfterReplacement_Test;
         friend class VisualizerImplResetTest_FailedNewProjectKeepsRecoveredSessionTemp_Test;
@@ -345,6 +349,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class VisualizerImplResetTest_SaveWhilePausedNoWorkerTrainerCompletes_Test;
         friend class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
+        friend class VisualizerImplResetTest_SaveWhileTrainerWriterInFlightQueuesUntilCompletion_Test;
         friend class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
         friend class VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;

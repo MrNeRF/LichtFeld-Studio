@@ -193,6 +193,8 @@ namespace lfs::app {
                 return "idle";
             case vis::TrainingState::Ready:
                 return "ready";
+            case vis::TrainingState::Starting:
+                return "starting";
             case vis::TrainingState::Running:
                 return "running";
             case vis::TrainingState::Paused:

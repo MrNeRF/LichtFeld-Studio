@@ -2621,6 +2621,15 @@ namespace lfs::training {
         return true;
     }
 
+    std::uint64_t Trainer::cameraLossColorGeneration() const {
+        const auto heatmap = getCameraLossHeatmap();
+        if (!heatmap) {
+            return 0;
+        }
+        std::shared_lock lock(heatmap->snapshot_mutex);
+        return heatmap->published_generation;
+    }
+
     std::expected<void, std::string> Trainer::initialize_camera_loss_heatmap(
         const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
         setCameraLossHeatmap(nullptr);
@@ -2749,6 +2758,7 @@ namespace lfs::training {
         std::unique_lock lock(heatmap->snapshot_mutex);
         heatmap->published_colors = std::move(colors);
         heatmap->published_valid = std::move(valid);
+        ++heatmap->published_generation;
     }
 
     void Trainer::maybe_publish_camera_loss_heatmap(const int iter, const bool force) {

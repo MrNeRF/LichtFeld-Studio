@@ -193,6 +193,9 @@ namespace lfs::vis {
         virtual RenderingManager* getRenderingManager() = 0;
 
         virtual bool postWork(WorkItem work) = 0;
+        // Drain viewer-owned work while an explicit project operation waits
+        // for a worker. Normal frames drain this queue from update().
+        virtual bool pumpPostedWorkForProjectWrite() { return false; }
         [[nodiscard]] virtual bool isOnViewerThread() const { return false; }
         [[nodiscard]] virtual bool acceptsPostedWork() const { return true; }
         virtual void setShutdownRequestedCallback(std::function<void()> callback) = 0;

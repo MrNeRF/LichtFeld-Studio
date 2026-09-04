@@ -33,6 +33,9 @@ namespace lfs::vis::gui {
 
         void draw(const PanelDrawContext& ctx) override;
         bool poll(const PanelDrawContext& ctx) override;
+        void setPollVisibility(bool visible) override;
+        bool isVisibleForAnimation() const override;
+        void on_visibility_changed(bool visible) override;
         void preload(const PanelDrawContext& ctx) override;
         PanelRenderCapabilities renderCapabilities() const override {
             return {.direct = true};
@@ -47,6 +50,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::string captureChromeJson() const override;
         void applyChromeJson(std::string_view json) override;
         void setForeground(bool fg);
+        [[nodiscard]] nb::object panelInstance() const { return panel_instance_; }
 
     private:
         enum class LifecycleState : uint8_t {
@@ -98,6 +102,8 @@ namespace lfs::vis::gui {
         int height_mode_ = 0;
         bool foreground_ = false;
         bool floating_ = false;
+        bool poll_visible_ = true;
+        bool enabled_visible_ = true;
         uint64_t last_scene_gen_ = 0;
         uint64_t last_prepare_frame_ = 0;
         bool content_dirty_ = false;

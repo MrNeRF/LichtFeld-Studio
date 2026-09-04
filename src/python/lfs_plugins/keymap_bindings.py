@@ -145,6 +145,7 @@ class KeymapBindingsSection:
         self._last_lang = ""
         self._last_current_profile = ""
         self._last_capturing = None
+        self._rows_built = False
 
     # ── Data model ────────────────────────────────────────────
 
@@ -259,10 +260,11 @@ class KeymapBindingsSection:
         self._doc = doc
         self._last_lang = lf.ui.get_current_language()
         self._last_current_profile = lf.keymap.get_current_profile()
+        self._rows_built = False
+        self._last_state_key = None
 
         self._rebuild_profile_records()
         self._rebuild_mode_records()
-        self._rebuild_binding_rows(self.TOOL_MODES[self._selected_mode_idx])
 
         table_el = doc.get_element_by_id("bindings-table")
         if table_el:
@@ -272,6 +274,8 @@ class KeymapBindingsSection:
     def on_unmount(self):
         self._doc = None
         self._handle = None
+        self._rows_built = False
+        self._last_state_key = None
 
     def on_update(self, doc):
         self._doc = doc
@@ -283,54 +287,51 @@ class KeymapBindingsSection:
             self._rebuild_profile_records()
             self._dirty_model("profile_idx")
 
-        is_capturing = lf.keymap.is_capturing()
-        mode = self.TOOL_MODES[self._selected_mode_idx]
-
-        if self._rebinding_action is not None:
-            trigger = lf.keymap.get_captured_trigger()
-            if trigger is not None:
-                action = self._rebinding_action
-                mode = self._rebinding_mode
-                previous_trigger = self._previous_trigger
-                self._rebinding_action = None
-                self._rebinding_mode = None
-                self._previous_trigger = None
-                conflict = lf.keymap.find_conflict_for_action(mode, action)
-                if conflict is not None:
-                    self._pending_conflict = {
-                        "mode": mode,
-                        "action": action,
-                        "other_mode": lf.keymap.ToolMode(conflict["other_mode"]),
-                        "other_action": lf.keymap.Action(conflict["other_action"]),
-                        "previous_trigger": previous_trigger,
-                    }
-                    self._show_conflict_overlay(doc)
-                else:
-                    self._hide_conflict_overlay()
-                is_capturing = lf.keymap.is_capturing()
-            elif not is_capturing:
-                self._rebinding_action = None
-                self._rebinding_mode = None
-                self._previous_trigger = None
-
-        current_profile = lf.keymap.get_current_profile()
-        state_key = (
-            self._selected_mode_idx,
-            self._rebinding_action,
-            is_capturing,
-            current_profile,
-            current_lang,
-        )
-        if state_key != self._last_state_key:
-            self._last_state_key = state_key
-            self._rebuild_binding_rows(mode)
-            self._dirty_model("bindings_hint")
-
         if current_lang != self._last_lang:
             self._last_lang = current_lang
             self._rebuild_mode_records()
             self._rebuild_profile_records()
             self._dirty_model()
+
+        is_capturing = lf.keymap.is_capturing()
+        current_profile = lf.keymap.get_current_profile()
+        if self._rows_built:
+            mode = self.TOOL_MODES[self._selected_mode_idx]
+
+            if self._rebinding_action is not None:
+                trigger = lf.keymap.get_captured_trigger()
+                if trigger is not None:
+                    action = self._rebinding_action
+                    mode = self._rebinding_mode
+                    previous_trigger = self._previous_trigger
+                    self._rebinding_action = None
+                    self._rebinding_mode = None
+                    self._previous_trigger = None
+                    conflict = lf.keymap.find_conflict_for_action(mode, action)
+                    if conflict is not None:
+                        self._pending_conflict = {
+                            "mode": mode,
+                            "action": action,
+                            "other_mode": lf.keymap.ToolMode(conflict["other_mode"]),
+                            "other_action": lf.keymap.Action(conflict["other_action"]),
+                            "previous_trigger": previous_trigger,
+                        }
+                        self._show_conflict_overlay(doc)
+                    else:
+                        self._hide_conflict_overlay()
+                    is_capturing = lf.keymap.is_capturing()
+                elif not is_capturing:
+                    self._rebinding_action = None
+                    self._rebinding_mode = None
+                    self._previous_trigger = None
+
+            state_key = self._current_state_key(
+                is_capturing, current_profile, current_lang, mode
+            )
+            if state_key != self._last_state_key:
+                self._last_state_key = state_key
+                self._rebuild_binding_rows(mode)
+                self._dirty_model("bindings_hint")
 
         if current_profile != self._last_current_profile:
             self._last_current_profile = current_profile
@@ -423,6 +424,28 @@ class KeymapBindingsSection:
         })
         for action in actions:
             rows.append(self._binding_row_record(action, mode))
+
+    def _current_state_key(self, is_capturing, current_profile, current_lang, mode):
+        return (
+            self.TOOL_MODES.index(mode),
+            self._rebinding_action,
+            is_capturing,
+            current_profile,
+            current_lang,
+        )
+
+    def ensure_binding_rows(self):
+        if self._rows_built or not self._handle:
+            return
+        mode = self.TOOL_MODES[self._selected_mode_idx]
+        is_capturing = lf.keymap.is_capturing()
+        current_profile = lf.keymap.get_current_profile()
+        current_lang = lf.ui.get_current_language()
+        self._last_state_key = self._current_state_key(
+            is_capturing, current_profile, current_lang, mode
+        )
+        self._rows_built = True
+        self._rebuild_binding_rows(mode)
 
     def _rebuild_binding_rows(self, mode):
         if not self._handle:

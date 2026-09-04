@@ -5,6 +5,7 @@
 #include "preprocessing/preprocess.hpp"
 
 #include "core/cuda_error.hpp"
+#include "core/environment.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/nn/models/moge2.hpp"
@@ -149,15 +150,15 @@ namespace {
 
     fs::path home_directory() {
 #ifdef _WIN32
-        if (const char* profile = std::getenv("USERPROFILE"); profile && profile[0])
-            return fs::path(profile);
-        const char* drive = std::getenv("HOMEDRIVE");
-        const char* homepath = std::getenv("HOMEPATH");
-        if (drive && drive[0] && homepath && homepath[0])
-            return fs::path(std::string(drive) + homepath);
+        if (const auto profile = lfs::core::environment::value("USERPROFILE"))
+            return lfs::core::utf8_to_path(*profile);
+        const auto drive = lfs::core::environment::value("HOMEDRIVE");
+        const auto homepath = lfs::core::environment::value("HOMEPATH");
+        if (drive && homepath)
+            return lfs::core::utf8_to_path(*drive + *homepath);
 #else
-        if (const char* home = std::getenv("HOME"); home && home[0])
-            return fs::path(home);
+        if (const auto home = lfs::core::environment::value("HOME"))
+            return lfs::core::utf8_to_path(*home);
 #endif
         return fs::temp_directory_path();
     }
@@ -177,8 +178,8 @@ namespace {
     }
 
     fs::path find_nn_export_script() {
-        if (const char* env = std::getenv("LFS_NN_EXPORT"); env && env[0])
-            return fs::path(env);
+        if (const auto env = lfs::core::environment::value("LFS_NN_EXPORT"))
+            return lfs::core::utf8_to_path(*env);
         std::error_code ec;
         std::vector<fs::path> roots;
 #ifdef __linux__
@@ -202,8 +203,8 @@ namespace {
     }
 
     fs::path find_python_for_export(const fs::path& script) {
-        if (const char* env = std::getenv("LFS_PYTHON"); env && env[0])
-            return fs::path(env);
+        if (const auto env = lfs::core::environment::value("LFS_PYTHON"))
+            return lfs::core::utf8_to_path(*env);
         if (!script.empty()) {
             const auto vcpkg = script.parent_path().parent_path().parent_path() / "build" /
                                "vcpkg_installed" / "x64-linux" / "tools" / "python3" / "python3";
@@ -224,12 +225,18 @@ namespace {
                 " --fp16 --moge2");
         }
         const auto python = find_python_for_export(script);
-        const fs::path tmp = lfw_path.string() + ".tmp";
-        const std::string cmd = path_to_string(python) + " " + path_to_string(script) +
-                                " --onnx " + path_to_string(onnx_path) + " --out " +
-                                path_to_string(tmp) + " --fp16 --moge2";
+        fs::path tmp = lfw_path;
+        tmp += ".tmp";
+        const std::string cmd =
+            path_to_string(python) + " " + path_to_string(script) +
+            " --onnx " + path_to_string(onnx_path) + " --out " +
+            path_to_string(tmp) + " --fp16 --moge2";
         std::cout << "Converting ONNX weights to " << path_to_string(lfw_path) << "\n";
+#ifdef _WIN32
+        const int rc = _wsystem(lfs::core::utf8_to_wstring(cmd).c_str());
+#else
         const int rc = std::system(cmd.c_str());
+#endif
         if (rc != 0 || !fs::is_regular_file(tmp)) {
             remove_file_if_exists(tmp);
             throw std::runtime_error(
@@ -242,17 +249,17 @@ namespace {
     fs::path legacy_model_path() {
         fs::path root;
 #ifdef _WIN32
-        if (const char* local = std::getenv("LOCALAPPDATA"); local && local[0])
-            root = fs::path(local) / "LichtFeld";
-        else if (const char* temp = std::getenv("TEMP"); temp && temp[0])
-            root = fs::path(temp) / "LichtFeld";
+        if (const auto local = lfs::core::environment::value("LOCALAPPDATA"))
+            root = lfs::core::utf8_to_path(*local) / "LichtFeld";
+        else if (const auto temp = lfs::core::environment::value("TEMP"))
+            root = lfs::core::utf8_to_path(*temp) / "LichtFeld";
         else
             root = fs::temp_directory_path() / "LichtFeld";
 #else
-        if (const char* xdg = std::getenv("XDG_CACHE_HOME"); xdg && xdg[0])
-            root = fs::path(xdg) / "lichtfeld";
-        else if (const char* home = std::getenv("HOME"); home && home[0])
-            root = fs::path(home) / ".cache" / "lichtfeld";
+        if (const auto xdg = lfs::core::environment::value("XDG_CACHE_HOME"))
+            root = lfs::core::utf8_to_path(*xdg) / "lichtfeld";
+        else if (const auto home = lfs::core::environment::value("HOME"))
+            root = lfs::core::utf8_to_path(*home) / ".cache" / "lichtfeld";
         else
             root = fs::temp_directory_path() / "lichtfeld";
 #endif
@@ -378,9 +385,11 @@ namespace {
                                 std::string_view expected_hash,
                                 std::string_view label) {
         fs::create_directories(destination.parent_path());
-        const fs::path tmp_path = destination.string() + ".tmp";
+        fs::path tmp_path = destination;
+        tmp_path += ".tmp";
 
-        std::ofstream output(tmp_path, std::ios::binary | std::ios::trunc);
+        std::ofstream output;
+        lfs::core::open_file_for_write(tmp_path, std::ios::binary | std::ios::trunc, output);
         if (!output)
             throw std::runtime_error("Could not open " + path_to_string(tmp_path) + " for writing");
 
@@ -645,8 +654,9 @@ namespace {
                              const fs::path& image_path,
                              const fs::path& images_dir) {
         fs::path rel = image_path.lexically_relative(images_dir);
-        const auto generic = rel.generic_string();
-        if (rel.empty() || generic == "." || generic == ".." || generic.starts_with("../")) {
+        const auto first = rel.begin();
+        if (rel.empty() || rel == "." || rel == ".." ||
+            (first != rel.end() && *first == fs::path(".."))) {
             rel = image_path.filename();
         }
         rel.replace_extension(".png");

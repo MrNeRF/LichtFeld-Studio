@@ -1,12 +1,11 @@
 #pragma once
 
 #include "core/path_utils.hpp"
+#include "io/atomic_output_path.hpp"
 #include "io/error.hpp"
 #include "io/exporter.hpp"
 
-#include <atomic>
 #include <cerrno>
-#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <format>
@@ -24,11 +23,6 @@
 
 namespace lfs::io {
 
-    enum class AtomicOutputTempName {
-        AppendSuffix,
-        PreserveExtension
-    };
-
     enum class AtomicOutputDurability {
         Atomic,
         Durable
@@ -42,28 +36,6 @@ namespace lfs::io {
 
     using AtomicOutputCommitObserver = std::function<void(AtomicOutputCommitStage)>;
 
-    inline std::filesystem::path make_atomic_temp_output_path(
-        const std::filesystem::path& output_path,
-        AtomicOutputTempName name_style = AtomicOutputTempName::AppendSuffix) {
-        static std::atomic_uint64_t counter{0};
-
-        const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
-#ifdef _WIN32
-        const auto process_id = GetCurrentProcessId();
-#else
-        const auto process_id = ::getpid();
-#endif
-        const auto unique_suffix =
-            std::format(".{}.{}.{}.tmp", ticks, process_id, counter.fetch_add(1, std::memory_order_relaxed));
-
-        if (name_style == AtomicOutputTempName::PreserveExtension && output_path.has_extension()) {
-            const auto temp_name = output_path.stem().string() + unique_suffix + output_path.extension().string();
-            return output_path.parent_path() / temp_name;
-        }
-
-        return output_path.string() + unique_suffix;
-    }
-
     inline Result<void> ensure_output_parent_directory(const std::filesystem::path& output_path) {
         if (output_path.parent_path().empty()) {
             return {};
@@ -74,7 +46,7 @@ namespace lfs::io {
         if (ec) {
             return std::unexpected(Error{
                 ErrorCode::WRITE_FAILURE,
-                std::format("Failed to create output directory '{}': {}", output_path.parent_path().string(), ec.message())});
+                std::format("Failed to create output directory '{}': {}", core::path_to_utf8(output_path.parent_path()), ec.message())});
         }
 
         return {};
@@ -94,7 +66,7 @@ namespace lfs::io {
                 return std::unexpected(Error{
                     ErrorCode::WRITE_FAILURE,
                     std::format("Failed to open temporary output '{}' for durable flush: Windows error {}",
-                                path.string(), GetLastError())});
+                                core::path_to_utf8(path), GetLastError())});
             }
             if (!FlushFileBuffers(handle)) {
                 const auto error = GetLastError();
@@ -102,7 +74,7 @@ namespace lfs::io {
                 return std::unexpected(Error{
                     ErrorCode::WRITE_FAILURE,
                     std::format("Failed to flush temporary output '{}': Windows error {}",
-                                path.string(), error)});
+                                core::path_to_utf8(path), error)});
             }
             CloseHandle(handle);
 #else
@@ -111,7 +83,7 @@ namespace lfs::io {
                 return std::unexpected(Error{
                     ErrorCode::WRITE_FAILURE,
                     std::format("Failed to open temporary output '{}' for durable flush: {}",
-                                path.string(), std::strerror(errno))});
+                                core::path_to_utf8(path), std::strerror(errno))});
             }
             if (::fsync(fd) != 0) {
                 const int error = errno;
@@ -119,13 +91,13 @@ namespace lfs::io {
                 return std::unexpected(Error{
                     ErrorCode::WRITE_FAILURE,
                     std::format("Failed to flush temporary output '{}': {}",
-                                path.string(), std::strerror(error))});
+                                core::path_to_utf8(path), std::strerror(error))});
             }
             if (::close(fd) != 0) {
                 return std::unexpected(Error{
                     ErrorCode::WRITE_FAILURE,
                     std::format("Failed to close temporary output '{}' after durable flush: {}",
-                                path.string(), std::strerror(errno))});
+                                core::path_to_utf8(path), std::strerror(errno))});
             }
 #endif
             return {};
@@ -144,7 +116,7 @@ namespace lfs::io {
                 return std::unexpected(Error{
                     ErrorCode::WRITE_FAILURE,
                     std::format("Failed to open output directory '{}' for durable flush: {}",
-                                parent.string(), std::strerror(errno))});
+                                core::path_to_utf8(parent), std::strerror(errno))});
             }
             if (::fsync(fd) != 0) {
                 const int error = errno;
@@ -152,13 +124,13 @@ namespace lfs::io {
                 return std::unexpected(Error{
                     ErrorCode::WRITE_FAILURE,
                     std::format("Failed to flush output directory '{}': {}",
-                                parent.string(), std::strerror(error))});
+                                core::path_to_utf8(parent), std::strerror(error))});
             }
             if (::close(fd) != 0) {
                 return std::unexpected(Error{
                     ErrorCode::WRITE_FAILURE,
                     std::format("Failed to close output directory '{}' after durable flush: {}",
-                                parent.string(), std::strerror(errno))});
+                                core::path_to_utf8(parent), std::strerror(errno))});
             }
             return {};
 #endif
@@ -189,7 +161,7 @@ namespace lfs::io {
             return std::unexpected(Error{
                 ErrorCode::WRITE_FAILURE,
                 std::format("Failed to replace '{}' with temporary export '{}': Windows error {}",
-                            output_path.string(), temp_path.string(), GetLastError())});
+                            core::path_to_utf8(output_path), core::path_to_utf8(temp_path), GetLastError())});
         }
 #else
         std::error_code ec;
@@ -198,7 +170,7 @@ namespace lfs::io {
             return std::unexpected(Error{
                 ErrorCode::WRITE_FAILURE,
                 std::format("Failed to replace '{}' with temporary export '{}': {}",
-                            output_path.string(), temp_path.string(), ec.message())});
+                            core::path_to_utf8(output_path), core::path_to_utf8(temp_path), ec.message())});
         }
 #endif
 

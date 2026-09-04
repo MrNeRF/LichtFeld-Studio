@@ -191,10 +191,11 @@ def test_selection_groups_on_update_skips_unchanged_count_poll(selection_groups_
     selection_groups_module.lf = _make_panel_lf(scene)
 
     doc = _DocStub()
-    panel.on_update(doc)
-    panel.on_update(doc)
+    assert panel.on_update(doc) is True
+    assert panel.on_update(doc) is False
 
     assert count_updates == 1
+    assert doc.content_wrap.classes == [("hidden", False)]
 
     selection_groups_module.RuntimeState.selection_generation.value += 1
     panel.on_update(doc)
@@ -213,6 +214,37 @@ def test_selection_groups_store_update_invalidates_dirty_panel(selection_groups_
         assert "__update__" in panel._handle.dirty_fields
     finally:
         panel._unsubscribe_reactive_state()
+
+
+def test_selection_groups_reactive_refresh_skips_unchanged_groups(selection_groups_module):
+    panel = selection_groups_module.SelectionGroupsPanel()
+    panel._handle = _HandleStub()
+
+    groups = [_make_group(1, "Foreground", 5, False, (1.0, 0.0, 0.0))]
+    scene = SimpleNamespace(
+        active_selection_group=1,
+        selection_groups=lambda: groups,
+        update_selection_group_counts=lambda: None,
+    )
+    selection_groups_module.lf = _make_panel_lf(scene)
+    panel.doc = _DocStub()
+    panel.on_update(panel.doc)
+    panel._subscribe_reactive_state()
+    try:
+        panel._handle.dirty_fields.clear()
+        selection_groups_module.RuntimeState.selection_generation.value += 1
+
+        assert "__update__" not in panel._handle.dirty_fields
+    finally:
+        panel._unsubscribe_reactive_state()
+
+
+def test_selection_groups_scene_change_does_not_enqueue_extra_update(selection_groups_module):
+    panel = selection_groups_module.SelectionGroupsPanel()
+    panel._handle = _HandleStub()
+
+    assert panel.on_scene_changed(None) is True
+    assert "__update__" not in panel._handle.dirty_fields
 
 
 def test_selection_groups_context_menu_uses_callback_without_poll(selection_groups_module):

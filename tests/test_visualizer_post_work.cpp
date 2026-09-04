@@ -501,6 +501,32 @@ protected:
         return condition();
     }
 
+    [[nodiscard]] bool pumpUntilImportSettled(
+        lfs::vis::VisualizerImpl& viewer,
+        std::mutex& queue_mutex,
+        std::vector<lfs::vis::Visualizer::WorkItem>& queue,
+        const std::chrono::milliseconds timeout = std::chrono::seconds(30)) {
+        return pumpUntil(
+            queue_mutex, queue,
+            [&] {
+                auto& tasks = viewer.getGuiManager()->asyncTasks();
+                tasks.pollImportCompletion();
+                return !tasks.isImporting() &&
+                       !tasks.hasPendingMainThreadCompletions();
+            },
+            timeout);
+    }
+
+    [[nodiscard]] std::filesystem::path makeSplatFixture(
+        const std::string_view stem) const {
+        const auto path = temporary_.path / (std::string(stem) + ".ply");
+        const auto saved = lfs::io::save_ply(
+            *lfs::test::licht::make_splat(2),
+            {.output_path = path, .binary = true, .async = false});
+        EXPECT_TRUE(saved);
+        return path;
+    }
+
     void installModalOverlay(
         std::unique_ptr<lfs::vis::gui::RmlModalOverlay>& overlay,
         lfs::vis::gui::RmlUIManager& manager) {
@@ -583,6 +609,8 @@ namespace {
             }
         }
         return state_machine.transitionTo(
+                   lfs::vis::TrainingState::Starting) &&
+               state_machine.transitionTo(
                    lfs::vis::TrainingState::Running) &&
                trainer_manager->isTrainingActive();
     }
@@ -1297,6 +1325,8 @@ namespace {
             }
         }
         return state_machine.transitionTo(
+                   lfs::vis::TrainingState::Starting) &&
+               state_machine.transitionTo(
                    lfs::vis::TrainingState::Running) &&
                state_machine.transitionTo(
                    lfs::vis::TrainingState::Paused) &&
@@ -4066,6 +4096,8 @@ namespace lfs::vis {
                     TrainingState::Ready));
             }
             ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
+            ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_NE(
                 viewer.getScene().addGroup("post-bind dirt"),
@@ -5388,9 +5420,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            LoadFileWipeGateDirtyDatasetDiscardAndSplatAdd) {
-        const auto splat_path =
-            std::filesystem::path(PROJECT_ROOT_PATH) /
-            "tests/data/bicycle_ref.sog";
+        const auto splat_path = makeSplatFixture("bicycle_ref");
         ASSERT_TRUE(std::filesystem::exists(splat_path));
 
         bool prompted = false;
@@ -5496,9 +5526,7 @@ namespace lfs::vis {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
         }
-        const auto splat_path =
-            std::filesystem::path(PROJECT_ROOT_PATH) /
-            "tests/data/bicycle_ref.sog";
+        const auto splat_path = makeSplatFixture("bicycle_ref");
         ASSERT_TRUE(std::filesystem::exists(splat_path));
 
         auto options = projectOptions();
@@ -5569,10 +5597,13 @@ namespace lfs::vis {
                     "Keep until splat load"),
                 nullptr);
 
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
             ASSERT_TRUE(pumpUntil(
                 viewer.work_queue_mutex_,
                 viewer.work_queue_,
                 [&] {
+                    gui->asyncTasks().pollImportCompletion();
                     return viewer.pending_training_action_ ==
                                VisualizerImpl::PendingTrainingAction::
                                    None &&
@@ -5581,7 +5612,9 @@ namespace lfs::vis {
                            !viewer.getTrainerManager()
                                 ->isTrainingActive() &&
                            !viewer.getTrainerManager()
-                                ->isCompletionPending();
+                                ->isCompletionPending() &&
+                           !gui->asyncTasks().isImporting() &&
+                           !gui->asyncTasks().hasPendingMainThreadCompletions();
                 }));
             EXPECT_FALSE(drop_blocked) << drop_error;
             EXPECT_FALSE(
@@ -5604,9 +5637,7 @@ namespace lfs::vis {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
         }
-        const auto first_path =
-            std::filesystem::path(PROJECT_ROOT_PATH) /
-            "tests/data/bicycle_ref.sog";
+        const auto first_path = makeSplatFixture("bicycle_ref");
         const auto second_path =
             std::filesystem::path(PROJECT_ROOT_PATH) /
             "tests/data/bike.ply";
@@ -5687,10 +5718,13 @@ namespace lfs::vis {
                 viewer.getSceneManager()->getContentType(),
                 SceneManager::ContentType::Dataset);
 
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
             ASSERT_TRUE(pumpUntil(
                 viewer.work_queue_mutex_,
                 viewer.work_queue_,
                 [&] {
+                    gui->asyncTasks().pollImportCompletion();
                     return viewer.pending_training_action_ ==
                                VisualizerImpl::PendingTrainingAction::
                                    None &&
@@ -5699,7 +5733,9 @@ namespace lfs::vis {
                            !viewer.getTrainerManager()
                                 ->isTrainingActive() &&
                            !viewer.getTrainerManager()
-                                ->isCompletionPending();
+                                ->isCompletionPending() &&
+                           !gui->asyncTasks().isImporting() &&
+                           !gui->asyncTasks().hasPendingMainThreadCompletions();
                 }));
             EXPECT_FALSE(drop_blocked) << drop_error;
             EXPECT_EQ(
@@ -6024,6 +6060,8 @@ namespace lfs::vis {
                 .discard_changes = true}
                 .emit();
 
+            ASSERT_TRUE(pumpUntilImportSettled(
+                viewer, viewer.work_queue_mutex_, viewer.work_queue_));
             EXPECT_FALSE(lifecycle->hasSourcePath());
             EXPECT_FALSE(lifecycle->isScratchBoundSession());
             EXPECT_EQ(
@@ -6087,6 +6125,8 @@ namespace lfs::vis {
                 .is_dataset = false}
                 .emit();
 
+            ASSERT_TRUE(pumpUntilImportSettled(
+                viewer, viewer.work_queue_mutex_, viewer.work_queue_));
             EXPECT_TRUE(lifecycle->hasSourcePath());
             EXPECT_FALSE(lifecycle->isScratchBoundSession());
             const auto has_path = viewer.projectHasPath();
@@ -7128,6 +7168,8 @@ namespace lfs::vis {
                     TrainingState::Ready));
             }
             ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
+            ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Stopping));
@@ -7794,6 +7836,8 @@ namespace lfs::vis {
                     TrainingState::Ready));
             }
             ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
+            ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(viewer.getTrainerManager()
                             ->isTrainingActive());
@@ -7867,6 +7911,8 @@ namespace lfs::vis {
                 ASSERT_TRUE(state_machine.transitionTo(
                     TrainingState::Ready));
             }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(viewer.getTrainerManager()
@@ -8052,6 +8098,8 @@ namespace lfs::vis {
                     TrainingState::Ready));
             }
             ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
+            ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(viewer.getTrainerManager()
                             ->isTrainingActive());
@@ -8189,6 +8237,55 @@ namespace lfs::vis {
         EXPECT_EQ(viewer.getViewport().camera.home_R[2], preserved_camera.home_R[2]);
 
         std::filesystem::remove_all(dataset_path, ec);
+    }
+
+    TEST_F(VisualizerImplResetTest, ResetTrainingStopsTrainerDuringStarting) {
+        const auto dataset_path = temporary_.path / "reset-starting-failure-dataset";
+        write_minimal_transforms_dataset(dataset_path);
+
+        VisualizerImpl viewer(projectOptions());
+        viewer.getSceneManager()->changeContentType(SceneManager::ContentType::Dataset);
+        viewer.getSceneManager()->setDatasetPath(dataset_path);
+        const auto cameras = viewer.getScene().addGroup("Train cameras");
+        ASSERT_NE(viewer.getScene().addCamera(
+                      "camera.png", cameras,
+                      make_project_request_test_camera()),
+                  lfs::core::NULL_NODE);
+
+        auto params = viewer.getDataLoader()->getParameters();
+        params.dataset.data_path = dataset_path;
+        params.init_path = (dataset_path / "missing-init.ply").string();
+        viewer.getDataLoader()->setParameters(params);
+
+        auto trainer = std::make_unique<lfs::training::Trainer>(viewer.getScene());
+        trainer->setParams(params);
+        viewer.getTrainerManager()->setTrainer(std::move(trainer));
+
+        // Hold the worker before its first scene snapshot so ResetTraining is
+        // deterministically issued while the manager is still Starting.
+        std::unique_lock initialization_lock(
+            viewer.getTrainerManager()->getTrainer()->getRenderMutex());
+        ASSERT_TRUE(viewer.getTrainerManager()->startTraining());
+        ASSERT_EQ(viewer.getTrainerManager()->getState(), lfs::vis::TrainingState::Starting);
+
+        lfs::core::events::cmd::ResetTraining{}.emit();
+        EXPECT_EQ(viewer.getTrainerManager()->getState(), lfs::vis::TrainingState::Stopping);
+
+        initialization_lock.unlock();
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                return viewer.getTrainerManager()->getState() == lfs::vis::TrainingState::Finished;
+            }));
+
+        EXPECT_EQ(viewer.getTrainerManager()->getStateMachine().getFinishReason(),
+                  lfs::vis::FinishReason::Error);
+        EXPECT_TRUE(viewer.getTrainerManager()->canReset());
+
+        // The completion handler queues the requested reset after publishing
+        // Finished(Error); drain that request and verify a fresh Ready trainer.
+        lfs::test::licht::drain_work_queue(viewer.work_queue_mutex_, viewer.work_queue_);
+        EXPECT_EQ(viewer.getTrainerManager()->getState(), lfs::vis::TrainingState::Ready);
+        EXPECT_NE(viewer.getTrainerManager()->getTrainer(), nullptr);
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -8941,6 +9038,8 @@ namespace lfs::vis {
                     TrainingState::Ready));
             }
             ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
+            ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Paused));
@@ -9029,6 +9128,8 @@ namespace lfs::vis {
                 ASSERT_TRUE(state_machine.transitionTo(
                     TrainingState::Ready));
             }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_NE(
@@ -9664,6 +9765,8 @@ namespace lfs::vis {
                     TrainingState::Ready));
             }
             ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
+            ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Paused));
@@ -9773,6 +9876,8 @@ namespace lfs::vis {
                 ASSERT_TRUE(state_machine.transitionTo(
                     TrainingState::Ready));
             }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(state_machine.transitionTo(
@@ -9889,6 +9994,8 @@ namespace lfs::vis {
                 ASSERT_TRUE(state_machine.transitionTo(
                     TrainingState::Ready));
             }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(state_machine.transitionTo(
@@ -10109,6 +10216,8 @@ namespace lfs::vis {
                     TrainingState::Ready));
             }
             ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
+            ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Stopping));
@@ -10126,6 +10235,73 @@ namespace lfs::vis {
                 false, std::memory_order_release);
             trainer_manager->training_joined_ = true;
         }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           SaveWhileTrainerWriterInFlightQueuesUntilCompletion) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto project_path = temporary_.path / "queued-save.licht";
+        write_empty_project(project_path);
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(viewer.projectOpen(project_path, ProjectSwitchDisposition::DiscardChanges));
+        ASSERT_TRUE(waitForHydrationComplete(viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+
+        auto& scene = viewer.getScene();
+        const auto cameras = scene.addGroup("Train cameras");
+        scene.addCamera("camera.png", cameras, make_project_request_test_camera());
+        viewer.getTrainerManager()->setTrainer(std::make_unique<lfs::training::Trainer>(scene));
+        auto* const trainer = viewer.getTrainer();
+        ASSERT_NE(trainer, nullptr);
+        trainer->project_writer_in_flight_.store(true, std::memory_order_release);
+
+        auto* const lifecycle = viewer.project_lifecycle_.get();
+        ASSERT_NE(lifecycle, nullptr);
+        const auto start = std::chrono::steady_clock::now();
+        ASSERT_TRUE(lifecycle->save(false));
+        EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::milliseconds(100));
+        ASSERT_TRUE(lifecycle->pending_explicit_save_regenerate_preview_);
+        ASSERT_TRUE(lifecycle->save(true));
+        ASSERT_TRUE(lifecycle->pending_explicit_save_regenerate_preview_);
+        EXPECT_FALSE(*lifecycle->pending_explicit_save_regenerate_preview_);
+
+        trainer->project_writer_in_flight_.store(false, std::memory_order_release);
+        lifecycle->updateMaintenance();
+        EXPECT_FALSE(lifecycle->pending_explicit_save_regenerate_preview_);
+        ASSERT_TRUE(lifecycle->project_write_job_);
+        ASSERT_TRUE(waitUntil([&] {
+            const auto poll = lifecycle->pollWrite();
+            return !poll.running;
+        },
+                              std::chrono::seconds(10)));
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           TemporaryPauseRequestIsObservedAtNextSafePoint) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(arm_running_trainer(viewer));
+        auto* const trainer_manager = viewer.getTrainerManager();
+        auto* const trainer = viewer.getTrainer();
+        ASSERT_NE(trainer_manager, nullptr);
+        ASSERT_NE(trainer, nullptr);
+
+        const auto start = std::chrono::steady_clock::now();
+        trainer_manager->pauseTrainingTemporary();
+        EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::milliseconds(100));
+        EXPECT_FALSE(trainer->is_paused());
+
+        trainer->handle_control_requests(0, {});
+        EXPECT_TRUE(trainer->is_paused());
+
+        trainer_manager->resumeTrainingTemporary();
+        trainer->handle_control_requests(0, {});
+        EXPECT_FALSE(trainer->is_paused());
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -10183,6 +10359,8 @@ namespace lfs::vis {
                 ASSERT_TRUE(state_machine.transitionTo(
                     TrainingState::Ready));
             }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(state_machine.transitionTo(
@@ -10274,6 +10452,8 @@ namespace lfs::vis {
                 ASSERT_TRUE(state_machine.transitionTo(
                     TrainingState::Ready));
             }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(state_machine.transitionTo(
@@ -10388,6 +10568,8 @@ namespace lfs::vis {
                 ASSERT_TRUE(state_machine.transitionTo(
                     TrainingState::Ready));
             }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(state_machine.transitionTo(
@@ -10553,6 +10735,8 @@ namespace lfs::vis {
                 ASSERT_TRUE(state_machine.transitionTo(
                     TrainingState::Ready));
             }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
 
@@ -10825,6 +11009,8 @@ namespace lfs::vis {
                 ASSERT_TRUE(state_machine.transitionTo(
                     TrainingState::Ready));
             }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
 
@@ -11727,6 +11913,8 @@ namespace lfs::vis {
                     TrainingState::Ready));
             }
             ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
+            ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Stopping));
@@ -11847,6 +12035,8 @@ namespace lfs::vis {
                 ASSERT_TRUE(state_machine.transitionTo(
                     TrainingState::Ready));
             }
+            ASSERT_TRUE(state_machine.transitionTo(
+                TrainingState::Starting));
             ASSERT_TRUE(state_machine.transitionTo(
                 TrainingState::Running));
             ASSERT_TRUE(
@@ -14110,6 +14300,61 @@ namespace lfs::vis {
             EXPECT_TRUE(
                 combined->has_tensor_allocator());
         }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           AsyncCaptureKeepsNewerSceneDirty) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        viewer.input_controller_ = std::make_unique<InputController>(
+            nullptr, viewer.getViewport());
+        auto* const lifecycle = viewer.project_lifecycle_.get();
+        ASSERT_NE(lifecycle, nullptr);
+
+        struct HeadroomGuard {
+            HeadroomGuard() {
+                lfs::io::project::detail::
+                    set_splat_capture_no_headroom_for_testing(false);
+            }
+            ~HeadroomGuard() {
+                lfs::io::project::detail::
+                    set_splat_capture_no_headroom_for_testing(std::nullopt);
+            }
+        } headroom;
+
+        auto cpu_model = lfs::test::licht::make_splat(65536);
+        auto cuda_model = std::make_unique<lfs::core::SplatData>(
+            0,
+            cpu_model->means().to(lfs::core::Device::CUDA),
+            cpu_model->sh0().to(lfs::core::Device::CUDA),
+            lfs::core::Tensor{},
+            cpu_model->scaling_raw().to(lfs::core::Device::CUDA),
+            cpu_model->rotation_raw().to(lfs::core::Device::CUDA),
+            cpu_model->opacity_raw().to(lfs::core::Device::CUDA), 1.0f);
+        ASSERT_NE(viewer.getScene().addSplat("Async dirty", std::move(cuda_model)),
+                  lfs::core::NULL_NODE);
+        const auto* const node = viewer.getScene().getNode("Async dirty");
+        ASSERT_NE(node, nullptr);
+        ASSERT_NE(node->model, nullptr);
+
+        auto started = lifecycle->startAutosave();
+        ASSERT_TRUE(started)
+            << lfs::format_for_developer(started.error());
+        ASSERT_TRUE(viewer.jobs().anyRunning(JobType::ProjectWrite));
+
+        node->model->means().fill_(23.0f);
+        lifecycle->markSceneMutation(
+            static_cast<std::uint32_t>(
+                lfs::core::Scene::MutationType::MODEL_CHANGED));
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+            }));
+        EXPECT_TRUE(lifecycle->hasDirtyProject());
     }
 
     TEST_F(VisualizerImplResetTest,

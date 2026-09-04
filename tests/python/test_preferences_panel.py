@@ -59,6 +59,12 @@ def preferences_panel_module(monkeypatch):
             scene_upscaler_preset="native",
         ),
         scene_reconstruction_presets={"native": "native", "spatial": "quality"},
+        viewport_chrome_style="translucent",
+        set_viewport_chrome_style_calls=[],
+        viewport_toolbar_position="centered",
+        set_viewport_toolbar_position_calls=[],
+        zoom_speed=11.0,
+        navigation_speed=8.0,
         project_location="",
         embed_dataset_by_default=False,
     )
@@ -96,6 +102,17 @@ def preferences_panel_module(monkeypatch):
     def reset_scene_reconstruction_preferences():
         state.scene_reconstruction_presets = {"native": "native", "spatial": "quality"}
 
+    def set_viewport_chrome_style(style):
+        state.viewport_chrome_style = str(style)
+        state.set_viewport_chrome_style_calls.append(str(style))
+
+    def set_viewport_toolbar_position(position):
+        state.viewport_toolbar_position = str(position)
+        state.set_viewport_toolbar_position_calls.append(str(position))
+
+    def set_speed(name, value):
+        setattr(state, name, max(1.0, min(100.0, float(value))))
+
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
         PanelSpace=SimpleNamespace(FLOATING="FLOATING"),
@@ -103,6 +120,11 @@ def preferences_panel_module(monkeypatch):
         PanelOption=SimpleNamespace(DEFAULT_CLOSED="DEFAULT_CLOSED"),
         get_current_language=lambda: state.language,
         set_language=lambda language: state.set_language_calls.append(language),
+        get_theme=lambda: "dark",
+        get_theme_family=lambda: "lichtfeld",
+        get_theme_mode=lambda: "dark",
+        get_ui_scale_preference=lambda: 0.0,
+        set_ui_scale=lambda *_a, **_k: None,
         get_mcp_preferences=lambda: dict(state.mcp_preferences),
         set_mcp_preferences=set_mcp_preferences,
         get_mcp_status=lambda: dict(state.mcp_status),
@@ -162,6 +184,18 @@ def preferences_panel_module(monkeypatch):
         reset_scene_reconstruction_preferences=reset_scene_reconstruction_preferences,
         get_progress_bar_style=lambda: "classic",
         set_progress_bar_style=lambda *_a, **_k: None,
+        get_viewport_chrome_style=lambda: state.viewport_chrome_style,
+        set_viewport_chrome_style=set_viewport_chrome_style,
+        get_viewport_toolbar_position=lambda: state.viewport_toolbar_position,
+        set_viewport_toolbar_position=set_viewport_toolbar_position,
+        get_zoom_speed_preference=lambda: state.zoom_speed,
+        set_zoom_speed_preference=lambda value: set_speed("zoom_speed", value),
+        get_navigation_speed_preference=lambda: state.navigation_speed,
+        set_navigation_speed_preference=lambda value: set_speed("navigation_speed", value),
+        remember_camera_navigation=lambda: False,
+        set_remember_camera_navigation=lambda _enabled: None,
+        remember_camera_view_snap=lambda: False,
+        set_remember_camera_view_snap=lambda _enabled: None,
     )
     lf_stub.keymap = SimpleNamespace(
         ToolMode=IntEnum(
@@ -300,7 +334,9 @@ def preferences_panel_module(monkeypatch):
 
     lf_stub.get_render_settings = lambda: state.render_settings
     lf_stub.get_camera_navigation_mode = lambda: "orbit"
+    lf_stub.set_camera_navigation_mode = lambda _mode: None
     lf_stub.get_camera_view_snap_enabled = lambda: False
+    lf_stub.set_camera_view_snap_enabled = lambda _enabled: None
     lf_stub.file_associations_status = file_associations_status
     lf_stub.file_association_set = file_association_set
 
@@ -320,6 +356,61 @@ def test_language_selection_does_not_reload_active_language(preferences_panel_mo
     panel._set_language_index("1")
 
     assert state.set_language_calls == []
+
+
+def test_viewport_chrome_selection_uses_global_style_preference(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+
+    assert panel._viewport_chrome_index() == "1"
+    panel._set_viewport_chrome_index("2")
+
+    assert state.viewport_chrome_style == "frosted"
+    assert state.set_viewport_chrome_style_calls == ["frosted"]
+    assert panel._viewport_chrome_index() == "2"
+
+
+def test_viewport_toolbar_position_uses_global_preference(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+
+    assert panel._viewport_toolbar_position_index() == "1"
+    panel._set_viewport_toolbar_position_index("2")
+
+    assert state.viewport_toolbar_position == "free"
+    assert state.set_viewport_toolbar_position_calls == ["free"]
+    assert panel._viewport_toolbar_position_index() == "2"
+
+
+def test_navigation_speed_preferences_round_trip_and_clamp(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+
+    panel._set_zoom_speed(42)
+    panel._set_navigation_speed(73)
+    assert panel._get_scrub_value("zoom_speed") == 42
+    assert panel._get_scrub_value("navigation_speed") == 73
+
+    panel._set_zoom_speed(0)
+    panel._set_navigation_speed(101)
+    assert state.zoom_speed == 1
+    assert state.navigation_speed == 100
+
+
+def test_navigation_speed_preferences_reset_with_input_section(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._section = "input"
+    panel._set_zoom_speed(42)
+    panel._set_navigation_speed(73)
+    panel._refresh_selection = lambda: None
+
+    panel._reset_section()
+
+    assert state.zoom_speed == 11
+    assert state.navigation_speed == 8
 
 
 def test_project_location_is_saved_and_can_return_to_default(
@@ -830,3 +921,46 @@ def test_embed_dataset_default_is_exposed_and_settable(preferences_panel_module)
     panel._set_embed_dataset_by_default(True)
     assert state.embed_dataset_by_default is True
     assert module.lf.ui.get_embed_dataset_by_default() is True
+
+
+def test_preferences_close_retains_the_mounted_document(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+
+    class Document:
+        def get_element_by_id(self, _element_id):
+            return None
+
+    document = Document()
+    panel._rebuild_records = lambda: None
+    panel._load_mcp_preferences = lambda: None
+    panel._consume_section_request = lambda: None
+    panel._refresh_selection = lambda: None
+    panel._state = lambda: None
+    panel._dirty_expanded_sections = lambda: None
+    panel._keymap.on_mount = lambda _doc: None
+    panel.on_mount(document)
+    panel._on_close(None, None, None)
+
+    assert panel.mount_count == 1
+    assert panel._document is document
+    assert state.panel_enabled_calls[-1] == ("lfs.preferences", False)
+
+
+def test_preferences_keymap_rows_are_created_when_expanded(preferences_panel_module):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    records = {}
+    panel._keymap._handle = SimpleNamespace(
+        update_record_list=lambda name, items: records.__setitem__(name, list(items)),
+    )
+    panel._section = "input"
+
+    assert "key_bindings" in panel._expanded_sections
+    assert panel._keymap._rows_built is False
+
+    panel._expanded_sections.discard("key_bindings")
+    panel._on_toggle_section(None, None, ["key_bindings"])
+
+    assert panel._keymap._rows_built is True
+    assert records["binding_rows"]

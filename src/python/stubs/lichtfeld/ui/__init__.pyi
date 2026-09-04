@@ -241,6 +241,18 @@ def get_progress_bar_style() -> str:
 def set_progress_bar_style(style: str) -> None:
     """Set the status bar progress style (classic or miner)"""
 
+def get_viewport_chrome_style() -> str:
+    """Return the viewport controls style (solid, translucent, or frosted)"""
+
+def set_viewport_chrome_style(style: str) -> None:
+    """Set the viewport controls style (solid, translucent, or frosted)"""
+
+def get_viewport_toolbar_position() -> str:
+    """Return the viewport toolbar position (top, centered, or free)"""
+
+def set_viewport_toolbar_position(position: str) -> None:
+    """Set the viewport toolbar position (top, centered, or free)"""
+
 class PanelSpace(enum.Enum):
     SIDE_PANEL = 0
 
@@ -403,6 +415,15 @@ def is_panel_enabled(panel_id: str) -> bool:
 
 def get_main_panel_tabs() -> list[PanelSummary]:
     """Get all main panel tabs as typed panel summaries"""
+
+def get_bottom_dock_tabs() -> list[str]:
+    """Get the currently visible bottom-dock panel ids in registry order"""
+
+def get_bottom_dock_active_tab() -> str:
+    """Get the active bottom-dock panel id"""
+
+def set_bottom_dock_active_tab(panel_id: str) -> None:
+    """Set the active bottom-dock panel id"""
 
 def get_panel(panel_id: str) -> PanelInfo | None:
     """Get typed panel info by id (None if not found)"""
@@ -953,6 +974,11 @@ def modal_get() -> dict | None:
 def modal_press(label: str) -> bool:
     """
     Press an enabled modal button by label. Returns False if no matching enabled button.
+    """
+
+def get_panel_object(panel_id: str) -> object:
+    """
+    Get the Python object for a retained Python panel, or None if unavailable
     """
 
 def begin_drag_payload(type: str, data: str, label: str = '') -> int:
@@ -2589,6 +2615,20 @@ def set_theme(name: str) -> None:
 def get_theme() -> str:
     """Get current stable theme id"""
 
+def set_theme_family(family_id: str, mode: str) -> bool:
+    """Select a theme family using dark, light, or automatic system mode"""
+
+def get_theme_family() -> str:
+    """Get the selected theme family id"""
+
+def get_theme_mode() -> str:
+    """Get the selected family mode: dark, light, or auto"""
+
+def supports_system_theme() -> bool:
+    """
+    Return whether automatic OS light/dark detection is available in this session
+    """
+
 def themes() -> list:
     """Get available theme presets with stable ids and UI metadata"""
 
@@ -2600,6 +2640,18 @@ def get_ui_scale() -> float:
 
 def get_ui_scale_preference() -> float:
     """Get saved UI scale preference (0.0 = auto)"""
+
+def set_zoom_speed_preference(speed: float) -> None:
+    """Set the default camera zoom speed (1-100)"""
+
+def get_zoom_speed_preference() -> float:
+    """Get the default camera zoom speed"""
+
+def set_navigation_speed_preference(speed: float) -> None:
+    """Set the default WASD navigation speed (1-100)"""
+
+def get_navigation_speed_preference() -> float:
+    """Get the default WASD navigation speed"""
 
 def get_scene_reconstruction_options() -> list:
     """Get registered scene reconstruction backends and their presets"""

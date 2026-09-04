@@ -225,6 +225,8 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleTrainingStarted() {
+        // The worker completion handoff only invalidates overlay state. Any
+        // renderer setup is consumed by the next render cadence tick.
         markDirty(DirtyFlag::OVERLAY);
     }
 

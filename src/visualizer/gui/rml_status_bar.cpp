@@ -1300,6 +1300,10 @@ namespace lfs::vis::gui {
                 mode_color = colorToRml(p.success);
                 break;
             }
+            case TrainingState::Starting:
+                mode_rml = LOC("runtime.task_starting_ellipsis") + suffix;
+                mode_color = colorToRml(p.warning);
+                break;
             case TrainingState::Finished:
                 mode_rml = LOC(lichtfeld::Strings::Status::COMPLETE) + suffix;
                 mode_color = colorToRml(p.success);

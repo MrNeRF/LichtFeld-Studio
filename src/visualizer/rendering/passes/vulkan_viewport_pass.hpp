@@ -98,6 +98,14 @@ namespace lfs::vis {
         std::uint32_t instance_count = 0;
     };
 
+    struct VulkanViewportFrustumOverlayData {
+        std::uint64_t generation = 0;
+        std::vector<VulkanViewportOverlayVertex> overlay_triangles;
+        std::vector<VulkanViewportTexturedOverlay> textured_overlays;
+        std::vector<VulkanViewportFrustumInstance> frustum_instances;
+        std::vector<VulkanViewportFrustumBatch> frustum_batches;
+    };
+
     struct VulkanViewportPassParams {
         std::size_t frame_slot = 0;
         glm::vec2 viewport_pos{0.0f, 0.0f};
@@ -145,6 +153,9 @@ namespace lfs::vis {
         // Textured overlays drawn in the UI phase (after ui_shape_overlay): screen-space
         // text and icons that must layer above overlay fills and gizmo shapes.
         std::vector<VulkanViewportTexturedOverlay> ui_textured_overlays;
+        // Immutable for the duration of prepare/record. GUI frustum caches keep
+        // this shared block alive so an idle frame does not copy 1740 entries.
+        std::shared_ptr<const VulkanViewportFrustumOverlayData> frustum_overlay_data;
         std::vector<VulkanViewportFrustumInstance> frustum_instances;
         std::vector<VulkanViewportFrustumBatch> frustum_batches;
 

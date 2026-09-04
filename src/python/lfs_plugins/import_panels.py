@@ -17,21 +17,24 @@ from .ui import RuntimeState
 
 _new_project_panel = None
 _resume_checkpoint_panel = None
+_SOURCE_PROBE_DEBOUNCE_SECONDS = 0.3
 
 __lfs_panel_classes__ = ["NewProjectPanel", "ResumeCheckpointPanel"]
 __lfs_panel_ids__ = ["lfs.new_project", "lfs.resume_checkpoint"]
 
 
 def open_new_project_panel(source_path: str = "") -> bool:
-    if _new_project_panel is None:
+    panel = _new_project_panel or lf.ui.get_panel_object("lfs.new_project")
+    if panel is None:
         return False
-    return _new_project_panel.show(source_path)
+    return panel.show(source_path)
 
 
 def open_resume_checkpoint_panel(checkpoint_path: str) -> bool:
-    if _resume_checkpoint_panel is None:
+    panel = _resume_checkpoint_panel or lf.ui.get_panel_object("lfs.resume_checkpoint")
+    if panel is None:
         return False
-    return _resume_checkpoint_panel.show(checkpoint_path)
+    return panel.show(checkpoint_path)
 
 
 def _directory_has_colmap_file(path: str) -> bool:
@@ -86,6 +89,7 @@ class _ImportDialogPanel(Panel):
         if hasattr(self, "_dialog_mounted"):
             self._dialog_mounted = False
             self._source_generation += 1
+            self._source_probe_update_generation += 1
             self._source_probe_cancel.set()
             self._source_probe_active = False
         self._unsubscribe_reactive_state()
@@ -190,6 +194,7 @@ class NewProjectPanel(_ImportDialogPanel):
         self._last_lang = ""
         self._source_generation = 0
         self._source_probe_due = 0.0
+        self._source_probe_update_generation = 0
         self._source_probe_active = False
         self._source_probe_cancel = threading.Event()
         self._dialog_mounted = False
@@ -313,7 +318,8 @@ class NewProjectPanel(_ImportDialogPanel):
             self._source_kind = "splat"
         else:
             self._source_kind = "checking"
-            self._source_probe_due = time.monotonic() + 0.3
+            self._source_probe_due = time.monotonic() + _SOURCE_PROBE_DEBOUNCE_SECONDS
+            self._schedule_source_probe_update()
 
         self._dirty_model(
             "source_path",
@@ -362,6 +368,7 @@ class NewProjectPanel(_ImportDialogPanel):
     def _start_source_probe(self) -> None:
         if self._source_probe_active:
             return
+        self._source_probe_due = 0.0
         self._source_probe_active = True
         path = self._source_path
         name = self._name
@@ -455,10 +462,33 @@ class NewProjectPanel(_ImportDialogPanel):
         scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
         if callable(scheduler):
             self._target_exists_cached = False
-            self._source_probe_due = time.monotonic() + 0.3
+            self._source_probe_due = time.monotonic() + _SOURCE_PROBE_DEBOUNCE_SECONDS
+            self._schedule_source_probe_update()
         else:
             self._refresh_target_cache()
         self._dirty_model("name", "name_valid", "target_exists", "can_create", "location_preview", "create_hint")
+
+    def _schedule_source_probe_update(self) -> None:
+        self._source_probe_update_generation += 1
+        generation = self._source_probe_update_generation
+        due = self._source_probe_due
+        delay = max(0.0, due - time.monotonic())
+
+        def fire() -> None:
+            if (
+                generation != self._source_probe_update_generation
+                or self._source_probe_due != due
+            ):
+                return
+            scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
+            if callable(scheduler):
+                scheduler(self._request_reactive_update)
+            else:
+                self._request_reactive_update()
+
+        timer = threading.Timer(delay, fire)
+        timer.daemon = True
+        timer.start()
 
     def _name_is_valid(self) -> bool:
         name = self._name.strip()

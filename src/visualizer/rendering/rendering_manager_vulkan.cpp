@@ -1655,7 +1655,9 @@ namespace lfs::vis {
         SceneManager* const scene_manager = context.scene_manager;
         auto* const trainer_manager = scene_manager ? scene_manager->getTrainerManager() : nullptr;
         const bool is_training = scene_manager && scene_manager->hasDataset() &&
-                                 trainer_manager && trainer_manager->isRunning();
+                                 trainer_manager && trainer_manager->isTrainingActive();
+        const bool training_initializing = trainer_manager &&
+                                           trainer_manager->getState() == TrainingState::Starting;
         if (!is_training && vksplat_viewport_renderer_) {
             // Clear a callback capturing the previous trainer before any cached or
             // minimized-frame early return can leave it reachable by an auxiliary submit.
@@ -2044,17 +2046,19 @@ namespace lfs::vis {
                  render_lock_contended);
         // Step-boundary contention during densify: retain last splat image, re-queue
         // dirty so the next cadence tick retries after the exclusive lock drops.
-        if (render_lock_contended && has_cached_viewport_output) {
+        if (render_lock_contended && (has_cached_viewport_output || training_initializing)) {
             if (frame_dirty != 0) {
                 dirty_mask_.fetch_or(frame_dirty, std::memory_order_relaxed);
             }
-            LOG_PERF("renderVulkanFrame: step-boundary lock contended (retaining cached splat)");
+            LOG_PERF("renderVulkanFrame: {} lock contended (retaining cached splat)",
+                     training_initializing ? "training initialization" : "step-boundary");
             render_lock.reset();
             return cached_frame_result();
         }
         if (render_lock_contended && !has_cached_viewport_output) {
-            // First frame while densify holds exclusive — block once so we get a
-            // stable model rather than an empty viewport for the whole refine.
+            // A normal running-training cold start may block once for a stable
+            // first frame. Starting is handled above and never waits for the
+            // initialization worker, even when no previous frame exists.
             render_lock = acquireLiveModelRenderLock(scene_manager, /*try_lock=*/false);
             render_lock_contended = !render_lock.has_value();
             if (render_lock) {
@@ -2152,7 +2156,12 @@ namespace lfs::vis {
                       render_size.y);
         }
 
-        if (!vksplat_viewport_resize && frame_dirty == 0 && has_cached_viewport_output) {
+        // Camera thumbnails are uploaded and composited by the GUI viewport
+        // pass. Reuse the cached splat image for an overlay-only refresh; a
+        // thumbnail must never turn a stream-in update into a full splat pass.
+        if (!vksplat_viewport_resize &&
+            (frame_dirty == 0 || frame_dirty == DirtyFlag::OVERLAY) &&
+            has_cached_viewport_output) {
             LOG_PERF("renderVulkanFrame: cache HIT (returning cached image)");
             render_lock.reset();
             return cached_frame_result();

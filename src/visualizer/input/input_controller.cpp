@@ -547,12 +547,26 @@ namespace lfs::vis {
         }
     }
 
+    void InputController::applyNavigationSpeedPreferences(const float zoom_speed,
+                                                          const float navigation_speed) {
+        viewport_.camera.setZoomSpeed(zoom_speed);
+        viewport_.camera.setWasdSpeed(navigation_speed);
+        if (viewer_) {
+            if (auto* const rendering = viewer_->getRenderingManager()) {
+                auto& secondary = rendering->projectSecondaryViewport();
+                secondary.camera.setZoomSpeed(zoom_speed);
+                secondary.camera.setWasdSpeed(navigation_speed);
+            }
+        }
+    }
+
     void InputController::onWindowFocusLost() {
         if (current_cursor_ != CursorType::Default) {
             SDL_SetCursor(SDL_GetDefaultCursor());
             current_cursor_ = CursorType::Default;
         }
         held_keys_.clear();
+        selection_drag_op_.reset();
         pending_click_drag_ = {};
         forced_mouse_press_action_ = input::Action::NONE;
         text_input_viewport_click_button_ = -1;
@@ -596,6 +610,16 @@ namespace lfs::vis {
         if (m & SDL_KMOD_ALT)
             mods |= input::KEYMOD_ALT;
         return mods;
+    }
+
+    bool InputController::hasViewportCursorOverride() const {
+        return current_cursor_ == CursorType::Resize;
+    }
+
+    std::optional<input::SelectionOp> InputController::selectionDragOperation() const {
+        if (!selection_drag_op_ || !op::operators().hasModalOperator())
+            return std::nullopt;
+        return selection_drag_op_;
     }
 
     void InputController::refreshSplitDividerCache() const {
@@ -1045,7 +1069,22 @@ namespace lfs::vis {
                         props.set("use_depth_filter", selection_tool_->isDepthFilterEnabled());
 
                         const auto result = op::operators().invoke(op::BuiltinOp::SelectionStroke, &props);
-                        if (result.status == op::OperatorResult::RUNNING_MODAL) {
+                        if (result.status == op::OperatorResult::RUNNING_MODAL ||
+                            op::operators().hasModalOperator()) {
+                            switch (bound_action) {
+                            case input::Action::SELECTION_ADD:
+                                selection_drag_op_ = input::SelectionOp::Add;
+                                break;
+                            case input::Action::SELECTION_REMOVE:
+                                selection_drag_op_ = input::SelectionOp::Remove;
+                                break;
+                            case input::Action::SELECTION_INTERSECT:
+                                selection_drag_op_ = input::SelectionOp::Intersect;
+                                break;
+                            default:
+                                selection_drag_op_.reset();
+                                break;
+                            }
                             // Operator is now modal, don't set drag mode - modal dispatch handles it
                         }
                     } else if (align_tool_ && align_tool_->isEnabled()) {
@@ -1739,8 +1778,7 @@ namespace lfs::vis {
                 return;
 
             case input::Action::TOGGLE_INDEPENDENT_SPLIT_VIEW:
-                cmd::ToggleIndependentSplitView{.viewport = &viewport_}.emit();
-                focusSplitPanel(SplitViewPanelId::Left);
+                toggleIndependentSplitView();
                 return;
 
             case input::Action::TOGGLE_GT_COMPARISON:
@@ -1765,6 +1803,16 @@ namespace lfs::vis {
             case input::Action::TOGGLE_SCENE_SELECTION_TRAINING:
                 if (gui)
                     (void)gui->toggleSceneSelectionTrainingIfFocused();
+                return;
+
+            case input::Action::GROUP_SELECTED_SCENE_NODES:
+                if (gui)
+                    (void)gui->groupSelectedSceneNodesIfFocused();
+                return;
+
+            case input::Action::UNGROUP_SELECTED_SCENE_NODE:
+                if (gui)
+                    (void)gui->ungroupSelectedSceneNodeIfFocused();
                 return;
 
             case input::Action::TOGGLE_MCP_SERVER:
@@ -2770,6 +2818,18 @@ namespace lfs::vis {
     bool InputController::isIndependentSplitViewActive() const {
         auto* const rendering = services().renderingOrNull();
         return rendering && rendering->isIndependentSplitViewActive();
+    }
+
+    void InputController::toggleIndependentSplitView() {
+        if (!isIndependentSplitViewActive()) {
+            const auto* const scene_manager = services().sceneOrNull();
+            if (!scene_manager || scene_manager->isEmpty()) {
+                return;
+            }
+        }
+
+        cmd::ToggleIndependentSplitView{.viewport = &viewport_}.emit();
+        focusSplitPanel(SplitViewPanelId::Left);
     }
 
     SplitViewPanelId InputController::splitPanelForScreenX(const double x) const {

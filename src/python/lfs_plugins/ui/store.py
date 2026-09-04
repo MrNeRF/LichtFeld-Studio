@@ -203,22 +203,41 @@ class PanelStateBinding:
     def watch(
         self,
         *signals: StateSignal[object] | Signal[object] | ComputedSignal[object],
-        refresh: Callable[[], None] | None = None,
+        refresh: Callable[[], bool | None] | None = None,
         dirty: DirtySpec = None,
         immediate: bool = False,
     ) -> PanelStateBinding:
-        """Refresh and invalidate the panel when any runtime-state signal changes."""
+        """Refresh and invalidate on signal changes unless refresh returns False."""
 
-        def on_change(_value: object) -> None:
-            if refresh is not None:
-                refresh()
-            invalidate_panel(self._handle, dirty)
+        def make_on_change():
+            last_value = None
+            has_last_value = False
+
+            def on_change(value: object) -> None:
+                nonlocal has_last_value, last_value
+                if has_last_value and value == last_value:
+                    return
+                has_last_value = True
+                last_value = value
+
+                refresh_result = None
+                if refresh is not None:
+                    refresh_result = refresh()
+                if refresh_result is False:
+                    return
+                invalidate_panel(self._handle, dirty)
+
+            return on_change
 
         for signal in signals:
-            self._unsubscribers.append(signal.subscribe(on_change))
+            self._unsubscribers.append(signal.subscribe(make_on_change()))
 
         if immediate:
-            on_change(None)
+            refresh_result = None
+            if refresh is not None:
+                refresh_result = refresh()
+            if refresh_result is not False:
+                invalidate_panel(self._handle, dirty)
 
         return self
 

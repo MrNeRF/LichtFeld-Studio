@@ -171,6 +171,10 @@ class Action(enum.Enum):
 
     TOGGLE_SCENE_SELECTION_TRAINING = 84
 
+    GROUP_SELECTED_SCENE_NODES = 85
+
+    UNGROUP_SELECTED_SCENE_NODE = 86
+
 class ToolMode(enum.Enum):
     GLOBAL = 0
 

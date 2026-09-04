@@ -86,10 +86,7 @@ namespace lfs::vis {
         }
         void applySplitterCursorOverride() const;
 
-        void toggleIndependentSplitView() {
-            lfs::core::events::cmd::ToggleIndependentSplitView{.viewport = &viewport_}.emit();
-            focusSplitPanel(SplitViewPanelId::Left);
-        }
+        void toggleIndependentSplitView();
 
         // Set special input modes
         void setPointCloudMode(bool enabled) {
@@ -102,6 +99,7 @@ namespace lfs::vis {
         void loadInputProfile(const std::string& name) { bindings_.loadProfile(name); }
         [[nodiscard]] CameraNavigationMode cameraNavigationMode() const { return camera_navigation_mode_; }
         void setCameraNavigationMode(CameraNavigationMode mode);
+        void applyNavigationSpeedPreferences(float zoom_speed, float navigation_speed);
         [[nodiscard]] bool cameraViewSnapEnabled() const { return camera_view_snap_enabled_; }
         void setCameraViewSnapEnabled(bool enabled) { camera_view_snap_enabled_ = enabled; }
         void restoreProjectNavigation(
@@ -143,6 +141,9 @@ namespace lfs::vis {
         }
         [[nodiscard]] bool hasViewportKeyboardFocus() const;
         [[nodiscard]] bool isViewportPoint(double x, double y) const { return isInViewport(x, y); }
+        [[nodiscard]] int currentModifierKeys() const { return getModifierKeys(); }
+        [[nodiscard]] std::optional<input::SelectionOp> selectionDragOperation() const;
+        [[nodiscard]] bool hasViewportCursorOverride() const;
         void setInputRouter(input::InputRouter* router) { input_router_ = router; }
 
         // Node rectangle selection state (for rendering)
@@ -301,6 +302,7 @@ namespace lfs::vis {
         // Used to resolve chord-bound scroll/drag triggers, e.g. R+Scroll for
         // Camera Roll. Newest held key wins when multiple chords are possible.
         std::vector<int> held_keys_;
+        std::optional<input::SelectionOp> selection_drag_op_;
         bool keys_movement_[6] = {false, false, false, false, false, false}; // fwd, left, back, right, up, down
 
         // Cached movement key bindings, indexed by ToolMode. Refreshed on

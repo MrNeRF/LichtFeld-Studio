@@ -32,11 +32,12 @@ namespace lfs::core {
     LFS_CORE_API std::tuple<unsigned char*, int, int, int>
     load_image(std::filesystem::path p, int res_div = -1, int max_width = 0);
 
-    // Thumbnail-only decode. JPEG decoders may use native DCT scaling before
-    // the final area resample; training and general image loading stay on
-    // load_image().
+    // Loads an RGB thumbnail. JPEG input uses an embedded EXIF thumbnail when
+    // its larger side is at least max_width, otherwise libjpeg DCT scaling
+    // before the final resample; other formats retain their full-decode path.
     LFS_CORE_API std::tuple<unsigned char*, int, int, int>
-    load_image_thumbnail(std::filesystem::path p, int max_width);
+    load_image_thumbnail(std::filesystem::path p, int max_width,
+                         bool* used_exif_thumbnail = nullptr);
 
     LFS_CORE_API std::tuple<uint16_t*, int, int, int>
     load_image_u16(std::filesystem::path p, int res_div = -1, int max_width = 0);

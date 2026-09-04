@@ -3,21 +3,20 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include <charconv>
 #include <concepts>
-#include <cstdlib>
 #include <optional>
+#include <string>
 #include <string_view>
 
 namespace lfs::core::environment {
 
-    [[nodiscard]] inline std::optional<std::string_view> value(const char* const name) noexcept {
-        const char* const raw = std::getenv(name);
-        if (!raw || *raw == '\0') {
-            return std::nullopt;
-        }
-        return std::string_view(raw);
-    }
+    [[nodiscard]] LFS_LOGGER_API std::optional<std::string> value(const char* name) noexcept;
+
+    [[nodiscard]] LFS_LOGGER_API bool set_value(std::string_view name,
+                                                std::string_view utf8_value) noexcept;
 
     namespace detail {
         [[nodiscard]] inline bool equals_ignore_ascii_case(const std::string_view lhs,

@@ -33,6 +33,10 @@ namespace lfs::vis {
         [[nodiscard]] std::string themeName();
         void setUiScale(float value);
         [[nodiscard]] float uiScale();
+        void setZoomSpeed(float value);
+        [[nodiscard]] float zoomSpeed();
+        void setNavigationSpeed(float value);
+        [[nodiscard]] float navigationSpeed();
 
         void setLanguage(const std::string& value);
         [[nodiscard]] std::string language();
@@ -50,6 +54,12 @@ namespace lfs::vis {
         [[nodiscard]] bool sceneGraphSelectionMarkers();
         void setProgressBarStyle(std::string_view value);
         [[nodiscard]] std::string progressBarStyle();
+        void setViewportChromeStyle(std::string_view value);
+        [[nodiscard]] std::string viewportChromeStyle();
+        void setViewportToolbarPosition(std::string_view value);
+        [[nodiscard]] std::string viewportToolbarPosition();
+        void setViewportToolbarFreeY(float value);
+        [[nodiscard]] float viewportToolbarFreeY();
 
         void setMcp(const McpPreferenceState& state);
         [[nodiscard]] McpPreferenceState mcp();
@@ -77,6 +87,10 @@ namespace lfs::vis {
 
     LFS_VIS_API void saveCameraNavigationPreference(const std::string& mode);
     [[nodiscard]] LFS_VIS_API std::string loadCameraNavigationPreference();
+    LFS_VIS_API void saveZoomSpeedPreference(float speed);
+    [[nodiscard]] LFS_VIS_API float loadZoomSpeedPreference();
+    LFS_VIS_API void saveNavigationSpeedPreference(float speed);
+    [[nodiscard]] LFS_VIS_API float loadNavigationSpeedPreference();
     LFS_VIS_API void setRememberCameraNavigationPreference(bool enabled);
     [[nodiscard]] LFS_VIS_API bool rememberCameraNavigationPreference();
     LFS_VIS_API void saveCameraViewSnapPreference(bool enabled);
@@ -87,6 +101,12 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API bool loadSceneGraphSelectionMarkersPreference();
     LFS_VIS_API void saveProgressBarStylePreference(std::string_view style);
     [[nodiscard]] LFS_VIS_API std::string loadProgressBarStylePreference();
+    LFS_VIS_API void saveViewportChromeStylePreference(std::string_view style);
+    [[nodiscard]] LFS_VIS_API std::string loadViewportChromeStylePreference();
+    LFS_VIS_API void saveViewportToolbarPositionPreference(std::string_view position);
+    [[nodiscard]] LFS_VIS_API std::string loadViewportToolbarPositionPreference();
+    LFS_VIS_API void saveViewportToolbarFreeYPreference(float value);
+    [[nodiscard]] LFS_VIS_API float loadViewportToolbarFreeYPreference();
     LFS_VIS_API void saveMcpPreferences(const McpPreferenceState& state);
     [[nodiscard]] LFS_VIS_API McpPreferenceState loadMcpPreferences();
     LFS_VIS_API void saveSceneUpscalerPreference(const std::string& backend_id,

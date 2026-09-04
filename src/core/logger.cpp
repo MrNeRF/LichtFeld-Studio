@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
+#include "core/environment.hpp"
+#include "core/path_utils.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include <array>
 #include <cstdio>
@@ -10,16 +12,20 @@
 #include <deque>
 #include <filesystem>
 #include <format>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <regex>
 #include <vector>
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <unistd.h>
 #endif
-#ifdef WIN32
+#ifdef _WIN32
 #define FMT_UNICODE 0
 #endif
 #include <spdlog/sinks/base_sink.h>
@@ -43,17 +49,17 @@ namespace lfs::core {
 
     std::filesystem::path lichtfeld_home_directory() {
 #ifdef _WIN32
-        if (const char* profile = std::getenv("USERPROFILE"); profile && profile[0])
-            return std::filesystem::path(profile);
-        const char* drive = std::getenv("HOMEDRIVE");
-        const char* homepath = std::getenv("HOMEPATH");
-        if (drive && drive[0] && homepath && homepath[0])
-            return std::filesystem::path(std::string(drive) + homepath);
-        if (const char* home = std::getenv("HOME"); home && home[0])
-            return std::filesystem::path(home);
+        if (const auto profile = environment::value("USERPROFILE"))
+            return utf8_to_path(*profile);
+        const auto drive = environment::value("HOMEDRIVE");
+        const auto homepath = environment::value("HOMEPATH");
+        if (drive && homepath)
+            return utf8_to_path(*drive + *homepath);
+        if (const auto home = environment::value("HOME"))
+            return utf8_to_path(*home);
 #else
-        if (const char* home = std::getenv("HOME"); home && home[0])
-            return std::filesystem::path(home);
+        if (const auto home = environment::value("HOME"))
+            return utf8_to_path(*home);
 #endif
         return std::filesystem::temp_directory_path();
     }
@@ -353,6 +359,28 @@ namespace lfs::core {
                 return {entries_.begin(), entries_.end()};
             }
 
+            [[nodiscard]] std::vector<LogEntrySnapshot>
+            entries_since(const uint64_t generation, const size_t max_count) const {
+                if (max_count == 0)
+                    return {};
+
+                std::lock_guard lock(entries_mutex_);
+                auto first = entries_.begin();
+                while (first != entries_.end() && first->sequence <= generation)
+                    ++first;
+                if (first == entries_.end())
+                    return {};
+
+                const auto available = static_cast<size_t>(std::distance(first, entries_.end()));
+                if (available > max_count)
+                    first = std::prev(entries_.end(), static_cast<std::ptrdiff_t>(max_count));
+
+                std::vector<LogEntrySnapshot> result;
+                result.reserve(std::min(available, max_count));
+                result.insert(result.end(), first, entries_.end());
+                return result;
+            }
+
             [[nodiscard]] std::string text() const {
                 std::lock_guard lock(entries_mutex_);
                 std::string output;
@@ -390,8 +418,8 @@ namespace lfs::core {
                 std::lock_guard lock(entries_mutex_);
                 if (entries_.size() >= max_entries_)
                     entries_.pop_front();
+                entry.sequence = generation_.fetch_add(1, std::memory_order_relaxed) + 1;
                 entries_.push_back(std::move(entry));
-                generation_.fetch_add(1, std::memory_order_relaxed);
             }
 
             void flush_() override {}
@@ -421,7 +449,7 @@ namespace lfs::core {
 
         fs::path resolve_default_log_directory(const std::string& user_dir_override) {
             if (!user_dir_override.empty())
-                return fs::path(user_dir_override) / "logs";
+                return utf8_to_path(user_dir_override) / "logs";
             return lichtfeld_home_directory() / ".lichtfeld" / "logs";
         }
 
@@ -430,8 +458,9 @@ namespace lfs::core {
         }
 
         std::shared_ptr<spdlog::sinks::rotating_file_sink_mt> make_rotating_file_sink(const fs::path& path) {
+            const auto filename = path_to_utf8(path);
             auto sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
-                path.string(), DEFAULT_LOG_ROTATION_MAX_BYTES, DEFAULT_LOG_ROTATION_MAX_FILES);
+                filename, DEFAULT_LOG_ROTATION_MAX_BYTES, DEFAULT_LOG_ROTATION_MAX_FILES);
             sink->set_level(spdlog::level::trace);
             sink->set_pattern(DEFAULT_LOG_FILE_PATTERN);
             return sink;
@@ -445,14 +474,14 @@ namespace lfs::core {
             fs::create_directories(path.parent_path(), ec);
             if (ec) {
                 std::fprintf(stderr, "lichtfeld: could not create log directory '%s': %s\n",
-                             path.parent_path().string().c_str(), ec.message().c_str());
+                             path_to_utf8(path.parent_path()).c_str(), ec.message().c_str());
                 return nullptr;
             }
             try {
                 return make_rotating_file_sink(path);
             } catch (const std::exception& e) {
                 std::fprintf(stderr, "lichtfeld: could not open default log file '%s': %s\n",
-                             path.string().c_str(), e.what());
+                             path_to_utf8(path).c_str(), e.what());
                 return nullptr;
             }
         }
@@ -550,7 +579,7 @@ namespace lfs::core {
         }
 
         if (!log_file.empty()) {
-            const fs::path explicit_path(log_file);
+            const fs::path explicit_path = utf8_to_path(log_file);
             if (!default_sink_added || !same_log_target(default_log_path, explicit_path)) {
                 sinks.push_back(make_rotating_file_sink(explicit_path));
             }
@@ -671,24 +700,50 @@ namespace lfs::core {
     }
 
     size_t Logger::buffered_log_count() const {
-        std::lock_guard lock(impl_->mutex);
-        return impl_->memory_sink ? impl_->memory_sink->entry_count() : 0;
+        std::shared_ptr<MemorySink> memory_sink;
+        {
+            std::lock_guard lock(impl_->mutex);
+            memory_sink = impl_->memory_sink;
+        }
+        return memory_sink ? memory_sink->entry_count() : 0;
     }
 
     uint64_t Logger::buffered_log_generation() const {
-        std::lock_guard lock(impl_->mutex);
-        return impl_->memory_sink ? impl_->memory_sink->generation() : 0;
+        std::shared_ptr<MemorySink> memory_sink;
+        {
+            std::lock_guard lock(impl_->mutex);
+            memory_sink = impl_->memory_sink;
+        }
+        return memory_sink ? memory_sink->generation() : 0;
     }
 
     std::vector<LogEntrySnapshot> Logger::buffered_logs() const {
-        std::lock_guard lock(impl_->mutex);
-        return impl_->memory_sink ? impl_->memory_sink->entries()
-                                  : std::vector<LogEntrySnapshot>{};
+        std::shared_ptr<MemorySink> memory_sink;
+        {
+            std::lock_guard lock(impl_->mutex);
+            memory_sink = impl_->memory_sink;
+        }
+        return memory_sink ? memory_sink->entries() : std::vector<LogEntrySnapshot>{};
+    }
+
+    std::vector<LogEntrySnapshot>
+    Logger::buffered_logs_since(const uint64_t generation, const size_t max_count) const {
+        std::shared_ptr<MemorySink> memory_sink;
+        {
+            std::lock_guard lock(impl_->mutex);
+            memory_sink = impl_->memory_sink;
+        }
+        return memory_sink ? memory_sink->entries_since(generation, max_count)
+                           : std::vector<LogEntrySnapshot>{};
     }
 
     std::string Logger::buffered_logs_as_text() const {
-        std::lock_guard lock(impl_->mutex);
-        return impl_->memory_sink ? impl_->memory_sink->text() : std::string{};
+        std::shared_ptr<MemorySink> memory_sink;
+        {
+            std::lock_guard lock(impl_->mutex);
+            memory_sink = impl_->memory_sink;
+        }
+        return memory_sink ? memory_sink->text() : std::string{};
     }
 
     ScopedTimer::ScopedTimer(const std::string_view name, const LogLevel level,

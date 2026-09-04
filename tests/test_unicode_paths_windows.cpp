@@ -14,6 +14,8 @@
  * This test runs on Windows CI without requiring CUDA/GPU.
  */
 
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -24,13 +26,17 @@
 #include <vector>
 
 // Check if we have access to the full library (not standalone unicode test build)
-#if __has_include("core/parameters.hpp")
+#if __has_include("core/parameters.hpp") && !defined(LFS_UNICODE_TEST_STANDALONE)
 #define LFS_HAS_FULL_LIBRARY 1
 #include "core/parameters.hpp"
 #include <nlohmann/json.hpp>
 #endif
 
+#include "core/environment.hpp"
 #include "core/path_utils.hpp"
+#include "io/atomic_output_path.hpp"
+
+#include <stb_image.h>
 
 namespace fs = std::filesystem;
 using namespace lfs::core;
@@ -211,6 +217,122 @@ TEST_F(UnicodePathTest, PathToUtf8Conversion) {
         std::string utf8 = path_to_utf8(long_path);
         EXPECT_FALSE(utf8.empty());
     }
+}
+
+TEST_F(UnicodePathTest, ProcessBoundaryHelpersPreserveJapanese) {
+    const auto japanese_path = test_root_ / utf8_to_path("山田_プロジェクト");
+
+#ifdef _WIN32
+    wchar_t arg0[] = L"lichtfeld.exe";
+    wchar_t arg1[] = L"--project";
+    wchar_t arg2[] = L"C:\\Users\\山田\\プロジェクト.licht";
+    wchar_t* wide_argv[] = {arg0, arg1, arg2};
+    const auto arguments = utf8_argv(3, wide_argv);
+#else
+    char arg0[] = "lichtfeld";
+    char arg1[] = "--project";
+    char arg2[] = "山田/プロジェクト.licht";
+    char* narrow_argv[] = {arg0, arg1, arg2};
+    const auto arguments = utf8_argv(3, narrow_argv);
+#endif
+    ASSERT_EQ(arguments.size(), 3);
+    EXPECT_EQ(arguments[1], "--project");
+    EXPECT_EQ(arguments[2],
+#ifdef _WIN32
+              "C:\\Users\\山田\\プロジェクト.licht"
+#else
+              "山田/プロジェクト.licht"
+#endif
+    );
+
+    constexpr const char* environment_name = "LFS_UNICODE_PATH_TEST";
+    const auto previous = lfs::core::environment::value(environment_name);
+    const auto japanese_path_utf8 = path_to_utf8(japanese_path);
+    ASSERT_TRUE(environment::set_value(environment_name, japanese_path_utf8));
+#ifdef _WIN32
+    const auto wide_name = utf8_to_wstring(environment_name);
+    const auto* const raw_wide = _wgetenv(wide_name.c_str());
+    ASSERT_NE(raw_wide, nullptr);
+    EXPECT_EQ(wstring_to_utf8(raw_wide), japanese_path_utf8);
+#else
+    const auto* const raw = std::getenv(environment_name);
+    ASSERT_NE(raw, nullptr);
+    EXPECT_STREQ(raw, japanese_path_utf8.c_str());
+#endif
+    const auto observed = lfs::core::environment::value(environment_name);
+    ASSERT_TRUE(observed.has_value());
+    EXPECT_EQ(utf8_to_path(*observed), japanese_path);
+#ifdef _WIN32
+    if (previous) {
+        const auto previous_wide = utf8_to_wstring(*previous);
+        _wputenv_s(wide_name.c_str(), previous_wide.c_str());
+    } else {
+        _wputenv_s(wide_name.c_str(), L"");
+    }
+#else
+    if (previous)
+        setenv(environment_name, previous->c_str(), 1);
+    else
+        unsetenv(environment_name);
+#endif
+}
+
+TEST_F(UnicodePathTest, PathToGenericUtf8UsesForwardSlashes) {
+#ifdef _WIN32
+    const fs::path relative(L"画像\\写真.jpg");
+#else
+    const fs::path relative = fs::path("画像") / "写真.jpg";
+#endif
+    EXPECT_EQ(path_to_generic_utf8(relative), "画像/写真.jpg");
+}
+
+TEST_F(UnicodePathTest, PathAwareFileAndStbiRead) {
+    const auto image_path = test_root_ / utf8_to_path("画像_日本語.ppm");
+    const std::vector<uint8_t> ppm = {
+        'P',
+        '6',
+        '\n',
+        '1',
+        ' ',
+        '1',
+        '\n',
+        '2',
+        '5',
+        '5',
+        '\n',
+        255,
+        0,
+        0,
+    };
+    fs::create_directories(image_path.parent_path());
+    FILE* file = open_file(image_path, "wb");
+    ASSERT_NE(file, nullptr);
+    ASSERT_EQ(fwrite(ppm.data(), 1, ppm.size(), file), ppm.size());
+    fclose(file);
+
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    stbi_uc* pixels = stbi_load(path_to_utf8(image_path).c_str(),
+                                &width, &height, &channels, 4);
+    ASSERT_NE(pixels, nullptr);
+    EXPECT_EQ(width, 1);
+    EXPECT_EQ(height, 1);
+    stbi_image_free(pixels);
+}
+
+TEST_F(UnicodePathTest, AtomicOutputTempNamingPreservesJapanesePath) {
+    const auto output = test_root_ / utf8_to_path("成果物_日本語.licht");
+    const auto appended = lfs::io::make_atomic_temp_output_path(output);
+    const auto preserved = lfs::io::make_atomic_temp_output_path(
+        output, lfs::io::AtomicOutputTempName::PreserveExtension);
+
+    EXPECT_EQ(appended.parent_path(), output.parent_path());
+    EXPECT_EQ(preserved.parent_path(), output.parent_path());
+    EXPECT_NE(appended, output);
+    EXPECT_NE(preserved, output);
+    EXPECT_EQ(preserved.extension(), output.extension());
+    EXPECT_EQ(path_to_utf8(preserved.parent_path()), path_to_utf8(output.parent_path()));
 }
 
 // ============================================================================
@@ -878,8 +1000,14 @@ TEST_F(UnicodePathTest, RealWorld_ExportWorkflow) {
     auto sog_path = exports_dir / "故宮_ForbiddenCity_紫禁城.sog";
     // SOG is a ZIP archive, create minimal ZIP header
     std::vector<uint8_t> zip_header = {
-        0x50, 0x4B, 0x03, 0x04, // ZIP local file header signature
-        0x14, 0x00, 0x00, 0x00, // Version, flags
+        0x50,
+        0x4B,
+        0x03,
+        0x04, // ZIP local file header signature
+        0x14,
+        0x00,
+        0x00,
+        0x00, // Version, flags
     };
     create_binary_file(sog_path, zip_header);
     verify_file(sog_path);

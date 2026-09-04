@@ -1,5 +1,6 @@
 <rml>
 <head>
+    <link type="text/rcss" href="panel_tabs.rcss"/>
     <link type="text/rcss" href="right_panel.rcss"/>
 </head>
 <body id="rp-body" data-model="right_panel_tabs">

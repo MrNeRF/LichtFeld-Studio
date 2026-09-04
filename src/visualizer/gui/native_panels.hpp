@@ -6,6 +6,8 @@
 
 #include "gui/panel_registry.hpp"
 
+#include <string_view>
+
 namespace lfs::vis::gui {
 
     class StartupOverlay;
@@ -22,6 +24,8 @@ namespace lfs::gui {
 }
 
 namespace lfs::vis::gui::native_panels {
+
+    inline constexpr std::string_view SEQUENCER_PANEL_ID = "native.sequencer";
 
     class VideoExtractorPanel : public IPanel {
     public:

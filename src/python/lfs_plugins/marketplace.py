@@ -8,7 +8,8 @@ import json
 import logging
 import threading
 import time
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, replace
 from typing import Callable, List, Optional, Set, Tuple
 
 from .http import urlopen
@@ -20,21 +21,29 @@ try:
 
     class _LfLogHandler(logging.Handler):
         def emit(self, record):
-            msg = self.format(record)
-            if record.levelno >= logging.ERROR:
-                _lf.log.error(msg)
-            elif record.levelno >= logging.WARNING:
-                _lf.log.warn(msg)
-            else:
-                _lf.log.info(msg)
+            try:
+                msg = self.format(record)
+                if record.levelno >= logging.ERROR:
+                    _lf.log.error(msg)
+                elif record.levelno >= logging.WARNING:
+                    _lf.log.warn(msg)
+                else:
+                    _lf.log.info(msg)
+            except Exception:
+                # Logging must never turn a per-entry network failure into a
+                # catalog-wide failure (and keeps lightweight test stubs safe).
+                pass
 
     _log.addHandler(_LfLogHandler())
     _log.setLevel(logging.DEBUG)
 except Exception:
     pass
 
-GITHUB_TIMEOUT_SEC = 10
+GITHUB_TIMEOUT_SEC = 4
+GITHUB_MAX_WORKERS = 4
+CATALOG_CACHE_TTL_SEC = 300
 REFRESH_RETRY_COOLDOWN_SEC = 30
+REFRESH_RETRY_MAX_COOLDOWN_SEC = 300
 GITHUB_API_URL = "https://api.github.com/repos"
 
 CURATED_PLUGIN_URLS: Tuple[str, ...] = (
@@ -57,12 +66,31 @@ class MarketplacePluginEntry:
     repo: str
     name: str
     description: str
-    stars: int = 0
+    stars: Optional[int] = None
     downloads: int = 0
     language: str = ""
     topics: Tuple[str, ...] = ()
     registry_id: str = ""
     error: str = ""
+    version: str = ""
+    github_enrichment_failed: bool = False
+
+
+@dataclass(frozen=True)
+class _CatalogCache:
+    entries: Tuple[MarketplacePluginEntry, ...]
+    registry_loaded: bool
+    github_enriched: bool
+    stored_at: float
+    next_retry_at: float = 0.0
+    failure_count: int = 0
+
+
+_catalog_cache_lock = threading.Lock()
+_catalog_cache: Optional[_CatalogCache] = None
+# Refresh ownership is deliberately per catalog instance.  A global in-flight
+# flag used to make a second panel return without ever receiving the first
+# panel's result.
 
 
 class PluginMarketplaceCatalog:
@@ -74,8 +102,8 @@ class PluginMarketplaceCatalog:
         self._loading = False
         self._registry_loaded = False
         self._github_enriched = False
-        self._last_attempt: float = 0.0
         self._on_change: Optional[Callable[[], None]] = None
+        self._restore_cached_catalog(time.monotonic())
 
     def set_on_change(self, callback: Optional[Callable[[], None]]) -> None:
         with self._lock:
@@ -91,63 +119,145 @@ class PluginMarketplaceCatalog:
         except Exception:
             _log.debug("Plugin marketplace change callback failed", exc_info=True)
 
+    def _restore_cached_catalog(self, now: float) -> None:
+        with _catalog_cache_lock:
+            cache = _catalog_cache
+            if cache is None:
+                return
+            if cache.registry_loaded:
+                usable = now - cache.stored_at < CATALOG_CACHE_TTL_SEC
+            else:
+                usable = now < cache.next_retry_at
+            if not usable:
+                return
+
+        with self._lock:
+            self._entries = list(cache.entries)
+            self._registry_loaded = cache.registry_loaded
+            self._github_enriched = cache.github_enriched
+
+    @staticmethod
+    def _cache_can_serve(
+        cache: Optional[_CatalogCache],
+        now: float,
+        require_github_enrichment: bool,
+    ) -> bool:
+        if cache is None:
+            return False
+        if now < cache.next_retry_at:
+            return True
+        if not cache.registry_loaded or now - cache.stored_at >= CATALOG_CACHE_TTL_SEC:
+            return False
+        return not require_github_enrichment or cache.github_enriched
+
     def refresh_async(self, force: bool = False, require_github_enrichment: bool = False) -> None:
         """Fetch registry entries, optionally enriching curated entries with GitHub metadata."""
+        now = time.monotonic()
+        with _catalog_cache_lock:
+            cache = _catalog_cache
+            cache_can_serve = self._cache_can_serve(
+                cache, now, require_github_enrichment
+            )
         with self._lock:
             if self._loading:
                 return
-            needs_github_upgrade = require_github_enrichment and not self._github_enriched
-            if self._registry_loaded and not needs_github_upgrade and not force:
+            needs_github_upgrade = (
+                require_github_enrichment
+                and not self._github_enriched
+                and not (cache and cache.github_enriched)
+            )
+            if not force and cache_can_serve and not needs_github_upgrade:
                 return
-            now = time.monotonic()
-            if (
-                not force
-                and not needs_github_upgrade
-                and self._last_attempt > 0
-                and (now - self._last_attempt) < REFRESH_RETRY_COOLDOWN_SEC
-            ):
+            if not force and cache is not None and now < cache.next_retry_at:
                 return
             self._loading = True
-            self._last_attempt = now
         self._notify_change()
 
         def worker():
-            from .manager import PluginManager
+            global _catalog_cache
 
-            mgr = PluginManager.instance()
             registry_entries: List[MarketplacePluginEntry] = []
             registry_ok = False
+            registry_error = None
+            github_enrichment_succeeded = False
+            backoff = None
             try:
-                for info in mgr.search(""):
-                    registry_entries.append(_from_registry(info))
-                registry_ok = True
-            except Exception as exc:
-                _log.debug("Registry search failed: %s", exc)
+                try:
+                    from .manager import PluginManager
 
-            curated_entries = (
-                _resolve_curated_from_github()
-                if require_github_enrichment
-                else _build_curated_fallback()
-            )
-            merged = _merge_entries(registry_entries, curated_entries)
-            if registry_ok:
-                _log.info(
-                    "Plugin marketplace registry loaded: %d registry entries, %d total catalog entries",
-                    len(registry_entries),
-                    len(merged),
-                )
-            else:
-                _log.info(
-                    "Plugin marketplace registry unavailable, using fallback catalog: %d fallback entries, %d total catalog entries",
-                    len(curated_entries),
-                    len(merged),
-                )
-            with self._lock:
-                self._entries = merged
-                self._loading = False
-                self._registry_loaded = registry_ok
-                self._github_enriched = self._github_enriched or require_github_enrichment
-            self._notify_change()
+                    mgr = PluginManager.instance()
+                    for info in mgr.search(""):
+                        registry_entries.append(_from_registry(info))
+                    registry_ok = True
+                except Exception as exc:
+                    registry_error = exc
+
+                try:
+                    curated_entries = _build_curated_fallback()
+                    if require_github_enrichment:
+                        # Popularity applies to the complete catalog.  Include
+                        # registry-backed repositories in the same bounded
+                        # GitHub pool as the curated entries.
+                        curated_entries = _resolve_github_entries(
+                            registry_entries + curated_entries
+                        )
+                    github_enrichment_succeeded = require_github_enrichment
+                except Exception as exc:
+                    curated_entries = _build_curated_fallback()
+                    registry_error = registry_error or exc
+                merged = _merge_entries(registry_entries, curated_entries)
+                if registry_ok:
+                    _log.info(
+                        "Plugin marketplace registry loaded: %d registry entries, %d total catalog entries",
+                        len(registry_entries),
+                        len(merged),
+                    )
+                with self._lock:
+                    self._entries = merged
+                    self._registry_loaded = registry_ok
+                    self._github_enriched = (
+                        self._github_enriched or github_enrichment_succeeded
+                    )
+
+                with _catalog_cache_lock:
+                    previous_failures = (
+                        _catalog_cache.failure_count
+                        if _catalog_cache is not None and not registry_ok
+                        else 0
+                    )
+                    failure_count = previous_failures + 1 if not registry_ok else 0
+                    if failure_count:
+                        backoff = min(
+                            REFRESH_RETRY_COOLDOWN_SEC * 2 ** (failure_count - 1),
+                            REFRESH_RETRY_MAX_COOLDOWN_SEC,
+                        )
+                        next_retry_at = time.monotonic() + backoff
+                    else:
+                        next_retry_at = 0.0
+                    _catalog_cache = _CatalogCache(
+                        entries=tuple(merged),
+                        registry_loaded=registry_ok,
+                        github_enriched=self._github_enriched,
+                        stored_at=time.monotonic(),
+                        next_retry_at=next_retry_at,
+                        failure_count=failure_count,
+                    )
+                if registry_error is not None:
+                    if backoff is not None:
+                        _log.warning(
+                            "Plugin marketplace refresh failed; retrying in %.0f s: %s",
+                            backoff,
+                            registry_error,
+                        )
+                    else:
+                        _log.warning(
+                            "Plugin marketplace GitHub enrichment failed: %s",
+                            registry_error,
+                        )
+            finally:
+                with self._lock:
+                    self._loading = False
+                self._notify_change()
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -184,6 +294,7 @@ def _from_registry(info) -> MarketplacePluginEntry:
         downloads=info.downloads,
         topics=info.keywords,
         registry_id=info.full_id,
+        version=info.latest_version,
     )
 
 
@@ -210,36 +321,83 @@ def _build_curated_fallback() -> List[MarketplacePluginEntry]:
 
 def _resolve_curated_from_github() -> List[MarketplacePluginEntry]:
     """Resolve curated URLs via GitHub API (runs in background thread)."""
+    return _resolve_github_entries(_build_curated_fallback())
+
+
+def _resolve_github_entries(
+    entries: List[MarketplacePluginEntry],
+) -> List[MarketplacePluginEntry]:
+    """Resolve GitHub metadata for unique repository entries in a bounded pool."""
     from .installer import parse_github_url
 
-    entries: List[MarketplacePluginEntry] = []
-    for url in CURATED_PLUGIN_URLS:
-        try:
-            owner, repo, _ = parse_github_url(url)
-        except Exception:
+    requests = []
+    seen: Set[str] = set()
+    for entry in entries:
+        owner, repo = entry.owner, entry.repo
+        if not owner or not repo:
+            for candidate in (entry.github_url, entry.source_url):
+                try:
+                    owner, repo, _ = parse_github_url(candidate)
+                    break
+                except Exception:
+                    owner, repo = "", ""
+        key = _entry_key(owner, repo)
+        if not key or key in seen:
             continue
-        entries.append(_resolve_github_entry(url, owner, repo))
-    return entries
+        seen.add(key)
+        requests.append((entry.source_url or entry.github_url, owner, repo))
+
+    if not requests:
+        return []
+
+    # Keep the catalog responsive when GitHub is slow or rate-limiting.  Each
+    # task returns a fallback-shaped entry even when its request fails, so one
+    # bad repository cannot discard the rest of the catalog.
+    with ThreadPoolExecutor(max_workers=min(GITHUB_MAX_WORKERS, len(requests))) as pool:
+        futures = [pool.submit(_resolve_github_entry, *request) for request in requests]
+        entries = []
+        for request, future in zip(requests, futures):
+            try:
+                entries.append(future.result())
+            except Exception as exc:
+                url, owner, repo = request
+                _log.warning("GitHub metadata lookup failed for %s/%s: %s", owner, repo, exc)
+                entries.append(_fallback_github_entry(url, owner, repo))
+        return entries
+
+
+def _fallback_github_entry(source_url: str, owner: str, repo: str) -> MarketplacePluginEntry:
+    return MarketplacePluginEntry(
+        source_url=source_url,
+        github_url=f"https://github.com/{owner}/{repo}",
+        owner=owner,
+        repo=repo,
+        name=repo,
+        description="",
+        stars=None,
+        github_enrichment_failed=True,
+    )
 
 
 def _resolve_github_entry(source_url: str, owner: str, repo: str) -> MarketplacePluginEntry:
     github_url = f"https://github.com/{owner}/{repo}"
     name = repo
     description = ""
-    stars = 0
+    stars: Optional[int] = None
     language = ""
     topics: Tuple[str, ...] = ()
+    enrichment_failed = False
 
     try:
         data = _fetch_repo_metadata(owner, repo)
         api_name = str(data.get("name", "")).strip()
         api_description = data.get("description")
-        api_stars = data.get("stargazers_count", 0)
+        api_stars = data.get("stargazers_count")
         api_language = data.get("language")
         api_topics = data.get("topics")
         name = api_name or name
         description = api_description.strip() if isinstance(api_description, str) else ""
-        stars = int(api_stars) if isinstance(api_stars, (int, float)) else 0
+        stars = int(api_stars) if isinstance(api_stars, (int, float)) else None
         github_url = str(data.get("html_url") or github_url)
         language = api_language.strip() if isinstance(api_language, str) else ""
         topics = (
@@ -249,6 +407,7 @@ def _resolve_github_entry(source_url: str, owner: str, repo: str) -> Marketplace
         )
     except Exception as exc:
         _log.debug("GitHub metadata lookup failed for %s/%s: %s", owner, repo, exc)
+        enrichment_failed = True
 
     return MarketplacePluginEntry(
         source_url=source_url,
@@ -260,6 +419,7 @@ def _resolve_github_entry(source_url: str, owner: str, repo: str) -> Marketplace
         stars=stars,
         language=language,
         topics=topics,
+        github_enrichment_failed=enrichment_failed,
     )
 
 
@@ -290,20 +450,46 @@ def _merge_entries(
     registry: List[MarketplacePluginEntry],
     curated: List[MarketplacePluginEntry],
 ) -> List[MarketplacePluginEntry]:
-    """Registry entries take priority; curated entries fill gaps."""
+    """Merge registry metadata with GitHub enrichment for the same repository."""
     seen: Set[str] = set()
     merged: List[MarketplacePluginEntry] = []
+    positions = {}
 
     for entry in registry:
         key = _unique_key(entry)
         if key and key not in seen:
             seen.add(key)
+            positions[key] = len(merged)
             merged.append(entry)
 
     for entry in curated:
         key = _unique_key(entry)
-        if key and key not in seen:
+        if not key:
+            continue
+        if key not in seen:
             seen.add(key)
+            positions[key] = len(merged)
             merged.append(entry)
+            continue
+
+        index = positions[key]
+        registry_entry = merged[index]
+        # Registry-owned fields deliberately remain untouched.  GitHub-only
+        # fields fill the registry record when the registry has no value.
+        merged[index] = replace(
+            registry_entry,
+            github_url=registry_entry.github_url or entry.github_url,
+            stars=(
+                registry_entry.stars
+                if registry_entry.stars is not None
+                else entry.stars
+            ),
+            language=registry_entry.language or entry.language,
+            topics=registry_entry.topics or entry.topics,
+            github_enrichment_failed=(
+                registry_entry.github_enrichment_failed
+                or entry.github_enrichment_failed
+            ),
+        )
 
     return merged

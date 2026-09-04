@@ -5,23 +5,23 @@ body {
 }
 
 #menu-row {
-    background-color: @{menu.background};
+    @{chrome.menu_decor};
 }
 
 #menu-left {
-    background-color: @{menu.background};
+    background-color: transparent;
 }
 
 #menu-items {
-    background-color: @{menu.background};
+    background-color: transparent;
 }
 
 #menu-right {
-    background-color: @{menu.background};
+    background-color: transparent;
 }
 
 #menu-toolbar {
-    background-color: @{menu.background};
+    background-color: transparent;
 }
 
 .menu-label:hover {
@@ -69,6 +69,11 @@ body {
     background-color: @{menu.hover};
 }
 
+.menu-toolbar-btn img,
+.menu-window-utility-btn img {
+    image-color: @{menu.toolbar_icon};
+}
+
 .menu-window-btn:hover {
     background-color: @{menu.hover};
 }
@@ -97,10 +102,15 @@ body {
 }
 
 .menu-window-utility-btn.selected {
-    background-color: @{menu.active};
+    @{menu.toolbar_selected_decor};
 }
 
 .menu-toolbar-btn.selected {
-    background-color: @{menu.active};
-    border-color: @{menu.border};
+    @{menu.toolbar_selected_decor};
+    border-color: @{primary};
+}
+
+.menu-toolbar-btn.selected img,
+.menu-window-utility-btn.selected img {
+    image-color: @{menu.toolbar_selected_icon};
 }
