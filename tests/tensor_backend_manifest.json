@@ -28726,7 +28726,7 @@
     "name": "SceneConsolidationExtractTest.OffsetWalksNullSlotAfterMiddleRemove",
     "executable": "lichtfeld_tests",
     "file": "tests/test_scene_consolidation.cpp",
-    "line": 474,
+    "line": 479,
     "eligibility": "vulkan",
     "launchers": [
       "launch_strided_copy",
@@ -28738,7 +28738,7 @@
     "name": "SceneConsolidationExtractTest.RemovingNodeRetiresModelUntilWorkerPoll",
     "executable": "lichtfeld_tests",
     "file": "tests/test_scene_consolidation.cpp",
-    "line": 345,
+    "line": 346,
     "eligibility": "vulkan",
     "launchers": [
       "launch_strided_copy",
@@ -28750,7 +28750,7 @@
     "name": "SceneConsolidationExtractTest.ReplacingNodeModelRetiresPreviousUntilWorkerPoll",
     "executable": "lichtfeld_tests",
     "file": "tests/test_scene_consolidation.cpp",
-    "line": 397,
+    "line": 398,
     "eligibility": "vulkan",
     "launchers": [
       "launch_strided_copy",
@@ -28762,7 +28762,7 @@
     "name": "SceneConsolidationExtractTest.ReturnsNullWhenNotConsolidatedOrUnknown",
     "executable": "lichtfeld_tests",
     "file": "tests/test_scene_consolidation.cpp",
-    "line": 547,
+    "line": 552,
     "eligibility": "vulkan",
     "launchers": [
       "launch_strided_copy",
@@ -28774,7 +28774,7 @@
     "name": "SceneConsolidationExtractTest.SceneDestructionJoinsCombinedModelWorker",
     "executable": "lichtfeld_tests",
     "file": "tests/test_scene_consolidation.cpp",
-    "line": 310,
+    "line": 311,
     "eligibility": "vulkan",
     "launchers": [
       "launch_strided_copy",
@@ -28799,7 +28799,7 @@
     "name": "SceneConsolidationExtractTest.SoftDeletedRowsAreExcluded",
     "executable": "lichtfeld_tests",
     "file": "tests/test_scene_consolidation.cpp",
-    "line": 491,
+    "line": 496,
     "eligibility": "vulkan",
     "launchers": [
       "launch_strided_copy",
@@ -28811,7 +28811,7 @@
     "name": "SceneConsolidationExtractTest.StaleWorkerGenerationCannotReplaceNewestCache",
     "executable": "lichtfeld_tests",
     "file": "tests/test_scene_consolidation.cpp",
-    "line": 452,
+    "line": 457,
     "eligibility": "vulkan",
     "launchers": [
       "launch_strided_copy",
@@ -35966,6 +35966,480 @@
     "eligibility": "vulkan",
     "launchers": [
       "launch_convert_type"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendFacade.ClampEntriesPreserveFloatAndIntPolicies",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_facade.cpp",
+    "line": 158,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_clamp_scalar",
+      "launch_clamp_fused",
+      "launch_clamp_scalar_int"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendFacade.LazyFusedChainUsesUnifiedPointwiseIds",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_facade.cpp",
+    "line": 194,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_fill_strided",
+      "launch_fused_pointwise_chain"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendFacade.PointwiseEntriesPreserveCudaResultsAndBackend",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_facade.cpp",
+    "line": 101,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_unary_op_generic",
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_fill_strided",
+      "launch_fused_pointwise_chain"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendFacade.PointwiseTableNamesAndLowersEveryFunctor",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_facade.cpp",
+    "line": 72,
+    "eligibility": "not-tensor",
+    "reason": "does not exercise the LichtFeld tensor API",
+    "launchers": [],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendFacade.RegistryReturnsVulkanAndRejectsCpuStorage",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_facade.cpp",
+    "line": 85,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_fill_strided"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendFacadeB.FusedTransformReductionsPreserveChainsAndSegments",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_facade.cpp",
+    "line": 261,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_reduce_op",
+      "launch_column_reduce",
+      "launch_strided_reduce_fast",
+      "launch_fused_transform_reduce",
+      "launch_fused_segmented_transform_reduce",
+      "launch_fill_strided",
+      "launch_fused_pointwise_chain"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendFacadeB.MatrixEntriesPreserveDimensionsEpiloguesAndBackend",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_facade.cpp",
+    "line": 314,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_sgemm",
+      "launch_sgemm_tn",
+      "launch_sgemm_batched",
+      "launch_dot_product",
+      "launch_diag",
+      "launch_bias_add",
+      "launch_bias_relu",
+      "launch_strided_upload",
+      "launch_fill_strided",
+      "launch_cdist",
+      "launch_eye"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendFacadeB.NnEntriesPreservePoolingBiasReluAndBackend",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_facade.cpp",
+    "line": 386,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_sgemm",
+      "launch_sgemm_bias_relu",
+      "launch_max_pool2d",
+      "launch_adaptive_avg_pool2d",
+      "launch_bias_add",
+      "launch_bias_relu",
+      "launch_relu",
+      "launch_strided_upload",
+      "launch_fill_strided"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendFacadeB.RandomEntriesPreserveContractsAndBackend",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_facade.cpp",
+    "line": 433,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_uniform",
+      "launch_bernoulli",
+      "launch_randint",
+      "launch_multinomial",
+      "launch_strided_upload",
+      "launch_fill_strided"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendFacadeB.ReductionsPreserveCudaResultsBackendAndSyncBoundaries",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_facade.cpp",
+    "line": 209,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "direct_sum_scalar",
+      "direct_mean_scalar",
+      "direct_max_scalar",
+      "direct_min_scalar",
+      "launch_reduce_op",
+      "launch_column_reduce",
+      "launch_strided_reduce_fast",
+      "launch_fused_transform_reduce",
+      "launch_fused_segmented_transform_reduce",
+      "launch_count_nonzero_bool",
+      "launch_count_nonzero_float",
+      "launch_strided_upload",
+      "launch_fill_strided",
+      "has_nan_gpu",
+      "has_inf_gpu"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendFacadeB.ScanAndSortPreserveLayoutsIndicesAndBackend",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_facade.cpp",
+    "line": 283,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_cumsum",
+      "launch_sort_1d",
+      "launch_sort_2d",
+      "launch_strided_upload"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendFacadeC.CatPadAndGrowthAdaptersPreserveStorageRules",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_facade_c.cpp",
+    "line": 134,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_cat_last_dim",
+      "launch_cat_middle_dim"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendFacadeC.CopyScalarAndScratchServicesPreserveBoundaries",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_facade_c.cpp",
+    "line": 175,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_fill_strided"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendFacadeC.IndexAdaptersPreserveValuesAndDuplicateAccumulation",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_facade_c.cpp",
+    "line": 35,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_gather",
+      "launch_take",
+      "launch_index_select",
+      "launch_scatter",
+      "launch_index_copy",
+      "launch_index_add",
+      "launch_strided_upload",
+      "launch_fill_strided"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendFacadeC.MaskAdaptersPreserveCountsValuesAndBackend",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_facade_c.cpp",
+    "line": 66,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_masked_fill",
+      "launch_masked_select",
+      "launch_and_live",
+      "launch_where",
+      "launch_nonzero",
+      "launch_nonzero_bool",
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_fill_strided"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendFacadeC.StridedMovementAdaptersKeepLogicalLayouts",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_facade_c.cpp",
+    "line": 105,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_fill_strided"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendParity.BroadcastPreservesBackendAndIeeeValues",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_parity.cpp",
+    "line": 215,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_ieee_maximum_float",
+      "launch_broadcast_binary",
+      "launch_ieee_maximum_float_broadcast",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendParity.Float16PointwiseUsesDocumentedTolerance",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_parity.cpp",
+    "line": 252,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_fused_pointwise_chain"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendParity.MovementIsBitExactUnderOppositeScope",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_parity.cpp",
+    "line": 243,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_cat_last_dim",
+      "launch_cat_middle_dim"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendParity.PointwiseIgnoresOppositeActiveScope",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_parity.cpp",
+    "line": 132,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_fused_pointwise_chain"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendParity.PointwiseUsesInputBackendWithoutActiveScope",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_parity.cpp",
+    "line": 122,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_fused_pointwise_chain"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendParity.UnaryProgramsUseCudaToleranceClasses",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_parity.cpp",
+    "line": 138,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_unary_op_generic",
+      "launch_ieee_round_float",
+      "launch_relu",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_fused_pointwise_chain"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendSelection.AProcessDefaultFreezesAfterFirstResolution",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_selection.cpp",
+    "line": 37,
+    "eligibility": "vulkan",
+    "launchers": [],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendSelection.BackendMemoryAndShutdownAreDefinedForBothBackends",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_selection.cpp",
+    "line": 184,
+    "eligibility": "not-tensor",
+    "reason": "does not exercise the LichtFeld tensor API",
+    "launchers": [],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendSelection.ConfiguredDefaultPrecedesEnvironmentResolution",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_selection.cpp",
+    "line": 66,
+    "eligibility": "not-tensor",
+    "reason": "does not exercise the LichtFeld tensor API",
+    "launchers": [],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendSelection.CopyToBackendClonesAndConvertsCleanly",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_selection.cpp",
+    "line": 170,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_fill_strided"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendSelection.CudaFromBlobIgnoresVulkanScope",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_selection.cpp",
+    "line": 120,
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_selection.cpp:126: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "launchers": [],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendSelection.OperationsInheritInputBackendAgainstScope",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_selection.cpp",
+    "line": 145,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_reduce_op",
+      "launch_column_reduce",
+      "launch_strided_reduce_fast",
+      "launch_fused_transform_reduce",
+      "launch_fused_segmented_transform_reduce",
+      "launch_fill_strided",
+      "launch_fused_pointwise_chain"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendSelection.ScopeNestsRestoresAndIsThreadLocal",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_selection.cpp",
+    "line": 79,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_load_op"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendSelection.StorageIdentityCoversCpuGpuAndViews",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_selection.cpp",
+    "line": 108,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_fill_strided"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendSelection.VulkanFactorySucceedsWithoutChangingDefault",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_selection.cpp",
+    "line": 133,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_fill_strided"
     ],
     "skip_allowlisted": false
   },
@@ -48039,6 +48513,48 @@
     "skip_allowlisted": false
   },
   {
+    "name": "TensorSeamRegressions.InPlaceWritesPreserveLazySnapshots",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_seam_regressions.cpp",
+    "line": 40,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_unary_op_generic",
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_masked_fill",
+      "launch_strided_upload",
+      "launch_clamp_scalar",
+      "launch_clamp_scalar_int",
+      "launch_fused_pointwise_chain"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorSeamRegressions.ScalarReadsOnStridedViewsUseStorageExtent",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_seam_regressions.cpp",
+    "line": 23,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_upload"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorSeamRegressions.StaleViewsAreRejectedByFacadeOperations",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_seam_regressions.cpp",
+    "line": 70,
+    "eligibility": "vulkan",
+    "launchers": [
+      "direct_sum_scalar",
+      "launch_fill_strided"
+    ],
+    "skip_allowlisted": false
+  },
+  {
     "name": "TensorSerializationTest.Bool",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_serialization.cpp",
@@ -49940,6 +50456,357 @@
       "launch_strided_copy",
       "launch_strided_copy_immediate",
       "launch_strided_upload",
+      "launch_fill_strided"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanPointwise.BinaryScalarBroadcastAndLogicalCatchDtypeDispatch",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_pointwise.cpp",
+    "line": 169,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_ieee_maximum_float",
+      "launch_ieee_minimum_float",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_ieee_maximum_float_broadcast",
+      "launch_ieee_minimum_float_broadcast",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_fused_pointwise_chain"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanPointwise.ClampEntriesCatchInPlaceFusedAndIntegerBounds",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_pointwise.cpp",
+    "line": 314,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_clamp_scalar",
+      "launch_clamp_fused",
+      "launch_clamp_scalar_int"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanPointwise.ConversionCatchesEveryCudaInstantiatedDtypePair",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_pointwise.cpp",
+    "line": 236,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanPointwise.ConversionCatchesTorchUInt8AndNonzeroBoolRules",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_pointwise.cpp",
+    "line": 204,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanPointwise.EagerExpressionCatchesAllSixteenChainDescriptors",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_pointwise.cpp",
+    "line": 335,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_unary_op_generic",
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_relu",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_fused_pointwise_chain"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanPointwise.EveryUnaryProgramCatchesMissingOpSpecializations",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_pointwise.cpp",
+    "line": 85,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_unary_op_generic",
+      "launch_ieee_round_float",
+      "launch_relu",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_fused_pointwise_chain"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanPointwise.IeeePoliciesCatchNaNZeroDenormalAndHalfEvenErrors",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_pointwise.cpp",
+    "line": 134,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_unary_op_generic",
+      "launch_ieee_round_float",
+      "launch_binary_op_generic",
+      "launch_ieee_maximum_float",
+      "launch_ieee_minimum_float",
+      "launch_broadcast_binary",
+      "launch_ieee_maximum_float_broadcast",
+      "launch_ieee_minimum_float_broadcast",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanPointwise.MovementEntriesCatchStridesCatPadAndFill",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_pointwise.cpp",
+    "line": 355,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_cat_last_dim",
+      "launch_cat_middle_dim",
+      "launch_fill_strided"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanPointwise.UnalignedFacadeInputCatchesWrongVectorFastPath",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_pointwise.cpp",
+    "line": 299,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_upload"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanPointwise.UnaryBoundarySizesCatchTailAndGridTruncation",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_pointwise.cpp",
+    "line": 69,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_unary_op_generic",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_fused_pointwise_chain"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRuntime.CloneAndReservePreserveBytesAndGenerationRules",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_runtime.cpp",
+    "line": 168,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_load_op"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRuntime.CompletedDeadThreadRecordersAreReclaimed",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_runtime.cpp",
+    "line": 330,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_copy",
+      "launch_strided_copy_immediate"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRuntime.CrossThreadConsumerFlushesUnsubmittedProducer",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_runtime.cpp",
+    "line": 284,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_fill_strided"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRuntime.DeviceIndexOverrideAndCapsAreExposed",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_runtime.cpp",
+    "line": 58,
+    "eligibility": "not-tensor",
+    "reason": "does not exercise the LichtFeld tensor API",
+    "launchers": [],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRuntime.EmptyCreatesNativeVulkanStorageDescriptor",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_runtime.cpp",
+    "line": 40,
+    "eligibility": "vulkan",
+    "launchers": [],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRuntime.EnvironmentSelectsVulkanForPublicFactories",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_runtime.cpp",
+    "line": 381,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_fill_strided"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRuntime.ExplicitCrossBackendCopyIsBitExactBothWays",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_runtime.cpp",
+    "line": 229,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRuntime.MixedBackendAndKernelEntriesFailAtTheFacade",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_runtime.cpp",
+    "line": 256,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_unary_op_generic",
+      "launch_fill_strided",
+      "launch_fused_pointwise_chain"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRuntime.RecorderProtectsReadAllocationsUntilTimelineCompletion",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_runtime.cpp",
+    "line": 202,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_copy",
+      "launch_strided_copy_immediate"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRuntime.RetiredTierAllocationIsReusedAfterTimelineCompletion",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_runtime.cpp",
+    "line": 188,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_fill_strided"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRuntime.ShutdownDropsLiveContextAndReinitializes",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_runtime.cpp",
+    "line": 365,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_fill_strided"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRuntime.ShutdownWaitsForAutoSubmittedCommands",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_runtime.cpp",
+    "line": 350,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_fill_strided"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRuntime.StagingRingWrapWaitsBeforeReusingSlices",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_runtime.cpp",
+    "line": 110,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_upload"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRuntime.ThreadExitFlushesItsOpenRecorder",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_runtime.cpp",
+    "line": 319,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_fill_strided"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRuntime.UploadAndDownloadAreBitExactForEveryDtypeAndBoundarySize",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_runtime.cpp",
+    "line": 83,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_convert_type"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRuntime.ViewsShareDescriptorAndDownloadInLogicalOrder",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_runtime.cpp",
+    "line": 142,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload"
+    ],
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRuntime.ZeroOneAndFullUseTransferAndFillPaths",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_runtime.cpp",
+    "line": 121,
+    "eligibility": "vulkan",
+    "launchers": [
       "launch_fill_strided"
     ],
     "skip_allowlisted": false

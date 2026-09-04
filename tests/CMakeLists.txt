@@ -586,7 +586,11 @@ set(TEST_FILES
     test_error_envelope.cpp
 )
 if(LFS_TENSOR_VULKAN)
-    list(APPEND TEST_FILES test_tensor_vulkan_runtime.cpp)
+    list(APPEND TEST_FILES
+        test_tensor_vulkan_runtime.cpp
+        test_tensor_vulkan_pointwise.cpp
+        test_tensor_backend_parity.cpp
+    )
 endif()
 list(APPEND TEST_FILES test_vksplat_input_packer.cpp)
 list(APPEND TEST_FILES test_viewer_sh_zerocopy_triad.cpp)

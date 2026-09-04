@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "core/tensor/backend/gpu_backend_ops.hpp"
+#include "core/tensor/internal/tensor_ops.hpp"
 #include "core/tensor_backend.hpp"
 
 #include <cuda_runtime.h>
@@ -37,6 +39,8 @@ using lfs::core::MovementOp;
 using lfs::core::ScatterMode;
 using lfs::core::Tensor;
 using lfs::core::TensorShape;
+namespace internal = lfs::core::internal;
+namespace tensor_ops = lfs::core::tensor_ops;
 
 namespace {
 
@@ -689,8 +693,21 @@ namespace {
         }
         if (name == "launch_clamp_fused")
             return {a.clamp(-1.0f, 1.0f)};
-        if (name == "launch_fused_pointwise_chain")
-            return {a.add(0.25f).mul(1.5f).sub(0.5f)};
+        if (name == "launch_fused_pointwise_chain") {
+            tensor_ops::FusedPointwiseOpChain chain{};
+            chain.num_ops = 3;
+            chain.ops[0].kind = static_cast<uint8_t>(internal::PointwiseOp::AddScalar);
+            chain.ops[0].scalar = 0.25f;
+            chain.ops[1].kind = static_cast<uint8_t>(internal::PointwiseOp::MulScalar);
+            chain.ops[1].scalar = 1.5f;
+            chain.ops[2].kind = static_cast<uint8_t>(internal::PointwiseOp::SubScalar);
+            chain.ops[2].scalar = 0.5f;
+            Tensor output = internal::allocate_like(a, a.shape(), DataType::Float32);
+            internal::backend_ops_for(a).fused_pointwise_chain(
+                internal::storage_ref(a), internal::storage_ref(output),
+                output.numel(), chain, internal::ExecContext{output.stream()});
+            return {std::move(output)};
+        }
         if (name == "launch_cdist")
             return {inputs.input.cdist(inputs.rhs)};
         if (name == "launch_eye")

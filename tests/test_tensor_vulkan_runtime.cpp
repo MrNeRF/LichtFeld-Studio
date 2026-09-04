@@ -273,10 +273,10 @@ namespace {
                       std::string::npos);
         }
         try {
-            static_cast<void>(vulkan.exp());
-            FAIL() << "unimplemented Vulkan unary entry did not throw";
+            static_cast<void>(vulkan.sum().item<float>());
+            FAIL() << "unimplemented Vulkan reduction entry did not throw";
         } catch (const std::exception& error) {
-            EXPECT_NE(std::string(error.what()).find("Vulkan backend: unary is not implemented yet"),
+            EXPECT_NE(std::string(error.what()).find("is not implemented yet"),
                       std::string::npos);
         }
     }

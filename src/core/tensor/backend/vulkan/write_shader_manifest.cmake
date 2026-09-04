@@ -6,10 +6,14 @@ set(_push_constant_size "${CMAKE_MATCH_1}")
 if(NOT _local_size_x OR NOT _push_constant_size)
     message(FATAL_ERROR "Shader ${SOURCE} does not declare its manifest constants")
 endif()
+set(_required_capabilities "\"Int64\", \"PhysicalStorageBufferAddresses\"")
+if(_source MATCHES "LFS_REQUIRED_FLOAT16[ \t]*=[ \t]*1")
+    string(APPEND _required_capabilities ", \"Float16\"")
+endif()
 file(WRITE "${OUTPUT}"
     "{\n"
     "  \"entry_point\": \"main\",\n"
     "  \"local_size\": [${_local_size_x}, 1, 1],\n"
     "  \"push_constant_size\": ${_push_constant_size},\n"
-    "  \"required_capabilities\": [\"Int64\", \"PhysicalStorageBufferAddresses\"]\n"
+    "  \"required_capabilities\": [${_required_capabilities}]\n"
     "}\n")

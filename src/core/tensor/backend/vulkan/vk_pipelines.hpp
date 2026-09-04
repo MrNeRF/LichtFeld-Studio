@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <mutex>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vulkan/vulkan.h>
@@ -28,13 +29,16 @@ namespace lfs::core::internal {
         VulkanPipelines(const VulkanPipelines&) = delete;
         VulkanPipelines& operator=(const VulkanPipelines&) = delete;
 
-        [[nodiscard]] const VulkanPipeline& fill();
+        [[nodiscard]] const VulkanPipeline& specialized(
+            const std::string& module, uint32_t expected_push_constant_size,
+            std::span<const uint32_t> constants);
         void shutdown();
 
     private:
         [[nodiscard]] VulkanPipeline load(const std::string& module,
                                           uint32_t expected_local_size_x,
-                                          uint32_t expected_push_constant_size);
+                                          uint32_t expected_push_constant_size,
+                                          std::span<const uint32_t> constants = {});
 
         VulkanContext& context_;
         std::mutex mutex_;

@@ -7,6 +7,7 @@
 #include "vk_context.hpp"
 
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <vector>
@@ -45,20 +46,31 @@ namespace lfs::core::internal {
         shutdown();
     }
 
-    const VulkanPipeline& VulkanPipelines::fill() {
+    const VulkanPipeline& VulkanPipelines::specialized(
+        const std::string& module, const uint32_t expected_push_constant_size,
+        const std::span<const uint32_t> constants) {
+        std::string key = module;
+        for (const uint32_t constant : constants) {
+            key += std::format(":{}", constant);
+        }
         std::lock_guard lock(mutex_);
         LFS_ASSERT_MSG(!shutting_down_,
                        "Vulkan backend: pipeline creation during shutdown");
-        auto iterator = pipelines_.find("fill");
+        auto iterator = pipelines_.find(key);
         if (iterator == pipelines_.end()) {
-            iterator = pipelines_.emplace("fill", load("fill", 256, 24)).first;
+            iterator = pipelines_
+                           .emplace(key, load(module, 256,
+                                              expected_push_constant_size,
+                                              constants))
+                           .first;
         }
         return iterator->second;
     }
 
     VulkanPipeline VulkanPipelines::load(const std::string& module,
                                          const uint32_t expected_local_size_x,
-                                         const uint32_t expected_push_constant_size) {
+                                         const uint32_t expected_push_constant_size,
+                                         const std::span<const uint32_t> constants) {
         const std::filesystem::path directory(LFS_TENSOR_SPV_DIR);
         const nlohmann::json manifest =
             read_manifest(directory / (module + ".json"));
@@ -74,8 +86,13 @@ namespace lfs::core::internal {
                        "Vulkan backend: shader manifest push constant size mismatch");
         const auto capabilities =
             manifest.at("required_capabilities").get<std::vector<std::string>>();
-        const std::vector<std::string> expected_capabilities{
+        std::vector<std::string> expected_capabilities{
             "Int64", "PhysicalStorageBufferAddresses"};
+        if (module == "pointwise_half") {
+            expected_capabilities.emplace_back("Float16");
+            LFS_ASSERT_MSG(context_.caps().shader_float16,
+                           "Vulkan native Float16 pipeline requires shaderFloat16");
+        }
         LFS_ASSERT_MSG(capabilities == expected_capabilities,
                        "Vulkan backend: shader manifest capabilities mismatch");
 
@@ -104,6 +121,23 @@ namespace lfs::core::internal {
         stage_info.stage = VK_SHADER_STAGE_COMPUTE_BIT;
         stage_info.module = result.shader;
         stage_info.pName = "main";
+        std::vector<VkSpecializationMapEntry> entries(constants.size());
+        for (size_t index = 0; index < entries.size(); ++index) {
+            entries[index] = VkSpecializationMapEntry{
+                .constantID = static_cast<uint32_t>(index),
+                .offset = static_cast<uint32_t>(index * sizeof(uint32_t)),
+                .size = sizeof(uint32_t),
+            };
+        }
+        VkSpecializationInfo specialization{
+            .mapEntryCount = static_cast<uint32_t>(entries.size()),
+            .pMapEntries = entries.data(),
+            .dataSize = constants.size_bytes(),
+            .pData = constants.data(),
+        };
+        if (!constants.empty()) {
+            stage_info.pSpecializationInfo = &specialization;
+        }
         VkComputePipelineCreateInfo pipeline_info{
             VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
         pipeline_info.stage = stage_info;
