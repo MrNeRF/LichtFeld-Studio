@@ -1958,6 +1958,9 @@
     "downloads": "下载量",
     "invalid_link": "无效链接",
     "button.install": "安装",
+    "cancel": "取消",
+    "cancelling": "正在取消...",
+    "installation_cancelled": "安装已取消",
     "local_install": "本地安装",
     "install_as_git_checkout": "作为 git 检出安装",
     "confirm_uninstall_message": "您确定要卸载 \"{name}\" 吗？",
@@ -1971,7 +1974,8 @@
     "registry_loaded.other": "注册表已加载：市场目录中有 {count} 个插件。",
     "registry_unavailable.one": "注册表不可用：正在显示 {count} 个备用插件。",
     "registry_unavailable.few": "注册表不可用：正在显示 {count} 个备用插件。",
-    "registry_unavailable.other": "注册表不可用：正在显示 {count} 个备用插件。"
+    "registry_unavailable.other": "注册表不可用：正在显示 {count} 个备用插件。",
+    "popularity_unavailable": "无法获取人气数据。"
   },
   "sequencer": {
     "edit_focal_length": "编辑焦距...",

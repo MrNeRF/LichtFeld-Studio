@@ -1958,6 +1958,9 @@
     "downloads": "Downloads",
     "invalid_link": "Ungültiger Link",
     "button.install": "Installieren",
+    "cancel": "Abbrechen",
+    "cancelling": "Wird abgebrochen...",
+    "installation_cancelled": "Installation abgebrochen",
     "local_install": "Lokale Installation",
     "install_as_git_checkout": "Als Git-Checkout installieren",
     "confirm_uninstall_message": "Möchten Sie \"{name}\" wirklich deinstallieren?",
@@ -1971,7 +1974,8 @@
     "registry_loaded.other": "Registry geladen: {count} Plugins im Marketplace-Katalog.",
     "registry_unavailable.one": "Registry nicht verfügbar: {count} Fallback-Plugin wird angezeigt.",
     "registry_unavailable.few": "Registry nicht verfügbar: {count} Fallback-Plugins werden angezeigt.",
-    "registry_unavailable.other": "Registry nicht verfügbar: {count} Fallback-Plugins werden angezeigt."
+    "registry_unavailable.other": "Registry nicht verfügbar: {count} Fallback-Plugins werden angezeigt.",
+    "popularity_unavailable": "Beliebtheitsdaten nicht verfügbar."
   },
   "sequencer": {
     "edit_focal_length": "Brennweite bearbeiten...",

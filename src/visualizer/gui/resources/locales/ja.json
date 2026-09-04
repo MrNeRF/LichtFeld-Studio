@@ -1958,6 +1958,9 @@
     "downloads": "ダウンロード",
     "invalid_link": "無効なリンク",
     "button.install": "インストール",
+    "cancel": "キャンセル",
+    "cancelling": "キャンセル中...",
+    "installation_cancelled": "インストールをキャンセルしました",
     "local_install": "ローカルインストール",
     "install_as_git_checkout": "Git チェックアウトとしてインストール",
     "confirm_uninstall_message": "「{name}」を本当にアンインストールしますか？",
@@ -1971,7 +1974,8 @@
     "registry_loaded.other": "レジストリを読み込みました: マーケットプレイスカタログに {count} 件のプラグインがあります。",
     "registry_unavailable.one": "レジストリを利用できません: {count} 件のフォールバックプラグインを表示しています。",
     "registry_unavailable.few": "レジストリを利用できません: {count} 件のフォールバックプラグインを表示しています。",
-    "registry_unavailable.other": "レジストリを利用できません: {count} 件のフォールバックプラグインを表示しています。"
+    "registry_unavailable.other": "レジストリを利用できません: {count} 件のフォールバックプラグインを表示しています。",
+    "popularity_unavailable": "人気データを利用できません。"
   },
   "sequencer": {
     "edit_focal_length": "焦点距離を編集...",

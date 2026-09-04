@@ -1958,6 +1958,9 @@
     "downloads": "다운로드",
     "invalid_link": "유효하지 않은 링크",
     "button.install": "설치",
+    "cancel": "취소",
+    "cancelling": "취소 중...",
+    "installation_cancelled": "설치가 취소되었습니다",
     "local_install": "로컬 설치",
     "install_as_git_checkout": "Git 체크아웃으로 설치",
     "confirm_uninstall_message": "\"{name}\" 플러그인을 정말 제거하시겠습니까?",
@@ -1971,7 +1974,8 @@
     "registry_loaded.other": "레지스트리를 불러왔습니다: 마켓플레이스 카탈로그에 플러그인 {count}개가 있습니다.",
     "registry_unavailable.one": "레지스트리를 사용할 수 없습니다: 대체 플러그인 {count}개를 표시합니다.",
     "registry_unavailable.few": "레지스트리를 사용할 수 없습니다: 대체 플러그인 {count}개를 표시합니다.",
-    "registry_unavailable.other": "레지스트리를 사용할 수 없습니다: 대체 플러그인 {count}개를 표시합니다."
+    "registry_unavailable.other": "레지스트리를 사용할 수 없습니다: 대체 플러그인 {count}개를 표시합니다.",
+    "popularity_unavailable": "인기도 데이터를 사용할 수 없습니다."
   },
   "sequencer": {
     "edit_focal_length": "초점 거리 편집...",

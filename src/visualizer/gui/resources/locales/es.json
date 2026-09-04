@@ -1958,6 +1958,9 @@
     "downloads": "Descargas",
     "invalid_link": "Enlace no válido",
     "button.install": "Instalar",
+    "cancel": "Cancelar",
+    "cancelling": "Cancelando...",
+    "installation_cancelled": "Instalación cancelada",
     "local_install": "Instalación local",
     "install_as_git_checkout": "Instalar como checkout de git",
     "confirm_uninstall_message": "¿Seguro que quieres desinstalar \"{name}\"?",
@@ -1971,7 +1974,8 @@
     "registry_loaded.other": "Registro cargado: {count} plugins en el catálogo del marketplace.",
     "registry_unavailable.one": "Registro no disponible: mostrando {count} plugin de respaldo.",
     "registry_unavailable.few": "Registro no disponible: mostrando {count} plugins de respaldo.",
-    "registry_unavailable.other": "Registro no disponible: mostrando {count} plugins de respaldo."
+    "registry_unavailable.other": "Registro no disponible: mostrando {count} plugins de respaldo.",
+    "popularity_unavailable": "Datos de popularidad no disponibles."
   },
   "sequencer": {
     "edit_focal_length": "Editar la Longitud Focal...",
