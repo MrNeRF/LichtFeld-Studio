@@ -593,6 +593,7 @@ add_executable(${PROJECT_NAME}
     src/app/mcp_ui_registry_tools.cpp
     src/app/converter.cpp
     resources/lichtfeld-studio.rc
+    resources/lichtfeld-studio.manifest
 )
 
 # The binary only carries code for these architectures; the app refuses to start on anything

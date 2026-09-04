@@ -678,7 +678,7 @@ namespace lfs::io::project {
                         "REFS", "fingerprint");
                 }
                 Entry entry{
-                    .path = lfs::core::path_to_utf8(relative.generic_string()),
+                    .path = lfs::core::path_to_generic_utf8(relative),
                     .size = 0,
                     .kind = std::filesystem::is_directory(status)
                                 ? 'd'
@@ -1882,8 +1882,8 @@ namespace lfs::io::project {
             if (relative.empty() || relative == ".") {
                 return true;
             }
-            const auto text = relative.generic_string();
-            return !text.starts_with("..");
+            const auto first = relative.begin();
+            return first == relative.end() || *first != std::filesystem::path("..");
         }
 
         bool fingerprint_content_matches(
@@ -1978,10 +1978,10 @@ namespace lfs::io::project {
             const auto root = absolute_lexically(project_root);
             if (path_is_under(root, absolute)) {
                 const auto relative = absolute.lexically_relative(root);
+                const auto first = relative.begin();
                 if (!relative.empty() && relative != "." &&
-                    !relative.generic_string().starts_with("..")) {
-                    locator.preferred =
-                        lfs::core::path_to_utf8(relative.generic_string());
+                    (first == relative.end() || *first != std::filesystem::path(".."))) {
+                    locator.preferred = lfs::core::path_to_generic_utf8(relative);
                     locator.base = LocatorBase::Project;
                 }
             }
@@ -3390,7 +3390,7 @@ namespace lfs::io::project {
                 const bool valid_kind = kind == "image" || kind == "mask" ||
                                         kind == "depth" || kind == "normal" ||
                                         kind == "sparse" || kind == "meta";
-                const auto relative = std::filesystem::path(rel_path);
+                const auto relative = lfs::core::utf8_to_path(rel_path);
                 if (rel_path.empty() || kind.empty() || !uuid || uuid->is_nil() ||
                     !hash || !valid_kind || relative.is_absolute() ||
                     relative.lexically_normal() != relative ||
@@ -3432,7 +3432,7 @@ namespace lfs::io::project {
             const bool valid_kind = entry.kind == "image" || entry.kind == "mask" ||
                                     entry.kind == "depth" || entry.kind == "normal" ||
                                     entry.kind == "sparse" || entry.kind == "meta";
-            const auto relative = std::filesystem::path(entry.rel_path);
+            const auto relative = lfs::core::utf8_to_path(entry.rel_path);
             if (entry.rel_path.empty() || entry.chunk_uuid.is_nil() ||
                 !valid_kind || relative.is_absolute() ||
                 relative.lexically_normal() != relative ||

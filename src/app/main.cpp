@@ -8,6 +8,7 @@
 #include "core/argument_parser.hpp"
 #include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"
+#include "core/environment.hpp"
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -48,11 +49,7 @@ namespace {
         const auto publish = [](const char* const name,
                                 const std::filesystem::path& path) {
             const auto value = lfs::core::path_to_utf8(path);
-#ifdef _WIN32
-            (void)_putenv_s(name, value.c_str());
-#else
-            (void)setenv(name, value.c_str(), 1);
-#endif
+            (void)lfs::core::environment::set_value(name, value);
         };
         publish("LFS_RESOLVED_CONFIG_DIR", paths->configDir());
         publish("LFS_RESOLVED_DATA_DIR", paths->dataDir());
