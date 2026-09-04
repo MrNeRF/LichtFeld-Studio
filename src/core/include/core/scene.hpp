@@ -291,7 +291,7 @@ namespace lfs::core {
 
         void removeNode(std::string name, bool keep_children = false);
         void removeNodeById(NodeId id, bool keep_children = false);
-        [[nodiscard]] std::vector<std::unique_ptr<lfs::core::SplatData>> detachSplatModelsForRemoval(
+        [[nodiscard]] std::vector<std::pair<Uuid, std::unique_ptr<lfs::core::SplatData>>> detachSplatModelsForRemoval(
             NodeId id,
             bool keep_children = false);
         void replaceNodeModel(const std::string& name, std::unique_ptr<lfs::core::SplatData> model);

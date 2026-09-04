@@ -822,7 +822,9 @@ namespace lfs::vis::op {
         SceneGraphNodeSnapshot captureNodeSnapshot(const SceneManager& scene_manager,
                                                    const lfs::core::SceneNode& node,
                                                    const SceneGraphCaptureMode mode,
-                                                   const lfs::core::Scene::PerNodeSelectionSlices& selection_slices) {
+                                                   const lfs::core::Scene::PerNodeSelectionSlices& selection_slices,
+                                                   const std::unordered_set<lfs::core::Uuid>& payload_uuids,
+                                                   const bool capture_all_payloads) {
             SceneGraphNodeSnapshot snapshot;
             snapshot.uuid = node.uuid;
             snapshot.id = node.id;
@@ -861,39 +863,46 @@ namespace lfs::vis::op {
                 snapshot.selection_slice_device = slice->second.device();
             }
 
-            if (mode == SceneGraphCaptureMode::FULL && node.model) {
+            const bool capture_payload = mode == SceneGraphCaptureMode::FULL &&
+                                         (capture_all_payloads || payload_uuids.contains(node.uuid));
+            if (capture_payload && node.model) {
                 snapshot.payload_device = node.model->means_raw().device();
                 snapshot.model = cloneSplatData(*node.model);
             }
-            if (mode == SceneGraphCaptureMode::FULL && node.point_cloud) {
+            if (capture_payload && node.point_cloud) {
                 snapshot.payload_device = node.point_cloud->means.device();
                 snapshot.point_cloud = clonePointCloud(*node.point_cloud);
             }
-            if (mode == SceneGraphCaptureMode::FULL && node.mesh) {
+            if (capture_payload && node.mesh) {
                 snapshot.payload_device = node.mesh->vertices.device();
                 snapshot.mesh = cloneMeshData(*node.mesh);
             }
-            if (node.cropbox) {
+            if (capture_payload && node.cropbox) {
                 snapshot.cropbox = std::make_unique<lfs::core::CropBoxData>(*node.cropbox);
             }
-            if (node.ellipsoid) {
+            if (capture_payload && node.ellipsoid) {
                 snapshot.ellipsoid = std::make_unique<lfs::core::EllipsoidData>(*node.ellipsoid);
             }
-            if (node.keyframe) {
+            if (capture_payload && node.keyframe) {
                 snapshot.keyframe = std::make_unique<lfs::core::KeyframeData>(*node.keyframe);
             }
-            if (node.camera) {
+            if (capture_payload && node.camera) {
                 snapshot.camera = captureCameraSnapshot(*node.camera);
             }
 
             for (const auto child_id : node.children) {
                 if (const auto* child = scene_manager.getScene().getNodeById(child_id)) {
                     snapshot.children.push_back(
-                        captureNodeSnapshot(scene_manager, *child, mode, selection_slices));
+                        captureNodeSnapshot(scene_manager, *child, mode, selection_slices,
+                                            payload_uuids, capture_all_payloads));
                 }
             }
 
             return snapshot;
+        }
+
+        const lfs::core::SplatData* snapshotSplatModel(const SceneGraphNodeSnapshot& snapshot) {
+            return snapshot.model ? snapshot.model.get() : snapshot.shared_model.get();
         }
 
         struct SnapshotTraversalNode {
@@ -952,7 +961,11 @@ namespace lfs::vis::op {
             });
         }
 
-        void validateSnapshotPayload(const SceneGraphNodeSnapshot& snapshot) {
+        void validateSnapshotPayload(const SceneGraphNodeSnapshot& snapshot,
+                                     const bool require_payload) {
+            if (!require_payload) {
+                return;
+            }
             switch (snapshot.type) {
             case lfs::core::NodeType::POINTCLOUD:
                 if (!snapshot.point_cloud) {
@@ -1090,7 +1103,9 @@ namespace lfs::vis::op {
                         resolved_parent_uuid.to_string() + " is not resolvable in restore order");
                 }
 
-                validateSnapshotPayload(snapshot);
+                const auto* existing = scene.getNodeByUuid(snapshot.uuid);
+                validateSnapshotPayload(snapshot,
+                                        !existing || existing->type != snapshot.type);
 
                 if (snapshot.selection_slice) {
                     if (snapshot.type != lfs::core::NodeType::SPLAT) {
@@ -1121,7 +1136,7 @@ namespace lfs::vis::op {
                     }
                 }
 
-                if (scene.getNodeByUuid(snapshot.uuid)) {
+                if (existing) {
                     plan.nodes.push_back(PreparedRestoreNode{
                         .snapshot = &snapshot,
                         .parent_uuid = resolved_parent_uuid,
@@ -1149,9 +1164,9 @@ namespace lfs::vis::op {
                 try {
                     switch (snapshot.type) {
                     case lfs::core::NodeType::SPLAT:
-                        if (snapshot.model) {
+                        if (const auto* model = snapshotSplatModel(snapshot)) {
                             auto allocator = makeViewerSplatTensorAllocator();
-                            desc.model = cloneRendererReadySplatData(*snapshot.model, allocator);
+                            desc.model = cloneRendererReadySplatData(*model, allocator);
                             if (allocator) {
                                 plan.combined_model_allocator = std::move(allocator);
                             }
@@ -1293,15 +1308,15 @@ namespace lfs::vis::op {
             if (snapshot.selection_slice) {
                 total += tensorBytes(*snapshot.selection_slice);
             }
-            if (snapshot.model) {
-                total += tensorBytes(snapshot.model->means_raw());
-                total += tensorBytes(snapshot.model->sh0_raw());
-                total += tensorBytes(snapshot.model->shN_raw());
-                total += tensorBytes(snapshot.model->scaling_raw());
-                total += tensorBytes(snapshot.model->rotation_raw());
-                total += tensorBytes(snapshot.model->opacity_raw());
-                total += tensorBytes(snapshot.model->deleted());
-                total += tensorBytes(snapshot.model->_densification_info);
+            if (const auto* model = snapshotSplatModel(snapshot)) {
+                total += tensorBytes(model->means_raw());
+                total += tensorBytes(model->sh0_raw());
+                total += tensorBytes(model->shN_raw());
+                total += tensorBytes(model->scaling_raw());
+                total += tensorBytes(model->rotation_raw());
+                total += tensorBytes(model->opacity_raw());
+                total += tensorBytes(model->deleted());
+                total += tensorBytes(model->_densification_info);
             }
             if (snapshot.point_cloud) {
                 total += tensorBytes(snapshot.point_cloud->means);
@@ -1320,6 +1335,15 @@ namespace lfs::vis::op {
                 total += tensorBytes(snapshot.mesh->texcoords);
                 total += tensorBytes(snapshot.mesh->colors);
                 total += tensorBytes(snapshot.mesh->indices);
+            }
+            if (snapshot.cropbox) {
+                total += sizeof(*snapshot.cropbox);
+            }
+            if (snapshot.ellipsoid) {
+                total += sizeof(*snapshot.ellipsoid);
+            }
+            if (snapshot.keyframe) {
+                total += sizeof(*snapshot.keyframe);
             }
             if (snapshot.camera) {
                 total += tensorBytes(snapshot.camera->R);
@@ -1347,14 +1371,23 @@ namespace lfs::vis::op {
             if (snapshot.selection_slice) {
                 total += tensorMemory(*snapshot.selection_slice);
             }
-            if (snapshot.model) {
-                total += estimateSplatDataMemory(*snapshot.model);
+            if (const auto* model = snapshotSplatModel(snapshot)) {
+                total += estimateSplatDataMemory(*model);
             }
             if (snapshot.point_cloud) {
                 total += estimatePointCloudMemory(*snapshot.point_cloud);
             }
             if (snapshot.mesh) {
                 total += estimateMeshMemory(*snapshot.mesh);
+            }
+            if (snapshot.cropbox) {
+                total.cpu_bytes += sizeof(*snapshot.cropbox);
+            }
+            if (snapshot.ellipsoid) {
+                total.cpu_bytes += sizeof(*snapshot.ellipsoid);
+            }
+            if (snapshot.keyframe) {
+                total.cpu_bytes += sizeof(*snapshot.keyframe);
             }
             if (snapshot.camera) {
                 total += estimateCameraMemory(*snapshot.camera);
@@ -1462,66 +1495,54 @@ namespace lfs::vis::op {
                                     const SceneGraphNodeSnapshot& snapshot) {
             switch (snapshot.type) {
             case lfs::core::NodeType::SPLAT:
-                if (snapshot.model) {
+                if (const auto* model = snapshotSplatModel(snapshot)) {
                     auto allocator = makeViewerSplatTensorAllocator();
-                    auto model = cloneRendererReadySplatData(*snapshot.model, allocator);
+                    auto restored_model = cloneRendererReadySplatData(*model, allocator);
                     if (allocator) {
                         scene.setCombinedModelAllocator(std::move(allocator));
                     }
-                    scene.replaceNodeModel(node.name, std::move(model));
+                    scene.replaceNodeModel(node.name, std::move(restored_model));
                 }
                 break;
             case lfs::core::NodeType::POINTCLOUD:
-                if (!snapshot.point_cloud) {
-                    throw HistoryCorruptionError(
-                        "Cannot restore point-cloud node '" + snapshot.name + "': payload is missing");
+                if (snapshot.point_cloud) {
+                    node.point_cloud = clonePointCloud(*snapshot.point_cloud);
+                    scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
                 }
-                node.point_cloud = clonePointCloud(*snapshot.point_cloud);
-                scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
                 break;
             case lfs::core::NodeType::MESH:
-                if (!snapshot.mesh) {
-                    throw HistoryCorruptionError(
-                        "Cannot restore mesh node '" + snapshot.name + "': payload is missing");
+                if (snapshot.mesh) {
+                    node.mesh = cloneMeshData(*snapshot.mesh);
+                    scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
                 }
-                node.mesh = cloneMeshData(*snapshot.mesh);
-                scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
                 break;
             case lfs::core::NodeType::CROPBOX:
-                if (!snapshot.cropbox) {
-                    throw HistoryCorruptionError(
-                        "Cannot restore crop-box node '" + snapshot.name + "': payload is missing");
+                if (snapshot.cropbox) {
+                    node.cropbox = std::make_unique<lfs::core::CropBoxData>(*snapshot.cropbox);
+                    scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
                 }
-                node.cropbox = std::make_unique<lfs::core::CropBoxData>(*snapshot.cropbox);
-                scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
                 break;
             case lfs::core::NodeType::ELLIPSOID:
-                if (!snapshot.ellipsoid) {
-                    throw HistoryCorruptionError(
-                        "Cannot restore ellipsoid node '" + snapshot.name + "': payload is missing");
+                if (snapshot.ellipsoid) {
+                    node.ellipsoid = std::make_unique<lfs::core::EllipsoidData>(*snapshot.ellipsoid);
+                    scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
                 }
-                node.ellipsoid = std::make_unique<lfs::core::EllipsoidData>(*snapshot.ellipsoid);
-                scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
                 break;
             case lfs::core::NodeType::CAMERA:
-                if (!snapshot.camera) {
-                    throw HistoryCorruptionError(
-                        "Cannot restore camera node '" + snapshot.name + "': payload is missing");
+                if (snapshot.camera) {
+                    node.camera = restoreCamera(*snapshot.camera);
+                    node.camera_uid = node.camera->uid();
+                    node.image_path = lfs::core::path_to_utf8(node.camera->image_path());
+                    node.mask_path = lfs::core::path_to_utf8(node.camera->mask_path());
+                    node.depth_path = lfs::core::path_to_utf8(node.camera->depth_path());
+                    scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
                 }
-                node.camera = restoreCamera(*snapshot.camera);
-                node.camera_uid = node.camera->uid();
-                node.image_path = lfs::core::path_to_utf8(node.camera->image_path());
-                node.mask_path = lfs::core::path_to_utf8(node.camera->mask_path());
-                node.depth_path = lfs::core::path_to_utf8(node.camera->depth_path());
-                scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
                 break;
             case lfs::core::NodeType::KEYFRAME:
-                if (!snapshot.keyframe) {
-                    throw HistoryCorruptionError(
-                        "Cannot restore keyframe node '" + snapshot.name + "': payload is missing");
+                if (snapshot.keyframe) {
+                    node.keyframe = std::make_unique<lfs::core::KeyframeData>(*snapshot.keyframe);
+                    scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
                 }
-                node.keyframe = std::make_unique<lfs::core::KeyframeData>(*snapshot.keyframe);
-                scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
                 break;
             case lfs::core::NodeType::GROUP:
             case lfs::core::NodeType::DATASET:
@@ -2034,6 +2055,7 @@ namespace lfs::vis::op {
           payload_device(other.payload_device),
           selection_slice_device(other.selection_slice_device),
           source_path(other.source_path),
+          shared_model(other.shared_model),
           camera(other.camera),
           children(other.children) {
         if (other.selection_slice) {
@@ -3422,11 +3444,18 @@ namespace lfs::vis::op {
             selection_slices = scene.capturePerNodeSelectionSlices();
         }
 
+        std::unordered_set<lfs::core::Uuid> payload_uuids;
+        if (options.payload_uuids) {
+            payload_uuids.insert(options.payload_uuids->begin(), options.payload_uuids->end());
+        }
+        const bool capture_all_payloads = !options.payload_uuids.has_value();
+
         snapshot.roots.reserve(root_nodes.size());
         for (const auto* root : root_nodes) {
             assert(root);
             snapshot.roots.push_back(
-                captureNodeSnapshot(scene_manager, *root, options.mode, selection_slices));
+                captureNodeSnapshot(scene_manager, *root, options.mode, selection_slices,
+                                    payload_uuids, capture_all_payloads));
         }
 
         return snapshot;

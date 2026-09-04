@@ -434,6 +434,9 @@ namespace lfs::vis::op {
         bool include_scene_context = true;
         bool preserve_node_ids = false;
         bool scoped_topology = false;
+        // A missing allowlist preserves the legacy FULL capture behavior. An
+        // engaged allowlist captures payloads only for these node UUIDs.
+        std::optional<std::vector<lfs::core::Uuid>> payload_uuids;
     };
 
     struct SceneGraphCameraSnapshot {
@@ -487,6 +490,7 @@ namespace lfs::vis::op {
         std::optional<std::filesystem::path> source_path;
         std::shared_ptr<lfs::core::Tensor> selection_slice;
         std::unique_ptr<lfs::core::SplatData> model;
+        std::shared_ptr<const lfs::core::SplatData> shared_model;
         std::shared_ptr<lfs::core::PointCloud> point_cloud;
         std::shared_ptr<lfs::core::MeshData> mesh;
         std::unique_ptr<lfs::core::CropBoxData> cropbox;

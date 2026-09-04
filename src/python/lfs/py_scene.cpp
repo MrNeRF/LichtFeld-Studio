@@ -148,6 +148,7 @@ namespace lfs::python {
             .mode = vis::op::SceneGraphCaptureMode::FULL,
             .include_selected_nodes = include_selected_nodes,
             .include_scene_context = include_scene_context,
+            .payload_uuids = std::vector<core::Uuid>{},
         };
     }
 

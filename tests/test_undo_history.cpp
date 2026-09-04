@@ -29,7 +29,9 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <ranges>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -2531,6 +2533,137 @@ TEST_F(UndoHistoryTest, DuplicateSelectedNodeClonesSliceUnderNewUuid) {
     ASSERT_NE(scene.getNodeByUuid(duplicate_uuid), nullptr);
     EXPECT_EQ(selection_mask_values(scene),
               (std::vector<uint8_t>{0, 6, 0, 0, 6, 0}));
+}
+
+TEST_F(UndoHistoryTest, SceneGraphPatchPayloadCaptureIsOperationScoped) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+    auto& scene = scene_manager->getScene();
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+
+    const auto payload_bytes = [](const lfs::core::SplatData& model) {
+        return model.means_raw().bytes() + model.sh0_raw().bytes() + model.shN_raw().bytes() +
+               model.scaling_raw().bytes() + model.rotation_raw().bytes() + model.opacity_raw().bytes() +
+               (model.has_deleted_mask() ? model.deleted().bytes() : 0u) +
+               (model._densification_info.is_valid() ? model._densification_info.bytes() : 0u);
+    };
+
+    const auto graph_signature = [&] {
+        std::vector<std::string> result;
+        const auto visit = [&](const auto& self, const lfs::core::NodeId id) -> void {
+            const auto* node = scene.getNodeById(id);
+            if (!node) {
+                return;
+            }
+            const auto parent_uuid = node->parent_id == lfs::core::NULL_NODE
+                                         ? lfs::core::Uuid{}
+                                         : scene.getNodeUuid(node->parent_id);
+            std::string row = node->uuid.to_string() + "|" + parent_uuid.to_string() + "|" + node->name + "|" +
+                              std::to_string(static_cast<int>(node->type)) + "|";
+            if (node->model) {
+                const auto means = node->model->means_raw().cpu().to_vector();
+                row += std::to_string(node->model->size()) + "|";
+                if (!means.empty()) {
+                    row += std::to_string(means.front()) + "|" + std::to_string(means[means.size() - 3]);
+                }
+                if (node->model->has_deleted_mask()) {
+                    row += "|" + std::to_string(node->model->deleted().count_nonzero());
+                }
+            }
+            result.push_back(std::move(row));
+            for (const auto child_id : node->children) {
+                self(self, child_id);
+            }
+        };
+        for (const auto root_id : scene.getRootNodes()) {
+            visit(visit, root_id);
+        }
+        return result;
+    };
+
+    const auto check_round_trip = [&](const std::vector<std::string>& before,
+                                      const std::vector<std::string>& after) {
+        auto result = lfs::vis::op::undoHistory().undo();
+        ASSERT_TRUE(result.success) << result.error;
+        EXPECT_EQ(graph_signature(), before);
+        result = lfs::vis::op::undoHistory().redo();
+        ASSERT_TRUE(result.success) << result.error;
+        EXPECT_EQ(graph_signature(), after);
+        result = lfs::vis::op::undoHistory().undo();
+        ASSERT_TRUE(result.success) << result.error;
+        EXPECT_EQ(graph_signature(), before);
+        result = lfs::vis::op::undoHistory().redo();
+        ASSERT_TRUE(result.success) << result.error;
+    };
+
+    std::vector<lfs::core::NodeId> node_ids;
+    node_ids.reserve(10);
+    for (int i = 0; i < 10; ++i) {
+        const auto id = scene.addSplat("model_" + std::to_string(i), make_linear_test_splat(10000));
+        ASSERT_NE(id, lfs::core::NULL_NODE);
+        node_ids.push_back(id);
+    }
+
+    const auto empty_group = scene.addGroup("empty_group");
+    ASSERT_NE(empty_group, lfs::core::NULL_NODE);
+    const auto empty_group_before = graph_signature();
+    ASSERT_TRUE(scene_manager->removeNodesByIdsWithResult({empty_group}, false));
+    const auto empty_group_after = graph_signature();
+    ASSERT_EQ(lfs::vis::op::undoHistory().undoItems().back().metadata.label, "Delete Nodes");
+    EXPECT_LT(lfs::vis::op::undoHistory().undoItems().back().estimated_bytes, 64u * 1024u);
+    check_round_trip(empty_group_before, empty_group_after);
+
+    const auto* deleted_node = scene.getNodeById(node_ids.front());
+    ASSERT_NE(deleted_node, nullptr);
+    ASSERT_NE(deleted_node->model, nullptr);
+    const size_t deleted_payload_bytes = payload_bytes(*deleted_node->model);
+    const auto delete_before = graph_signature();
+    ASSERT_TRUE(scene_manager->removeNodesByIdsWithResult({node_ids.front()}, false));
+    const auto delete_after = graph_signature();
+    EXPECT_LE(lfs::vis::op::undoHistory().undoItems().back().estimated_bytes,
+              deleted_payload_bytes * 3 / 2);
+    check_round_trip(delete_before, delete_after);
+
+    const auto* duplicate_source = scene.getNodeById(node_ids[1]);
+    ASSERT_NE(duplicate_source, nullptr);
+    ASSERT_NE(duplicate_source->model, nullptr);
+    const size_t duplicate_payload_bytes = payload_bytes(*duplicate_source->model);
+    const auto duplicate_before = graph_signature();
+    ASSERT_FALSE(scene_manager->duplicateNodeTree(node_ids[1]).empty());
+    const auto duplicate_after = graph_signature();
+    EXPECT_LE(lfs::vis::op::undoHistory().undoItems().back().estimated_bytes,
+              duplicate_payload_bytes * 3 / 2);
+    check_round_trip(duplicate_before, duplicate_after);
+
+    const auto group_before = graph_signature();
+    ASSERT_TRUE(scene_manager->groupNodes({node_ids[2], node_ids[3]}));
+    const auto group_after = graph_signature();
+    EXPECT_LT(lfs::vis::op::undoHistory().undoItems().back().estimated_bytes, 64u * 1024u);
+    check_round_trip(group_before, group_after);
+
+    const auto grouped_id = [&] {
+        for (const auto* node : scene.getNodes()) {
+            if (node && node->type == lfs::core::NodeType::GROUP &&
+                std::ranges::find(node->children, node_ids[2]) != node->children.end()) {
+                return node->id;
+            }
+        }
+        return lfs::core::NULL_NODE;
+    }();
+    ASSERT_NE(grouped_id, lfs::core::NULL_NODE);
+    const auto ungroup_before = graph_signature();
+    ASSERT_TRUE(scene_manager->ungroupNode(grouped_id));
+    const auto ungroup_after = graph_signature();
+    EXPECT_LT(lfs::vis::op::undoHistory().undoItems().back().estimated_bytes, 64u * 1024u);
+    check_round_trip(ungroup_before, ungroup_after);
+
+    const auto target_group = scene.addGroup("target_group");
+    ASSERT_NE(target_group, lfs::core::NULL_NODE);
+    const auto move_before = graph_signature();
+    ASSERT_TRUE(scene_manager->moveNodes({node_ids[4]}, target_group, -1));
+    const auto move_after = graph_signature();
+    EXPECT_LT(lfs::vis::op::undoHistory().undoItems().back().estimated_bytes, 64u * 1024u);
+    check_round_trip(move_before, move_after);
 }
 
 TEST_F(UndoHistoryTest, DeletingLastNodeRemainsUndoable) {

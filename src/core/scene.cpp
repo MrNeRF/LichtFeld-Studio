@@ -485,10 +485,10 @@ namespace lfs::core {
         }
     }
 
-    std::vector<std::unique_ptr<lfs::core::SplatData>> Scene::detachSplatModelsForRemoval(
+    std::vector<std::pair<lfs::core::Uuid, std::unique_ptr<lfs::core::SplatData>>> Scene::detachSplatModelsForRemoval(
         const NodeId root_id,
         const bool keep_children) {
-        std::vector<std::unique_ptr<lfs::core::SplatData>> detached;
+        std::vector<std::pair<lfs::core::Uuid, std::unique_ptr<lfs::core::SplatData>>> detached;
 
         if (root_id == NULL_NODE) {
             return detached;
@@ -507,7 +507,7 @@ namespace lfs::core {
             if (node->model) {
                 if (auto model = retireCombinedModelIfInFlight(
                         std::move(node->model))) {
-                    detached.push_back(std::move(model));
+                    detached.emplace_back(node->uuid, std::move(model));
                 }
             }
 
