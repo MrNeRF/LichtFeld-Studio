@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "config.slang"
+#include "overlay_flags.inc"
 
 static const float eps = 1e-7;
 
@@ -1125,6 +1126,19 @@ uint read_byte(ByteAddressBuffer buffer, uint idx)
     return (buffer.Load(aligned_idx) >> shift) & 0xffu;
 }
 
+// The host clears every word before projection. Atomic OR preserves adjacent
+// bytes even when compact survivor slots in one word come from different waves.
+// All-zero flags need no store; clearing also removes flags from the last frame.
+[ForceInline]
+void write_overlay_byte(RWByteAddressBuffer buffer, uint idx, uint flags, uint lod_enabled)
+{
+    if ((lod_enabled & LFS_VK_OVERLAY_WRITE_BIT) == 0u || (flags & 0xffu) == 0u)
+        return;
+    const uint word_offset = idx & ~(LFS_VK_OVERLAY_WORD_BYTES - 1u);
+    const uint shift = (idx & (LFS_VK_OVERLAY_WORD_BYTES - 1u)) * 8u;
+    buffer.InterlockedOr(word_offset, (flags & 0xffu) << shift);
+}
+
 [ForceInline]
 int read_int32(ByteAddressBuffer buffer, uint idx)
 {
@@ -1211,12 +1225,12 @@ uint unpack_overlay_preview_byte(uint packed)
 [ForceInline]
 uint load_overlay_per_splat_pack(
     uint splat_id,
-    StructuredBuffer<uint> gaussian_overlay_flags,
+    ByteAddressBuffer gaussian_overlay_flags,
     ByteAddressBuffer selection_mask,
     ByteAddressBuffer preview_mask,
     OverlayUniformState state)
 {
-    uint flags = gaussian_overlay_flags[splat_id];
+    uint flags = read_byte(gaussian_overlay_flags, splat_id);
     uint selection_byte = state.selection_mask_enabled ? read_byte(selection_mask, splat_id) : 0u;
     uint preview_byte = state.preview_mask_enabled ? read_byte(preview_mask, splat_id) : 0u;
     return pack_overlay_per_splat(flags, selection_byte, preview_byte);
