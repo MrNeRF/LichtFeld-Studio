@@ -3443,7 +3443,7 @@ namespace lfs::core {
             new_gpu_storage.dtype = dtype_;
             new_data = new_gpu_storage.data;
             LFS_ASSERT_MSG(new_data != nullptr,
-                           "reserve CPU allocation failed");
+                           "reserve GPU allocation failed");
             LOG_DEBUG("  ✓ CUDA allocation succeeded: {} MB at {}", new_bytes / (1024.0 * 1024.0), new_data);
         } else {
             new_data = std::malloc(new_bytes);
@@ -3458,17 +3458,23 @@ namespace lfs::core {
 
         std::shared_ptr<void> new_owner;
         if (device_ == Device::CUDA) {
-            record_storage_allocation(StorageAccountingKind::CudaDirect, new_bytes);
+            const StorageAccountingKind accounting_kind =
+                new_gpu_storage.backend == GpuBackend::Vulkan
+                    ? StorageAccountingKind::VulkanOwned
+                    : StorageAccountingKind::CudaDirect;
+            record_storage_allocation(accounting_kind, new_bytes);
             const cudaStream_t allocation_stream = stream();
             new_owner = std::shared_ptr<void>(new_data, [bytes = new_bytes,
                                                          new_gpu_storage,
+                                                         accounting_kind,
                                                          allocation_stream](void* ptr) {
-                if (ptr && !gpu_process_teardown_started()) {
+                if (ptr && (new_gpu_storage.backend == GpuBackend::Vulkan ||
+                            !gpu_process_teardown_started())) {
                     internal::backend_ops(new_gpu_storage.backend)
                         .deallocate(new_gpu_storage,
                                     internal::ExecContext{allocation_stream});
                 }
-                Tensor::record_storage_deallocation(StorageAccountingKind::CudaDirect, bytes);
+                Tensor::record_storage_deallocation(accounting_kind, bytes);
             });
         } else {
             new_owner = std::shared_ptr<void>(new_data, [](void* ptr) {
@@ -3479,10 +3485,18 @@ namespace lfs::core {
         if (device_ == Device::CUDA) {
             new_storage_meta->backend = storage_meta_ ? storage_meta_->backend
                                                       : GpuBackend::CUDA;
-            new_storage_meta->gpu_descriptor.byte_size = new_bytes;
-            new_storage_meta->gpu_descriptor.accounting_kind =
-                StorageAccountingKind::CudaDirect;
-            new_storage_meta->external_kind = "cuda.direct";
+            if (new_gpu_storage.meta != nullptr) {
+                new_storage_meta->gpu_descriptor =
+                    new_gpu_storage.meta->gpu_descriptor;
+            } else {
+                new_storage_meta->gpu_descriptor.byte_size = new_bytes;
+                new_storage_meta->gpu_descriptor.accounting_kind =
+                    StorageAccountingKind::CudaDirect;
+            }
+            new_storage_meta->external_kind =
+                new_gpu_storage.backend == GpuBackend::Vulkan
+                    ? ""
+                    : "cuda.direct";
         }
 
         // Copy existing data
@@ -3567,7 +3581,8 @@ namespace lfs::core {
             t.id_ = next_id_++;
             t.init_storage_meta();
             t.storage_meta_->backend = backend;
-            t.storage_meta_->external_kind = "cuda.direct";
+            t.storage_meta_->external_kind =
+                backend == GpuBackend::Vulkan ? "" : "cuda.direct";
             return t;
         }
 
@@ -3598,8 +3613,12 @@ namespace lfs::core {
         // Create tensor with custom deleter
         Tensor t;
         t.data_ = data_ptr;
-        record_storage_allocation(StorageAccountingKind::CudaDirect, total_bytes);
-        t.data_owner_ = std::shared_ptr<void>(data_ptr, [bytes = total_bytes, storage](void* ptr) {
+        const StorageAccountingKind accounting_kind =
+            backend == GpuBackend::Vulkan ? StorageAccountingKind::VulkanOwned
+                                          : StorageAccountingKind::CudaDirect;
+        record_storage_allocation(accounting_kind, total_bytes);
+        t.data_owner_ = std::shared_ptr<void>(data_ptr, [bytes = total_bytes, storage,
+                                                         accounting_kind](void* ptr) {
             if (!ptr) {
                 return;
             }
@@ -3608,10 +3627,11 @@ namespace lfs::core {
             // process has already begun teardown avoids cudaErrorContextIsDestroyed
             // / SIGSEGV on a dead primary context. Pre-shutdown hooks should
             // release long-lived holders while CUDA is still healthy.
-            if (!gpu_process_teardown_started()) {
+            if (storage.backend == GpuBackend::Vulkan ||
+                !gpu_process_teardown_started()) {
                 internal::backend_ops(storage.backend).deallocate(storage, internal::ExecContext{nullptr});
             }
-            Tensor::record_storage_deallocation(StorageAccountingKind::CudaDirect, bytes);
+            Tensor::record_storage_deallocation(accounting_kind, bytes);
         });
         t.shape_ = shape;
         t.strides_ = shape.strides();
@@ -3624,10 +3644,16 @@ namespace lfs::core {
         t.id_ = next_id_++;
         t.init_storage_meta();
         t.storage_meta_->backend = backend;
-        t.storage_meta_->gpu_descriptor.byte_size = total_bytes;
-        t.storage_meta_->gpu_descriptor.accounting_kind =
-            StorageAccountingKind::CudaDirect;
-        t.storage_meta_->external_kind = "cuda.direct";
+        if (storage.meta != nullptr) {
+            t.storage_meta_->gpu_descriptor = storage.meta->gpu_descriptor;
+        } else {
+            t.storage_meta_->gpu_descriptor.byte_size = total_bytes;
+            t.storage_meta_->gpu_descriptor.accounting_kind =
+                StorageAccountingKind::CudaDirect;
+        }
+        t.storage_meta_->external_kind = backend == GpuBackend::Vulkan
+                                             ? ""
+                                             : "cuda.direct";
 
         return t;
     }

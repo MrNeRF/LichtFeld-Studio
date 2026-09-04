@@ -5,6 +5,9 @@
 
 #include "../internal/tensor_impl.hpp"
 #include "core/assert.hpp"
+#ifdef LFS_TENSOR_VULKAN
+#include "vulkan/vk_backend_ops.hpp"
+#endif
 
 #include <utility>
 
@@ -14,12 +17,17 @@ namespace lfs::core::internal {
 
     GpuBackendOps& backend_ops(const GpuBackend backend) {
         if (backend == GpuBackend::CUDA) {
-            static CudaBackendOps cuda_ops;
-            return cuda_ops;
+            static CudaBackendOps* const cuda_ops = new CudaBackendOps();
+            return *cuda_ops;
         }
 
+#ifdef LFS_TENSOR_VULKAN
+        static VulkanBackendOps* const vulkan_ops = new VulkanBackendOps();
+        return *vulkan_ops;
+#else
         LFS_ASSERT_MSG(false, "GPU backend 'Vulkan' is unavailable");
         std::unreachable();
+#endif
     }
 
     GpuBackendOps& backend_ops_for(const Tensor& tensor) {

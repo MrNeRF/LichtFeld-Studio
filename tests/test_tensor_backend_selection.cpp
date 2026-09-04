@@ -10,9 +10,9 @@
 #include <atomic>
 #include <cstdlib>
 #include <cuda_runtime.h>
-#include <exception>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -34,15 +34,6 @@ namespace {
 #endif
     }
 
-    std::string exception_message(const auto& operation) {
-        try {
-            operation();
-        } catch (const std::exception& error) {
-            return error.what();
-        }
-        return {};
-    }
-
     TEST(TensorBackendSelection, AProcessDefaultFreezesAfterFirstResolution) {
         unset_backend_environment();
         internal::gpu_backend_reset_for_testing();
@@ -54,9 +45,8 @@ namespace {
         // Catches a thread scope freezing the otherwise untouched process default.
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            EXPECT_FALSE(exception_message([] {
-                             (void)Tensor::empty({1}, Device::CUDA);
-                         }).empty());
+            const Tensor tensor = Tensor::empty({1}, Device::CUDA);
+            EXPECT_EQ(gpu_backend_of(tensor), GpuBackend::Vulkan);
         }
 
         // Catches environment reads that override an explicit pre-resolution setter.
@@ -97,11 +87,8 @@ namespace {
             });
             other_thread.join();
 
-            const std::string outer_error = exception_message([] {
-                (void)Tensor::empty({1}, Device::CUDA);
-            });
-            EXPECT_NE(outer_error.find("Vulkan"), std::string::npos);
-            EXPECT_NE(outer_error.find("unavailable"), std::string::npos);
+            const Tensor outer_tensor = Tensor::empty({1}, Device::CUDA);
+            EXPECT_EQ(gpu_backend_of(outer_tensor), GpuBackend::Vulkan);
 
             {
                 GpuBackendScope inner(GpuBackend::CUDA);
@@ -109,10 +96,8 @@ namespace {
                 EXPECT_EQ(gpu_backend_of(tensor), GpuBackend::CUDA);
             }
 
-            const std::string restored_error = exception_message([] {
-                (void)Tensor::empty({1}, Device::CUDA);
-            });
-            EXPECT_NE(restored_error.find("Vulkan"), std::string::npos);
+            const Tensor restored_tensor = Tensor::empty({1}, Device::CUDA);
+            EXPECT_EQ(gpu_backend_of(restored_tensor), GpuBackend::Vulkan);
         }
 
         EXPECT_TRUE(other_thread_used_cuda.load());
@@ -145,16 +130,14 @@ namespace {
         ASSERT_EQ(cudaFree(pointer), cudaSuccess);
     }
 
-    TEST(TensorBackendSelection, VulkanFactoryFailsWithoutChangingDefault) {
-        // Catches unavailable backends falling through to a CUDA allocation.
-        EXPECT_FALSE(gpu_backend_available(GpuBackend::Vulkan));
+    TEST(TensorBackendSelection, VulkanFactorySucceedsWithoutChangingDefault) {
+        // Catches a Vulkan scope falling through to a CUDA allocation.
+        ASSERT_TRUE(gpu_backend_available(GpuBackend::Vulkan));
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            const std::string message = exception_message([] {
-                (void)Tensor::zeros({2}, Device::CUDA);
-            });
-            EXPECT_NE(message.find("Vulkan"), std::string::npos);
-            EXPECT_NE(message.find("unavailable"), std::string::npos);
+            const Tensor tensor = Tensor::zeros({2}, Device::CUDA);
+            EXPECT_EQ(gpu_backend_of(tensor), GpuBackend::Vulkan);
+            EXPECT_EQ(tensor.to_vector(), std::vector<float>({0.0f, 0.0f}));
         }
         EXPECT_EQ(default_gpu_backend(), GpuBackend::CUDA);
     }
@@ -184,7 +167,7 @@ namespace {
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(std::nullopt);
     }
 
-    TEST(TensorBackendSelection, CopyToCudaClonesAndVulkanFailsCleanly) {
+    TEST(TensorBackendSelection, CopyToBackendClonesAndConvertsCleanly) {
         // Catches same-backend aliasing and cross-backend CUDA fallthrough.
         const Tensor source = Tensor::full({4}, 7.0f, Device::CUDA);
         const Tensor clone = internal::copy_to_backend(source, GpuBackend::CUDA);
@@ -192,21 +175,19 @@ namespace {
         EXPECT_NE(clone.data_ptr(), source.data_ptr());
         EXPECT_EQ(clone.to_vector(), source.to_vector());
 
-        const std::string message = exception_message([&] {
-            (void)internal::copy_to_backend(source, GpuBackend::Vulkan);
-        });
-        EXPECT_NE(message.find("Vulkan"), std::string::npos);
-        EXPECT_NE(message.find("unavailable"), std::string::npos);
+        const Tensor vulkan =
+            internal::copy_to_backend(source, GpuBackend::Vulkan);
+        EXPECT_EQ(gpu_backend_of(vulkan), GpuBackend::Vulkan);
+        EXPECT_EQ(vulkan.to_vector(), source.to_vector());
     }
 
     TEST(TensorBackendSelection, BackendMemoryAndShutdownAreDefinedForBothBackends) {
         // Catches placeholder Vulkan services leaking CUDA statistics or errors.
         EXPECT_TRUE(gpu_backend_available(GpuBackend::CUDA));
         const MemoryInfo vulkan = gpu_backend_memory_info(GpuBackend::Vulkan);
-        EXPECT_EQ(vulkan.free_bytes, 0u);
-        EXPECT_EQ(vulkan.total_bytes, 0u);
-        EXPECT_EQ(vulkan.allocated_bytes, 0u);
-        EXPECT_EQ(vulkan.device_id, -1);
+        EXPECT_GT(vulkan.total_bytes, 0u);
+        EXPECT_GT(vulkan.free_bytes, 0u);
+        EXPECT_GE(vulkan.device_id, 0);
         EXPECT_TRUE(shutdown_gpu_backend(GpuBackend::CUDA).has_value());
         EXPECT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan).has_value());
     }

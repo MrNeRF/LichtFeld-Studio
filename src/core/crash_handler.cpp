@@ -10,6 +10,7 @@
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 
 #include <array>
 #include <atomic>
@@ -95,6 +96,7 @@ namespace lfs::core {
 
     void teardown_gpu_before_exit() noexcept {
         try {
+            static_cast<void>(shutdown_gpu_backend(GpuBackend::Vulkan));
             // release every registered long-lived CUDA holder
             // (TLS FastGS sort workspaces, rasterizer image caches, PPISP shared
             // statics, mirror mult cache, nan-check scratch, …) while the pool

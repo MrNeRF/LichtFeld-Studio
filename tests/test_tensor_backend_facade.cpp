@@ -6,6 +6,7 @@
 #include "core/tensor/backend/pointwise_lowering.hpp"
 #include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor/internal/tensor_ops.hpp"
+#include "core/tensor_backend.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -81,13 +82,13 @@ namespace {
 #undef LFS_POINTWISE_OP
     }
 
-    TEST(TensorBackendFacade, RegistryRejectsUnavailableAndCpuStorage) {
-        // Catches Vulkan silently falling through to the CUDA singleton.
-        const std::string vulkan_error = exception_message([] {
-            (void)internal::backend_ops(GpuBackend::Vulkan);
-        });
-        EXPECT_NE(vulkan_error.find("Vulkan"), std::string::npos);
-        EXPECT_NE(vulkan_error.find("unavailable"), std::string::npos);
+    TEST(TensorBackendFacade, RegistryReturnsVulkanAndRejectsCpuStorage) {
+        // Catches the Vulkan registry entry silently returning the CUDA singleton.
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        const Tensor vulkan = Tensor::empty({2}, Device::CUDA);
+        EXPECT_EQ(internal::backend_ops(GpuBackend::Vulkan)
+                      .classify_pointer(vulkan.data_ptr()),
+                  PointerClass::Device);
 
         // Catches CPU tensors reaching a GPU facade through a default-backend fallback.
         const Tensor cpu = Tensor::ones({2}, Device::CPU);

@@ -489,6 +489,8 @@ namespace lfs::core {
     struct StorageMeta {
         GpuBackend backend = GpuBackend::CUDA;
         GpuStorageDescriptor gpu_descriptor{};
+        std::atomic<uint64_t> pending_recorder{0};
+        std::atomic<uint64_t> pending_value{0};
         std::atomic<uint64_t> generation{0};
         std::atomic<uint32_t> pending_lazy_snapshots{0};
         std::mutex lazy_snapshot_mutex;
@@ -1817,12 +1819,14 @@ namespace lfs::core {
             preserve_lazy_snapshots_before_write();
             tensor_contract::require_valid(
                 *this, "storage_ptr", "tensor", LFS_SOURCE_SITE_CURRENT());
+            assert_device_storage_matches_tag();
             return data_;
         }
         const void* storage_ptr() const {
             materialize_if_deferred();
             tensor_contract::require_valid(
                 *this, "storage_ptr", "tensor", LFS_SOURCE_SITE_CURRENT());
+            assert_device_storage_matches_tag();
             return data_;
         }
 

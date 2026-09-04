@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 
 #include <cuda_runtime.h>
 
@@ -30,6 +31,7 @@
 using lfs::core::BoundaryMode;
 using lfs::core::DataType;
 using lfs::core::Device;
+using lfs::core::GpuBackend;
 using lfs::core::MovementArgs;
 using lfs::core::MovementOp;
 using lfs::core::ScatterMode;
@@ -410,6 +412,8 @@ namespace {
         if (name == "launch_masked_fill" || name == "launch_masked_select" ||
             name == "launch_masked_scatter") {
             inputs.mask = inputs.a.to(DataType::Float32).gt(0.0f);
+            if (lfs::core::gpu_backend_of(inputs.a) == GpuBackend::Vulkan)
+                (void)inputs.mask.data_ptr();
             if (name != "launch_masked_select")
                 prepare_destinations(inputs, inputs.a, execution_count, noncontiguous);
             if (name == "launch_masked_scatter") {
@@ -421,8 +425,11 @@ namespace {
             inputs.rhs = make_profile_tensor(profile, DataType::Bool, seed + 4);
             prepare_destinations(inputs, inputs.a, execution_count, noncontiguous);
         }
-        if (name == "launch_where")
+        if (name == "launch_where") {
             inputs.mask = inputs.a.gt(0.0f);
+            if (lfs::core::gpu_backend_of(inputs.a) == GpuBackend::Vulkan)
+                (void)inputs.mask.data_ptr();
+        }
         if (name == "launch_sgemm") {
             const size_t k = std::max<size_t>(3, std::min<size_t>(profile.cols, 33));
             inputs.input = make_tensor({profile.rows, k}, dtype, seed);
@@ -794,7 +801,12 @@ namespace {
     std::vector<std::byte> download(const std::vector<Tensor>& outputs) {
         for (const auto& output : outputs)
             (void)output.data_ptr();
-        cuda_check(cudaDeviceSynchronize(), "cudaDeviceSynchronize before download");
+        const bool has_cuda_output = std::ranges::any_of(outputs, [](const Tensor& output) {
+            return output.device() == Device::CUDA &&
+                   lfs::core::gpu_backend_of(output) == GpuBackend::CUDA;
+        });
+        if (has_cuda_output)
+            cuda_check(cudaDeviceSynchronize(), "cudaDeviceSynchronize before download");
         std::vector<std::byte> bytes;
         for (const auto& output : outputs) {
             const Tensor host = output.device() == Device::CPU ? output.contiguous()
@@ -858,6 +870,7 @@ namespace {
 
     struct Options {
         std::filesystem::path output;
+        GpuBackend backend = GpuBackend::CUDA;
         bool dump = false;
         bool time = false;
     };
@@ -878,13 +891,31 @@ namespace {
             else
                 throw std::runtime_error("usage: tensor_backend_corpus --backend cuda|vulkan --out DIR [--dump] [--time]");
         }
-        if (backend == "vulkan") {
-            std::cout << "backend not available\n";
-            std::exit(2);
-        }
-        if (backend != "cuda" || options.output.empty())
-            throw std::runtime_error("--backend cuda and --out DIR are required");
+        if (backend == "vulkan")
+            options.backend = GpuBackend::Vulkan;
+        else if (backend != "cuda")
+            throw std::runtime_error("--backend cuda|vulkan is required");
+        if (options.output.empty())
+            throw std::runtime_error("--out DIR is required");
+        if (options.backend == GpuBackend::Vulkan && options.time)
+            throw std::runtime_error("--time is not available for the phase-P3 Vulkan corpus; Vulkan timing is enabled in P4");
         return options;
+    }
+
+    bool is_vulkan_not_implemented(const std::exception& error) {
+        const std::string_view message(error.what());
+        return message.contains("Vulkan backend:") &&
+               message.contains("is not implemented yet");
+    }
+
+    std::string not_implemented_line(const Entry& entry, const Profile& profile,
+                                     const DataType dtype, const std::exception& error) {
+        std::string message(error.what());
+        std::ranges::replace(message, '\n', ' ');
+        std::ostringstream line;
+        line << entry.launcher << ' ' << entry.call << ' ' << profile.name << ' '
+             << compact_dtype_name(dtype) << " notimpl " << message;
+        return line.str();
     }
 
     std::array<double, 3> time_case(size_t entry_index, const Profile& profile, DataType dtype,
@@ -954,46 +985,56 @@ namespace {
                 variants.emplace_back(Profile{"33x127T", 33, 127}, true);
             for (const auto& [profile, noncontiguous] : variants) {
                 for (DataType dtype : entry.dtypes) {
-                    if (entry.rule == Rule::Stat)
-                        Tensor::manual_seed(kSeed + entry_index);
-                    auto outputs = run_entry(entry_index, profile, dtype, noncontiguous);
-                    auto bytes = download(outputs);
-                    if (entry.rule == Rule::Permutation) {
-                        const auto order = outputs.at(1).cpu().to_vector_int64();
-                        const size_t width = entry.launcher == "launch_sort_1d" ? order.size()
-                                                                                : profile.cols;
-                        for (size_t offset = 0; offset < order.size(); offset += width) {
-                            std::vector<int64_t> row(
-                                order.begin() + static_cast<ptrdiff_t>(offset),
-                                order.begin() + static_cast<ptrdiff_t>(offset + width));
-                            std::sort(row.begin(), row.end());
-                            for (size_t i = 0; i < row.size(); ++i) {
-                                if (row[i] != static_cast<int64_t>(i))
-                                    throw std::runtime_error("sort indices failed permutation check");
+                    try {
+                        if (entry.rule == Rule::Stat)
+                            Tensor::manual_seed(kSeed + entry_index);
+                        auto outputs = run_entry(entry_index, profile, dtype, noncontiguous);
+                        auto bytes = download(outputs);
+                        if (entry.rule == Rule::Permutation) {
+                            const auto order = outputs.at(1).cpu().to_vector_int64();
+                            const size_t width = entry.launcher == "launch_sort_1d" ? order.size()
+                                                                                    : profile.cols;
+                            for (size_t offset = 0; offset < order.size(); offset += width) {
+                                std::vector<int64_t> row(
+                                    order.begin() + static_cast<ptrdiff_t>(offset),
+                                    order.begin() + static_cast<ptrdiff_t>(offset + width));
+                                std::sort(row.begin(), row.end());
+                                for (size_t i = 0; i < row.size(); ++i) {
+                                    if (row[i] != static_cast<int64_t>(i))
+                                        throw std::runtime_error("sort indices failed permutation check");
+                                }
                             }
+                            bytes = download({outputs.front()});
                         }
-                        bytes = download({outputs.front()});
-                    }
-                    const std::string result =
-                        entry.rule == Rule::Stat ? statistics(outputs, entry.launcher, profile)
-                                                 : digest(bytes);
-                    std::ostringstream line;
-                    line << entry.launcher << ' ' << entry.call << ' ' << profile.name << ' '
-                         << compact_dtype_name(dtype) << ' ' << rule_name(entry.rule) << ' ' << result;
-                    lines.push_back(line.str());
-                    if (write_files && options.dump) {
-                        std::ofstream dump(options.output / (std::to_string(case_index) + ".bin"),
-                                           std::ios::binary);
-                        dump.write(reinterpret_cast<const char*>(bytes.data()),
-                                   static_cast<std::streamsize>(bytes.size()));
-                    }
-                    if (write_files && options.time) {
-                        const auto quartiles =
-                            time_case(entry_index, profile, dtype, noncontiguous);
-                        median_sum_us += quartiles[0];
-                        timing << entry.launcher << ' ' << profile.name << ' ' << compact_dtype_name(dtype) << ' '
-                               << std::fixed << std::setprecision(3) << quartiles[0] << ' ' << quartiles[1]
-                               << ' ' << quartiles[2] << '\n';
+                        const std::string result =
+                            entry.rule == Rule::Stat ? statistics(outputs, entry.launcher, profile)
+                                                     : digest(bytes);
+                        std::ostringstream line;
+                        line << entry.launcher << ' ' << entry.call << ' ' << profile.name << ' '
+                             << compact_dtype_name(dtype) << ' ' << rule_name(entry.rule) << ' ' << result;
+                        lines.push_back(line.str());
+                        if (write_files && options.dump) {
+                            std::ofstream dump(options.output / (std::to_string(case_index) + ".bin"),
+                                               std::ios::binary);
+                            dump.write(reinterpret_cast<const char*>(bytes.data()),
+                                       static_cast<std::streamsize>(bytes.size()));
+                        }
+                        if (write_files && options.time) {
+                            const auto quartiles =
+                                time_case(entry_index, profile, dtype, noncontiguous);
+                            median_sum_us += quartiles[0];
+                            timing << entry.launcher << ' ' << profile.name << ' ' << compact_dtype_name(dtype) << ' '
+                                   << std::fixed << std::setprecision(3) << quartiles[0] << ' ' << quartiles[1]
+                                   << ' ' << quartiles[2] << '\n';
+                        }
+                    } catch (const std::exception& error) {
+                        if (options.backend != GpuBackend::Vulkan ||
+                            !is_vulkan_not_implemented(error)) {
+                            throw;
+                        }
+                        lines.push_back(not_implemented_line(entry, profile, dtype, error));
+                        if (write_files)
+                            std::cout << lines.back() << '\n';
                     }
                     ++case_index;
                 }
@@ -1012,8 +1053,14 @@ namespace {
 int main(int argc, char** argv) {
     try {
         const Options options = parse_options(argc, argv);
-        int device = -1;
-        cuda_check(cudaGetDevice(&device), "cudaGetDevice");
+        const auto backend_status = lfs::core::set_default_gpu_backend(options.backend);
+        if (!backend_status)
+            throw std::runtime_error(
+                std::string(backend_status.error().user_message()));
+        if (options.backend == GpuBackend::CUDA) {
+            int device = -1;
+            cuda_check(cudaGetDevice(&device), "cudaGetDevice");
+        }
         std::filesystem::create_directories(options.output);
         double aggregate_median_ms = 0.0;
         const auto first = corpus_pass(options, true, &aggregate_median_ms);

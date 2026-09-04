@@ -1,0 +1,82 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+#pragma once
+
+#include "../descriptors.hpp"
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <mutex>
+#include <span>
+#include <unordered_map>
+#include <vector>
+#include <vk_mem_alloc.h>
+#include <vulkan/vulkan.h>
+
+namespace lfs::core {
+    class MemoryInfo;
+}
+
+namespace lfs::core::internal {
+
+    class VulkanContext;
+
+    class VulkanMemory final {
+    public:
+        explicit VulkanMemory(VulkanContext& context);
+        ~VulkanMemory();
+
+        VulkanMemory(const VulkanMemory&) = delete;
+        VulkanMemory& operator=(const VulkanMemory&) = delete;
+
+        [[nodiscard]] StorageRef allocate(size_t bytes, size_t alignment,
+                                          ExecContext context);
+        void deallocate(StorageRef storage) noexcept;
+        void copy_host_to_device(const CopyRequest& request);
+        void copy_device_to_host(const CopyRequest& request);
+        void copy_device_to_device(const CopyRequest& request);
+        void memset(const FillRequest& request);
+        void mark_used(std::span<const StorageRef> reads,
+                       std::span<const StorageRef> writes,
+                       uint64_t timeline_value);
+
+        void trim();
+        [[nodiscard]] MemoryInfo stats() const;
+        [[nodiscard]] size_t cached_bytes() const noexcept;
+        [[nodiscard]] uint64_t live_object_count() const noexcept;
+        [[nodiscard]] bool owns_address(const void* pointer) const noexcept;
+        void shutdown();
+
+    private:
+        struct AllocationRecord;
+        struct StagingSlice;
+
+        void create_pool();
+        void ensure_staging(size_t bytes);
+        [[nodiscard]] StagingSlice acquire_staging(size_t bytes, size_t alignment);
+        void collect_retired_locked(uint64_t completed);
+        void destroy_free_locked();
+        [[nodiscard]] AllocationRecord& allocation_for(StorageRef storage) const;
+        [[nodiscard]] static VkBuffer buffer_for(StorageRef storage);
+        [[nodiscard]] static VkDeviceSize offset_for(StorageRef storage);
+
+        VulkanContext& context_;
+        VmaPool device_pool_ = VK_NULL_HANDLE;
+        mutable std::mutex allocations_mutex_;
+        std::unordered_map<uint64_t, std::unique_ptr<AllocationRecord>> allocations_;
+        std::vector<std::unique_ptr<AllocationRecord>> retired_;
+        std::unordered_map<VkDeviceSize,
+                           std::vector<std::unique_ptr<AllocationRecord>>>
+            free_lists_;
+        mutable std::mutex staging_mutex_;
+        VkBuffer staging_buffer_ = VK_NULL_HANDLE;
+        VmaAllocation staging_allocation_ = VK_NULL_HANDLE;
+        std::byte* staging_mapped_ = nullptr;
+        VkDeviceSize staging_size_ = 0;
+        VkDeviceSize staging_head_ = 0;
+        uint64_t staging_retire_value_ = 0;
+        bool shutting_down_ = false;
+    };
+
+} // namespace lfs::core::internal

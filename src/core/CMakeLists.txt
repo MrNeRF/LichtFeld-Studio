@@ -8,6 +8,11 @@
 # Tensor CUDA kernels (STATIC, linked privately)
 add_subdirectory(tensor)
 
+option(LFS_TENSOR_VULKAN "Build the Vulkan tensor backend" ON)
+if(LFS_TENSOR_VULKAN)
+    include(tensor/backend/vulkan/CMakeLists.txt)
+endif()
+
 # Neural inference kernels (STATIC, linked privately)
 add_subdirectory(nn)
 
@@ -40,6 +45,7 @@ set(TENSOR_SOURCES
         tensor/backend/cuda/cuda_ops_index_mask.cpp
         tensor/backend/cuda/cuda_ops_movement.cpp
         tensor/backend/cuda/cuda_services.cpp
+        tensor/backend/vulkan/vma_implementation.cpp
         tensor/tensor.cpp
         tensor/tensor_serialization.cpp
         tensor/tensor_factory.cpp
@@ -62,6 +68,17 @@ set(TENSOR_SOURCES
         nn/models/moge2.cpp
         nn/models/sam2.cpp
 )
+
+if(LFS_TENSOR_VULKAN)
+    list(APPEND TENSOR_SOURCES
+        tensor/backend/vulkan/vk_context.cpp
+        tensor/backend/vulkan/vk_memory.cpp
+        tensor/backend/vulkan/vk_recorder.cpp
+        tensor/backend/vulkan/vk_pipelines.cpp
+        tensor/backend/vulkan/vk_backend_ops.cpp
+        tensor/backend/vulkan/vk_services.cpp
+    )
+endif()
 
 # Core module sources
 set(CORE_SOURCES
@@ -122,6 +139,13 @@ set(CORE_SOURCES
 
 add_library(lfs_core SHARED ${CORE_SOURCES} ${TENSOR_SOURCES})
 
+if(LFS_TENSOR_VULKAN)
+    add_dependencies(lfs_core lfs_tensor_vulkan_shaders)
+    target_compile_definitions(lfs_core PRIVATE
+        LFS_TENSOR_VULKAN=1
+        LFS_TENSOR_SPV_DIR="${LFS_TENSOR_SPV_DIR}")
+endif()
+
 target_compile_definitions(lfs_core PRIVATE LFS_CORE_EXPORTS)
 
 target_include_directories(lfs_core
@@ -134,6 +158,7 @@ target_include_directories(lfs_core
         ${CMAKE_SOURCE_DIR}/src/io/include
         ${CMAKE_CURRENT_SOURCE_DIR}/tensor  # For internal/ headers
         ${CMAKE_CURRENT_SOURCE_DIR}/nn
+        ${LFS_TENSOR_SPV_DIR}
 )
 target_include_directories(lfs_core SYSTEM PRIVATE
     ${CMAKE_SOURCE_DIR}/external
@@ -152,6 +177,8 @@ target_link_libraries(lfs_core
         CUDA::cudart
         CUDA::curand
         spdlog::spdlog
+        Vulkan::Vulkan
+        GPUOpen::VulkanMemoryAllocator
     PRIVATE
         lfs_core_cuda
         lfs_tensor_kernels

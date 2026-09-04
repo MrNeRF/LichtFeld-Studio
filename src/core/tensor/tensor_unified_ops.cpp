@@ -367,7 +367,8 @@ namespace lfs::core {
             result.dtype_ = args.dtype;
             result.id_ = next_id_++;
             result.ensure_state();
-            result.state_->stream = getCurrentCUDAStream();
+            result.state_->stream =
+                gpu_backend == GpuBackend::Vulkan ? nullptr : getCurrentCUDAStream();
 
             LFS_ASSERT_MSG(result.shape_.elements() == 0 ||
                                dtype_size(result.dtype_) <=
@@ -393,17 +394,19 @@ namespace lfs::core {
 
             if (result.device_ == Device::CUDA) {
                 cudaStream_t s = result.stream();
-                if (auto* arena = nn::ActivationArena::current()) {
-                    if (void* arena_ptr = arena->try_alloc(bytes)) {
-                        auto owner = arena->owner();
-                        result.adopt_storage(arena_ptr, [owner](void*) { (void)owner; });
-                        result.data_ = result.data_owner_.get();
-                        result.compute_alignment();
-                        result.storage_meta_->external_kind = "nn.arena";
-                        result.storage_meta_->external_owner = std::move(owner);
-                        result.storage_meta_->backend = *gpu_backend;
-                        result.storage_meta_->gpu_descriptor.byte_size = bytes;
-                        return result;
+                if (*gpu_backend == GpuBackend::CUDA) {
+                    if (auto* arena = nn::ActivationArena::current()) {
+                        if (void* arena_ptr = arena->try_alloc(bytes)) {
+                            auto owner = arena->owner();
+                            result.adopt_storage(arena_ptr, [owner](void*) { (void)owner; });
+                            result.data_ = result.data_owner_.get();
+                            result.compute_alignment();
+                            result.storage_meta_->external_kind = "nn.arena";
+                            result.storage_meta_->external_owner = std::move(owner);
+                            result.storage_meta_->backend = *gpu_backend;
+                            result.storage_meta_->gpu_descriptor.byte_size = bytes;
+                            return result;
+                        }
                     }
                 }
                 auto& backend_ops = internal::backend_ops(*gpu_backend);
@@ -413,15 +416,26 @@ namespace lfs::core {
                 void* const ptr = storage.data;
                 // Route destruction through the backend service, which is aware
                 // of ordered process teardown and pool lifetime.
-                result.adopt_storage(ptr, [s, storage](void* p) {
+                result.adopt_storage(ptr, [s, storage, bytes](void* p) {
                     if (p != nullptr) {
                         internal::backend_ops(storage.backend).deallocate(storage, internal::ExecContext{s});
+                        if (storage.backend == GpuBackend::Vulkan) {
+                            Tensor::record_storage_deallocation(
+                                StorageAccountingKind::VulkanOwned, bytes);
+                        }
                     }
                 });
                 result.data_ = result.data_owner_.get();
                 result.compute_alignment(); // Compute alignment flags once
                 result.storage_meta_->backend = *gpu_backend;
-                result.storage_meta_->gpu_descriptor.byte_size = bytes;
+                if (storage.meta != nullptr) {
+                    result.storage_meta_->gpu_descriptor = storage.meta->gpu_descriptor;
+                } else {
+                    result.storage_meta_->gpu_descriptor.byte_size = bytes;
+                }
+                if (*gpu_backend == GpuBackend::Vulkan) {
+                    record_storage_allocation(StorageAccountingKind::VulkanOwned, bytes);
+                }
 
                 // Record tensor allocation for profiling
                 backend_ops.record_tensor_allocation(
@@ -635,7 +649,8 @@ namespace lfs::core {
             result.dtype_ = args.dtype;
             result.id_ = next_id_++;
             result.ensure_state();
-            result.state_->stream = getCurrentCUDAStream();
+            result.state_->stream =
+                gpu_backend == GpuBackend::Vulkan ? nullptr : getCurrentCUDAStream();
 
             size_t bytes = count * dtype_size(result.dtype_);
 
@@ -647,15 +662,26 @@ namespace lfs::core {
                 storage.dtype = result.dtype_;
                 void* const ptr = storage.data;
                 // pool-liveness-aware deleter (see empty/ path above).
-                result.data_owner_ = std::shared_ptr<void>(ptr, [s, storage](void* p) {
+                result.data_owner_ = std::shared_ptr<void>(ptr, [s, storage, bytes](void* p) {
                     if (p != nullptr) {
                         internal::backend_ops(storage.backend).deallocate(storage, internal::ExecContext{s});
+                        if (storage.backend == GpuBackend::Vulkan) {
+                            Tensor::record_storage_deallocation(
+                                StorageAccountingKind::VulkanOwned, bytes);
+                        }
                     }
                 });
                 result.data_ = result.data_owner_.get();
                 result.init_storage_meta();
                 result.storage_meta_->backend = *gpu_backend;
-                result.storage_meta_->gpu_descriptor.byte_size = bytes;
+                if (storage.meta != nullptr) {
+                    result.storage_meta_->gpu_descriptor = storage.meta->gpu_descriptor;
+                } else {
+                    result.storage_meta_->gpu_descriptor.byte_size = bytes;
+                }
+                if (*gpu_backend == GpuBackend::Vulkan) {
+                    record_storage_allocation(StorageAccountingKind::VulkanOwned, bytes);
+                }
 
                 backend_ops.record_tensor_allocation(
                     internal::storage_ref(result), internal::strided_layout(result), bytes);

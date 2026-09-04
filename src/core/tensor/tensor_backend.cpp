@@ -12,6 +12,10 @@
 #include <cuda_runtime.h>
 #include <format>
 #include <string>
+#ifdef LFS_TENSOR_VULKAN
+#include "backend/gpu_backend_ops.hpp"
+#include "backend/vulkan/vk_context.hpp"
+#endif
 
 namespace lfs::core {
     namespace {
@@ -115,7 +119,11 @@ namespace lfs::core {
 
     bool gpu_backend_available(const GpuBackend backend) {
         if (backend == GpuBackend::Vulkan) {
+#ifdef LFS_TENSOR_VULKAN
+            return internal::vulkan_backend_probe_available();
+#else
             return false;
+#endif
         }
 
         static const bool cuda_available = [] {
@@ -147,10 +155,33 @@ namespace lfs::core {
     }
 
     MemoryInfo gpu_backend_memory_info(const GpuBackend backend) {
-        return backend == GpuBackend::CUDA ? MemoryInfo::cuda() : MemoryInfo{};
+        if (backend == GpuBackend::CUDA) {
+            return MemoryInfo::cuda();
+        }
+#ifdef LFS_TENSOR_VULKAN
+        return internal::backend_ops(GpuBackend::Vulkan).stats();
+#else
+        return {};
+#endif
     }
 
-    lfs::Status shutdown_gpu_backend(GpuBackend) {
+    lfs::Status shutdown_gpu_backend(const GpuBackend backend) {
+#ifdef LFS_TENSOR_VULKAN
+        if (backend == GpuBackend::Vulkan) {
+            try {
+                internal::backend_ops(backend).shutdown();
+            } catch (...) {
+                return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::Internal,
+                    .domain = lfs::ErrorDomain::Vulkan,
+                    .user_message = "Vulkan tensor backend shutdown failed",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
+            }
+        }
+#else
+        (void)backend;
+#endif
         return {};
     }
 
