@@ -8,6 +8,7 @@
 #include "core/optimization_properties.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/parameters.hpp"
+#include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
 #include "io/project_path.hpp"
 
@@ -244,6 +245,78 @@ TEST(ArgumentParserTest, BarePositionalPlyAndLichtFollowViewFlag) {
     EXPECT_EQ(
         unpublished_parsed.error(),
         lfs::io::project::unpublishedLichtUserMessage(unpublished));
+}
+
+TEST(ArgumentParserTest, UsdFilesAcceptExplicitAndBareViewPaths) {
+    const auto directory = std::filesystem::temp_directory_path() / "lfs_arg_parser_usd" /
+                           std::filesystem::path(u8"splat \u00e8 \u6d4b\u8bd5");
+    std::filesystem::create_directories(directory);
+
+    // Parsing only routes paths; USD decoding is covered by UsdFormatTest.
+    for (const auto* extension : {".usd", ".usda", ".usdc", ".usdz",
+                                  ".USD", ".USDA", ".USDC", ".USDZ",
+                                  ".Usd", ".UsdA", ".UsdC", ".UsdZ"}) {
+        const auto path = directory / (std::string("model with spaces") + extension);
+        std::ofstream file(path);
+        file.put('\n');
+        file.close();
+        ASSERT_TRUE(file.good());
+        const auto path_text = lfs::core::path_to_utf8(path);
+
+        for (const auto* flag : {"-v", "--view", ""}) {
+            SCOPED_TRACE(path_text + " via " + (flag[0] ? flag : "bare path"));
+            std::vector<const char*> argv = {"LichtFeld-Studio"};
+            if (flag[0])
+                argv.push_back(flag);
+            argv.push_back(path_text.c_str());
+
+            auto parsed = lfs::core::args::parse_args_and_params(
+                static_cast<int>(argv.size()), argv.data());
+            ASSERT_TRUE(parsed) << parsed.error();
+            EXPECT_EQ((*parsed)->view_paths, std::vector<std::filesystem::path>{path});
+            EXPECT_FALSE((*parsed)->project_path);
+            EXPECT_FALSE((*parsed)->resume_checkpoint);
+            EXPECT_FALSE((*parsed)->resume_project);
+        }
+    }
+}
+
+TEST(ArgumentParserTest, ViewDirectoryIncludesUsdAndPreservesFiltering) {
+    const auto directory = std::filesystem::temp_directory_path() / "lfs_arg_parser_usd_directory";
+    std::filesystem::create_directories(directory);
+    std::vector<std::filesystem::path> expected;
+    for (const auto* name : {"d.usdz", "b.USDA", "c.UsdC", "a.usd", "f.ply", "e.obj"}) {
+        const auto path = directory / name;
+        std::ofstream file(path);
+        file.put('\n');
+        file.close();
+        ASSERT_TRUE(file.good());
+        expected.push_back(path);
+    }
+    const auto ignored_directory = directory / "nested.usd";
+    std::filesystem::create_directories(ignored_directory);
+    for (const auto& path : {directory / "notes.txt", directory / "project.licht",
+                             ignored_directory / "nested.usda"}) {
+        std::ofstream file(path);
+        file.put('\n');
+        file.close();
+        ASSERT_TRUE(file.good());
+    }
+    std::sort(expected.begin(), expected.end());
+    const auto path_text = lfs::core::path_to_utf8(directory);
+
+    for (const auto* flag : {"-v", "--view", ""}) {
+        SCOPED_TRACE(flag[0] ? flag : "bare directory");
+        std::vector<const char*> argv = {"LichtFeld-Studio"};
+        if (flag[0])
+            argv.push_back(flag);
+        argv.push_back(path_text.c_str());
+        auto parsed = lfs::core::args::parse_args_and_params(
+            static_cast<int>(argv.size()), argv.data());
+        ASSERT_TRUE(parsed) << parsed.error();
+        EXPECT_EQ((*parsed)->view_paths, expected);
+        EXPECT_FALSE((*parsed)->project_path);
+    }
 }
 
 TEST(ArgumentParserTest, GuiViewProjectExtensionIsCaseInsensitive) {
